@@ -56,6 +56,7 @@ Supporting philosophy and model docs:
 - [v0.3.315 Letter 127 Update-Preview Parity Decision](archive-infra-decision-log-2026-08-11-v03315-letter127.md)
 - [v0.3.315 Letter 128 Paired-Batch Decision](archive-infra-decision-log-2026-08-11-v03315-letter128.md)
 - [v0.3.316 Letter 129 Complete Collision-Set Recovery Decision](archive-infra-decision-log-2026-08-12-v03316-letter129.md)
+- [v0.3.317 Letter 130 Staged-Cleanup Evidence Decision](archive-infra-decision-log-2026-08-13-v03317-letter130-staged-cleanup-evidence.md)
 - [Project Version Update](project-version-update.md)
 - [Derived Text Capture And Paired-Batch Recovery](derived-text.md)
 - [Letters 120 and 123 Index Lifecycle And Feedback Body](letter120-123-index-lifecycle-and-feedback-body.md)
@@ -436,6 +437,7 @@ These documents record public-safe work already performed.
 - [v0.3.314 Release Note](releases/v0.3.314.md)
 - [v0.3.315 Release Note](releases/v0.3.315.md)
 - [v0.3.316 Release Note](releases/v0.3.316.md)
+- [v0.3.317 Release Note](releases/v0.3.317.md)
 
 Work logs are not the same as product specs.
 

@@ -31,6 +31,67 @@ SAFE_RELEASE_TAG_RE = re.compile(r"v[0-9]+\.[0-9]+\.[0-9]+")
 SAFE_COLLISION_REF_RE = re.compile(r"update-entry:(?!0000)[0-9]{4}")
 MAX_DOMAIN_BLOCKER_CODES = 32
 MAX_DOMAIN_COLLISION_REFS = 32
+MAX_STAGED_CLEANUP_SUMMARY_COUNT = 1_000_000
+STAGED_CLEANUP_STATES = frozenset(
+    {"safe_to_cleanup", "not_safe_to_cleanup", "inspection_blocked"}
+)
+STAGED_CLEANUP_REASON_CODES = frozenset(
+    {
+        "unsafe_staged_folder",
+        "staged_folder_missing",
+        "deferred_list_unreadable",
+        "deferred_list_invalid",
+        "staged_tree_unreadable",
+        "staged_entry_not_preserved",
+        "staged_entries_not_preserved",
+        "staged_entry_unsafe",
+        "staged_entries_unsafe",
+        "staged_entry_unreadable",
+        "staged_entry_path_unsafe",
+        "staged_entry_explicitly_deferred",
+        "staged_entries_deferred",
+        "unsafe_symlink",
+        "unsafe_entry",
+        "objet_preservation_evidence_missing",
+        "objet_capture_receipt_missing",
+        "objet_capture_receipt_invalid",
+        "objet_capture_receipt_scan_incomplete",
+        "objet_manifest_missing",
+        "objet_manifest_path_unsafe",
+        "objet_manifest_scan_incomplete",
+        "objet_store_missing",
+        "objet_store_sha256_mismatch",
+        "objet_store_missing_or_sha256_mismatch",
+        "ordinary_manifest_missing",
+        "ordinary_store_missing",
+        "ordinary_store_mismatch",
+        "derived_text_source_bytes_changed_by_normalization",
+        "derived_text_manifest_missing",
+        "derived_text_manifest_invalid",
+        "derived_text_manifest_scan_incomplete",
+        "derived_text_store_missing",
+        "derived_text_store_sha256_mismatch",
+        "derived_text_capture_receipt_missing",
+        "derived_text_capture_receipt_invalid",
+        "derived_text_receipt_scan_incomplete",
+        "derived_text_receipt_missing",
+        "derived_text_store_mismatch",
+        "derived_text_source_mismatch",
+        "derived_representation_only",
+        "derived_text_receipt_not_terminal",
+        "derived_text_receipt_unsupported",
+        "legacy_receipt_not_exact",
+        "evidence_scan_incomplete",
+        "staged_tree_changed_during_inspection",
+        "staged_evidence_changed_during_inspection",
+    }
+)
+STAGED_CLEANUP_SUMMARY_KEYS = (
+    "preserved",
+    "deferred",
+    "not_preserved",
+    "unsafe",
+)
 
 MAX_JOURNAL_BYTES = 1024 * 1024
 MAX_JOURNAL_RECORDS = 4096
@@ -54,6 +115,7 @@ COMMAND_KINDS = {
     "project-version-update": "project_version_update",
     "index": "archive_index",
     "index-health": "archive_index_health",
+    "staged-cleanup-check": "staged_cleanup_check",
 }
 KIND_COMMANDS = {value: key for key, value in COMMAND_KINDS.items()}
 COMMAND_STAGES = {
@@ -88,6 +150,18 @@ COMMAND_STAGES = {
             "index-health-live-zettels",
             "index-health-index-rows",
             "index-health-compare",
+            "unknown",
+        }
+    ),
+    "staged-cleanup-check": frozenset(
+        {
+            "starting",
+            "manifest",
+            "zettel-references",
+            "staged-walk",
+            "verify",
+            "source-hash",
+            "store-hash",
             "unknown",
         }
     ),
@@ -387,7 +461,20 @@ def _validated_result_payload(
     artifact = payload.get("cli_output_artifact")
     operation = artifact.get("operation") if isinstance(artifact, dict) else None
     exit_code = execution.get("exit_code") if isinstance(execution, dict) else None
-    result_ok = payload.get("ok")
+    inspection_ok = payload.get("ok")
+    if command == "staged-cleanup-check":
+        safe_to_cleanup = payload.get("safe_to_cleanup")
+        if type(inspection_ok) is not bool or (
+            inspection_ok is True and type(safe_to_cleanup) is not bool
+        ) or (
+            inspection_ok is False
+            and safe_to_cleanup is not None
+            and type(safe_to_cleanup) is not bool
+        ):
+            return None
+        result_ok = bool(inspection_ok and safe_to_cleanup is True)
+    else:
+        result_ok = inspection_ok
     if (
         not isinstance(execution, dict)
         or not isinstance(artifact, dict)
@@ -440,6 +527,8 @@ def _safe_domain_projection(
     blocked project update and give one blocker-specific, path-free next step.
     """
 
+    if command == "staged-cleanup-check":
+        return _safe_staged_cleanup_domain_projection(payload)
     if command != "project-version-update":
         return None
     raw_status = payload.get("status")
@@ -562,6 +651,92 @@ def _safe_domain_projection(
         "local_paths_echoed": False,
         "private_values_echoed": False,
         "raw_blocker_messages_copied": False,
+    }
+
+
+def _safe_staged_cleanup_domain_projection(
+    payload: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Project only fixed staged-cleanup truth and bounded aggregate counts."""
+
+    inspection_ok = payload.get("ok")
+    safe_to_cleanup = payload.get("safe_to_cleanup")
+    state = payload.get("state")
+    raw_summary = payload.get("summary")
+    raw_reason_codes = payload.get("reason_codes")
+    if (
+        type(inspection_ok) is not bool
+        or type(safe_to_cleanup) is not bool
+        or not isinstance(state, str)
+        or state not in STAGED_CLEANUP_STATES
+        or not isinstance(raw_summary, dict)
+        or not isinstance(raw_reason_codes, list)
+        or len(raw_reason_codes) > MAX_DOMAIN_BLOCKER_CODES
+    ):
+        return None
+
+    summary: dict[str, int] = {}
+    for key in STAGED_CLEANUP_SUMMARY_KEYS:
+        value = raw_summary.get(key)
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, int)
+            or not 0 <= value <= MAX_STAGED_CLEANUP_SUMMARY_COUNT
+        ):
+            return None
+        summary[key] = value
+    if sum(summary.values()) > MAX_STAGED_CLEANUP_SUMMARY_COUNT:
+        return None
+
+    reason_codes: list[str] = []
+    for value in raw_reason_codes:
+        if not isinstance(value, str) or value not in STAGED_CLEANUP_REASON_CODES:
+            return None
+        if value not in reason_codes:
+            reason_codes.append(value)
+
+    expected_state = (
+        "inspection_blocked"
+        if not inspection_ok
+        else "safe_to_cleanup"
+        if safe_to_cleanup
+        else "not_safe_to_cleanup"
+    )
+    if state != expected_state:
+        return None
+    if not inspection_ok and safe_to_cleanup:
+        return None
+    if state == "safe_to_cleanup" and (
+        reason_codes
+        or summary["deferred"]
+        or summary["not_preserved"]
+        or summary["unsafe"]
+    ):
+        return None
+    if state == "not_safe_to_cleanup" and (
+        not reason_codes
+        or not (
+            summary["deferred"]
+            or summary["not_preserved"]
+            or summary["unsafe"]
+        )
+    ):
+        return None
+    if state == "inspection_blocked" and not reason_codes:
+        return None
+
+    return {
+        "command": "staged-cleanup-check",
+        "inspection_ok": inspection_ok,
+        "safe_to_cleanup": safe_to_cleanup,
+        "state": state,
+        "attention_required": not (inspection_ok and safe_to_cleanup),
+        "summary": summary,
+        "reason_codes": reason_codes,
+        "local_paths_echoed": False,
+        "object_ids_echoed": False,
+        "private_values_echoed": False,
+        "raw_messages_copied": False,
     }
 
 
@@ -1355,6 +1530,21 @@ _PROJECT_UPDATE_UNKNOWN_SUCCESS_ACTIONS = (
     "Review the complete bound output and run a fresh project-version-update --dry-run before taking another action",
 )
 
+_STAGED_CLEANUP_COMPLETED_ACTIONS = {
+    "safe_to_cleanup": (
+        "Review the complete bound staged-cleanup result and run archive doctor --strict plus artifact-hygiene checks before any separate manual cleanup",
+        "Treat cleanup as a separate human decision because staged-cleanup-check never deletes entries and operation-control is not deletion approval",
+    ),
+    "not_safe_to_cleanup": (
+        "Do not delete or move staged entries",
+        "Review the complete bound result's opaque entry references and preservation evidence; keep deferred entries staged, preserve unresolved bytes, then run a fresh staged-cleanup-check",
+    ),
+    "inspection_blocked": (
+        "Do not delete or move staged entries",
+        "Resolve the complete bound result's fixed reason codes, then run a fresh staged-cleanup-check",
+    ),
+}
+
 
 def _project_update_completed_next_actions(
     domain: object,
@@ -1426,6 +1616,29 @@ def _project_update_completed_next_actions(
     return [
         "Review the complete output artifact's fixed blocker_codes and rerun only a fresh project-version-update --dry-run after the blocker is resolved; do not repeat approval from operation-control alone"
     ]
+
+
+def _staged_cleanup_completed_next_actions(
+    domain: object,
+) -> list[str] | None:
+    if (
+        not isinstance(domain, dict)
+        or domain.get("command") != "staged-cleanup-check"
+    ):
+        return None
+    state = domain.get("state")
+    actions = (
+        _STAGED_CLEANUP_COMPLETED_ACTIONS.get(state)
+        if isinstance(state, str)
+        else None
+    )
+    return list(actions) if actions is not None else None
+
+
+def _completed_result_next_actions(domain: object) -> list[str] | None:
+    return _project_update_completed_next_actions(
+        domain
+    ) or _staged_cleanup_completed_next_actions(domain)
 
 
 def inspect_operation(
@@ -1592,9 +1805,7 @@ def inspect_operation(
         ]
     elif state == "completed_result_available":
         result["next_safe_actions"] = (
-            _project_update_completed_next_actions(
-                result["result"].get("domain")
-            )
+            _completed_result_next_actions(result["result"].get("domain"))
             or [
                 "Use the complete output artifact and the command-specific verification step before claiming domain completion."
             ]
@@ -1677,6 +1888,17 @@ def recovery_plan(
                 )
                 or [
                     "Review the complete project-version-update output before deciding whether a fresh dry-run is safe."
+                ]
+            )
+        elif kind == "staged_cleanup_check":
+            actions = (
+                _staged_cleanup_completed_next_actions(
+                    result.get("result", {}).get("domain")
+                    if isinstance(result.get("result"), dict)
+                    else None
+                )
+                or [
+                    "Do not delete or move staged entries; review the complete staged-cleanup result and run a fresh staged-cleanup-check before any manual cleanup"
                 ]
             )
         elif kind == "archive_index":

@@ -11,7 +11,12 @@ from urllib.error import HTTPError
 from urllib import request as urllib_request
 import uuid
 
-from wom_kit.credential_secure_intake import _validate_identity, create_secure_intake_plan
+from wom_kit.credential_secure_intake import (
+    NOTION_PAT_WORKSPACE_IDENTITY_BASIS,
+    NOTION_WORKSPACE_IDENTITY_BASIS,
+    _validate_identity,
+    create_secure_intake_plan,
+)
 from wom_kit.notion_http_adapter import (
     NOTION_API_VERSION,
     NotionBearerSecret,
@@ -23,8 +28,11 @@ from wom_kit.notion_page_recovery import REQUEST_SCHEMA, execute_recovery, plan_
 
 SECRET = "secret_N0t10n_PAT_must_never_leak"
 PAGE_ID = str(uuid.UUID(int=101))
+OTHER_PAGE_ID = str(uuid.UUID(int=102))
 USER_ID = str(uuid.UUID(int=202))
 UNKNOWN_ID = str(uuid.UUID(int=303))
+WORKSPACE_ID = str(uuid.UUID(int=404))
+OTHER_WORKSPACE_ID = str(uuid.UUID(int=405))
 PRIVATE_TITLE = "PRIVATE PAGE TITLE"
 PRIVATE_EMAIL = "person@example.com"
 PRIVATE_URL = "https://provider.example/private"
@@ -95,7 +103,10 @@ def user_payload(**overrides):
         "type": "bot",
         "name": "PRIVATE USER NAME",
         "person": {"email": PRIVATE_EMAIL},
-        "bot": {"workspace_name": "PRIVATE WORKSPACE NAME"},
+        "bot": {
+            "workspace_name": "PRIVATE WORKSPACE NAME",
+            "workspace_id": WORKSPACE_ID,
+        },
         "avatar_url": PRIVATE_URL,
     }
     payload.update(overrides)
@@ -599,6 +610,10 @@ class NotionHttpAdapterIdentityTests(unittest.TestCase):
         self.assertTrue(evidence["workspace_anchor_verified"])
         self.assertRegex(evidence["account_fingerprint"], r"^sha256:[0-9a-f]{64}$")
         self.assertRegex(evidence["workspace_fingerprint"], r"^sha256:[0-9a-f]{64}$")
+        self.assertEqual(
+            evidence["workspace_identity_basis"],
+            NOTION_WORKSPACE_IDENTITY_BASIS,
+        )
         self.assertNotEqual(
             evidence["account_fingerprint"], evidence["workspace_fingerprint"]
         )
@@ -677,7 +692,7 @@ class NotionHttpAdapterIdentityTests(unittest.TestCase):
         ):
             self.assertNotIn(private, rendered)
 
-    def test_same_reviewed_anchor_groups_different_accounts_into_one_workspace_scope(self) -> None:
+    def test_same_workspace_groups_different_accounts_and_anchors_into_one_scope(self) -> None:
         other_user = str(uuid.UUID(int=777))
         first = NotionHttpAdapter(
             transport=FakeTransport(
@@ -688,9 +703,9 @@ class NotionHttpAdapterIdentityTests(unittest.TestCase):
         second = NotionHttpAdapter(
             transport=FakeTransport(
                 FakeResponse(payload=user_payload(id=other_user)),
-                FakeResponse(payload=page_payload()),
+                FakeResponse(payload=page_payload(page_id=OTHER_PAGE_ID)),
             )
-        ).verify_identity(NotionBearerSecret(SECRET + "-second"), PAGE_ID)
+        ).verify_identity(NotionBearerSecret(SECRET + "-second"), OTHER_PAGE_ID)
 
         self.assertNotEqual(
             first["account_fingerprint"], second["account_fingerprint"]
@@ -698,6 +713,141 @@ class NotionHttpAdapterIdentityTests(unittest.TestCase):
         self.assertEqual(
             first["workspace_fingerprint"], second["workspace_fingerprint"]
         )
+        rendered = json.dumps((first, second), sort_keys=True)
+        for private in (WORKSPACE_ID, PAGE_ID, OTHER_PAGE_ID, USER_ID, other_user):
+            self.assertNotIn(private, rendered)
+
+    def test_different_workspace_ids_never_share_one_scope(self) -> None:
+        first = NotionHttpAdapter(
+            transport=FakeTransport(
+                FakeResponse(payload=user_payload()),
+                FakeResponse(payload=page_payload()),
+            )
+        ).verify_identity(SECRET, PAGE_ID)
+        second = NotionHttpAdapter(
+            transport=FakeTransport(
+                FakeResponse(
+                    payload=user_payload(
+                        bot={
+                            "workspace_name": "OTHER PRIVATE WORKSPACE",
+                            "workspace_id": OTHER_WORKSPACE_ID,
+                        }
+                    )
+                ),
+                FakeResponse(payload=page_payload()),
+            )
+        ).verify_identity(SECRET, PAGE_ID)
+
+        self.assertTrue(first["workspace_anchor_verified"])
+        self.assertTrue(second["workspace_anchor_verified"])
+        self.assertNotEqual(
+            first["workspace_fingerprint"], second["workspace_fingerprint"]
+        )
+        rendered = json.dumps((first, second), sort_keys=True)
+        for private in (WORKSPACE_ID, OTHER_WORKSPACE_ID, PAGE_ID, USER_ID):
+            self.assertNotIn(private, rendered)
+
+    def test_person_pat_uses_token_scope_and_current_reviewed_anchor(self) -> None:
+        person_payload = {
+            "object": "user",
+            "id": USER_ID,
+            "type": "person",
+            "name": "PRIVATE PAT OWNER",
+            "person": {"email": PRIVATE_EMAIL},
+            "avatar_url": PRIVATE_URL,
+        }
+        first = NotionHttpAdapter(
+            transport=FakeTransport(
+                FakeResponse(payload=person_payload),
+                FakeResponse(payload=page_payload()),
+            )
+        ).verify_identity(SECRET, PAGE_ID)
+        second = NotionHttpAdapter(
+            transport=FakeTransport(
+                FakeResponse(payload=person_payload),
+                FakeResponse(payload=page_payload(page_id=OTHER_PAGE_ID)),
+            )
+        ).verify_identity(SECRET, OTHER_PAGE_ID)
+
+        self.assertTrue(first["identity_verified"])
+        self.assertTrue(first["workspace_anchor_verified"])
+        self.assertEqual(
+            first["reason_code"],
+            "notion_pat_identity_and_workspace_anchor_verified",
+        )
+        self.assertEqual(
+            first["workspace_identity_basis"],
+            NOTION_PAT_WORKSPACE_IDENTITY_BASIS,
+        )
+        self.assertEqual(first["workspace_fingerprint"], second["workspace_fingerprint"])
+        rendered = json.dumps((first, second), ensure_ascii=False, sort_keys=True)
+        for private in (
+            SECRET,
+            USER_ID,
+            PAGE_ID,
+            OTHER_PAGE_ID,
+            PRIVATE_EMAIL,
+            PRIVATE_URL,
+            "PRIVATE PAT OWNER",
+        ):
+            self.assertNotIn(private, rendered)
+
+    def test_malformed_person_pat_shape_fails_before_anchor_read(self) -> None:
+        cases = (
+            {"object": "user", "id": USER_ID, "type": "person"},
+            {"object": "user", "id": USER_ID, "type": "person", "person": "bad"},
+        )
+        for payload in cases:
+            with self.subTest(payload=payload):
+                transport = FakeTransport(FakeResponse(payload=payload))
+                evidence = NotionHttpAdapter(transport=transport).verify_identity(
+                    SECRET,
+                    PAGE_ID,
+                )
+                self.assertTrue(evidence["identity_verified"])
+                self.assertFalse(evidence["workspace_anchor_verified"])
+                self.assertEqual(
+                    evidence["reason_code"],
+                    "notion_workspace_identity_response_malformed",
+                )
+                self.assertEqual(len(transport.calls), 1)
+
+    def test_missing_or_malformed_bot_workspace_id_fails_closed(self) -> None:
+        cases = {
+            "missing": {"workspace_name": "PRIVATE WORKSPACE NAME"},
+            "malformed": {
+                "workspace_name": "PRIVATE WORKSPACE NAME",
+                "workspace_id": "PRIVATE MALFORMED WORKSPACE ID",
+            },
+        }
+        for label, bot in cases.items():
+            with self.subTest(label=label):
+                transport = FakeTransport(
+                    FakeResponse(payload=user_payload(bot=bot)),
+                )
+                evidence = NotionHttpAdapter(transport=transport).verify_identity(
+                    SECRET, PAGE_ID
+                )
+
+                self.assertTrue(evidence["identity_verified"])
+                self.assertFalse(evidence["workspace_anchor_verified"])
+                self.assertIsNotNone(evidence["account_fingerprint"])
+                self.assertIsNone(evidence["workspace_fingerprint"])
+                self.assertEqual(
+                    evidence["reason_code"],
+                    "notion_workspace_identity_response_malformed",
+                )
+                self.assertEqual(len(transport.calls), 1)
+                rendered = json.dumps(evidence, sort_keys=True)
+                for private in (
+                    SECRET,
+                    PAGE_ID,
+                    USER_ID,
+                    WORKSPACE_ID,
+                    "PRIVATE WORKSPACE NAME",
+                    "PRIVATE MALFORMED WORKSPACE ID",
+                ):
+                    self.assertNotIn(private, rendered)
 
     def test_users_me_success_alone_never_claims_workspace_identity(self) -> None:
         anchor_error = FakeResponse(
@@ -798,6 +948,10 @@ class NotionHttpAdapterIdentityTests(unittest.TestCase):
         )
         self.assertRegex(identity.account_subject, r"^sha256:[0-9a-f]{64}$")
         self.assertRegex(identity.workspace_identity, r"^sha256:[0-9a-f]{64}$")
+        self.assertEqual(
+            identity.workspace_identity_basis,
+            NOTION_WORKSPACE_IDENTITY_BASIS,
+        )
         self.assertIn("read_content", identity.capabilities)
         self.assertIn("retrieve_user_identity", identity.capabilities)
         rendered = repr(verifier) + repr(identity)
@@ -814,9 +968,39 @@ class NotionHttpAdapterIdentityTests(unittest.TestCase):
             requested_capabilities=("read_content", "retrieve_user_identity"),
             request_id_factory=lambda: "intake_1234567890abcdef",
         )
-        failure, capabilities = _validate_identity(identity, plan)
+        failure, capabilities, basis = _validate_identity(identity, plan)
         self.assertIsNone(failure)
         self.assertIn("read_content", capabilities)
+        self.assertEqual(basis, NOTION_WORKSPACE_IDENTITY_BASIS)
+
+        pat_transport = FakeTransport(
+            FakeResponse(
+                payload={
+                    "object": "user",
+                    "id": USER_ID,
+                    "type": "person",
+                    "person": {"email": PRIVATE_EMAIL},
+                }
+            ),
+            FakeResponse(payload=page_payload()),
+        )
+        pat_identity = NotionHttpAdapter(
+            transport=pat_transport
+        ).secure_intake_verifier().verify_identity(
+            memoryview(secret_buffer),
+            provider="notion",
+            reviewed_anchor_uuid=PAGE_ID,
+        )
+        self.assertEqual(
+            pat_identity.workspace_identity_basis,
+            NOTION_PAT_WORKSPACE_IDENTITY_BASIS,
+        )
+        pat_failure, _pat_capabilities, pat_basis = _validate_identity(
+            pat_identity,
+            plan,
+        )
+        self.assertIsNone(pat_failure)
+        self.assertEqual(pat_basis, NOTION_PAT_WORKSPACE_IDENTITY_BASIS)
 
         no_calls = FakeTransport()
         wrong_provider = NotionHttpAdapter(transport=no_calls).secure_intake_verifier()

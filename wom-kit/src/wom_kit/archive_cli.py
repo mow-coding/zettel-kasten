@@ -185,7 +185,7 @@ Commands:
   credential-ref-plan
           Plan a local credential reference without reading or storing secret values.
   credential-adopt
-          Plan or explicitly approve Windows masked Notion credential intake; PAT values are never accepted on the command line.
+          Plan or explicitly approve visible-console Notion credential intake; PAT values are never accepted by AI chat or the command line.
   credential-secure-list
           List local receipt metadata, or explicitly verify it with the exact archive authentication key.
   credential-lifecycle
@@ -9117,7 +9117,7 @@ def command_credential_ref_plan(args: argparse.Namespace) -> int:
     return 0 if result.get("ok", True) else 1
 
 
-CREDENTIAL_ADOPTION_REQUEST_SCHEMA = "wom-kit/credential-adoption-request/v0.1"
+CREDENTIAL_ADOPTION_REQUEST_SCHEMA = "wom-kit/credential-adoption-request/v0.2"
 _SHA256_IDENTIFIER_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 _SAFE_CREDENTIAL_REVIEWER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._@:+-]{0,127}$")
 _SAFE_RECOVERY_REVIEWER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:+-]{0,127}$")
@@ -9153,6 +9153,9 @@ def _canonical_credential_adoption_request(
     account_label: str,
     workspace_label: str,
     purpose: str,
+    task_summary: str,
+    connection_reason: str,
+    replace_existing: bool,
     reviewed_anchor_page_id: str,
     capabilities: list[str],
     ttl_seconds: int,
@@ -9176,6 +9179,8 @@ def _canonical_credential_adoption_request(
             account_label,
             workspace_label,
             purpose,
+            task_summary,
+            connection_reason,
             *capabilities,
         )
     ):
@@ -9186,6 +9191,9 @@ def _canonical_credential_adoption_request(
         account_label=account_label,
         workspace_label=workspace_label,
         purpose=purpose,
+        task_summary=task_summary,
+        connection_reason=connection_reason,
+        replace_existing=replace_existing,
         reviewed_anchor_uuid=reviewed_anchor_page_id,
         requested_capabilities=capabilities,
         ttl_seconds=ttl_seconds,
@@ -9208,6 +9216,10 @@ def _canonical_credential_adoption_request(
         "account_label": public_plan["account_label"],
         "workspace_label": public_plan["workspace_label"],
         "purpose": public_plan["purpose"],
+        "task_summary": validation["interaction_context"]["task_summary"],
+        "connection_reason": validation["interaction_context"]["connection_reason"],
+        "interaction_context_sha256": validation["interaction_context_sha256"],
+        "replace_existing": validation["replacement_approved"],
         "reviewed_anchor_page_id": normalized_anchor,
         "requested_capabilities": list(public_plan["requested_capabilities"]),
         "ttl_seconds": public_plan["ttl_seconds"],
@@ -9260,6 +9272,9 @@ def command_credential_adopt(args: argparse.Namespace) -> int:
                 account_label=args.account_label,
                 workspace_label=args.workspace_label,
                 purpose=args.purpose,
+                task_summary=args.task_summary,
+                connection_reason=args.connection_reason,
+                replace_existing=args.replace_existing,
                 reviewed_anchor_page_id=args.reviewed_anchor_page_id,
                 capabilities=list(args.capability or []),
                 ttl_seconds=args.ttl_seconds,
@@ -9282,6 +9297,10 @@ def command_credential_adopt(args: argparse.Namespace) -> int:
                     ),
                     "ttl_seconds": canonical_request["ttl_seconds"],
                     "interactive_secret_prompt": True,
+                    "assistant_task_context_bound": True,
+                    "interaction_context_sha256": canonical_request[
+                        "interaction_context_sha256"
+                    ],
                     "human_approval_required": True,
                     "approval_command_requires_expected_request_sha256": True,
                     "secret_value_present": False,
@@ -9318,6 +9337,9 @@ def command_credential_adopt(args: argparse.Namespace) -> int:
                     account_label=canonical_request["account_label"],
                     workspace_label=canonical_request["workspace_label"],
                     purpose=canonical_request["purpose"],
+                    task_summary=canonical_request["task_summary"],
+                    connection_reason=canonical_request["connection_reason"],
+                    replace_existing=canonical_request["replace_existing"],
                     reviewed_anchor_uuid=canonical_request[
                         "reviewed_anchor_page_id"
                     ],
@@ -17888,34 +17910,242 @@ def command_import_workpack(args: argparse.Namespace) -> int:
     return 0 if result["ok"] else 1
 
 
+def staged_cleanup_public_result(result: dict[str, Any]) -> dict[str, Any]:
+    """Project the cleanup verdict without staged paths, ids, digests, or bodies."""
+
+    summary = result.get("summary") if isinstance(result.get("summary"), dict) else {}
+    entries = result.get("entries") if isinstance(result.get("entries"), list) else []
+    public_entries: list[dict[str, Any]] = []
+    allowed_entry_keys = (
+        "entry_ref",
+        "status",
+        "preservation_kind",
+        "reason_code",
+        "manifest_record_present",
+        "capture_receipt_present",
+        "preserved_bytes_verified",
+        "source_entry_readable",
+    )
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        public_entries.append({key: entry.get(key) for key in allowed_entry_keys})
+    return {
+        "schema": result.get("schema"),
+        "ok": bool(result.get("ok")),
+        "state": result.get("state"),
+        "reason_codes": [
+            value
+            for value in result.get("reason_codes", [])
+            if isinstance(value, str)
+        ],
+        "dry_run": True,
+        "lifecycle_action": "staged_cleanup_check",
+        "safe_to_cleanup": bool(result.get("safe_to_cleanup")),
+        "deletion_performed": False,
+        "entry_ref_scheme": "staged-entry-sorted-ordinal-v1",
+        "entry_count_complete": bool(result.get("ok")),
+        "entries": public_entries,
+        "summary": {
+            key: int(summary.get(key, 0))
+            for key in ("preserved", "deferred", "not_preserved", "unsafe")
+            if isinstance(summary.get(key, 0), int)
+            and not isinstance(summary.get(key, 0), bool)
+        },
+        "next_safe_actions": [
+            value
+            for value in result.get("next_safe_actions", [])
+            if isinstance(value, str)
+        ],
+        "blockers": [
+            value for value in result.get("blockers", []) if isinstance(value, str)
+        ],
+        "warnings": [
+            value for value in result.get("warnings", []) if isinstance(value, str)
+        ],
+        "privacy_guards": {
+            "staged_paths_echoed": False,
+            "filenames_echoed": False,
+            "object_ids_echoed": False,
+            "digests_echoed": False,
+            "receipt_paths_echoed": False,
+            "body_text_echoed": False,
+        },
+        "would_change": [],
+    }
+
+
 def command_staged_cleanup_check(args: argparse.Namespace) -> int:
     if not args.dry_run:
         print("staged-cleanup-check is report-only; pass --dry-run.", file=sys.stderr)
         return 1
-    progress_callback = make_stage_progress_callback(
-        bool(getattr(args, "progress", False)), label="staged-cleanup-check"
-    )
     try:
+        archive_root = archive_services.require_existing_archive_root(Path(args.archive_root))
+    except (archive_services.ArchiveServiceError, OSError):
+        print("Archive root does not exist or is not a directory.", file=sys.stderr, flush=True)
+        return 1
+    reporter = CommandProgressReporter(
+        bool(getattr(args, "progress", False)),
+        label="staged-cleanup-check",
+        stage_order=(
+            "manifest",
+            "zettel-references",
+            "staged-walk",
+            "verify",
+            "source-hash",
+            "store-hash",
+        ),
+    )
+    capture: CommandRunResultCapture | None = None
+    operation_journal: operation_control.OperationRunJournal | None = None
+    terminal_output_ref: str | None = None
+    try:
+        if getattr(args, "output", None):
+            capture = CommandRunResultCapture.prepare(
+                str(args.output),
+                archive_root,
+                command="staged-cleanup-check",
+            )
+            terminal_output_ref = f"command-result:{capture.run_id}"
+            operation_journal = prepare_operation_tracking(capture)
+            best_effort_terminal_print(
+                f"[staged-cleanup-check] result pending ref={terminal_output_ref}",
+                file=sys.stderr,
+            )
         result = archive_services.staged_cleanup_check(
-            Path(args.archive_root),
+            archive_root,
             args.staged,
             deferred_path=Path(args.deferred) if args.deferred else None,
-            progress_callback=progress_callback,
+            progress_callback=operation_progress_callback(reporter, operation_journal),
         )
-    except (archive_services.ArchiveServiceError, OSError, json.JSONDecodeError, yaml.YAMLError) as exc:
-        print(f"Staged cleanup check failed: {exc}", file=sys.stderr)
+        public_result = staged_cleanup_public_result(result)
+    except (
+        archive_services.ArchiveServiceError,
+        operation_control.OperationControlError,
+        OSError,
+        UnicodeError,
+        json.JSONDecodeError,
+        yaml.YAMLError,
+        ValueError,
+    ) as exc:
+        failure_result_written = False
+        if capture is not None:
+            try:
+                capture.write_completed(exit_code=1, error=exc)
+                failure_result_written = True
+                best_effort_terminal_print(
+                    "[staged-cleanup-check] completed exit_code=1 "
+                    f"result_ref={terminal_output_ref}",
+                    file=sys.stderr,
+                )
+            except (OSError, ValueError) as capture_exc:
+                best_effort_terminal_print(
+                    "Staged cleanup check failed; result capture also failed "
+                    f"({type(capture_exc).__name__}).",
+                    file=sys.stderr,
+                )
+        complete_operation_tracking(
+            operation_journal,
+            capture,
+            exit_code=1,
+            result_available=failure_result_written,
+            result_ok=False if failure_result_written else None,
+        )
+        if failure_result_written:
+            best_effort_terminal_print(
+                "Staged cleanup check failed; the saved result contains a sanitized failure code.",
+                file=sys.stderr,
+            )
+        else:
+            best_effort_terminal_print(
+                "Staged cleanup check failed safely; no raw local error was printed.",
+                file=sys.stderr,
+            )
         return 1
+    finally:
+        reporter.close()
+
+    exit_code = 0 if result.get("ok") and result.get("safe_to_cleanup") else 1
+    output_metadata: dict[str, Any] | None = None
+    if capture is not None:
+        try:
+            output_metadata = capture.write_completed(
+                exit_code=exit_code,
+                result=public_result,
+            )
+        except (OSError, ValueError) as exc:
+            complete_operation_tracking(
+                operation_journal,
+                capture,
+                exit_code=1,
+                result_available=False,
+                result_ok=None,
+            )
+            best_effort_terminal_print(
+                "Staged cleanup inspection completed, but --output capture failed "
+                f"({type(exc).__name__}).",
+                file=sys.stderr,
+            )
+            return 1
+        effective_result_ok = bool(result.get("ok") and result.get("safe_to_cleanup"))
+        complete_operation_tracking(
+            operation_journal,
+            capture,
+            exit_code=exit_code,
+            result_available=True,
+            result_ok=effective_result_ok,
+        )
+        best_effort_terminal_print(
+            f"[staged-cleanup-check] completed exit_code={exit_code} "
+            f"result_ref={terminal_output_ref}",
+            file=sys.stderr,
+        )
+
+    if output_metadata is not None:
+        compact = {
+            "ok": bool(result.get("ok")),
+            "lifecycle_action": "staged_cleanup_check_output_summary",
+            "state": result.get("state"),
+            "safe_to_cleanup": bool(result.get("safe_to_cleanup")),
+            "summary": public_result.get("summary"),
+            "reason_codes": public_result.get("reason_codes"),
+            "blocker_count": len(public_result.get("blockers", [])),
+            "warning_count": len(public_result.get("warnings", [])),
+            "output": {
+                "written": True,
+                "output_ref": terminal_output_ref,
+                "path_echoed": False,
+            },
+        }
+        if args.format == "json":
+            best_effort_terminal_json(compact)
+        else:
+            best_effort_terminal_print(
+                f"Staged cleanup check: {result.get('state')}\n"
+                "Full content-free result written to the requested --output file "
+                f"(ref: {terminal_output_ref})."
+            )
+        return exit_code
+
     if args.format == "json":
-        print_json(result)
+        best_effort_terminal_json(public_result)
     else:
-        for entry in result.get("files", []):
-            print(f"{entry['path']}: {entry['status']}")
-        print(f"safe_to_cleanup: {result.get('safe_to_cleanup')}")
-        for action in result.get("next_safe_actions", []):
-            print(f"- {action}")
-        for blocker in result.get("blockers", []):
-            print(f"BLOCKED: {blocker}")
-    return 0 if result.get("ok") and result.get("safe_to_cleanup") else 1
+        lines = [
+            f"Staged cleanup check: {result.get('state')}",
+            f"safe_to_cleanup: {bool(result.get('safe_to_cleanup'))}",
+        ]
+        for entry in public_result.get("entries", []):
+            lines.append(
+                f"{entry.get('entry_ref')}: {entry.get('status')} "
+                f"({entry.get('reason_code')})"
+            )
+        for action in public_result.get("next_safe_actions", []):
+            lines.append(f"NEXT: {action}")
+        for blocker in public_result.get("blockers", []):
+            lines.append(f"BLOCKED: {blocker}")
+        lines.append("Staged paths, filenames, ids, digests, receipt paths, and body text: not echoed")
+        best_effort_terminal_print("\n".join(lines))
+    return exit_code
 
 
 def command_objet_capture_batch(args: argparse.Namespace) -> int:
@@ -24959,7 +25189,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     credential_adopt = subcommands.add_parser(
         "credential-adopt",
-        help="Plan or explicitly approve Windows-native masked Notion credential intake without accepting a PAT on argv, stdin, or environment.",
+        help="First-time enrollment or explicit replacement only: plan or approve Notion credential intake through a separate visible Windows console. Later approved work reuses the saved Windows credential and must not call this command again.",
+        description="First-time enrollment or explicit replacement only. The helper AI supplies reviewed task context, WOM supplies fixed security copy, and later approved work reuses the saved Windows credential without reopening the input console.",
     )
     credential_adopt.add_argument("archive_root", help="Archive root that will own the authenticated local receipt.")
     credential_adopt.add_argument(
@@ -24976,6 +25207,21 @@ def build_parser() -> argparse.ArgumentParser:
         "--purpose",
         default="notion_page_recovery",
         help="Safe machine-readable purpose label.",
+    )
+    credential_adopt.add_argument(
+        "--task-summary",
+        required=True,
+        help="One reviewed, public-safe sentence supplied by the helper AI describing the exact current task shown to the human. Never include a token, private body, path, URL, or identifier.",
+    )
+    credential_adopt.add_argument(
+        "--connection-reason",
+        required=True,
+        help="One reviewed, public-safe sentence supplied by the helper AI explaining why the current task needs this Notion connection. Never include a token, private body, path, URL, or identifier.",
+    )
+    credential_adopt.add_argument(
+        "--replace-existing",
+        action="store_true",
+        help="Explicit rotation/replacement intent. Without this reviewed flag, an authenticated matching registration is preserved and no input console opens.",
     )
     credential_adopt.add_argument(
         "--reviewed-anchor-page-id",
@@ -24996,14 +25242,14 @@ def build_parser() -> argparse.ArgumentParser:
     credential_adopt.add_argument(
         "--interactive",
         action="store_true",
-        help="Required. Approval opens only the native masked Windows credential dialog in a spawned worker.",
+        help="Required. Approval opens one separate visible Windows console in a spawned worker; typed characters are not echoed.",
     )
     credential_adopt.add_argument(
         "--expected-request-sha256",
         help="Required with --approve. Must match the stable canonical request SHA-256 returned by dry-run.",
     )
     credential_adopt.add_argument("--dry-run", action="store_true", help="Validate and hash the stable request only; performs no live operation.")
-    credential_adopt.add_argument("--approve", action="store_true", help="After exact request-hash approval, create one fresh worker plan and open the native masked dialog.")
+    credential_adopt.add_argument("--approve", action="store_true", help="For first enrollment or an explicitly reviewed replacement only: after exact request-hash approval, open one echo-disabled Windows console and persist the verified credential for later reuse.")
     credential_adopt.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
     credential_adopt.set_defaults(func=command_credential_adopt)
 
@@ -29546,14 +29792,22 @@ def build_parser() -> argparse.ArgumentParser:
 
     staged_cleanup = subcommands.add_parser(
         "staged-cleanup-check",
-        help="Report-only G2 verifier: is every staged file preserved as an objet (or deferred) so cleanup would be safe?",
+        help="Report-only G2 verifier: is every staged file durably preserved so cleanup would be safe? Deferred entries remain staged and block cleanup.",
     )
     staged_cleanup.add_argument("archive_root", help="Archive root containing the staged folder.")
     staged_cleanup.add_argument("--staged", required=True, help="Archive-relative staged folder to verify.")
-    staged_cleanup.add_argument("--deferred", help="Optional JSON file: {\"deferred\": [staged-relative paths]} explicitly deferred from capture.")
+    staged_cleanup.add_argument("--deferred", help="Optional legacy classification JSON: {\"deferred\": [staged-relative paths]}. Deferred entries remain staged and make safe_to_cleanup false.")
     staged_cleanup.add_argument("--dry-run", action="store_true", help="Required: report-only and never deletes; exits 0 only when safe_to_cleanup is true.")
     staged_cleanup.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     staged_cleanup.add_argument("--progress", action="store_true", help="Stream content-free stage progress to stderr.")
+    staged_cleanup.add_argument(
+        "--output",
+        help=(
+            "Optional no-overwrite content-free result JSON under "
+            ".wom-scratch/diagnostics/. The inspection remains read-only; only "
+            "this local diagnostic artifact and its operation journal are written."
+        ),
+    )
     staged_cleanup.set_defaults(func=command_staged_cleanup_check)
 
     project_bytecode_repair_plan = subcommands.add_parser(
@@ -32742,7 +32996,7 @@ def main(argv: list[str] | None = None) -> int:
             )
         else:
             print(
-                "credential-adopt accepts secrets only through the native masked Windows dialog; private argument values were not echoed.",
+                "credential-adopt accepts secrets only through its separate echo-disabled Windows console; private argument values were not echoed.",
                 file=sys.stderr,
             )
         return 2

@@ -6,6 +6,55 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.317 - 2026-08-13
+
+- Replaced generic Notion secret-entry copy with a two-owner visible-console
+  contract: the helper AI supplies reviewed public-safe current-task and
+  connection-reason sentences, while WOM supplies fixed non-overridable
+  security, masking, cancellation, persistence, and reuse notices.
+- Bound the helper context and explicit replacement intent into the adoption
+  request digest; changed context now blocks before the credential console
+  opens.
+- Made the Windows console use Unicode output plus UTF-8 code pages, disabled
+  echo and processed Ctrl+C handling, and made empty Enter and Ctrl+C safe
+  cancellations with buffer cleanup. Escape is not advertised because the
+  real cooked Windows console does not reliably wake for it.
+- Made enrollment idempotent without trusting metadata alone: before skipping
+  the prompt, WOM now authenticates the receipt, reads only its exact Windows
+  Credential Manager entry inside the worker, verifies the secret fingerprint,
+  and rechecks the currently reviewed Notion anchor. A missing, unreadable, or
+  fingerprint-mismatched entry requires a separately reviewed
+  `--replace-existing` operation. A current-anchor/provider check failure keeps
+  the saved entry and routes to connection and page-sharing review instead of
+  prompting. Display-label changes do not cause another prompt or duplicate
+  credential. Later approved Notion work reuses the exact saved entry.
+- Added explicit Notion workspace-identity bases to new authenticated v0.2
+  receipts. Internal integrations bind the provider-returned
+  `bot.workspace_id`; person PATs use `notion_pat_token_scope_v1`, derived from
+  the archive-keyed fingerprint of the exact saved PAT plus fresh person and
+  reviewed-page verification. The same PAT can serve another reviewed page,
+  while different PATs are never silently merged into one workspace scope.
+- Kept released v0.3.311-v0.3.316 v0.1 receipts immutable and added an
+  authenticated append-only workspace-scope evolution for one compatible
+  legacy registration. It reuses the same Credential Manager item and secret,
+  performs no new prompt/write/delete, migrates only a simple singleton
+  lifecycle, remains non-authoritative without a human lifecycle decision, and
+  stops before publication for duplicate or complex state.
+- Extended `staged-cleanup-check` to recognize exact BOM-free paired derived
+  text only when its strict manifest row, canonical store bytes, and direct
+  terminal receipt all agree. Transcoded BOM/UTF-16 source bytes still require
+  a separately preserved ordinary objet.
+- Replaced stat-only final evidence checks with exact-byte rehashing for staged
+  sources, object/derived stores, manifests, and receipts, so same-size and
+  restored-mtime in-place changes invalidate the whole cleanup verdict.
+- Added content-free opaque entries, fixed reason codes, optional no-overwrite
+  `--output`, and `operation-control` status/wait/recovery projection for long
+  cleanup inspections without exposing paths, object ids, hashes, or receipt
+  names in the terminal summary.
+- Corrected legacy deferment semantics: `--deferred` remains a classification
+  input, but every deferred entry must stay staged and now makes
+  `safe_to_cleanup` false. Deferment is not deletion or discard approval.
+
 ## v0.3.316 - 2026-08-12
 
 - Closed the v0.3.315 update-recovery gap in which a project could correctly
@@ -167,7 +216,9 @@ This project uses semantic versioning for public compatibility checkpoints.
   store presence, Notion identity and reviewed-anchor verification, atomic
   authenticated receipts, mutable-buffer wiping, and value-free rollback or
   repair outcomes. Raw credentials are never accepted through command-line
-  arguments, environment variables, normal stdin, files, chat, or clipboard.
+  arguments, environment variables, normal stdin, files, chat, or direct
+  clipboard-API reads. A deliberate human paste into the isolated masked
+  console is accepted only as console input and is never read by the helper AI.
   Process-start failures are distinguished from post-start unknown durable
   state so a crashed worker cannot be mislabeled as zero writes.
 - Added authenticated credential listing and digest-bound human lifecycle

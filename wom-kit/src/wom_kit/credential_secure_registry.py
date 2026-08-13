@@ -19,8 +19,8 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import contextmanager
-from dataclasses import dataclass, field
-from datetime import datetime
+from dataclasses import dataclass, field, replace
+from datetime import datetime, timezone
 import hashlib
 import hmac
 import json
@@ -36,6 +36,11 @@ import yaml
 
 from .credential_secure_intake import (
     AtomicJsonReceiptCommitter,
+    LEGACY_RECEIPT_SCHEMA_VERSION,
+    NOTION_PAT_SCOPE_FINGERPRINT_DOMAIN,
+    NOTION_PAT_WORKSPACE_IDENTITY_BASIS,
+    NOTION_WORKSPACE_IDENTITY_BASES,
+    NOTION_WORKSPACE_IDENTITY_BASIS,
     RECEIPT_SCHEMA_VERSION,
 )
 from .credential_secure_intake_windows import windows_credential_target
@@ -44,6 +49,7 @@ from .notion_page_recovery import ScopeBinding
 
 
 RECEIPTS_RELATIVE = "profiles/local/credential-intake/receipts"
+EVOLUTIONS_RELATIVE = "profiles/local/credential-intake/evolutions"
 LIFECYCLE_RELATIVE = "profiles/local/credential-intake/lifecycle.json"
 LOCK_RELATIVE = "profiles/local/credential-intake/.registry.lock"
 
@@ -52,6 +58,13 @@ LIFECYCLE_SCHEMA_VERSION = "wom-credential-secure-registry-lifecycle/v0.1"
 LIFECYCLE_PLAN_SCHEMA_VERSION = "wom-credential-secure-registry-lifecycle-plan/v0.1"
 LIFECYCLE_AUTHENTICATION_SCHEMA = "wom-credential-lifecycle-authentication/v0.1"
 REGISTRY_RESULT_SCHEMA_VERSION = "wom-credential-secure-registry-result/v0.1"
+WORKSPACE_SCOPE_EVOLUTION_SCHEMA_VERSION = (
+    "wom-credential-workspace-scope-evolution/v0.1"
+)
+WORKSPACE_SCOPE_EVOLUTION_AUTHENTICATION_SCHEMA = (
+    "wom-credential-workspace-scope-evolution-authentication/v0.1"
+)
+LEGACY_WORKSPACE_IDENTITY_BASIS = "legacy_reviewed_anchor_v1"
 
 RECEIPT_AUTHENTICATION_DOMAIN = (
     b"wom/credential-secure-registry/receipt-authentication/v0.1\x00"
@@ -60,6 +73,9 @@ LIFECYCLE_AUTHENTICATION_DOMAIN = (
     b"wom/credential-secure-registry/lifecycle-authentication/v0.1\x00"
 )
 ARCHIVE_KEY_TARGET_DOMAIN = b"wom/credential-secure-registry/archive-key-target/v0.1\x00"
+WORKSPACE_SCOPE_EVOLUTION_AUTHENTICATION_DOMAIN = (
+    b"wom/credential-secure-registry/workspace-scope-evolution/v0.1\x00"
+)
 
 WINDOWS_ARCHIVE_KEY_TARGET_PREFIX = "WOM/credential-intake/backend_key_"
 
@@ -67,12 +83,20 @@ MAX_RECEIPT_BYTES = 64 * 1024
 MAX_LIFECYCLE_BYTES = 256 * 1024
 MAX_ARCHIVE_DOCUMENT_BYTES = 256 * 1024
 MAX_RECEIPTS = 512
+MAX_EVOLUTIONS = 512
+MAX_EVOLUTION_BYTES = 64 * 1024
 AUTHENTICATION_KEY_BYTES = 32
 REPARSE_FLAG = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
 
 _CREDENTIAL_ID_RE = re.compile(r"^cred_[A-Za-z0-9_-]{16,96}$")
 _RECEIPT_TEMP_RE = re.compile(
     r"^\.(cred_[A-Za-z0-9_-]{16,96})\.[0-9a-f]{16}\.tmp$"
+)
+_EVOLUTION_FILE_RE = re.compile(
+    r"^(cred_[A-Za-z0-9_-]{16,96})\.workspace-scope-v1\.json$"
+)
+_EVOLUTION_TEMP_RE = re.compile(
+    r"^\.(cred_[A-Za-z0-9_-]{16,96})\.workspace-scope-v1\.[0-9a-f]{16}\.tmp$"
 )
 _BACKEND_ID_RE = re.compile(r"^backend_[A-Za-z0-9_-]{16,96}$")
 _REQUEST_ID_RE = re.compile(r"^intake_[A-Za-z0-9_-]{16,96}$")
@@ -114,6 +138,7 @@ _RECEIPT_KEYS = {
     "request_id",
     "plan_digest",
 }
+_RECEIPT_V2_KEYS = _RECEIPT_KEYS | {"workspace_identity_basis"}
 _RECEIPT_AUTH_KEYS = {"schema_version", "algorithm", "mac"}
 _LIFECYCLE_KEYS = {"schema_version", "archive_id", "scopes", "authentication"}
 _LIFECYCLE_SCOPE_KEYS = {
@@ -131,6 +156,20 @@ _LIFECYCLE_CREDENTIAL_KEYS = {
     "is_default",
 }
 _AUTHENTICATION_KEYS = {"schema_version", "algorithm", "mac"}
+_EVOLUTION_KEYS = {
+    "schema_version",
+    "credential_id",
+    "provider",
+    "base_receipt_sha256",
+    "previous_workspace_fingerprint",
+    "previous_workspace_identity_basis",
+    "verified_account_fingerprint",
+    "verified_capabilities",
+    "evolved_workspace_fingerprint",
+    "workspace_identity_basis",
+    "evolved_at",
+    "authentication",
+}
 
 _THREAD_LOCKS: dict[str, threading.RLock] = {}
 _THREAD_LOCKS_GUARD = threading.Lock()
@@ -394,14 +433,22 @@ def _validate_receipt_document(document: Any, *, authentication_optional: bool) 
         raise _fail("credential_registry_receipt_schema_invalid")
     result = dict(document)
     keys = set(result)
-    expected = set(_RECEIPT_KEYS)
+    schema_version = result.get("schema_version")
+    if schema_version == LEGACY_RECEIPT_SCHEMA_VERSION:
+        expected = set(_RECEIPT_KEYS)
+    elif schema_version == RECEIPT_SCHEMA_VERSION:
+        expected = set(_RECEIPT_V2_KEYS)
+    else:
+        raise _fail("credential_registry_receipt_schema_invalid")
     if authentication_optional:
         if keys not in (expected, expected | {"receipt_authentication"}):
             raise _fail("credential_registry_receipt_schema_invalid")
     elif keys != expected:
         raise _fail("credential_registry_receipt_schema_invalid")
-    if result.get("schema_version") != RECEIPT_SCHEMA_VERSION:
-        raise _fail("credential_registry_receipt_schema_invalid")
+    if schema_version == RECEIPT_SCHEMA_VERSION and (
+        result.get("workspace_identity_basis") not in NOTION_WORKSPACE_IDENTITY_BASES
+    ):
+        raise _fail("credential_registry_receipt_identity_basis_invalid")
     credential_id = result.get("credential_id")
     if not isinstance(credential_id, str) or _CREDENTIAL_ID_RE.fullmatch(credential_id) is None:
         raise _fail("credential_registry_receipt_credential_invalid")
@@ -439,6 +486,16 @@ def _validate_receipt_document(document: Any, *, authentication_optional: bool) 
         value = result.get(key)
         if not isinstance(value, str) or _SHA256_RE.fullmatch(value) is None:
             raise _fail("credential_registry_receipt_identity_invalid")
+    if (
+        schema_version == RECEIPT_SCHEMA_VERSION
+        and result.get("workspace_identity_basis")
+        == NOTION_PAT_WORKSPACE_IDENTITY_BASIS
+        and not hmac.compare_digest(
+            result["verified_workspace_fingerprint"],
+            _notion_pat_scope_fingerprint(result["fingerprint_digest"]),
+        )
+    ):
+        raise _fail("credential_registry_receipt_identity_invalid")
     _validate_timestamp(result.get("adopted_at"))
     _validate_timestamp(result.get("last_verified_at"))
     if result.get("rotation_status") not in {"current", "legacy", "review_pending"}:
@@ -480,6 +537,17 @@ def _receipt_mac(document: Mapping[str, Any], key: bytes | bytearray) -> str:
             _receipt_authentication_payload(document)
         ),
         hashlib.sha256,
+    ).hexdigest()
+
+
+def _notion_pat_scope_fingerprint(credential_fingerprint: str) -> str:
+    """Derive the only valid authority scope for a person/PAT receipt."""
+
+    if _HMAC_SHA256_RE.fullmatch(credential_fingerprint) is None:
+        raise _fail("credential_registry_evolution_identity_invalid")
+    return "sha256:" + hashlib.sha256(
+        NOTION_PAT_SCOPE_FINGERPRINT_DOMAIN
+        + credential_fingerprint.encode("ascii")
     ).hexdigest()
 
 
@@ -601,7 +669,14 @@ def _atomic_replace_json(path: Path, document: Mapping[str, Any]) -> None:
     body = _canonical_json_bytes(document) + b"\n"
     descriptor: int | None = None
     try:
-        descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        descriptor = os.open(
+            temporary,
+            os.O_WRONLY
+            | os.O_CREAT
+            | os.O_EXCL
+            | getattr(os, "O_BINARY", 0),
+            0o600,
+        )
         written = 0
         while written < len(body):
             count = os.write(descriptor, body[written:])
@@ -626,6 +701,70 @@ def _atomic_replace_json(path: Path, document: Mapping[str, Any]) -> None:
         raise _fail("credential_registry_atomic_write_failed") from None
 
 
+def _atomic_create_json(
+    root: Path, path: Path, document: Mapping[str, Any]
+) -> tuple[bytes, bool]:
+    """Publish one immutable canonical document; identical replay is success."""
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    _ensure_safe_parent_chain(root, path)
+    body = _canonical_json_bytes(document) + b"\n"
+    temporary = path.parent / (
+        f".{path.name.removesuffix('.json')}.{secrets.token_hex(8)}.tmp"
+    )
+    descriptor: int | None = None
+    try:
+        descriptor = os.open(
+            temporary,
+            os.O_WRONLY
+            | os.O_CREAT
+            | os.O_EXCL
+            | getattr(os, "O_BINARY", 0),
+            0o600,
+        )
+        written = 0
+        while written < len(body):
+            count = os.write(descriptor, body[written:])
+            if count <= 0:
+                raise OSError
+            written += count
+        os.fsync(descriptor)
+        os.close(descriptor)
+        descriptor = None
+        try:
+            os.link(temporary, path)
+            created = True
+        except FileExistsError:
+            existing = _read_exact_bytes(
+                path,
+                maximum=MAX_EVOLUTION_BYTES,
+                missing_code="credential_registry_evolution_missing",
+            )
+            if not hmac.compare_digest(existing, body):
+                raise _fail("credential_registry_evolution_conflict")
+            created = False
+        try:
+            temporary.unlink()
+        except OSError:
+            pass
+        _fsync_directory(path.parent)
+        return body, created
+    except SecureCredentialRegistryError:
+        raise
+    except Exception:
+        raise _fail("credential_registry_evolution_commit_failed") from None
+    finally:
+        if descriptor is not None:
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+        try:
+            temporary.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
 @dataclass(repr=False)
 class AuthenticatedArchiveReceiptCommitter:
     """Atomic intake committer fixed to one archive's ignored-local path."""
@@ -642,6 +781,8 @@ class AuthenticatedArchiveReceiptCommitter:
         if archive_id != self.archive_id:
             raise _fail("credential_registry_archive_identity_changed")
         document = _validate_receipt_document(receipt, authentication_optional=False)
+        if document["schema_version"] != RECEIPT_SCHEMA_VERSION:
+            raise _fail("credential_registry_legacy_receipt_write_forbidden")
         authenticated = dict(document)
         authenticated["receipt_authentication"] = {
             "schema_version": RECEIPT_AUTHENTICATION_SCHEMA,
@@ -767,6 +908,11 @@ class _ReceiptRecord:
     document: Mapping[str, Any] = field(repr=False)
     receipt_sha256: str
     authentication_status: str
+    effective_workspace_fingerprint: str
+    workspace_identity_basis: str
+    authority_sha256: str
+    workspace_scope_evolved: bool = False
+    evolution_document: Mapping[str, Any] | None = field(default=None, repr=False)
 
 
 def _read_receipt_records(
@@ -832,9 +978,218 @@ def _read_receipt_records(
                 document=document,
                 receipt_sha256="sha256:" + hashlib.sha256(raw).hexdigest(),
                 authentication_status=_receipt_authentication_status(document, key),
+                effective_workspace_fingerprint=document[
+                    "verified_workspace_fingerprint"
+                ],
+                workspace_identity_basis=(
+                    document["workspace_identity_basis"]
+                    if document["schema_version"] == RECEIPT_SCHEMA_VERSION
+                    else LEGACY_WORKSPACE_IDENTITY_BASIS
+                ),
+                authority_sha256="sha256:" + hashlib.sha256(raw).hexdigest(),
             )
         )
     return records
+
+
+def _evolution_authentication_payload(document: Mapping[str, Any]) -> dict[str, Any]:
+    payload = dict(document)
+    payload.pop("authentication", None)
+    return payload
+
+
+def _evolution_mac(document: Mapping[str, Any], key: bytes | bytearray) -> str:
+    return hmac.new(
+        key,
+        WORKSPACE_SCOPE_EVOLUTION_AUTHENTICATION_DOMAIN
+        + _canonical_json_bytes(_evolution_authentication_payload(document)),
+        hashlib.sha256,
+    ).hexdigest()
+
+
+def _validate_evolution_document(document: Any) -> dict[str, Any]:
+    if not isinstance(document, Mapping) or set(document) != _EVOLUTION_KEYS:
+        raise _fail("credential_registry_evolution_schema_invalid")
+    result = dict(document)
+    if result.get("schema_version") != WORKSPACE_SCOPE_EVOLUTION_SCHEMA_VERSION:
+        raise _fail("credential_registry_evolution_schema_invalid")
+    credential_id = result.get("credential_id")
+    if not isinstance(credential_id, str) or _CREDENTIAL_ID_RE.fullmatch(credential_id) is None:
+        raise _fail("credential_registry_evolution_identity_invalid")
+    provider = result.get("provider")
+    if not isinstance(provider, str) or _PROVIDER_RE.fullmatch(provider) is None:
+        raise _fail("credential_registry_evolution_identity_invalid")
+    for name in (
+        "base_receipt_sha256",
+        "previous_workspace_fingerprint",
+        "verified_account_fingerprint",
+        "evolved_workspace_fingerprint",
+    ):
+        value = result.get(name)
+        if not isinstance(value, str) or _SHA256_RE.fullmatch(value) is None:
+            raise _fail("credential_registry_evolution_identity_invalid")
+    if result.get("previous_workspace_identity_basis") != LEGACY_WORKSPACE_IDENTITY_BASIS:
+        raise _fail("credential_registry_evolution_identity_basis_invalid")
+    if result.get("workspace_identity_basis") not in NOTION_WORKSPACE_IDENTITY_BASES:
+        raise _fail("credential_registry_evolution_identity_basis_invalid")
+    capabilities = result.get("verified_capabilities")
+    if not isinstance(capabilities, list) or capabilities != sorted(set(capabilities)):
+        raise _fail("credential_registry_evolution_capabilities_invalid")
+    if any(
+        not isinstance(capability, str) or _PURPOSE_RE.fullmatch(capability) is None
+        for capability in capabilities
+    ):
+        raise _fail("credential_registry_evolution_capabilities_invalid")
+    _validate_timestamp(result.get("evolved_at"))
+    authentication = result.get("authentication")
+    if not isinstance(authentication, Mapping) or set(authentication) != _AUTHENTICATION_KEYS:
+        raise _fail("credential_registry_evolution_authentication_invalid")
+    if (
+        authentication.get("schema_version")
+        != WORKSPACE_SCOPE_EVOLUTION_AUTHENTICATION_SCHEMA
+        or authentication.get("algorithm") != "hmac-sha256"
+        or not isinstance(authentication.get("mac"), str)
+        or _HEX_SHA256_RE.fullmatch(authentication["mac"]) is None
+    ):
+        raise _fail("credential_registry_evolution_authentication_invalid")
+    return result
+
+
+def _read_evolution_documents(
+    root: Path,
+) -> list[tuple[Path, bytes, dict[str, Any]]]:
+    evolutions_root = _archive_path(root, EVOLUTIONS_RELATIVE)
+    _ensure_safe_parent_chain(root, evolutions_root)
+    try:
+        info = os.lstat(evolutions_root)
+    except FileNotFoundError:
+        return []
+    except OSError:
+        raise _fail("credential_registry_evolution_directory_unavailable") from None
+    if _is_reparse(info) or not stat.S_ISDIR(info.st_mode):
+        raise _fail("credential_registry_evolution_directory_unsafe")
+    try:
+        entries = sorted(os.scandir(evolutions_root), key=lambda entry: entry.name)
+    except OSError:
+        raise _fail("credential_registry_evolution_directory_unavailable") from None
+    authority_entries: list[os.DirEntry[str]] = []
+    for entry in entries:
+        if _EVOLUTION_FILE_RE.fullmatch(entry.name) is not None:
+            authority_entries.append(entry)
+            continue
+        if _EVOLUTION_TEMP_RE.fullmatch(entry.name) is not None:
+            try:
+                temp_info = entry.stat(follow_symlinks=False)
+            except OSError:
+                raise _fail("credential_registry_evolution_entry_invalid") from None
+            if _is_reparse(temp_info) or not stat.S_ISREG(temp_info.st_mode):
+                raise _fail("credential_registry_evolution_entry_invalid")
+            continue
+        raise _fail("credential_registry_evolution_entry_invalid")
+    if len(authority_entries) > MAX_EVOLUTIONS:
+        raise _fail("credential_registry_evolution_count_exceeded")
+    result: list[tuple[Path, bytes, dict[str, Any]]] = []
+    seen: set[str] = set()
+    for entry in authority_entries:
+        match = _EVOLUTION_FILE_RE.fullmatch(entry.name)
+        if match is None or match.group(1) in seen:
+            raise _fail("credential_registry_evolution_duplicate")
+        seen.add(match.group(1))
+        raw = _read_exact_bytes(
+            Path(entry.path),
+            maximum=MAX_EVOLUTION_BYTES,
+            missing_code="credential_registry_evolution_missing",
+        )
+        try:
+            document = _validate_evolution_document(json.loads(raw.decode("utf-8")))
+        except (UnicodeError, json.JSONDecodeError):
+            raise _fail("credential_registry_evolution_schema_invalid") from None
+        if document["credential_id"] != match.group(1):
+            raise _fail("credential_registry_evolution_identity_invalid")
+        result.append((Path(entry.path), raw, document))
+    return result
+
+
+def _apply_workspace_scope_evolutions(
+    root: Path,
+    records: Sequence[_ReceiptRecord],
+    key: bytes | bytearray | None,
+) -> list[_ReceiptRecord]:
+    by_id = {record.document["credential_id"]: record for record in records}
+    evolved: dict[str, _ReceiptRecord] = dict(by_id)
+    for _path, raw, document in _read_evolution_documents(root):
+        credential_id = document["credential_id"]
+        record = by_id.get(credential_id)
+        if record is None:
+            raise _fail("credential_registry_evolution_orphaned")
+        if record.document["schema_version"] != LEGACY_RECEIPT_SCHEMA_VERSION:
+            raise _fail("credential_registry_evolution_conflict")
+        if not (
+            document["provider"] == record.document["provider"]
+            and document["base_receipt_sha256"] == record.receipt_sha256
+            and document["previous_workspace_fingerprint"]
+            == record.document["verified_workspace_fingerprint"]
+            and document["verified_account_fingerprint"]
+            == record.document["verified_account_fingerprint"]
+            and document["verified_capabilities"]
+            == record.document["verified_capabilities"]
+        ):
+            raise _fail("credential_registry_evolution_conflict")
+        if (
+            document["workspace_identity_basis"]
+            == NOTION_PAT_WORKSPACE_IDENTITY_BASIS
+            and not hmac.compare_digest(
+                document["evolved_workspace_fingerprint"],
+                _notion_pat_scope_fingerprint(
+                    record.document["fingerprint_digest"]
+                ),
+            )
+        ):
+            raise _fail("credential_registry_evolution_conflict")
+        authentication = document["authentication"]
+        if key is None:
+            authentication_status = "not_checked"
+        else:
+            authentication_status = (
+                "valid"
+                if hmac.compare_digest(
+                    str(authentication["mac"]), _evolution_mac(document, key)
+                )
+                else "invalid"
+            )
+        authority_sha256 = "sha256:" + hashlib.sha256(raw).hexdigest()
+        evolved[credential_id] = replace(
+            record,
+            authentication_status=(
+                "valid"
+                if record.authentication_status == "valid"
+                and authentication_status == "valid"
+                else (
+                    "not_checked"
+                    if record.authentication_status == "not_checked"
+                    and authentication_status == "not_checked"
+                    else "invalid"
+                )
+            ),
+            effective_workspace_fingerprint=document[
+                "evolved_workspace_fingerprint"
+            ],
+            workspace_identity_basis=document["workspace_identity_basis"],
+            authority_sha256=authority_sha256,
+            workspace_scope_evolved=True,
+            evolution_document=document,
+        )
+    return [evolved[record.document["credential_id"]] for record in records]
+
+
+def _read_effective_receipt_records(
+    root: Path, key: bytes | bytearray | None
+) -> list[_ReceiptRecord]:
+    return _apply_workspace_scope_evolutions(
+        root,
+        _read_receipt_records(root, key),
+        key,
+    )
 
 
 def _lifecycle_mac(document: Mapping[str, Any], key: bytes | bytearray) -> str:
@@ -989,15 +1344,24 @@ def _public_receipt(
     lifecycle_status = state["lifecycle_status"] if state is not None else document["lifecycle_status"]
     rotation_status = state["rotation_status"] if state is not None else document["rotation_status"]
     is_default = state["is_default"] if state is not None else document["is_default"]
+    workspace_fingerprint = record.effective_workspace_fingerprint
+    authority_sha256 = record.authority_sha256
     revision = (
         scope["revision"]
         if scope is not None
-        else "receipt-" + record.receipt_sha256.removeprefix("sha256:")
+        else "receipt-" + authority_sha256.removeprefix("sha256:")
     )
     lifecycle_scope_matches = bool(
         scope is not None
         and scope["provider"] == document["provider"]
-        and scope["workspace_fingerprint"] == document["verified_workspace_fingerprint"]
+        and scope["workspace_fingerprint"] == workspace_fingerprint
+    )
+    workspace_scope_transition_pending = bool(
+        record.workspace_scope_evolved
+        and lifecycle_authentication_status == "valid"
+        and scope is not None
+        and scope["provider"] == document["provider"]
+        and scope["workspace_fingerprint"] != workspace_fingerprint
     )
     authenticated = record.authentication_status == "valid"
     lifecycle_authenticated = lifecycle_authentication_status == "valid"
@@ -1022,15 +1386,18 @@ def _public_receipt(
         "lifecycle_status": lifecycle_status,
         "rotation_status": rotation_status,
         "is_default": is_default,
-        "verified_workspace_fingerprint": document["verified_workspace_fingerprint"],
-        "receipt_sha256": record.receipt_sha256,
+        "verified_workspace_fingerprint": workspace_fingerprint,
+        "workspace_identity_basis": record.workspace_identity_basis,
+        "workspace_scope_evolved": record.workspace_scope_evolved,
+        "workspace_scope_transition_pending": workspace_scope_transition_pending,
+        "receipt_sha256": authority_sha256,
         "receipt_authentication_status": record.authentication_status,
         "lifecycle_authentication_status": lifecycle_authentication_status,
         "broker_authoritative": broker_authoritative,
         "scope_binding": {
             "credential_id": document["credential_id"],
-            "workspace_fingerprint": document["verified_workspace_fingerprint"],
-            "scope_receipt_sha256": record.receipt_sha256,
+            "workspace_fingerprint": workspace_fingerprint,
+            "scope_receipt_sha256": authority_sha256,
             "revision": revision,
             # In a recovery manifest, ``persisted`` is an authority bit rather
             # than a restatement of the intake receipt.  A newly intaken secret
@@ -1056,7 +1423,7 @@ def list_secure_credentials(
         else _validate_authentication_key(receipt_authentication_key)
     )
     with _archive_lock(root, create_if_missing=False):
-        records = _read_receipt_records(root, key)
+        records = _read_effective_receipt_records(root, key)
         lifecycle_document, lifecycle_status = _read_lifecycle(root, archive_id, key)
     # An unauthenticated lifecycle file may not override even presentation
     # state.  Valid receipt metadata remains visible, but lifecycle/default
@@ -1081,7 +1448,7 @@ def list_secure_credentials(
                 for record in records
                 if record.authentication_status == "valid"
                 and record.document["provider"] == scope["provider"]
-                and record.document["verified_workspace_fingerprint"]
+                and record.effective_workspace_fingerprint
                 == scope["workspace_fingerprint"]
             }
             complete = all_receipts_authenticated and lifecycle_ids == receipt_ids
@@ -1107,6 +1474,573 @@ def list_secure_credentials(
         "native_enumeration_performed": False,
         "provider_call_performed": False,
         "write_performed": False,
+    }
+
+
+@dataclass(frozen=True, repr=False)
+class AuthenticatedCredentialReuseEvidence:
+    """Receipt-authenticated, non-secret scope evidence for one reuse check."""
+
+    provider: str
+    verified_account_fingerprint: str
+    verified_workspace_fingerprint: str
+    workspace_identity_basis: str
+    credential_fingerprint: str = field(repr=False)
+    verified_capabilities: tuple[str, ...]
+
+
+@dataclass(frozen=True, repr=False)
+class _AuthenticatedCredentialReuseAuthority:
+    target: str = field(repr=False)
+    receipt_sha256: str
+    expected_secret_fingerprint: str = field(repr=False)
+    evidence: AuthenticatedCredentialReuseEvidence
+
+
+def _authenticated_credential_reuse_authority(
+    archive_root: Path | str,
+    credential_id: str,
+    *,
+    receipt_authentication_key: bytes | bytearray | memoryview,
+) -> _AuthenticatedCredentialReuseAuthority:
+    if not isinstance(credential_id, str) or _CREDENTIAL_ID_RE.fullmatch(
+        credential_id
+    ) is None:
+        raise _fail("credential_registry_credential_id_invalid")
+    root, archive_id = _validate_archive(archive_root)
+    key = _validate_authentication_key(receipt_authentication_key)
+    with _archive_lock(root, create_if_missing=False):
+        records = _read_effective_receipt_records(root, key)
+        if any(record.authentication_status != "valid" for record in records):
+            raise _fail("credential_registry_receipt_set_untrusted")
+        matching = [
+            record
+            for record in records
+            if record.document["credential_id"] == credential_id
+        ]
+        if len(matching) != 1:
+            raise _fail("credential_registry_credential_not_found")
+        document = matching[0].document
+        if document["encrypted_backend_kind"] != "windows_credential_manager_generic":
+            raise _fail("credential_registry_backend_not_supported")
+        backend_id = document["encrypted_backend_id"]
+        if _BACKEND_ID_RE.fullmatch(backend_id) is None:
+            raise _fail("credential_registry_receipt_backend_invalid")
+        return _AuthenticatedCredentialReuseAuthority(
+            target=windows_credential_target(archive_id, backend_id),
+            receipt_sha256=matching[0].authority_sha256,
+            expected_secret_fingerprint=document["fingerprint_digest"],
+            evidence=AuthenticatedCredentialReuseEvidence(
+                provider=document["provider"],
+                verified_account_fingerprint=document[
+                    "verified_account_fingerprint"
+                ],
+                verified_workspace_fingerprint=matching[
+                    0
+                ].effective_workspace_fingerprint,
+                workspace_identity_basis=matching[0].workspace_identity_basis,
+                credential_fingerprint=document["fingerprint_digest"],
+                verified_capabilities=tuple(document["verified_capabilities"]),
+            ),
+        )
+
+
+def use_authenticated_secure_credential_for_revalidation(
+    archive_root: Path | str,
+    credential_id: str,
+    *,
+    receipt_authentication_key: bytes | bytearray | memoryview,
+    secret_fingerprint_key: bytes | bytearray | memoryview,
+    native: ExactWindowsCredentialNative,
+    consumer: Callable[[memoryview, AuthenticatedCredentialReuseEvidence], _T],
+) -> _T:
+    """Revalidate one saved secret without exporting it from the worker.
+
+    The authenticated receipt selects exactly one backend target.  The secret
+    is read into a mutable buffer, HMAC-compared with the receipt, passed only
+    to the trusted in-process callback, and wiped.  Receipt and store authority
+    are then observed a second time so a successful reuse result cannot be
+    based on a record or credential that changed during provider verification.
+    """
+
+    fingerprint_key = _validate_authentication_key(secret_fingerprint_key)
+    before = _authenticated_credential_reuse_authority(
+        archive_root,
+        credential_id,
+        receipt_authentication_key=receipt_authentication_key,
+    )
+
+    def read_and_verify(authority: _AuthenticatedCredentialReuseAuthority) -> bytearray:
+        try:
+            present = native.generic_exists(authority.target)
+        except Exception:
+            raise _fail("credential_registry_store_probe_failed") from None
+        if not present:
+            raise _fail("credential_registry_store_missing")
+        try:
+            secret_buffer = native.read_generic_secret_exact(authority.target)
+        except Exception:
+            raise _fail("credential_registry_secret_read_failed") from None
+        if not isinstance(secret_buffer, bytearray) or not secret_buffer:
+            if isinstance(secret_buffer, bytearray):
+                for index in range(len(secret_buffer)):
+                    secret_buffer[index] = 0
+            raise _fail("credential_registry_secret_read_failed")
+        actual_fingerprint = "hmac-sha256:" + hmac.new(
+            fingerprint_key,
+            secret_buffer,
+            hashlib.sha256,
+        ).hexdigest()
+        if not hmac.compare_digest(
+            actual_fingerprint,
+            authority.expected_secret_fingerprint,
+        ):
+            for index in range(len(secret_buffer)):
+                secret_buffer[index] = 0
+            raise _fail("credential_registry_secret_fingerprint_mismatch")
+        return secret_buffer
+
+    secret_buffer: bytearray | None = None
+    secret_view: memoryview | None = None
+    try:
+        secret_buffer = read_and_verify(before)
+        secret_view = memoryview(secret_buffer)
+        result = consumer(secret_view, before.evidence)
+    finally:
+        if secret_view is not None:
+            secret_view.release()
+        if secret_buffer is not None:
+            for index in range(len(secret_buffer)):
+                secret_buffer[index] = 0
+
+    after = _authenticated_credential_reuse_authority(
+        archive_root,
+        credential_id,
+        receipt_authentication_key=receipt_authentication_key,
+    )
+    if not (
+        hmac.compare_digest(before.target, after.target)
+        and hmac.compare_digest(before.receipt_sha256, after.receipt_sha256)
+        and hmac.compare_digest(
+            before.expected_secret_fingerprint,
+            after.expected_secret_fingerprint,
+        )
+        and before.evidence == after.evidence
+    ):
+        raise _fail("credential_registry_reuse_authority_changed")
+
+    final_buffer: bytearray | None = None
+    try:
+        final_buffer = read_and_verify(after)
+    finally:
+        if final_buffer is not None:
+            for index in range(len(final_buffer)):
+                final_buffer[index] = 0
+    return result
+
+
+def _verify_exact_saved_secret(
+    authority: _AuthenticatedCredentialReuseAuthority,
+    *,
+    native: ExactWindowsCredentialNative,
+    fingerprint_key: bytes | bytearray,
+) -> None:
+    secret_buffer: bytearray | None = None
+    try:
+        try:
+            if not native.generic_exists(authority.target):
+                raise _fail("credential_registry_store_missing")
+        except SecureCredentialRegistryError:
+            raise
+        except Exception:
+            raise _fail("credential_registry_store_probe_failed") from None
+        try:
+            secret_buffer = native.read_generic_secret_exact(authority.target)
+        except Exception:
+            raise _fail("credential_registry_secret_read_failed") from None
+        if not isinstance(secret_buffer, bytearray) or not secret_buffer:
+            raise _fail("credential_registry_secret_read_failed")
+        actual = "hmac-sha256:" + hmac.new(
+            fingerprint_key, secret_buffer, hashlib.sha256
+        ).hexdigest()
+        if not hmac.compare_digest(actual, authority.expected_secret_fingerprint):
+            raise _fail("credential_registry_secret_fingerprint_mismatch")
+    finally:
+        if secret_buffer is not None:
+            for index in range(len(secret_buffer)):
+                secret_buffer[index] = 0
+
+
+def _singleton_lifecycle_transition(
+    existing: Mapping[str, Any] | None,
+    *,
+    provider: str,
+    credential_id: str,
+    previous_workspace_fingerprint: str,
+    evolved_workspace_fingerprint: str,
+    evolution_authority_sha256: str,
+) -> dict[str, Any] | None:
+    """Return a safe singleton transition, None for no lifecycle, or fail."""
+
+    if existing is None:
+        return None
+    occurrences: list[tuple[int, Mapping[str, Any], Mapping[str, Any]]] = []
+    for index, scope in enumerate(existing["scopes"]):
+        for state in scope["credentials"]:
+            if state["credential_id"] == credential_id:
+                occurrences.append((index, scope, state))
+    if len(occurrences) != 1:
+        raise _fail("credential_registry_evolution_lifecycle_review_required")
+    index, scope, _state = occurrences[0]
+    if (
+        scope["provider"] == provider
+        and scope["workspace_fingerprint"] == evolved_workspace_fingerprint
+        and len(scope["credentials"]) == 1
+    ):
+        replay = dict(existing)
+        replay.pop("authentication", None)
+        return replay
+    if not (
+        scope["provider"] == provider
+        and scope["workspace_fingerprint"] == previous_workspace_fingerprint
+        and len(scope["credentials"]) == 1
+    ):
+        raise _fail("credential_registry_evolution_lifecycle_review_required")
+    if any(
+        candidate["provider"] == provider
+        and candidate["workspace_fingerprint"] == evolved_workspace_fingerprint
+        and candidate is not scope
+        for candidate in existing["scopes"]
+    ):
+        raise _fail("credential_registry_evolution_lifecycle_review_required")
+    transition_seed = {
+        "credential_id": credential_id,
+        "previous_workspace_fingerprint": previous_workspace_fingerprint,
+        "evolved_workspace_fingerprint": evolved_workspace_fingerprint,
+        "evolution_authority_sha256": evolution_authority_sha256,
+        "preserved_credentials": scope["credentials"],
+    }
+    transition_sha256 = "sha256:" + hashlib.sha256(
+        _canonical_json_bytes(transition_seed)
+    ).hexdigest()
+    transitioned_scope = dict(scope)
+    transitioned_scope.update(
+        {
+            "workspace_fingerprint": evolved_workspace_fingerprint,
+            "revision": "scope-evolution-"
+            + transition_sha256.removeprefix("sha256:"),
+            "plan_sha256": transition_sha256,
+        }
+    )
+    scopes = [dict(candidate) for candidate in existing["scopes"]]
+    scopes[index] = transitioned_scope
+    scopes.sort(key=lambda candidate: (candidate["provider"], candidate["workspace_fingerprint"]))
+    return {
+        "schema_version": LIFECYCLE_SCHEMA_VERSION,
+        "archive_id": existing["archive_id"],
+        "scopes": scopes,
+    }
+
+
+def evolve_legacy_authenticated_workspace_scope(
+    archive_root: Path | str,
+    credential_id: str,
+    *,
+    evolved_workspace_fingerprint: str,
+    workspace_identity_basis: str,
+    verified_account_fingerprint: str,
+    verified_capabilities: Sequence[str],
+    receipt_authentication_key: bytes | bytearray | memoryview,
+    secret_fingerprint_key: bytes | bytearray | memoryview,
+    native: ExactWindowsCredentialNative,
+    evolved_at: str | None = None,
+    after_evolution_commit: Callable[[], None] | None = None,
+) -> dict[str, Any]:
+    """Evolve one released v0.1 anchor scope without changing its saved PAT.
+
+    Provider verification occurs immediately before this call.  This commit
+    gate independently authenticates the base receipt, exact saved-secret HMAC,
+    and any existing evolution/lifecycle.  It never writes or deletes a native
+    credential.  A complex lifecycle fails before first publication.
+    """
+
+    if not isinstance(credential_id, str) or _CREDENTIAL_ID_RE.fullmatch(credential_id) is None:
+        raise _fail("credential_registry_credential_id_invalid")
+    if not isinstance(evolved_workspace_fingerprint, str) or _SHA256_RE.fullmatch(
+        evolved_workspace_fingerprint
+    ) is None:
+        raise _fail("credential_registry_evolution_identity_invalid")
+    if workspace_identity_basis not in NOTION_WORKSPACE_IDENTITY_BASES:
+        raise _fail("credential_registry_evolution_identity_basis_invalid")
+    if not isinstance(verified_account_fingerprint, str) or _SHA256_RE.fullmatch(
+        verified_account_fingerprint
+    ) is None:
+        raise _fail("credential_registry_evolution_identity_invalid")
+    capabilities = list(verified_capabilities)
+    if capabilities != sorted(set(capabilities)) or any(
+        not isinstance(capability, str) or _PURPOSE_RE.fullmatch(capability) is None
+        for capability in capabilities
+    ):
+        raise _fail("credential_registry_evolution_capabilities_invalid")
+    key = _validate_authentication_key(receipt_authentication_key)
+    fingerprint_key = _validate_authentication_key(secret_fingerprint_key)
+    root, archive_id = _validate_archive(archive_root)
+    timestamp = evolved_at or datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace(
+        "+00:00", "Z"
+    )
+    _validate_timestamp(timestamp)
+
+    with _archive_lock(root):
+        base_records = _read_receipt_records(root, key)
+        if any(record.authentication_status != "valid" for record in base_records):
+            raise _fail("credential_registry_receipt_set_untrusted")
+        matching = [
+            record
+            for record in base_records
+            if record.document["credential_id"] == credential_id
+        ]
+        if len(matching) != 1:
+            raise _fail("credential_registry_credential_not_found")
+        base = matching[0]
+        document = base.document
+        if document["schema_version"] != LEGACY_RECEIPT_SCHEMA_VERSION:
+            raise _fail("credential_registry_evolution_not_legacy")
+        if (
+            workspace_identity_basis == NOTION_PAT_WORKSPACE_IDENTITY_BASIS
+            and not hmac.compare_digest(
+                evolved_workspace_fingerprint,
+                _notion_pat_scope_fingerprint(document["fingerprint_digest"]),
+            )
+        ):
+            raise _fail("credential_registry_evolution_identity_mismatch")
+        if not (
+            document["provider"] == "notion"
+            and document["verified_account_fingerprint"]
+            == verified_account_fingerprint
+            and document["verified_capabilities"] == capabilities
+        ):
+            raise _fail("credential_registry_evolution_identity_mismatch")
+        if document["encrypted_backend_kind"] != "windows_credential_manager_generic":
+            raise _fail("credential_registry_backend_not_supported")
+        authority = _AuthenticatedCredentialReuseAuthority(
+            target=windows_credential_target(
+                archive_id, document["encrypted_backend_id"]
+            ),
+            receipt_sha256=base.receipt_sha256,
+            expected_secret_fingerprint=document["fingerprint_digest"],
+            evidence=AuthenticatedCredentialReuseEvidence(
+                provider=document["provider"],
+                verified_account_fingerprint=document[
+                    "verified_account_fingerprint"
+                ],
+                verified_workspace_fingerprint=document[
+                    "verified_workspace_fingerprint"
+                ],
+                workspace_identity_basis=LEGACY_WORKSPACE_IDENTITY_BASIS,
+                credential_fingerprint=document["fingerprint_digest"],
+                verified_capabilities=tuple(capabilities),
+            ),
+        )
+        existing_lifecycle, lifecycle_status = _read_lifecycle(
+            root, archive_id, key
+        )
+        if existing_lifecycle is not None and lifecycle_status != "valid":
+            raise _fail("credential_registry_lifecycle_authentication_invalid")
+
+        existing_evolutions = _read_evolution_documents(root)
+        effective_before = _apply_workspace_scope_evolutions(
+            root, base_records, key
+        )
+        if any(
+            record.authentication_status != "valid"
+            for record in effective_before
+        ):
+            raise _fail("credential_registry_evolution_authentication_invalid")
+        matching_evolution = [
+            (raw, evolution)
+            for _path, raw, evolution in existing_evolutions
+            if evolution["credential_id"] == credential_id
+        ]
+        if len(matching_evolution) > 1:
+            raise _fail("credential_registry_evolution_duplicate")
+        if any(
+            record.document["credential_id"] != credential_id
+            and record.document["provider"] == "notion"
+            and record.effective_workspace_fingerprint
+            == evolved_workspace_fingerprint
+            for record in effective_before
+        ):
+            # Collapsing two independently authenticated registrations into
+            # one authority scope is a human lifecycle decision, never an
+            # automatic migration side effect.
+            raise _fail("credential_registry_evolution_lifecycle_review_required")
+
+        if matching_evolution:
+            evolution_raw, evolution = matching_evolution[0]
+            validated = _apply_workspace_scope_evolutions(root, base_records, key)
+            effective = next(
+                record
+                for record in validated
+                if record.document["credential_id"] == credential_id
+            )
+            if not (
+                effective.authentication_status == "valid"
+                and effective.effective_workspace_fingerprint
+                == evolved_workspace_fingerprint
+                and evolution["verified_account_fingerprint"]
+                == verified_account_fingerprint
+                and evolution["verified_capabilities"] == capabilities
+                and evolution["workspace_identity_basis"]
+                == workspace_identity_basis
+            ):
+                raise _fail("credential_registry_evolution_conflict")
+            _verify_exact_saved_secret(
+                authority, native=native, fingerprint_key=fingerprint_key
+            )
+            evolution_authority_sha256 = "sha256:" + hashlib.sha256(
+                evolution_raw
+            ).hexdigest()
+            created = False
+        else:
+            # Decide whether lifecycle topology is migratable before publishing
+            # the append-only authority.  No-lifecycle remains non-authoritative.
+            prospective_authority = "sha256:" + ("0" * 64)
+            _singleton_lifecycle_transition(
+                existing_lifecycle,
+                provider="notion",
+                credential_id=credential_id,
+                previous_workspace_fingerprint=document[
+                    "verified_workspace_fingerprint"
+                ],
+                evolved_workspace_fingerprint=evolved_workspace_fingerprint,
+                evolution_authority_sha256=prospective_authority,
+            )
+            _verify_exact_saved_secret(
+                authority, native=native, fingerprint_key=fingerprint_key
+            )
+            evolution = {
+                "schema_version": WORKSPACE_SCOPE_EVOLUTION_SCHEMA_VERSION,
+                "credential_id": credential_id,
+                "provider": "notion",
+                "base_receipt_sha256": base.receipt_sha256,
+                "previous_workspace_fingerprint": document[
+                    "verified_workspace_fingerprint"
+                ],
+                "previous_workspace_identity_basis": LEGACY_WORKSPACE_IDENTITY_BASIS,
+                "verified_account_fingerprint": verified_account_fingerprint,
+                "verified_capabilities": capabilities,
+                "evolved_workspace_fingerprint": evolved_workspace_fingerprint,
+                "workspace_identity_basis": workspace_identity_basis,
+                "evolved_at": timestamp,
+            }
+            evolution["authentication"] = {
+                "schema_version": WORKSPACE_SCOPE_EVOLUTION_AUTHENTICATION_SCHEMA,
+                "algorithm": "hmac-sha256",
+                "mac": _evolution_mac(evolution, key),
+            }
+            _validate_evolution_document(evolution)
+            evolution_path = _archive_path(root, EVOLUTIONS_RELATIVE) / (
+                credential_id + ".workspace-scope-v1.json"
+            )
+            evolution_raw, created = _atomic_create_json(
+                root, evolution_path, evolution
+            )
+            evolution_authority_sha256 = "sha256:" + hashlib.sha256(
+                evolution_raw
+            ).hexdigest()
+
+        transitioned = _singleton_lifecycle_transition(
+            existing_lifecycle,
+            provider="notion",
+            credential_id=credential_id,
+            previous_workspace_fingerprint=document[
+                "verified_workspace_fingerprint"
+            ],
+            evolved_workspace_fingerprint=evolved_workspace_fingerprint,
+            evolution_authority_sha256=evolution_authority_sha256,
+        )
+        if created and after_evolution_commit is not None:
+            after_evolution_commit()
+        lifecycle_migrated = False
+        if transitioned is not None:
+            transitioned["authentication"] = {
+                "schema_version": LIFECYCLE_AUTHENTICATION_SCHEMA,
+                "algorithm": "hmac-sha256",
+                "mac": _lifecycle_mac(transitioned, key),
+            }
+            _validate_lifecycle_document(transitioned, archive_id=archive_id)
+            lifecycle_path = _archive_path(root, LIFECYCLE_RELATIVE)
+            _atomic_replace_json(lifecycle_path, transitioned)
+            lifecycle_migrated = True
+
+        # Final interpretation must authenticate the newly effective authority.
+        final_records = _read_effective_receipt_records(root, key)
+        final = next(
+            record
+            for record in final_records
+            if record.document["credential_id"] == credential_id
+        )
+        if not (
+            final.authentication_status == "valid"
+            and final.authority_sha256 == evolution_authority_sha256
+            and final.effective_workspace_fingerprint
+            == evolved_workspace_fingerprint
+        ):
+            raise _fail("credential_registry_evolution_verification_failed")
+        _verify_exact_saved_secret(
+            authority, native=native, fingerprint_key=fingerprint_key
+        )
+        final_lifecycle, final_lifecycle_status = _read_lifecycle(
+            root, archive_id, key
+        )
+        broker_authoritative = False
+        if final_lifecycle_status == "valid" and final_lifecycle is not None:
+            final_lifecycle_index = _lifecycle_index(final_lifecycle)
+            final_lifecycle_entry = final_lifecycle_index.get(credential_id)
+            if final_lifecycle_entry is not None:
+                final_scope, final_state = final_lifecycle_entry
+                lifecycle_ids = {
+                    row["credential_id"]
+                    for row in final_scope["credentials"]
+                }
+                receipt_ids = {
+                    record.document["credential_id"]
+                    for record in final_records
+                    if record.authentication_status == "valid"
+                    and record.document["provider"] == final_scope["provider"]
+                    and record.effective_workspace_fingerprint
+                    == final_scope["workspace_fingerprint"]
+                }
+                broker_authoritative = bool(
+                    all(
+                        record.authentication_status == "valid"
+                        for record in final_records
+                    )
+                    and final_scope["provider"] == "notion"
+                    and final_scope["workspace_fingerprint"]
+                    == evolved_workspace_fingerprint
+                    and lifecycle_ids == receipt_ids
+                    and final_state["lifecycle_status"] == "active"
+                    and final_state["rotation_status"] == "current"
+                    and final_state["is_default"] is True
+                )
+    return {
+        "schema_version": REGISTRY_RESULT_SCHEMA_VERSION,
+        "ok": True,
+        "status": (
+            "workspace_scope_evolved"
+            if created
+            else "workspace_scope_evolution_replayed"
+        ),
+        "credential_id": credential_id,
+        "verified_workspace_fingerprint": evolved_workspace_fingerprint,
+        "workspace_identity_basis": workspace_identity_basis,
+        "authority_sha256": evolution_authority_sha256,
+        "lifecycle_migrated": lifecycle_migrated,
+        "broker_authoritative": broker_authoritative,
+        "credential_store_write_performed": False,
+        "credential_store_delete_performed": False,
+        "secret_prompt_performed": False,
     }
 
 
@@ -1161,12 +2095,12 @@ def persist_duplicate_lifecycle_decision(
     ):
         raise _fail("credential_registry_lifecycle_pending_invalid")
     with _archive_lock(root, create_if_missing=human_approved is True):
-        records = _read_receipt_records(root, key)
+        records = _read_effective_receipt_records(root, key)
         scoped = [
             record
             for record in records
             if record.document["provider"] == provider
-            and record.document["verified_workspace_fingerprint"] == workspace_fingerprint
+            and record.effective_workspace_fingerprint == workspace_fingerprint
         ]
         if not scoped:
             raise _fail("credential_registry_lifecycle_scope_not_found")
@@ -1200,7 +2134,7 @@ def persist_duplicate_lifecycle_decision(
         receipt_set = [
             {
                 "credential_id": record.document["credential_id"],
-                "receipt_sha256": record.receipt_sha256,
+                "receipt_sha256": record.authority_sha256,
                 "credential_fingerprint": record.document["fingerprint_digest"],
             }
             for record in sorted(scoped, key=lambda value: value.document["credential_id"])
@@ -1349,7 +2283,7 @@ class ReceiptBackedNotionCredentialBroker:
         root, archive_id = _validate_archive(archive_root)
         key = _validate_authentication_key(receipt_authentication_key)
         with _archive_lock(root, create_if_missing=False):
-            records = _read_receipt_records(root, key)
+            records = _read_effective_receipt_records(root, key)
             matching = [
                 record
                 for record in records
@@ -1374,16 +2308,17 @@ class ReceiptBackedNotionCredentialBroker:
             document = record.document
             if document["provider"] != "notion":
                 raise _fail("credential_registry_provider_not_supported")
-            if not hmac.compare_digest(record.receipt_sha256, scope_binding.scope_receipt_sha256):
+            if not hmac.compare_digest(record.authority_sha256, scope_binding.scope_receipt_sha256):
                 raise _fail("credential_registry_scope_receipt_mismatch")
             if not hmac.compare_digest(
-                document["verified_workspace_fingerprint"],
+                record.effective_workspace_fingerprint,
                 scope_binding.workspace_fingerprint,
             ):
                 raise _fail("credential_registry_scope_workspace_mismatch")
             if (
                 scope["provider"] != document["provider"]
-                or scope["workspace_fingerprint"] != document["verified_workspace_fingerprint"]
+                or scope["workspace_fingerprint"]
+                != record.effective_workspace_fingerprint
             ):
                 raise _fail("credential_registry_lifecycle_scope_mismatch")
             lifecycle_ids = {row["credential_id"] for row in scope["credentials"]}
@@ -1391,8 +2326,8 @@ class ReceiptBackedNotionCredentialBroker:
                 item.document["credential_id"]
                 for item in records
                 if item.document["provider"] == document["provider"]
-                and item.document["verified_workspace_fingerprint"]
-                == document["verified_workspace_fingerprint"]
+                and item.effective_workspace_fingerprint
+                == record.effective_workspace_fingerprint
             }
             if lifecycle_ids != receipt_ids:
                 raise _fail("credential_registry_lifecycle_receipt_set_drift")
@@ -1481,12 +2416,15 @@ class ReceiptBackedNotionCredentialBroker:
 
 __all__ = [
     "AuthenticatedArchiveReceiptCommitter",
+    "AuthenticatedCredentialReuseEvidence",
     "ExactWindowsCredentialNative",
     "ReceiptBackedNotionCredentialBroker",
     "SecureCredentialRegistryError",
     "StableArchiveFingerprintKeyProvider",
     "create_archive_atomic_json_receipt_committer",
+    "evolve_legacy_authenticated_workspace_scope",
     "list_secure_credentials",
     "lookup_secure_credential",
+    "use_authenticated_secure_credential_for_revalidation",
     "persist_duplicate_lifecycle_decision",
 ]

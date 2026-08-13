@@ -117,6 +117,11 @@ DERIVED_TEXT_REVIEW_STATUSES = {"unreviewed", "human_corrected"}
 DERIVED_TEXT_UNKNOWN_VERSION_LABELS = {"unknown", "n/a", "na", "none", "unspecified", "todo", "tbd"}
 DERIVED_TEXT_CAPTURE_RECEIPT_SCHEMA = "wom-kit/derived-text-capture-receipt/v0.2"
 DERIVED_TEXT_RECORD_SCHEMA = "wom-kit/derived-text-record/v0.1"
+STAGED_CLEANUP_CHECK_SCHEMA = "wom-kit/staged-cleanup-check/v0.3.317"
+STAGED_CLEANUP_MANIFEST_MAX_BYTES = 64 * 1024 * 1024
+STAGED_CLEANUP_RECEIPT_MAX_BYTES = 16 * 1024 * 1024
+STAGED_CLEANUP_MAX_DERIVED_RECEIPTS = 100_000
+STAGED_CLEANUP_MAX_DERIVED_RECEIPT_SCAN_BYTES = 512 * 1024 * 1024
 # Deterministic size cap for text sources (standalone --text-file, batch manifests, and
 # paired staged_text_path): decode+re-encode peaks at roughly 3-4x the input for UTF-16,
 # and paired intake makes a one-typo giant file likely, so the cap is checked on the
@@ -125370,6 +125375,917 @@ def objet_capture_summary(item_results: list[dict[str, Any]], *, approve: bool) 
     return summary
 
 
+def _staged_cleanup_strict_json_object(raw: bytes) -> dict[str, Any] | None:
+    """Decode one bounded JSON object without accepting duplicate members."""
+
+    def unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        result: dict[str, Any] = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError("duplicate_json_member")
+            result[key] = value
+        return result
+
+    try:
+        value = json.loads(
+            raw.decode("utf-8"),
+            object_pairs_hook=unique_object,
+        )
+    except (UnicodeError, json.JSONDecodeError, ValueError, RecursionError):
+        return None
+    return value if isinstance(value, dict) else None
+
+
+def _staged_cleanup_stat_identity(value: os.stat_result) -> tuple[int, int, int, int, int]:
+    return (
+        int(value.st_dev),
+        int(getattr(value, "st_ino", 0) or 0),
+        int(value.st_size),
+        int(getattr(value, "st_mtime_ns", 0)),
+        int(value.st_mode),
+    )
+
+
+def _staged_cleanup_path_identity(
+    root: Path,
+    path: Path,
+    relative: str,
+) -> tuple[int, int, int, int, int] | None:
+    if objet_capture_path_chain_blockers(root, relative):
+        return None
+    try:
+        observed = os.lstat(path)
+    except OSError:
+        return None
+    reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+    if stat.S_ISLNK(observed.st_mode) or (
+        reparse_flag
+        and getattr(observed, "st_file_attributes", 0) & reparse_flag
+    ):
+        return None
+    return _staged_cleanup_stat_identity(observed)
+
+
+def _staged_cleanup_authority_unchanged(
+    root: Path,
+    authority: tuple[Any, ...],
+) -> bool:
+    if len(authority) not in {3, 4}:
+        return False
+    path, relative, expected = authority[:3]
+    if _staged_cleanup_path_identity(root, path, relative) != expected:
+        return False
+    if len(authority) == 3:
+        # Directory authorities bind enumeration identity only. File
+        # authorities always carry a fourth exact-byte digest below.
+        return True
+    expected_digest = authority[3]
+    digest, size, observed_authority = _staged_cleanup_stable_file_digest(
+        root,
+        path,
+        relative,
+    )
+    return bool(
+        isinstance(expected_digest, str)
+        and digest == expected_digest
+        and size == expected[2]
+        and observed_authority is not None
+        and observed_authority[2] == expected
+    )
+
+
+def _staged_cleanup_staged_tree_snapshot(
+    root: Path,
+    staged_root: Path,
+    normalized: str,
+) -> tuple[
+    tuple[tuple[str, tuple[int, int, int, int, int]], ...] | None,
+    list[Path],
+]:
+    rows: list[tuple[str, tuple[int, int, int, int, int]]] = []
+    files: list[Path] = []
+    failed = False
+    directory_authorities: list[
+        tuple[Path, str, tuple[int, int, int, int, int]]
+    ] = []
+
+    def onerror(_error: OSError) -> None:
+        nonlocal failed
+        failed = True
+
+    for dirpath, dirnames, filenames in os.walk(staged_root, onerror=onerror):
+        directory = Path(dirpath)
+        try:
+            relative_dir = directory.relative_to(staged_root).as_posix()
+        except ValueError:
+            failed = True
+            continue
+        relative = normalized if relative_dir == "." else f"{normalized}/{relative_dir}"
+        identity = _staged_cleanup_path_identity(root, directory, relative)
+        if identity is None:
+            failed = True
+        else:
+            rows.append((f"d:{relative_dir}", identity))
+            directory_authorities.append((directory, relative, identity))
+        for dirname in list(dirnames):
+            child = directory / dirname
+            try:
+                child_stat = os.lstat(child)
+            except OSError:
+                failed = True
+                continue
+            reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+            if stat.S_ISLNK(child_stat.st_mode) or (
+                reparse_flag
+                and getattr(child_stat, "st_file_attributes", 0) & reparse_flag
+            ):
+                dirnames.remove(dirname)
+                child_relative = child.relative_to(staged_root).as_posix()
+                rows.append((f"u:{child_relative}", _staged_cleanup_stat_identity(child_stat)))
+                files.append(child)
+        for filename in filenames:
+            child = directory / filename
+            child_relative = child.relative_to(staged_root).as_posix()
+            relative = f"{normalized}/{child_relative}"
+            identity = _staged_cleanup_path_identity(root, child, relative)
+            if identity is None:
+                failed = True
+                continue
+            rows.append((f"f:{child_relative}", identity))
+            files.append(child)
+    if failed:
+        return None, files
+    if any(
+        not _staged_cleanup_authority_unchanged(root, authority)
+        for authority in directory_authorities
+    ):
+        return None, files
+    return tuple(sorted(rows)), sorted(files)
+
+
+def _staged_cleanup_stable_file_digest(
+    root: Path,
+    path: Path,
+    relative: str,
+    *,
+    progress_callback: Callable[[int], None] | None = None,
+) -> tuple[
+    str | None,
+    int | None,
+    tuple[Path, str, tuple[int, int, int, int, int], str] | None,
+]:
+    """Hash one regular file through a stable, no-follow descriptor."""
+
+    entry_identity = _staged_cleanup_path_identity(root, path, relative)
+    if entry_identity is None or not stat.S_ISREG(entry_identity[4]):
+        return None, None, None
+    flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        fd = os.open(str(path), flags)
+    except OSError:
+        return None, None, None
+    try:
+        opened = os.fstat(fd)
+        if (
+            not stat.S_ISREG(opened.st_mode)
+            or _staged_cleanup_stat_identity(opened) != entry_identity
+        ):
+            return None, None, None
+        digest = hashlib.sha256()
+        total = 0
+        while True:
+            chunk = os.read(fd, 1024 * 1024)
+            if not chunk:
+                break
+            total += len(chunk)
+            digest.update(chunk)
+            if progress_callback is not None:
+                progress_callback(total)
+        opened_after = os.fstat(fd)
+        final_identity = _staged_cleanup_path_identity(root, path, relative)
+        if (
+            _staged_cleanup_stat_identity(opened_after) != entry_identity
+            or final_identity != entry_identity
+            or total != entry_identity[2]
+        ):
+            return None, None, None
+        digest_hex = digest.hexdigest()
+        return digest_hex, total, (path, relative, entry_identity, digest_hex)
+    except OSError:
+        return None, None, None
+    finally:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+
+
+def _staged_cleanup_strict_object_manifest(
+    root: Path,
+    archive_id: str,
+) -> tuple[
+    list[dict[str, Any]],
+    set[str],
+    bool,
+    tuple[Path, str, tuple[int, int, int, int, int], str] | None,
+]:
+    """Load strict canonical ordinary-object evidence from one stable snapshot."""
+
+    relative = "objects/manifests/files.jsonl"
+    manifest = archive_internal_path(root, relative)
+    if not manifest.exists():
+        return [], set(), True, None
+    identity = _staged_cleanup_path_identity(root, manifest, relative)
+    if identity is None:
+        return [], set(), False, None
+    raw, error = _bounded_stable_regular_file_read(
+        manifest,
+        max_bytes=STAGED_CLEANUP_MANIFEST_MAX_BYTES,
+    )
+    if raw is None or error is not None:
+        return [], set(), False, None
+    try:
+        lines = raw.decode("utf-8").splitlines()
+    except UnicodeError:
+        return [], set(), False, None
+    if len(lines) > STAGED_CLEANUP_MAX_DERIVED_RECEIPTS:
+        return [], set(), False, None
+
+    records: list[dict[str, Any]] = []
+    canonical_rows: dict[str, list[tuple[bool, str]]] = {}
+    for raw_line in lines:
+        if not raw_line.strip():
+            continue
+        record = _staged_cleanup_strict_json_object(raw_line.encode("utf-8"))
+        if record is None:
+            return [], set(), False, None
+        records.append(record)
+        object_id = record.get("object_id")
+        if not isinstance(object_id, str) or OBJECT_ID_RE.fullmatch(object_id) is None:
+            continue
+        digest = object_id.removeprefix("sha256:")
+        logical_key = f"objects/sha256/{digest[:2]}/{digest}"
+        size_bytes = record.get("size_bytes")
+        locations = record.get("locations")
+        provenance = record.get("provenance")
+        canonical_location = bool(
+            isinstance(locations, list)
+            and any(
+                isinstance(location, dict)
+                and location.get("provider") == "local"
+                and location.get("path") == logical_key
+                and location.get("availability") == "available"
+                for location in locations
+            )
+        )
+        canonical_provenance = bool(
+            isinstance(provenance, dict)
+            and provenance.get("created_in") == f"archive:{archive_id}"
+            and isinstance(provenance.get("source"), str)
+            and bool(provenance.get("source"))
+            and isinstance(provenance.get("captured_at"), str)
+            and bool(provenance.get("captured_at"))
+        )
+        canonical = bool(
+            record.get("sha256") == digest
+            and record.get("logical_key") == logical_key
+            and isinstance(record.get("mime"), str)
+            and bool(record.get("mime"))
+            and isinstance(size_bytes, int)
+            and not isinstance(size_bytes, bool)
+            and size_bytes >= 0
+            and canonical_location
+            and canonical_provenance
+        )
+        canonical_rows.setdefault(object_id, []).append(
+            (canonical, sha256_json_value(record))
+        )
+    canonical_ids = {
+        object_id
+        for object_id, rows in canonical_rows.items()
+        if len(rows) == 1 and rows[0][0]
+    }
+    return records, canonical_ids, True, (
+        manifest,
+        relative,
+        identity,
+        hashlib.sha256(raw).hexdigest(),
+    )
+
+
+def _staged_cleanup_strict_derived_records(
+    root: Path,
+) -> tuple[
+    list[dict[str, Any]],
+    bool,
+    tuple[Path, str, tuple[int, int, int, int, int], str] | None,
+]:
+    """Load the derived manifest as one stable, bounded, strict JSONL snapshot."""
+
+    manifest = archive_internal_path(root, DERIVED_TEXT_MANIFEST_RELATIVE_PATH)
+    if not manifest.exists():
+        return [], True, None
+    identity = _staged_cleanup_path_identity(
+        root,
+        manifest,
+        DERIVED_TEXT_MANIFEST_RELATIVE_PATH,
+    )
+    if identity is None:
+        return [], False, None
+    raw, error = _bounded_stable_regular_file_read(
+        manifest,
+        max_bytes=STAGED_CLEANUP_MANIFEST_MAX_BYTES,
+    )
+    if raw is None or error is not None:
+        return [], False, None
+    records: list[dict[str, Any]] = []
+    try:
+        lines = raw.decode("utf-8").splitlines()
+    except UnicodeError:
+        return [], False, None
+    if len(lines) > STAGED_CLEANUP_MAX_DERIVED_RECEIPTS:
+        return [], False, None
+    for raw_line in lines:
+        if not raw_line.strip():
+            continue
+        record = _staged_cleanup_strict_json_object(raw_line.encode("utf-8"))
+        if record is None:
+            return [], False, None
+        records.append(record)
+    return records, True, (
+        manifest,
+        DERIVED_TEXT_MANIFEST_RELATIVE_PATH,
+        identity,
+        hashlib.sha256(raw).hexdigest(),
+    )
+
+
+def _staged_cleanup_receipt_documents(
+    root: Path,
+    relative_root: str,
+    *,
+    safety_required: bool,
+    filename_prefixes: set[str] | None = None,
+) -> tuple[
+    list[tuple[str, dict[str, Any]]],
+    set[str],
+    bool,
+    list[tuple[Path, str, tuple[int, int, int, int, int], str]],
+]:
+    """Read direct JSON receipts once with stable per-file and aggregate bounds.
+
+    Filenames are retained only as private matching authority.  They are never
+    returned by staged_cleanup_check.
+    """
+
+    receipt_root = archive_internal_path(root, relative_root)
+    if not receipt_root.exists():
+        return [], set(), True, []
+    if objet_capture_path_chain_blockers(root, relative_root):
+        return [], set(), not safety_required, []
+    try:
+        root_stat = os.lstat(receipt_root)
+    except OSError:
+        return [], set(), not safety_required, []
+    reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+    if (
+        stat.S_ISLNK(root_stat.st_mode)
+        or not stat.S_ISDIR(root_stat.st_mode)
+        or (
+            reparse_flag
+            and getattr(root_stat, "st_file_attributes", 0) & reparse_flag
+        )
+    ):
+        return [], set(), not safety_required, []
+    try:
+        with os.scandir(receipt_root) as iterator:
+            entries = sorted(
+                [
+                    entry
+                    for entry in iterator
+                    if entry.name.lower().endswith(".json")
+                    and (
+                        filename_prefixes is None
+                        or any(entry.name.startswith(prefix) for prefix in filename_prefixes)
+                    )
+                ],
+                key=lambda entry: entry.name,
+            )
+    except OSError:
+        return [], set(), not safety_required, []
+    if len(entries) > STAGED_CLEANUP_MAX_DERIVED_RECEIPTS:
+        return [], {entry.name for entry in entries}, not safety_required, []
+
+    documents: list[tuple[str, dict[str, Any]]] = []
+    present_names: set[str] = set()
+    total_bytes = 0
+    complete = True
+    authorities: list[
+        tuple[Path, str, tuple[int, int, int, int, int], str]
+    ] = []
+    for entry in entries:
+        present_names.add(entry.name)
+        try:
+            if entry.is_symlink() or not entry.is_file(follow_symlinks=False):
+                complete = False
+                continue
+        except OSError:
+            complete = False
+            continue
+        raw, error = _bounded_stable_regular_file_read(
+            Path(entry.path),
+            max_bytes=STAGED_CLEANUP_RECEIPT_MAX_BYTES,
+        )
+        if raw is None or error is not None:
+            complete = False
+            continue
+        total_bytes += len(raw)
+        if total_bytes > STAGED_CLEANUP_MAX_DERIVED_RECEIPT_SCAN_BYTES:
+            complete = False
+            break
+        document = _staged_cleanup_strict_json_object(raw)
+        if document is None:
+            # Malformed receipts remain physically present but cannot prove a
+            # completed capture.  Per-entry classification uses the filename's
+            # capture timestamp prefix without reflecting that name publicly.
+            continue
+        documents.append((entry.name, document))
+        relative = f"{relative_root}/{entry.name}"
+        identity = _staged_cleanup_path_identity(root, Path(entry.path), relative)
+        if identity is None:
+            complete = False
+        else:
+            authorities.append(
+                (
+                    Path(entry.path),
+                    relative,
+                    identity,
+                    hashlib.sha256(raw).hexdigest(),
+                )
+            )
+    return documents, present_names, complete or not safety_required, authorities
+
+
+def _staged_cleanup_derived_record_info(
+    record: dict[str, Any],
+    *,
+    canonical_object_ids: set[str],
+) -> dict[str, Any]:
+    provenance = record.get("provenance") if isinstance(record.get("provenance"), dict) else {}
+    source_digest = provenance.get("source_text_sha256")
+    text_digest = record.get("text_sha256")
+    source_object_id = record.get("source_object_id")
+    text_logical_key = record.get("text_logical_key")
+    derived_text_id = record.get("derived_text_id")
+    size_bytes = record.get("size_bytes")
+    captured_at = provenance.get("captured_at")
+    source_digest_valid = isinstance(source_digest, str) and SHA256_RE.fullmatch(source_digest) is not None
+    text_digest_valid = isinstance(text_digest, str) and SHA256_RE.fullmatch(text_digest) is not None
+    source_digest_supported = source_digest_valid or (
+        source_digest is None
+        and isinstance(captured_at, str)
+    )
+    source_object_valid = (
+        isinstance(source_object_id, str)
+        and OBJECT_ID_RE.fullmatch(source_object_id) is not None
+        and source_object_id in canonical_object_ids
+    )
+    logical_key_valid = bool(
+        text_digest_valid
+        and text_logical_key
+        == f"{DERIVED_TEXT_STORE_PREFIX}/{text_digest[:2]}/{text_digest}.txt"
+    )
+    metadata_valid = not _derived_text_pair_metadata_blockers(
+        derivation_kind=record.get("derivation_kind"),
+        tool_name=record.get("tool_name"),
+        tool_version=record.get("tool_version"),
+        review_status=record.get("review_status"),
+        confidence=record.get("confidence"),
+        language=record.get("language"),
+        model_name=record.get("model_name"),
+        model_version=record.get("model_version"),
+        born_digital=record.get("born_digital", False),
+    )
+    expected_id: str | None = None
+    if source_object_valid and text_digest_valid and metadata_valid:
+        expected_id = "derived-text:sha256:" + derived_text_identity_digest(
+            source_object_id=source_object_id,
+            text_sha256=text_digest,
+            derivation_kind=str(record.get("derivation_kind")),
+            tool_name=str(record.get("tool_name")),
+            tool_version=str(record.get("tool_version")),
+            model_name=record.get("model_name") if isinstance(record.get("model_name"), str) else None,
+            model_version=record.get("model_version") if isinstance(record.get("model_version"), str) else None,
+            review_status=str(record.get("review_status")),
+        )
+    valid = bool(
+        record.get("schema") == DERIVED_TEXT_RECORD_SCHEMA
+        and source_object_valid
+        and text_digest_valid
+        and logical_key_valid
+        and metadata_valid
+        and isinstance(size_bytes, int)
+        and not isinstance(size_bytes, bool)
+        and 0 <= size_bytes <= DERIVED_TEXT_MAX_SOURCE_BYTES
+        and isinstance(derived_text_id, str)
+        and derived_text_id == expected_id
+        and (
+            source_digest_supported
+        )
+    )
+    receipt_prefix = (
+        re.sub(r"[^0-9TZ]", "", captured_at) + "-"
+        if isinstance(captured_at, str) and captured_at
+        else None
+    )
+    return {
+        "record": record,
+        "valid": valid,
+        "source_digest": source_digest if source_digest_valid else None,
+        "text_digest": text_digest if text_digest_valid else None,
+        "source_object_id": source_object_id if isinstance(source_object_id, str) else None,
+        "text_logical_key": text_logical_key if isinstance(text_logical_key, str) else None,
+        "derived_text_id": derived_text_id if isinstance(derived_text_id, str) else None,
+        "size_bytes": size_bytes if isinstance(size_bytes, int) and not isinstance(size_bytes, bool) else None,
+        "captured_at": captured_at if isinstance(captured_at, str) else None,
+        "receipt_prefix": receipt_prefix,
+    }
+
+
+def _staged_cleanup_valid_derived_receipt(
+    document: dict[str, Any],
+    *,
+    filename: str,
+    archive_id: str,
+    staged_digest: str,
+    record_info: dict[str, Any] | None,
+) -> bool:
+    schema = document.get("schema")
+    if schema not in {
+        "wom-kit/derived-text-capture-receipt/v0.1",
+        DERIVED_TEXT_CAPTURE_RECEIPT_SCHEMA,
+    }:
+        return False
+    receipt_id = document.get("receipt_id")
+    captured_at = document.get("captured_at")
+    timestamp_prefix = (
+        re.sub(r"[^0-9TZ]", "", captured_at) + "-"
+        if isinstance(captured_at, str) and captured_at
+        else ""
+    )
+    if (
+        not filename.lower().endswith(".json")
+        or receipt_id
+        != f"receipt:derived-text-capture:{filename[:-5]}"
+        or not timestamp_prefix
+        or not filename.startswith(timestamp_prefix)
+    ):
+        return False
+    text_digest = document.get("text_sha256")
+    if not isinstance(text_digest, str) or SHA256_RE.fullmatch(text_digest) is None:
+        return False
+    if schema == DERIVED_TEXT_CAPTURE_RECEIPT_SCHEMA:
+        if document.get("source_text_sha256") != staged_digest:
+            return False
+    elif text_digest != staged_digest:
+        return False
+    planned_action = document.get("planned_action")
+    stored_sha256_verified = document.get("stored_sha256_verified")
+    # The official repair_append writer verifies the already-present store
+    # before appending the missing manifest row, but its historical receipt
+    # truthfully leaves stored_sha256_verified=false because this invocation
+    # did not publish or re-materialize the bytes.  Cleanup independently
+    # rehashes the canonical store below, so retain that legitimate receipt
+    # shape while still requiring a real boolean and exact action mapping.
+    stored_verification_field_valid = (
+        stored_sha256_verified is False
+        if planned_action == "repair_append"
+        else stored_sha256_verified is True
+    )
+    if (
+        document.get("dry_run") is not False
+        or document.get("ok") is not True
+        or document.get("archive_id") != archive_id
+        or not stored_verification_field_valid
+        or not isinstance(document.get("reviewed_by"), str)
+        or not document.get("reviewed_by")
+        or {
+            "capture": "captured",
+            "repair_append": "repair_appended",
+            "re_materialize": "re_materialized",
+            "skip_already_present": "skip_already_present",
+        }.get(planned_action)
+        != document.get("action")
+        or document.get("manifest_record_appended")
+        is not (
+            planned_action in {"capture", "repair_append"}
+        )
+        or document.get("blockers") != []
+    ):
+        return False
+    if record_info is None:
+        return True
+    return bool(
+        document.get("derived_text_id") == record_info.get("derived_text_id")
+        and document.get("source_object_id") == record_info.get("source_object_id")
+        and text_digest == record_info.get("text_digest")
+        and document.get("text_logical_key") == record_info.get("text_logical_key")
+        and document.get("derivation_kind")
+        == record_info.get("record", {}).get("derivation_kind")
+        and document.get("review_status")
+        == record_info.get("record", {}).get("review_status")
+    )
+
+
+def _staged_cleanup_store_observation(
+    root: Path,
+    *,
+    text_digest: str | None,
+    text_logical_key: str | None,
+) -> tuple[
+    bool,
+    bool,
+    tuple[Path, str, tuple[int, int, int, int, int], str] | None,
+]:
+    if (
+        text_digest is None
+        or text_logical_key
+        != f"{DERIVED_TEXT_STORE_PREFIX}/{text_digest[:2]}/{text_digest}.txt"
+    ):
+        return False, False, None
+    store = archive_internal_path(root, text_logical_key)
+    if objet_capture_path_chain_blockers(root, text_logical_key):
+        return False, store.exists(), None
+    present = store.exists()
+    raw, error = _bounded_stable_regular_file_read(
+        store,
+        max_bytes=DERIVED_TEXT_MAX_SOURCE_BYTES,
+    )
+    verified = bool(
+        raw is not None
+        and error is None
+        and hashlib.sha256(raw).hexdigest() == text_digest
+    )
+    if verified:
+        identity = _staged_cleanup_path_identity(root, store, text_logical_key)
+        if identity is None:
+            return False, present, None
+        return True, present, (store, text_logical_key, identity, text_digest)
+    return False, present, None
+
+
+def _staged_cleanup_valid_objet_receipt_envelope(
+    document: dict[str, Any],
+    *,
+    filename: str,
+    archive_id: str,
+) -> bool:
+    """Accept only a completed official v0.2/v0.3 objet receipt envelope.
+
+    A v0.3 receipt may truthfully be ``partial`` when its ordinary-object half
+    is durable and a paired derived-text half (or another item) is blocked.
+    That remains usable evidence for the successful ordinary item.  An aborted
+    run, inconsistent aggregate blockers, or synthetic scalar/boolean values
+    must never become cleanup authority.
+    """
+
+    schema = document.get("schema")
+    if schema not in {
+        "wom-kit/objet-capture-receipt/v0.2",
+        OBJET_CAPTURE_RECEIPT_SCHEMA,
+    }:
+        return False
+    captured_at = document.get("captured_at")
+    if (
+        not isinstance(captured_at, str)
+        or re.fullmatch(
+            r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z",
+            captured_at,
+        )
+        is None
+    ):
+        return False
+    timestamp_prefix = re.sub(r"[^0-9TZ]", "", captured_at)
+    if (
+        re.fullmatch(rf"{re.escape(timestamp_prefix)}-[0-9a-f]{{12}}\.json", filename)
+        is None
+        or document.get("receipt_id")
+        != f"receipt:objet-capture:{filename[:-5]}"
+        or document.get("dry_run") is not False
+        or document.get("archive_id") != archive_id
+        # Even a writer-produced aborted receipt is completion evidence, not
+        # cleanup evidence. Replay must mint a non-aborted receipt first.
+        or document.get("aborted") is not False
+    ):
+        return False
+
+    reviewer = document.get("reviewed_by")
+    selection_manifest_id = document.get("selection_manifest_id")
+    selection_manifest_sha256 = document.get("selection_manifest_sha256")
+    if (
+        not isinstance(reviewer, str)
+        or safe_project_intake_actor_id(reviewer) != reviewer
+        or not isinstance(selection_manifest_id, str)
+        or not safe_source_intake_ref(selection_manifest_id)
+        or not isinstance(selection_manifest_sha256, str)
+        or OBJECT_ID_RE.fullmatch(selection_manifest_sha256) is None
+    ):
+        return False
+
+    items = document.get("items")
+    blockers = document.get("blockers")
+    warnings = document.get("warnings")
+    if (
+        not isinstance(items, list)
+        or not items
+        or any(not isinstance(item, dict) for item in items)
+        or not isinstance(blockers, list)
+        or any(not isinstance(code, str) or not code for code in blockers)
+        or not isinstance(warnings, list)
+        or any(not isinstance(code, str) or not code for code in warnings)
+    ):
+        return False
+
+    aggregated_blockers: list[str] = []
+    for item in items:
+        item_blockers = item.get("blockers")
+        item_warnings = item.get("warnings")
+        if (
+            not isinstance(item_blockers, list)
+            or any(not isinstance(code, str) or not code for code in item_blockers)
+            or not isinstance(item_warnings, list)
+            or any(not isinstance(code, str) or not code for code in item_warnings)
+        ):
+            return False
+        aggregated_blockers.extend(item_blockers)
+        derived = item.get("derived_text")
+        if schema == "wom-kit/objet-capture-receipt/v0.2":
+            if derived is not None:
+                return False
+        elif derived is not None:
+            if not isinstance(derived, dict):
+                return False
+            derived_blockers = derived.get("blockers")
+            derived_warnings = derived.get("warnings")
+            if (
+                not isinstance(derived_blockers, list)
+                or any(
+                    not isinstance(code, str) or not code
+                    for code in derived_blockers
+                )
+                or not isinstance(derived_warnings, list)
+                or any(
+                    not isinstance(code, str) or not code
+                    for code in derived_warnings
+                )
+            ):
+                return False
+            aggregated_blockers.extend(derived_blockers)
+        if schema == OBJET_CAPTURE_RECEIPT_SCHEMA and item.get(
+            "status_class"
+        ) != _objet_capture_item_status_class(item, approve=True):
+            return False
+
+    expected_blockers = unique_preserve_order(aggregated_blockers)
+    expected_ok = not expected_blockers
+    if (
+        blockers != expected_blockers
+        or document.get("ok") is not expected_ok
+        or document.get("summary")
+        != objet_capture_summary(items, approve=True)
+    ):
+        return False
+    if schema == OBJET_CAPTURE_RECEIPT_SCHEMA and document.get(
+        "status_class"
+    ) != _objet_capture_run_status_class(items, approve=True):
+        return False
+    return True
+
+
+def _staged_cleanup_outer_receipt_links(
+    root: Path,
+    *,
+    archive_id: str,
+    filename_prefixes: set[str] | None = None,
+) -> tuple[
+    dict[str, set[int]],
+    set[str],
+    dict[str, set[str]],
+    bool,
+    list[tuple[Path, str, tuple[int, int, int, int, int], str]],
+]:
+    documents, _names, complete, authorities = _staged_cleanup_receipt_documents(
+        root,
+        OBJET_CAPTURE_RECEIPTS_DIR,
+        safety_required=True,
+        filename_prefixes=filename_prefixes,
+    )
+    linked: dict[str, set[int]] = {}
+    candidate_object_ids: set[str] = set()
+    derived_receipt_names: dict[str, set[str]] = {}
+    for filename, document in documents:
+        candidate_items = document.get("items")
+        if isinstance(candidate_items, list):
+            for candidate_item in candidate_items:
+                if not isinstance(candidate_item, dict):
+                    continue
+                candidate_object_id = candidate_item.get("object_id")
+                if (
+                    isinstance(candidate_object_id, str)
+                    and OBJECT_ID_RE.fullmatch(candidate_object_id)
+                ):
+                    candidate_object_ids.add(candidate_object_id)
+        if not _staged_cleanup_valid_objet_receipt_envelope(
+            document,
+            filename=filename,
+            archive_id=archive_id,
+        ):
+            continue
+        items = document.get("items")
+        if not isinstance(items, list):
+            continue
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            object_id = item.get("object_id")
+            digest = object_id.removeprefix("sha256:") if isinstance(object_id, str) else ""
+            logical_key = f"objects/sha256/{digest[:2]}/{digest}" if digest else ""
+            planned = item.get("planned_action")
+            action = item.get("action")
+            action_matches_plan = {
+                "capture": "captured",
+                "repair_append": "repair_appended",
+                "re_materialize": "re_materialized",
+                "skip_already_present": "skip_already_present",
+            }.get(planned) == action
+            expected_stored_sha256_verified = {
+                "capture": True,
+                "repair_append": False,
+                "re_materialize": True,
+                "skip_already_present": False,
+            }.get(planned)
+            expected_manifest_record_appended = {
+                "capture": True,
+                "repair_append": True,
+                "re_materialize": False,
+                "skip_already_present": False,
+            }.get(planned)
+            publication_flag_valid = bool(
+                expected_stored_sha256_verified is not None
+                and item.get("stored_sha256_verified")
+                is expected_stored_sha256_verified
+            )
+            manifest_flag_valid = bool(
+                expected_manifest_record_appended is not None
+                and item.get("manifest_record_appended")
+                is expected_manifest_record_appended
+            )
+            if (
+                isinstance(object_id, str)
+                and OBJECT_ID_RE.fullmatch(object_id)
+                and item.get("logical_key") == logical_key
+                and item.get("approved_object_id") == object_id
+                and isinstance(item.get("size_bytes"), int)
+                and not isinstance(item.get("size_bytes"), bool)
+                and item.get("size_bytes") >= 0
+                and isinstance(item.get("mime"), str)
+                and bool(item.get("mime"))
+                and action_matches_plan
+                and publication_flag_valid
+                and manifest_flag_valid
+                and (
+                    document.get("schema") != OBJET_CAPTURE_RECEIPT_SCHEMA
+                    or item.get("status_class") in {"written", "partial"}
+                )
+                and item.get("blockers") == []
+            ):
+                linked.setdefault(object_id, set()).add(int(item["size_bytes"]))
+            derived = item.get("derived_text")
+            if isinstance(derived, dict):
+                derived_text_id = derived.get("derived_text_id")
+                receipt_path = derived.get("receipt_path")
+                if (
+                    isinstance(derived_text_id, str)
+                    and re.fullmatch(
+                        r"derived-text:sha256:[0-9a-f]{64}", derived_text_id
+                    )
+                    is not None
+                    and isinstance(receipt_path, str)
+                    and receipt_path.startswith(DERIVED_TEXT_CAPTURE_RECEIPTS_DIR + "/")
+                ):
+                    receipt_name = PurePosixPath(receipt_path).name
+                    if (
+                        receipt_name == receipt_path.removeprefix(
+                            DERIVED_TEXT_CAPTURE_RECEIPTS_DIR + "/"
+                        )
+                        and receipt_name.lower().endswith(".json")
+                    ):
+                        derived_receipt_names.setdefault(derived_text_id, set()).add(
+                            receipt_name
+                        )
+    return linked, candidate_object_ids, derived_receipt_names, complete, authorities
+
+
 def staged_cleanup_check(
     archive_root: Path | str,
     staged_folder: str,
@@ -125379,8 +126295,9 @@ def staged_cleanup_check(
 ) -> dict[str, Any]:
     """Report-only G2 deletion-safety verifier for a staged intake folder.
 
-    Answers "is every file in this staged folder preserved as an objet (or explicitly
-    deferred), so the folder could be cleaned up?" It NEVER deletes, moves, or writes
+    Answers "is every file in this staged folder durably preserved, so the folder
+    could be cleaned up?" Explicitly deferred entries remain unresolved staged
+    material and therefore block folder cleanup. It NEVER deletes, moves, or writes
     anything; cleanup itself stays a manual human action after this report plus the
     doctor/hygiene checks listed in next_safe_actions.
     """
@@ -125431,8 +126348,47 @@ def staged_cleanup_check(
         deferred = {value.replace("\\", "/").strip("/") for value in raw_deferred}
 
     _progress("manifest", "start")
-    canonical_ids = objet_capture_canonical_record_ids(load_manifest_records(root))
-    _progress("manifest", f"loaded {len(canonical_ids)} canonical object records")
+    if objet_capture_path_chain_blockers(root, "objects/manifests/files.jsonl"):
+        return _staged_cleanup_abort(
+            archive_id,
+            ["objet_manifest_path_unsafe"],
+        )
+    (
+        manifest_records,
+        canonical_ids,
+        object_manifest_scan_complete,
+        object_manifest_authority,
+    ) = _staged_cleanup_strict_object_manifest(root, archive_id)
+    if not object_manifest_scan_complete:
+        blockers.append("objet_manifest_scan_incomplete")
+    derived_records, derived_manifest_scan_complete, derived_manifest_authority = (
+        _staged_cleanup_strict_derived_records(root)
+    )
+    derived_record_infos = [
+        _staged_cleanup_derived_record_info(
+            record,
+            canonical_object_ids=canonical_ids,
+        )
+        for record in derived_records
+    ]
+    derived_id_counts: dict[str, int] = {}
+    for info in derived_record_infos:
+        derived_text_id = info.get("derived_text_id")
+        if isinstance(derived_text_id, str):
+            derived_id_counts[derived_text_id] = derived_id_counts.get(derived_text_id, 0) + 1
+    for info in derived_record_infos:
+        derived_text_id = info.get("derived_text_id")
+        if isinstance(derived_text_id, str) and derived_id_counts.get(derived_text_id) != 1:
+            info["valid"] = False
+    if not derived_manifest_scan_complete:
+        blockers.append("derived_text_manifest_scan_incomplete")
+    _progress(
+        "manifest",
+        (
+            f"loaded {len(canonical_ids)} canonical object records, "
+            f"{len(derived_record_infos)} derived records"
+        ),
+    )
     referencing: dict[str, int] = {}
     _progress("zettel-references", "start")
     zettel_count = 0
@@ -125459,30 +126415,292 @@ def staged_cleanup_check(
                 reference_count += 1
     _progress("zettel-references", f"done; scanned {zettel_count} notes and {reference_count} references")
 
+    derived_receipt_cache: dict[
+        tuple[str, ...] | None,
+        tuple[
+            list[tuple[str, dict[str, Any]]],
+            set[str],
+            bool,
+            list[tuple[Path, str, tuple[int, int, int, int, int], str]],
+        ],
+    ] = {}
+    ordinary_receipt_sizes: dict[str, set[int]] | None = None
+    ordinary_receipt_candidate_ids: set[str] | None = None
+    outer_derived_receipt_names: dict[str, set[str]] | None = None
+    evidence_authorities: list[
+        tuple[Path, str, tuple[int, int, int, int, int], str]
+    ] = []
+    if derived_manifest_authority is not None:
+        evidence_authorities.append(derived_manifest_authority)
+    if object_manifest_authority is not None:
+        evidence_authorities.append(object_manifest_authority)
+
+    def derived_receipt_view(
+        _prefixes: set[str] | None,
+    ) -> tuple[list[tuple[str, dict[str, Any]]], set[str]]:
+        # A later official replay writes a new receipt timestamp while retaining
+        # the original manifest row. Match receipts by their signed content, not
+        # the manifest's original timestamp prefix.
+        cache_key = None
+        if cache_key not in derived_receipt_cache:
+            derived_receipt_cache[cache_key] = _staged_cleanup_receipt_documents(
+                root,
+                DERIVED_TEXT_CAPTURE_RECEIPTS_DIR,
+                safety_required=True,
+                filename_prefixes=None,
+            )
+        documents, names, complete, authorities = derived_receipt_cache[cache_key]
+        for authority in authorities:
+            if authority not in evidence_authorities:
+                evidence_authorities.append(authority)
+        if not complete and "derived_text_receipt_scan_incomplete" not in blockers:
+            blockers.append("derived_text_receipt_scan_incomplete")
+        return documents, names
+
+    def outer_receipt_view() -> tuple[
+        dict[str, set[int]],
+        set[str],
+        dict[str, set[str]],
+    ]:
+        nonlocal ordinary_receipt_sizes, ordinary_receipt_candidate_ids
+        nonlocal outer_derived_receipt_names
+        if ordinary_receipt_sizes is None:
+            (
+                ordinary_receipt_sizes,
+                ordinary_receipt_candidate_ids,
+                outer_derived_receipt_names,
+                complete,
+                authorities,
+            ) = _staged_cleanup_outer_receipt_links(
+                root,
+                archive_id=archive_id,
+            )
+            for authority in authorities:
+                if authority not in evidence_authorities:
+                    evidence_authorities.append(authority)
+            if not complete and "objet_capture_receipt_scan_incomplete" not in blockers:
+                blockers.append("objet_capture_receipt_scan_incomplete")
+        return (
+            ordinary_receipt_sizes,
+            ordinary_receipt_candidate_ids or set(),
+            outer_derived_receipt_names or {},
+        )
+
+    def ordinary_receipt_state(object_id: str, size_bytes: int) -> tuple[bool, bool]:
+        receipt_sizes, candidate_ids, _derived_names = outer_receipt_view()
+        return (
+            size_bytes in receipt_sizes.get(object_id, set()),
+            object_id in candidate_ids,
+        )
+
+    def derived_evidence_for_digest(digest: str) -> dict[str, Any]:
+        current_candidates = [
+            info
+            for info in derived_record_infos
+            if info.get("source_digest") == digest
+        ]
+        legacy_candidates = [
+            info
+            for info in derived_record_infos
+            if info.get("source_digest") is None
+            and info.get("text_digest") == digest
+        ]
+        candidates = [*current_candidates, *legacy_candidates]
+        derived_receipts, derived_receipt_names = derived_receipt_view(None)
+        linked_receipts = [
+            (name, document)
+            for name, document in derived_receipts
+            if document.get("source_text_sha256") == digest
+            or (
+                document.get("schema")
+                == "wom-kit/derived-text-capture-receipt/v0.1"
+                and document.get("text_sha256") == digest
+            )
+        ]
+
+        # If the manifest row is missing, a valid direct receipt still tells us
+        # where the preserved representation should be.  It never replaces the
+        # missing manifest; it only lets the result report store/receipt evidence
+        # accurately without exposing a path or digest.
+        if not candidates:
+            valid_unlinked_receipts = [
+                document
+                for name, document in linked_receipts
+                if _staged_cleanup_valid_derived_receipt(
+                    document,
+                    filename=name,
+                    archive_id=archive_id,
+                    staged_digest=digest,
+                    record_info=None,
+                )
+            ]
+            receipt = valid_unlinked_receipts[0] if valid_unlinked_receipts else None
+            bytes_verified = False
+            if receipt is not None:
+                bytes_verified, _present, store_authority = _staged_cleanup_store_observation(
+                    root,
+                    text_digest=receipt.get("text_sha256"),
+                    text_logical_key=receipt.get("text_logical_key"),
+                )
+                if store_authority is not None:
+                    evidence_authorities.append(store_authority)
+                bytes_verified = bool(
+                    bytes_verified and receipt.get("text_sha256") == digest
+                )
+            return {
+                "eligible": bool(linked_receipts),
+                "status": "not_preserved",
+                "preservation_kind": "none",
+                "reason_code": "derived_text_manifest_missing"
+                if linked_receipts
+                else "staged_entry_not_preserved",
+                "manifest_record_present": False,
+                "capture_receipt_present": bool(linked_receipts),
+                "preserved_bytes_verified": bytes_verified,
+            }
+
+        # A candidate is physically present even when strict semantic validation
+        # rejects it.  Keep that distinction in booleans while refusing cleanup.
+        valid_candidates = [info for info in candidates if info.get("valid")]
+        if not valid_candidates:
+            _ordinary_sizes, _ordinary_candidates, linked_names_by_id = (
+                outer_receipt_view()
+            )
+            candidate_ids = {
+                str(info.get("derived_text_id"))
+                for info in candidates
+                if info.get("derived_text_id")
+            }
+            receipt_present = bool(linked_receipts) or any(
+                document.get("derived_text_id")
+                in candidate_ids
+                for _name, document in derived_receipts
+            ) or any(
+                linked_names_by_id.get(candidate_id, set()) & derived_receipt_names
+                for candidate_id in candidate_ids
+            )
+            first = candidates[0]
+            bytes_verified, _present, store_authority = _staged_cleanup_store_observation(
+                root,
+                text_digest=first.get("text_digest"),
+                text_logical_key=first.get("text_logical_key"),
+            )
+            if store_authority is not None:
+                evidence_authorities.append(store_authority)
+            return {
+                "eligible": True,
+                "status": "not_preserved",
+                "preservation_kind": "none",
+                "reason_code": "derived_text_manifest_invalid",
+                "manifest_record_present": True,
+                "capture_receipt_present": receipt_present,
+                "preserved_bytes_verified": bool(
+                    bytes_verified and first.get("text_digest") == digest
+                ),
+            }
+
+        # Prefer a completely verified exact representation.  This also handles
+        # duplicate historical rows deterministically without accepting a weaker
+        # row when a stronger one is present.
+        evaluations: list[dict[str, Any]] = []
+        _ordinary_sizes, _ordinary_candidates, linked_names_by_id = (
+            outer_receipt_view()
+        )
+        for info in valid_candidates:
+            matching_receipts = [
+                (name, document)
+                for name, document in derived_receipts
+                if document.get("derived_text_id") == info.get("derived_text_id")
+            ]
+            physical_receipt_present = bool(matching_receipts) or bool(
+                linked_names_by_id.get(str(info.get("derived_text_id")), set())
+                & derived_receipt_names
+            )
+            receipt_valid = any(
+                _staged_cleanup_valid_derived_receipt(
+                    document,
+                    filename=name,
+                    archive_id=archive_id,
+                    staged_digest=digest,
+                    record_info=info,
+                )
+                for name, document in matching_receipts
+            )
+            store_verified, store_present, store_authority = _staged_cleanup_store_observation(
+                root,
+                text_digest=info.get("text_digest"),
+                text_logical_key=info.get("text_logical_key"),
+            )
+            if store_authority is not None:
+                evidence_authorities.append(store_authority)
+            manifest_size_valid = bool(
+                store_authority is not None
+                and info.get("size_bytes") == store_authority[2][2]
+            )
+            evaluations.append(
+                {
+                    "info": info,
+                    "receipt_present": physical_receipt_present,
+                    "receipt_valid": receipt_valid,
+                    "store_present": store_present,
+                    "store_verified": store_verified,
+                    "manifest_size_valid": manifest_size_valid,
+                }
+            )
+
+        for evaluation in evaluations:
+            info = evaluation["info"]
+            if (
+                info.get("text_digest") == digest
+                and evaluation["manifest_size_valid"]
+                and evaluation["receipt_valid"]
+                and evaluation["store_verified"]
+            ):
+                return {
+                    "eligible": True,
+                    "status": "preserved",
+                    "preservation_kind": "derived_text_exact_bytes",
+                    "reason_code": "derived_text_exact_bytes_manifest_store_and_receipt_verified",
+                    "manifest_record_present": True,
+                    "capture_receipt_present": True,
+                    "preserved_bytes_verified": True,
+                }
+
+        first = evaluations[0]
+        info = first["info"]
+        if info.get("text_digest") != digest:
+            reason = "derived_text_source_bytes_changed_by_normalization"
+        elif not first["store_present"]:
+            reason = "derived_text_store_missing"
+        elif not first["store_verified"]:
+            reason = "derived_text_store_sha256_mismatch"
+        elif not first["manifest_size_valid"]:
+            reason = "derived_text_manifest_invalid"
+        elif not first["receipt_present"]:
+            reason = "derived_text_capture_receipt_missing"
+        else:
+            reason = "derived_text_capture_receipt_invalid"
+        return {
+            "eligible": True,
+            "status": "not_preserved",
+            "preservation_kind": "none",
+            "reason_code": reason,
+            "manifest_record_present": True,
+            "capture_receipt_present": bool(first["receipt_present"]),
+            "preserved_bytes_verified": bool(first["store_verified"] and info.get("text_digest") == digest),
+        }
+
     files: list[dict[str, Any]] = []
+    entries: list[dict[str, Any]] = []
     counts = {"preserved": 0, "deferred": 0, "not_preserved": 0, "unsafe": 0}
-    # A deletion-safety verifier MUST fail closed on any enumeration it cannot complete:
-    # pathlib.rglob silently swallows per-directory OSError (Windows MAX_PATH, permission
-    # denied), which would hide an only-copy file and yield a false safe_to_cleanup. os.walk
-    # with onerror surfaces every such failure as a hard blocker instead.
-    staged_files: list[Path] = []
-
-    def _on_walk_error(error: OSError) -> None:
-        blockers.append("staged_tree_unreadable")
-
     _progress("staged-walk", "start")
-    for dirpath, _dirnames, filenames in os.walk(staged_root, onerror=_on_walk_error):
-        for filename in filenames:
-            staged_files.append(Path(dirpath) / filename)
-            if _progress_step(len(staged_files)):
-                _progress("staged-walk", f"found {len(staged_files)} staged entries")
-        # also capture symlinked subdirectories as unsafe (os.walk does not descend symlinks)
-        for dirname in _dirnames:
-            sub = Path(dirpath) / dirname
-            if sub.is_symlink():
-                staged_files.append(sub)
-                if _progress_step(len(staged_files)):
-                    _progress("staged-walk", f"found {len(staged_files)} staged entries")
+    initial_staged_tree_snapshot, staged_files = _staged_cleanup_staged_tree_snapshot(
+        root,
+        staged_root,
+        normalized,
+    )
+    if initial_staged_tree_snapshot is None:
+        blockers.append("staged_tree_unreadable")
     _progress("staged-walk", f"done; found {len(staged_files)} staged entries")
     total_staged_files = len(staged_files)
     for index, path in enumerate(sorted(staged_files), start=1):
@@ -125502,18 +126720,35 @@ def staged_cleanup_check(
                     "referencing_zets": 0,
                 }
             )
+            entries.append(
+                {
+                    "entry_ref": f"staged-entry:{len(entries) + 1:04d}",
+                    "status": "unsafe",
+                    "preservation_kind": "none",
+                    "reason_code": "staged_entry_path_unsafe",
+                    "manifest_record_present": False,
+                    "capture_receipt_present": False,
+                    "preserved_bytes_verified": False,
+                    "source_entry_readable": False,
+                }
+            )
             continue
         if not path.is_file():
             continue
         relative = path.relative_to(staged_root).as_posix()
-        try:
-            source_size = path.stat().st_size
-            digest = sha256_path(
-                path,
-                progress_callback=_hash_progress("source-hash", source_size),
-                progress_step_bytes=256 * 1024 * 1024,
-            )
-        except OSError:
+        source_identity = _staged_cleanup_path_identity(
+            root,
+            path,
+            f"{normalized}/{relative}",
+        )
+        source_size_hint = source_identity[2] if source_identity is not None else 0
+        digest, source_size, source_authority = _staged_cleanup_stable_file_digest(
+            root,
+            path,
+            f"{normalized}/{relative}",
+            progress_callback=_hash_progress("source-hash", source_size_hint),
+        )
+        if digest is None or source_size is None or source_authority is None:
             counts["unsafe"] += 1
             files.append(
                 {
@@ -125525,58 +126760,208 @@ def staged_cleanup_check(
                     "referencing_zets": 0,
                 }
             )
+            entries.append(
+                {
+                    "entry_ref": f"staged-entry:{len(entries) + 1:04d}",
+                    "status": "unsafe",
+                    "preservation_kind": "none",
+                    "reason_code": "staged_entry_unreadable",
+                    "manifest_record_present": False,
+                    "capture_receipt_present": False,
+                    "preserved_bytes_verified": False,
+                    "source_entry_readable": False,
+                }
+            )
             continue
+        evidence_authorities.append(source_authority)
         object_id = f"sha256:{digest}"
-        dest = archive_internal_path(root, f"objects/sha256/{digest[:2]}/{digest}")
+        dest_relative = f"objects/sha256/{digest[:2]}/{digest}"
+        dest = archive_internal_path(root, dest_relative)
         # FALSE-SAFE is the fatal failure mode here: a "safe to clean up" verdict for a
         # file whose stored copy is absent, corrupted, or unreferenced would let the only
         # copy be deleted. So preservation requires ALL THREE: dest exists, stored bytes
         # re-hash to the same digest, and a canonical manifest record exists.
         bytes_verified = False
-        if dest.is_file():
-            dest_size = dest.stat().st_size
+        if not objet_capture_path_chain_blockers(root, dest_relative):
             bytes_verified = (
-                sha256_path(
+                _stable_exact_file_observation(
                     dest,
-                    progress_callback=_hash_progress("store-hash", dest_size),
-                    progress_step_bytes=256 * 1024 * 1024,
+                    expected_size=source_size,
+                    expected_sha256=digest,
                 )
-                == digest
+                == "verified_exact"
             )
-        record_present = object_id in canonical_ids
-        if bytes_verified and record_present:
+            if bytes_verified:
+                dest_identity = _staged_cleanup_path_identity(root, dest, dest_relative)
+                if dest_identity is None:
+                    bytes_verified = False
+                else:
+                    evidence_authorities.append(
+                        (dest, dest_relative, dest_identity, digest)
+                    )
+        record_present = bool(
+            object_id in canonical_ids
+            and any(
+                record.get("object_id") == object_id
+                and record.get("size_bytes") == source_size
+                for record in manifest_records
+            )
+        )
+        receipt_valid, receipt_candidate_present = ordinary_receipt_state(
+            object_id,
+            source_size,
+        )
+        if bytes_verified and record_present and receipt_valid:
             status = "preserved"
+            preservation_kind = "objet"
+            reason_code = "objet_bytes_manifest_store_and_receipt_verified"
+            selected_manifest_present = True
+            selected_receipt_present = True
+            selected_bytes_verified = True
         elif relative in deferred:
             status = "deferred"
+            preservation_kind = "explicit_deferment"
+            reason_code = "staged_entry_explicitly_deferred"
+            selected_manifest_present = record_present
+            selected_receipt_present = receipt_candidate_present
+            selected_bytes_verified = bytes_verified
         else:
-            status = "not_preserved"
+            derived_evidence = derived_evidence_for_digest(digest)
+            if (
+                derived_evidence.get("eligible")
+                and derived_evidence.get("status") == "preserved"
+            ):
+                status = str(derived_evidence["status"])
+                preservation_kind = str(derived_evidence["preservation_kind"])
+                reason_code = str(derived_evidence["reason_code"])
+                selected_manifest_present = bool(derived_evidence["manifest_record_present"])
+                selected_receipt_present = bool(derived_evidence["capture_receipt_present"])
+                selected_bytes_verified = bool(derived_evidence["preserved_bytes_verified"])
+            elif bytes_verified and record_present:
+                status = "not_preserved"
+                preservation_kind = "objet"
+                reason_code = (
+                    "objet_capture_receipt_invalid"
+                    if receipt_candidate_present
+                    else "objet_capture_receipt_missing"
+                )
+                selected_manifest_present = True
+                selected_receipt_present = receipt_candidate_present
+                selected_bytes_verified = True
+            elif derived_evidence.get("eligible"):
+                status = str(derived_evidence["status"])
+                preservation_kind = str(derived_evidence["preservation_kind"])
+                reason_code = str(derived_evidence["reason_code"])
+                selected_manifest_present = bool(derived_evidence["manifest_record_present"])
+                selected_receipt_present = bool(derived_evidence["capture_receipt_present"])
+                selected_bytes_verified = bool(derived_evidence["preserved_bytes_verified"])
+            else:
+                status = "not_preserved"
+                preservation_kind = "none"
+                if record_present and not bytes_verified:
+                    reason_code = "objet_store_missing_or_sha256_mismatch"
+                elif bytes_verified and not record_present:
+                    reason_code = "objet_manifest_missing"
+                else:
+                    reason_code = "staged_entry_not_preserved"
+                selected_manifest_present = record_present
+                selected_receipt_present = receipt_candidate_present
+                selected_bytes_verified = bytes_verified
         counts[status if status in counts else "not_preserved"] += 1
         files.append(
             {
                 "path": relative,
                 "status": status,
                 "object_id": object_id,
-                "preserved_bytes_verified": bytes_verified,
-                "manifest_record_present": record_present,
+                "preserved_bytes_verified": selected_bytes_verified,
+                "manifest_record_present": selected_manifest_present,
                 "referencing_zets": referencing.get(object_id, 0),
+            }
+        )
+        entries.append(
+            {
+                "entry_ref": f"staged-entry:{len(entries) + 1:04d}",
+                "status": status,
+                "preservation_kind": preservation_kind,
+                "reason_code": reason_code,
+                "manifest_record_present": selected_manifest_present,
+                "capture_receipt_present": selected_receipt_present,
+                "preserved_bytes_verified": selected_bytes_verified,
+                "source_entry_readable": True,
             }
         )
     _progress("verify", f"done; checked {len(files)} staged file reports")
 
+    # A cleanup verdict is authority-bound to one complete staging tree and to
+    # every source/evidence file used above. Any drift during the inspection
+    # invalidates the entire report; the operator must run a fresh check.
+    final_staged_tree_snapshot, _final_staged_files = _staged_cleanup_staged_tree_snapshot(
+        root,
+        staged_root,
+        normalized,
+    )
+    if (
+        initial_staged_tree_snapshot is None
+        or final_staged_tree_snapshot is None
+        or final_staged_tree_snapshot != initial_staged_tree_snapshot
+    ):
+        blockers.append("staged_tree_changed_during_inspection")
+    if any(
+        not _staged_cleanup_authority_unchanged(root, authority)
+        for authority in dict.fromkeys(evidence_authorities)
+    ):
+        blockers.append("staged_evidence_changed_during_inspection")
+
     if not files:
         warnings.append("staged_folder_empty")
-    safe_to_cleanup = counts["not_preserved"] == 0 and counts["unsafe"] == 0 and not blockers
+    if counts["not_preserved"]:
+        warnings.append("staged_entries_not_preserved")
+    if counts["deferred"]:
+        warnings.append("staged_entries_deferred")
+    if counts["unsafe"]:
+        warnings.append("staged_entries_unsafe")
+    safe_to_cleanup = (
+        counts["deferred"] == 0
+        and counts["not_preserved"] == 0
+        and counts["unsafe"] == 0
+        and not blockers
+    )
+    reason_codes = unique_preserve_order(
+        [
+            *blockers,
+            *[
+                str(entry.get("reason_code"))
+                for entry in entries
+                if entry.get("status") in {"deferred", "not_preserved", "unsafe"}
+                and isinstance(entry.get("reason_code"), str)
+            ],
+        ]
+    )
+    state = (
+        "inspection_blocked"
+        if blockers
+        else ("safe_to_cleanup" if safe_to_cleanup else "not_safe_to_cleanup")
+    )
     return {
+        "schema": STAGED_CLEANUP_CHECK_SCHEMA,
         "ok": not blockers,
+        "state": state,
+        "reason_codes": reason_codes,
         "dry_run": True,
         "lifecycle_action": "staged_cleanup_check",
         "archive_id": archive_id,
         "staged_folder": normalized,
         "safe_to_cleanup": safe_to_cleanup,
         "deletion_performed": False,
+        "entries": entries,
         "files": files,
         "summary": counts,
         "next_safe_actions": [
+            "When state is not_safe_to_cleanup, do not delete or move the staged folder.",
+            "For missing or incomplete paired-capture evidence, run archive objet-capture-batch <archive-root> --manifest <retained-batch-request.json> --dry-run --format json; never edit manifests or receipts manually.",
+            "For missing or invalid ordinary capture receipts, run archive objet-capture <archive-root> --selection <retained-selection.json> --dry-run --format json, review it, then use a separate approval so replay can mint fresh evidence.",
+            "After reviewing that fresh plan, use a separate objet-capture-batch approval with its new plan digest, then run a fresh staged-cleanup-check.",
+            "When source bytes changed during text normalization, preserve the raw staged bytes as an ordinary objet; a deferred entry must remain staged and blocks folder cleanup.",
             "Run archive doctor --strict and resolve any errors before cleanup.",
             "Run wom-kit/tools/check_artifact_hygiene.py and resolve unresolved blockers.",
             "Cleanup is a manual, human-approved deletion; this tool never deletes.",
@@ -125589,14 +126974,22 @@ def staged_cleanup_check(
 
 def _staged_cleanup_abort(archive_id: str, blockers: list[str]) -> dict[str, Any]:
     return {
+        "schema": STAGED_CLEANUP_CHECK_SCHEMA,
         "ok": False,
+        "state": "inspection_blocked",
+        "reason_codes": unique_preserve_order(blockers),
         "dry_run": True,
         "lifecycle_action": "staged_cleanup_check",
         "archive_id": archive_id,
         "safe_to_cleanup": False,
         "deletion_performed": False,
+        "entries": [],
         "files": [],
         "summary": {"preserved": 0, "deferred": 0, "not_preserved": 0, "unsafe": 0},
+        "next_safe_actions": [
+            "Do not delete or move the staged folder.",
+            "Resolve the fixed inspection blocker, then run a fresh staged-cleanup-check dry-run.",
+        ],
         "blockers": blockers,
         "warnings": [],
         "would_change": [],
