@@ -9,8 +9,8 @@ separate gates.
 ## Chronology
 
 1. The operator supplied protected-archive feedback Letter 131 and asked
-   implementation to start immediately. The source letter was read from the protected archive
-   archive without modifying it. Its SHA-256 is
+   implementation to start immediately. The source letter was read from the
+   protected archive without modifying it. Its SHA-256 is
    `651ccd5326d203af0680cb69a963c6fad181263b3dbba8dfa1c0bad43536a39d`.
 2. Letter 131 reports that the separate black credential console opened and
    showed the intended task/security copy, but Ctrl+Shift+V and right-click did
