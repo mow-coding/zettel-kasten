@@ -606,6 +606,150 @@ class CredentialWorkflowPlanningTests(unittest.TestCase):
         self.assertIsNone(forged["accepted"])
         self.assertIsNone(forged["persisted"])
 
+    def test_adoption_projection_binds_failure_stage_to_rollback_state(self) -> None:
+        input_reasons = {
+            "credential_input_cancelled_or_empty",
+            "credential_input_not_received",
+        }
+        provider_reasons = {
+            "provider_auth_rejected",
+            "provider_identity_endpoint_unavailable",
+            "reviewed_anchor_inaccessible",
+        }
+        expected_provider_actions = {
+            "provider_auth_rejected": "review_the_notion_credential_and_create_a_new_plan",
+            "provider_identity_endpoint_unavailable": "create_a_new_plan_after_provider_identity_service_recovers",
+            "reviewed_anchor_inaccessible": "review_page_access_and_create_a_new_plan",
+        }
+        legacy_pre_store_reasons = {
+            "human_cancelled",
+            "secret_input_unavailable",
+            "request_expired",
+            "request_replayed",
+            "request_user_mismatch",
+            "request_claim_failed",
+            "plan_digest_mismatch",
+        }
+        store_stage_reasons = {
+            "store_write_failed",
+            "store_presence_not_verified",
+            "receipt_commit_failed",
+        }
+
+        for reason in sorted(input_reasons):
+            with self.subTest(reason=reason, rollback="not_required"):
+                valid = credential_workflows._approved_adoption_worker_failure(
+                    reason,
+                    rollback_status="not_required",
+                )
+                projected = credential_workflows._project_adoption_worker_result(
+                    valid
+                )
+                self.assertEqual(projected["reason_code"], reason)
+                self.assertEqual(projected["rollback_status"], "not_required")
+                self.assertFalse(projected["store_absence_verified"])
+
+            with self.subTest(reason=reason, rollback="deleted_is_forged"):
+                forged = credential_workflows._approved_adoption_worker_failure(
+                    reason,
+                    rollback_status="deleted",
+                )
+                projected = credential_workflows._project_adoption_worker_result(
+                    forged
+                )
+                self.assertEqual(
+                    projected["reason_code"],
+                    "credential_adoption_worker_state_unknown",
+                )
+                self.assertIsNone(projected["accepted"])
+                self.assertIsNone(projected["persisted"])
+
+        for reason in sorted(legacy_pre_store_reasons):
+            with self.subTest(reason=reason, compatibility="pre_store_v01"):
+                valid = credential_workflows._approved_adoption_worker_failure(
+                    reason,
+                    rollback_status="not_required",
+                )
+                self.assertEqual(
+                    credential_workflows._project_adoption_worker_result(valid)[
+                        "reason_code"
+                    ],
+                    reason,
+                )
+                forged = credential_workflows._approved_adoption_worker_failure(
+                    reason,
+                    rollback_status="deleted",
+                )
+                self.assertEqual(
+                    credential_workflows._project_adoption_worker_result(forged)[
+                        "reason_code"
+                    ],
+                    "credential_adoption_worker_state_unknown",
+                )
+
+        for reason in sorted(store_stage_reasons):
+            with self.subTest(reason=reason, compatibility="store_stage_v01"):
+                valid = credential_workflows._approved_adoption_worker_failure(
+                    reason,
+                    rollback_status="deleted",
+                )
+                self.assertEqual(
+                    credential_workflows._project_adoption_worker_result(valid)[
+                        "reason_code"
+                    ],
+                    reason,
+                )
+                forged = credential_workflows._approved_adoption_worker_failure(
+                    reason,
+                    rollback_status="not_required",
+                )
+                self.assertEqual(
+                    credential_workflows._project_adoption_worker_result(forged)[
+                        "reason_code"
+                    ],
+                    "credential_adoption_worker_state_unknown",
+                )
+
+        for reason in sorted(provider_reasons):
+            for rollback in ("deleted", "delete_failed"):
+                with self.subTest(reason=reason, rollback=rollback):
+                    valid = credential_workflows._approved_adoption_worker_failure(
+                        reason,
+                        rollback_status=rollback,
+                    )
+                    projected = credential_workflows._project_adoption_worker_result(
+                        valid
+                    )
+                    self.assertEqual(projected["reason_code"], reason)
+                    self.assertEqual(projected["rollback_status"], rollback)
+                    self.assertEqual(
+                        projected["operator_action"],
+                        (
+                            "stop_and_remove_the_exact_encrypted_store_entry"
+                            if rollback == "delete_failed"
+                            else expected_provider_actions[reason]
+                        ),
+                    )
+                    self.assertEqual(
+                        projected["store_absence_verified"],
+                        rollback == "deleted",
+                    )
+
+            with self.subTest(reason=reason, rollback="not_required_is_forged"):
+                forged = credential_workflows._approved_adoption_worker_failure(
+                    reason,
+                    rollback_status="not_required",
+                )
+                projected = credential_workflows._project_adoption_worker_result(
+                    forged
+                )
+                self.assertEqual(
+                    projected["reason_code"],
+                    "credential_adoption_worker_state_unknown",
+                )
+                self.assertIsNone(projected["accepted"])
+                self.assertIsNone(projected["persisted"])
+
     def test_adoption_worker_start_evidence_controls_zero_vs_unknown(self) -> None:
         class FakeConnection:
             def __init__(self, *, eof: bool = False) -> None:

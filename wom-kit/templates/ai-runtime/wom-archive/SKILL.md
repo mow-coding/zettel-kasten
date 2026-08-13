@@ -107,7 +107,17 @@ Do not preload every reference.
   for first enrollment or an explicitly reviewed replacement. Before using it,
   check authenticated credential state. Supply one public-safe current-task
   sentence and one public-safe connection-reason sentence; WOM owns the fixed
-  security notice and the separate echo-disabled Windows console. After a
+  security notice and the separate echo-disabled Windows console. Tell the
+  human to use `Ctrl+V` or `Shift+Insert`; Windows Terminal defaults also
+  support `Ctrl+Shift+V`, while right-click depends on host settings. During
+  the prompt `Ctrl+C` is ignored and empty Enter is cancellation. After a
+  complete non-empty line, `입력값을 받았습니다. 검증 중입니다.` confirms
+  only console receipt. Interpret the v0.2 public outcomes exactly:
+  `credential_input_cancelled_or_empty`, `credential_input_not_received`,
+  `provider_auth_rejected`, `provider_identity_endpoint_unavailable`, and
+  `reviewed_anchor_inaccessible`. Never infer from
+  `credential_input_not_received` which physical paste gesture did or did not
+  work, and never read the clipboard programmatically. After a
   successful enrollment and lifecycle choice, later approved work reuses the
   exact Windows Credential Manager entry without prompting again. The same
   saved PAT may be revalidated for another reviewed page; do not treat a page
