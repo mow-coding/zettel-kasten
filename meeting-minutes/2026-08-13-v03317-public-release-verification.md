@@ -98,6 +98,6 @@ fresh isolated installation. It does not claim a live authenticated Notion
 operation, a real PAT entry, or beta-client acceptance. Those require a user to
 install v0.3.317 and exercise the reviewed workflow in their own WOM workspace.
 
-No protected Basoon archive, private zettel, credential value, provider
+No protected archive, private zettel, credential value, provider
 payload, or authenticated Notion service was read or modified during release
 publication and public-wheel verification.
