@@ -16,11 +16,13 @@ cannot become an accidental secret channel.
 from __future__ import annotations
 
 import ctypes
+import math
 import os
 import re
+import time
 from ctypes import wintypes
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Callable
 
 
 REQUEST_ID_RE = re.compile(r"^intake_[A-Za-z0-9_-]{16,96}$")
@@ -35,6 +37,10 @@ INVALID_HANDLE_VALUE = wintypes.HANDLE(-1).value
 ENABLE_PROCESSED_INPUT = 0x0001
 ENABLE_LINE_INPUT = 0x0002
 ENABLE_ECHO_INPUT = 0x0004
+ENABLE_INSERT_MODE = 0x0020
+ENABLE_QUICK_EDIT_MODE = 0x0040
+ENABLE_EXTENDED_FLAGS = 0x0080
+ENABLE_VIRTUAL_TERMINAL_INPUT = 0x0200
 
 CP_UTF8 = 65001
 WC_ERR_INVALID_CHARS = 0x00000080
@@ -49,7 +55,10 @@ _SECRET_SHAPE_RE = re.compile(
 _PRIVATE_LOCATOR_SHAPE_RE = re.compile(
     r"(?i)(?:https?://|\\\\|[A-Z]:\\|\b[0-9a-f]{8}-[0-9a-f-]{27,}\b|\b[0-9a-f]{32,}\b|\S+@\S+)"
 )
-_ACCEPTED_TEXT = "\r\n입력을 안전하게 받았습니다. 이 창은 자동으로 닫힙니다.\r\n"
+_ACCEPTED_TEXT = (
+    "\r\n입력값을 받았습니다. 검증 중입니다.\r\n"
+    "이 창은 자동으로 닫힙니다.\r\n"
+)
 _CANCELLED_TEXT = "\r\n입력을 취소했습니다. 이 창은 자동으로 닫힙니다.\r\n"
 
 
@@ -111,8 +120,13 @@ def _prompt_copy(context: VisibleConsolePromptContext) -> str:
         "입력 내용은 화면, 명령줄, 로그에도 표시되지 않습니다.\r\n"
         "연결이 성공하면 Windows 자격 증명 관리자에 안전하게 보관됩니다.\r\n"
         "다음 승인된 WOM 작업에서는 저장된 자격 증명을 재사용하므로 다시 입력하지 않습니다.\r\n\r\n"
-        "계속하려면 Notion 연결 키를 붙여넣고 Enter를 누르세요.\r\n"
-        "취소하려면 Ctrl+C를 누르거나 아무것도 입력하지 않고 Enter를 누르세요.\r\n\r\n"
+        "붙여넣기 안내\r\n"
+        "- Ctrl+V 또는 Shift+Insert를 사용하세요.\r\n"
+        "- Windows Terminal 기본 설정에서는 Ctrl+Shift+V도 사용할 수 있습니다.\r\n"
+        "- 오른쪽 클릭은 터미널 설정에 따라 메뉴나 복사로 동작할 수 있습니다.\r\n"
+        "  메뉴가 열리면 '붙여넣기'를 선택하세요.\r\n"
+        "- 붙여넣은 글자는 화면에 나타나지 않습니다. 붙여넣은 뒤 Enter를 누르세요.\r\n"
+        "취소하려면 아무것도 입력하지 않은 상태에서 Enter를 누르세요.\r\n\r\n"
         "Notion 연결 키 (입력 내용 숨김): "
     )
 
@@ -170,6 +184,11 @@ def _configure_console_signatures(kernel32: Any) -> None:
     _configure(
         kernel32.GetConsoleMode,
         [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)],
+        wintypes.BOOL,
+    )
+    _configure(
+        kernel32.SetConsoleCtrlHandler,
+        [wintypes.LPVOID, wintypes.BOOL],
         wintypes.BOOL,
     )
     _configure(
@@ -294,6 +313,8 @@ def prompt_masked_secret_in_new_console(
     kernel32: Any | None = None,
     platform_name: str | None = None,
     max_secret_bytes: int = DEFAULT_MAX_SECRET_BYTES,
+    status_dwell_seconds: float = 1.0,
+    sleep: Callable[[float], None] = time.sleep,
 ) -> bytearray | None:
     """Read one secret in a newly allocated console owned by this process.
 
@@ -308,6 +329,11 @@ def prompt_masked_secret_in_new_console(
         or type(max_secret_bytes) is not int
         or max_secret_bytes <= 0
         or max_secret_bytes > DEFAULT_MAX_SECRET_BYTES
+        or isinstance(status_dwell_seconds, bool)
+        or not isinstance(status_dwell_seconds, (int, float))
+        or not math.isfinite(float(status_dwell_seconds))
+        or not 0 <= float(status_dwell_seconds) <= 5
+        or not callable(sleep)
         or (platform_name or os.name) != "nt"
     ):
         raise VisibleConsoleSecretPromptError()
@@ -331,6 +357,7 @@ def prompt_masked_secret_in_new_console(
     original_mode: int | None = None
     original_input_code_page: int | None = None
     original_output_code_page: int | None = None
+    ctrl_c_ignored = False
     secret: bytearray | None = None
     cancelled = False
     failed = False
@@ -390,11 +417,23 @@ def prompt_masked_secret_in_new_console(
         if not selected_kernel32.GetConsoleMode(input_handle, ctypes.byref(mode)):
             raise VisibleConsoleSecretPromptError()
         original_mode = int(mode.value)
-        # AllocConsole resets the control-handler table. Keep processed input
-        # disabled so Ctrl+C arrives as U+0003 in ReadConsoleW instead of
-        # terminating the credential worker before it can clean up.
-        masked_mode = (original_mode | ENABLE_LINE_INPUT) & ~(
-            ENABLE_ECHO_INPUT | ENABLE_PROCESSED_INPUT
+        # Processed input is required for the modern Console Host's Ctrl+V and
+        # Shift+Insert edit shortcuts. AllocConsole resets the control-handler
+        # table, whose default Ctrl+C handler exits the process, so ignore
+        # Ctrl+C only for this short prompt and advertise empty Enter as the
+        # deterministic cancellation gesture.
+        if not selected_kernel32.SetConsoleCtrlHandler(None, True):
+            raise VisibleConsoleSecretPromptError()
+        ctrl_c_ignored = True
+        masked_mode = (
+            original_mode
+            | ENABLE_PROCESSED_INPUT
+            | ENABLE_LINE_INPUT
+            | ENABLE_INSERT_MODE
+            | ENABLE_QUICK_EDIT_MODE
+            | ENABLE_EXTENDED_FLAGS
+        ) & ~(
+            ENABLE_ECHO_INPUT | ENABLE_VIRTUAL_TERMINAL_INPUT
         )
         if not selected_kernel32.SetConsoleMode(input_handle, masked_mode):
             raise VisibleConsoleSecretPromptError()
@@ -404,10 +443,10 @@ def prompt_masked_secret_in_new_console(
         input_control = _CONSOLE_READCONSOLE_CONTROL(
             nLength=ctypes.sizeof(_CONSOLE_READCONSOLE_CONTROL),
             nInitialChars=0,
-            # ReadConsoleW remains in cooked line mode. With processed input
-            # disabled, Ctrl+C arrives as U+0003 and wakes the read without
-            # terminating the credential worker.
-            dwCtrlWakeupMask=(1 << 0x03),
+            # ReadConsoleW remains in cooked line mode. Ctrl+C is temporarily
+            # ignored at the process control-handler boundary, so only a
+            # complete Enter-terminated line completes this read.
+            dwCtrlWakeupMask=0,
             dwControlKeyState=0,
         )
         try:
@@ -467,12 +506,23 @@ def prompt_masked_secret_in_new_console(
                         wchar_length,
                         max_secret_bytes=max_secret_bytes,
                     )
+                    # Keep only the mutable UTF-8 buffer that crosses the
+                    # secure-intake boundary.  The console's duplicate UTF-16
+                    # copy is no longer needed and must not survive the safe
+                    # receipt-status dwell below.
+                    ctypes.memset(
+                        ctypes.addressof(input_buffer),
+                        0,
+                        ctypes.sizeof(input_buffer),
+                    )
 
         _write_console(
             selected_kernel32,
             output_handle,
             _CANCELLED_TEXT if cancelled else _ACCEPTED_TEXT,
         )
+        if not cancelled and float(status_dwell_seconds) > 0:
+            sleep(float(status_dwell_seconds))
     except KeyboardInterrupt:
         cancelled = True
     except BaseException:
@@ -509,9 +559,21 @@ def prompt_masked_secret_in_new_console(
                     cleanup_failed = True
             except BaseException:
                 cleanup_failed = True
+        console_detached = False
         if console_allocated:
             try:
-                if not selected_kernel32.FreeConsole():
+                console_detached = bool(selected_kernel32.FreeConsole())
+                if not console_detached:
+                    cleanup_failed = True
+            except BaseException:
+                cleanup_failed = True
+        # Never re-enable the default process-terminating Ctrl+C handler while
+        # this worker is still attached to the prompt console. FreeConsole
+        # resets the handler table on success. This fallback is reached only
+        # when allocation did not complete, so no prompt console exists.
+        if ctrl_c_ignored and not console_detached and not console_allocated:
+            try:
+                if not selected_kernel32.SetConsoleCtrlHandler(None, False):
                     cleanup_failed = True
             except BaseException:
                 cleanup_failed = True

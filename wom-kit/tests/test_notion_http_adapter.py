@@ -7,11 +7,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 from urllib.error import HTTPError
 from urllib import request as urllib_request
 import uuid
 
 from wom_kit.credential_secure_intake import (
+    CredentialIntakeStageError,
     NOTION_PAT_WORKSPACE_IDENTITY_BASIS,
     NOTION_WORKSPACE_IDENTITY_BASIS,
     _validate_identity,
@@ -991,6 +993,7 @@ class NotionHttpAdapterIdentityTests(unittest.TestCase):
             provider="notion",
             reviewed_anchor_uuid=PAGE_ID,
         )
+
         self.assertEqual(
             pat_identity.workspace_identity_basis,
             NOTION_PAT_WORKSPACE_IDENTITY_BASIS,
@@ -1012,6 +1015,152 @@ class NotionHttpAdapterIdentityTests(unittest.TestCase):
             )
         self.assertEqual(str(context.exception), "notion_provider_mismatch")
         self.assertEqual(no_calls.calls, [])
+
+    def test_secure_intake_bridge_preserves_auth_identity_and_anchor_stages(self) -> None:
+        cases = [
+            (
+                "users_me_unauthorized",
+                (FakeResponse(status=401, payload={}),),
+                "provider_auth_rejected",
+            ),
+            (
+                "users_me_forbidden",
+                (FakeResponse(status=403, payload={}),),
+                "provider_auth_rejected",
+            ),
+            (
+                "users_me_unavailable",
+                (FakeResponse(status=503, payload={}),),
+                "provider_identity_endpoint_unavailable",
+            ),
+            (
+                "users_me_not_found",
+                (FakeResponse(status=404, payload={}),),
+                "provider_identity_endpoint_unavailable",
+            ),
+            (
+                "users_me_transport_failure",
+                (RuntimeError(PRIVATE_ERROR + SECRET + PRIVATE_URL),),
+                "provider_identity_endpoint_unavailable",
+            ),
+            (
+                "users_me_malformed",
+                (FakeResponse(payload={"object": "user"}),),
+                "provider_identity_endpoint_unavailable",
+            ),
+            (
+                "anchor_unauthorized_after_identity",
+                (
+                    FakeResponse(payload=user_payload()),
+                    FakeResponse(status=401, payload={}),
+                ),
+                "reviewed_anchor_inaccessible",
+            ),
+            (
+                "anchor_not_shared_after_identity",
+                (
+                    FakeResponse(payload=user_payload()),
+                    FakeResponse(status=404, payload={}),
+                ),
+                "reviewed_anchor_inaccessible",
+            ),
+            (
+                "anchor_forbidden_after_identity",
+                (
+                    FakeResponse(payload=user_payload()),
+                    FakeResponse(status=403, payload={}),
+                ),
+                "reviewed_anchor_inaccessible",
+            ),
+            (
+                "anchor_deleted_after_identity",
+                (
+                    FakeResponse(payload=user_payload()),
+                    FakeResponse(payload=page_payload(in_trash=True)),
+                ),
+                "reviewed_anchor_inaccessible",
+            ),
+            (
+                "anchor_malformed_after_identity",
+                (
+                    FakeResponse(payload=user_payload()),
+                    FakeResponse(payload={"object": "page", "id": "bad"}),
+                ),
+                "reviewed_anchor_inaccessible",
+            ),
+            (
+                "anchor_transport_failure_after_identity",
+                (
+                    FakeResponse(payload=user_payload()),
+                    RuntimeError(PRIVATE_ERROR + SECRET + PRIVATE_URL),
+                ),
+                "reviewed_anchor_inaccessible",
+            ),
+        ]
+        for label, outcomes, expected in cases:
+            with self.subTest(label=label):
+                verifier = NotionHttpAdapter(
+                    transport=FakeTransport(*outcomes),
+                    max_attempts=1,
+                ).secure_intake_verifier()
+                secret_buffer = bytearray(SECRET.encode("ascii"))
+                try:
+                    with self.assertRaises(CredentialIntakeStageError) as context:
+                        verifier.verify_identity(
+                            memoryview(secret_buffer),
+                            provider="notion",
+                            reviewed_anchor_uuid=PAGE_ID,
+                        )
+                    self.assertEqual(context.exception.code, expected)
+                    rendered = repr(context.exception)
+                    for private in (
+                        SECRET,
+                        PAGE_ID,
+                        PRIVATE_ERROR,
+                        PRIVATE_URL,
+                        PRIVATE_EMAIL,
+                    ):
+                        self.assertNotIn(private, rendered)
+                finally:
+                    secret_buffer[:] = b"\x00" * len(secret_buffer)
+
+        invalid_buffer = bytearray(b"invalid token with spaces")
+        try:
+            with self.assertRaises(CredentialIntakeStageError) as context:
+                NotionHttpAdapter(
+                    transport=FakeTransport(),
+                    max_attempts=1,
+                ).secure_intake_verifier().verify_identity(
+                    memoryview(invalid_buffer),
+                    provider="notion",
+                    reviewed_anchor_uuid=PAGE_ID,
+                )
+            self.assertEqual(context.exception.code, "provider_auth_rejected")
+        finally:
+            invalid_buffer[:] = b"\x00" * len(invalid_buffer)
+
+        unknown_buffer = bytearray(SECRET.encode("ascii"))
+        try:
+            with patch.object(
+                NotionHttpAdapter,
+                "verify_identity",
+                return_value={
+                    "reason_code": "notion_future_unclassified_failure",
+                    "identity_verified": False,
+                    "workspace_anchor_verified": False,
+                },
+            ):
+                with self.assertRaises(CredentialIntakeStageError) as context:
+                    NotionHttpAdapter(
+                        transport=FakeTransport(),
+                    ).secure_intake_verifier().verify_identity(
+                        memoryview(unknown_buffer),
+                        provider="notion",
+                        reviewed_anchor_uuid=PAGE_ID,
+                    )
+            self.assertEqual(context.exception.code, "provider_identity_unverified")
+        finally:
+            unknown_buffer[:] = b"\x00" * len(unknown_buffer)
 
 
 if __name__ == "__main__":

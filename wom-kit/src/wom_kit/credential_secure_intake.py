@@ -45,7 +45,7 @@ NOTION_PAT_SCOPE_FINGERPRINT_DOMAIN = b"wom/notion-pat-token-scope/v1\x00"
 NOTION_WORKSPACE_IDENTITY_BASES = frozenset(
     {NOTION_WORKSPACE_IDENTITY_BASIS, NOTION_PAT_WORKSPACE_IDENTITY_BASIS}
 )
-RESULT_SCHEMA_VERSION = "wom-credential-secure-intake-result/v0.1"
+RESULT_SCHEMA_VERSION = "wom-credential-secure-intake-result/v0.2"
 LIFECYCLE_SCHEMA_VERSION = "wom-credential-duplicate-lifecycle/v0.1"
 CLAIM_SCHEMA_VERSION = "wom-credential-secure-intake-claim/v0.1"
 
@@ -80,6 +80,14 @@ PLAN_ACTIONS = (
 )
 
 FAILURE_OPERATOR_ACTIONS = {
+    "credential_input_cancelled_or_empty": "create_a_new_intake_plan_when_ready",
+    "credential_input_not_received": "retry_supported_console_input_with_a_new_plan",
+    "provider_auth_rejected": "review_the_notion_credential_and_create_a_new_plan",
+    "provider_identity_endpoint_unavailable": "create_a_new_plan_after_provider_identity_service_recovers",
+    "reviewed_anchor_inaccessible": "review_page_access_and_create_a_new_plan",
+    # Pre-v0.3.318 fixed reasons remain accepted at the process boundary for
+    # source compatibility, but the current worker no longer emits them for
+    # the corresponding official paths.
     "human_cancelled": "restart_human_only_intake_when_ready",
     "secret_input_unavailable": "use_supported_human_only_input_ui",
     "store_write_failed": "repair_encrypted_store_and_retry_with_new_request",
@@ -100,6 +108,25 @@ _FIXED_FAILURE_ERROR = "secure credential intake did not complete"
 _UNKNOWN_WORKER_REASON = "worker_state_unknown"
 _UNKNOWN_WORKER_ACTION = "reconcile_then_rerun_same_approved_plan"
 _UNKNOWN_WORKER_ERROR = "secure credential intake worker state is unknown"
+
+_STAGE_FAILURE_REASONS = frozenset(
+    {
+        "provider_auth_rejected",
+        "provider_identity_endpoint_unavailable",
+        "reviewed_anchor_inaccessible",
+    }
+)
+
+
+class CredentialIntakeStageError(RuntimeError):
+    """One allowlisted, value-free failure raised by a trusted intake adapter."""
+
+    def __init__(self, code: str) -> None:
+        self.code = code if code in _STAGE_FAILURE_REASONS else "provider_identity_unverified"
+        super().__init__(self.code)
+
+    def __repr__(self) -> str:
+        return f"CredentialIntakeStageError({self.code!r})"
 
 # The exported process launcher is a public parent/child security boundary,
 # not a generic JSON relay.  Its default production contract is deliberately
@@ -221,13 +248,18 @@ def _normalize_capabilities(values: Sequence[str]) -> tuple[str, ...]:
 def _fixed_failure(reason_code: str, *, rollback_status: str = "not_required") -> dict[str, Any]:
     if reason_code not in FAILURE_OPERATOR_ACTIONS:
         reason_code = "worker_result_invalid"
+    operator_action = FAILURE_OPERATOR_ACTIONS[reason_code]
+    if rollback_status == "delete_failed":
+        # An unresolved encrypted store entry must be removed before any
+        # credential review, retry, or replacement plan can be safe.
+        operator_action = "stop_and_remove_the_exact_encrypted_store_entry"
     return {
         "schema_version": RESULT_SCHEMA_VERSION,
         "ok": False,
         "accepted": False,
         "persisted": False,
         "reason_code": reason_code,
-        "operator_action": FAILURE_OPERATOR_ACTIONS[reason_code],
+        "operator_action": operator_action,
         "rollback_status": rollback_status,
         "error": _FIXED_FAILURE_ERROR,
     }
@@ -1344,8 +1376,10 @@ def _validate_identity(
         return "provider_identity_unverified", (), None
     if not identity.subject_verified or provider != plan.provider or not account_subject:
         return "provider_identity_unverified", (), None
-    if not identity.anchor_access_verified or anchor != plan.reviewed_anchor_uuid or not workspace_identity:
-        return "workspace_anchor_mismatch", (), None
+    if not identity.anchor_access_verified or anchor != plan.reviewed_anchor_uuid:
+        return "reviewed_anchor_inaccessible", (), None
+    if not workspace_identity:
+        return "provider_identity_unverified", (), None
     if provider != "notion" or workspace_identity_basis not in NOTION_WORKSPACE_IDENTITY_BASES:
         # A reviewed page UUID, label, account id, or other inferred value is
         # never an authoritative workspace identity.  The provider adapter must
@@ -1479,11 +1513,11 @@ class SecureIntakeWorker:
             try:
                 secret = self.ui.request_secret(request_id=plan.request_id)
             except Exception:
-                return _fixed_failure("secret_input_unavailable")
+                return _fixed_failure("credential_input_not_received")
             if secret is None:
-                return _fixed_failure("human_cancelled")
+                return _fixed_failure("credential_input_cancelled_or_empty")
             if not isinstance(secret, bytearray) or not 0 < len(secret) <= MAX_SECRET_BYTES:
-                return _fixed_failure("secret_input_unavailable")
+                return _fixed_failure("credential_input_not_received")
             secret_view = memoryview(secret)
 
             backend_id = str(self.backend_id_factory())
@@ -1512,6 +1546,11 @@ class SecureIntakeWorker:
                     secret_view,
                     provider=plan.provider,
                     reviewed_anchor_uuid=plan.reviewed_anchor_uuid,
+                )
+            except CredentialIntakeStageError as error:
+                return _fixed_failure(
+                    error.code,
+                    rollback_status=rollback_once(),
                 )
             except Exception:
                 return _fixed_failure(
@@ -1744,6 +1783,8 @@ _WORKER_ROLLBACK_STATUSES = frozenset(
 )
 _PRE_STORE_FAILURE_REASONS = frozenset(
     {
+        "credential_input_cancelled_or_empty",
+        "credential_input_not_received",
         "human_cancelled",
         "secret_input_unavailable",
         "request_expired",
@@ -1751,6 +1792,18 @@ _PRE_STORE_FAILURE_REASONS = frozenset(
         "request_user_mismatch",
         "request_claim_failed",
         "plan_digest_mismatch",
+    }
+)
+_ROLLBACK_REQUIRED_FAILURE_REASONS = frozenset(
+    {
+        "store_write_failed",
+        "store_presence_not_verified",
+        "provider_auth_rejected",
+        "provider_identity_endpoint_unavailable",
+        "reviewed_anchor_inaccessible",
+        "provider_identity_unverified",
+        "workspace_anchor_mismatch",
+        "receipt_commit_failed",
     }
 )
 
@@ -1804,7 +1857,16 @@ def _project_worker_failure(result: Mapping[str, Any]) -> dict[str, Any] | None:
         and reason in _WORKER_FAILURE_REASONS
         and type(rollback) is str
         and rollback in _WORKER_ROLLBACK_STATUSES
-        and (reason not in _PRE_STORE_FAILURE_REASONS or rollback == "not_required")
+        and (
+            (reason in _PRE_STORE_FAILURE_REASONS and rollback == "not_required")
+            or (
+                reason in _ROLLBACK_REQUIRED_FAILURE_REASONS
+                and rollback in {"deleted", "delete_failed"}
+            )
+            # This internal integrity failure can occur either before the
+            # encrypted write or after it, where rollback is mandatory.
+            or reason == "worker_result_invalid"
+        )
     ):
         return None
     projected = _fixed_failure(reason, rollback_status=rollback)
@@ -2065,6 +2127,7 @@ def apply_duplicate_lifecycle_decision(
 __all__ = [
     "AtomicJsonReceiptCommitter",
     "AtomicReceiptCommitter",
+    "CredentialIntakeStageError",
     "ExactCredentialStore",
     "FileOneTimeRequestClaims",
     "HumanOnlySecretUI",

@@ -19,6 +19,7 @@ from unittest.mock import patch
 from wom_kit import credential_secure_intake as secure_intake_module
 from wom_kit.credential_secure_intake import (
     AtomicJsonReceiptCommitter,
+    CredentialIntakeStageError,
     FileOneTimeRequestClaims,
     InMemoryOneTimeRequestClaims,
     NOTION_PAT_SCOPE_FINGERPRINT_DOMAIN,
@@ -92,6 +93,7 @@ class FakeVerifier:
     provider: str = "notion"
     anchor: str = ANCHOR
     error: bool = False
+    stage_error: str | None = None
     subject_verified: bool = True
     anchor_access_verified: bool = True
     received: list[bytes] = field(default_factory=list, repr=False)
@@ -106,6 +108,8 @@ class FakeVerifier:
         self.received.append(bytes(secret))
         if self.error:
             raise RuntimeError(f"provider leaked {SECRET_TEXT}")
+        if self.stage_error is not None:
+            raise CredentialIntakeStageError(self.stage_error)
         return VerifiedCredentialIdentity(
             provider=self.provider,
             account_subject="provider-user-id-private",
@@ -374,13 +378,54 @@ class SecureCredentialIntakeTests(unittest.TestCase):
         self.assertEqual(store.calls[-1], ("delete_exact", BACKEND_ID))
         self.assertEqual(committer.receipts, [])
 
+    def test_provider_stage_failures_are_distinct_redacted_and_rolled_back(self) -> None:
+        expected_actions = {
+            "provider_auth_rejected": "review_the_notion_credential_and_create_a_new_plan",
+            "provider_identity_endpoint_unavailable": "create_a_new_plan_after_provider_identity_service_recovers",
+            "reviewed_anchor_inaccessible": "review_page_access_and_create_a_new_plan",
+        }
+        for reason, expected_action in expected_actions.items():
+            with self.subTest(reason=reason):
+                worker, _, store, _, committer = self.worker(
+                    verifier=FakeVerifier(stage_error=reason)
+                )
+                result = self.execute(worker)
+
+                self.assert_failed_without_id(result, reason)
+                self.assertEqual(result["rollback_status"], "deleted")
+                self.assertEqual(result["operator_action"], expected_action)
+                self.assertEqual(
+                    store.calls,
+                    [
+                        ("put_exact", BACKEND_ID),
+                        ("probe_exact", BACKEND_ID),
+                        ("delete_exact", BACKEND_ID),
+                    ],
+                )
+                self.assertEqual(committer.receipts, [])
+                self.assertNotIn(SECRET_TEXT, json.dumps(result, ensure_ascii=False))
+
+    def test_provider_stage_delete_failure_remains_unresolved(self) -> None:
+        worker, _, store, _, _ = self.worker(
+            store=FakeStore(delete_error=True),
+            verifier=FakeVerifier(stage_error="provider_auth_rejected"),
+        )
+        result = self.execute(worker)
+
+        self.assert_failed_without_id(result, "provider_auth_rejected")
+        self.assertEqual(result["rollback_status"], "delete_failed")
+        self.assertEqual(
+            result["operator_action"],
+            "stop_and_remove_the_exact_encrypted_store_entry",
+        )
+
     def test_reviewed_anchor_mismatch_is_distinct_and_rolls_back(self) -> None:
         worker, _, store, _, committer = self.worker(
             verifier=FakeVerifier(anchor=OTHER_ANCHOR)
         )
         result = self.execute(worker)
 
-        self.assert_failed_without_id(result, "workspace_anchor_mismatch")
+        self.assert_failed_without_id(result, "reviewed_anchor_inaccessible")
         self.assertEqual(store.calls[-1], ("delete_exact", BACKEND_ID))
         self.assertEqual(committer.receipts, [])
 
@@ -413,7 +458,7 @@ class SecureCredentialIntakeTests(unittest.TestCase):
         cancelled_ui = FakeUI(value_factory=lambda: None)
         worker, _, store, _, _ = self.worker(ui=cancelled_ui)
         cancelled = self.execute(worker)
-        self.assert_failed_without_id(cancelled, "human_cancelled")
+        self.assert_failed_without_id(cancelled, "credential_input_cancelled_or_empty")
         self.assertEqual(store.calls, [])
 
         class ExplodingUI:
@@ -422,7 +467,7 @@ class SecureCredentialIntakeTests(unittest.TestCase):
 
         worker, _, store, _, _ = self.worker(ui=ExplodingUI())
         unavailable = self.execute(worker)
-        self.assert_failed_without_id(unavailable, "secret_input_unavailable")
+        self.assert_failed_without_id(unavailable, "credential_input_not_received")
         self.assertEqual(store.calls, [])
 
     def test_request_expiry_replay_and_owner_binding_close_before_ui(self) -> None:
@@ -915,7 +960,7 @@ class SecureCredentialIntakeTests(unittest.TestCase):
         )
         self.assertEqual(projected, child_result)
         self.assertIsNot(projected, child_result)
-        self.assert_failed_without_id(projected, "human_cancelled")
+        self.assert_failed_without_id(projected, "credential_input_cancelled_or_empty")
 
         contaminated = dict(child_result)
         contaminated["error"] = SECRET_TEXT
@@ -928,6 +973,80 @@ class SecureCredentialIntakeTests(unittest.TestCase):
             spawner=ContaminatedFailureSpawner()
         ).launch(plan, expected_plan_digest=plan.plan_digest)
         self.assert_unknown_worker_state(blocked)
+
+        provider_failure = secure_intake_module._fixed_failure(
+            "provider_auth_rejected",
+            rollback_status="deleted",
+        )
+
+        class ProviderFailureSpawner:
+            def run_worker(self, invocation):
+                return provider_failure
+
+        projected_provider = SecureIntakeProcessLauncher(
+            spawner=ProviderFailureSpawner()
+        ).launch(plan, expected_plan_digest=plan.plan_digest)
+        self.assertEqual(projected_provider, provider_failure)
+
+        forged_provider_failure = secure_intake_module._fixed_failure(
+            "provider_auth_rejected",
+            rollback_status="not_required",
+        )
+
+        class ForgedProviderFailureSpawner:
+            def run_worker(self, invocation):
+                return forged_provider_failure
+
+        blocked_provider = SecureIntakeProcessLauncher(
+            spawner=ForgedProviderFailureSpawner()
+        ).launch(plan, expected_plan_digest=plan.plan_digest)
+        self.assert_unknown_worker_state(blocked_provider)
+
+    def test_core_projection_binds_legacy_failure_stage_to_rollback_state(self) -> None:
+        pre_store = {
+            "human_cancelled",
+            "secret_input_unavailable",
+            "request_expired",
+            "request_replayed",
+            "request_user_mismatch",
+            "request_claim_failed",
+            "plan_digest_mismatch",
+        }
+        rollback_required = {
+            "store_write_failed",
+            "store_presence_not_verified",
+            "provider_identity_unverified",
+            "workspace_anchor_mismatch",
+            "receipt_commit_failed",
+        }
+        for reason in sorted(pre_store):
+            with self.subTest(reason=reason, rollback="not_required"):
+                valid = secure_intake_module._fixed_failure(reason)
+                self.assertEqual(
+                    secure_intake_module._project_worker_failure(valid),
+                    valid,
+                )
+                forged = secure_intake_module._fixed_failure(
+                    reason,
+                    rollback_status="deleted",
+                )
+                self.assertIsNone(
+                    secure_intake_module._project_worker_failure(forged)
+                )
+        for reason in sorted(rollback_required):
+            with self.subTest(reason=reason, rollback="deleted"):
+                valid = secure_intake_module._fixed_failure(
+                    reason,
+                    rollback_status="deleted",
+                )
+                self.assertEqual(
+                    secure_intake_module._project_worker_failure(valid),
+                    valid,
+                )
+                forged = secure_intake_module._fixed_failure(reason)
+                self.assertIsNone(
+                    secure_intake_module._project_worker_failure(forged)
+                )
 
     def test_parent_launcher_blocks_child_success_contamination_and_covert_fields(
         self,

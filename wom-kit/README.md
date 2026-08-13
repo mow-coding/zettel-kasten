@@ -10,30 +10,30 @@ It is not a website, SaaS app, dashboard, or visual note-taking product. The int
 
 ## Install The Command-Line Tool
 
-The exact v0.3.317 GitHub Release, when present, uses the self-contained wheel
+The exact v0.3.318 GitHub Release, when present, uses the self-contained wheel
 below. Confirm that the release exists and lists the wheel before installing
 it. The versioned URL alone is not proof that the asset is available.
 
 ```powershell
-uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.317/wom_kit-0.3.317-py3-none-any.whl"
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.318/wom_kit-0.3.318-py3-none-any.whl"
 archive --version
 ```
 
-v0.3.317 corrects the real-use credential and staged-cleanup boundaries. First
-credential enrollment uses one separate visible Unicode Windows console with
-echo disabled; the helper AI supplies digest-bound public-safe task context,
-WOM supplies fixed security copy, and later approved work reuses a matching
-authenticated Windows Credential Manager entry only after exact-store,
-secret-fingerprint, and current-anchor revalidation. Credential scope uses the
-provider's bot workspace ID for internal integrations and an
-exact-token-scoped witness for person PATs, so the same saved PAT can serve a
-different reviewed page without another prompt. Legacy authenticated receipts
-can evolve locally without rewriting the receipt or Credential Manager entry;
-ambiguous lifecycle state remains human-review-only. `staged-cleanup-check` now
-requires complete manifest, rehashed store-byte, and receipt evidence, rehashes
-all final authorities, keeps deferred entries staged, and supports content-free
-saved output plus bounded operation control. It remains report-only and deletes
-nothing. See [`docs/releases/v0.3.317.md`](docs/releases/v0.3.317.md).
+v0.3.318 corrects the real-use masked-console feedback and outcome boundary.
+The separate Unicode Windows console tells the human to use `Ctrl+V` or
+`Shift+Insert`, notes Windows Terminal's default `Ctrl+Shift+V`, and states
+that right-click depends on host settings. It keeps echo disabled, ignores
+`Ctrl+C` during the prompt, and documents empty Enter as cancellation. After
+one complete non-empty line it shows only
+`입력값을 받았습니다. 검증 중입니다.` Five fixed reason codes distinguish
+input cancellation, input-boundary failure, authentication rejection, identity
+service unavailability, and reviewed-page inaccessibility under v0.2 result
+envelopes with strict rollback relationships. WOM still performs no
+programmatic clipboard read, and a matching authenticated credential remains a
+no-prompt reuse. Synthetic Win32 API canaries do not prove actual physical paste
+gesture acceptance under every terminal host. See
+[`docs/releases/v0.3.318.md`](docs/releases/v0.3.318.md) and the
+[`Letter 131 guide`](docs/letter131-credential-console-paste-and-failure-stages.md).
 
 v0.3.291 makes runtime version alignment explicit. `archive version <root>`
 distinguishes an aligned runtime, project source that must be repaired or

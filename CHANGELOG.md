@@ -6,6 +6,34 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.318 - 2026-08-13
+
+- Made successful masked-console input visible without revealing the value or
+  length: after one complete non-empty line, the console says
+  `입력값을 받았습니다. 검증 중입니다.` and briefly remains visible while
+  provider verification begins.
+- Added explicit paste guidance for `Ctrl+V`, `Shift+Insert`, Windows
+  Terminal's default `Ctrl+Shift+V`, and host-dependent right-click behavior.
+  WOM still performs no programmatic clipboard read.
+- Kept cooked, echo-disabled Unicode input while enabling the Windows console
+  edit modes needed by classic host shortcuts. During the short prompt WOM
+  ignores `Ctrl+C`; empty Enter is the one documented cancellation gesture.
+- Split the public intake outcome into five actionable stages:
+  `credential_input_cancelled_or_empty`, `credential_input_not_received`,
+  `provider_auth_rejected`, `provider_identity_endpoint_unavailable`, and
+  `reviewed_anchor_inaccessible`.
+- Bumped secure-intake and workflow result envelopes to v0.2, constrained each
+  reason to its valid pre-store or rollback stage, and kept unknown provider
+  failures on the conservative `provider_identity_unverified` fallback.
+- Preserved fail-closed exact-entry rollback, absence verification, immediate
+  temporary-buffer wiping, parent-result reconstruction, and secret-free
+  screen, logs, argv, environment, files, and IPC.
+- Verified the Win32 console API boundary with synthetic input, including
+  exact Korean output, mode/code-page restoration, status dwell, Ctrl+C
+  survival, and cleanup-window survival. This is not evidence that physical
+  paste gestures work under every Windows Terminal, Console Host, ConPTY, or
+  customized host configuration.
+
 ## v0.3.317 - 2026-08-13
 
 - Replaced generic Notion secret-entry copy with a two-owner visible-console

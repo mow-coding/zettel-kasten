@@ -1,6 +1,6 @@
 # Runtime Canonical Entry Points
 
-Status: v0.3.317 credential-console continuity and staged-cleanup evidence checkpoint
+Status: v0.3.318 credential paste and failure-stage checkpoint
 
 When an AI runtime enters a WOM archive, it needs a small, explicit "start
 here" map. The archive may contain zets, source bindings, provider metadata,
