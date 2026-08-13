@@ -15932,11 +15932,19 @@ state:
             self.assertNotIn(request_relative, output)
 
     def test_credential_adopt_binds_stable_request_and_never_accepts_or_echoes_pat(self) -> None:
+        help_code, help_output = self.run_cli(["credential-adopt", "--help"])
+        self.assertEqual(help_code, 0, help_output)
+        self.assertIn("--task-summary", help_output)
+        self.assertIn("--connection-reason", help_output)
+        self.assertIn("--replace-existing", help_output)
+        self.assertIn("First-time enrollment", help_output)
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")
             anchor = "00000000-0000-0000-0000-000000000071"
             account_label = "private account label"
             workspace_label = "private workspace label"
+            task_summary = "검토한 Notion 페이지를 WOM 아카이브로 복구하고 있습니다."
+            connection_reason = "복구를 계속하려면 해당 Notion 작업공간 연결을 확인해야 합니다."
             token = "secret-token-value-that-must-never-echo"
             base = [
                 "credential-adopt",
@@ -15947,6 +15955,10 @@ state:
                 workspace_label,
                 "--purpose",
                 "notion-page-recovery",
+                "--task-summary",
+                task_summary,
+                "--connection-reason",
+                connection_reason,
                 "--reviewed-anchor-page-id",
                 anchor,
                 "--capability",
@@ -15965,13 +15977,38 @@ state:
             self.assertEqual(second_code, 0, second_output)
             self.assertEqual(first["request_sha256"], second["request_sha256"])
             self.assertRegex(first["request_sha256"], r"^sha256:[0-9a-f]{64}$")
+            interaction_context = {
+                "schema": "wom-credential-interaction-context/v0.1",
+                "provider": "notion",
+                "purpose": "notion_page_recovery",
+                "account_label": account_label,
+                "workspace_label": workspace_label,
+                "task_summary": task_summary,
+                "connection_reason": connection_reason,
+            }
+            expected_interaction_context_sha256 = "sha256:" + hashlib.sha256(
+                json.dumps(
+                    interaction_context,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+            ).hexdigest()
+            self.assertEqual(
+                first["interaction_context_sha256"],
+                expected_interaction_context_sha256,
+            )
             canonical_request = {
-                "schema": "wom-kit/credential-adoption-request/v0.1",
+                "schema": "wom-kit/credential-adoption-request/v0.2",
                 "archive_id": "archive:personal:fake-life",
                 "provider": "notion",
                 "account_label": account_label,
                 "workspace_label": workspace_label,
                 "purpose": "notion_page_recovery",
+                "task_summary": task_summary,
+                "connection_reason": connection_reason,
+                "interaction_context_sha256": expected_interaction_context_sha256,
+                "replace_existing": False,
                 "reviewed_anchor_page_id": anchor,
                 "requested_capabilities": ["read_page_content"],
                 "ttl_seconds": 300,
@@ -15988,9 +16025,24 @@ state:
             self.assertEqual(first["request_sha256"], expected_request_sha256)
             self.assertNotIn("plan_digest", first)
             self.assertNotIn("intake_plan", first)
+            self.assertTrue(first["assistant_task_context_bound"])
             for private_value in (anchor, account_label, workspace_label):
                 self.assertNotIn(private_value, first_output)
             self.assertEqual(before, self.snapshot_archive_files(archive_root))
+
+            replacement_code, replacement_output = self.run_cli(
+                [*base, "--replace-existing", "--dry-run"]
+            )
+            replacement = json.loads(replacement_output)
+            self.assertEqual(replacement_code, 0, replacement_output)
+            self.assertNotEqual(
+                replacement["request_sha256"],
+                first["request_sha256"],
+            )
+            self.assertEqual(
+                replacement["interaction_context_sha256"],
+                first["interaction_context_sha256"],
+            )
 
             with patch(
                 "wom_kit.credential_workflows.execute_windows_notion_credential_adoption"
@@ -16073,6 +16125,10 @@ state:
                     token_shaped_label,
                     "--workspace-label",
                     workspace_label,
+                    "--task-summary",
+                    task_summary,
+                    "--connection-reason",
+                    connection_reason,
                     "--reviewed-anchor-page-id",
                     anchor,
                     "--interactive",
@@ -78350,14 +78406,20 @@ class ObjetCaptureTests(unittest.TestCase):
             self.assertEqual(code, 1, "unsafe cleanup verdict must exit nonzero")
             self.assertFalse(json.loads(output)["safe_to_cleanup"])
 
-    def test_staged_cleanup_check_deferred_file_counts_safe(self) -> None:
+    def test_staged_cleanup_check_deferred_file_stays_not_safe(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root, digest, staged = self._captured_sandbox(tmp)
             (archive_root / "staging" / "incoming" / "later.txt").write_bytes(b"deliberately deferred")
             deferred_path = Path(tmp) / "deferred.json"
             deferred_path.write_text(json.dumps({"deferred": ["later.txt"]}), encoding="utf-8")
             result = archive_services.staged_cleanup_check(archive_root, staged, deferred_path=deferred_path)
-            self.assertTrue(result["safe_to_cleanup"], result)
+            self.assertTrue(result["ok"], result)
+            self.assertFalse(result["safe_to_cleanup"], result)
+            self.assertEqual(result["state"], "not_safe_to_cleanup")
+            self.assertIn(
+                "staged_entry_explicitly_deferred",
+                result["reason_codes"],
+            )
             by_path = {entry["path"]: entry for entry in result["files"]}
             self.assertEqual(by_path["later.txt"]["status"], "deferred")
 

@@ -103,6 +103,17 @@ Do not preload every reference.
 - Never expose secret values, credential-store responses, private paths, or source
   excerpts. A read-only result never authorizes provider calls, transport,
   mint, revise, retire, import, trust, or delete.
+- Never ask for or accept a provider secret in chat. `credential-adopt` is only
+  for first enrollment or an explicitly reviewed replacement. Before using it,
+  check authenticated credential state. Supply one public-safe current-task
+  sentence and one public-safe connection-reason sentence; WOM owns the fixed
+  security notice and the separate echo-disabled Windows console. After a
+  successful enrollment and lifecycle choice, later approved work reuses the
+  exact Windows Credential Manager entry without prompting again. The same
+  saved PAT may be revalidated for another reviewed page; do not treat a page
+  UUID or display label as workspace authority. A legacy authenticated receipt
+  may need WOM's no-prompt scope-evolution path, while duplicate or complex
+  lifecycle state requires human review rather than another secret request.
 - Run `backup-evidence --dry-run` before backup claims. Configuration, local
   commit, declared label, generated index, and historical receipt do not prove
   current remote completion.

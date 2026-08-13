@@ -23,6 +23,10 @@ from urllib import error as urllib_error
 from urllib import request as urllib_request
 import uuid
 
+from .credential_secure_intake import (
+    NOTION_PAT_WORKSPACE_IDENTITY_BASIS,
+    NOTION_WORKSPACE_IDENTITY_BASIS,
+)
 from .notion_page_recovery import NOTION_API_VERSION, ProviderResponse
 
 
@@ -198,6 +202,7 @@ class NotionSecureIntakeIdentity:
     workspace_identity: str = dataclass_field(repr=False)
     reviewed_anchor_uuid: str = dataclass_field(repr=False)
     capabilities: tuple[str, ...]
+    workspace_identity_basis: str
     subject_verified: bool = True
     anchor_access_verified: bool = True
 
@@ -246,6 +251,7 @@ class NotionSecureIntakeVerifier:
             workspace_identity=str(evidence["workspace_fingerprint"]),
             reviewed_anchor_uuid=normalized_anchor,
             capabilities=_SECURE_INTAKE_CAPABILITIES,
+            workspace_identity_basis=str(evidence["workspace_identity_basis"]),
         )
 
     def __repr__(self) -> str:
@@ -426,6 +432,39 @@ class NotionHttpAdapter:
             if account_id is None:
                 return _identity_evidence("notion_identity_response_malformed")
             account_fingerprint = _fingerprint("account", account_id)
+            identity_type = identity.payload.get("type") if identity.payload else None
+            if identity_type == "bot":
+                workspace_id = _bot_workspace_id(identity.payload)
+                if workspace_id is None:
+                    return _identity_evidence(
+                        "notion_workspace_identity_response_malformed",
+                        identity_verified=True,
+                        account_fingerprint=account_fingerprint,
+                    )
+                workspace_identity = _fingerprint("workspace", workspace_id)
+                workspace_identity_basis = NOTION_WORKSPACE_IDENTITY_BASIS
+                success_reason = "notion_identity_and_workspace_anchor_verified"
+            elif identity_type == "person" and isinstance(
+                identity.payload.get("person"), Mapping
+            ):
+                # Official Notion PATs are user-scoped and belong to exactly
+                # one user in one workspace, but /v1/users/me intentionally
+                # returns a person without a workspace_id.  The adapter marks
+                # that provider contract explicitly; secure intake derives the
+                # actual private scope from the authenticated exact-secret HMAC
+                # and never substitutes the reviewed page UUID.
+                workspace_identity = _fingerprint(
+                    "workspace-basis",
+                    NOTION_PAT_WORKSPACE_IDENTITY_BASIS,
+                )
+                workspace_identity_basis = NOTION_PAT_WORKSPACE_IDENTITY_BASIS
+                success_reason = "notion_pat_identity_and_workspace_anchor_verified"
+            else:
+                return _identity_evidence(
+                    "notion_workspace_identity_response_malformed",
+                    identity_verified=True,
+                    account_fingerprint=account_fingerprint,
+                )
 
             anchor = self.retrieve_page(
                 normalized_anchor,
@@ -437,6 +476,7 @@ class NotionHttpAdapter:
                     _anchor_status_reason(anchor.status, anchor.payload),
                     identity_verified=True,
                     account_fingerprint=account_fingerprint,
+                    workspace_identity_basis=workspace_identity_basis,
                 )
             anchor_payload = anchor.payload
             if (
@@ -447,28 +487,22 @@ class NotionHttpAdapter:
                     "notion_workspace_anchor_response_malformed",
                     identity_verified=True,
                     account_fingerprint=account_fingerprint,
+                    workspace_identity_basis=workspace_identity_basis,
                 )
             if anchor_payload.get("in_trash") is True:
                 return _identity_evidence(
                     "notion_workspace_anchor_deleted",
                     identity_verified=True,
                     account_fingerprint=account_fingerprint,
+                    workspace_identity_basis=workspace_identity_basis,
                 )
-            workspace_fingerprint = _fingerprint(
-                # Notion does not guarantee a workspace id on /users/me. The
-                # reviewed page belongs to one workspace, so its stable UUID is
-                # the shared scope witness. Do not include the account/bot id:
-                # two valid credentials for the same reviewed workspace must be
-                # comparable in the duplicate/default lifecycle.
-                "workspace-anchor",
-                normalized_anchor,
-            )
             return _identity_evidence(
-                "notion_identity_and_workspace_anchor_verified",
+                success_reason,
                 identity_verified=True,
                 workspace_anchor_verified=True,
                 account_fingerprint=account_fingerprint,
-                workspace_fingerprint=workspace_fingerprint,
+                workspace_fingerprint=workspace_identity,
+                workspace_identity_basis=workspace_identity_basis,
             )
         finally:
             if owned:
@@ -763,6 +797,19 @@ def _user_identity_id(payload: Mapping[str, Any] | None) -> str | None:
     return _normalize_uuid(payload.get("id"))
 
 
+def _bot_workspace_id(payload: Mapping[str, Any] | None) -> str | None:
+    if (
+        not isinstance(payload, Mapping)
+        or payload.get("object") != "user"
+        or payload.get("type") != "bot"
+    ):
+        return None
+    bot = payload.get("bot")
+    if not isinstance(bot, Mapping):
+        return None
+    return _normalize_uuid(bot.get("workspace_id"))
+
+
 def _status_reason(status: int) -> str:
     if status == 401:
         return "notion_unauthorized"
@@ -831,6 +878,7 @@ def _identity_evidence(
     workspace_anchor_verified: bool = False,
     account_fingerprint: str | None = None,
     workspace_fingerprint: str | None = None,
+    workspace_identity_basis: str | None = None,
 ) -> dict[str, Any]:
     return {
         "provider": "notion",
@@ -839,6 +887,7 @@ def _identity_evidence(
         "workspace_anchor_verified": workspace_anchor_verified,
         "account_fingerprint": account_fingerprint,
         "workspace_fingerprint": workspace_fingerprint,
+        "workspace_identity_basis": workspace_identity_basis,
         "capabilities": dict(_CAPABILITIES),
         "api_version": NOTION_API_VERSION,
         "privacy_guards": {

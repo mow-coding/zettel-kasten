@@ -6,13 +6,21 @@ explicit `--output` file:
 
 - `project-version-update`;
 - `index`; or
-- `index-health`.
+- `index-health`; or
+- `staged-cleanup-check`.
 
 Without `--output`, those commands keep their existing behavior and create no
 operation journal. With `--output`, stderr prints an opaque
 `op:sha256:<digest>` reference early. The same reference and follow-up command
 templates are stored under `cli_output_artifact.operation` in the complete
 JSON result.
+
+For `staged-cleanup-check`, operation control keeps only the inspection state,
+the `safe_to_cleanup` boolean, four bounded counts, and fixed reason codes. It
+never copies staged paths, filenames, object ids, hashes, receipt names, or raw
+messages. A complete inspection with `safe_to_cleanup: false` is a valid saved
+result with process exit `1`, not a transport failure. Deferred entries remain
+staged and also produce that not-safe result.
 
 ## Start an observable command
 

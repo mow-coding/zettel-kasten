@@ -3,7 +3,7 @@
 This module is the live Windows boundary for :mod:`credential_secure_intake`.
 It deliberately uses only these exact operations:
 
-* ``CredUIPromptForCredentialsW`` for an application-modal, masked local UI;
+* one separate, visible Windows console with echo-disabled ``ReadConsoleW``;
 * ``CredWriteW`` for one exact Generic Credential target;
 * ``CredReadW`` only as an existence probe, followed immediately by
   ``CredFree`` without dereferencing ``CredentialBlob`` in Python;
@@ -12,19 +12,21 @@ It deliberately uses only these exact operations:
 * ``CredDeleteW`` for the same exact target; and
 * the current process token's ``TokenUser`` SID for owner binding.
 
-There is no command-line prompt, stdin, environment-variable, stdout,
-clipboard, plaintext-file, enumeration, search, fuzzy matching, or public
-``get-secret`` API.  The only read is the exact, approval-gated broker primitive
-described above; it returns no text or public result and its mutable buffer must
-be wiped after the trusted consumer finishes.  Loading the real DLL facade
-requires an explicit ``cli_live_approved`` flag and a Windows platform.  Unit
-tests inject a fake facade and never open a real dialog, credential store,
-provider, or real secret.
+There is no parent-console prompt, ordinary stdin, command argument,
+environment-variable, stdout/stderr, clipboard, plaintext-file, enumeration,
+search, fuzzy matching, or public ``get-secret`` API.  The visible console is
+created inside the already-isolated transaction worker and closed before the
+Credential Manager write starts, so the raw secret never crosses a process
+boundary.  The exact broker read returns no text or public result and its
+mutable buffer must be wiped after the trusted consumer finishes.  Loading the
+real DLL facade requires an explicit ``cli_live_approved`` flag and a Windows
+platform.  Unit tests inject fake native boundaries and never open a real
+console, credential store, provider, or real secret.
 
 Microsoft contracts used here:
 
-* CredUI ``DO_NOT_PERSIST`` keeps the dialog from independently saving the
-  entered value.  The atomic worker performs the only approved store write.
+* ``FreeConsole`` followed by ``AllocConsole`` gives the isolated worker its
+  own visible input window; ``ENABLE_ECHO_INPUT`` remains disabled.
 * A Generic Credential is identified exactly by ``TargetName`` and ``Type``.
 * The buffer allocated by ``CredReadW`` must be released with ``CredFree``.
 """
@@ -40,7 +42,7 @@ from ctypes import wintypes
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Callable, Protocol
 
 from .credential_secure_intake import (
     AtomicJsonReceiptCommitter,
@@ -49,33 +51,20 @@ from .credential_secure_intake import (
     SecureIntakeWorker,
     WindowsCredentialManagerExactStore,
 )
+from .credential_visible_console_windows import (
+    VisibleConsolePromptContext,
+    VisibleConsoleSecretPromptError,
+    prompt_masked_secret_in_new_console,
+)
 
 
-NO_ERROR = 0
-ERROR_CANCELLED = 1223
 ERROR_NOT_FOUND = 1168
 
 CRED_TYPE_GENERIC = 1
 CRED_PERSIST_LOCAL_MACHINE = 2
 CRED_MAX_CREDENTIAL_BLOB_SIZE = 5 * 512
-CREDUI_MAX_USERNAME_LENGTH = 513
-CREDUI_MAX_PASSWORD_LENGTH = 256
-
-CREDUI_FLAGS_DO_NOT_PERSIST = 0x00002
-CREDUI_FLAGS_EXCLUDE_CERTIFICATES = 0x00008
-CREDUI_FLAGS_ALWAYS_SHOW_UI = 0x00080
-CREDUI_FLAGS_GENERIC_CREDENTIALS = 0x40000
-CREDUI_FLAGS = (
-    CREDUI_FLAGS_DO_NOT_PERSIST
-    | CREDUI_FLAGS_EXCLUDE_CERTIFICATES
-    | CREDUI_FLAGS_ALWAYS_SHOW_UI
-    | CREDUI_FLAGS_GENERIC_CREDENTIALS
-)
-
 TOKEN_QUERY = 0x0008
 TOKEN_USER_INFORMATION_CLASS = 1
-CP_UTF8 = 65001
-WC_ERR_INVALID_CHARS = 0x00000080
 
 REQUEST_ID_RE = re.compile(r"^intake_[A-Za-z0-9_-]{16,96}$")
 BACKEND_ID_RE = re.compile(r"^backend_[A-Za-z0-9_-]{16,96}$")
@@ -88,7 +77,7 @@ FIXED_CODES = {
     "windows_live_approval_required",
     "windows_platform_required",
     "windows_native_load_failed",
-    "windows_masked_dialog_failed",
+    "windows_visible_console_failed",
     "windows_credential_write_failed",
     "windows_credential_probe_failed",
     "windows_credential_read_failed",
@@ -146,16 +135,6 @@ class _FILETIME(ctypes.Structure):
     ]
 
 
-class _CREDUI_INFOW(ctypes.Structure):
-    _fields_ = [
-        ("cbSize", wintypes.DWORD),
-        ("hwndParent", wintypes.HWND),
-        ("pszMessageText", wintypes.LPCWSTR),
-        ("pszCaptionText", wintypes.LPCWSTR),
-        ("hbmBanner", wintypes.HANDLE),
-    ]
-
-
 class _CREDENTIALW(ctypes.Structure):
     _fields_ = [
         ("Flags", wintypes.DWORD),
@@ -188,15 +167,22 @@ class _TOKEN_USER(ctypes.Structure):
 class WindowsDllBundle:
     """Injected DLL bundle; fields are hidden from repr and public results."""
 
-    credui: Any = field(repr=False)
     advapi32: Any = field(repr=False)
     kernel32: Any = field(repr=False)
+    # Kept only so older injected test/embedding bundles remain constructible.
+    # Production no longer loads or calls CredUI.
+    credui: Any | None = field(default=None, repr=False)
 
 
 class WindowsSecureIntakeNative(Protocol):
     """High-level native facade consumed by the core worker and factory."""
 
-    def prompt_masked_secret(self, *, request_id: str) -> bytearray | None: ...
+    def prompt_masked_secret(
+        self,
+        *,
+        request_id: str,
+        context: VisibleConsolePromptContext,
+    ) -> bytearray | None: ...
 
     def write_generic(self, target_name: str, secret: memoryview) -> None: ...
 
@@ -226,6 +212,7 @@ class CtypesWindowsNativeFacade:
         cli_live_approved: bool,
         dlls: WindowsDllBundle | None = None,
         platform_name: str | None = None,
+        console_prompt: Callable[..., bytearray | None] | None = None,
     ) -> None:
         if cli_live_approved is not True:
             raise _fail("windows_live_approval_required")
@@ -237,13 +224,16 @@ class CtypesWindowsNativeFacade:
                 if loader is None:
                     raise OSError
                 dlls = WindowsDllBundle(
-                    credui=loader("credui", use_last_error=True),
                     advapi32=loader("advapi32", use_last_error=True),
                     kernel32=loader("kernel32", use_last_error=True),
                 )
-            self._credui = dlls.credui
             self._advapi32 = dlls.advapi32
             self._kernel32 = dlls.kernel32
+            self._console_prompt = (
+                console_prompt
+                if console_prompt is not None
+                else prompt_masked_secret_in_new_console
+            )
             self._configure_signatures()
         except WindowsSecureIntakeError:
             raise
@@ -251,25 +241,9 @@ class CtypesWindowsNativeFacade:
             raise _fail("windows_native_load_failed") from None
 
     def __repr__(self) -> str:
-        return "CtypesWindowsNativeFacade(live_approved=True)"
+        return "CtypesWindowsNativeFacade(live_approved=True, visible_console=True)"
 
     def _configure_signatures(self) -> None:
-        _configure(
-            self._credui.CredUIPromptForCredentialsW,
-            [
-                ctypes.POINTER(_CREDUI_INFOW),
-                wintypes.LPCWSTR,
-                ctypes.c_void_p,
-                wintypes.DWORD,
-                wintypes.LPWSTR,
-                wintypes.ULONG,
-                wintypes.LPWSTR,
-                wintypes.ULONG,
-                ctypes.POINTER(wintypes.BOOL),
-                wintypes.DWORD,
-            ],
-            wintypes.DWORD,
-        )
         _configure(
             self._advapi32.CredWriteW,
             [ctypes.POINTER(_CREDENTIALW), wintypes.DWORD],
@@ -315,21 +289,6 @@ class CtypesWindowsNativeFacade:
         _configure(self._kernel32.GetCurrentProcess, [], wintypes.HANDLE)
         _configure(self._kernel32.CloseHandle, [wintypes.HANDLE], wintypes.BOOL)
         _configure(self._kernel32.LocalFree, [ctypes.c_void_p], ctypes.c_void_p)
-        _configure(self._kernel32.lstrlenW, [wintypes.LPCWSTR], ctypes.c_int)
-        _configure(
-            self._kernel32.WideCharToMultiByte,
-            [
-                wintypes.UINT,
-                wintypes.DWORD,
-                wintypes.LPCWSTR,
-                ctypes.c_int,
-                ctypes.c_void_p,
-                ctypes.c_int,
-                ctypes.c_void_p,
-                ctypes.c_void_p,
-            ],
-            ctypes.c_int,
-        )
 
     @staticmethod
     def _last_error() -> int:
@@ -339,104 +298,28 @@ class CtypesWindowsNativeFacade:
         except Exception:
             return 0
 
-    @staticmethod
-    def _wipe_ctypes_buffer(buffer: Any) -> None:
-        try:
-            ctypes.memset(ctypes.addressof(buffer), 0, ctypes.sizeof(buffer))
-        except Exception:
-            pass
-
-    def _utf8_from_wchar_buffer(self, buffer: Any) -> bytearray:
-        output = bytearray()
-        try:
-            length = int(self._kernel32.lstrlenW(buffer))
-            if length <= 0:
-                return output
-            needed = int(
-                self._kernel32.WideCharToMultiByte(
-                    CP_UTF8,
-                    WC_ERR_INVALID_CHARS,
-                    buffer,
-                    length,
-                    None,
-                    0,
-                    None,
-                    None,
-                )
-            )
-            if needed <= 0 or needed > CRED_MAX_CREDENTIAL_BLOB_SIZE:
-                raise _fail("windows_masked_dialog_failed")
-            output = bytearray(needed)
-            native_output = (ctypes.c_char * needed).from_buffer(output)
-            converted = int(
-                self._kernel32.WideCharToMultiByte(
-                    CP_UTF8,
-                    WC_ERR_INVALID_CHARS,
-                    buffer,
-                    length,
-                    ctypes.cast(native_output, ctypes.c_void_p),
-                    needed,
-                    None,
-                    None,
-                )
-            )
-            if converted != needed:
-                raise _fail("windows_masked_dialog_failed")
-            return output
-        except WindowsSecureIntakeError:
-            for index in range(len(output)):
-                output[index] = 0
-            raise
-        except Exception:
-            for index in range(len(output)):
-                output[index] = 0
-            raise _fail("windows_masked_dialog_failed") from None
-
-    def prompt_masked_secret(self, *, request_id: str) -> bytearray | None:
+    def prompt_masked_secret(
+        self,
+        *,
+        request_id: str,
+        context: VisibleConsolePromptContext,
+    ) -> bytearray | None:
         if REQUEST_ID_RE.fullmatch(str(request_id or "")) is None:
-            raise _fail("windows_masked_dialog_failed")
-        username = ctypes.create_unicode_buffer(CREDUI_MAX_USERNAME_LENGTH + 1)
-        password = ctypes.create_unicode_buffer(CREDUI_MAX_PASSWORD_LENGTH + 1)
-        username.value = "WOM"
-        save = wintypes.BOOL(False)
-        caption = "WOM credential intake"
-        message = "Enter the credential in this local masked window. It is not sent to AI output."
-        info = _CREDUI_INFOW(
-            cbSize=ctypes.sizeof(_CREDUI_INFOW),
-            hwndParent=None,
-            pszMessageText=message,
-            pszCaptionText=caption,
-            hbmBanner=None,
-        )
-        target = f"WOM credential intake {request_id}"
+            raise _fail("windows_visible_console_failed")
         try:
-            result = int(
-                self._credui.CredUIPromptForCredentialsW(
-                    ctypes.byref(info),
-                    target,
-                    None,
-                    0,
-                    username,
-                    len(username),
-                    password,
-                    len(password),
-                    ctypes.byref(save),
-                    CREDUI_FLAGS,
-                )
+            return self._console_prompt(
+                request_id=request_id,
+                context=context,
+                kernel32=self._kernel32,
+                platform_name="nt",
+                max_secret_bytes=CRED_MAX_CREDENTIAL_BLOB_SIZE,
             )
-            if result == ERROR_CANCELLED:
-                return None
-            if result != NO_ERROR:
-                raise _fail("windows_masked_dialog_failed")
-            return self._utf8_from_wchar_buffer(password)
+        except VisibleConsoleSecretPromptError:
+            raise _fail("windows_visible_console_failed") from None
         except WindowsSecureIntakeError:
             raise
         except Exception:
-            raise _fail("windows_masked_dialog_failed") from None
-        finally:
-            self._wipe_ctypes_buffer(password)
-            self._wipe_ctypes_buffer(username)
-            save.value = False
+            raise _fail("windows_visible_console_failed") from None
 
     @staticmethod
     def _validated_target(target_name: str) -> str:
@@ -653,21 +536,30 @@ class CtypesWindowsNativeFacade:
 
 
 @dataclass
-class WindowsNativeMaskedSecretUI:
-    """Worker-only UI adapter; it has no stdin or fallback input channel."""
+class WindowsVisibleConsoleSecretUI:
+    """Worker-only visible-console adapter with no fallback input channel."""
 
     native: WindowsSecureIntakeNative = field(repr=False)
+    context: VisibleConsolePromptContext = field(repr=False)
 
     def request_secret(self, *, request_id: str) -> bytearray | None:
         try:
-            value = self.native.prompt_masked_secret(request_id=request_id)
+            value = self.native.prompt_masked_secret(
+                request_id=request_id,
+                context=self.context,
+            )
             if value is not None and not isinstance(value, bytearray):
-                raise _fail("windows_masked_dialog_failed")
+                raise _fail("windows_visible_console_failed")
             return value
         except WindowsSecureIntakeError:
             raise
         except Exception:
-            raise _fail("windows_masked_dialog_failed") from None
+            raise _fail("windows_visible_console_failed") from None
+
+
+# Source compatibility for integrations that imported the pre-v0.3.317 class.
+# Production composition uses the explicit visible-console name below.
+WindowsNativeMaskedSecretUI = WindowsVisibleConsoleSecretUI
 
 
 def current_windows_owner_binding(native: WindowsSecureIntakeNative) -> str:
@@ -729,6 +621,7 @@ def build_windows_secure_intake_worker(
     provider_verifier: ProviderIdentityVerifier,
     fingerprint_master_key: bytes | bytearray | memoryview,
     native: WindowsSecureIntakeNative | None = None,
+    prompt_context: VisibleConsolePromptContext | None = None,
     credential_id_factory: Any | None = None,
     backend_id_factory: Any | None = None,
     now_factory: Any | None = None,
@@ -736,8 +629,9 @@ def build_windows_secure_intake_worker(
     """Assemble the Windows-first worker after explicit CLI approval.
 
     Construction queries only the current SID and creates no claim/receipt
-    directory.  The native masked dialog, exact Credential Manager operations,
-    and provider verifier run later inside ``SecureIntakeWorker.execute``.
+    directory. The visible echo-disabled console, exact Credential Manager
+    operations, and provider verifier run later inside
+    ``SecureIntakeWorker.execute``.
     ``claims_directory`` must be lexically contained by the explicit
     ``archive_root``; omission or an outside path fails before the SID query.
     The master key must come from an approved secure configuration channel; it
@@ -773,7 +667,19 @@ def build_windows_secure_intake_worker(
             archive_root=canonical_archive_root,
             expected_relative_directory=claims_relative_directory,
         ),
-        "ui": WindowsNativeMaskedSecretUI(selected_native),
+        "ui": WindowsVisibleConsoleSecretUI(
+            selected_native,
+            prompt_context
+            if prompt_context is not None
+            else VisibleConsolePromptContext(
+                provider="notion",
+                purpose="source_recovery",
+                account_label="승인한 계정",
+                workspace_label="승인한 작업공간",
+                task_summary="승인한 Notion 자료 연결 작업을 진행하고 있습니다.",
+                connection_reason="이 작업을 계속하려면 해당 Notion 작업공간 연결을 확인해 주세요.",
+            ),
+        ),
         "store": WindowsCredentialManagerExactStore(
             native=selected_native,
             target_prefix=windows_credential_target_prefix(archive_scope_id),
@@ -797,8 +703,10 @@ __all__ = [
     "CtypesWindowsNativeFacade",
     "WindowsDllBundle",
     "WindowsNativeMaskedSecretUI",
+    "WindowsVisibleConsoleSecretUI",
     "WindowsSecureIntakeError",
     "WindowsSecureIntakeNative",
+    "VisibleConsolePromptContext",
     "build_windows_secure_intake_worker",
     "current_windows_owner_binding",
     "derive_windows_fingerprint_key",

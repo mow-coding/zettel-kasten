@@ -115,7 +115,7 @@ CURRENT_DATABASE_CANONICAL_SHA256 = (
     "d9a42f08ee12a6d42e40214cfb12441e4077bf50c38c25b2692ec1344328294a"
 )
 RESOURCE_ADDITIONS = {
-    "release-notes/v0.3.316.md",
+    "release-notes/v0.3.317.md",
     "schemas/artifact-lifecycle-inventory.schema.json",
     "schemas/authoring-conventions.schema.json",
     "schemas/draft-discard-receipt.schema.json",
@@ -154,7 +154,7 @@ RESOURCE_ADDITIONS = {
 RESOURCE_REMOVALS = {"release-notes/v0.3.297.md"}
 CURRENT_RESOURCE_COUNT = 145
 CURRENT_RESOURCE_CANONICAL_SHA256 = (
-    "87a91edfc92a5c75405e77b358de59268276d972ac50e64f97a265c75a65fcb3"
+    "4e171dfb394df5abbf7db3a632f1553b4afb9b96ccb6317cf6ac32f7363daa95"
 )
 
 
@@ -348,7 +348,7 @@ class V03299PredecessorSurfaceTests(unittest.TestCase):
                         f"{module.__name__} was imported outside this worktree's source checkout."
                     )
 
-    def test_cli_paths_are_v03297_plus_exact_v03298_v03316_delta(self) -> None:
+    def test_cli_paths_are_v03297_plus_exact_v03298_v03317_delta(self) -> None:
         predecessor = self.fixture["cli"]["paths"]
         predecessor_set = {tuple(path) for path in predecessor}
         self.assertFalse(CLI_ADDITIONS & predecessor_set)
@@ -451,7 +451,7 @@ class V03299PredecessorSurfaceTests(unittest.TestCase):
             after["properties"]["fidelity_source_object_id"]["pattern"],
             "^sha256:[0-9a-f]{64}$",
         )
-    def test_resource_paths_are_v03297_plus_exact_v03298_v03316_delta(self) -> None:
+    def test_resource_paths_are_v03297_plus_exact_v03298_v03317_delta(self) -> None:
         predecessor_paths = set(self.fixture["package_resources"]["packaged_paths"])
         self.assertTrue(
             RESOURCE_REMOVALS <= predecessor_paths,
@@ -481,10 +481,10 @@ class V03299PredecessorSurfaceTests(unittest.TestCase):
             actual,
             expected,
             "Current package-resource paths must be the full v0.3.297 set plus "
-            "the exact cumulative v0.3.298 through v0.3.316 delta. "
+            "the exact cumulative v0.3.298 through v0.3.317 delta. "
             f"missing={compact(missing)}; extra={compact(extra)}",
         )
-        self.assertEqual(manifest["version"], "0.3.316")
+        self.assertEqual(manifest["version"], "0.3.317")
         self.assertEqual(len(actual), CURRENT_RESOURCE_COUNT)
         self.assertEqual(
             canonical_sha256(actual),
@@ -503,14 +503,14 @@ class V03299PredecessorSurfaceTests(unittest.TestCase):
         self.assertIn("does not undo", predecessor_flat)
         self.assertNotIn("C:\\Users\\", predecessor_text)
 
-    def test_v03316_release_note_is_public_and_synchronized(self) -> None:
-        current_source_release = KIT_ROOT / "docs" / "releases" / "v0.3.316.md"
+    def test_v03317_release_note_is_public_and_synchronized(self) -> None:
+        current_source_release = KIT_ROOT / "docs" / "releases" / "v0.3.317.md"
         current_packaged_release = (
             SRC_ROOT
             / "wom_kit"
             / "_resources"
             / "release-notes"
-            / "v0.3.316.md"
+            / "v0.3.317.md"
         )
         self.assertEqual(
             current_source_release.read_bytes(),
@@ -519,13 +519,13 @@ class V03299PredecessorSurfaceTests(unittest.TestCase):
         current_text = current_source_release.read_text(encoding="utf-8")
         current_flat = " ".join(current_text.split())
         for token in (
-            "materialization_plan_sha256",
-            "--action inspect-all",
-            "complete opaque collision set",
-            "Counts alone are never repair authority",
-            "project-bytecode-repair-plan",
-            "same exclusive project-version-update lock",
-            "Repair success is not update success",
+            "separate visible Unicode Windows console",
+            "--task-summary",
+            "matching authenticated registration",
+            "--replace-existing",
+            "Ordinary objet preservation",
+            "direct terminal derived-text receipt",
+            "`safe_to_cleanup` false",
         ):
             with self.subTest(token=token):
                 self.assertIn(token, current_flat)
@@ -538,8 +538,8 @@ class V03299PredecessorSurfaceTests(unittest.TestCase):
             with self.subTest(forbidden=forbidden):
                 self.assertNotIn(forbidden, current_text)
 
-        historical_release = KIT_ROOT / "docs" / "releases" / "v0.3.315.md"
-        historical_packaged = current_packaged_release.with_name("v0.3.315.md")
+        historical_release = KIT_ROOT / "docs" / "releases" / "v0.3.316.md"
+        historical_packaged = current_packaged_release.with_name("v0.3.316.md")
         self.assertTrue(historical_release.is_file())
         self.assertFalse(historical_packaged.exists())
 

@@ -10,14 +10,30 @@ It is not a website, SaaS app, dashboard, or visual note-taking product. The int
 
 ## Install The Command-Line Tool
 
-The exact v0.3.316 GitHub Release, when present, uses the self-contained wheel
+The exact v0.3.317 GitHub Release, when present, uses the self-contained wheel
 below. Confirm that the release exists and lists the wheel before installing
 it. The versioned URL alone is not proof that the asset is available.
 
 ```powershell
-uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.316/wom_kit-0.3.316-py3-none-any.whl"
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.317/wom_kit-0.3.317-py3-none-any.whl"
 archive --version
 ```
+
+v0.3.317 corrects the real-use credential and staged-cleanup boundaries. First
+credential enrollment uses one separate visible Unicode Windows console with
+echo disabled; the helper AI supplies digest-bound public-safe task context,
+WOM supplies fixed security copy, and later approved work reuses a matching
+authenticated Windows Credential Manager entry only after exact-store,
+secret-fingerprint, and current-anchor revalidation. Credential scope uses the
+provider's bot workspace ID for internal integrations and an
+exact-token-scoped witness for person PATs, so the same saved PAT can serve a
+different reviewed page without another prompt. Legacy authenticated receipts
+can evolve locally without rewriting the receipt or Credential Manager entry;
+ambiguous lifecycle state remains human-review-only. `staged-cleanup-check` now
+requires complete manifest, rehashed store-byte, and receipt evidence, rehashes
+all final authorities, keeps deferred entries staged, and supports content-free
+saved output plus bounded operation control. It remains report-only and deletes
+nothing. See [`docs/releases/v0.3.317.md`](docs/releases/v0.3.317.md).
 
 v0.3.291 makes runtime version alignment explicit. `archive version <root>`
 distinguishes an aligned runtime, project source that must be repaired or
@@ -259,6 +275,14 @@ lock deletion. See [`docs/operation-control.md`](docs/operation-control.md) and
 [`docs/releases/v0.3.314.md`](docs/releases/v0.3.314.md). Local benchmarks and
 tests do not prove merge, tag, Release, wheel, fresh install, real-archive use,
 or human acceptance.
+
+In v0.3.317, `staged-cleanup-check --output` uses
+the same bounded observation path. Its compact terminal/control result contains
+only state, fixed reasons, and counts; the complete local result is written once
+under `.wom-scratch/diagnostics/`. Ordinary objets require strict manifest,
+independently rehashed store, and valid item receipt evidence. Exact BOM-free
+paired text can use its strict derived manifest/store/direct-receipt chain.
+Deferred entries remain staged and block cleanup.
 
 v0.3.313 requires every new AI-assisted or AI-generated draft to bind one
 manifested content-addressed source, an explicit `verbatim`,

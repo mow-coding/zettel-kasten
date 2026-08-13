@@ -10,19 +10,26 @@ import tempfile
 import threading
 import unittest
 
-from wom_kit.credential_secure_intake import AtomicJsonReceiptCommitter
-from wom_kit.credential_secure_intake import WindowsCredentialManagerExactStore
+from wom_kit.credential_secure_intake import (
+    AtomicJsonReceiptCommitter,
+    NOTION_PAT_SCOPE_FINGERPRINT_DOMAIN,
+    NOTION_PAT_WORKSPACE_IDENTITY_BASIS,
+    WindowsCredentialManagerExactStore,
+)
 from wom_kit.credential_secure_intake_windows import (
     windows_credential_target,
     windows_credential_target_prefix,
 )
 from wom_kit.credential_secure_registry import (
+    _receipt_mac,
+    RECEIPT_AUTHENTICATION_SCHEMA,
     ReceiptBackedNotionCredentialBroker,
     SecureCredentialRegistryError,
     StableArchiveFingerprintKeyProvider,
     create_archive_atomic_json_receipt_committer,
     list_secure_credentials,
     lookup_secure_credential,
+    evolve_legacy_authenticated_workspace_scope,
     persist_duplicate_lifecycle_decision,
 )
 from wom_kit.notion_http_adapter import NotionBearerSecret
@@ -72,10 +79,15 @@ def make_receipt(
     *,
     workspace: str = WORKSPACE_A,
     fingerprint_digit: str = "3",
+    legacy: bool = False,
 ) -> dict[str, object]:
     repeated = suffix * 16
-    return {
-        "schema_version": "wom-credential-secure-intake-receipt/v0.1",
+    receipt = {
+        "schema_version": (
+            "wom-credential-secure-intake-receipt/v0.1"
+            if legacy
+            else "wom-credential-secure-intake-receipt/v0.2"
+        ),
         "credential_id": "cred_" + repeated,
         "persisted": True,
         "provider": "notion",
@@ -96,12 +108,31 @@ def make_receipt(
         "request_id": "intake_" + repeated,
         "plan_digest": "5" * 64,
     }
+    if not legacy:
+        receipt["workspace_identity_basis"] = "notion_bot_workspace_id_v1"
+    return receipt
 
 
 def scope_from_public(row: dict[str, object]) -> ScopeBinding:
     binding = row["scope_binding"]
     assert isinstance(binding, dict)
     return ScopeBinding(**binding)
+
+
+def commit_released_v01_receipt(
+    root: Path, receipt: dict[str, object], *, key: bytes
+) -> str:
+    """Materialize exact release-era authenticated bytes without runtime writer access."""
+
+    authenticated = dict(receipt)
+    authenticated["receipt_authentication"] = {
+        "schema_version": RECEIPT_AUTHENTICATION_SCHEMA,
+        "algorithm": "hmac-sha256",
+        "mac": _receipt_mac(receipt, key),
+    }
+    return AtomicJsonReceiptCommitter(
+        root / "profiles" / "local" / "credential-intake" / "receipts"
+    ).commit_atomic(authenticated)
 
 
 class SecureCredentialRegistryTests(unittest.TestCase):
@@ -175,6 +206,553 @@ class SecureCredentialRegistryTests(unittest.TestCase):
         )
         native.values[target] = bytearray(secret)
         return public, native, scope_from_public(public)
+
+    def _legacy_receipt_with_secret(
+        self,
+        *,
+        lifecycle: bool,
+    ) -> tuple[dict[str, object], FakeExactWindowsNative, str]:
+        receipt = make_receipt(legacy=True)
+        receipt["fingerprint_digest"] = "hmac-sha256:" + hmac.new(
+            FINGERPRINT_KEY,
+            SECRET,
+            hashlib.sha256,
+        ).hexdigest()
+        commit_released_v01_receipt(self.root, receipt, key=AUTH_KEY)
+        if lifecycle:
+            self._approve_lifecycle(
+                provider="notion",
+                workspace_fingerprint=str(
+                    receipt["verified_workspace_fingerprint"]
+                ),
+                selected_default_credential_id=str(receipt["credential_id"]),
+            )
+        native = FakeExactWindowsNative()
+        target = windows_credential_target(
+            "archive:test", str(receipt["encrypted_backend_id"])
+        )
+        native.values[target] = bytearray(SECRET)
+        return receipt, native, target
+
+    def test_legacy_scope_evolution_preserves_exact_secret_and_singleton_lifecycle(self) -> None:
+        receipt, native, target = self._legacy_receipt_with_secret(lifecycle=True)
+        old = lookup_secure_credential(
+            self.root,
+            str(receipt["credential_id"]),
+            receipt_authentication_key=AUTH_KEY,
+        )
+        old_scope = scope_from_public(old)
+        evolved = evolve_legacy_authenticated_workspace_scope(
+            self.root,
+            str(receipt["credential_id"]),
+            evolved_workspace_fingerprint=WORKSPACE_B,
+            workspace_identity_basis="notion_bot_workspace_id_v1",
+            verified_account_fingerprint=str(
+                receipt["verified_account_fingerprint"]
+            ),
+            verified_capabilities=tuple(receipt["verified_capabilities"]),
+            receipt_authentication_key=AUTH_KEY,
+            secret_fingerprint_key=FINGERPRINT_KEY,
+            native=native,
+            evolved_at="2026-08-13T01:02:03Z",
+        )
+        self.assertTrue(evolved["ok"])
+        self.assertTrue(evolved["lifecycle_migrated"])
+        self.assertEqual(native.write_targets, [])
+        self.assertEqual(native.values[target], bytearray(SECRET))
+        current = lookup_secure_credential(
+            self.root,
+            str(receipt["credential_id"]),
+            receipt_authentication_key=AUTH_KEY,
+        )
+        self.assertEqual(current["verified_workspace_fingerprint"], WORKSPACE_B)
+        self.assertEqual(
+            current["workspace_identity_basis"], "notion_bot_workspace_id_v1"
+        )
+        self.assertTrue(current["workspace_scope_evolved"])
+        self.assertTrue(current["broker_authoritative"])
+        self.assertNotEqual(
+            current["scope_binding"]["scope_receipt_sha256"],
+            old_scope.scope_receipt_sha256,
+        )
+        broker = ReceiptBackedNotionCredentialBroker(
+            self.root,
+            native,
+            AUTH_KEY,
+            FINGERPRINT_KEY,
+        )
+        with self.assertRaisesRegex(
+            SecureCredentialRegistryError,
+            "credential_registry_scope_receipt_mismatch|credential_registry_scope_workspace_mismatch",
+        ):
+            broker.resolve(old_scope)
+        current_scope = scope_from_public(current)
+        bearer = broker.resolve(current_scope)
+        bearer.close()
+
+    def test_legacy_scope_evolution_is_idempotent_and_no_lifecycle_stays_non_authoritative(self) -> None:
+        receipt, native, _target = self._legacy_receipt_with_secret(lifecycle=False)
+        common = {
+            "evolved_workspace_fingerprint": WORKSPACE_B,
+            "workspace_identity_basis": "notion_bot_workspace_id_v1",
+            "verified_account_fingerprint": str(
+                receipt["verified_account_fingerprint"]
+            ),
+            "verified_capabilities": tuple(receipt["verified_capabilities"]),
+            "receipt_authentication_key": AUTH_KEY,
+            "secret_fingerprint_key": FINGERPRINT_KEY,
+            "native": native,
+            "evolved_at": "2026-08-13T01:02:03Z",
+        }
+        first = evolve_legacy_authenticated_workspace_scope(
+            self.root, str(receipt["credential_id"]), **common
+        )
+        second = evolve_legacy_authenticated_workspace_scope(
+            self.root, str(receipt["credential_id"]), **common
+        )
+        self.assertEqual(first["status"], "workspace_scope_evolved")
+        self.assertEqual(second["status"], "workspace_scope_evolution_replayed")
+        self.assertEqual(first["authority_sha256"], second["authority_sha256"])
+        self.assertFalse(first["broker_authoritative"])
+        listed = lookup_secure_credential(
+            self.root,
+            str(receipt["credential_id"]),
+            receipt_authentication_key=AUTH_KEY,
+        )
+        self.assertFalse(listed["broker_authoritative"])
+
+    def test_legacy_scope_evolution_complex_lifecycle_blocks_before_publication(self) -> None:
+        first = make_receipt("a", legacy=True)
+        second = make_receipt("b", legacy=True, fingerprint_digit="6")
+        for receipt, secret in ((first, SECRET), (second, b"other secret")):
+            receipt["fingerprint_digest"] = "hmac-sha256:" + hmac.new(
+                FINGERPRINT_KEY, secret, hashlib.sha256
+            ).hexdigest()
+            commit_released_v01_receipt(self.root, receipt, key=AUTH_KEY)
+        self._approve_lifecycle(
+            provider="notion",
+            workspace_fingerprint=WORKSPACE_A,
+            selected_default_credential_id=str(first["credential_id"]),
+        )
+        native = FakeExactWindowsNative()
+        native.values[
+            windows_credential_target(
+                "archive:test", str(first["encrypted_backend_id"])
+            )
+        ] = bytearray(SECRET)
+        with self.assertRaisesRegex(
+            SecureCredentialRegistryError,
+            "credential_registry_evolution_lifecycle_review_required",
+        ):
+            evolve_legacy_authenticated_workspace_scope(
+                self.root,
+                str(first["credential_id"]),
+                evolved_workspace_fingerprint=WORKSPACE_B,
+                workspace_identity_basis="notion_bot_workspace_id_v1",
+                verified_account_fingerprint=str(
+                    first["verified_account_fingerprint"]
+                ),
+                verified_capabilities=tuple(first["verified_capabilities"]),
+                receipt_authentication_key=AUTH_KEY,
+                secret_fingerprint_key=FINGERPRINT_KEY,
+                native=native,
+                evolved_at="2026-08-13T01:02:03Z",
+            )
+        evolutions = (
+            self.root / "profiles" / "local" / "credential-intake" / "evolutions"
+        )
+        self.assertFalse(evolutions.exists())
+
+    def test_legacy_scope_evolution_crash_after_authority_retries_singleton_lifecycle(self) -> None:
+        receipt, native, target = self._legacy_receipt_with_secret(lifecycle=True)
+        old = lookup_secure_credential(
+            self.root,
+            str(receipt["credential_id"]),
+            receipt_authentication_key=AUTH_KEY,
+        )
+        common = {
+            "evolved_workspace_fingerprint": WORKSPACE_B,
+            "workspace_identity_basis": "notion_bot_workspace_id_v1",
+            "verified_account_fingerprint": str(
+                receipt["verified_account_fingerprint"]
+            ),
+            "verified_capabilities": tuple(receipt["verified_capabilities"]),
+            "receipt_authentication_key": AUTH_KEY,
+            "secret_fingerprint_key": FINGERPRINT_KEY,
+            "native": native,
+            "evolved_at": "2026-08-13T01:02:03Z",
+        }
+
+        def interrupt_after_evolution() -> None:
+            raise RuntimeError("synthetic private interruption")
+
+        with self.assertRaisesRegex(RuntimeError, "synthetic private interruption"):
+            evolve_legacy_authenticated_workspace_scope(
+                self.root,
+                str(receipt["credential_id"]),
+                after_evolution_commit=interrupt_after_evolution,
+                **common,
+            )
+        interrupted = lookup_secure_credential(
+            self.root,
+            str(receipt["credential_id"]),
+            receipt_authentication_key=AUTH_KEY,
+        )
+        self.assertTrue(interrupted["workspace_scope_evolved"])
+        self.assertTrue(interrupted["workspace_scope_transition_pending"])
+        self.assertFalse(interrupted["broker_authoritative"])
+        self.assertEqual(native.values[target], bytearray(SECRET))
+
+        replay = evolve_legacy_authenticated_workspace_scope(
+            self.root, str(receipt["credential_id"]), **common
+        )
+        self.assertEqual(replay["status"], "workspace_scope_evolution_replayed")
+        self.assertTrue(replay["lifecycle_migrated"])
+        current = lookup_secure_credential(
+            self.root,
+            str(receipt["credential_id"]),
+            receipt_authentication_key=AUTH_KEY,
+        )
+        self.assertFalse(current["workspace_scope_transition_pending"])
+        self.assertTrue(current["broker_authoritative"])
+        self.assertNotEqual(
+            current["scope_binding"]["scope_receipt_sha256"],
+            old["scope_binding"]["scope_receipt_sha256"],
+        )
+        self.assertEqual(native.write_targets, [])
+        self.assertEqual(native.values[target], bytearray(SECRET))
+
+    def test_legacy_scope_evolution_requires_present_exact_saved_secret(self) -> None:
+        receipt, native, target = self._legacy_receipt_with_secret(lifecycle=False)
+        native.values.pop(target)
+        common = {
+            "evolved_workspace_fingerprint": WORKSPACE_B,
+            "workspace_identity_basis": "notion_bot_workspace_id_v1",
+            "verified_account_fingerprint": str(
+                receipt["verified_account_fingerprint"]
+            ),
+            "verified_capabilities": tuple(receipt["verified_capabilities"]),
+            "receipt_authentication_key": AUTH_KEY,
+            "secret_fingerprint_key": FINGERPRINT_KEY,
+            "native": native,
+            "evolved_at": "2026-08-13T01:02:03Z",
+        }
+        with self.assertRaisesRegex(
+            SecureCredentialRegistryError,
+            "credential_registry_store_missing",
+        ):
+            evolve_legacy_authenticated_workspace_scope(
+                self.root, str(receipt["credential_id"]), **common
+            )
+        native.values[target] = bytearray(b"different saved secret")
+        with self.assertRaisesRegex(
+            SecureCredentialRegistryError,
+            "credential_registry_secret_fingerprint_mismatch",
+        ):
+            evolve_legacy_authenticated_workspace_scope(
+                self.root, str(receipt["credential_id"]), **common
+            )
+        self.assertFalse(
+            (
+                self.root
+                / "profiles"
+                / "local"
+                / "credential-intake"
+                / "evolutions"
+            ).exists()
+        )
+        self.assertEqual(native.write_targets, [])
+
+    def test_pat_evolution_scope_is_derived_from_authenticated_secret_fingerprint(self) -> None:
+        receipt, native, _target = self._legacy_receipt_with_secret(lifecycle=False)
+        expected = "sha256:" + hashlib.sha256(
+            NOTION_PAT_SCOPE_FINGERPRINT_DOMAIN
+            + str(receipt["fingerprint_digest"]).encode("ascii")
+        ).hexdigest()
+        common = {
+            "workspace_identity_basis": NOTION_PAT_WORKSPACE_IDENTITY_BASIS,
+            "verified_account_fingerprint": str(
+                receipt["verified_account_fingerprint"]
+            ),
+            "verified_capabilities": tuple(receipt["verified_capabilities"]),
+            "receipt_authentication_key": AUTH_KEY,
+            "secret_fingerprint_key": FINGERPRINT_KEY,
+            "native": native,
+            "evolved_at": "2026-08-13T01:02:03Z",
+        }
+        with self.assertRaisesRegex(
+            SecureCredentialRegistryError,
+            "credential_registry_evolution_identity_mismatch",
+        ):
+            evolve_legacy_authenticated_workspace_scope(
+                self.root,
+                str(receipt["credential_id"]),
+                evolved_workspace_fingerprint=WORKSPACE_B,
+                **common,
+            )
+        evolved = evolve_legacy_authenticated_workspace_scope(
+            self.root,
+            str(receipt["credential_id"]),
+            evolved_workspace_fingerprint=expected,
+            **common,
+        )
+        self.assertTrue(evolved["ok"])
+        self.assertEqual(evolved["verified_workspace_fingerprint"], expected)
+
+    def test_legacy_scope_evolution_conflict_does_not_publish_duplicate(self) -> None:
+        receipt, native, _target = self._legacy_receipt_with_secret(lifecycle=False)
+        common = {
+            "workspace_identity_basis": "notion_bot_workspace_id_v1",
+            "verified_account_fingerprint": str(
+                receipt["verified_account_fingerprint"]
+            ),
+            "verified_capabilities": tuple(receipt["verified_capabilities"]),
+            "receipt_authentication_key": AUTH_KEY,
+            "secret_fingerprint_key": FINGERPRINT_KEY,
+            "native": native,
+            "evolved_at": "2026-08-13T01:02:03Z",
+        }
+        evolve_legacy_authenticated_workspace_scope(
+            self.root,
+            str(receipt["credential_id"]),
+            evolved_workspace_fingerprint=WORKSPACE_B,
+            **common,
+        )
+        with self.assertRaisesRegex(
+            SecureCredentialRegistryError,
+            "credential_registry_evolution_conflict",
+        ):
+            evolve_legacy_authenticated_workspace_scope(
+                self.root,
+                str(receipt["credential_id"]),
+                evolved_workspace_fingerprint="sha256:" + "9" * 64,
+                **common,
+            )
+        files = list(
+            (
+                self.root
+                / "profiles"
+                / "local"
+                / "credential-intake"
+                / "evolutions"
+            ).glob("*.workspace-scope-v1.json")
+        )
+        self.assertEqual(len(files), 1)
+
+    def test_legacy_scope_evolution_never_collapses_another_authenticated_registration(self) -> None:
+        receipt, native, _target = self._legacy_receipt_with_secret(lifecycle=False)
+        other = make_receipt("b", workspace=WORKSPACE_B, fingerprint_digit="7")
+        self._committer().commit_atomic(other)
+        with self.assertRaisesRegex(
+            SecureCredentialRegistryError,
+            "credential_registry_evolution_lifecycle_review_required",
+        ):
+            evolve_legacy_authenticated_workspace_scope(
+                self.root,
+                str(receipt["credential_id"]),
+                evolved_workspace_fingerprint=WORKSPACE_B,
+                workspace_identity_basis="notion_bot_workspace_id_v1",
+                verified_account_fingerprint=str(
+                    receipt["verified_account_fingerprint"]
+                ),
+                verified_capabilities=tuple(receipt["verified_capabilities"]),
+                receipt_authentication_key=AUTH_KEY,
+                secret_fingerprint_key=FINGERPRINT_KEY,
+                native=native,
+                evolved_at="2026-08-13T01:02:03Z",
+            )
+        self.assertFalse(
+            (
+                self.root
+                / "profiles"
+                / "local"
+                / "credential-intake"
+                / "evolutions"
+            ).exists()
+        )
+
+    def test_production_committer_writes_v02_only_but_released_v01_remains_readable(self) -> None:
+        legacy = make_receipt(legacy=True)
+        with self.assertRaisesRegex(
+            SecureCredentialRegistryError,
+            "credential_registry_legacy_receipt_write_forbidden",
+        ):
+            self._committer().commit_atomic(legacy)
+        commit_released_v01_receipt(self.root, legacy, key=AUTH_KEY)
+        row = lookup_secure_credential(
+            self.root,
+            str(legacy["credential_id"]),
+            receipt_authentication_key=AUTH_KEY,
+        )
+        self.assertEqual(row["receipt_authentication_status"], "valid")
+        self.assertEqual(
+            row["workspace_identity_basis"], "legacy_reviewed_anchor_v1"
+        )
+
+    def test_evolution_tamper_or_orphan_fails_closed(self) -> None:
+        receipt, native, _target = self._legacy_receipt_with_secret(lifecycle=False)
+        evolve_legacy_authenticated_workspace_scope(
+            self.root,
+            str(receipt["credential_id"]),
+            evolved_workspace_fingerprint=WORKSPACE_B,
+            workspace_identity_basis="notion_bot_workspace_id_v1",
+            verified_account_fingerprint=str(
+                receipt["verified_account_fingerprint"]
+            ),
+            verified_capabilities=tuple(receipt["verified_capabilities"]),
+            receipt_authentication_key=AUTH_KEY,
+            secret_fingerprint_key=FINGERPRINT_KEY,
+            native=native,
+            evolved_at="2026-08-13T01:02:03Z",
+        )
+        evolution_path = next(
+            (
+                self.root
+                / "profiles"
+                / "local"
+                / "credential-intake"
+                / "evolutions"
+            ).glob("*.workspace-scope-v1.json")
+        )
+        original = evolution_path.read_bytes()
+        document = json.loads(original.decode("utf-8"))
+        document["evolved_workspace_fingerprint"] = "sha256:" + "8" * 64
+        evolution_path.write_text(
+            json.dumps(document, sort_keys=True, separators=(",", ":")) + "\n",
+            encoding="utf-8",
+        )
+        tampered = list_secure_credentials(
+            self.root, receipt_authentication_key=AUTH_KEY
+        )["credentials"][0]
+        self.assertEqual(tampered["receipt_authentication_status"], "invalid")
+        self.assertFalse(tampered["broker_authoritative"])
+        self.assertIsNone(tampered["scope_binding"])
+        evolution_path.write_bytes(original)
+        receipt_path = (
+            self.root
+            / "profiles"
+            / "local"
+            / "credential-intake"
+            / "receipts"
+            / f"{receipt['credential_id']}.json"
+        )
+        receipt_path.unlink()
+        with self.assertRaisesRegex(
+            SecureCredentialRegistryError,
+            "credential_registry_evolution_orphaned",
+        ):
+            list_secure_credentials(
+                self.root, receipt_authentication_key=AUTH_KEY
+            )
+
+    def test_evolution_directory_rejects_unknown_and_oversized_entries(self) -> None:
+        evolutions = (
+            self.root
+            / "profiles"
+            / "local"
+            / "credential-intake"
+            / "evolutions"
+        )
+        evolutions.mkdir(parents=True)
+        unknown = evolutions / "unexpected.json"
+        unknown.write_text("{}", encoding="utf-8")
+        with self.assertRaisesRegex(
+            SecureCredentialRegistryError,
+            "credential_registry_evolution_entry_invalid",
+        ):
+            list_secure_credentials(
+                self.root, receipt_authentication_key=AUTH_KEY
+            )
+        unknown.unlink()
+        oversized = evolutions / (
+            "cred_aaaaaaaaaaaaaaaa.workspace-scope-v1.json"
+        )
+        oversized.write_bytes(b"{" + (b" " * (64 * 1024)))
+        with self.assertRaisesRegex(
+            SecureCredentialRegistryError,
+            "credential_registry_local_document_size_invalid",
+        ):
+            list_secure_credentials(
+                self.root, receipt_authentication_key=AUTH_KEY
+            )
+
+    def test_concurrent_identical_evolution_is_one_append_only_authority(self) -> None:
+        receipt, native, _target = self._legacy_receipt_with_secret(lifecycle=False)
+        common = {
+            "evolved_workspace_fingerprint": WORKSPACE_B,
+            "workspace_identity_basis": "notion_bot_workspace_id_v1",
+            "verified_account_fingerprint": str(
+                receipt["verified_account_fingerprint"]
+            ),
+            "verified_capabilities": tuple(receipt["verified_capabilities"]),
+            "receipt_authentication_key": AUTH_KEY,
+            "secret_fingerprint_key": FINGERPRINT_KEY,
+            "native": native,
+            "evolved_at": "2026-08-13T01:02:03Z",
+        }
+        barrier = threading.Barrier(3)
+        results: list[dict[str, object]] = []
+        errors: list[BaseException] = []
+
+        def run() -> None:
+            try:
+                barrier.wait()
+                results.append(
+                    evolve_legacy_authenticated_workspace_scope(
+                        self.root, str(receipt["credential_id"]), **common
+                    )
+                )
+            except BaseException as error:  # pragma: no cover - asserted below
+                errors.append(error)
+
+        threads = [threading.Thread(target=run) for _ in range(2)]
+        for thread in threads:
+            thread.start()
+        barrier.wait()
+        for thread in threads:
+            thread.join(timeout=10)
+        self.assertEqual(errors, [])
+        self.assertEqual(len(results), 2)
+        self.assertEqual(
+            {result["status"] for result in results},
+            {
+                "workspace_scope_evolved",
+                "workspace_scope_evolution_replayed",
+            },
+        )
+        self.assertEqual(
+            len(
+                list(
+                    (
+                        self.root
+                        / "profiles"
+                        / "local"
+                        / "credential-intake"
+                        / "evolutions"
+                    ).glob("*.workspace-scope-v1.json")
+                )
+            ),
+            1,
+        )
+
+    @unittest.skipUnless(hasattr(os, "symlink"), "symlink unavailable")
+    def test_reparse_evolution_directory_is_rejected_when_supported(self) -> None:
+        outside = Path(self.temporary.name) / "outside-evolutions"
+        outside.mkdir()
+        parent = self.root / "profiles" / "local" / "credential-intake"
+        parent.mkdir(parents=True)
+        link = parent / "evolutions"
+        try:
+            os.symlink(outside, link, target_is_directory=True)
+        except OSError:
+            self.skipTest("symlink creation not permitted")
+        with self.assertRaisesRegex(
+            SecureCredentialRegistryError,
+            "credential_registry_evolution_directory_unsafe|credential_registry_path_reparse_forbidden",
+        ):
+            list_secure_credentials(
+                self.root, receipt_authentication_key=AUTH_KEY
+            )
 
     def test_authenticated_commit_is_rediscoverable_without_private_fields(self) -> None:
         receipt = make_receipt()

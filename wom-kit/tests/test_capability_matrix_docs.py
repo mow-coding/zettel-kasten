@@ -9,7 +9,7 @@ from wom_kit import __version__
 
 KIT_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = KIT_ROOT.parent
-EXPECTED_CURRENT_VERSION = "0.3.316"
+EXPECTED_CURRENT_VERSION = "0.3.317"
 EXPECTED_CURRENT_TAG = f"v{EXPECTED_CURRENT_VERSION}"
 CURRENT_VERSION = f"v{__version__}"
 CURRENT_RELEASE_NOTE = f"{EXPECTED_CURRENT_TAG}.md"
@@ -20,7 +20,7 @@ CURRENT_WHEEL_URL = (
     f"wom_kit-{EXPECTED_CURRENT_VERSION}-py3-none-any.whl"
 )
 CURRENT_RUNTIME_STATUS = (
-    f"Status: {CURRENT_VERSION} Letter 129 complete collision-set inspection and cache-repair checkpoint"
+    f"Status: {CURRENT_VERSION} credential-console continuity and staged-cleanup evidence checkpoint"
 )
 CURRENT_MATRIX_VERSION = f"Version: {CURRENT_VERSION} implementation and release scope"
 MATRIX_PATH = KIT_ROOT / "docs" / "capability-matrix.md"
@@ -10925,7 +10925,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
                     self.assertIn(command, text)
 
         for command_shape in (
-            "archive credential-adopt <archive-root> --account-label <safe-label> --workspace-label <safe-label> --reviewed-anchor-page-id <uuid> --interactive --dry-run --format json",
+            'archive credential-adopt <archive-root> --account-label <safe-label> --workspace-label <safe-label> --task-summary "<public-safe current task>" --connection-reason "<public-safe reason>" --reviewed-anchor-page-id <uuid> --interactive --dry-run --format json',
             "--expected-request-sha256 <sha256> --approve --format json",
             "archive credential-secure-list <archive-root> --verify --format json",
             "archive credential-lifecycle <archive-root> --provider notion --workspace-fingerprint <sha256> --default-credential-id <opaque-id> --dry-run --format json",
@@ -10949,6 +10949,21 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         ):
             with self.subTest(matrix_phrase=phrase):
                 self.assertIn(phrase, matrix_flat)
+
+        for phrase in (
+            "bot.workspace_id",
+            "notion_pat_token_scope_v1",
+            "same PAT can serve another reviewed page",
+            "workspace-scope evolution",
+            "opens no prompt",
+        ):
+            with self.subTest(v03317_credential_identity_phrase=phrase):
+                self.assertTrue(
+                    phrase in matrix_text
+                    or phrase in guide_text
+                    or phrase in decision_text,
+                    phrase,
+                )
 
         for phrase in (
             "presence: not_checked",

@@ -1034,6 +1034,66 @@ These norms govern how the operator AI behaves, not what it is allowed to write.
 - ENUMERATE TOOLS BEFORE DECLARING IMPOSSIBLE. Before you say a task cannot be done, or quietly degrade it ("verbatim not possible, I'll summarize"), systematically check the installed and available tools: local CLIs, MCP servers, and the derive-text tool-readiness surface. One or two failed probes are not proof of impossibility.
 - CARRY ESTABLISHED STATE. Carry forward what is already set up or approved — in this session or recorded in operational-context (credentials configured, permissions granted, resources present). Do not re-ask for or re-confirm already-established state as if first-time. When unsure, CHECK the recorded context (operational-context, receipts) before asking again.
 
+## Human Credential Console
+
+When an approved provider task needs a Notion credential, the helper AI and
+WOM own different text in the visible Windows console:
+
+- the helper AI supplies one public-safe sentence describing the exact current
+  task and one public-safe sentence explaining why this task needs the Notion
+  connection;
+- WOM supplies the title, target labels, fixed security notice, masked-input
+  instructions, cancellation instructions, persistence notice, and every
+  statement about where the credential does or does not travel;
+- the helper AI cannot replace or weaken WOM's security text.
+
+Never put a page title, body excerpt, URL, filesystem path, email, identifier,
+PAT, API key, or token-shaped value in the two helper sentences. They travel as
+public-safe command arguments and are bound into the reviewed request digest.
+Use a shape like:
+
+```powershell
+archive credential-adopt <archive-root> --account-label <safe-label> --workspace-label <safe-label> --purpose notion-page-recovery --task-summary "검토한 Notion 페이지를 WOM 아카이브로 복구하고 있습니다." --connection-reason "이 작업을 계속하려면 해당 Notion 작업공간 연결을 확인해 주세요." --reviewed-anchor-page-id <uuid> --interactive --dry-run --format json
+```
+
+After reviewing the exact `request_sha256`, repeat the same public-safe fields
+with `--expected-request-sha256 <sha256> --approve`. The human types the secret
+only in the separate black Windows console. Do not ask the human to paste it in
+chat, a normal terminal prompt, argv, stdin, environment, or a file. WOM and
+the helper AI never read the clipboard directly; the human may deliberately
+paste into the isolated masked console, where it is handled only as console input.
+
+`credential-adopt` is not a per-task login command. Use it only for first
+enrollment. A matching authenticated registration makes a repeated call a
+no-prompt reuse only after authenticated receipt, exact saved-secret
+fingerprint, and current reviewed-anchor revalidation. Missing, replaced,
+or unreadable entries require a fresh reviewed replacement plan. A current
+anchor/provider check failure keeps the entry and requires page, sharing, and
+connection review before a no-prompt retry. After the human records the
+lifecycle default, normal approved
+work resolves and reuses the exact Windows Credential Manager entry. Open a
+new console again only when the credential is absent or unusable and the human
+has explicitly reviewed `--replace-existing`; never infer rotation from an API
+failure or retry it automatically.
+
+For an internal Notion integration, the provider-returned `bot.workspace_id`
+is the workspace basis. A person PAT has no returned workspace ID, so WOM binds
+its scope to the archive-keyed fingerprint of that exact saved PAT and still
+rechecks the current person identity plus reviewed-page access. The same PAT
+can therefore serve another reviewed page. Never merge a different PAT into
+that scope merely because labels match or a human says both tokens are in one
+workspace; rotation and reconciliation need separate lifecycle review.
+
+Authenticated v0.3.311-v0.3.316 receipts are legacy page-scoped records. WOM
+may evolve exactly one compatible record without asking for the PAT again: it
+authenticates the old receipt, rereads and fingerprint-checks the exact saved
+secret in the worker, revalidates the current provider/page, and appends a
+local authenticated scope-evolution record. It never rewrites the old receipt
+or the Credential Manager entry. A simple singleton lifecycle can move to the
+new authority; no lifecycle still needs a human default, and duplicate or
+complex state stops for review. If the local transition is interrupted, rerun
+the same approved operation to complete it; do not open a new secret console.
+
 ## Plain-Language for Humans
 
 When the reply is for a HUMAN, not a machine, log, or JSON field, translate git/infrastructure/WOM-internal jargon into everyday language. Keep the exact technical term in parentheses or in the logs only, so nothing precise is lost.
