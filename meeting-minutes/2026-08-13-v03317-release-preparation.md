@@ -88,3 +88,19 @@ runs. Start and end fingerprints matched.
 - This establishes a locally tested v0.3.317 release candidate. It still does
   not establish a commit, push, PR, external CI result, tag, published wheel,
   fresh-install result, live Notion operation, or beta-client acceptance.
+
+## Pull-request CI correction
+
+- The release candidate was committed as `ec41aff4` and opened as PR #64.
+- The first Ubuntu shard run exposed one Linux-only error-contract ordering
+  failure. A reparse-point `evolutions` directory was safely rejected, but the
+  generic local-document code was raised before the credential scope-evolution
+  boundary could return its fixed `credential_registry_evolution_directory_unsafe`
+  code.
+- The shared parent-chain validator now accepts a fixed leaf reparse code. The
+  evolution reader supplies its domain-specific code while every other caller
+  retains the existing generic behavior. This preserves fail-closed path safety
+  and makes the result deterministic across supported platforms.
+- This correction is not release completion by itself. PR CI, merge, tagged
+  wheel build, publication, anonymous download, fresh installation, and the
+  public verification record still have to complete.

@@ -248,7 +248,12 @@ def _archive_path(root: Path, relative: str) -> Path:
     return candidate
 
 
-def _ensure_safe_parent_chain(root: Path, path: Path) -> None:
+def _ensure_safe_parent_chain(
+    root: Path,
+    path: Path,
+    *,
+    leaf_reparse_code: str = "credential_registry_local_document_unsafe",
+) -> None:
     try:
         relative = path.relative_to(root)
     except ValueError:
@@ -271,7 +276,7 @@ def _ensure_safe_parent_chain(root: Path, path: Path) -> None:
     except OSError:
         raise _fail("credential_registry_local_document_unavailable") from None
     if _is_reparse(info):
-        raise _fail("credential_registry_local_document_unsafe")
+        raise _fail(leaf_reparse_code)
 
 
 def _read_exact_bytes(path: Path, *, maximum: int, missing_code: str) -> bytes:
@@ -1059,7 +1064,11 @@ def _read_evolution_documents(
     root: Path,
 ) -> list[tuple[Path, bytes, dict[str, Any]]]:
     evolutions_root = _archive_path(root, EVOLUTIONS_RELATIVE)
-    _ensure_safe_parent_chain(root, evolutions_root)
+    _ensure_safe_parent_chain(
+        root,
+        evolutions_root,
+        leaf_reparse_code="credential_registry_evolution_directory_unsafe",
+    )
     try:
         info = os.lstat(evolutions_root)
     except FileNotFoundError:
