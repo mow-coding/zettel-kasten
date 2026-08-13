@@ -10,8 +10,12 @@ from typing import Any
 from wom_kit.credential_visible_console_windows import (
     CP_UTF8,
     ENABLE_ECHO_INPUT,
+    ENABLE_EXTENDED_FLAGS,
+    ENABLE_INSERT_MODE,
     ENABLE_LINE_INPUT,
     ENABLE_PROCESSED_INPUT,
+    ENABLE_QUICK_EDIT_MODE,
+    ENABLE_VIRTUAL_TERMINAL_INPUT,
     VisibleConsolePromptContext,
     VisibleConsoleSecretPromptError,
     prompt_masked_secret_in_new_console,
@@ -42,6 +46,13 @@ class FakeFunction:
 
 @dataclass
 class FakeConsoleKernel32:
+    """Fake only the Win32 API boundary after a host delivered one line.
+
+    ``input_text`` is injected straight into ``ReadConsoleW``. It does not
+    emulate a paste gesture, a terminal key binding, font rendering, or a
+    ConPTY host.
+    """
+
     input_text: str = SYNTHETIC_SECRET
     interrupt_read: bool = False
     fail_close: bool = False
@@ -55,6 +66,7 @@ class FakeConsoleKernel32:
     input_code_pages: list[int] = field(default_factory=list)
     output_code_pages: list[int] = field(default_factory=list)
     requested_write_lengths: list[int] = field(default_factory=list)
+    ctrl_handler_ignore_values: list[bool] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         self.FreeConsole = FakeFunction(self._free_console)
@@ -67,6 +79,7 @@ class FakeConsoleKernel32:
         self.CreateFileW = FakeFunction(self._create_file)
         self.GetConsoleMode = FakeFunction(self._get_mode)
         self.SetConsoleMode = FakeFunction(self._set_mode)
+        self.SetConsoleCtrlHandler = FakeFunction(self._set_console_ctrl_handler)
         self.ReadConsoleW = FakeFunction(self._read_console)
         self.WriteConsoleW = FakeFunction(self._write_console)
         self.CloseHandle = FakeFunction(self._close_handle)
@@ -121,6 +134,12 @@ class FakeConsoleKernel32:
     def _set_mode(self, handle: int, mode: int) -> int:
         self.calls.append(("SetConsoleMode", handle))
         self.modes.append(int(mode))
+        return 1
+
+    def _set_console_ctrl_handler(self, _handler: Any, add: int) -> int:
+        ignored = bool(add)
+        self.calls.append(("SetConsoleCtrlHandler", ignored))
+        self.ctrl_handler_ignore_values.append(ignored)
         return 1
 
     def _read_console(
@@ -200,6 +219,20 @@ class FakeConsoleKernel32:
 class VisibleConsoleSecretPromptTests(unittest.TestCase):
     def test_success_uses_new_console_with_echo_disabled_and_no_public_output(self) -> None:
         kernel32 = FakeConsoleKernel32()
+        dwell_calls: list[float] = []
+        input_wiped_before_dwell: list[bool] = []
+
+        def observe_dwell(seconds: float) -> None:
+            dwell_calls.append(seconds)
+            self.assertIsNotNone(kernel32.last_input_buffer)
+            input_wiped_before_dwell.append(
+                ctypes.string_at(
+                    ctypes.addressof(kernel32.last_input_buffer),
+                    ctypes.sizeof(kernel32.last_input_buffer),
+                )
+                == b"\x00" * ctypes.sizeof(kernel32.last_input_buffer)
+            )
+
         stdout = io.StringIO()
         stderr = io.StringIO()
         with redirect_stdout(stdout), redirect_stderr(stderr):
@@ -208,6 +241,7 @@ class VisibleConsoleSecretPromptTests(unittest.TestCase):
                 context=PROMPT_CONTEXT,
                 kernel32=kernel32,
                 platform_name="nt",
+                sleep=observe_dwell,
             )
 
         self.assertEqual(secret, bytearray(SYNTHETIC_SECRET.encode("utf-8")))
@@ -219,7 +253,27 @@ class VisibleConsoleSecretPromptTests(unittest.TestCase):
         )
         self.assertEqual(
             kernel32.modes,
-            [ENABLE_LINE_INPUT, 0x0007],
+            [
+                ENABLE_PROCESSED_INPUT
+                | ENABLE_LINE_INPUT
+                | ENABLE_INSERT_MODE
+                | ENABLE_QUICK_EDIT_MODE
+                | ENABLE_EXTENDED_FLAGS,
+                0x0007,
+            ],
+        )
+        self.assertFalse(kernel32.modes[0] & ENABLE_ECHO_INPUT)
+        self.assertFalse(kernel32.modes[0] & ENABLE_VIRTUAL_TERMINAL_INPUT)
+        self.assertEqual(dwell_calls, [1.0])
+        self.assertEqual(input_wiped_before_dwell, [True])
+        # FreeConsole resets the handler table. Calling SetConsoleCtrlHandler
+        # with FALSE while still attached would reopen a process-termination
+        # race, so the successful prompt deliberately has no FALSE call.
+        self.assertEqual(kernel32.ctrl_handler_ignore_values, [True])
+        names = [name for name, _value in kernel32.calls]
+        self.assertLess(
+            max(index for index, name in enumerate(names) if name == "CloseHandle"),
+            max(index for index, name in enumerate(names) if name == "FreeConsole"),
         )
         self.assertEqual(kernel32.input_code_pages, [CP_UTF8, 949])
         self.assertEqual(kernel32.output_code_pages, [CP_UTF8, 949])
@@ -227,7 +281,7 @@ class VisibleConsoleSecretPromptTests(unittest.TestCase):
             [name for name, _value in kernel32.calls].count("FreeConsole"),
             2,
         )
-        self.assertEqual(kernel32.ctrl_wakeup_mask, (1 << 0x03))
+        self.assertEqual(kernel32.ctrl_wakeup_mask, 0)
         rendered = "".join(kernel32.safe_writes)
         self.assertNotIn(SYNTHETIC_SECRET, rendered)
         self.assertIn("도우미 AI가 설명한 현재 작업", rendered)
@@ -239,6 +293,12 @@ class VisibleConsoleSecretPromptTests(unittest.TestCase):
         )
         self.assertIn("클립보드 내용을 직접 읽지 않습니다", rendered)
         self.assertIn("이 창에 붙여넣은 내용만 숨김 입력", rendered)
+        self.assertIn("Ctrl+V 또는 Shift+Insert", rendered)
+        self.assertIn("Windows Terminal 기본 설정에서는 Ctrl+Shift+V", rendered)
+        self.assertIn("오른쪽 클릭은 터미널 설정에 따라", rendered)
+        self.assertIn("입력값을 받았습니다. 검증 중입니다.", rendered)
+        self.assertNotIn("**", rendered)
+        self.assertNotIn(f"{len(SYNTHETIC_SECRET)}자", rendered)
         self.assertIn("Windows 자격 증명 관리자", rendered)
         self.assertNotIn("???", rendered)
         self.assertNotIn(SYNTHETIC_SECRET, repr(kernel32.calls))
@@ -284,22 +344,29 @@ class VisibleConsoleSecretPromptTests(unittest.TestCase):
                 len(message.encode("utf-16-le")) // 2,
             )
 
-    def test_empty_enter_and_ctrl_c_cancel_without_a_secret(self) -> None:
+    def test_empty_enter_and_internal_interrupt_cancel_without_a_secret(self) -> None:
         for kernel32 in (
             FakeConsoleKernel32(input_text=""),
             FakeConsoleKernel32(input_text="\x03", append_line_ending=False),
             FakeConsoleKernel32(interrupt_read=True),
         ):
             with self.subTest(interrupt_read=kernel32.interrupt_read):
+                dwell_calls: list[float] = []
                 self.assertIsNone(
                     prompt_masked_secret_in_new_console(
                         request_id=REQUEST_ID,
                         context=PROMPT_CONTEXT,
                         kernel32=kernel32,
                         platform_name="nt",
+                        sleep=dwell_calls.append,
                     )
                 )
+                self.assertEqual(dwell_calls, [])
                 self.assertIn("입력을 취소했습니다", "".join(kernel32.safe_writes))
+                self.assertNotIn(
+                    "입력값을 받았습니다. 검증 중입니다.",
+                    "".join(kernel32.safe_writes),
+                )
 
     def test_worker_without_inherited_console_still_allocates_visible_console(self) -> None:
         kernel32 = FakeConsoleKernel32(no_inherited_console=True)
@@ -316,16 +383,25 @@ class VisibleConsoleSecretPromptTests(unittest.TestCase):
         )
 
     def test_invalid_request_fails_before_any_console_side_effect(self) -> None:
-        kernel32 = FakeConsoleKernel32()
-        with self.assertRaises(VisibleConsoleSecretPromptError) as error:
-            prompt_masked_secret_in_new_console(
-                request_id="not-valid",
-                context=PROMPT_CONTEXT,
-                kernel32=kernel32,
-                platform_name="nt",
-            )
-        self.assertEqual(error.exception.code, "windows_visible_console_failed")
-        self.assertEqual(kernel32.calls, [])
+        for invalid_kwargs in (
+            {"request_id": "not-valid"},
+            {"status_dwell_seconds": -1},
+            {"status_dwell_seconds": float("nan")},
+            {"sleep": None},
+        ):
+            with self.subTest(invalid_kwargs=invalid_kwargs):
+                kernel32 = FakeConsoleKernel32()
+                kwargs = {
+                    "request_id": REQUEST_ID,
+                    "context": PROMPT_CONTEXT,
+                    "kernel32": kernel32,
+                    "platform_name": "nt",
+                }
+                kwargs.update(invalid_kwargs)
+                with self.assertRaises(VisibleConsoleSecretPromptError) as error:
+                    prompt_masked_secret_in_new_console(**kwargs)
+                self.assertEqual(error.exception.code, "windows_visible_console_failed")
+                self.assertEqual(kernel32.calls, [])
 
     def test_multiline_and_utf8_over_limit_fail_closed_without_echo(self) -> None:
         for entered in ("first\r\nsecond", "한" * 900):
@@ -341,15 +417,20 @@ class VisibleConsoleSecretPromptTests(unittest.TestCase):
                 self.assertNotIn(entered, "".join(kernel32.safe_writes))
 
     def test_cleanup_failure_rejects_the_secret_instead_of_continuing_to_store(self) -> None:
-        kernel32 = FakeConsoleKernel32(fail_close=True)
-        with self.assertRaises(VisibleConsoleSecretPromptError):
-            prompt_masked_secret_in_new_console(
-                request_id=REQUEST_ID,
-                context=PROMPT_CONTEXT,
-                kernel32=kernel32,
-                platform_name="nt",
-            )
-        self.assertNotIn(SYNTHETIC_SECRET, "".join(kernel32.safe_writes))
+        for kernel32 in (
+            FakeConsoleKernel32(fail_close=True),
+        ):
+            with self.subTest(
+                fail_close=kernel32.fail_close,
+            ):
+                with self.assertRaises(VisibleConsoleSecretPromptError):
+                    prompt_masked_secret_in_new_console(
+                        request_id=REQUEST_ID,
+                        context=PROMPT_CONTEXT,
+                        kernel32=kernel32,
+                        platform_name="nt",
+                    )
+                self.assertNotIn(SYNTHETIC_SECRET, "".join(kernel32.safe_writes))
 
 
 if __name__ == "__main__":

@@ -2,6 +2,64 @@
 
 [English Upgrade Guide](UPGRADE.md)
 
+## v0.3.318 자격증명 paste와 실패 단계
+
+정확한 v0.3.318 GitHub Release에 검증된 wheel이 실제로 올라온 뒤에만
+설치하세요. 저장소 파일만 바꿔서는 격리된 예전 WOM-kit 설치가 업데이트되지
+않습니다. 새 프로세스에서 `archive --version`을 확인한 뒤 새 등록 계획을
+만드세요. 실행 버전과 검토한 요청이 일치해야 하므로 예전 dry-run digest는
+버립니다.
+
+별도 Windows 검은 창은 이제 가려진 입력 바로 위에서 다음 방법을 안내합니다.
+
+- `Ctrl+V` 또는 `Shift+Insert`를 사용합니다.
+- Windows Terminal 기본 설정에서는 `Ctrl+Shift+V`도 사용할 수 있습니다.
+- 오른쪽 클릭은 terminal host 설정에 따라 붙여넣기, 복사, 메뉴 열기 중 하나가
+  될 수 있습니다. 메뉴가 뜨면 붙여넣기를 고릅니다.
+- 입력값과 길이는 보이지 않습니다. 붙여넣은 다음 Enter를 누릅니다.
+- 이 짧은 프롬프트 동안 `Ctrl+C`는 무시되고, 빈 Enter만 취소로 안내됩니다.
+
+완전한 비어 있지 않은 한 줄이 WOM에 도착하면 검은 창은
+`입력값을 받았습니다. 검증 중입니다.`만 표시하고 잠시 남습니다. 이는 콘솔
+경계가 입력을 받았다는 뜻이지 provider 인증이나 영구 저장 성공을 뜻하지
+않습니다. WOM은 clipboard를 프로그램으로 읽지 않습니다. 사용자가 바꾼 host
+key binding은 여전히 다를 수 있습니다.
+
+공개 결과는 이제 `wom-credential-workflow-result/v0.2`, child secure-intake
+결과는 `wom-credential-secure-intake-result/v0.2`입니다. 고정 결과 다섯 개는
+다음처럼 읽습니다.
+
+- `credential_input_cancelled_or_empty`: 완전한 입력을 받지 않았습니다. 준비가
+  되었을 때만 새 계획을 만듭니다.
+- `credential_input_not_received`: 안전한 콘솔 경계가 완전한 입력을 돌려주지
+  못했습니다. 어떤 물리 paste gesture가 동작했거나 안 했다는 증거는 아닙니다.
+  지원하는 방법으로 새 계획에서 다시 시도합니다.
+- `provider_auth_rejected`: Notion이 자격증명을 거부했습니다. 임시로 쓴 정확한
+  저장 항목은 삭제되어야 하며, 실패하면 `delete_failed`가 나옵니다. 자격증명을
+  검토한 뒤 새 계획을 만듭니다.
+- `provider_identity_endpoint_unavailable`: provider 신원 서비스를 확인할 수
+  없었습니다. 같은 rollback 규칙을 지키며, 복구를 기다린 뒤 새 계획을 만듭니다.
+- `reviewed_anchor_inaccessible`: 해당 연결로 검토 페이지를 확인할 수
+  없었습니다. 같은 rollback 규칙을 지키며 페이지 공유와 접근을 먼저 검토합니다.
+
+앞의 두 결과는 저장 전 단계이므로 `rollback_status: not_required`여야 합니다.
+뒤의 세 결과는 정확한 임시 저장 뒤에만 나올 수 있고 `deleted` 또는
+`delete_failed`여야 합니다. `deleted`는 저장 항목 부재 확인도 요구합니다. 공개
+결과를 바꾸려고 Credential Manager 항목을 손으로 수정하거나 지우지 마세요.
+
+소스 테스트와 합성 Win32 API canary는 Unicode 문구, echo-off 입력, 상태 문구
+표시 시간, Ctrl+C 생존, cleanup 순서, code page와 mode 복원, rollback projection,
+비밀값 없는 출력을 확인했습니다. 하지만 모든 Windows Terminal, classic Console
+Host, ConPTY, 원격 세션, 사용자 설정에서 실제 `Ctrl+V`, `Ctrl+Shift+V`,
+`Shift+Insert`, 오른쪽 클릭 paste가 동작한다는 증거는 아닙니다. 해당 host에서는
+별도로 검토한 합성 수동 acceptance만 사용하고 문서나 로그에 실제 PAT를 넣지
+마세요.
+
+자세한 내용은 [v0.3.318 릴리스 노트](wom-kit/docs/releases/v0.3.318.md),
+[Letter 131 자격증명 콘솔 가이드](wom-kit/docs/letter131-credential-console-paste-and-failure-stages.md),
+[Letter 131 결정 기록](wom-kit/docs/archive-infra-decision-log-2026-08-13-v03318-letter131-credential-input.md)을
+보세요.
+
 ## v0.3.317 자격증명 검은 창과 staged-cleanup 안전성
 
 정확한 v0.3.317 GitHub Release에 검증된 wheel이 실제로 올라온 뒤에만

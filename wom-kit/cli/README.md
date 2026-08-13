@@ -6,23 +6,19 @@ The filesystem folder is `wom-kit/`, the Python import package is `wom_kit`, and
 
 See `wom-kit/docs/concepts/naming-and-terminology.md` for the naming baseline.
 
-v0.3.317 corrects two real-use safety paths. `credential-adopt` now opens one
-separate visible Unicode Windows console only for first enrollment or an
-explicitly reviewed replacement. The helper AI supplies the digest-bound
-public-safe task and connection context, WOM owns the fixed security copy,
-input echo is disabled, and a matching authenticated registration is reused
-without another prompt only after exact-store, secret-fingerprint, and
-current-anchor revalidation. Credential scope uses `bot.workspace_id` for
-internal integrations and an exact-token-scoped
-witness for person PATs, and supports authenticated no-prompt evolution of one
-compatible legacy receipt without rewriting the saved secret. Different PATs
-and ambiguous lifecycle state are never merged automatically.
-`staged-cleanup-check` now requires strict manifest,
-rehashed store-byte, and receipt evidence; exact BOM-free paired text also
-requires its direct terminal receipt. Final authorities are rehashed, deferred
-entries stay staged and block cleanup, and optional saved/control output remains
-content-free. The verifier is report-only and never deletes. See
-`wom-kit/docs/releases/v0.3.317.md`.
+v0.3.318 makes `credential-adopt` console receipt and failures actionable while
+preserving the v0.3.317 first-enrollment/reuse boundary. The echo-disabled
+Unicode console guides `Ctrl+V`, `Shift+Insert`, Windows Terminal's default
+`Ctrl+Shift+V`, and host-dependent right-click. It ignores `Ctrl+C` during the
+prompt, treats empty Enter as cancellation, and shows only
+`입력값을 받았습니다. 검증 중입니다.` after a complete non-empty line. The
+v0.2 public result uses fixed stages for cancellation/empty input, console input
+failure, provider authentication rejection, provider identity-service
+unavailability, and reviewed-anchor inaccessibility; each result must match its
+valid pre-store or rollback state. WOM never reads the clipboard directly, and
+synthetic Win32 API canaries are not actual physical paste gesture evidence.
+See `wom-kit/docs/releases/v0.3.318.md` and
+`wom-kit/docs/letter131-credential-console-paste-and-failure-stages.md`.
 
 v0.3.316 closes the supported Python-cache collision gap left after v0.3.315
 detection. The alias-free CLI-only
@@ -57,7 +53,7 @@ Release, wheel, fresh installation, real-archive use, or human acceptance.
 
 v0.3.314 adds one alias-free `operation-control` surface for output-supervised
 `project-version-update`, `index`, and `index-health` runs. The current
-v0.3.317 also supports `staged-cleanup-check`. A fresh `--output`
+  v0.3.318 also supports `staged-cleanup-check`. A fresh `--output`
 causes an early opaque operation reference; a later process can request
 content-free `status`, a 1-60 second `wait`, or read-only `recovery-plan` with
 the exact starting root. Completed state requires the saved output binding,

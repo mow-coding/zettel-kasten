@@ -1063,6 +1063,42 @@ chat, a normal terminal prompt, argv, stdin, environment, or a file. WOM and
 the helper AI never read the clipboard directly; the human may deliberately
 paste into the isolated masked console, where it is handled only as console input.
 
+The v0.3.318 prompt gives exact, bounded host guidance: use `Ctrl+V` or
+`Shift+Insert`; Windows Terminal's default configuration also supports
+`Ctrl+Shift+V`; right-click behavior depends on host settings, so choose Paste
+if a menu appears. Characters and length remain hidden. During the prompt
+`Ctrl+C` is ignored, and empty Enter is the one documented cancellation
+gesture. After one complete non-empty line arrives, the console shows only
+`입력값을 받았습니다. 검증 중입니다.` briefly. That proves console receipt,
+not provider acceptance or persistence. WOM performs no programmatic clipboard
+read.
+
+Interpret the v0.2 public result by its exact fixed stage:
+
+- `credential_input_cancelled_or_empty` is a pre-store cancel or empty line;
+- `credential_input_not_received` is a pre-store safe-input boundary failure,
+  not proof that a particular physical paste gesture worked or failed;
+- `provider_auth_rejected` is a post-write provider authentication rejection;
+- `provider_identity_endpoint_unavailable` is a post-write provider identity
+  service failure;
+- `reviewed_anchor_inaccessible` is a post-write reviewed-page access failure.
+
+The first two require `rollback_status: not_required`. The provider-stage
+outcomes require `deleted` or `delete_failed`; only verified exact-store
+absence can support `deleted`. A `delete_failed` result requires immediate
+human cleanup review, not retry. Unknown provider failures retain the
+conservative `provider_identity_unverified` fallback. Never expose or infer a
+secret from a reason, rollback, log, or UI state.
+
+Automated synthetic Win32 API canaries and the opt-in
+`wom-kit/tools/check_windows_credential_console_host.py` manual synthetic
+host check are different evidence. The first verifies the API boundary; the
+second can record one human-observed host/gesture attempt without a real PAT,
+store, provider, private path, or clipboard API. Unless that manual check was
+actually completed, report actual physical paste gesture acceptance as
+`not_performed`; never generalize one host's result to customized Windows
+Terminal, Console Host, ConPTY, remote, or other configurations.
+
 `credential-adopt` is not a per-task login command. Use it only for first
 enrollment. A matching authenticated registration makes a repeated call a
 no-prompt reuse only after authenticated receipt, exact saved-secret
