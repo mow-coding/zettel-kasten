@@ -16063,7 +16063,7 @@ state:
             )
 
             safe_worker_result = {
-                "schema_version": "wom-credential-workflow-result/v0.1",
+                "schema_version": "wom-credential-workflow-result/v0.2",
                 "ok": True,
                 "lifecycle_action": "secure_credential_adoption_execute",
                 "accepted": True,
@@ -16105,6 +16105,53 @@ state:
             for private_value in (anchor, account_label, workspace_label):
                 self.assertNotIn(private_value, approve_output)
             self.assertEqual(before, self.snapshot_archive_files(archive_root))
+
+            from wom_kit import credential_workflows
+
+            for reason_code, rollback_status in (
+                ("credential_input_cancelled_or_empty", "not_required"),
+                ("credential_input_not_received", "not_required"),
+                ("provider_auth_rejected", "deleted"),
+                ("provider_identity_endpoint_unavailable", "deleted"),
+                ("reviewed_anchor_inaccessible", "deleted"),
+            ):
+                with self.subTest(reason_code=reason_code), patch(
+                    "wom_kit.credential_workflows.execute_windows_notion_credential_adoption",
+                    return_value=credential_workflows._approved_adoption_worker_failure(
+                        reason_code,
+                        rollback_status=rollback_status,
+                    ),
+                ):
+                    failure_code, failure_output = self.run_cli(
+                        [
+                            *base,
+                            "--approve",
+                            "--expected-request-sha256",
+                            first["request_sha256"],
+                        ]
+                    )
+                failure = json.loads(failure_output)
+                self.assertEqual(failure_code, 1, failure_output)
+                self.assertEqual(
+                    failure["schema_version"],
+                    "wom-credential-workflow-result/v0.2",
+                )
+                self.assertFalse(failure["accepted"])
+                self.assertFalse(failure["persisted"])
+                self.assertEqual(failure["reason_code"], reason_code)
+                self.assertEqual(failure["rollback_status"], rollback_status)
+                self.assertEqual(
+                    failure["store_absence_verified"],
+                    rollback_status == "deleted",
+                )
+                self.assertFalse(failure["secret_value_present"])
+                for private_value in (
+                    anchor,
+                    account_label,
+                    workspace_label,
+                    token,
+                ):
+                    self.assertNotIn(private_value, failure_output)
 
             forbidden_code, forbidden_output = self.run_cli(
                 [*base, "--approve", "--token", token]

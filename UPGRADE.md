@@ -24,6 +24,69 @@ Before upgrading a real archive:
 
 The archive should never silently rewrite memory.
 
+## v0.3.318 Credential Paste And Failure Stages
+
+Install only after the exact v0.3.318 GitHub Release lists the verified wheel.
+Repository changes do not update an isolated older WOM-kit installation. Start
+a new process and confirm `archive --version` before making a new adoption
+plan. Discard any older dry-run digest because the running version and reviewed
+request must agree.
+
+The separate black Windows console now explains the supported actions directly
+above the masked input:
+
+- use `Ctrl+V` or `Shift+Insert`;
+- Windows Terminal's default configuration also supports `Ctrl+Shift+V`;
+- right-click depends on terminal-host settings and may paste, copy, or open a
+  menu, so choose Paste when a menu appears;
+- the value and its length remain hidden; press Enter after pasting;
+- during this short prompt `Ctrl+C` is ignored, and empty Enter is the one
+  documented cancellation gesture.
+
+After a complete non-empty line reaches WOM, the console displays only
+`입력값을 받았습니다. 검증 중입니다.` and briefly remains visible. This
+confirms receipt at the console boundary, not provider acceptance or durable
+storage. WOM never reads the clipboard programmatically. User-customized host
+bindings can still differ.
+
+The public result is now `wom-credential-workflow-result/v0.2`; the child
+secure-intake result is `wom-credential-secure-intake-result/v0.2`. Read these
+five fixed outcomes as follows:
+
+- `credential_input_cancelled_or_empty`: no complete value was accepted;
+  create a new intake plan only when ready.
+- `credential_input_not_received`: the safe console boundary did not return a
+  complete value. This does not prove which physical paste gesture was or was
+  not used; retry a supported console input method with a new plan.
+- `provider_auth_rejected`: Notion rejected the credential. The temporary
+  exact store entry must be deleted or the result reports `delete_failed`;
+  review the credential before creating a new plan.
+- `provider_identity_endpoint_unavailable`: the provider identity service
+  could not be verified. The same rollback rule applies; wait for recovery and
+  create a new plan rather than guessing.
+- `reviewed_anchor_inaccessible`: the reviewed page could not be verified with
+  that connection. The same rollback rule applies; review page sharing and
+  access before a new plan.
+
+The first two outcomes are pre-store and require `rollback_status:
+not_required`. The last three happen only after the exact temporary write and
+require `deleted` or `delete_failed`. A `deleted` result also requires verified
+store absence. Never hand-edit or delete Credential Manager state merely to
+change the public result.
+
+The source test suite and synthetic Win32 API canaries verify Unicode text,
+echo-off input, status dwell, Ctrl+C survival, cleanup ordering, code-page and
+mode restoration, rollback projections, and secret-free output. They do not
+prove a physical `Ctrl+V`, `Ctrl+Shift+V`, `Shift+Insert`, or right-click paste
+under every Windows Terminal, classic Console Host, ConPTY, remote session, or
+customized configuration. Use only a separately reviewed synthetic manual
+acceptance exercise for that host; never test with a real PAT in documentation
+or logs.
+
+See the [v0.3.318 release note](wom-kit/docs/releases/v0.3.318.md),
+[Letter 131 credential console guide](wom-kit/docs/letter131-credential-console-paste-and-failure-stages.md),
+and [Letter 131 decision](wom-kit/docs/archive-infra-decision-log-2026-08-13-v03318-letter131-credential-input.md).
+
 ## v0.3.317 Credential Console And Staged-Cleanup Safety
 
 Install only after the exact v0.3.317 GitHub Release lists the verified wheel.

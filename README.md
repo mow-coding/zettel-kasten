@@ -34,10 +34,10 @@ not re-grow baseline ladders or tag lists here.
 Current public baseline:
 
 ```text
-v0.3.317
+v0.3.318
 ```
 
-Previous public baseline: v0.3.316.
+Previous public baseline: v0.3.317.
 
 Full release history: see [CHANGELOG.md](CHANGELOG.md) and [wom-kit/docs/releases/](wom-kit/docs/releases/).
 
@@ -57,7 +57,7 @@ matching GitHub Release exists and lists this wheel. The versioned URL alone is
 not proof that the asset is available.
 
 ```powershell
-uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.317/wom_kit-0.3.317-py3-none-any.whl"
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.318/wom_kit-0.3.318-py3-none-any.whl"
 archive --version
 ```
 
@@ -97,7 +97,7 @@ approval-gated write, or docs-only), see the
 - one fail-closed current-index authority for protected search, structured `view-zets`, and mint planning; `mint-zet --progress` now emits content-free start and heartbeat evidence to stderr while reserving stdout for the final result, and the separate operator-feedback body companion uses an exact six-section private request plus digest-bound human approval and lifecycle checking without submitting externally or proving real-archive repair; see [Letters 120 and 123](wom-kit/docs/letter120-123-index-lifecycle-and-feedback-body.md),
 - a private source-fidelity gate for every new AI-assisted or AI-generated draft: one manifested content-addressed source, explicit `verbatim`, `faithful_summary`, or `sanitized_derivative` mode, dry-run hashes, and attributed human replay are required before a write; `private_self` verbatim preserves personal source data while credential secrets block, declared AI provenance cannot downgrade to the human route, mint re-verifies the private receipt, and audience metadata never shares or exports anything; see [Source Fidelity And Private Verbatim Preservation](wom-kit/docs/source-fidelity-and-private-verbatim.md),
 - v0.3.316 project-update cache recovery: when an update is blocked by many ignored Python cache collisions, `project-version-update-collision --action inspect-all` classifies the complete opaque set from one exact plan. Only an exact all-cache set can continue to a separately reviewed, exact-set-bound `project-bytecode-repair`; the repair shares the updater lock and is followed by a fresh update preview and separate update approval. It adds no separate UI and never guesses private paths, deletes user-authored source, fetches a target, or retries the updater; see [Project Version Update](wom-kit/docs/project-version-update.md), [Upgrade Guide](UPGRADE.md), and [v0.3.316 release notes](wom-kit/docs/releases/v0.3.316.md),
-- v0.3.317 corrects two real-use safety boundaries: credential enrollment now uses a separate visible Unicode Windows console whose public task context comes from the helper AI while fixed security copy remains WOM-owned, and an authenticated matching credential is reused instead of prompting every time. Internal integrations bind Notion's bot workspace ID; person PATs use an exact-token-scoped witness plus current-page verification, so the same saved PAT can serve another reviewed page. Legacy authenticated receipts can evolve locally without a second prompt or credential-store write, while duplicate or complex lifecycle state stops for review. `staged-cleanup-check` now requires complete byte, manifest, store, and receipt evidence, rehashes final authorities, keeps deferred entries staged, and offers content-free saved output plus bounded operation control without deleting anything; see [Letters 118 and 119](wom-kit/docs/letter118-119-credential-continuity-and-notion-page-recovery.md), [Staged-Cleanup Evidence Decision](wom-kit/docs/archive-infra-decision-log-2026-08-13-v03317-letter130-staged-cleanup-evidence.md), [Upgrade Guide](UPGRADE.md), and [v0.3.317 release notes](wom-kit/docs/releases/v0.3.317.md),
+- v0.3.318 makes the masked Windows credential console understandable and actionable without expanding secret authority. It shows exact paste guidance for `Ctrl+V`, `Shift+Insert`, Windows Terminal's default `Ctrl+Shift+V`, and host-dependent right-click, then confirms only `입력값을 받았습니다. 검증 중입니다.` after a complete non-empty line. During the prompt `Ctrl+C` is ignored and empty Enter is the documented cancellation. Five fixed public reason codes distinguish cancellation/empty input, console intake failure, provider authentication rejection, provider identity-service unavailability, and reviewed-page inaccessibility under v0.2 result envelopes with strict pre-store/rollback relationships. Synthetic Win32 API canaries verify Unicode, echo-off, status, Ctrl+C survival, cleanup ordering, and restoration; they do not prove physical paste gestures in every terminal host. Matching authenticated credentials remain reusable without another prompt, and WOM still performs no programmatic clipboard read; see [Letter 131 Credential Console Paste And Failure Stages](wom-kit/docs/letter131-credential-console-paste-and-failure-stages.md), [Upgrade Guide](UPGRADE.md), and [v0.3.318 release notes](wom-kit/docs/releases/v0.3.318.md),
 - a bounded read-only artifact lifecycle inventory over fixed archive-owned scratch, staging, draft, workpack, generated-index, and local content-addressed object surfaces, with independent per-root coverage, content-free stable review refs, strict manifest candidate reconciliation, expiry review without deletion inference, and presence-only protection for non-canonical in-root original storage,
 - WOM-kit local CLI and MCP tooling under `wom-kit/`, importing as `wom_kit`,
 - an exact installed-wheel resource integrity gate: release checking rejects
@@ -518,7 +518,7 @@ WOM, `zettel-kasten`, `zet`, and `ZET` are managed as a versioned protocol famil
 Release tags are compatibility checkpoints:
 
 ```text
-v0.3.317 (current checkpoint)
+v0.3.318 (current checkpoint)
 ```
 
 Public releases from `v0.2.5` onward are tagged as compatibility checkpoints.

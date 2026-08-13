@@ -24,6 +24,7 @@ from urllib import request as urllib_request
 import uuid
 
 from .credential_secure_intake import (
+    CredentialIntakeStageError,
     NOTION_PAT_WORKSPACE_IDENTITY_BASIS,
     NOTION_WORKSPACE_IDENTITY_BASIS,
 )
@@ -230,7 +231,7 @@ class NotionSecureIntakeVerifier:
             # an additional immutable raw-token bytes copy first.
             secret_text = codecs.decode(secret, "utf-8", errors="strict")
         except (AttributeError, TypeError, UnicodeDecodeError, ValueError):
-            raise NotionHttpAdapterError("notion_secret_invalid") from None
+            raise CredentialIntakeStageError("provider_auth_rejected") from None
         evidence = self._adapter.verify_identity(secret_text, reviewed_anchor_uuid)
         if not (
             evidence.get("identity_verified") is True
@@ -241,10 +242,12 @@ class NotionSecureIntakeVerifier:
             reason = evidence.get("reason_code")
             if not isinstance(reason, str) or not reason.startswith("notion_"):
                 reason = "notion_identity_unverified"
-            raise NotionHttpAdapterError(reason)
+            raise CredentialIntakeStageError(
+                _secure_intake_stage_reason(reason, evidence=evidence)
+            )
         normalized_anchor = _normalize_uuid(reviewed_anchor_uuid)
         if normalized_anchor is None:
-            raise NotionHttpAdapterError("notion_workspace_anchor_id_invalid")
+            raise CredentialIntakeStageError("reviewed_anchor_inaccessible")
         return NotionSecureIntakeIdentity(
             provider="notion",
             account_subject=str(evidence["account_fingerprint"]),
@@ -858,6 +861,43 @@ def _anchor_status_reason(status: int, payload: Mapping[str, Any] | None) -> str
     }:
         return str(reason)
     return "notion_workspace_anchor_http_error"
+
+
+def _secure_intake_stage_reason(
+    reason: str,
+    *,
+    evidence: Mapping[str, Any],
+) -> str:
+    """Project a private Notion failure into one fixed operator-visible stage."""
+
+    if reason == "notion_secret_invalid":
+        return "provider_auth_rejected"
+    if reason in {
+        "notion_identity_unauthorized",
+        "notion_identity_forbidden",
+    }:
+        return "provider_auth_rejected"
+    if reason.startswith("notion_workspace_anchor_"):
+        return "reviewed_anchor_inaccessible"
+    if evidence.get("identity_verified") is True and reason in {
+        "notion_transport_error",
+        "notion_response_oversize",
+        "notion_response_malformed",
+    }:
+        return "reviewed_anchor_inaccessible"
+    if reason in {
+        "notion_transport_error",
+        "notion_response_oversize",
+        "notion_response_malformed",
+        "notion_identity_not_found",
+        "notion_identity_http_error",
+        "notion_identity_response_malformed",
+        "notion_workspace_identity_response_malformed",
+        "notion_workspace_anchor_response_malformed",
+        "notion_workspace_anchor_http_error",
+    }:
+        return "provider_identity_endpoint_unavailable"
+    return "provider_identity_unverified"
 
 
 def _safe_provider_error(status: int, reason_code: str) -> ProviderResponse:

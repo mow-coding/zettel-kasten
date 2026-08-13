@@ -79,7 +79,7 @@ from .notion_page_recovery import (
 
 
 WORKFLOW_PLAN_SCHEMA_VERSION = "wom-credential-workflow-plan/v0.2"
-WORKFLOW_RESULT_SCHEMA_VERSION = "wom-credential-workflow-result/v0.1"
+WORKFLOW_RESULT_SCHEMA_VERSION = "wom-credential-workflow-result/v0.2"
 INTERACTION_CONTEXT_SCHEMA_VERSION = "wom-credential-interaction-context/v0.1"
 PLANNING_OWNER_BINDING = "credential-workflow-non-live-planning-owner"
 
@@ -188,7 +188,19 @@ def _workflow_failure(
         if rollback_status in {"not_required", "deleted", "delete_failed"}
         else "not_required"
     )
-    if safe_reason == "credential_adoption_existing_scope_revalidation_failed":
+    if safe_rollback == "delete_failed":
+        operator_action = "stop_and_remove_the_exact_encrypted_store_entry"
+    elif safe_reason == "credential_input_cancelled_or_empty":
+        operator_action = "create_a_new_intake_plan_when_ready"
+    elif safe_reason == "credential_input_not_received":
+        operator_action = "retry_supported_console_input_with_a_new_plan"
+    elif safe_reason == "provider_auth_rejected":
+        operator_action = "review_the_notion_credential_and_create_a_new_plan"
+    elif safe_reason == "provider_identity_endpoint_unavailable":
+        operator_action = "create_a_new_plan_after_provider_identity_service_recovers"
+    elif safe_reason == "reviewed_anchor_inaccessible":
+        operator_action = "review_page_access_and_create_a_new_plan"
+    elif safe_reason == "credential_adoption_existing_scope_revalidation_failed":
         operator_action = "review_current_notion_anchor_and_connection_before_retry"
     elif safe_reason == "credential_adoption_existing_scope_migration_failed":
         operator_action = "rerun_same_approved_plan_to_complete_scope_migration"
@@ -198,8 +210,6 @@ def _workflow_failure(
         "credential_adoption_existing_store_fingerprint_mismatch",
     }:
         operator_action = "create_and_review_fresh_replace_existing_plan"
-    elif safe_rollback == "delete_failed":
-        operator_action = "stop_and_remove_the_exact_encrypted_store_entry"
     elif accepted and persisted:
         operator_action = "stop_and_repair_authenticated_rediscovery"
     else:
@@ -1229,6 +1239,11 @@ _ADOPTION_WORKER_FAILURE_KEYS = {
     "operations",
 }
 _ADOPTION_WORKER_FAILURE_REASONS = {
+    "credential_input_cancelled_or_empty",
+    "credential_input_not_received",
+    "provider_auth_rejected",
+    "provider_identity_endpoint_unavailable",
+    "reviewed_anchor_inaccessible",
     "human_cancelled",
     "secret_input_unavailable",
     "store_write_failed",
@@ -1258,6 +1273,37 @@ _ADOPTION_WORKER_FAILURE_REASONS = {
 _ADOPTION_PERSISTED_FAILURE_REASONS = {
     "credential_adoption_archive_identity_changed",
     "credential_adoption_rediscovery_verification_failed",
+}
+_ADOPTION_PRE_STORE_FAILURE_REASONS = {
+    "credential_input_cancelled_or_empty",
+    "credential_input_not_received",
+    "human_cancelled",
+    "secret_input_unavailable",
+    "request_expired",
+    "request_replayed",
+    "request_user_mismatch",
+    "request_claim_failed",
+    "plan_digest_mismatch",
+    "worker_launch_failed",
+    "credential_adoption_archive_identity_mismatch",
+    "credential_adoption_preflight_failed",
+    "credential_adoption_existing_registry_untrusted",
+    "credential_adoption_existing_registrations_require_lifecycle_review",
+    "credential_adoption_existing_store_missing",
+    "credential_adoption_existing_store_probe_failed",
+    "credential_adoption_existing_store_fingerprint_mismatch",
+    "credential_adoption_existing_scope_revalidation_failed",
+    "credential_adoption_existing_scope_migration_failed",
+}
+_ADOPTION_ROLLBACK_REQUIRED_FAILURE_REASONS = {
+    "store_write_failed",
+    "store_presence_not_verified",
+    "provider_auth_rejected",
+    "provider_identity_endpoint_unavailable",
+    "reviewed_anchor_inaccessible",
+    "provider_identity_unverified",
+    "workspace_anchor_mismatch",
+    "receipt_commit_failed",
 }
 
 
@@ -1365,6 +1411,21 @@ def _project_adoption_worker_result_unchecked(
         and isinstance(reason, str)
         and reason in _ADOPTION_WORKER_FAILURE_REASONS
         and rollback in {"not_required", "deleted", "delete_failed"}
+        and (
+            (
+                reason in _ADOPTION_PRE_STORE_FAILURE_REASONS
+                and rollback == "not_required"
+            )
+            or (
+                reason in _ADOPTION_ROLLBACK_REQUIRED_FAILURE_REASONS
+                and rollback in {"deleted", "delete_failed"}
+            )
+            or reason == "worker_result_invalid"
+            or (
+                reason in _ADOPTION_PERSISTED_FAILURE_REASONS
+                and rollback == "not_required"
+            )
+        )
         and result.get("credential_id_present") is False
         and result.get("secret_value_present") is False
         and result.get("reviewed_anchor_present_in_result") is False

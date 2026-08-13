@@ -91,8 +91,7 @@ class V03313SourceFidelityDocsTests(unittest.TestCase):
 
     def test_current_public_surfaces_link_the_contract_and_predecessor(self) -> None:
         expected_status = (
-            "Status: v0.3.317 credential-console continuity and staged-cleanup "
-            "evidence checkpoint"
+            "Status: v0.3.318 credential paste and failure-stage checkpoint"
         )
         for path in (MATRIX, RUNTIME):
             with self.subTest(document=path.name):
