@@ -8,8 +8,8 @@ separate gates.
 
 ## Chronology
 
-1. The operator supplied Basoon feedback Letter 131 and asked implementation
-   to start immediately. The source letter was read from the protected Basoon
+1. The operator supplied protected-archive feedback Letter 131 and asked
+   implementation to start immediately. The source letter was read from the protected archive
    archive without modifying it. Its SHA-256 is
    `651ccd5326d203af0680cb69a963c6fad181263b3dbba8dfa1c0bad43536a39d`.
 2. Letter 131 reports that the separate black credential console opened and
@@ -75,7 +75,7 @@ separate gates.
    reconstruction, and authenticated registry behavior. Keep API-boundary
    tests separate from the opt-in human host acceptance tool
    `wom-kit/tools/check_windows_credential_console_host.py`, which uses fixed
-   synthetic input only. Do not use a real PAT, provider account, or Basoon
+   synthetic input only. Do not use a real PAT, provider account, or protected archive
    data.
 
 ## Evidence produced
@@ -92,7 +92,7 @@ separate gates.
 - Strict reason/rollback matrices cover all five new codes and retain a generic
   unknown-verifier fallback.
 - The manual host tool separates `automated_win32_boundary_status` from
-  `actual_host_acceptance_status` and uses no real PAT, store, provider, Basoon
+  `actual_host_acceptance_status` and uses no real PAT, store, provider, protected archive
   data, private locator, or clipboard API.
 
 ## Evidence still required
@@ -114,6 +114,6 @@ separate gates.
 
 ## Protected boundary
 
-The Basoon feedback source and archive are read-only. No actual credential,
+The feedback source and protected archive are read-only. No actual credential,
 Notion account, workspace, page body, private locator, or Windows Credential
 Manager entry is used by this implementation work.

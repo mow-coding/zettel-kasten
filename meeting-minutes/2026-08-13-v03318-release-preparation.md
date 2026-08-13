@@ -8,8 +8,8 @@ host paste acceptance remain separate release or human gates.
 
 ## Scope
 
-v0.3.318 responds to protected Basoon feedback Letter 131. The source letter
-was read without changing the Basoon archive. No real PAT, Notion account,
+v0.3.318 responds to protected-archive feedback Letter 131. The source letter
+was read without changing the protected archive. No real PAT, Notion account,
 reviewed page content, private locator, existing Credential Manager entry, or
 protected archive data was used in implementation or verification.
 
@@ -71,7 +71,7 @@ claiming one canary covered code it did not run.
 source-tree check for one human-observed, fixed-synthetic console attempt. It
 uses exact matched host-family and launch-route pairs plus bounded gesture labels; separates
 `automated_win32_boundary_status` from `actual_host_acceptance_status`; calls no
-clipboard API, provider, Credential Manager, or Basoon data; emits no private
+clipboard API, provider, Credential Manager, or protected-archive data; emits no private
 locator; and wipes its mutable synthetic buffer. The visible prompt runs in a
 spawned worker so the original terminal stays attached. Only
 `(nonempty_bool, exact_bool)` returns to the parent.
@@ -119,6 +119,16 @@ candidate record. Those interrupted processes are not release evidence. The
 final full regression must start only after this record is present so its
 start/end tree is the actual release candidate.
 
+The first PR #66 CI run then found a separate privacy-record issue. Ubuntu
+Python 3.10 shard 2/2 reported candidate sealed-surface total 212 against the
+unchanged predecessor limit 203. A content-free comparison found exactly nine
+new occurrences, all confined to the two new internal minutes and caused by
+repeating the protected project's proper name. The predecessor constant,
+empty allowlist, and privacy test remain unchanged. The nine references were
+rewritten as generic `protected archive` language, after which the exact
+privacy subset test and focused release checks must pass before a replacement
+PR head is pushed. The failed head is not release evidence.
+
 ## Remaining release gates
 
 - run the full repository regression and release-document tests after all
@@ -128,4 +138,4 @@ start/end tree is the actual release candidate.
 - merge, external CI, tag, GitHub Release, wheel upload, fresh install, and
   live version verification;
 - separately run any desired fixed-synthetic human host acceptance, without a
-  real PAT or Basoon data, and record only bounded result fields.
+  real PAT or protected-archive data, and record only bounded result fields.
