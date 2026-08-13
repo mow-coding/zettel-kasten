@@ -71,6 +71,17 @@ and never deletes. Its process exit status is also a safety signal:
 Automation should still read the JSON report for the detailed file statuses, and
 must treat cleanup as approved only when `safe_to_cleanup` is `true`.
 
+`--output .wom-scratch/diagnostics/<name>.json` atomically preserves one
+no-overwrite, content-free result plus an operation journal. The terminal then
+prints only state, fixed reason codes, and aggregate counts. A completed check
+with `safe_to_cleanup: false` is saved successfully but still exits `1`.
+`operation-control` can later project that bounded result without copying entry
+paths, object ids, hashes, or receipt names.
+
+`--deferred` is a legacy classification input, not cleanup approval. A deferred
+entry must remain in staging and makes `safe_to_cleanup` false until its bytes
+are preserved and a fresh check succeeds.
+
 Use `--progress` when a large staged folder or large source/store file could make
 the command appear silent. Progress goes to stderr and contains only stage names,
 counts, and large-file byte totals; it does not add staged file names, object ids,

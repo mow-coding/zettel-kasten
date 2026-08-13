@@ -37,7 +37,14 @@ from typing import Any, Protocol
 
 
 PLAN_SCHEMA_VERSION = "wom-credential-secure-intake-plan/v0.1"
-RECEIPT_SCHEMA_VERSION = "wom-credential-secure-intake-receipt/v0.1"
+LEGACY_RECEIPT_SCHEMA_VERSION = "wom-credential-secure-intake-receipt/v0.1"
+RECEIPT_SCHEMA_VERSION = "wom-credential-secure-intake-receipt/v0.2"
+NOTION_WORKSPACE_IDENTITY_BASIS = "notion_bot_workspace_id_v1"
+NOTION_PAT_WORKSPACE_IDENTITY_BASIS = "notion_pat_token_scope_v1"
+NOTION_PAT_SCOPE_FINGERPRINT_DOMAIN = b"wom/notion-pat-token-scope/v1\x00"
+NOTION_WORKSPACE_IDENTITY_BASES = frozenset(
+    {NOTION_WORKSPACE_IDENTITY_BASIS, NOTION_PAT_WORKSPACE_IDENTITY_BASIS}
+)
 RESULT_SCHEMA_VERSION = "wom-credential-secure-intake-result/v0.1"
 LIFECYCLE_SCHEMA_VERSION = "wom-credential-duplicate-lifecycle/v0.1"
 CLAIM_SCHEMA_VERSION = "wom-credential-secure-intake-claim/v0.1"
@@ -1237,6 +1244,7 @@ class VerifiedCredentialIdentity:
     workspace_identity: str = field(repr=False)
     reviewed_anchor_uuid: str
     capabilities: tuple[str, ...]
+    workspace_identity_basis: str = NOTION_WORKSPACE_IDENTITY_BASIS
     subject_verified: bool = True
     anchor_access_verified: bool = True
 
@@ -1318,7 +1326,7 @@ class AtomicJsonReceiptCommitter:
 def _validate_identity(
     identity: VerifiedCredentialIdentity,
     plan: SecureIntakePlan,
-) -> tuple[str | None, tuple[str, ...]]:
+) -> tuple[str | None, tuple[str, ...], str | None]:
     try:
         provider = _safe_provider(identity.provider)
         account_subject = _safe_text(
@@ -1327,20 +1335,26 @@ def _validate_identity(
         workspace_identity = _safe_text(
             identity.workspace_identity, "secure_intake_provider_identity_invalid", maximum=512
         )
+        workspace_identity_basis = _safe_purpose(identity.workspace_identity_basis)
         anchor = _safe_uuid(
             identity.reviewed_anchor_uuid, "secure_intake_provider_identity_invalid"
         )
         capabilities = _normalize_capabilities(identity.capabilities)
     except (AttributeError, TypeError, ValueError):
-        return "provider_identity_unverified", ()
+        return "provider_identity_unverified", (), None
     if not identity.subject_verified or provider != plan.provider or not account_subject:
-        return "provider_identity_unverified", ()
+        return "provider_identity_unverified", (), None
     if not identity.anchor_access_verified or anchor != plan.reviewed_anchor_uuid or not workspace_identity:
-        return "workspace_anchor_mismatch", ()
+        return "workspace_anchor_mismatch", (), None
+    if provider != "notion" or workspace_identity_basis not in NOTION_WORKSPACE_IDENTITY_BASES:
+        # A reviewed page UUID, label, account id, or other inferred value is
+        # never an authoritative workspace identity.  The provider adapter must
+        # state the exact identity basis it actually verified.
+        return "provider_identity_unverified", (), None
     requested = set(plan.requested_capabilities)
     if requested and not requested.issubset(capabilities):
-        return "provider_identity_unverified", ()
-    return None, capabilities
+        return "provider_identity_unverified", (), None
+    return None, capabilities, workspace_identity_basis
 
 
 def _fingerprint(secret: memoryview, key: bytes | bytearray) -> str:
@@ -1355,6 +1369,26 @@ def _identity_fingerprint(value: str) -> str:
     # secret-derived HMAC display digest, they retain the full SHA-256 width so
     # recovery manifests can bind to the exact same workspace identity.
     return "sha256:" + hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def _workspace_identity_fingerprint(
+    identity: VerifiedCredentialIdentity,
+    *,
+    credential_fingerprint: str,
+) -> str:
+    basis = identity.workspace_identity_basis
+    if basis == NOTION_WORKSPACE_IDENTITY_BASIS:
+        return _identity_fingerprint(identity.workspace_identity)
+    if basis == NOTION_PAT_WORKSPACE_IDENTITY_BASIS:
+        # Official Notion personal tokens are scoped to one user in one
+        # workspace, while the person response does not expose a workspace id.
+        # Bind the scope to the archive-keyed exact-secret fingerprint instead
+        # of guessing from a label, account id, or reviewed anchor.
+        return "sha256:" + hashlib.sha256(
+            NOTION_PAT_SCOPE_FINGERPRINT_DOMAIN
+            + credential_fingerprint.encode("ascii")
+        ).hexdigest()
+    raise ValueError("secure_intake_provider_identity_invalid")
 
 
 def _rollback(store: ExactCredentialStore, backend_id: str) -> str:
@@ -1484,7 +1518,9 @@ class SecureIntakeWorker:
                     "provider_identity_unverified",
                     rollback_status=rollback_once(),
                 )
-            identity_failure, capabilities = _validate_identity(identity, plan)
+            identity_failure, capabilities, workspace_identity_basis = _validate_identity(
+                identity, plan
+            )
             if identity_failure:
                 return _fixed_failure(
                     identity_failure,
@@ -1493,7 +1529,10 @@ class SecureIntakeWorker:
 
             fingerprint_digest = _fingerprint(secret_view, self.fingerprint_key)
             account_fingerprint = _identity_fingerprint(identity.account_subject)
-            workspace_fingerprint = _identity_fingerprint(identity.workspace_identity)
+            workspace_fingerprint = _workspace_identity_fingerprint(
+                identity,
+                credential_fingerprint=fingerprint_digest,
+            )
             credential_id = str(self.credential_id_factory())
             if CREDENTIAL_ID_RE.fullmatch(credential_id) is None:
                 return _fixed_failure(
@@ -1514,6 +1553,7 @@ class SecureIntakeWorker:
                 "fingerprint_digest": fingerprint_digest,
                 "verified_account_fingerprint": account_fingerprint,
                 "verified_workspace_fingerprint": workspace_fingerprint,
+                "workspace_identity_basis": workspace_identity_basis,
                 "adopted_at": verified_at,
                 "last_verified_at": verified_at,
                 "rotation_status": "current",
@@ -1538,6 +1578,7 @@ class SecureIntakeWorker:
                 "fingerprint_digest": fingerprint_digest,
                 "verified_account_fingerprint": account_fingerprint,
                 "verified_workspace_fingerprint": workspace_fingerprint,
+                "workspace_identity_basis": workspace_identity_basis,
                 "adopted_at": verified_at,
                 "last_verified_at": verified_at,
                 "rotation_status": "current",
@@ -1684,6 +1725,7 @@ _WORKER_SUCCESS_KEYS = {
     "fingerprint_digest",
     "verified_account_fingerprint",
     "verified_workspace_fingerprint",
+    "workspace_identity_basis",
     "adopted_at",
     "last_verified_at",
     "rotation_status",
@@ -1787,6 +1829,7 @@ def _project_worker_success(
     fingerprint = plain.get("fingerprint_digest")
     account_fingerprint = plain.get("verified_account_fingerprint")
     workspace_fingerprint = plain.get("verified_workspace_fingerprint")
+    workspace_identity_basis = plain.get("workspace_identity_basis")
     receipt_ref = plain.get("receipt_ref")
     capabilities = plain.get("verified_capabilities")
     adopted_at = plain.get("adopted_at")
@@ -1848,6 +1891,7 @@ def _project_worker_success(
         and WORKSPACE_FINGERPRINT_RE.fullmatch(account_fingerprint) is not None
         and type(workspace_fingerprint) is str
         and WORKSPACE_FINGERPRINT_RE.fullmatch(workspace_fingerprint) is not None
+        and workspace_identity_basis in NOTION_WORKSPACE_IDENTITY_BASES
         and type(adopted_at) is str
         and type(last_verified_at) is str
         and adopted_at == last_verified_at == canonical_time
@@ -1887,6 +1931,7 @@ def _project_worker_success(
         "fingerprint_digest": fingerprint,
         "verified_account_fingerprint": account_fingerprint,
         "verified_workspace_fingerprint": workspace_fingerprint,
+        "workspace_identity_basis": workspace_identity_basis,
         "adopted_at": canonical_time,
         "last_verified_at": canonical_time,
         "rotation_status": "current",
@@ -2024,8 +2069,14 @@ __all__ = [
     "FileOneTimeRequestClaims",
     "HumanOnlySecretUI",
     "InMemoryOneTimeRequestClaims",
+    "LEGACY_RECEIPT_SCHEMA_VERSION",
+    "NOTION_WORKSPACE_IDENTITY_BASIS",
+    "NOTION_PAT_WORKSPACE_IDENTITY_BASIS",
+    "NOTION_PAT_SCOPE_FINGERPRINT_DOMAIN",
+    "NOTION_WORKSPACE_IDENTITY_BASES",
     "IsolatedWorkerSpawner",
     "ProviderIdentityVerifier",
+    "RECEIPT_SCHEMA_VERSION",
     "SecureIntakePlan",
     "SecureIntakeProcessLauncher",
     "SecureIntakeWorker",

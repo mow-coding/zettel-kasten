@@ -24,6 +24,88 @@ Before upgrading a real archive:
 
 The archive should never silently rewrite memory.
 
+## v0.3.317 Credential Console And Staged-Cleanup Safety
+
+Install only after the exact v0.3.317 GitHub Release lists the verified wheel.
+Repository changes do not update an older isolated WOM-kit installation. Open a
+new process and confirm `archive --version` before using the corrected paths.
+
+There is no automatic canonical-zet rewrite, object-store rewrite, provider
+write, credential replacement, or credential-store deletion in this release.
+
+### First credential enrollment or reviewed replacement
+
+Discard any older credential-adoption dry-run digest. v0.3.317 binds the helper
+AI's reviewed public-safe task summary, connection reason, and replacement
+intent into a new request digest.
+
+```powershell
+archive credential-adopt <archive-root> --account-label <safe-label> --workspace-label <safe-label> --task-summary "<public-safe current task>" --connection-reason "<public-safe reason>" --reviewed-anchor-page-id <uuid> --interactive --dry-run --format json
+archive credential-adopt <archive-root> --account-label <same-safe-label> --workspace-label <same-safe-label> --task-summary "<same public-safe current task>" --connection-reason "<same public-safe reason>" --reviewed-anchor-page-id <same-uuid> --interactive --expected-request-sha256 <request-sha256> --approve --format json
+```
+
+The approved command opens one separate visible Unicode Windows console with
+input echo disabled. Enter the PAT only there. WOM's fixed notice explains that
+the credential is not sent to the helper AI or chat. Empty Enter or Ctrl+C
+cancels. After a successful authenticated registration, ordinary later work
+reuses the saved Windows credential and must not call `credential-adopt` again.
+
+Use `--replace-existing` in both commands only for a separately reviewed
+rotation or repair. Without that flag, a matching authenticated registration is
+kept and no new input console opens only after WOM authenticates its receipt,
+reads the exact saved Windows entry inside the worker, verifies its secret
+fingerprint, and rechecks the current reviewed Notion anchor. A missing,
+unreadable, or fingerprint-mismatched saved entry stops and requires a fresh,
+separately reviewed replacement plan. If the current anchor/provider check
+fails, keep the saved credential and review the page, sharing, and connection
+before retrying without another prompt. Account/workspace labels are display
+text, so changing only those labels must not open another prompt.
+
+Notion exposes two different identity shapes. An internal integration returns
+`bot.workspace_id`, which WOM uses as its provider workspace basis. A person
+PAT does not return a workspace ID. For a PAT, WOM instead derives the
+`notion_pat_token_scope_v1` witness from the archive-keyed fingerprint of the
+exact saved token and rechecks both the current person identity and reviewed
+page access. This allows the same saved PAT to be reused for another page
+without another prompt. A different PAT remains a different scope, even if it
+belongs to the same Notion workspace; rotation or reconciliation requires a
+separate reviewed lifecycle operation.
+
+### Existing v0.3.311-v0.3.316 registrations
+
+Those versions wrote authenticated v0.1 receipts whose workspace fingerprint
+was derived from the reviewed page. v0.3.317 never rewrites that receipt or
+stores the PAT again. For exactly one compatible registration, WOM
+authenticates the old receipt, verifies the exact saved-secret fingerprint,
+performs the current provider/page check, and appends one authenticated local
+workspace-scope evolution. A compatible one-credential lifecycle is moved to
+that new authority without another prompt, Credential Manager write, or
+deletion. With no lifecycle, the evolved registration still needs a human
+default selection. Duplicate or complex lifecycle state stops for review
+before first publication. If the process stops after the evolution but before
+the lifecycle transition, the old broker binding remains blocked and rerunning
+the same approved operation completes the idempotent transition.
+
+### Before removing a staged folder
+
+Run a fresh report-only verification:
+
+```powershell
+archive staged-cleanup-check <archive-root> --staged <archive-relative-staged-folder> --dry-run --format json --output .wom-scratch/diagnostics/staged-cleanup-v03317.json
+```
+
+Only exit `0` and `safe_to_cleanup: true` authorize the human to consider a
+separate manual cleanup. Ordinary objets need matching store bytes, manifest,
+and capture receipt. Exact BOM-free paired text needs its complete direct
+derived-text evidence chain. A deferred entry stays staged and forces exit `1`.
+The command itself never deletes or moves data. Do not edit a manifest or
+receipt by hand to force a safe result.
+
+See the [v0.3.317 release note](wom-kit/docs/releases/v0.3.317.md),
+[Letters 118 and 119 guide](wom-kit/docs/letter118-119-credential-continuity-and-notion-page-recovery.md),
+[staged-cleanup evidence decision](wom-kit/docs/archive-infra-decision-log-2026-08-13-v03317-letter130-staged-cleanup-evidence.md),
+and [operation-control guide](wom-kit/docs/operation-control.md).
+
 ## v0.3.316 Python Cache Collision Recovery
 
 v0.3.315 could correctly detect a complete batch of ignored Python cache
@@ -255,8 +337,10 @@ credential-reference rows remain metadata only with store presence unchecked.
 
 On Windows, use `credential-adopt` in dry-run mode first and approve only the
 exact returned request digest. Approval opens a native masked dialog in a
-spawned child; never paste a PAT into a command argument, environment variable,
-normal stdin, file, chat, or clipboard. After authenticated listing, use the
+spawned child. Never paste a PAT into a command argument, environment variable,
+normal stdin, file, or chat. WOM and the helper AI never read the clipboard
+directly; a deliberate human paste into the separate masked console is handled
+only as console input. After authenticated listing, use the
 separate `credential-lifecycle` dry-run/approval pair to choose one current
 credential for an exact workspace. WOM does not delete or revoke the other
 valid entries.

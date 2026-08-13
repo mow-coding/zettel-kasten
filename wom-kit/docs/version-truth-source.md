@@ -1,6 +1,6 @@
 # WOM-kit Version Truth Source
 
-Status: v0.3.316 runtime alignment and exact-set-bound cache collision recovery
+Status: v0.3.317 runtime alignment with credential and staged-cleanup safety corrections
 
 Previous checkpoint: Status: v0.3.291 read-only runtime alignment plus approval-gated project update
 

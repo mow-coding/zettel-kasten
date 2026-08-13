@@ -285,6 +285,9 @@ capture: register the external content-addressed store with
 human-selected subset through the capture spine above. Only
 `staged-cleanup-check` evidence — never this document — can say a migrated
 folder is safe to remove, and WOM-kit still never deletes it for you.
+An entry classified through the legacy `--deferred` input is intentionally
+unresolved: keep it staged or preserve it first. Deferment alone can never make
+the whole folder safe to remove.
 
 The current local cleanup flow is:
 

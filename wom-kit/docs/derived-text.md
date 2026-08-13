@@ -262,11 +262,13 @@ both an original and a transcript source).
 
 Honest scope notes:
 
-- Paired intake does NOT preserve raw transcript bytes: the stored text is
-  transcoded UTF-8, so `staged-cleanup-check` will correctly report the staged
-  `.txt` as `not_preserved` (preservation requires an `objects/sha256` copy
-  hashing to the raw digest). When raw-byte preservation matters, use the
-  deferred list or a separate objet capture of the `.txt` itself.
+- Paired intake preserves an exact staged transcript for cleanup only when the
+  source was already BOM-free UTF-8, so the raw staged SHA-256 equals the
+  canonical derived-text SHA-256, and strict manifest, store, and direct
+  terminal receipt evidence all agree. BOM or UTF-16 transcoding changes the
+  bytes, so `staged-cleanup-check` reports that staged `.txt` as not preserved.
+  Preserve those raw bytes as a separate ordinary objet. A deferred entry is
+  kept in staging and blocks folder cleanup; deferment is not discard approval.
 - The v0.3.158 capture-enablement gate covers the paired derived half only
   because the pair runs INSIDE objet-capture; standalone derive-text capture
   remains ungated by design (`gate_scope` unchanged).

@@ -55,6 +55,7 @@
 - [v0.3.315 Letter 127 업데이트 미리보기 일치 결정 기록](archive-infra-decision-log-2026-08-11-v03315-letter127.md)
 - [v0.3.315 Letter 128 paired batch 결정 기록](archive-infra-decision-log-2026-08-11-v03315-letter128.md)
 - [v0.3.316 Letter 129 전체 충돌 집합 복구 결정 기록](archive-infra-decision-log-2026-08-12-v03316-letter129.md)
+- [v0.3.317 Letter 130 staged-cleanup 증거 결정 기록](archive-infra-decision-log-2026-08-13-v03317-letter130-staged-cleanup-evidence.md)
 - [프로젝트 버전 업데이트](project-version-update.md)
 - [Derived Text Capture와 paired batch 복구](derived-text.md)
 - [Letter 120·123 인덱스 수명주기와 피드백 본문](letter120-123-index-lifecycle-and-feedback-body.md)
@@ -423,6 +424,7 @@ local archive
 - [v0.3.314 릴리스 노트](releases/v0.3.314.md)
 - [v0.3.315 릴리스 노트](releases/v0.3.315.md)
 - [v0.3.316 릴리스 노트](releases/v0.3.316.md)
+- [v0.3.317 릴리스 노트](releases/v0.3.317.md)
 
 작업일지는 제품 명세가 아닙니다.
 

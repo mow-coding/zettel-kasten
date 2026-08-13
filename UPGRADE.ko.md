@@ -2,6 +2,86 @@
 
 [English Upgrade Guide](UPGRADE.md)
 
+## v0.3.317 자격증명 검은 창과 staged-cleanup 안전성
+
+정확한 v0.3.317 GitHub Release에 검증된 wheel이 실제로 올라온 뒤에만
+설치하세요. 저장소 파일만 바꿔서는 격리된 예전 WOM-kit 설치가 업데이트되지
+않습니다. 새 프로세스를 열고 `archive --version`을 확인한 뒤 새 경로를 쓰세요.
+
+이 릴리스는 canonical zet 수정, object store 재작성, provider write, 자격증명
+교체, 자격증명 저장소 삭제를 자동으로 실행하지 않습니다.
+
+### 최초 자격증명 등록 또는 검토된 교체
+
+예전 `credential-adopt` dry-run digest는 버리고 새로 시작하세요. v0.3.317은
+도우미 AI가 작성한 공개해도 안전한 현재 작업 설명, 연결 이유, 교체 의도를 새
+요청 digest에 함께 묶습니다.
+
+```powershell
+archive credential-adopt <archive-root> --account-label <safe-label> --workspace-label <safe-label> --task-summary "<공개해도 안전한 현재 작업>" --connection-reason "<공개해도 안전한 연결 이유>" --reviewed-anchor-page-id <uuid> --interactive --dry-run --format json
+archive credential-adopt <archive-root> --account-label <같은-safe-label> --workspace-label <같은-safe-label> --task-summary "<같은 현재 작업>" --connection-reason "<같은 연결 이유>" --reviewed-anchor-page-id <같은-uuid> --interactive --expected-request-sha256 <request-sha256> --approve --format json
+```
+
+승인 명령은 입력 글자가 보이지 않는 별도 Unicode Windows 검은 창 하나를
+엽니다. PAT는 그 창에만 입력하세요. WOM의 고정 안내문은 입력한 자격증명이
+도우미 AI나 채팅으로 전달되지 않는다는 점을 설명합니다. 빈 Enter나 Ctrl+C로
+안전하게 취소할 수 있습니다. 인증된 등록이 성공하면 이후 일반 작업은 저장된
+Windows 자격증명을 재사용하므로 `credential-adopt`를 다시 부르면 안 됩니다.
+
+사람이 별도로 검토한 rotation이나 repair에만 두 명령 모두
+`--replace-existing`을 넣으세요. 이 플래그가 없으면 일치하는 인증된 등록을
+그대로 유지하고 새 입력 창을 열지 않습니다. 단, WOM은 먼저 인증된 영수증을
+확인하고, worker 안에서 정확한 Windows 저장 항목만 읽어 비밀값 지문을 비교한
+뒤, 현재 검토한 Notion 페이지 접근을 다시 확인합니다. 저장 항목이 없거나,
+읽을 수 없거나, 저장된 지문과 다르면 자동 재사용하지 않습니다. 이때는 새
+`--replace-existing` 계획을 따로 만들고 다시 검토해야 합니다. 반면 현재 Notion
+페이지나 provider 확인만 실패했다면 저장된 자격증명은 그대로 두고, 페이지 공유
+상태와 연결을 먼저 확인한 뒤 새 입력 창 없이 다시 시도합니다.
+계정·작업공간 label은 화면에 보여 주는 설명일 뿐 권한 근거가 아닙니다. label만
+바뀌었다고 입력 창을 다시 열거나 자격증명을 중복 저장하지 않습니다.
+
+Notion은 두 가지 신원 형태를 돌려줍니다. 내부 integration은
+`bot.workspace_id`를 주므로 WOM이 이를 provider 작업공간 근거로 사용합니다.
+사람용 PAT 응답에는 작업공간 ID가 없습니다. 이때 WOM은 정확히 저장된 PAT의
+archive-keyed 지문으로 `notion_pat_token_scope_v1` 근거를 만들고, 현재 사람 신원과
+검토한 페이지 접근을 함께 다시 확인합니다. 따라서 같은 PAT는 다른 페이지
+작업에서도 새 입력 창 없이 재사용할 수 있습니다. 같은 Notion 작업공간에서 만든
+다른 PAT라도 자동으로 같은 범위라고 합치지 않습니다. 교체나 두 PAT의 정리는
+별도로 검토한 lifecycle 작업이어야 합니다.
+
+### v0.3.311-v0.3.316에서 저장한 기존 등록
+
+이 버전들은 당시 검토한 페이지로 작업공간 지문을 만든 인증된 v0.1 영수증을
+썼습니다. v0.3.317은 그 영수증을 덮어쓰거나 PAT를 다시 저장하지 않습니다.
+호환되는 등록이 정확히 하나라면, WOM은 예전 영수증과 정확한 저장 비밀값 지문을
+검증하고 현재 provider/페이지를 다시 확인한 뒤 인증된 local 작업공간 범위 승계
+기록 하나를 append-only로 추가합니다. 호환되는 자격증명 하나짜리 lifecycle은
+새 권한으로 옮기지만, 검은 입력 창을 열거나 Credential Manager를 쓰거나 지우지
+않습니다. lifecycle이 없으면 사람이 default를 한 번 선택해야 합니다. 중복 또는
+복잡한 lifecycle은 첫 승계 기록을 쓰기 전에 멈추고 사람 검토를 요구합니다.
+승계 기록 뒤 lifecycle 전환 전에 중단되면 예전 broker 권한은 계속 차단되며,
+같은 승인 작업을 다시 실행하면 멱등하게 전환을 마칩니다.
+
+### staged 폴더를 지우기 전
+
+새 읽기 전용 검사를 실행하세요.
+
+```powershell
+archive staged-cleanup-check <archive-root> --staged <archive-relative-staged-folder> --dry-run --format json --output .wom-scratch/diagnostics/staged-cleanup-v03317.json
+```
+
+exit `0`과 `safe_to_cleanup: true`가 함께 나왔을 때만 사람이 별도의 수동 정리를
+검토할 수 있습니다. 일반 objet은 store 바이트, manifest, capture receipt가 모두
+맞아야 합니다. 정확한 BOM 없는 paired text도 직접 연결된 derived-text 증거가
+끝까지 완전해야 합니다. deferred 항목은 staged 상태로 남고 exit `1`을
+강제합니다. 이 명령 자체는 파일을 지우거나 옮기지 않습니다. 안전 결과를
+억지로 만들려고 manifest나 receipt를 손으로 고치지 마세요.
+
+자세한 내용은 [v0.3.317 릴리스 노트](wom-kit/docs/releases/v0.3.317.md),
+[Letter 118·119 가이드](wom-kit/docs/letter118-119-credential-continuity-and-notion-page-recovery.md),
+[staged-cleanup 증거 결정](wom-kit/docs/archive-infra-decision-log-2026-08-13-v03317-letter130-staged-cleanup-evidence.md),
+[operation-control 가이드](wom-kit/docs/operation-control.md)를 보세요.
+
 ## v0.3.316 Python 캐시 충돌 복구
 
 v0.3.315는 ignored Python 캐시 충돌 묶음을 정확히 찾아 멈출 수 있었지만,
@@ -221,8 +301,9 @@ canonical zet 수정을 자동으로 수행하지 않습니다. 기존 자격증
 
 Windows에서는 먼저 `credential-adopt --dry-run`으로 요청을 검토하고 정확한
 요청 digest만 승인하세요. 승인하면 별도 자식 프로세스 안에서 Windows 기본
-마스킹 창이 열립니다. PAT를 명령 인자, 환경 변수, 일반 stdin, 파일, 채팅,
-clipboard에 붙여 넣지 마세요. 인증된 목록을 확인한 다음 별도
+마스킹 창이 열립니다. PAT를 명령 인자, 환경 변수, 일반 stdin, 파일, 채팅에
+붙여 넣지 마세요. WOM과 도우미 AI는 클립보드를 직접 읽지 않으며, 사람이 별도
+마스킹 창에 의도적으로 붙여 넣은 값만 콘솔 입력으로 처리합니다. 인증된 목록을 확인한 다음 별도
 `credential-lifecycle` 미리보기와 승인을 통해 정확한 workspace에 쓸 현재
 자격증명 하나를 사람이 선택합니다. WOM은 다른 유효 자격증명을 자동 삭제하거나
 폐기하지 않습니다.

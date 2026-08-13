@@ -13,7 +13,7 @@ trusted local caller.  It keeps five important promises:
   authentication key, or exception text.
 
 Every operating-system and provider dependency is injectable.  Importing this
-module and running its tests cannot open a real dialog, credential store, or
+module and running its tests cannot open a real console, credential store, or
 network connection.
 """
 
@@ -22,7 +22,9 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+import hashlib
 import hmac
+import json
 import math
 import multiprocessing
 from pathlib import Path
@@ -33,12 +35,18 @@ from .credential_secure_intake import (
     FileOneTimeRequestClaims,
     SecureIntakePlan,
     SecureIntakeWorker,
+    LEGACY_RECEIPT_SCHEMA_VERSION,
+    NOTION_PAT_SCOPE_FINGERPRINT_DOMAIN,
+    NOTION_PAT_WORKSPACE_IDENTITY_BASIS,
+    NOTION_WORKSPACE_IDENTITY_BASIS,
+    NOTION_WORKSPACE_IDENTITY_BASES,
     WindowsCredentialManagerExactStore,
     create_secure_intake_plan,
 )
 from .credential_secure_intake_windows import (
     CtypesWindowsNativeFacade,
-    WindowsNativeMaskedSecretUI,
+    VisibleConsolePromptContext,
+    WindowsVisibleConsoleSecretUI,
     WindowsSecureIntakeError,
     WindowsSecureIntakeNative,
     current_windows_owner_binding,
@@ -46,12 +54,16 @@ from .credential_secure_intake_windows import (
     windows_credential_target_prefix,
 )
 from .credential_secure_registry import (
+    AuthenticatedCredentialReuseEvidence,
+    LEGACY_WORKSPACE_IDENTITY_BASIS,
     ReceiptBackedNotionCredentialBroker,
     SecureCredentialRegistryError,
     StableArchiveFingerprintKeyProvider,
     create_archive_atomic_json_receipt_committer,
+    evolve_legacy_authenticated_workspace_scope,
     list_secure_credentials,
     persist_duplicate_lifecycle_decision,
+    use_authenticated_secure_credential_for_revalidation,
 )
 from .notion_http_adapter import NotionHttpAdapter, NotionHttpAdapterError
 from .notion_page_recovery import (
@@ -66,8 +78,9 @@ from .notion_page_recovery import (
 )
 
 
-WORKFLOW_PLAN_SCHEMA_VERSION = "wom-credential-workflow-plan/v0.1"
+WORKFLOW_PLAN_SCHEMA_VERSION = "wom-credential-workflow-plan/v0.2"
 WORKFLOW_RESULT_SCHEMA_VERSION = "wom-credential-workflow-result/v0.1"
+INTERACTION_CONTEXT_SCHEMA_VERSION = "wom-credential-interaction-context/v0.1"
 PLANNING_OWNER_BINDING = "credential-workflow-non-live-planning-owner"
 
 _HEX_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -75,11 +88,20 @@ _SHA256_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 _FIXED_CODE_RE = re.compile(r"^[a-z][a-z0-9_]{2,127}$")
 _CREDENTIAL_ID_RE = re.compile(r"^cred_[A-Za-z0-9_-]{16,96}$")
 _SAFE_ARCHIVE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:+/-]{0,255}$")
+_SAFE_INTERACTION_TEXT_RE = re.compile(r"^[^\x00-\x1f\x7f]{1,240}$")
+_INTERACTION_SECRET_SHAPE_RE = re.compile(
+    r"(?i)(?:bearer\s+\S+|(?:ntn_|secret_|github_pat_|sk-)[A-Za-z0-9_./+=-]{16,})"
+)
+_INTERACTION_PRIVATE_LOCATOR_RE = re.compile(
+    r"(?i)(?:https?://|\\\\|[A-Z]:\\|\b[0-9a-f]{8}-[0-9a-f-]{27,}\b|\b[0-9a-f]{32,}\b|\S+@\S+)"
+)
 
 _ADOPTION_APPROVED_EXECUTION_STEPS = (
     "archive_identity_validate",
     "current_windows_owner_bind",
     "archive_scoped_authentication_key_initialize_or_reuse",
+    "assistant_task_context_and_fixed_wom_security_copy_verify",
+    "authenticated_existing_registration_check_before_prompt",
     "one_time_request_claim_and_masked_human_secret_prompt",
     "exact_encrypted_store_write",
     "provider_and_reviewed_anchor_verify",
@@ -166,7 +188,17 @@ def _workflow_failure(
         if rollback_status in {"not_required", "deleted", "delete_failed"}
         else "not_required"
     )
-    if safe_rollback == "delete_failed":
+    if safe_reason == "credential_adoption_existing_scope_revalidation_failed":
+        operator_action = "review_current_notion_anchor_and_connection_before_retry"
+    elif safe_reason == "credential_adoption_existing_scope_migration_failed":
+        operator_action = "rerun_same_approved_plan_to_complete_scope_migration"
+    elif safe_reason in {
+        "credential_adoption_existing_store_missing",
+        "credential_adoption_existing_store_probe_failed",
+        "credential_adoption_existing_store_fingerprint_mismatch",
+    }:
+        operator_action = "create_and_review_fresh_replace_existing_plan"
+    elif safe_rollback == "delete_failed":
         operator_action = "stop_and_remove_the_exact_encrypted_store_entry"
     elif accepted and persisted:
         operator_action = "stop_and_repair_authenticated_rediscovery"
@@ -215,6 +247,95 @@ def _approved_adoption_worker_failure(
         persisted=persisted,
         rollback_status=rollback_status,
         operations=_approved_adoption_worker_operations(),
+    )
+
+
+@dataclass(frozen=True)
+class _ExistingRegistrationScopeRevalidation:
+    exact_match: bool
+    migration_required: bool
+    verified_workspace_fingerprint: str | None = None
+    workspace_identity_basis: str | None = None
+
+
+def _existing_registration_scope_matches(
+    secret: memoryview,
+    evidence: AuthenticatedCredentialReuseEvidence,
+    *,
+    plan: SecureIntakePlan,
+    verifier: Any,
+) -> _ExistingRegistrationScopeRevalidation:
+    """Recheck the saved token against this plan's reviewed Notion anchor."""
+
+    try:
+        identity = verifier.verify_identity(
+            secret,
+            provider=plan.provider,
+            reviewed_anchor_uuid=plan.reviewed_anchor_uuid,
+        )
+        provider = identity.provider
+        account_subject = identity.account_subject
+        workspace_identity = identity.workspace_identity
+        anchor = identity.reviewed_anchor_uuid
+        capabilities = tuple(sorted(set(identity.capabilities)))
+        workspace_identity_basis = identity.workspace_identity_basis
+    except Exception:
+        return _ExistingRegistrationScopeRevalidation(False, False)
+    if not (
+        identity.subject_verified is True
+        and identity.anchor_access_verified is True
+        and provider == plan.provider == evidence.provider
+        and isinstance(account_subject, str)
+        and 0 < len(account_subject) <= 512
+        and isinstance(workspace_identity, str)
+        and 0 < len(workspace_identity) <= 512
+        and anchor == plan.reviewed_anchor_uuid
+        and all(
+            isinstance(capability, str)
+            and _FIXED_CODE_RE.fullmatch(capability) is not None
+            for capability in capabilities
+        )
+        and set(plan.requested_capabilities).issubset(capabilities)
+        and capabilities == evidence.verified_capabilities
+        and workspace_identity_basis in NOTION_WORKSPACE_IDENTITY_BASES
+    ):
+        return _ExistingRegistrationScopeRevalidation(False, False)
+    account_fingerprint = "sha256:" + hashlib.sha256(
+        account_subject.encode("utf-8")
+    ).hexdigest()
+    if not hmac.compare_digest(
+        account_fingerprint,
+        evidence.verified_account_fingerprint,
+    ):
+        return _ExistingRegistrationScopeRevalidation(False, False)
+    if workspace_identity_basis == NOTION_WORKSPACE_IDENTITY_BASIS:
+        workspace_fingerprint = "sha256:" + hashlib.sha256(
+            workspace_identity.encode("utf-8")
+        ).hexdigest()
+    elif workspace_identity_basis == NOTION_PAT_WORKSPACE_IDENTITY_BASIS:
+        workspace_fingerprint = "sha256:" + hashlib.sha256(
+            NOTION_PAT_SCOPE_FINGERPRINT_DOMAIN
+            + evidence.credential_fingerprint.encode("ascii")
+        ).hexdigest()
+    else:  # pragma: no cover - retained as a fail-closed guard.
+        return _ExistingRegistrationScopeRevalidation(False, False)
+    if evidence.workspace_identity_basis == LEGACY_WORKSPACE_IDENTITY_BASIS:
+        return _ExistingRegistrationScopeRevalidation(
+            False,
+            True,
+            workspace_fingerprint,
+            workspace_identity_basis,
+        )
+    if evidence.workspace_identity_basis != workspace_identity_basis:
+        return _ExistingRegistrationScopeRevalidation(False, False)
+    return _ExistingRegistrationScopeRevalidation(
+        hmac.compare_digest(
+            workspace_fingerprint,
+            evidence.verified_workspace_fingerprint,
+        ),
+        False,
+        workspace_fingerprint,
+        workspace_identity_basis,
     )
 
 
@@ -274,12 +395,50 @@ def _key_provider(
     return selected if selected is not None else StableArchiveFingerprintKeyProvider(native)
 
 
+def _validated_interaction_text(value: Any) -> str:
+    text = str(value or "").strip()
+    if (
+        _SAFE_INTERACTION_TEXT_RE.fullmatch(text) is None
+        or _INTERACTION_SECRET_SHAPE_RE.search(text) is not None
+        or _INTERACTION_PRIVATE_LOCATOR_RE.search(text) is not None
+    ):
+        raise ValueError("credential_adoption_interaction_context_invalid")
+    return text
+
+
+def _interaction_context(
+    plan: SecureIntakePlan,
+    *,
+    task_summary: str,
+    connection_reason: str,
+) -> tuple[dict[str, str], str]:
+    context = {
+        "schema": INTERACTION_CONTEXT_SCHEMA_VERSION,
+        "provider": plan.provider,
+        "purpose": plan.purpose,
+        "account_label": plan.account_label,
+        "workspace_label": plan.workspace_label,
+        "task_summary": _validated_interaction_text(task_summary),
+        "connection_reason": _validated_interaction_text(connection_reason),
+    }
+    canonical = json.dumps(
+        context,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return context, "sha256:" + hashlib.sha256(canonical).hexdigest()
+
+
 def plan_secure_credential_adoption(
     *,
     expected_archive_id: str,
     account_label: str,
     workspace_label: str,
     purpose: str,
+    task_summary: str,
+    connection_reason: str,
+    replace_existing: bool = False,
     reviewed_anchor_uuid: str,
     requested_capabilities: Sequence[str] = (),
     ttl_seconds: int = 300,
@@ -312,6 +471,13 @@ def plan_secure_credential_adoption(
             now=now,
             request_id_factory=request_id_factory,
         )
+        interaction_context, interaction_context_sha256 = _interaction_context(
+            plan,
+            task_summary=task_summary,
+            connection_reason=connection_reason,
+        )
+        if type(replace_existing) is not bool:
+            raise ValueError("credential_adoption_replacement_intent_invalid")
     except Exception:
         result = _workflow_failure(
             "secure_credential_adoption_plan",
@@ -329,6 +495,9 @@ def plan_secure_credential_adoption(
         "plan_digest": plan.plan_digest,
         "expected_archive_id": expected_archive_id,
         "intake_plan": plan.to_public_dict(),
+        "interaction_context": interaction_context,
+        "interaction_context_sha256": interaction_context_sha256,
+        "replacement_approved": replace_existing,
         "approved_execution_steps": list(_ADOPTION_APPROVED_EXECUTION_STEPS),
         "human_approval_required": True,
         "secret_value_present": False,
@@ -345,7 +514,7 @@ def _rebuild_approved_planning_contract(
     expected_archive_id: str,
     reviewed_anchor_uuid: str,
     requested_capabilities: Sequence[str],
-) -> SecureIntakePlan:
+) -> tuple[SecureIntakePlan, VisibleConsolePromptContext, str]:
     if (
         not isinstance(approval_plan, Mapping)
         or approval_plan.get("schema_version") != WORKFLOW_PLAN_SCHEMA_VERSION
@@ -357,6 +526,9 @@ def _rebuild_approved_planning_contract(
     if approval_plan.get("approved_execution_steps") != list(
         _ADOPTION_APPROVED_EXECUTION_STEPS
     ):
+        raise ValueError("credential_adoption_plan_digest_mismatch")
+    replacement_approved = approval_plan.get("replacement_approved")
+    if type(replacement_approved) is not bool:
         raise ValueError("credential_adoption_plan_digest_mismatch")
     planned_archive_id = approval_plan.get("expected_archive_id")
     if not (
@@ -407,7 +579,34 @@ def _rebuild_approved_planning_contract(
         raise ValueError("credential_adoption_plan_digest_mismatch")
     if rebuilt.provider != "notion":
         raise ValueError("credential_adoption_provider_invalid")
-    return rebuilt
+    raw_context = approval_plan.get("interaction_context")
+    supplied_context_sha256 = approval_plan.get("interaction_context_sha256")
+    if not isinstance(raw_context, Mapping):
+        raise ValueError("credential_adoption_interaction_context_invalid")
+    expected_context, rebuilt_context_sha256 = _interaction_context(
+        rebuilt,
+        task_summary=str(raw_context.get("task_summary") or ""),
+        connection_reason=str(raw_context.get("connection_reason") or ""),
+    )
+    if not (
+        dict(raw_context) == expected_context
+        and isinstance(supplied_context_sha256, str)
+        and _SHA256_RE.fullmatch(supplied_context_sha256)
+        and hmac.compare_digest(
+            supplied_context_sha256,
+            rebuilt_context_sha256,
+        )
+    ):
+        raise ValueError("credential_adoption_interaction_context_invalid")
+    prompt_context = VisibleConsolePromptContext(
+        provider=expected_context["provider"],
+        purpose=expected_context["purpose"],
+        account_label=expected_context["account_label"],
+        workspace_label=expected_context["workspace_label"],
+        task_summary=expected_context["task_summary"],
+        connection_reason=expected_context["connection_reason"],
+    )
+    return rebuilt, prompt_context, rebuilt_context_sha256
 
 
 @dataclass(frozen=True)
@@ -417,6 +616,8 @@ class CredentialAdoptionWorkerInvocation:
     archive_root: str = field(repr=False)
     approval_plan: Mapping[str, Any] = field(repr=False)
     expected_plan_digest: str
+    expected_interaction_context_sha256: str
+    replacement_approved: bool
     expected_archive_id: str
     reviewed_anchor_uuid: str = field(repr=False)
     requested_capabilities: tuple[str, ...]
@@ -426,10 +627,13 @@ class CredentialAdoptionWorkerInvocation:
             "archive_root_present": bool(self.archive_root),
             "approval_plan_present": bool(self.approval_plan),
             "expected_plan_digest": self.expected_plan_digest,
+            "interaction_context_present": True,
+            "interaction_context_sha256": self.expected_interaction_context_sha256,
+            "replacement_approved": self.replacement_approved,
             "expected_archive_id": self.expected_archive_id,
             "reviewed_anchor_present": True,
             "requested_capabilities": list(self.requested_capabilities),
-            "secret_transport": "child_native_masked_ui_only",
+            "secret_transport": "child_visible_console_masked_input_only",
         }
 
 
@@ -462,13 +666,20 @@ def _execute_adoption_inside_worker(
 
     action = "secure_credential_adoption_execute"
     try:
-        reviewed_plan = _rebuild_approved_planning_contract(
+        reviewed_plan, prompt_context, interaction_context_sha256 = _rebuild_approved_planning_contract(
             invocation.approval_plan,
             expected_plan_digest=invocation.expected_plan_digest,
             expected_archive_id=invocation.expected_archive_id,
             reviewed_anchor_uuid=invocation.reviewed_anchor_uuid,
             requested_capabilities=invocation.requested_capabilities,
         )
+        if not hmac.compare_digest(
+            invocation.expected_interaction_context_sha256,
+            interaction_context_sha256,
+        ) or invocation.replacement_approved is not invocation.approval_plan.get(
+            "replacement_approved"
+        ):
+            raise ValueError("credential_adoption_interaction_context_invalid")
         archive_projection = list_secure_credentials(invocation.archive_root)
         archive_id = archive_projection["archive_id"]
         if not (
@@ -501,7 +712,10 @@ def _execute_adoption_inside_worker(
     archive_path = Path(invocation.archive_root)
 
     def run_with_archive_key(key_view: memoryview) -> dict[str, Any]:
-        callback_archive_projection = list_secure_credentials(invocation.archive_root)
+        callback_archive_projection = list_secure_credentials(
+            invocation.archive_root,
+            receipt_authentication_key=key_view,
+        )
         callback_archive_id = callback_archive_projection.get("archive_id")
         if not (
             isinstance(callback_archive_id, str)
@@ -513,6 +727,221 @@ def _execute_adoption_inside_worker(
             return _approved_adoption_worker_failure(
                 "credential_adoption_archive_identity_mismatch"
             )
+        existing_rows = callback_archive_projection.get("credentials")
+        if not isinstance(existing_rows, list) or any(
+            not isinstance(row, Mapping)
+            or row.get("receipt_authentication_status") != "valid"
+            for row in existing_rows
+        ):
+            return _approved_adoption_worker_failure(
+                "credential_adoption_existing_registry_untrusted"
+            )
+        matching_existing = [
+            row
+            for row in existing_rows
+            if row.get("provider") == actual_plan.provider
+            and row.get("purpose") == actual_plan.purpose
+        ]
+        if matching_existing and invocation.replacement_approved is not True:
+            if len(matching_existing) != 1:
+                return _approved_adoption_worker_failure(
+                    "credential_adoption_existing_registrations_require_lifecycle_review"
+                )
+            existing = matching_existing[0]
+            credential_id = existing.get("credential_id")
+            if not isinstance(credential_id, str) or _CREDENTIAL_ID_RE.fullmatch(
+                credential_id
+            ) is None:
+                return _approved_adoption_worker_failure(
+                    "credential_adoption_existing_registry_untrusted"
+                )
+            fingerprint_key: bytearray | None = None
+            try:
+                fingerprint_key = derive_windows_fingerprint_key(
+                    key_view,
+                    owner_binding,
+                )
+                verifier = notion_adapter.secure_intake_verifier()
+                scope_revalidation = use_authenticated_secure_credential_for_revalidation(
+                    archive_path,
+                    credential_id,
+                    receipt_authentication_key=key_view,
+                    secret_fingerprint_key=fingerprint_key,
+                    native=native,
+                    consumer=lambda secret, evidence: (
+                        _existing_registration_scope_matches(
+                            secret,
+                            evidence,
+                            plan=actual_plan,
+                            verifier=verifier,
+                        )
+                    ),
+                )
+            except SecureCredentialRegistryError as error:
+                if error.code == "credential_registry_store_missing":
+                    reason = "credential_adoption_existing_store_missing"
+                elif error.code in {
+                    "credential_registry_store_probe_failed",
+                    "credential_registry_secret_read_failed",
+                }:
+                    reason = "credential_adoption_existing_store_probe_failed"
+                elif error.code == "credential_registry_secret_fingerprint_mismatch":
+                    reason = (
+                        "credential_adoption_existing_store_fingerprint_mismatch"
+                    )
+                else:
+                    reason = (
+                        "credential_adoption_existing_scope_revalidation_failed"
+                    )
+                return _approved_adoption_worker_failure(reason)
+            except Exception:
+                return _approved_adoption_worker_failure(
+                    "credential_adoption_existing_scope_revalidation_failed"
+                )
+            finally:
+                if fingerprint_key is not None:
+                    for index in range(len(fingerprint_key)):
+                        fingerprint_key[index] = 0
+            if not isinstance(
+                scope_revalidation, _ExistingRegistrationScopeRevalidation
+            ):
+                return _approved_adoption_worker_failure(
+                    "credential_adoption_existing_scope_revalidation_failed"
+                )
+            workspace_scope_migrated = False
+            workspace_scope_migration_required = bool(
+                scope_revalidation.migration_required
+                or (
+                    scope_revalidation.exact_match
+                    and existing.get("workspace_scope_evolved") is True
+                    and existing.get("workspace_scope_transition_pending") is True
+                )
+            )
+            if workspace_scope_migration_required:
+                if not (
+                    isinstance(
+                        scope_revalidation.verified_workspace_fingerprint, str
+                    )
+                    and isinstance(scope_revalidation.workspace_identity_basis, str)
+                ):
+                    return _approved_adoption_worker_failure(
+                        "credential_adoption_existing_scope_revalidation_failed"
+                    )
+                migration_fingerprint_key: bytearray | None = None
+                try:
+                    migration_moment = execution_now().astimezone(
+                        timezone.utc
+                    ).replace(microsecond=0)
+                    migration_fingerprint_key = derive_windows_fingerprint_key(
+                        key_view,
+                        owner_binding,
+                    )
+                    migration = evolve_legacy_authenticated_workspace_scope(
+                        archive_path,
+                        credential_id,
+                        evolved_workspace_fingerprint=(
+                            scope_revalidation.verified_workspace_fingerprint
+                        ),
+                        workspace_identity_basis=(
+                            scope_revalidation.workspace_identity_basis
+                        ),
+                        verified_account_fingerprint=(
+                            existing["verified_account_fingerprint"]
+                        ),
+                        verified_capabilities=tuple(
+                            existing["verified_capabilities"]
+                        ),
+                        receipt_authentication_key=key_view,
+                        secret_fingerprint_key=migration_fingerprint_key,
+                        native=native,
+                        evolved_at=migration_moment.isoformat().replace(
+                            "+00:00", "Z"
+                        ),
+                    )
+                except SecureCredentialRegistryError as error:
+                    if error.code == (
+                        "credential_registry_evolution_lifecycle_review_required"
+                    ):
+                        return _approved_adoption_worker_failure(
+                            "credential_adoption_existing_registrations_require_lifecycle_review"
+                        )
+                    if error.code == "credential_registry_store_missing":
+                        return _approved_adoption_worker_failure(
+                            "credential_adoption_existing_store_missing"
+                        )
+                    if error.code in {
+                        "credential_registry_store_probe_failed",
+                        "credential_registry_secret_read_failed",
+                    }:
+                        return _approved_adoption_worker_failure(
+                            "credential_adoption_existing_store_probe_failed"
+                        )
+                    if error.code == (
+                        "credential_registry_secret_fingerprint_mismatch"
+                    ):
+                        return _approved_adoption_worker_failure(
+                            "credential_adoption_existing_store_fingerprint_mismatch"
+                        )
+                    return _approved_adoption_worker_failure(
+                        "credential_adoption_existing_scope_migration_failed"
+                    )
+                except Exception:
+                    return _approved_adoption_worker_failure(
+                        "credential_adoption_existing_scope_migration_failed"
+                    )
+                finally:
+                    if migration_fingerprint_key is not None:
+                        for index in range(len(migration_fingerprint_key)):
+                            migration_fingerprint_key[index] = 0
+                if migration.get("ok") is not True:
+                    return _approved_adoption_worker_failure(
+                        "credential_adoption_existing_scope_migration_failed"
+                    )
+                workspace_scope_migrated = True
+                refreshed = list_secure_credentials(
+                    archive_path,
+                    receipt_authentication_key=key_view,
+                )
+                refreshed_matches = [
+                    row
+                    for row in refreshed.get("credentials", [])
+                    if isinstance(row, Mapping)
+                    and row.get("credential_id") == credential_id
+                ]
+                if len(refreshed_matches) != 1:
+                    return _approved_adoption_worker_failure(
+                        "credential_adoption_existing_scope_migration_failed"
+                    )
+                existing = refreshed_matches[0]
+            elif scope_revalidation.exact_match is not True:
+                return _approved_adoption_worker_failure(
+                    "credential_adoption_existing_scope_revalidation_failed"
+                )
+            return {
+                "schema_version": WORKFLOW_RESULT_SCHEMA_VERSION,
+                "ok": True,
+                "lifecycle_action": action,
+                "accepted": False,
+                "persisted": True,
+                "reason_code": (
+                    "credential_adoption_legacy_scope_evolved_without_prompt"
+                    if workspace_scope_migrated
+                    else "credential_adoption_existing_registration_preserved_without_prompt"
+                ),
+                "credential_id": credential_id,
+                "authenticated_rediscovery_verified": True,
+                "human_default_decision_required": not bool(
+                    existing.get("broker_authoritative")
+                ),
+                "secret_prompt_performed": False,
+                "existing_registration_reused": True,
+                "workspace_scope_migrated": workspace_scope_migrated,
+                "secret_value_present": False,
+                "reviewed_anchor_present_in_result": False,
+                "backend_target_present": False,
+                "crash_or_power_loss_rollback_guaranteed": False,
+                "operations": _approved_adoption_worker_operations(),
+            }
         worker_kwargs: dict[str, Any] = {
             "claims": FileOneTimeRequestClaims(
                 archive_path / "profiles" / "local" / "credential-intake" / "claims",
@@ -521,7 +950,10 @@ def _execute_adoption_inside_worker(
                     Path("profiles") / "local" / "credential-intake" / "claims"
                 ),
             ),
-            "ui": WindowsNativeMaskedSecretUI(native),
+            "ui": WindowsVisibleConsoleSecretUI(
+                native,
+                prompt_context,
+            ),
             "store": WindowsCredentialManagerExactStore(
                 native=native,
                 target_prefix=windows_credential_target_prefix(str(archive_id)),
@@ -701,8 +1133,10 @@ class SpawnCredentialAdoptionWorkerSpawner:
     The parent deliberately has no timeout/terminate path.  Python documents
     that terminating a process can interrupt ``finally`` blocks and corrupt
     pipes/locks; here it could also skip the worker's exact-target rollback.
-    A human must finish or cancel the native dialog.  Process crash and power
-    loss remain an explicitly reported durability gap.
+    A human must finish or cancel the visible console prompt. Process crash and
+    power loss remain an explicitly reported durability gap. The worker creates
+    its own visible console only for echo-disabled human input and closes that
+    console before any Credential Manager write begins.
     """
 
     def run_worker(
@@ -772,6 +1206,11 @@ _ADOPTION_WORKER_SUCCESS_KEYS = {
     "crash_or_power_loss_rollback_guaranteed",
     "operations",
 }
+_ADOPTION_WORKER_REUSE_KEYS = _ADOPTION_WORKER_SUCCESS_KEYS | {
+    "secret_prompt_performed",
+    "existing_registration_reused",
+    "workspace_scope_migrated",
+}
 _ADOPTION_WORKER_FAILURE_KEYS = {
     "schema_version",
     "ok",
@@ -808,6 +1247,13 @@ _ADOPTION_WORKER_FAILURE_REASONS = {
     "credential_adoption_archive_identity_changed",
     "credential_adoption_preflight_failed",
     "credential_adoption_rediscovery_verification_failed",
+    "credential_adoption_existing_registry_untrusted",
+    "credential_adoption_existing_registrations_require_lifecycle_review",
+    "credential_adoption_existing_store_missing",
+    "credential_adoption_existing_store_probe_failed",
+    "credential_adoption_existing_store_fingerprint_mismatch",
+    "credential_adoption_existing_scope_revalidation_failed",
+    "credential_adoption_existing_scope_migration_failed",
 }
 _ADOPTION_PERSISTED_FAILURE_REASONS = {
     "credential_adoption_archive_identity_changed",
@@ -824,6 +1270,43 @@ def _project_adoption_worker_result_unchecked(
     keys = set(result)
     if result.get("ok") is True:
         credential_id = result.get("credential_id")
+        if result.get("reason_code") in {
+            "credential_adoption_existing_registration_preserved_without_prompt",
+            "credential_adoption_legacy_scope_evolved_without_prompt",
+        }:
+            migrated = result.get("reason_code") == (
+                "credential_adoption_legacy_scope_evolved_without_prompt"
+            )
+            expected_reuse = {
+                "schema_version": WORKFLOW_RESULT_SCHEMA_VERSION,
+                "ok": True,
+                "lifecycle_action": action,
+                "accepted": False,
+                "persisted": True,
+                "reason_code": result.get("reason_code"),
+                "credential_id": credential_id,
+                "authenticated_rediscovery_verified": True,
+                "human_default_decision_required": result.get(
+                    "human_default_decision_required"
+                ),
+                "secret_prompt_performed": False,
+                "existing_registration_reused": True,
+                "workspace_scope_migrated": migrated,
+                "secret_value_present": False,
+                "reviewed_anchor_present_in_result": False,
+                "backend_target_present": False,
+                "crash_or_power_loss_rollback_guaranteed": False,
+                "operations": _approved_adoption_worker_operations(),
+            }
+            if not (
+                keys == _ADOPTION_WORKER_REUSE_KEYS
+                and isinstance(credential_id, str)
+                and _CREDENTIAL_ID_RE.fullmatch(credential_id)
+                and isinstance(result.get("human_default_decision_required"), bool)
+                and dict(result) == expected_reuse
+            ):
+                return _uncertain_adoption_worker_result()
+            return expected_reuse
         expected_success = {
             "schema_version": WORKFLOW_RESULT_SCHEMA_VERSION,
             "ok": True,
@@ -937,7 +1420,7 @@ def execute_windows_notion_credential_adoption(
     if approved is not True:
         return _workflow_failure(action, "credential_adoption_approval_required")
     try:
-        _rebuild_approved_planning_contract(
+        _reviewed_plan, _prompt_context, interaction_context_sha256 = _rebuild_approved_planning_contract(
             approval_plan,
             expected_plan_digest=expected_plan_digest,
             expected_archive_id=expected_archive_id,
@@ -952,6 +1435,8 @@ def execute_windows_notion_credential_adoption(
             archive_root=str(Path(archive_root).resolve()),
             approval_plan=dict(approval_plan),
             expected_plan_digest=expected_plan_digest,
+            expected_interaction_context_sha256=interaction_context_sha256,
+            replacement_approved=approval_plan["replacement_approved"],
             expected_archive_id=expected_archive_id,
             reviewed_anchor_uuid=reviewed_anchor_uuid,
             requested_capabilities=tuple(requested_capabilities),

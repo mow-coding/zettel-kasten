@@ -6,6 +6,24 @@ The filesystem folder is `wom-kit/`, the Python import package is `wom_kit`, and
 
 See `wom-kit/docs/concepts/naming-and-terminology.md` for the naming baseline.
 
+v0.3.317 corrects two real-use safety paths. `credential-adopt` now opens one
+separate visible Unicode Windows console only for first enrollment or an
+explicitly reviewed replacement. The helper AI supplies the digest-bound
+public-safe task and connection context, WOM owns the fixed security copy,
+input echo is disabled, and a matching authenticated registration is reused
+without another prompt only after exact-store, secret-fingerprint, and
+current-anchor revalidation. Credential scope uses `bot.workspace_id` for
+internal integrations and an exact-token-scoped
+witness for person PATs, and supports authenticated no-prompt evolution of one
+compatible legacy receipt without rewriting the saved secret. Different PATs
+and ambiguous lifecycle state are never merged automatically.
+`staged-cleanup-check` now requires strict manifest,
+rehashed store-byte, and receipt evidence; exact BOM-free paired text also
+requires its direct terminal receipt. Final authorities are rehashed, deferred
+entries stay staged and block cleanup, and optional saved/control output remains
+content-free. The verifier is report-only and never deletes. See
+`wom-kit/docs/releases/v0.3.317.md`.
+
 v0.3.316 closes the supported Python-cache collision gap left after v0.3.315
 detection. The alias-free CLI-only
 `project-version-update-collision --action inspect-all` surface inspects the
@@ -38,13 +56,16 @@ honest incomplete/recovery-required result. See
 Release, wheel, fresh installation, real-archive use, or human acceptance.
 
 v0.3.314 adds one alias-free `operation-control` surface for output-supervised
-`project-version-update`, `index`, and `index-health` runs. A fresh `--output`
+`project-version-update`, `index`, and `index-health` runs. The current
+v0.3.317 also supports `staged-cleanup-check`. A fresh `--output`
 causes an early opaque operation reference; a later process can request
 content-free `status`, a 1-60 second `wait`, or read-only `recovery-plan` with
 the exact starting root. Completed state requires the saved output binding,
 digest, size, and embedded operation evidence. `cancel` always returns
 `operation_cancel_not_supported`; cancel/resume support, MCP control, daemon,
 queue, background launch, force kill, and lock deletion are not implemented.
+For staged cleanup, the saved result is content-free and a deferred entry stays
+staged, returns exit `1`, and never authorizes manual folder deletion.
 The same release replaces per-file project-update Git materialization with
 bounded batch streams and requires generated SQLite reads to pass a clean
 rollback `DELETE` preflight before SQLite opens. See
@@ -81,7 +102,7 @@ evidence of real-archive repair, external delivery, or human acceptance.
 v0.3.311 adds release-facing `credential-adopt`, `credential-secure-list`,
 `credential-lifecycle`, `notion-page-recovery-plan`, and
 `notion-page-recovery` commands. Credential intake accepts a PAT only through
-the native masked Windows dialog in a spawned child. Listing separates
+the separate echo-disabled Windows console in a spawned child. Listing separates
 unauthenticated metadata from authenticated receipt/lifecycle evidence, and
 lifecycle approval never deletes or revokes another credential. The recovery
 commands require the complete reviewed 577+43 request while allowing bounded
