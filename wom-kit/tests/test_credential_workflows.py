@@ -1077,6 +1077,29 @@ class CredentialWorkflowPlanningTests(unittest.TestCase):
             "requested_capabilities": CAPABILITIES,
             "approved": True,
         }
+        fake_sigint = object()
+        fake_sigbreak = object()
+        original_sigint = object()
+        original_sigbreak = object()
+        handlers = {
+            fake_sigint: original_sigint,
+            fake_sigbreak: original_sigbreak,
+        }
+
+        def get_handler(signal_number):
+            return handlers[signal_number]
+
+        def set_handler(signal_number, handler):
+            previous = handlers[signal_number]
+            handlers[signal_number] = handler
+            return previous
+
+        production_spawner = (
+            credential_workflows.SpawnCredentialAdoptionWorkerSpawner(
+                _signal_getter=get_handler,
+                _signal_setter=set_handler,
+            )
+        )
 
         not_started = execute_windows_notion_credential_adoption(
             ".",
@@ -1137,10 +1160,15 @@ class CredentialWorkflowPlanningTests(unittest.TestCase):
             credential_workflows.multiprocessing,
             "get_context",
             return_value=FakeSpawnContext(fail_start=True),
+        ), patch.object(
+            credential_workflows,
+            "_credential_worker_start_signals",
+            return_value=(fake_sigint, fake_sigbreak),
         ):
             production_prestart = execute_windows_notion_credential_adoption(
                 ".",
                 plan,
+                worker_spawner=production_spawner,
                 **call_kwargs,
             )
         self.assertEqual(
@@ -1153,10 +1181,15 @@ class CredentialWorkflowPlanningTests(unittest.TestCase):
             credential_workflows.multiprocessing,
             "get_context",
             return_value=FakeSpawnContext(fail_start=False),
+        ), patch.object(
+            credential_workflows,
+            "_credential_worker_start_signals",
+            return_value=(fake_sigint, fake_sigbreak),
         ):
             production_eof = execute_windows_notion_credential_adoption(
                 ".",
                 plan,
+                worker_spawner=production_spawner,
                 **call_kwargs,
             )
         self.assertEqual(
@@ -1567,6 +1600,22 @@ class CredentialWorkflowPlanningTests(unittest.TestCase):
                 return self.process
 
         context = FakeSpawnContext()
+        fake_sigint = object()
+        fake_sigbreak = object()
+        original_sigint = object()
+        original_sigbreak = object()
+        handlers = {
+            fake_sigint: original_sigint,
+            fake_sigbreak: original_sigbreak,
+        }
+
+        def get_handler(signal_number):
+            return handlers[signal_number]
+
+        def set_handler(signal_number, handler):
+            previous = handlers[signal_number]
+            handlers[signal_number] = handler
+            return previous
 
         def interrupted_retry_wait(seconds: float) -> None:
             self.assertEqual(seconds, 0.05)
@@ -1588,12 +1637,19 @@ class CredentialWorkflowPlanningTests(unittest.TestCase):
             "get_context",
             return_value=context,
         ), patch.object(
+            credential_workflows,
+            "_credential_worker_start_signals",
+            return_value=(fake_sigint, fake_sigbreak),
+        ), patch.object(
             credential_workflows.time,
             "sleep",
             side_effect=interrupted_retry_wait,
         ):
             outcome = (
-                credential_workflows.SpawnCredentialAdoptionWorkerSpawner()
+                credential_workflows.SpawnCredentialAdoptionWorkerSpawner(
+                    _signal_getter=get_handler,
+                    _signal_setter=set_handler,
+                )
                 .run_worker(invocation)
             )
 

@@ -32,7 +32,7 @@ Date: 2026-08-14
 
 ## Decisions
 
-- Basoon and other protected archives remain read-only. No real credential,
+- The protected evidence archive and all other protected archives remain read-only. No real credential,
   account identifier, reviewed anchor, private path, or private body is copied
   into this repository.
 - The credential window must first receive a separate, empty Enter readiness
@@ -677,3 +677,27 @@ This correction opened no popup, requested no secret, touched no credential
 store or provider, and changed no product behavior. Commit, publication,
 installation, actual credential registration, and recovery remained pending at
 this point.
+
+## Cross-platform CI correction
+
+PR 68 then exposed eight deterministic Ubuntu test failures while the product
+and release-readiness jobs remained otherwise healthy. Two workflow tests had
+implicitly borrowed the Windows host's real `SIGBREAK`; on Linux their fake
+processes therefore never crossed the intended start seam. The tests now
+inject two synthetic signal identifiers plus in-memory get/set handlers. The
+production SIGINT/SIGBREAK requirement was not weakened.
+
+Five historical-document subtests had recorded hashes from a Windows CRLF
+working tree. The historical documents themselves were unchanged. The new
+test compares the exact committed Git blob bytes to canonical LF SHA-256
+values and separately requires no worktree diff for each historical path.
+This preserves byte immutability without making the result depend on checkout
+line-ending conversion.
+
+The sealed-public-surface gate also found one newly added protected-archive
+name in this meeting minute. The sentence was rewritten as the generic
+`protected evidence archive`; no baseline, predecessor count, allowlist, or
+historical evidence was changed. The four exact formerly failing checks and
+the full workflow, v0.3.318/v0.3.319 release-document, and sealed-privacy
+modules then passed locally. No UI, secret input, credential store, provider,
+archive operation, merge, tag, or release was performed during this correction.
