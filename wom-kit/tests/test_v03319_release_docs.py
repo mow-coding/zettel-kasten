@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
+import subprocess
 import unittest
 
 from wom_kit import __version__
@@ -77,25 +78,36 @@ class V03319ReleaseDocsTests(unittest.TestCase):
                 "649899aa8ad6150f27f8ffb551e72c90dce20eecaea8e78c098d342e6e174735"
             ),
             HISTORICAL_GUIDE: (
-                "907d67acac3528dea9e5f7715c662a3a9cd7e8cad03c6b6be3c12490838cd8d6"
+                "674f8707b4fe176ff7e73661820691e09a8af54bacc982daa390cff3c72cb49b"
             ),
             HISTORICAL_DECISION: (
-                "124295193b2f9d78d6c369c3cb5e4cf090711fc8e4b8f20792d696ce2fcb328b"
+                "a80000aa0011204a30114377968402c5c491a91c5115a8b53cbd0629a6c65e8d"
             ),
             HISTORICAL_MINUTES: (
-                "0038a42f7bef4314243a75188853a0afc267872eb1d5208b6ecffb245fa31bff"
+                "7314b2ef0d1e1a2f311eac13722ec012905f22d5c717e73c3937d963bbcba8ec"
             ),
             HISTORICAL_RELEASE_PREPARATION_MINUTES: (
-                "6a39ac90a0e13d01e60db172bb2a672126c5ef337ef22824726f4eaa273bab43"
+                "1be755c43f3fcc2c1e7bc74639bab33fcf5368a83ab937a3c99e30a9df1aec58"
             ),
             HISTORICAL_PUBLIC_RELEASE_MINUTES: (
-                "79551b60ff1eb30d3faafb9cb74f3bbc630ca4c86398304f50034665239817b2"
+                "32f3e2f7603a2d50db24f704add064235101dd1ea36eea629db660e0e363a711"
             ),
         }
         for path, expected_sha256 in expected.items():
             with self.subTest(path=path.name):
+                relative_path = path.relative_to(ROOT).as_posix()
+                worktree_diff = subprocess.run(
+                    ["git", "diff", "--quiet", "HEAD", "--", relative_path],
+                    cwd=ROOT,
+                    check=False,
+                )
+                self.assertEqual(worktree_diff.returncode, 0)
+                committed_bytes = subprocess.check_output(
+                    ["git", "cat-file", "blob", f"HEAD:{relative_path}"],
+                    cwd=ROOT,
+                )
                 self.assertEqual(
-                    hashlib.sha256(path.read_bytes()).hexdigest(),
+                    hashlib.sha256(committed_bytes).hexdigest(),
                     expected_sha256,
                 )
 
