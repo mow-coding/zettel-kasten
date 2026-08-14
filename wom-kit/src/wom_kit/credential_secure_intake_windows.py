@@ -3,7 +3,8 @@
 This module is the live Windows boundary for :mod:`credential_secure_intake`.
 It deliberately uses only these exact operations:
 
-* one separate, visible Windows console with echo-disabled ``ReadConsoleW``;
+* one native Unicode modal popup whose length-opaque overlay covers a standard
+  password-style ``EDIT`` control;
 * ``CredWriteW`` for one exact Generic Credential target;
 * ``CredReadW`` only as an existence probe, followed immediately by
   ``CredFree`` without dereferencing ``CredentialBlob`` in Python;
@@ -12,21 +13,20 @@ It deliberately uses only these exact operations:
 * ``CredDeleteW`` for the same exact target; and
 * the current process token's ``TokenUser`` SID for owner binding.
 
-There is no parent-console prompt, ordinary stdin, command argument,
-environment-variable, stdout/stderr, clipboard, plaintext-file, enumeration,
-search, fuzzy matching, or public ``get-secret`` API.  The visible console is
-created inside the already-isolated transaction worker and closed before the
-Credential Manager write starts, so the raw secret never crosses a process
-boundary.  The exact broker read returns no text or public result and its
-mutable buffer must be wiped after the trusted consumer finishes.  Loading the
-real DLL facade requires an explicit ``cli_live_approved`` flag and a Windows
-platform.  Unit tests inject fake native boundaries and never open a real
-console, credential store, provider, or real secret.
+There is no ordinary stdin, command argument, environment-variable,
+stdout/stderr, clipboard-reading API, plaintext-file, enumeration, search,
+fuzzy matching, or public ``get-secret`` API.  The isolated transaction worker
+owns the popup while the parent blocks, so the raw secret never crosses a
+process boundary.  The exact broker read returns no text or public result and
+its mutable buffer must be wiped after the trusted consumer finishes.  Loading
+the real DLL facade requires an explicit ``cli_live_approved`` flag and a
+Windows platform. Unit tests inject fake native boundaries and never open a
+real popup, credential store, provider, or real secret.
 
 Microsoft contracts used here:
 
-* ``FreeConsole`` followed by ``AllocConsole`` gives the isolated worker its
-  own visible input window; ``ENABLE_ECHO_INPUT`` remains disabled.
+* the spawned worker opens one owned Unicode popup and a standard password edit
+  whose entire visible rectangle is covered by fixed length-opaque text;
 * A Generic Credential is identified exactly by ``TargetName`` and ``Type``.
 * The buffer allocated by ``CredReadW`` must be released with ``CredFree``.
 """
@@ -47,15 +47,23 @@ from typing import Any, Callable, Protocol
 from .credential_secure_intake import (
     AtomicJsonReceiptCommitter,
     FileOneTimeRequestClaims,
+    HumanSecretInputResult,
     ProviderIdentityVerifier,
     SecureIntakeWorker,
     WindowsCredentialManagerExactStore,
+    _HumanSecretInputEvidenceError,
 )
-from .credential_visible_console_windows import (
-    VisibleConsolePromptContext,
-    VisibleConsoleSecretPromptError,
-    prompt_masked_secret_in_new_console,
+from .credential_popup_windows import (
+    CredentialPopupContext,
+    CredentialPopupInputIntent,
+    prompt_secret_in_native_popup,
 )
+
+
+# Compatibility name retained for callers that already construct this safe
+# context through the Windows intake module. Production rendering is the popup.
+CredentialPopupPromptContext = CredentialPopupContext
+VisibleConsolePromptContext = CredentialPopupPromptContext
 
 
 ERROR_NOT_FOUND = 1168
@@ -77,6 +85,7 @@ FIXED_CODES = {
     "windows_live_approval_required",
     "windows_platform_required",
     "windows_native_load_failed",
+    "windows_credential_popup_failed",
     "windows_visible_console_failed",
     "windows_credential_write_failed",
     "windows_credential_probe_failed",
@@ -181,8 +190,8 @@ class WindowsSecureIntakeNative(Protocol):
         self,
         *,
         request_id: str,
-        context: VisibleConsolePromptContext,
-    ) -> bytearray | None: ...
+        context: CredentialPopupPromptContext,
+    ) -> HumanSecretInputResult: ...
 
     def write_generic(self, target_name: str, secret: memoryview) -> None: ...
 
@@ -212,7 +221,9 @@ class CtypesWindowsNativeFacade:
         cli_live_approved: bool,
         dlls: WindowsDllBundle | None = None,
         platform_name: str | None = None,
-        console_prompt: Callable[..., bytearray | None] | None = None,
+        popup_prompt: Callable[..., HumanSecretInputResult] | None = None,
+        attached_console_prompt: Callable[..., HumanSecretInputResult] | None = None,
+        console_prompt: Callable[..., HumanSecretInputResult] | None = None,
     ) -> None:
         if cli_live_approved is not True:
             raise _fail("windows_live_approval_required")
@@ -229,10 +240,17 @@ class CtypesWindowsNativeFacade:
                 )
             self._advapi32 = dlls.advapi32
             self._kernel32 = dlls.kernel32
-            self._console_prompt = (
-                console_prompt
-                if console_prompt is not None
-                else prompt_masked_secret_in_new_console
+            prompt_overrides = tuple(
+                value
+                for value in (popup_prompt, attached_console_prompt, console_prompt)
+                if value is not None
+            )
+            if len(prompt_overrides) > 1:
+                raise ValueError
+            self._popup_prompt = (
+                prompt_overrides[0]
+                if prompt_overrides
+                else prompt_secret_in_native_popup
             )
             self._configure_signatures()
         except WindowsSecureIntakeError:
@@ -241,7 +259,7 @@ class CtypesWindowsNativeFacade:
             raise _fail("windows_native_load_failed") from None
 
     def __repr__(self) -> str:
-        return "CtypesWindowsNativeFacade(live_approved=True, visible_console=True)"
+        return "CtypesWindowsNativeFacade(live_approved=True, popup=True)"
 
     def _configure_signatures(self) -> None:
         _configure(
@@ -302,24 +320,28 @@ class CtypesWindowsNativeFacade:
         self,
         *,
         request_id: str,
-        context: VisibleConsolePromptContext,
-    ) -> bytearray | None:
+        context: CredentialPopupPromptContext,
+    ) -> HumanSecretInputResult:
         if REQUEST_ID_RE.fullmatch(str(request_id or "")) is None:
-            raise _fail("windows_visible_console_failed")
+            raise _fail("windows_credential_popup_failed")
         try:
-            return self._console_prompt(
+            result = self._popup_prompt(
                 request_id=request_id,
                 context=context,
+                input_intent=CredentialPopupInputIntent.live_registration,
                 kernel32=self._kernel32,
                 platform_name="nt",
                 max_secret_bytes=CRED_MAX_CREDENTIAL_BLOB_SIZE,
             )
-        except VisibleConsoleSecretPromptError:
-            raise _fail("windows_visible_console_failed") from None
+            if not isinstance(result, HumanSecretInputResult):
+                raise _fail("windows_credential_popup_failed")
+            return result
+        except _HumanSecretInputEvidenceError:
+            raise
         except WindowsSecureIntakeError:
             raise
         except Exception:
-            raise _fail("windows_visible_console_failed") from None
+            raise _fail("windows_credential_popup_failed") from None
 
     @staticmethod
     def _validated_target(target_name: str) -> str:
@@ -536,30 +558,34 @@ class CtypesWindowsNativeFacade:
 
 
 @dataclass
-class WindowsVisibleConsoleSecretUI:
-    """Worker-only visible-console adapter with no fallback input channel."""
+class WindowsCredentialPopupSecretUI:
+    """Worker-only native-popup adapter with no fallback input channel."""
 
     native: WindowsSecureIntakeNative = field(repr=False)
-    context: VisibleConsolePromptContext = field(repr=False)
+    context: CredentialPopupPromptContext = field(repr=False)
 
-    def request_secret(self, *, request_id: str) -> bytearray | None:
+    def request_secret(self, *, request_id: str) -> HumanSecretInputResult:
         try:
             value = self.native.prompt_masked_secret(
                 request_id=request_id,
                 context=self.context,
             )
-            if value is not None and not isinstance(value, bytearray):
-                raise _fail("windows_visible_console_failed")
+            if not isinstance(value, HumanSecretInputResult):
+                raise _fail("windows_credential_popup_failed")
             return value
+        except _HumanSecretInputEvidenceError:
+            raise
         except WindowsSecureIntakeError:
             raise
         except Exception:
-            raise _fail("windows_visible_console_failed") from None
+            raise _fail("windows_credential_popup_failed") from None
 
 
-# Source compatibility for integrations that imported the pre-v0.3.317 class.
-# Production composition uses the explicit visible-console name below.
-WindowsNativeMaskedSecretUI = WindowsVisibleConsoleSecretUI
+# Source compatibility for integrations that imported the earlier names.
+# All production aliases now resolve to the native popup class above.
+WindowsAttachedConsoleSecretUI = WindowsCredentialPopupSecretUI
+WindowsVisibleConsoleSecretUI = WindowsCredentialPopupSecretUI
+WindowsNativeMaskedSecretUI = WindowsCredentialPopupSecretUI
 
 
 def current_windows_owner_binding(native: WindowsSecureIntakeNative) -> str:
@@ -621,7 +647,7 @@ def build_windows_secure_intake_worker(
     provider_verifier: ProviderIdentityVerifier,
     fingerprint_master_key: bytes | bytearray | memoryview,
     native: WindowsSecureIntakeNative | None = None,
-    prompt_context: VisibleConsolePromptContext | None = None,
+    prompt_context: CredentialPopupPromptContext | None = None,
     credential_id_factory: Any | None = None,
     backend_id_factory: Any | None = None,
     now_factory: Any | None = None,
@@ -629,8 +655,8 @@ def build_windows_secure_intake_worker(
     """Assemble the Windows-first worker after explicit CLI approval.
 
     Construction queries only the current SID and creates no claim/receipt
-    directory. The visible echo-disabled console, exact Credential Manager
-    operations, and provider verifier run later inside
+    directory. The native popup, exact Credential Manager operations, and
+    provider verifier run later inside
     ``SecureIntakeWorker.execute``.
     ``claims_directory`` must be lexically contained by the explicit
     ``archive_root``; omission or an outside path fails before the SID query.
@@ -667,11 +693,11 @@ def build_windows_secure_intake_worker(
             archive_root=canonical_archive_root,
             expected_relative_directory=claims_relative_directory,
         ),
-        "ui": WindowsVisibleConsoleSecretUI(
+        "ui": WindowsCredentialPopupSecretUI(
             selected_native,
             prompt_context
             if prompt_context is not None
-            else VisibleConsolePromptContext(
+            else CredentialPopupPromptContext(
                 provider="notion",
                 purpose="source_recovery",
                 account_label="승인한 계정",
@@ -701,7 +727,10 @@ def build_windows_secure_intake_worker(
 
 __all__ = [
     "CtypesWindowsNativeFacade",
+    "CredentialPopupPromptContext",
     "WindowsDllBundle",
+    "WindowsAttachedConsoleSecretUI",
+    "WindowsCredentialPopupSecretUI",
     "WindowsNativeMaskedSecretUI",
     "WindowsVisibleConsoleSecretUI",
     "WindowsSecureIntakeError",

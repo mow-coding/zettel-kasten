@@ -15938,6 +15938,12 @@ state:
         self.assertIn("--connection-reason", help_output)
         self.assertIn("--replace-existing", help_output)
         self.assertIn("First-time enrollment", help_output)
+        normalized_help = " ".join(help_output.split())
+        self.assertIn("separate native Windows popup", normalized_help)
+        self.assertIn("actual credential registration", normalized_help)
+        self.assertIn("synthetic acceptance harness", normalized_help)
+        self.assertNotIn("attached Windows terminal", help_output)
+        self.assertNotIn("No separate window", help_output)
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")
             anchor = "00000000-0000-0000-0000-000000000071"
@@ -16063,7 +16069,7 @@ state:
             )
 
             safe_worker_result = {
-                "schema_version": "wom-credential-workflow-result/v0.2",
+                "schema_version": "wom-credential-workflow-result/v0.3",
                 "ok": True,
                 "lifecycle_action": "secure_credential_adoption_execute",
                 "accepted": True,
@@ -16076,6 +16082,10 @@ state:
                 "reviewed_anchor_present_in_result": False,
                 "backend_target_present": False,
                 "crash_or_power_loss_rollback_guaranteed": False,
+                "credential_input_received": True,
+                "complete_line_received": True,
+                "temporary_store_write_attempted": True,
+                "provider_request_attempted": True,
             }
             with patch(
                 "wom_kit.credential_workflows.execute_windows_notion_credential_adoption",
@@ -16092,6 +16102,10 @@ state:
             approved = json.loads(approve_output)
             self.assertEqual(approve_code, 0, approve_output)
             self.assertTrue(approved["persisted"])
+            self.assertTrue(approved["credential_input_received"])
+            self.assertTrue(approved["complete_line_received"])
+            self.assertTrue(approved["temporary_store_write_attempted"])
+            self.assertTrue(approved["provider_request_attempted"])
             self.assertEqual(approved["request_sha256"], first["request_sha256"])
             self.assertNotIn("plan_digest", approved)
             self.assertTrue(execute.call_args.kwargs["approved"])
@@ -16106,20 +16120,95 @@ state:
                 self.assertNotIn(private_value, approve_output)
             self.assertEqual(before, self.snapshot_archive_files(archive_root))
 
+            legacy_worker_result = dict(safe_worker_result)
+            legacy_worker_result["schema_version"] = (
+                "wom-credential-workflow-result/v0.2"
+            )
+            for stage_field in (
+                "credential_input_received",
+                "complete_line_received",
+                "temporary_store_write_attempted",
+                "provider_request_attempted",
+            ):
+                legacy_worker_result.pop(stage_field)
+            with patch(
+                "wom_kit.credential_workflows.execute_windows_notion_credential_adoption",
+                return_value=legacy_worker_result,
+            ):
+                legacy_code, legacy_output = self.run_cli(
+                    [
+                        *base,
+                        "--approve",
+                        "--expected-request-sha256",
+                        first["request_sha256"],
+                    ]
+                )
+            legacy = json.loads(legacy_output)
+            self.assertEqual(legacy_code, 1, legacy_output)
+            self.assertEqual(
+                legacy["reason_code"], "credential_adoption_worker_state_unknown"
+            )
+            for stage_field in (
+                "credential_input_received",
+                "complete_line_received",
+                "temporary_store_write_attempted",
+                "provider_request_attempted",
+            ):
+                self.assertIsNone(legacy[stage_field])
+
             from wom_kit import credential_workflows
 
-            for reason_code, rollback_status in (
-                ("credential_input_cancelled_or_empty", "not_required"),
-                ("credential_input_not_received", "not_required"),
-                ("provider_auth_rejected", "deleted"),
-                ("provider_identity_endpoint_unavailable", "deleted"),
-                ("reviewed_anchor_inaccessible", "deleted"),
+            for reason_code, rollback_status, stage_evidence in (
+                (
+                    "credential_input_cancelled_or_empty",
+                    "not_required",
+                    (True, True, False, False),
+                ),
+                (
+                    "credential_input_not_received",
+                    "not_required",
+                    (False, False, False, False),
+                ),
+                (
+                    "credential_input_invalid_for_provider",
+                    "not_required",
+                    (True, True, False, False),
+                ),
+                (
+                    "credential_input_boundary_failed",
+                    "not_required",
+                    (True, True, False, False),
+                ),
+                (
+                    "provider_request_not_attempted",
+                    "deleted",
+                    (True, True, True, False),
+                ),
+                (
+                    "provider_auth_rejected",
+                    "deleted",
+                    (True, True, True, True),
+                ),
+                (
+                    "provider_identity_endpoint_unavailable",
+                    "deleted",
+                    (True, True, True, True),
+                ),
+                (
+                    "reviewed_anchor_inaccessible",
+                    "deleted",
+                    (True, True, True, True),
+                ),
             ):
                 with self.subTest(reason_code=reason_code), patch(
                     "wom_kit.credential_workflows.execute_windows_notion_credential_adoption",
                     return_value=credential_workflows._approved_adoption_worker_failure(
                         reason_code,
                         rollback_status=rollback_status,
+                        credential_input_received=stage_evidence[0],
+                        complete_line_received=stage_evidence[1],
+                        temporary_store_write_attempted=stage_evidence[2],
+                        provider_request_attempted=stage_evidence[3],
                     ),
                 ):
                     failure_code, failure_output = self.run_cli(
@@ -16134,7 +16223,7 @@ state:
                 self.assertEqual(failure_code, 1, failure_output)
                 self.assertEqual(
                     failure["schema_version"],
-                    "wom-credential-workflow-result/v0.2",
+                    "wom-credential-workflow-result/v0.3",
                 )
                 self.assertFalse(failure["accepted"])
                 self.assertFalse(failure["persisted"])
@@ -16145,6 +16234,18 @@ state:
                     rollback_status == "deleted",
                 )
                 self.assertFalse(failure["secret_value_present"])
+                self.assertEqual(
+                    tuple(
+                        failure[field]
+                        for field in (
+                            "credential_input_received",
+                            "complete_line_received",
+                            "temporary_store_write_attempted",
+                            "provider_request_attempted",
+                        )
+                    ),
+                    stage_evidence,
+                )
                 for private_value in (
                     anchor,
                     account_label,
@@ -16152,6 +16253,31 @@ state:
                     token,
                 ):
                     self.assertNotIn(private_value, failure_output)
+
+            with patch(
+                "wom_kit.credential_workflows.execute_windows_notion_credential_adoption",
+                return_value=credential_workflows._uncertain_adoption_worker_result(),
+            ):
+                unknown_code, unknown_output = self.run_cli(
+                    [
+                        *base,
+                        "--approve",
+                        "--expected-request-sha256",
+                        first["request_sha256"],
+                    ]
+                )
+            unknown = json.loads(unknown_output)
+            self.assertEqual(unknown_code, 1, unknown_output)
+            self.assertEqual(
+                unknown["reason_code"], "credential_adoption_worker_state_unknown"
+            )
+            for stage_field in (
+                "credential_input_received",
+                "complete_line_received",
+                "temporary_store_write_attempted",
+                "provider_request_attempted",
+            ):
+                self.assertIsNone(unknown[stage_field])
 
             forbidden_code, forbidden_output = self.run_cli(
                 [*base, "--approve", "--token", token]
@@ -16190,6 +16316,26 @@ state:
                 "credential_adoption_request_invalid",
             )
             self.assertNotIn(token_shaped_label, label_output)
+
+    def test_credential_adopt_text_reports_content_free_stage_evidence(self) -> None:
+        result = {
+            "ok": False,
+            "lifecycle_action": "secure_credential_adoption_execute",
+            "reason_code": "provider_request_not_attempted",
+            "credential_input_received": True,
+            "complete_line_received": True,
+            "temporary_store_write_attempted": True,
+            "provider_request_attempted": False,
+        }
+        output = io.StringIO()
+        with redirect_stdout(output):
+            archive_cli._print_credential_command_result(result, "text")
+        rendered = output.getvalue()
+        self.assertIn("Credential input received: yes", rendered)
+        self.assertIn("Complete line received: yes", rendered)
+        self.assertIn("Temporary store write attempted: yes", rendered)
+        self.assertIn("Provider request attempted: no", rendered)
+        self.assertIn("Secret value shown: no", rendered)
 
     def test_credential_secure_list_is_unauthenticated_by_default_and_exact_key_only_on_verify(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

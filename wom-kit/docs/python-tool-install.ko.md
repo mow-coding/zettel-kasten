@@ -1,18 +1,18 @@
 # WOM-kit Python 도구 설치
 
-상태: v0.3.318 조건부 GitHub wheel 및 자격증명 입력 수정 계약
+상태: v0.3.319 조건부 GitHub wheel 및 자격증명 입력 준비 수정 계약
 
 WOM-kit은 명령줄 도구입니다. 일반 앱 프로젝트의 Python 의존성과 섞지 말고
 별도의 격리된 Python 환경에 설치하는 것이 좋습니다.
 
-아래 v0.3.318 URL은 조건부 계약이며 공개 자산이 실제로 존재한다는 증거가
+아래 v0.3.319 URL은 조건부 계약이며 공개 자산이 실제로 존재한다는 증거가
 아닙니다. 정확히 일치하는 GitHub Release가 존재하고 검증된 wheel을 자산으로
 나열한 뒤에만 사용하세요. 소스 상태와 릴리스 증거의 구분은
-[v0.3.318 릴리스 노트](releases/v0.3.318.md)를 보세요.
+[v0.3.319 릴리스 노트](releases/v0.3.319.md)를 보세요.
 
 이미 설치된 v0.3.317 client에는 수정된 paste 안내, 입력 수신 상태, 다섯 단계
 자격증명 결과 계약이 없습니다. 저장소 파일만 업데이트해도 분리된 `uv tool`
-또는 가상환경 wheel은 바뀌지 않습니다. 검증된 v0.3.318 자산이
+또는 가상환경 wheel은 바뀌지 않습니다. 검증된 v0.3.319 자산이
 실제로 생긴 뒤 그 정확한 wheel을 설치하고 새 프로세스를 시작하세요.
 
 ## 권장 설치
@@ -22,7 +22,7 @@ WOM-kit은 명령줄 도구입니다. 일반 앱 프로젝트의 Python 의존�
 증거가 되지는 않습니다.
 
 ```powershell
-uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.318/wom_kit-0.3.318-py3-none-any.whl"
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.319/wom_kit-0.3.319-py3-none-any.whl"
 archive --version
 ```
 
@@ -40,7 +40,7 @@ archive --version
 
 ```powershell
 py -m venv "$HOME\.wom-tools\wom-kit"
-& "$HOME\.wom-tools\wom-kit\Scripts\python.exe" -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.318/wom_kit-0.3.318-py3-none-any.whl"
+& "$HOME\.wom-tools\wom-kit\Scripts\python.exe" -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.319/wom_kit-0.3.319-py3-none-any.whl"
 & "$HOME\.wom-tools\wom-kit\Scripts\archive.exe" --version
 ```
 

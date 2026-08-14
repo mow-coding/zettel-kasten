@@ -58,6 +58,8 @@
 - [v0.3.317 Letter 130 staged-cleanup 증거 결정 기록](archive-infra-decision-log-2026-08-13-v03317-letter130-staged-cleanup-evidence.md)
 - [Letter 131 자격증명 콘솔 paste와 실패 단계](letter131-credential-console-paste-and-failure-stages.md)
 - [v0.3.318 Letter 131 자격증명 입력 결정 기록](archive-infra-decision-log-2026-08-13-v03318-letter131-credential-input.md)
+- [Letter 132 네이티브 자격증명 팝업과 인과 근거](letter132-credential-console-keyboard-readiness-and-causal-evidence.md)
+- [v0.3.319 Letter 132 자격증명 입력 근거 결정 기록](archive-infra-decision-log-2026-08-14-v03319-letter132-credential-input-evidence.md)
 - [프로젝트 버전 업데이트](project-version-update.md)
 - [Derived Text Capture와 paired batch 복구](derived-text.md)
 - [Letter 120·123 인덱스 수명주기와 피드백 본문](letter120-123-index-lifecycle-and-feedback-body.md)
@@ -427,6 +429,7 @@ local archive
 - [v0.3.315 릴리스 노트](releases/v0.3.315.md)
 - [v0.3.316 릴리스 노트](releases/v0.3.316.md)
 - [v0.3.317 릴리스 노트](releases/v0.3.317.md)
+- [v0.3.319 릴리스 노트](releases/v0.3.319.md)
 - [v0.3.318 릴리스 노트](releases/v0.3.318.md)
 
 작업일지는 제품 명세가 아닙니다.

@@ -1,6 +1,6 @@
 # Runtime Canonical Entry Points
 
-Status: v0.3.318 credential paste and failure-stage checkpoint
+Status: v0.3.319 native credential popup and causal-evidence checkpoint
 
 When an AI runtime enters a WOM archive, it needs a small, explicit "start
 here" map. The archive may contain zets, source bindings, provider metadata,
@@ -271,11 +271,47 @@ secret reader, provider caller, or archive writer:
 
 | Command | Canonical role |
 | --- | --- |
-| `credential-adopt` | First enrollment or explicit replacement only. Dry-run hashes the helper AI's public-safe current-task and connection-reason sentences together with the stable request. WOM supplies non-overridable security copy. Exact `request_sha256` approval opens one separate Unicode Windows console in the fresh spawned child, disables input echo, and closes the console before the store write. A matching registration returns without another prompt only after authenticated receipt, exact saved-secret fingerprint, and current reviewed-anchor revalidation; no PAT/token/secret command option exists. |
+| `credential-adopt` | First enrollment or explicit replacement only. Dry-run hashes the helper AI's public-safe task/reason with the stable request and opens no popup. Exact digest approval starts one isolated child and separate native Windows popup. Production hard-codes `CredentialPopupInputIntent.live_registration` and the blue `실제 자격 증명 등록` banner. A standard password EDIT retains ordinary editing/paste while an opaque sibling hides value, mask, caret, count, and length; WOM never reads the clipboard. The child detaches and sends `popup_child_detached` before live work. The parent restores its start-signal lease, accepts acknowledgement → final mapping → EOF, and joins every normally started child. A matching registration returns without another popup only after authenticated receipt, exact saved-secret fingerprint, provider/workspace-scope, and reviewed-anchor revalidation; no PAT/token/secret command option exists. |
 | `credential-secure-list` | Lists unauthenticated content-free receipt metadata by default. `--verify` reads only the exact archive authentication-key target and verifies receipt/lifecycle MACs; it neither enumerates the native vault nor resolves a provider credential. |
 | `credential-lifecycle` | Authenticates and digest-plans one human-selected active/current/default credential for an exact provider/workspace scope, then records only that unchanged approved decision. It never deletes or revokes another credential. |
 | `notion-page-recovery-plan` | Validates the exact ignored-local two-group request of 577 plus 43 unique page UUIDs, exactly 620, and digest-plans a bounded slice with zero credential reads, provider calls, or writes. |
 | `notion-page-recovery` | Repeats the same plan in dry-run or, with the exact reviewed plan SHA and reviewer, invokes spawned authenticated read-only Notion recovery and writes only content-addressed objets plus private recovery evidence. |
+
+The v0.3.319 correction replaces the rejected terminal-input prototypes with
+one separate native Windows popup. Production hard-codes
+`CredentialPopupInputIntent.live_registration` and shows the blue
+`실제 자격 증명 등록` banner. The standard password EDIT retains ordinary
+editing and paste behavior, but a fixed opaque sibling hides value, mask,
+caret, count, and length. WOM never reads the clipboard. Empty input cannot be
+confirmed; Cancel, X, and Escape stop before store/provider work.
+
+The child detaches and sends `popup_child_detached` before
+popup/native/store/provider/archive access. The parent restores its narrow
+`SIGINT`/`SIGBREAK` start lease before receiving, accepts only
+acknowledgement → final mapping → EOF, and joins every normally started child.
+Raw input and exception text never cross IPC.
+
+The child and parent v0.3 envelopes publish only
+`credential_input_received`, `complete_line_received`,
+`temporary_store_write_attempted`, and `provider_request_attempted`;
+unknown child state projects four nulls. `provider_auth_rejected` requires an
+actual provider request, and rollback `deleted` requires a fresh exact
+post-delete absence probe. `credential_input_boundary_failed` with action
+`repair_secure_input_boundary_and_create_a_new_plan` preserves truthful
+`1000` or `1100` evidence and keeps store/provider false. Complete local
+malformed/control/provider-shape, over-limit, or byte-oversize input uses
+`credential_input_invalid_for_provider`. A temporary write without provider
+transport uses `provider_request_not_attempted`.
+
+The popup-only manual helper hard-codes
+`CredentialPopupInputIntent.synthetic_acceptance`, emits
+`wom-kit/windows-credential-popup-acceptance/v0.1`, and uses the red
+`합성 입력 테스트 · 실제 키 입력 금지` banner plus fixed public challenge. It
+requests no PAT and performs no registration, store write, or provider call.
+The human synthetic row remains failed and is not repeated as a recovery
+prerequisite. Actual registration remains `not_performed`; it may proceed only
+after published-runtime verification and explicit confirmation of the blue
+live-registration banner. Automated evidence is not human/live evidence.
 
 For internal integrations, current scope authority comes from Notion's
 `bot.workspace_id`. A person PAT has no provider-returned workspace ID, so WOM

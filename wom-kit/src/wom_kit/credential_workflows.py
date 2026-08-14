@@ -13,13 +13,15 @@ trusted local caller.  It keeps five important promises:
   authentication key, or exception text.
 
 Every operating-system and provider dependency is injectable.  Importing this
-module and running its tests cannot open a real console, credential store, or
-network connection.
+module and running its tests cannot open a real credential popup, credential
+store, or network connection.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
+import ctypes
+from ctypes import wintypes
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import hashlib
@@ -27,8 +29,11 @@ import hmac
 import json
 import math
 import multiprocessing
+import os
 from pathlib import Path
 import re
+import signal
+import time
 from typing import Any, Protocol
 
 from .credential_secure_intake import (
@@ -45,8 +50,8 @@ from .credential_secure_intake import (
 )
 from .credential_secure_intake_windows import (
     CtypesWindowsNativeFacade,
-    VisibleConsolePromptContext,
-    WindowsVisibleConsoleSecretUI,
+    CredentialPopupPromptContext,
+    WindowsCredentialPopupSecretUI,
     WindowsSecureIntakeError,
     WindowsSecureIntakeNative,
     current_windows_owner_binding,
@@ -79,7 +84,7 @@ from .notion_page_recovery import (
 
 
 WORKFLOW_PLAN_SCHEMA_VERSION = "wom-credential-workflow-plan/v0.2"
-WORKFLOW_RESULT_SCHEMA_VERSION = "wom-credential-workflow-result/v0.2"
+WORKFLOW_RESULT_SCHEMA_VERSION = "wom-credential-workflow-result/v0.3"
 INTERACTION_CONTEXT_SCHEMA_VERSION = "wom-credential-interaction-context/v0.1"
 PLANNING_OWNER_BINDING = "credential-workflow-non-live-planning-owner"
 
@@ -95,6 +100,11 @@ _INTERACTION_SECRET_SHAPE_RE = re.compile(
 _INTERACTION_PRIVATE_LOCATOR_RE = re.compile(
     r"(?i)(?:https?://|\\\\|[A-Z]:\\|\b[0-9a-f]{8}-[0-9a-f-]{27,}\b|\b[0-9a-f]{32,}\b|\S+@\S+)"
 )
+_WORKFLOW_ROLLBACK_CANONICAL = {
+    "not_required": "not_required",
+    "deleted": "deleted",
+    "delete_failed": "delete_failed",
+}
 
 _ADOPTION_APPROVED_EXECUTION_STEPS = (
     "archive_identity_validate",
@@ -108,6 +118,52 @@ _ADOPTION_APPROVED_EXECUTION_STEPS = (
     "authenticated_receipt_commit",
     "authenticated_rediscovery_verify",
 )
+
+_ADOPTION_STAGE_FIELDS = (
+    "credential_input_received",
+    "complete_line_received",
+    "temporary_store_write_attempted",
+    "provider_request_attempted",
+)
+
+
+def _adoption_stage_evidence(
+    *,
+    credential_input_received: bool = False,
+    complete_line_received: bool = False,
+    temporary_store_write_attempted: bool = False,
+    provider_request_attempted: bool = False,
+) -> dict[str, bool]:
+    values = (
+        credential_input_received,
+        complete_line_received,
+        temporary_store_write_attempted,
+        provider_request_attempted,
+    )
+    if any(type(value) is not bool for value in values):
+        raise ValueError("credential_adoption_stage_evidence_invalid")
+    return dict(zip(_ADOPTION_STAGE_FIELDS, values, strict=True))
+
+
+def _adoption_stage_evidence_from_mapping(
+    value: Mapping[str, Any],
+) -> dict[str, bool] | None:
+    evidence = {field: value.get(field) for field in _ADOPTION_STAGE_FIELDS}
+    if any(type(item) is not bool for item in evidence.values()):
+        return None
+    vector = tuple(evidence[field] for field in _ADOPTION_STAGE_FIELDS)
+    if vector not in {
+        (False, False, False, False),
+        (True, False, False, False),
+        (True, True, False, False),
+        (True, True, True, False),
+        (True, True, True, True),
+        # Authenticated reuse has no fresh prompt or store write, but it does
+        # revalidate the exact saved credential with the provider.
+        (False, False, False, True),
+    }:
+        return None
+    return evidence  # type: ignore[return-value]
 
 
 def _zero_operations() -> dict[str, int]:
@@ -148,10 +204,12 @@ def _authenticated_key_operation_boundary(
 def _approved_adoption_worker_operations() -> dict[str, Any]:
     """Report the only honest public bound after an approved worker starts.
 
-    The worker deliberately does not export detailed native/provider telemetry:
-    such telemetry would be another secret-adjacent IPC surface.  Once the
-    approved worker boundary is entered, however, SID lookup, archive-key
-    initialization/reuse, request claiming, and the masked UI may already have
+    The worker deliberately does not export detailed native/provider counts:
+    such telemetry would be another secret-adjacent IPC surface.  The separate
+    four-bit stage evidence reports only whether each major boundary was
+    crossed; it never reports values, lengths, response status, or timing.
+    Once the approved worker boundary is entered, SID lookup, archive-key
+    initialization/reuse, request claiming, and the hidden UI may already have
     happened even when the human cancels or a later step fails.  ``None`` is
     therefore an intentional JSON ``null`` count, never an implied zero.
     """
@@ -175,25 +233,34 @@ def _workflow_failure(
     persisted: bool = False,
     rollback_status: str = "not_required",
     operations: Mapping[str, Any] | None = None,
+    credential_input_received: bool = False,
+    complete_line_received: bool = False,
+    temporary_store_write_attempted: bool = False,
+    provider_request_attempted: bool = False,
 ) -> dict[str, Any]:
     """Build one fixed, content-free failure result."""
 
     safe_reason = (
         reason_code
-        if isinstance(reason_code, str) and _FIXED_CODE_RE.fullmatch(reason_code)
+        if type(reason_code) is str and _FIXED_CODE_RE.fullmatch(reason_code)
         else "credential_workflow_failed"
     )
-    safe_rollback = (
-        rollback_status
-        if rollback_status in {"not_required", "deleted", "delete_failed"}
-        else "not_required"
+    safe_rollback = _WORKFLOW_ROLLBACK_CANONICAL.get(
+        rollback_status if type(rollback_status) is str else "",
+        "not_required",
     )
     if safe_rollback == "delete_failed":
         operator_action = "stop_and_remove_the_exact_encrypted_store_entry"
     elif safe_reason == "credential_input_cancelled_or_empty":
         operator_action = "create_a_new_intake_plan_when_ready"
     elif safe_reason == "credential_input_not_received":
-        operator_action = "retry_supported_console_input_with_a_new_plan"
+        operator_action = "retry_secure_popup_input_with_a_new_plan"
+    elif safe_reason == "credential_input_invalid_for_provider":
+        operator_action = "enter_a_complete_provider_credential_with_a_new_plan"
+    elif safe_reason == "credential_input_boundary_failed":
+        operator_action = "repair_secure_input_boundary_and_create_a_new_plan"
+    elif safe_reason == "provider_request_not_attempted":
+        operator_action = "stop_and_review_the_provider_adapter_before_retrying"
     elif safe_reason == "provider_auth_rejected":
         operator_action = "review_the_notion_credential_and_create_a_new_plan"
     elif safe_reason == "provider_identity_endpoint_unavailable":
@@ -214,7 +281,7 @@ def _workflow_failure(
         operator_action = "stop_and_repair_authenticated_rediscovery"
     else:
         operator_action = "review_the_fixed_reason_code_before_retry"
-    return {
+    result = {
         "schema_version": WORKFLOW_RESULT_SCHEMA_VERSION,
         "ok": False,
         "lifecycle_action": action,
@@ -239,6 +306,16 @@ def _workflow_failure(
             dict(operations) if operations is not None else _zero_operations()
         ),
     }
+    if action == "secure_credential_adoption_execute":
+        result.update(
+            _adoption_stage_evidence(
+                credential_input_received=credential_input_received,
+                complete_line_received=complete_line_received,
+                temporary_store_write_attempted=temporary_store_write_attempted,
+                provider_request_attempted=provider_request_attempted,
+            )
+        )
+    return result
 
 
 def _approved_adoption_worker_failure(
@@ -247,6 +324,10 @@ def _approved_adoption_worker_failure(
     accepted: bool = False,
     persisted: bool = False,
     rollback_status: str = "not_required",
+    credential_input_received: bool = False,
+    complete_line_received: bool = False,
+    temporary_store_write_attempted: bool = False,
+    provider_request_attempted: bool = False,
 ) -> dict[str, Any]:
     """Build a failure that cannot falsely claim zero work after approval."""
 
@@ -257,6 +338,10 @@ def _approved_adoption_worker_failure(
         persisted=persisted,
         rollback_status=rollback_status,
         operations=_approved_adoption_worker_operations(),
+        credential_input_received=credential_input_received,
+        complete_line_received=complete_line_received,
+        temporary_store_write_attempted=temporary_store_write_attempted,
+        provider_request_attempted=provider_request_attempted,
     )
 
 
@@ -274,14 +359,18 @@ def _existing_registration_scope_matches(
     *,
     plan: SecureIntakePlan,
     verifier: Any,
+    provider_request_observer: Callable[[], None],
 ) -> _ExistingRegistrationScopeRevalidation:
     """Recheck the saved token against this plan's reviewed Notion anchor."""
 
     try:
+        if verifier.validate_secret_input(secret, plan.provider) is not True:
+            return _ExistingRegistrationScopeRevalidation(False, False)
         identity = verifier.verify_identity(
             secret,
             provider=plan.provider,
             reviewed_anchor_uuid=plan.reviewed_anchor_uuid,
+            provider_request_observer=provider_request_observer,
         )
         provider = identity.provider
         account_subject = identity.account_subject
@@ -370,6 +459,10 @@ def _uncertain_adoption_worker_result() -> dict[str, Any]:
         "operations": _approved_adoption_worker_operations(),
         "durable_state": "unknown_may_have_changed",
         "worker_result_accepted": False,
+        "credential_input_received": None,
+        "complete_line_received": None,
+        "temporary_store_write_attempted": None,
+        "provider_request_attempted": None,
     }
 
 
@@ -524,7 +617,7 @@ def _rebuild_approved_planning_contract(
     expected_archive_id: str,
     reviewed_anchor_uuid: str,
     requested_capabilities: Sequence[str],
-) -> tuple[SecureIntakePlan, VisibleConsolePromptContext, str]:
+) -> tuple[SecureIntakePlan, CredentialPopupPromptContext, str]:
     if (
         not isinstance(approval_plan, Mapping)
         or approval_plan.get("schema_version") != WORKFLOW_PLAN_SCHEMA_VERSION
@@ -608,7 +701,7 @@ def _rebuild_approved_planning_contract(
         )
     ):
         raise ValueError("credential_adoption_interaction_context_invalid")
-    prompt_context = VisibleConsolePromptContext(
+    prompt_context = CredentialPopupPromptContext(
         provider=expected_context["provider"],
         purpose=expected_context["purpose"],
         account_label=expected_context["account_label"],
@@ -643,7 +736,7 @@ class CredentialAdoptionWorkerInvocation:
             "expected_archive_id": self.expected_archive_id,
             "reviewed_anchor_present": True,
             "requested_capabilities": list(self.requested_capabilities),
-            "secret_transport": "child_visible_console_masked_input_only",
+            "secret_transport": "child_native_popup_length_opaque_input_only",
         }
 
 
@@ -765,6 +858,17 @@ def _execute_adoption_inside_worker(
                 return _approved_adoption_worker_failure(
                     "credential_adoption_existing_registry_untrusted"
                 )
+            existing_provider_request_attempted = False
+
+            def observe_existing_provider_request() -> None:
+                nonlocal existing_provider_request_attempted
+                existing_provider_request_attempted = True
+
+            def existing_stage_evidence() -> dict[str, bool]:
+                return _adoption_stage_evidence(
+                    provider_request_attempted=existing_provider_request_attempted
+                )
+
             fingerprint_key: bytearray | None = None
             try:
                 fingerprint_key = derive_windows_fingerprint_key(
@@ -784,6 +888,7 @@ def _execute_adoption_inside_worker(
                             evidence,
                             plan=actual_plan,
                             verifier=verifier,
+                            provider_request_observer=observe_existing_provider_request,
                         )
                     ),
                 )
@@ -803,10 +908,14 @@ def _execute_adoption_inside_worker(
                     reason = (
                         "credential_adoption_existing_scope_revalidation_failed"
                     )
-                return _approved_adoption_worker_failure(reason)
+                return _approved_adoption_worker_failure(
+                    reason,
+                    **existing_stage_evidence(),
+                )
             except Exception:
                 return _approved_adoption_worker_failure(
-                    "credential_adoption_existing_scope_revalidation_failed"
+                    "credential_adoption_existing_scope_revalidation_failed",
+                    **existing_stage_evidence(),
                 )
             finally:
                 if fingerprint_key is not None:
@@ -816,7 +925,8 @@ def _execute_adoption_inside_worker(
                 scope_revalidation, _ExistingRegistrationScopeRevalidation
             ):
                 return _approved_adoption_worker_failure(
-                    "credential_adoption_existing_scope_revalidation_failed"
+                    "credential_adoption_existing_scope_revalidation_failed",
+                    **existing_stage_evidence(),
                 )
             workspace_scope_migrated = False
             workspace_scope_migration_required = bool(
@@ -835,7 +945,8 @@ def _execute_adoption_inside_worker(
                     and isinstance(scope_revalidation.workspace_identity_basis, str)
                 ):
                     return _approved_adoption_worker_failure(
-                        "credential_adoption_existing_scope_revalidation_failed"
+                        "credential_adoption_existing_scope_revalidation_failed",
+                        **existing_stage_evidence(),
                     )
                 migration_fingerprint_key: bytearray | None = None
                 try:
@@ -873,31 +984,37 @@ def _execute_adoption_inside_worker(
                         "credential_registry_evolution_lifecycle_review_required"
                     ):
                         return _approved_adoption_worker_failure(
-                            "credential_adoption_existing_registrations_require_lifecycle_review"
+                            "credential_adoption_existing_registrations_require_lifecycle_review",
+                            **existing_stage_evidence(),
                         )
                     if error.code == "credential_registry_store_missing":
                         return _approved_adoption_worker_failure(
-                            "credential_adoption_existing_store_missing"
+                            "credential_adoption_existing_store_missing",
+                            **existing_stage_evidence(),
                         )
                     if error.code in {
                         "credential_registry_store_probe_failed",
                         "credential_registry_secret_read_failed",
                     }:
                         return _approved_adoption_worker_failure(
-                            "credential_adoption_existing_store_probe_failed"
+                            "credential_adoption_existing_store_probe_failed",
+                            **existing_stage_evidence(),
                         )
                     if error.code == (
                         "credential_registry_secret_fingerprint_mismatch"
                     ):
                         return _approved_adoption_worker_failure(
-                            "credential_adoption_existing_store_fingerprint_mismatch"
+                            "credential_adoption_existing_store_fingerprint_mismatch",
+                            **existing_stage_evidence(),
                         )
                     return _approved_adoption_worker_failure(
-                        "credential_adoption_existing_scope_migration_failed"
+                        "credential_adoption_existing_scope_migration_failed",
+                        **existing_stage_evidence(),
                     )
                 except Exception:
                     return _approved_adoption_worker_failure(
-                        "credential_adoption_existing_scope_migration_failed"
+                        "credential_adoption_existing_scope_migration_failed",
+                        **existing_stage_evidence(),
                     )
                 finally:
                     if migration_fingerprint_key is not None:
@@ -905,7 +1022,8 @@ def _execute_adoption_inside_worker(
                             migration_fingerprint_key[index] = 0
                 if migration.get("ok") is not True:
                     return _approved_adoption_worker_failure(
-                        "credential_adoption_existing_scope_migration_failed"
+                        "credential_adoption_existing_scope_migration_failed",
+                        **existing_stage_evidence(),
                     )
                 workspace_scope_migrated = True
                 refreshed = list_secure_credentials(
@@ -920,12 +1038,14 @@ def _execute_adoption_inside_worker(
                 ]
                 if len(refreshed_matches) != 1:
                     return _approved_adoption_worker_failure(
-                        "credential_adoption_existing_scope_migration_failed"
+                        "credential_adoption_existing_scope_migration_failed",
+                        **existing_stage_evidence(),
                     )
                 existing = refreshed_matches[0]
             elif scope_revalidation.exact_match is not True:
                 return _approved_adoption_worker_failure(
-                    "credential_adoption_existing_scope_revalidation_failed"
+                    "credential_adoption_existing_scope_revalidation_failed",
+                    **existing_stage_evidence(),
                 )
             return {
                 "schema_version": WORKFLOW_RESULT_SCHEMA_VERSION,
@@ -951,6 +1071,7 @@ def _execute_adoption_inside_worker(
                 "backend_target_present": False,
                 "crash_or_power_loss_rollback_guaranteed": False,
                 "operations": _approved_adoption_worker_operations(),
+                **existing_stage_evidence(),
             }
         worker_kwargs: dict[str, Any] = {
             "claims": FileOneTimeRequestClaims(
@@ -960,7 +1081,7 @@ def _execute_adoption_inside_worker(
                     Path("profiles") / "local" / "credential-intake" / "claims"
                 ),
             ),
-            "ui": WindowsVisibleConsoleSecretUI(
+            "ui": WindowsCredentialPopupSecretUI(
                 native,
                 prompt_context,
             ),
@@ -990,6 +1111,9 @@ def _execute_adoption_inside_worker(
             expected_plan_digest=actual_plan.plan_digest,
             current_owner_binding=owner_binding,
         )
+        raw_stage_evidence = _adoption_stage_evidence_from_mapping(raw_result)
+        if raw_stage_evidence is None:
+            return _uncertain_adoption_worker_result()
         if raw_result.get("ok") is not True:
             reason = raw_result.get("reason_code")
             rollback_status = raw_result.get("rollback_status")
@@ -1000,7 +1124,15 @@ def _execute_adoption_inside_worker(
                     if isinstance(rollback_status, str)
                     else "not_required"
                 ),
+                **raw_stage_evidence,
             )
+        if raw_stage_evidence != _adoption_stage_evidence(
+            credential_input_received=True,
+            complete_line_received=True,
+            temporary_store_write_attempted=True,
+            provider_request_attempted=True,
+        ):
+            return _uncertain_adoption_worker_result()
 
         credential_id = raw_result.get("credential_id")
         authenticated = list_secure_credentials(
@@ -1017,6 +1149,7 @@ def _execute_adoption_inside_worker(
                 "credential_adoption_archive_identity_changed",
                 accepted=True,
                 persisted=True,
+                **raw_stage_evidence,
             )
         matches = [
             row
@@ -1028,6 +1161,7 @@ def _execute_adoption_inside_worker(
                 "credential_adoption_rediscovery_verification_failed",
                 accepted=True,
                 persisted=True,
+                **raw_stage_evidence,
             )
         safe_credential = dict(matches[0])
         return {
@@ -1047,6 +1181,7 @@ def _execute_adoption_inside_worker(
             "backend_target_present": False,
             "crash_or_power_loss_rollback_guaranteed": False,
             "operations": _approved_adoption_worker_operations(),
+            **raw_stage_evidence,
         }
 
     try:
@@ -1104,6 +1239,63 @@ def _adoption_worker_transport_marker() -> dict[str, str]:
     return {"worker_transport_status": "result_unavailable"}
 
 
+def _adoption_worker_detached_ack() -> dict[str, str]:
+    """Return the sole fixed ACK emitted before popup/native live work."""
+
+    return {"worker_transport_status": "popup_child_detached"}
+
+
+def _is_exact_adoption_worker_detached_ack(value: Any) -> bool:
+    return bool(
+        type(value) is dict
+        and set(value) == {"worker_transport_status"}
+        and type(value.get("worker_transport_status")) is str
+        and value["worker_transport_status"] == "popup_child_detached"
+    )
+
+
+def _detach_spawned_popup_child_console(
+    *,
+    kernel32: Any | None = None,
+    platform_name: str | None = None,
+) -> bool:
+    """Detach only the spawned popup child from its inherited console.
+
+    Production calls the exact zero-argument ``FreeConsole`` Win32 boundary.
+    The former console belongs to the parent and is never configured or read by
+    this child. Injected non-Boolean values are rejected rather than treated by
+    Python truthiness; a real ctypes BOOL result is canonicalized to ``bool``.
+    """
+
+    if (platform_name or os.name) != "nt":
+        return False
+    try:
+        if kernel32 is None:
+            loader = getattr(ctypes, "WinDLL", None)
+            if loader is None:
+                return False
+            kernel32 = loader("kernel32", use_last_error=True)
+        free_console = kernel32.FreeConsole
+        free_console.argtypes = []
+        free_console.restype = wintypes.BOOL
+        raw_result = free_console()
+        if type(raw_result) is bool:
+            return raw_result
+        native_function_type = getattr(ctypes, "_CFuncPtr", None)
+        if (
+            native_function_type is not None
+            and isinstance(free_console, native_function_type)
+            and type(raw_result) is int
+        ):
+            # Win32 BOOL success is any nonzero value. Only a real ctypes
+            # function result receives this canonicalization; injected Python
+            # integers remain invalid evidence above.
+            return raw_result != 0
+        return False
+    except BaseException:
+        raise
+
+
 def _spawned_adoption_entry(
     send_connection: Any,
     invocation: CredentialAdoptionWorkerInvocation,
@@ -1111,29 +1303,244 @@ def _spawned_adoption_entry(
     """Top-level Windows-spawn entry; sends only a sanitized status mapping."""
 
     try:
-        native = CtypesWindowsNativeFacade(cli_live_approved=True)
-        result = _execute_adoption_inside_worker(
-            invocation,
-            native=native,
-            notion_adapter=NotionHttpAdapter(
-                request_pacer=ArchiveInterprocessRequestPacer(
-                    invocation.archive_root
+        try:
+            if _detach_spawned_popup_child_console() is not True:
+                return
+        except BaseException:
+            return
+        try:
+            send_connection.send(_adoption_worker_detached_ack())
+        except BaseException:
+            # No popup/native/store/provider work is allowed unless the parent
+            # can prove this exact detached-child ACK.
+            return
+        try:
+            native = CtypesWindowsNativeFacade(cli_live_approved=True)
+            result = _execute_adoption_inside_worker(
+                invocation,
+                native=native,
+                notion_adapter=NotionHttpAdapter(
+                    request_pacer=ArchiveInterprocessRequestPacer(
+                        invocation.archive_root
+                    ),
+                    max_attempts=5,
                 ),
-                max_attempts=5,
-            ),
-            key_provider=StableArchiveFingerprintKeyProvider(native),
-        )
-    except Exception:
-        result = _adoption_worker_transport_marker()
-    try:
-        send_connection.send(result)
-    except Exception:
-        pass
+                key_provider=StableArchiveFingerprintKeyProvider(native),
+            )
+        except BaseException:
+            result = _adoption_worker_transport_marker()
+        try:
+            send_connection.send(result)
+        except BaseException:
+            pass
     finally:
         try:
             send_connection.close()
-        except Exception:
+        except BaseException:
             pass
+
+
+def _join_started_credential_worker(process: Any) -> None:
+    """Wait until a started worker exits without opening a terminate path.
+
+    The worker can own the only secret buffer and an in-flight exact-target
+    rollback, so a transient ``join`` failure must never let the parent resume
+    while that child is still alive.
+    A successful no-timeout ``join`` proves termination.  After an exceptional
+    join, exact ``is_alive() is False`` is the only alternative completion
+    proof; otherwise the parent keeps its protection lease and retries.
+    """
+
+    while True:
+        try:
+            process.join()
+            return
+        except (Exception, KeyboardInterrupt):
+            try:
+                if process.is_alive() is False:
+                    return
+            except (Exception, KeyboardInterrupt):
+                pass
+            try:
+                time.sleep(0.05)
+            except BaseException:
+                # An injected interruption must not escape while the child may
+                # still own secret/rollback state. The exact no-timeout join is
+                # retried without changing any parent input state.
+                pass
+
+
+@dataclass(frozen=True, repr=False)
+class _CredentialWorkerStartSignalLease:
+    """Captured parent handlers that must be restored before IPC resumes."""
+
+    signals: tuple[Any, ...]
+    originals: tuple[Any, ...] = field(repr=False)
+
+
+def _credential_worker_start_signals() -> tuple[Any, Any] | None:
+    """Return the two Windows console signals required for an atomic start."""
+
+    sigbreak = getattr(signal, "SIGBREAK", None)
+    if sigbreak is None:
+        return None
+    return signal.SIGINT, sigbreak
+
+
+def _restore_credential_worker_start_signal_lease(
+    lease: _CredentialWorkerStartSignalLease,
+    *,
+    signal_getter: Callable[[Any], Any],
+    signal_setter: Callable[[Any, Any], Any],
+) -> None:
+    """Gate forever until every attempted handler is exactly restored.
+
+    A setter may change a handler and then raise.  Callers therefore include a
+    signal in ``lease`` *before* attempting its install.  Neither an injected
+    ``BaseException`` nor a false-success setter may reopen the parent while a
+    child could exist under temporary ignored-signal state.
+    """
+
+    pending = list(zip(lease.signals, lease.originals, strict=True))
+    while pending:
+        unresolved: list[tuple[Any, Any]] = []
+        for signal_number, original_handler in reversed(pending):
+            try:
+                signal_setter(signal_number, original_handler)
+            except BaseException:
+                pass
+            try:
+                restored_handler = signal_getter(signal_number)
+            except BaseException:
+                unresolved.append((signal_number, original_handler))
+                continue
+            if restored_handler is not original_handler:
+                unresolved.append((signal_number, original_handler))
+        pending = list(reversed(unresolved))
+        if pending:
+            try:
+                time.sleep(0.01)
+            except BaseException:
+                pass
+
+
+def _capture_credential_worker_start_signal_lease(
+    *,
+    signal_getter: Callable[[Any], Any],
+) -> _CredentialWorkerStartSignalLease | None:
+    """Capture both exact original handlers before attempting any mutation."""
+
+    signal_numbers = _credential_worker_start_signals()
+    if signal_numbers is None:
+        return None
+    originals: list[Any] = []
+    try:
+        for signal_number in signal_numbers:
+            originals.append(signal_getter(signal_number))
+    except BaseException:
+        return None
+    return _CredentialWorkerStartSignalLease(
+        signals=signal_numbers,
+        originals=(originals[0], originals[1]),
+    )
+
+
+def _install_credential_worker_start_signal_lease(
+    lease: _CredentialWorkerStartSignalLease,
+    *,
+    signal_getter: Callable[[Any], Any],
+    signal_setter: Callable[[Any, Any], Any],
+) -> bool:
+    """Install both ignored handlers after the full restore lease is owned."""
+
+    try:
+        for signal_number in lease.signals:
+            # The caller stores the complete lease before this setter call: a
+            # setter may change the handler and then raise asynchronously.
+            signal_setter(signal_number, signal.SIG_IGN)
+            if signal_getter(signal_number) is not signal.SIG_IGN:
+                return False
+    except BaseException:
+        return False
+    return True
+
+
+def _close_credential_worker_send_connection(send_connection: Any) -> None:
+    """Close the parent send duplicate without allowing interruption escape."""
+
+    while True:
+        try:
+            send_connection.close()
+            return
+        except BaseException:
+            try:
+                time.sleep(0.01)
+            except BaseException:
+                pass
+
+
+@dataclass(frozen=True, repr=False)
+class _CredentialWorkerPipeOutcome:
+    worker_started: bool
+    result: Mapping[str, Any] | None = field(default=None, repr=False)
+
+
+def _drain_credential_worker_pipe(
+    receive_connection: Any,
+) -> _CredentialWorkerPipeOutcome:
+    """Drain ACK, final mapping, and terminal EOF without interruption escape.
+
+    On Windows, child creation can precede the public ``Process`` start proof.
+    The inherited one-way send handle is therefore the containment boundary:
+    terminal EOF proves that no bootstrap/worker still owns it. EOF before the
+    fixed detached ACK proves no live popup/native/store/provider work began.
+    Any malformed, missing-final, or extra sequence is conservatively projected
+    as started/unknown. Exceptions and their text never cross IPC.
+    """
+
+    final_mapping: Mapping[str, Any] | None = None
+    ack_observed = False
+    any_message_observed = False
+    malformed = False
+    message_count = 0
+    while True:
+        try:
+            message = receive_connection.recv()
+        except EOFError:
+            if not any_message_observed:
+                return _CredentialWorkerPipeOutcome(worker_started=False)
+            if (
+                ack_observed
+                and message_count == 2
+                and not malformed
+                and isinstance(final_mapping, Mapping)
+            ):
+                return _CredentialWorkerPipeOutcome(
+                    worker_started=True,
+                    result=final_mapping,
+                )
+            return _CredentialWorkerPipeOutcome(worker_started=True)
+        except BaseException:
+            try:
+                time.sleep(0.01)
+            except BaseException:
+                pass
+            continue
+        any_message_observed = True
+        message_count += 1
+        if message_count == 1:
+            ack_observed = _is_exact_adoption_worker_detached_ack(message)
+            malformed = not ack_observed
+        elif (
+            message_count == 2
+            and ack_observed
+            and isinstance(message, Mapping)
+            and not _is_exact_adoption_worker_detached_ack(message)
+        ):
+            final_mapping = message
+        else:
+            final_mapping = None
+            malformed = True
 
 
 @dataclass(repr=False)
@@ -1143,11 +1550,23 @@ class SpawnCredentialAdoptionWorkerSpawner:
     The parent deliberately has no timeout/terminate path.  Python documents
     that terminating a process can interrupt ``finally`` blocks and corrupt
     pipes/locks; here it could also skip the worker's exact-target rollback.
-    A human must finish or cancel the visible console prompt. Process crash and
-    power loss remain an explicitly reported durability gap. The worker creates
-    its own visible console only for echo-disabled human input and closes that
-    console before any Credential Manager write begins.
+    A human must finish or cancel the native popup. Process crash and power
+    loss remain an explicitly reported durability gap. The parent never reads
+    interactive input and never changes terminal modes or Windows console
+    handlers. It holds a narrow Python SIGINT/SIGBREAK ignore lease only across
+    ``Process.start`` and its exact-return proof, restores both exact handlers,
+    then drains fixed detached ACK, final result, and terminal EOF from the
+    isolated popup worker before the parent can resume.
     """
+
+    _signal_getter: Callable[[Any], Any] = field(
+        default=signal.getsignal,
+        repr=False,
+    )
+    _signal_setter: Callable[[Any, Any], Any] = field(
+        default=signal.signal,
+        repr=False,
+    )
 
     def run_worker(
         self,
@@ -1156,7 +1575,68 @@ class SpawnCredentialAdoptionWorkerSpawner:
         process: Any = None
         receive_connection: Any = None
         send_connection: Any = None
-        worker_started = False
+        start_lease: _CredentialWorkerStartSignalLease | None = None
+        start_lease_restored = False
+        start_invoked = False
+        process_start_returned = False
+        pipe_drained = False
+        worker_joined = False
+        pipe_outcome = _CredentialWorkerPipeOutcome(worker_started=False)
+        outcome = _CredentialAdoptionWorkerRunOutcome(worker_started=False)
+
+        def restore_start_lease_if_needed() -> None:
+            nonlocal start_lease_restored
+            if start_lease is not None and not start_lease_restored:
+                _restore_credential_worker_start_signal_lease(
+                    start_lease,
+                    signal_getter=self._signal_getter,
+                    signal_setter=self._signal_setter,
+                )
+                start_lease_restored = True
+
+        def drain_and_contain_started_boundary() -> None:
+            nonlocal pipe_drained, pipe_outcome, worker_joined
+            if not pipe_drained:
+                if send_connection is not None:
+                    _close_credential_worker_send_connection(send_connection)
+                if receive_connection is not None:
+                    pipe_outcome = _drain_credential_worker_pipe(
+                        receive_connection
+                    )
+                else:
+                    # A start call cannot be allowed without its containment
+                    # pipe. This branch is defensive and must never be reached
+                    # by the multiprocessing construction above.
+                    pipe_outcome = _CredentialWorkerPipeOutcome(
+                        worker_started=True
+                    )
+                pipe_drained = True
+            if (
+                process_start_returned
+                and process is not None
+                and not worker_joined
+            ):
+                _join_started_credential_worker(process)
+                worker_joined = True
+
+        def process_exited_cleanly() -> bool:
+            try:
+                return bool(process is not None and process.exitcode == 0)
+            except BaseException:
+                return False
+
+        def current_outcome() -> _CredentialAdoptionWorkerRunOutcome:
+            if pipe_outcome.worker_started is not True:
+                return _CredentialAdoptionWorkerRunOutcome(worker_started=False)
+            if not isinstance(pipe_outcome.result, Mapping):
+                return _CredentialAdoptionWorkerRunOutcome(worker_started=True)
+            if process_start_returned and not process_exited_cleanly():
+                return _CredentialAdoptionWorkerRunOutcome(worker_started=True)
+            return _CredentialAdoptionWorkerRunOutcome(
+                worker_started=True,
+                result=pipe_outcome.result,
+            )
+
         try:
             context = multiprocessing.get_context("spawn")
             receive_connection, send_connection = context.Pipe(duplex=False)
@@ -1165,39 +1645,56 @@ class SpawnCredentialAdoptionWorkerSpawner:
                 args=(send_connection, invocation),
                 daemon=False,
             )
-            process.start()
-            worker_started = True
-            send_connection.close()
-            try:
-                result = receive_connection.recv()
-            except Exception:
-                result = _adoption_worker_transport_marker()
-            process.join()
-            if process.exitcode != 0 or not isinstance(result, Mapping):
-                return _CredentialAdoptionWorkerRunOutcome(worker_started=True)
-            return _CredentialAdoptionWorkerRunOutcome(
-                worker_started=True,
-                result=result,
+            start_lease = _capture_credential_worker_start_signal_lease(
+                signal_getter=self._signal_getter,
             )
-        except Exception:
+            if start_lease is not None:
+                try:
+                    if _install_credential_worker_start_signal_lease(
+                        start_lease,
+                        signal_getter=self._signal_getter,
+                        signal_setter=self._signal_setter,
+                    ):
+                        try:
+                            start_invoked = True
+                            process.start()
+                        except BaseException:
+                            # CPython's Windows spawn can create/inherit the
+                            # child pipe before Process.start publishes public
+                            # joinability. ACK plus EOF resolve that ambiguity.
+                            pass
+                        else:
+                            # Record this exact proof while both handlers are
+                            # still ignored, immediately after start returns.
+                            process_start_returned = True
+                finally:
+                    restore_start_lease_if_needed()
+            if start_invoked:
+                drain_and_contain_started_boundary()
+            outcome = current_outcome()
+        except BaseException:
             # Never force-terminate a started intake child: it owns the only
             # secret buffer and must retain the opportunity to run rollback.
-            if worker_started and process is not None and process.is_alive():
-                process.join()
-            return _CredentialAdoptionWorkerRunOutcome(
-                worker_started=worker_started,
-            )
+            restore_start_lease_if_needed()
+            if start_invoked:
+                drain_and_contain_started_boundary()
+            outcome = current_outcome()
         finally:
+            restore_start_lease_if_needed()
+            if start_invoked:
+                drain_and_contain_started_boundary()
             try:
                 if receive_connection is not None:
                     receive_connection.close()
-            except Exception:
+            except BaseException:
                 pass
             try:
                 if send_connection is not None:
                     send_connection.close()
-            except Exception:
+            except BaseException:
                 pass
+            outcome = current_outcome()
+        return outcome
 
 
 _ADOPTION_WORKER_SUCCESS_KEYS = {
@@ -1215,7 +1712,7 @@ _ADOPTION_WORKER_SUCCESS_KEYS = {
     "backend_target_present",
     "crash_or_power_loss_rollback_guaranteed",
     "operations",
-}
+} | set(_ADOPTION_STAGE_FIELDS)
 _ADOPTION_WORKER_REUSE_KEYS = _ADOPTION_WORKER_SUCCESS_KEYS | {
     "secret_prompt_performed",
     "existing_registration_reused",
@@ -1237,10 +1734,13 @@ _ADOPTION_WORKER_FAILURE_KEYS = {
     "backend_target_present",
     "crash_or_power_loss_rollback_guaranteed",
     "operations",
-}
+} | set(_ADOPTION_STAGE_FIELDS)
 _ADOPTION_WORKER_FAILURE_REASONS = {
     "credential_input_cancelled_or_empty",
     "credential_input_not_received",
+    "credential_input_invalid_for_provider",
+    "credential_input_boundary_failed",
+    "provider_request_not_attempted",
     "provider_auth_rejected",
     "provider_identity_endpoint_unavailable",
     "reviewed_anchor_inaccessible",
@@ -1270,15 +1770,55 @@ _ADOPTION_WORKER_FAILURE_REASONS = {
     "credential_adoption_existing_scope_revalidation_failed",
     "credential_adoption_existing_scope_migration_failed",
 }
+_ADOPTION_WORKER_FAILURE_REASON_CANONICAL = {
+    reason: reason for reason in _ADOPTION_WORKER_FAILURE_REASONS
+}
+_ADOPTION_WORKER_REUSE_REASON_CANONICAL = {
+    "credential_adoption_existing_registration_preserved_without_prompt": (
+        "credential_adoption_existing_registration_preserved_without_prompt"
+    ),
+    "credential_adoption_legacy_scope_evolved_without_prompt": (
+        "credential_adoption_legacy_scope_evolved_without_prompt"
+    ),
+}
 _ADOPTION_PERSISTED_FAILURE_REASONS = {
     "credential_adoption_archive_identity_changed",
     "credential_adoption_rediscovery_verification_failed",
 }
-_ADOPTION_PRE_STORE_FAILURE_REASONS = {
-    "credential_input_cancelled_or_empty",
+_STAGE_0000 = (False, False, False, False)
+_STAGE_1000 = (True, False, False, False)
+_STAGE_1100 = (True, True, False, False)
+_STAGE_1110 = (True, True, True, False)
+_STAGE_1111 = (True, True, True, True)
+_STAGE_0001_REUSE = (False, False, False, True)
+
+_ADOPTION_INPUT_NOT_RECEIVED_REASONS = {
     "credential_input_not_received",
-    "human_cancelled",
+}
+_ADOPTION_ZERO_EVIDENCE_LEGACY_REASONS = {
     "secret_input_unavailable",
+    "human_cancelled",
+}
+_ADOPTION_COMPLETE_LOCAL_INPUT_REASONS = {
+    "credential_input_invalid_for_provider",
+}
+_ADOPTION_INPUT_BOUNDARY_REASONS = {
+    "credential_input_boundary_failed",
+}
+_ADOPTION_PRE_PROVIDER_STORE_REASONS = {
+    "store_write_failed",
+    "store_presence_not_verified",
+    "provider_request_not_attempted",
+}
+_ADOPTION_PROVIDER_STAGE_REASONS = {
+    "provider_auth_rejected",
+    "provider_identity_endpoint_unavailable",
+    "reviewed_anchor_inaccessible",
+    "provider_identity_unverified",
+    "workspace_anchor_mismatch",
+    "receipt_commit_failed",
+}
+_ADOPTION_PRE_EXECUTION_REASONS = {
     "request_expired",
     "request_replayed",
     "request_user_mismatch",
@@ -1288,6 +1828,8 @@ _ADOPTION_PRE_STORE_FAILURE_REASONS = {
     "credential_adoption_archive_identity_mismatch",
     "credential_adoption_preflight_failed",
     "credential_adoption_existing_registry_untrusted",
+}
+_ADOPTION_EXISTING_OPTIONAL_REVALIDATION_REASONS = {
     "credential_adoption_existing_registrations_require_lifecycle_review",
     "credential_adoption_existing_store_missing",
     "credential_adoption_existing_store_probe_failed",
@@ -1295,16 +1837,53 @@ _ADOPTION_PRE_STORE_FAILURE_REASONS = {
     "credential_adoption_existing_scope_revalidation_failed",
     "credential_adoption_existing_scope_migration_failed",
 }
-_ADOPTION_ROLLBACK_REQUIRED_FAILURE_REASONS = {
-    "store_write_failed",
-    "store_presence_not_verified",
-    "provider_auth_rejected",
-    "provider_identity_endpoint_unavailable",
-    "reviewed_anchor_inaccessible",
-    "provider_identity_unverified",
-    "workspace_anchor_mismatch",
-    "receipt_commit_failed",
-}
+
+
+def _adoption_failure_stage_valid(
+    reason: str,
+    evidence: Mapping[str, bool],
+) -> bool:
+    vector = tuple(evidence[field] for field in _ADOPTION_STAGE_FIELDS)
+    if reason in _ADOPTION_INPUT_NOT_RECEIVED_REASONS:
+        return vector in {_STAGE_0000, _STAGE_1000}
+    if reason in _ADOPTION_ZERO_EVIDENCE_LEGACY_REASONS:
+        return vector == _STAGE_0000
+    if reason == "credential_input_cancelled_or_empty":
+        return vector in {_STAGE_0000, _STAGE_1000, _STAGE_1100}
+    if reason in _ADOPTION_COMPLETE_LOCAL_INPUT_REASONS:
+        return vector == _STAGE_1100
+    if reason in _ADOPTION_INPUT_BOUNDARY_REASONS:
+        return vector in {_STAGE_1000, _STAGE_1100}
+    if reason in _ADOPTION_PRE_PROVIDER_STORE_REASONS:
+        return vector == _STAGE_1110
+    if reason in _ADOPTION_PROVIDER_STAGE_REASONS:
+        return vector == _STAGE_1111
+    if reason in _ADOPTION_PRE_EXECUTION_REASONS:
+        return vector == _STAGE_0000
+    if reason in _ADOPTION_EXISTING_OPTIONAL_REVALIDATION_REASONS:
+        return vector in {_STAGE_0000, _STAGE_0001_REUSE}
+    if reason in _ADOPTION_PERSISTED_FAILURE_REASONS:
+        return vector == _STAGE_1111
+    if reason == "worker_result_invalid":
+        return vector in {
+            _STAGE_0000,
+            _STAGE_1000,
+            _STAGE_1100,
+            _STAGE_1110,
+            _STAGE_1111,
+        }
+    return False
+
+
+def _approved_adoption_worker_operations_are_exact(value: Any) -> bool:
+    """Accept the fixed operations shape only with plain-string enums."""
+
+    return (
+        isinstance(value, Mapping)
+        and type(value.get("live_operation_boundary")) is str
+        and type(value.get("count_status")) is str
+        and value == _approved_adoption_worker_operations()
+    )
 
 
 def _project_adoption_worker_result_unchecked(
@@ -1314,13 +1893,20 @@ def _project_adoption_worker_result_unchecked(
 
     action = "secure_credential_adoption_execute"
     keys = set(result)
+    stage_evidence = _adoption_stage_evidence_from_mapping(result)
+    if (
+        stage_evidence is None
+        or type(result.get("schema_version")) is not str
+        or type(result.get("lifecycle_action")) is not str
+        or type(result.get("reason_code")) is not str
+    ):
+        return _uncertain_adoption_worker_result()
     if result.get("ok") is True:
         credential_id = result.get("credential_id")
-        if result.get("reason_code") in {
-            "credential_adoption_existing_registration_preserved_without_prompt",
-            "credential_adoption_legacy_scope_evolved_without_prompt",
-        }:
-            migrated = result.get("reason_code") == (
+        reason = result.get("reason_code")
+        reuse_reason = _ADOPTION_WORKER_REUSE_REASON_CANONICAL.get(reason)
+        if reuse_reason is not None:
+            migrated = reuse_reason == (
                 "credential_adoption_legacy_scope_evolved_without_prompt"
             )
             expected_reuse = {
@@ -1329,7 +1915,7 @@ def _project_adoption_worker_result_unchecked(
                 "lifecycle_action": action,
                 "accepted": False,
                 "persisted": True,
-                "reason_code": result.get("reason_code"),
+                "reason_code": reuse_reason,
                 "credential_id": credential_id,
                 "authenticated_rediscovery_verified": True,
                 "human_default_decision_required": result.get(
@@ -1343,12 +1929,20 @@ def _project_adoption_worker_result_unchecked(
                 "backend_target_present": False,
                 "crash_or_power_loss_rollback_guaranteed": False,
                 "operations": _approved_adoption_worker_operations(),
+                **stage_evidence,
             }
             if not (
                 keys == _ADOPTION_WORKER_REUSE_KEYS
-                and isinstance(credential_id, str)
+                and tuple(
+                    stage_evidence[field] for field in _ADOPTION_STAGE_FIELDS
+                )
+                == _STAGE_0001_REUSE
+                and type(credential_id) is str
                 and _CREDENTIAL_ID_RE.fullmatch(credential_id)
                 and isinstance(result.get("human_default_decision_required"), bool)
+                and _approved_adoption_worker_operations_are_exact(
+                    result.get("operations")
+                )
                 and dict(result) == expected_reuse
             ):
                 return _uncertain_adoption_worker_result()
@@ -1370,6 +1964,7 @@ def _project_adoption_worker_result_unchecked(
             "backend_target_present": False,
             "crash_or_power_loss_rollback_guaranteed": False,
             "operations": _approved_adoption_worker_operations(),
+            **stage_evidence,
         }
         if not (
             keys == _ADOPTION_WORKER_SUCCESS_KEYS
@@ -1379,7 +1974,7 @@ def _project_adoption_worker_result_unchecked(
             and result.get("persisted") is True
             and result.get("reason_code")
             == "credential_adoption_persisted_and_rediscoverable"
-            and isinstance(credential_id, str)
+            and type(credential_id) is str
             and _CREDENTIAL_ID_RE.fullmatch(credential_id)
             and result.get("authenticated_rediscovery_verified") is True
             and isinstance(result.get("human_default_decision_required"), bool)
@@ -1387,19 +1982,27 @@ def _project_adoption_worker_result_unchecked(
             and result.get("reviewed_anchor_present_in_result") is False
             and result.get("backend_target_present") is False
             and result.get("crash_or_power_loss_rollback_guaranteed") is False
-            and result.get("operations") == _approved_adoption_worker_operations()
+            and _approved_adoption_worker_operations_are_exact(
+                result.get("operations")
+            )
+            and tuple(stage_evidence[field] for field in _ADOPTION_STAGE_FIELDS)
+            == _STAGE_1111
             and dict(result) == expected_success
         ):
             return _uncertain_adoption_worker_result()
         return expected_success
     if keys != _ADOPTION_WORKER_FAILURE_KEYS:
         return _uncertain_adoption_worker_result()
-    reason = result.get("reason_code")
-    rollback = result.get("rollback_status")
-    expected_persisted = (
-        isinstance(reason, str)
-        and reason in _ADOPTION_PERSISTED_FAILURE_REASONS
-    )
+    raw_reason = result.get("reason_code")
+    raw_rollback = result.get("rollback_status")
+    if (
+        type(raw_rollback) is not str
+        or type(result.get("operator_action")) is not str
+    ):
+        return _uncertain_adoption_worker_result()
+    reason = _ADOPTION_WORKER_FAILURE_REASON_CANONICAL.get(raw_reason)
+    rollback = _WORKFLOW_ROLLBACK_CANONICAL.get(raw_rollback)
+    expected_persisted = reason in _ADOPTION_PERSISTED_FAILURE_REASONS
     if not (
         result.get("schema_version") == WORKFLOW_RESULT_SCHEMA_VERSION
         and result.get("lifecycle_action") == action
@@ -1408,22 +2011,23 @@ def _project_adoption_worker_result_unchecked(
         and isinstance(result.get("persisted"), bool)
         and result.get("accepted") is expected_persisted
         and result.get("persisted") is expected_persisted
-        and isinstance(reason, str)
-        and reason in _ADOPTION_WORKER_FAILURE_REASONS
-        and rollback in {"not_required", "deleted", "delete_failed"}
+        and reason is not None
+        and rollback is not None
+        and _adoption_failure_stage_valid(reason, stage_evidence)
         and (
             (
-                reason in _ADOPTION_PRE_STORE_FAILURE_REASONS
+                expected_persisted
                 and rollback == "not_required"
             )
             or (
-                reason in _ADOPTION_ROLLBACK_REQUIRED_FAILURE_REASONS
+                not expected_persisted
+                and stage_evidence["temporary_store_write_attempted"] is False
+                and rollback == "not_required"
+            )
+            or (
+                not expected_persisted
+                and stage_evidence["temporary_store_write_attempted"] is True
                 and rollback in {"deleted", "delete_failed"}
-            )
-            or reason == "worker_result_invalid"
-            or (
-                reason in _ADOPTION_PERSISTED_FAILURE_REASONS
-                and rollback == "not_required"
             )
         )
         and result.get("credential_id_present") is False
@@ -1431,8 +2035,9 @@ def _project_adoption_worker_result_unchecked(
         and result.get("reviewed_anchor_present_in_result") is False
         and result.get("backend_target_present") is False
         and result.get("crash_or_power_loss_rollback_guaranteed") is False
-        and isinstance(result.get("operations"), Mapping)
-        and result.get("operations") == _approved_adoption_worker_operations()
+        and _approved_adoption_worker_operations_are_exact(
+            result.get("operations")
+        )
     ):
         return _uncertain_adoption_worker_result()
     expected_failure = _approved_adoption_worker_failure(
@@ -1440,6 +2045,7 @@ def _project_adoption_worker_result_unchecked(
         accepted=result["accepted"],
         persisted=result["persisted"],
         rollback_status=rollback,
+        **stage_evidence,
     )
     if dict(result) != expected_failure:
         return _uncertain_adoption_worker_result()
@@ -1510,11 +2116,13 @@ def execute_windows_notion_credential_adoption(
     except Exception:
         return _uncertain_adoption_worker_result()
     if isinstance(run_outcome, _CredentialAdoptionWorkerRunOutcome):
-        if run_outcome.worker_started is not True:
+        if run_outcome.worker_started is False and run_outcome.result is None:
             return _workflow_failure(
                 action,
                 "credential_adoption_worker_launch_failed",
             )
+        if run_outcome.worker_started is not True:
+            return _uncertain_adoption_worker_result()
         result = run_outcome.result
     else:
         # A backward-compatible bare mapping has crossed its injected worker

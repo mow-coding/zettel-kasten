@@ -185,7 +185,7 @@ Commands:
   credential-ref-plan
           Plan a local credential reference without reading or storing secret values.
   credential-adopt
-          Plan or explicitly approve visible-console Notion credential intake; PAT values are never accepted by AI chat or the command line.
+          Plan or explicitly approve native-popup Notion credential intake; PAT values are never accepted by AI chat or the command line.
   credential-secure-list
           List local receipt metadata, or explicitly verify it with the exact archive authentication key.
   credential-lifecycle
@@ -9246,6 +9246,17 @@ def _print_credential_command_result(result: dict[str, Any], output_format: str)
         print(f"Reviewed request: {result['request_sha256']}")
     if result.get("plan_sha256"):
         print(f"Reviewed plan: {result['plan_sha256']}")
+    stage_labels = (
+        ("Credential input received", "credential_input_received"),
+        ("Complete line received", "complete_line_received"),
+        ("Temporary store write attempted", "temporary_store_write_attempted"),
+        ("Provider request attempted", "provider_request_attempted"),
+    )
+    if any(field in result for _, field in stage_labels):
+        for label, field in stage_labels:
+            value = result.get(field)
+            rendered = "yes" if value is True else "no" if value is False else "unknown"
+            print(f"{label}: {rendered}")
     print("Secret value shown: no")
     print("Automatic delete or revoke: no")
 
@@ -9284,7 +9295,7 @@ def command_credential_adopt(args: argparse.Namespace) -> int:
                 if args.expected_request_sha256 is not None:
                     raise ValueError("credential_adoption_expected_request_only_for_approval")
                 result = {
-                    "schema_version": "wom-credential-cli-result/v0.1",
+                    "schema_version": "wom-credential-cli-result/v0.2",
                     "ok": True,
                     "dry_run": True,
                     "lifecycle_action": action,
@@ -9369,7 +9380,33 @@ def command_credential_adopt(args: argparse.Namespace) -> int:
                     )
                     if not isinstance(raw_result, dict):
                         raise ValueError("credential_adoption_result_invalid")
-                    result = dict(raw_result)
+                    stage_values = tuple(
+                        raw_result.get(stage_field)
+                        for stage_field in (
+                            "credential_input_received",
+                            "complete_line_received",
+                            "temporary_store_write_attempted",
+                            "provider_request_attempted",
+                        )
+                    )
+                    current_workflow_schema = (
+                        raw_result.get("schema_version")
+                        == credential_workflows.WORKFLOW_RESULT_SCHEMA_VERSION
+                    )
+                    known_stage = current_workflow_schema and all(
+                        type(value) is bool for value in stage_values
+                    )
+                    unknown_stage = (
+                        current_workflow_schema
+                        and raw_result.get("reason_code")
+                        == "credential_adoption_worker_state_unknown"
+                        and all(value is None for value in stage_values)
+                    )
+                    result = (
+                        dict(raw_result)
+                        if known_stage or unknown_stage
+                        else credential_workflows._uncertain_adoption_worker_result()
+                    )
                 result["dry_run"] = False
                 result["request_sha256"] = request_sha256
                 # Worker-only drift gates must never become public approval
@@ -9384,6 +9421,13 @@ def command_credential_adopt(args: argparse.Namespace) -> int:
             result = _credential_cli_blocked(action, "credential_adoption_failed")
 
     result["dry_run"] = bool(args.dry_run)
+    for stage_field in (
+        "credential_input_received",
+        "complete_line_received",
+        "temporary_store_write_attempted",
+        "provider_request_attempted",
+    ):
+        result.setdefault(stage_field, False)
     _print_credential_command_result(result, args.format)
     return 0 if result.get("ok") else 1
 
@@ -25189,8 +25233,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     credential_adopt = subcommands.add_parser(
         "credential-adopt",
-        help="First-time enrollment or explicit replacement only: plan or approve Notion credential intake through a separate visible Windows console. Later approved work reuses the saved Windows credential and must not call this command again.",
-        description="First-time enrollment or explicit replacement only. The helper AI supplies reviewed task context, WOM supplies fixed security copy, and later approved work reuses the saved Windows credential without reopening the input console.",
+        help="First-time enrollment or explicit replacement only: plan or approve Notion credential intake in a separate native Windows popup. Later approved work reuses the saved Windows credential and must not call this command again.",
+        description="First-time enrollment or explicit replacement only. The helper AI supplies reviewed public-safe task context, WOM labels the operation as actual credential registration, and one isolated worker opens a separate native Windows popup whose opaque input cover reveals neither value nor length. PAT values are never accepted through AI chat, command arguments, ordinary stdin, environment variables, or the synthetic acceptance harness. Later approved work reuses the saved Windows credential without reopening the registration popup.",
     )
     credential_adopt.add_argument("archive_root", help="Archive root that will own the authenticated local receipt.")
     credential_adopt.add_argument(
@@ -25221,7 +25265,7 @@ def build_parser() -> argparse.ArgumentParser:
     credential_adopt.add_argument(
         "--replace-existing",
         action="store_true",
-        help="Explicit rotation/replacement intent. Without this reviewed flag, an authenticated matching registration is preserved and no input console opens.",
+        help="Explicit rotation/replacement intent. Without this reviewed flag, an authenticated matching registration is preserved and no secret-input prompt starts.",
     )
     credential_adopt.add_argument(
         "--reviewed-anchor-page-id",
@@ -25242,14 +25286,14 @@ def build_parser() -> argparse.ArgumentParser:
     credential_adopt.add_argument(
         "--interactive",
         action="store_true",
-        help="Required. Approval opens one separate visible Windows console in a spawned worker; typed characters are not echoed.",
+        help="Required. Approval lets one isolated spawned worker open the native Windows registration popup while the parent waits. Enter an actual credential only in that popup after confirming the registration intent; never use the synthetic acceptance line here.",
     )
     credential_adopt.add_argument(
         "--expected-request-sha256",
         help="Required with --approve. Must match the stable canonical request SHA-256 returned by dry-run.",
     )
     credential_adopt.add_argument("--dry-run", action="store_true", help="Validate and hash the stable request only; performs no live operation.")
-    credential_adopt.add_argument("--approve", action="store_true", help="For first enrollment or an explicitly reviewed replacement only: after exact request-hash approval, open one echo-disabled Windows console and persist the verified credential for later reuse.")
+    credential_adopt.add_argument("--approve", action="store_true", help="For first enrollment or an explicitly reviewed replacement only: after exact request-hash approval, open the native Windows registration popup and persist the verified credential for later reuse.")
     credential_adopt.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
     credential_adopt.set_defaults(func=command_credential_adopt)
 
@@ -32996,7 +33040,7 @@ def main(argv: list[str] | None = None) -> int:
             )
         else:
             print(
-                "credential-adopt accepts secrets only through its separate echo-disabled Windows console; private argument values were not echoed.",
+                "credential-adopt accepts secrets only inside its native Windows registration popup; PAT values are not command arguments, and private argument values were not echoed.",
                 file=sys.stderr,
             )
         return 2

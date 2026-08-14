@@ -1034,17 +1034,16 @@ These norms govern how the operator AI behaves, not what it is allowed to write.
 - ENUMERATE TOOLS BEFORE DECLARING IMPOSSIBLE. Before you say a task cannot be done, or quietly degrade it ("verbatim not possible, I'll summarize"), systematically check the installed and available tools: local CLIs, MCP servers, and the derive-text tool-readiness surface. One or two failed probes are not proof of impossibility.
 - CARRY ESTABLISHED STATE. Carry forward what is already set up or approved — in this session or recorded in operational-context (credentials configured, permissions granted, resources present). Do not re-ask for or re-confirm already-established state as if first-time. When unsure, CHECK the recorded context (operational-context, receipts) before asking again.
 
-## Human Credential Console
+## Human Credential Popup
 
 When an approved provider task needs a Notion credential, the helper AI and
-WOM own different text in the visible Windows console:
+WOM own different text:
 
 - the helper AI supplies one public-safe sentence describing the exact current
-  task and one public-safe sentence explaining why this task needs the Notion
-  connection;
-- WOM supplies the title, target labels, fixed security notice, masked-input
-  instructions, cancellation instructions, persistence notice, and every
-  statement about where the credential does or does not travel;
+  task and one public-safe sentence explaining why it needs the connection;
+- WOM supplies the native popup title, input-intent banner, target labels,
+  fixed security notice, cancellation and persistence copy, and every statement
+  about where the credential does or does not travel;
 - the helper AI cannot replace or weaken WOM's security text.
 
 Never put a page title, body excerpt, URL, filesystem path, email, identifier,
@@ -1057,78 +1056,119 @@ archive credential-adopt <archive-root> --account-label <safe-label> --workspace
 ```
 
 After reviewing the exact `request_sha256`, repeat the same public-safe fields
-with `--expected-request-sha256 <sha256> --approve`. The human types the secret
-only in the separate black Windows console. Do not ask the human to paste it in
-chat, a normal terminal prompt, argv, stdin, environment, or a file. WOM and
-the helper AI never read the clipboard directly; the human may deliberately
-paste into the isolated masked console, where it is handled only as console input.
+with `--expected-request-sha256 <sha256> --approve`. The human enters a real
+credential only in the separate native Unicode Windows popup whose exact intent
+is `CredentialPopupInputIntent.live_registration` and whose exact banner is
+`실제 자격 증명 등록`. Never ask for the credential in chat, argv,
+environment, ordinary stdin, a file, or the synthetic acceptance helper.
 
-The v0.3.318 prompt gives exact, bounded host guidance: use `Ctrl+V` or
-`Shift+Insert`; Windows Terminal's default configuration also supports
-`Ctrl+Shift+V`; right-click behavior depends on host settings, so choose Paste
-if a menu appears. Characters and length remain hidden. During the prompt
-`Ctrl+C` is ignored, and empty Enter is the one documented cancellation
-gesture. After one complete non-empty line arrives, the console shows only
-`입력값을 받았습니다. 검증 중입니다.` briefly. That proves console receipt,
-not provider acceptance or persistence. WOM performs no programmatic clipboard
-read.
+The popup runs in an isolated spawned child. Before native UI, store, provider,
+or archive work, that child detaches from the inherited console and sends the
+fixed content-free `popup_child_detached` acknowledgement. The parent installs
+a narrow `SIGINT` and Windows `SIGBREAK` ignore lease only around
+`Process.start()`, restores the exact original handlers before receiving, then
+requires the strict acknowledgement, final mapping, and terminal EOF sequence.
+A normal start is also joined without a timeout. An ambiguous start drains the
+pipe through terminal EOF before the parent can resume. Error text, secret
+content, and secret-derived metadata never cross this boundary.
 
-Interpret the v0.2 public result by its exact fixed stage:
+The child opens a Unicode modal owned popup and performs no console input,
+console output, or ordinary stdin read. A standard single-line password edit is
+fully covered by an opaque fixed-text sibling reading
+`입력 내용과 길이는 화면에 표시되지 않습니다.`. The opaque layer reveals
+no value, mask, caret, character count, or length. Copy and cut are blocked.
+Typing, Ctrl+V, Shift+Insert, and the restricted Paste/Clear context menu
+dispatch only through the standard edit; WOM never calls a clipboard API.
+Input-method association is proved absent before the popup may be shown.
+Non-empty input enables confirmation; Enter confirms. Cancel, close, or Escape
+returns cancellation while preserving only content-free causal facts.
 
-- `credential_input_cancelled_or_empty` is a pre-store cancel or empty line;
-- `credential_input_not_received` is a pre-store safe-input boundary failure,
-  not proof that a particular physical paste gesture worked or failed;
-- `provider_auth_rejected` is a post-write provider authentication rejection;
-- `provider_identity_endpoint_unavailable` is a post-write provider identity
-  service failure;
-- `reviewed_anchor_inaccessible` is a post-write reviewed-page access failure.
+The popup uses a per-thread per-monitor-v2 DPI lease, the system message font,
+measured wrapped text, and scaled geometry. It creates no dependency on a
+legacy stock font. Cleanup destroys the popup, deletes the owned font, removes
+the registered class, and exactly restores the prior DPI context. Any
+post-result cleanup failure wipes the owned result bytes before returning a
+fixed content-free error. A 168-DPI full native-bounds capture measured
+1155×823 and showed every instruction, overlay, status, and button; the earlier
+660×470 image was only an invalid upper-left crop, not acceptance evidence.
 
-The first two require `rollback_status: not_required`. The provider-stage
-outcomes require `deleted` or `delete_failed`; only verified exact-store
-absence can support `deleted`. A `delete_failed` result requires immediate
-human cleanup review, not retry. Unknown provider failures retain the
-conservative `provider_identity_unverified` fallback. Never expose or infer a
-secret from a reason, rollback, log, or UI state.
+Explicit intent prevents a test from being mistaken for registration. The
+manual helper uses:
 
-Automated synthetic Win32 API canaries and the opt-in
-`wom-kit/tools/check_windows_credential_console_host.py` manual synthetic
-host check are different evidence. The first verifies the API boundary; the
-second can record one human-observed host/gesture attempt without a real PAT,
-store, provider, private path, or clipboard API. Unless that manual check was
-actually completed, report actual physical paste gesture acceptance as
-`not_performed`; never generalize one host's result to customized Windows
-Terminal, Console Host, ConPTY, remote, or other configurations.
+- schema `wom-kit/windows-credential-popup-acceptance/v0.1`;
+- route `codex_desktop_native_popup`;
+- intent `CredentialPopupInputIntent.synthetic_acceptance`;
+- banner `합성 입력 테스트 · 실제 키 입력 금지`;
+- warning `경고: 실제 자격 증명은 절대 입력하거나 붙여넣지 마세요.`;
+- fixed challenge `WOM-INPUT-ACCEPTANCE-0319`.
+
+It asks the human to acknowledge synthetic-only intent before launch. It cannot
+request or receive an actual PAT, cannot call credential store or provider, and
+returns only strict Boolean observations plus the content-free classification
+`no_input`, `partial_input_cancelled`, `empty_confirmation`,
+`nonempty_input_mismatch`, or `exact_synthetic_input_received`. Synthetic
+popup acceptance never enrolls a credential. The human synthetic row remains
+failed and is not repeated as a prerequisite for this recovery; the helper is
+optional future acceptance only. Actual registration remains `not_performed`
+and may proceed only after published-runtime verification plus explicit human
+confirmation of the blue `실제 자격 증명 등록` banner. Automated Win32 and
+fake-message-loop checks are not physical human acceptance.
+
+Interpret the child `wom-credential-secure-intake-result/v0.3` and parent
+`wom-credential-workflow-result/v0.3` by four exact causal facts:
+
+- `credential_input_received` says that credential input was observed;
+- `complete_line_received` says explicit confirmation completed the candidate;
+- `temporary_store_write_attempted` says the exact store boundary was attempted;
+- `provider_request_attempted` says the verifier crossed actual provider transport.
+
+Unknown child state publishes four nulls. `provider_auth_rejected` is
+permitted only after a real request. Complete malformed, control-containing,
+provider-shape-invalid, over-limit, or UTF-8 byte-oversize input is
+`credential_input_invalid_for_provider`, exactly `1100`, with no
+store/provider attempt. A temporary store attempt whose verifier never crosses
+transport is `provider_request_not_attempted`. Provider identity-service and
+reviewed-page failures also require actual request evidence. Never infer a
+secret, gesture, length, provider body, status, path, identifier, or timing
+from these fields.
+
+`credential_input_boundary_failed` means input was observed before the secure
+native boundary or cleanup could complete. Preserve truthful `1000` or
+`1100` input facts, always rollback-not-required, store false, and provider
+false. Its fixed action is
+`repair_secure_input_boundary_and_create_a_new_plan`. It never claims that the
+input content was invalid. Rollback `deleted` requires both the exact delete
+and a fresh exact absence probe. Delete failure, a still-present entry, or an
+inconclusive probe is `delete_failed` and requires immediate human cleanup
+review, not retry.
 
 `credential-adopt` is not a per-task login command. Use it only for first
-enrollment. A matching authenticated registration makes a repeated call a
-no-prompt reuse only after authenticated receipt, exact saved-secret
-fingerprint, and current reviewed-anchor revalidation. Missing, replaced,
-or unreadable entries require a fresh reviewed replacement plan. A current
-anchor/provider check failure keeps the entry and requires page, sharing, and
-connection review before a no-prompt retry. After the human records the
-lifecycle default, normal approved
-work resolves and reuses the exact Windows Credential Manager entry. Open a
-new console again only when the credential is absent or unusable and the human
-has explicitly reviewed `--replace-existing`; never infer rotation from an API
-failure or retry it automatically.
+enrollment or an explicitly reviewed replacement. A matching authenticated
+registration becomes a no-prompt reuse only after authenticated receipt, exact
+saved-secret fingerprint, and current reviewed-anchor revalidation. Missing,
+replaced, or unreadable entries require a fresh reviewed replacement plan.
+Current anchor/provider check failure keeps the entry and requires page,
+sharing, and connection review before a no-prompt retry. Normal approved work
+reuses the exact Windows Credential Manager entry; never infer rotation from an
+API failure or retry it automatically.
 
 For an internal Notion integration, the provider-returned `bot.workspace_id`
 is the workspace basis. A person PAT has no returned workspace ID, so WOM binds
-its scope to the archive-keyed fingerprint of that exact saved PAT and still
-rechecks the current person identity plus reviewed-page access. The same PAT
-can therefore serve another reviewed page. Never merge a different PAT into
-that scope merely because labels match or a human says both tokens are in one
-workspace; rotation and reconciliation need separate lifecycle review.
+scope to the archive-keyed fingerprint of that exact saved PAT and rechecks the
+current person identity plus reviewed-page access. The same PAT can serve
+another reviewed page. Never merge a different PAT into that scope because
+labels match or a human says both tokens are in one workspace; rotation and
+reconciliation need separate lifecycle review.
 
 Authenticated v0.3.311-v0.3.316 receipts are legacy page-scoped records. WOM
 may evolve exactly one compatible record without asking for the PAT again: it
 authenticates the old receipt, rereads and fingerprint-checks the exact saved
 secret in the worker, revalidates the current provider/page, and appends a
 local authenticated scope-evolution record. It never rewrites the old receipt
-or the Credential Manager entry. A simple singleton lifecycle can move to the
-new authority; no lifecycle still needs a human default, and duplicate or
-complex state stops for review. If the local transition is interrupted, rerun
-the same approved operation to complete it; do not open a new secret console.
+or Credential Manager entry. A simple singleton lifecycle can move to the new
+authority; no lifecycle still needs a human default, and duplicate or complex
+state stops for review. If the local transition is interrupted, rerun the same
+approved operation to complete it; do not open a new credential popup.
 
 ## Plain-Language for Humans
 
