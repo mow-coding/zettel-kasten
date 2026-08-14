@@ -6,19 +6,28 @@ The filesystem folder is `wom-kit/`, the Python import package is `wom_kit`, and
 
 See `wom-kit/docs/concepts/naming-and-terminology.md` for the naming baseline.
 
-v0.3.318 makes `credential-adopt` console receipt and failures actionable while
-preserving the v0.3.317 first-enrollment/reuse boundary. The echo-disabled
-Unicode console guides `Ctrl+V`, `Shift+Insert`, Windows Terminal's default
-`Ctrl+Shift+V`, and host-dependent right-click. It ignores `Ctrl+C` during the
-prompt, treats empty Enter as cancellation, and shows only
-`입력값을 받았습니다. 검증 중입니다.` after a complete non-empty line. The
-v0.2 public result uses fixed stages for cancellation/empty input, console input
-failure, provider authentication rejection, provider identity-service
-unavailability, and reviewed-anchor inaccessibility; each result must match its
-valid pre-store or rollback state. WOM never reads the clipboard directly, and
-synthetic Win32 API canaries are not actual physical paste gesture evidence.
-See `wom-kit/docs/releases/v0.3.318.md` and
-`wom-kit/docs/letter131-credential-console-paste-and-failure-stages.md`.
+v0.3.319 replaces the withdrawn terminal-input prototypes with one separate
+native Windows credential popup in an isolated spawned child. The opaque cover
+over the standard password EDIT hides value, mask, caret, count, and length;
+WOM never reads the clipboard. Confirm stays disabled while empty.
+
+Production hard-codes `CredentialPopupInputIntent.live_registration` and
+shows the blue `실제 자격 증명 등록` banner. The source-tree acceptance helper
+hard-codes `synthetic_acceptance`, shows the red
+`합성 입력 테스트 · 실제 키 입력 금지` banner, accepts only the public fixed
+challenge, and performs no PAT request, registration, store write, or provider
+request. Missing or string intent fails before native show or live work.
+
+The child detaches and sends `popup_child_detached` before
+popup/native/store/provider/archive work. The parent restores its start-signal
+lease before accepting acknowledgement → final mapping → EOF and joins every
+normally started child. The v0.3 public result still projects only
+`credential_input_received`, `complete_line_received`,
+`temporary_store_write_attempted`, and `provider_request_attempted`. The human
+synthetic row remains failed and is not repeated as a recovery prerequisite.
+Actual registration is `not_performed`; it requires a verified published
+runtime and explicit confirmation of the blue live-registration banner. See
+`wom-kit/docs/releases/v0.3.319.md` and the Letter 132 guide.
 
 v0.3.316 closes the supported Python-cache collision gap left after v0.3.315
 detection. The alias-free CLI-only
@@ -53,7 +62,7 @@ Release, wheel, fresh installation, real-archive use, or human acceptance.
 
 v0.3.314 adds one alias-free `operation-control` surface for output-supervised
 `project-version-update`, `index`, and `index-health` runs. The current
-  v0.3.318 also supports `staged-cleanup-check`. A fresh `--output`
+  v0.3.319 also supports `staged-cleanup-check`. A fresh `--output`
 causes an early opaque operation reference; a later process can request
 content-free `status`, a 1-60 second `wait`, or read-only `recovery-plan` with
 the exact starting root. Completed state requires the saved output binding,
@@ -98,7 +107,8 @@ evidence of real-archive repair, external delivery, or human acceptance.
 v0.3.311 adds release-facing `credential-adopt`, `credential-secure-list`,
 `credential-lifecycle`, `notion-page-recovery-plan`, and
 `notion-page-recovery` commands. Credential intake accepts a PAT only through
-the separate echo-disabled Windows console in a spawned child. Listing separates
+the isolated child UI; the current v0.3.319 implementation is the intent-labeled
+native registration popup described above. Listing separates
 unauthenticated metadata from authenticated receipt/lifecycle evidence, and
 lifecycle approval never deletes or revokes another credential. The recovery
 commands require the complete reviewed 577+43 request while allowing bounded

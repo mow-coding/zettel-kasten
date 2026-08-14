@@ -59,6 +59,8 @@ Supporting philosophy and model docs:
 - [v0.3.317 Letter 130 Staged-Cleanup Evidence Decision](archive-infra-decision-log-2026-08-13-v03317-letter130-staged-cleanup-evidence.md)
 - [Letter 131 Credential Console Paste And Failure Stages](letter131-credential-console-paste-and-failure-stages.md)
 - [v0.3.318 Letter 131 Credential Input Decision](archive-infra-decision-log-2026-08-13-v03318-letter131-credential-input.md)
+- [Letter 132 Native Credential Popup And Causal Evidence](letter132-credential-console-keyboard-readiness-and-causal-evidence.md)
+- [v0.3.319 Letter 132 Credential Input Evidence Decision](archive-infra-decision-log-2026-08-14-v03319-letter132-credential-input-evidence.md)
 - [Project Version Update](project-version-update.md)
 - [Derived Text Capture And Paired-Batch Recovery](derived-text.md)
 - [Letters 120 and 123 Index Lifecycle And Feedback Body](letter120-123-index-lifecycle-and-feedback-body.md)
@@ -440,6 +442,7 @@ These documents record public-safe work already performed.
 - [v0.3.315 Release Note](releases/v0.3.315.md)
 - [v0.3.316 Release Note](releases/v0.3.316.md)
 - [v0.3.317 Release Note](releases/v0.3.317.md)
+- [v0.3.319 Release Note](releases/v0.3.319.md)
 - [v0.3.318 Release Note](releases/v0.3.318.md)
 
 Work logs are not the same as product specs.

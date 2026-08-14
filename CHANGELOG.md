@@ -6,6 +6,59 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.319 - 2026-08-14
+
+- Withdrew the terminal-based Letter 132 credential-entry prototypes after
+  repeated real-host failures, unreadable Korean UI, and the user's explicit
+  request for a separate popup.
+- Replaced the production path with a Unicode native Windows popup in one
+  isolated spawned child. The standard single-line password EDIT retains
+  keyboard editing, Ctrl+V, Shift+Insert, and a Paste/Clear-only menu, while an
+  opaque sibling covers the complete field so no value, mask glyph, caret,
+  count, or length is rendered. Copy/cut are blocked and product code never
+  reads the clipboard.
+- Added the exact closed enum `CredentialPopupInputIntent`.
+  `live_registration` is hard-coded by the production facade and displays the
+  blue `실제 자격 증명 등록` banner. `synthetic_acceptance` displays the red
+  `합성 입력 테스트 · 실제 키 입력 금지` banner plus an explicit warning never
+  to enter a real credential. Missing or plain-string intent fails before
+  native show, focus, store, or provider access.
+- Converted the historically named manual host helper to popup-only schema
+  `wom-kit/windows-credential-popup-acceptance/v0.1` and route
+  `codex_desktop_native_popup`. It accepts only
+  `WOM-INPUT-ACCEPTANCE-0319`, requests no PAT, and performs no registration,
+  credential-store write, or provider request.
+- Kept the pre-intent human mismatch row failed. The person later clarified
+  that the old harness copy had led them to enter an actual secret instead of
+  the fixed challenge. The value was not logged, returned to the parent, stored,
+  or sent to a provider, and the child buffer was wiped. That synthetic row
+  remains failed and will not be repeated as a recovery prerequisite. Actual
+  registration remains `not_performed`.
+- Made the child detach before popup/native/store/provider/archive work and send
+  one fixed `popup_child_detached` acknowledgement before live work. The
+  parent restores a narrow `SIGINT`/`SIGBREAK` start lease before receiving,
+  accepts only acknowledgement → final mapping → EOF, and additionally joins
+  every normally started child without a timeout or terminate path.
+- Added a PMv2 thread-DPI lease, current Windows message font, measured wrapped
+  rows, scaled common-DPI geometry, owner centering, IME-absence proof, dialog
+  key routing, and exact window/font/class/DPI cleanup. Cleanup ambiguity wipes
+  any otherwise-returnable secret before a content-free error.
+- Corrected the visual evidence: the apparent clipping was a DPI-unaware
+  660×470 capture of the upper-left corner of a complete 1155×823 popup at
+  168 DPI. A PMv2-aware full capture showed all instructions, overlay, status,
+  and buttons without clipping or overlap.
+- Kept secure-intake and workflow result envelopes at v0.3 with only
+  `credential_input_received`, `complete_line_received`,
+  `temporary_store_write_attempted`, and `provider_request_attempted`.
+  Unknown child state projects four nulls; local invalid input, native boundary
+  failure, actual provider rejection, and exact post-delete absence remain
+  separate causal stages.
+- Local source, fake Win32, privacy, DPI, buffer-wipe, and transport tests are
+  implementation evidence only. They do not prove merge, external CI, exact
+  tag, GitHub Release, wheel publication, fresh installation, exact synthetic
+  human acceptance, live credential registration, provider acceptance,
+  credential persistence, or recovery.
+
 ## v0.3.318 - 2026-08-13
 
 - Made successful masked-console input visible without revealing the value or

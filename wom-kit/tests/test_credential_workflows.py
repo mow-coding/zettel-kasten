@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import copy
+import ctypes
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import hashlib
 import json
 from pathlib import Path
+import pickle
 import tempfile
+import threading
 import unittest
 from unittest.mock import patch
 import uuid
@@ -14,6 +17,7 @@ import uuid
 import wom_kit.credential_workflows as credential_workflows
 from wom_kit.credential_secure_intake import (
     AtomicJsonReceiptCommitter,
+    HumanSecretInputResult,
     NOTION_PAT_SCOPE_FINGERPRINT_DOMAIN,
     NOTION_PAT_WORKSPACE_IDENTITY_BASIS,
 )
@@ -56,6 +60,18 @@ CAPABILITIES = (
     "retrieve_page",
     "retrieve_page_as_markdown",
 )
+
+
+class SecretStr(str):
+    """Pickle-safe hostile child string carrying secret-adjacent state."""
+
+    def __new__(cls, value: str, secret: str | None = None):
+        instance = super().__new__(cls, value)
+        instance.secret = secret
+        return instance
+
+    def __repr__(self) -> str:
+        return f"<SecretStr leaked={self.secret!r}>"
 
 ZERO_LIVE_OPERATIONS = {
     "native_calls": 0,
@@ -156,6 +172,7 @@ class FakeWindowsNative:
     secret_text: str = SECRET_TEXT
     delete_fails: bool = False
     probe_fails: bool = False
+    secret_write_fails: bool = False
     probe_fail_targets: set[str] = field(default_factory=set, repr=False)
     read_fail_targets: set[str] = field(default_factory=set, repr=False)
     values: dict[str, bytearray] = field(default_factory=dict, repr=False)
@@ -165,19 +182,40 @@ class FakeWindowsNative:
     prompts: int = 0
     sid_reads: int = 0
 
-    def prompt_masked_secret(self, *, request_id: str, context=None) -> bytearray | None:
+    def prompt_masked_secret(
+        self, *, request_id: str, context=None
+    ) -> HumanSecretInputResult:
         self.prompts += 1
         if self.cancelled:
-            return None
-        return bytearray(self.secret_text.encode("utf-8"))
+            return HumanSecretInputResult(
+                secret=None,
+                credential_input_received=True,
+                complete_line_received=True,
+                cancelled=True,
+            )
+        return HumanSecretInputResult(
+            secret=bytearray(self.secret_text.encode("utf-8")),
+            credential_input_received=True,
+            complete_line_received=True,
+            cancelled=False,
+        )
 
     def write_generic(self, target_name: str, secret: memoryview) -> None:
         self.writes.append(target_name)
+        if (
+            self.secret_write_fails
+            and "/backend_" in target_name
+            and "backend_key_" not in target_name
+        ):
+            raise RuntimeError("synthetic secret write failure must not escape")
         self.values[target_name] = bytearray(secret)
 
     def generic_exists(self, target_name: str) -> bool:
         self.probes.append(target_name)
-        if self.probe_fails or target_name in self.probe_fail_targets:
+        if (
+            self.probe_fails
+            or target_name in self.probe_fail_targets
+        ):
             raise RuntimeError("synthetic probe detail must not escape")
         return target_name in self.values
 
@@ -606,159 +644,393 @@ class CredentialWorkflowPlanningTests(unittest.TestCase):
         self.assertIsNone(forged["accepted"])
         self.assertIsNone(forged["persisted"])
 
-    def test_adoption_projection_binds_failure_stage_to_rollback_state(self) -> None:
-        input_reasons = {
-            "credential_input_cancelled_or_empty",
-            "credential_input_not_received",
+    def test_adoption_projection_binds_reason_stage_and_rollback_exactly(self) -> None:
+        def stage(bits: str) -> dict[str, bool]:
+            return dict(
+                zip(
+                    (
+                        "credential_input_received",
+                        "complete_line_received",
+                        "temporary_store_write_attempted",
+                        "provider_request_attempted",
+                    ),
+                    (bit == "1" for bit in bits),
+                    strict=True,
+                )
+            )
+
+        valid_cases = (
+            ("credential_input_not_received", "0000", "not_required", False),
+            ("credential_input_not_received", "1000", "not_required", False),
+            ("secret_input_unavailable", "0000", "not_required", False),
+            ("credential_input_cancelled_or_empty", "0000", "not_required", False),
+            ("credential_input_cancelled_or_empty", "1000", "not_required", False),
+            ("credential_input_cancelled_or_empty", "1100", "not_required", False),
+            ("credential_input_invalid_for_provider", "1100", "not_required", False),
+            ("credential_input_boundary_failed", "1000", "not_required", False),
+            ("credential_input_boundary_failed", "1100", "not_required", False),
+            ("human_cancelled", "0000", "not_required", False),
+            ("store_write_failed", "1110", "deleted", False),
+            ("store_presence_not_verified", "1110", "delete_failed", False),
+            ("provider_request_not_attempted", "1110", "deleted", False),
+            ("provider_auth_rejected", "1111", "deleted", False),
+            ("provider_identity_endpoint_unavailable", "1111", "delete_failed", False),
+            ("reviewed_anchor_inaccessible", "1111", "deleted", False),
+            ("provider_identity_unverified", "1111", "deleted", False),
+            ("workspace_anchor_mismatch", "1111", "deleted", False),
+            ("receipt_commit_failed", "1111", "deleted", False),
+            ("request_expired", "0000", "not_required", False),
+            ("request_replayed", "0000", "not_required", False),
+            ("request_user_mismatch", "0000", "not_required", False),
+            ("request_claim_failed", "0000", "not_required", False),
+            ("plan_digest_mismatch", "0000", "not_required", False),
+            ("credential_adoption_archive_identity_mismatch", "0000", "not_required", False),
+            ("credential_adoption_existing_store_missing", "0000", "not_required", False),
+            ("credential_adoption_existing_scope_revalidation_failed", "0001", "not_required", False),
+            ("credential_adoption_archive_identity_changed", "1111", "not_required", True),
+            ("credential_adoption_rediscovery_verification_failed", "1111", "not_required", True),
+        )
+        for reason, bits, rollback, persisted in valid_cases:
+            with self.subTest(reason=reason, bits=bits, rollback=rollback):
+                child = credential_workflows._approved_adoption_worker_failure(
+                    reason,
+                    accepted=persisted,
+                    persisted=persisted,
+                    rollback_status=rollback,
+                    **stage(bits),
+                )
+                projected = credential_workflows._project_adoption_worker_result(
+                    child
+                )
+                self.assertEqual(projected, child)
+                self.assertEqual(
+                    tuple(projected[field] for field in stage(bits)),
+                    tuple(stage(bits).values()),
+                )
+                self.assertEqual(
+                    projected["store_absence_verified"], rollback == "deleted"
+                )
+                self.assertIs(type(projected["reason_code"]), str)
+                self.assertIs(type(projected["rollback_status"]), str)
+
+        expected_new_actions = {
+            "credential_input_invalid_for_provider": (
+                "enter_a_complete_provider_credential_with_a_new_plan"
+            ),
+            "credential_input_boundary_failed": (
+                "repair_secure_input_boundary_and_create_a_new_plan"
+            ),
+            "provider_request_not_attempted": (
+                "stop_and_review_the_provider_adapter_before_retrying"
+            ),
         }
-        provider_reasons = {
+        for reason, action in expected_new_actions.items():
+            bits = (
+                "1100"
+                if reason
+                in {
+                    "credential_input_invalid_for_provider",
+                    "credential_input_boundary_failed",
+                }
+                else "1110"
+            )
+            rollback = "not_required" if bits == "1100" else "deleted"
+            projected = credential_workflows._project_adoption_worker_result(
+                credential_workflows._approved_adoption_worker_failure(
+                    reason,
+                    rollback_status=rollback,
+                    **stage(bits),
+                )
+            )
+            self.assertEqual(projected["operator_action"], action)
+
+        invalid_cases = (
+            ("credential_input_invalid_for_provider", "1000", "not_required"),
+            ("credential_input_invalid_for_provider", "1110", "deleted"),
+            ("credential_input_boundary_failed", "0000", "not_required"),
+            ("credential_input_boundary_failed", "1110", "deleted"),
+            ("store_write_failed", "1100", "not_required"),
+            ("provider_request_not_attempted", "1111", "deleted"),
+            ("provider_auth_rejected", "1110", "deleted"),
+            ("provider_auth_rejected", "1111", "not_required"),
+            ("credential_adoption_existing_scope_revalidation_failed", "1110", "deleted"),
+            ("credential_adoption_archive_identity_changed", "1111", "deleted"),
+        )
+        for reason, bits, rollback in invalid_cases:
+            with self.subTest(forged_reason=reason, bits=bits, rollback=rollback):
+                forged = credential_workflows._approved_adoption_worker_failure(
+                    reason,
+                    accepted=(
+                        reason == "credential_adoption_archive_identity_changed"
+                    ),
+                    persisted=(
+                        reason == "credential_adoption_archive_identity_changed"
+                    ),
+                    rollback_status=rollback,
+                    **stage(bits),
+                )
+                projected = credential_workflows._project_adoption_worker_result(
+                    forged
+                )
+                self.assertEqual(
+                    projected["reason_code"],
+                    "credential_adoption_worker_state_unknown",
+                )
+                self.assertIsNone(projected["accepted"])
+                self.assertIsNone(projected["persisted"])
+
+    def test_adoption_projection_rejects_untrusted_stage_evidence_as_unknown(self) -> None:
+        stage_fields = (
+            "credential_input_received",
+            "complete_line_received",
+            "temporary_store_write_attempted",
+            "provider_request_attempted",
+        )
+        valid = credential_workflows._approved_adoption_worker_failure(
             "provider_auth_rejected",
-            "provider_identity_endpoint_unavailable",
-            "reviewed_anchor_inaccessible",
-        }
-        expected_provider_actions = {
-            "provider_auth_rejected": "review_the_notion_credential_and_create_a_new_plan",
-            "provider_identity_endpoint_unavailable": "create_a_new_plan_after_provider_identity_service_recovers",
-            "reviewed_anchor_inaccessible": "review_page_access_and_create_a_new_plan",
-        }
-        legacy_pre_store_reasons = {
-            "human_cancelled",
-            "secret_input_unavailable",
-            "request_expired",
-            "request_replayed",
-            "request_user_mismatch",
-            "request_claim_failed",
-            "plan_digest_mismatch",
-        }
-        store_stage_reasons = {
-            "store_write_failed",
-            "store_presence_not_verified",
-            "receipt_commit_failed",
-        }
+            rollback_status="deleted",
+            credential_input_received=True,
+            complete_line_received=True,
+            temporary_store_write_attempted=True,
+            provider_request_attempted=True,
+        )
+        malformed: list[tuple[str, dict[str, object]]] = []
+        for field in stage_fields:
+            missing = dict(valid)
+            missing.pop(field)
+            malformed.append((f"missing_{field}", missing))
+        extra = dict(valid)
+        extra["untrusted_stage_detail"] = False
+        malformed.append(("extra_field", extra))
+        old_schema = dict(valid)
+        old_schema["schema_version"] = "wom-credential-workflow-result/v0.2"
+        malformed.append(("v0.2_child", old_schema))
+        for field in stage_fields:
+            for value in (0, 1, None, "false"):
+                non_bool = dict(valid)
+                non_bool[field] = value
+                malformed.append((f"{field}_{value!r}", non_bool))
 
-        for reason in sorted(input_reasons):
-            with self.subTest(reason=reason, rollback="not_required"):
-                valid = credential_workflows._approved_adoption_worker_failure(
-                    reason,
-                    rollback_status="not_required",
-                )
+        for label, child in malformed:
+            with self.subTest(case=label):
                 projected = credential_workflows._project_adoption_worker_result(
-                    valid
-                )
-                self.assertEqual(projected["reason_code"], reason)
-                self.assertEqual(projected["rollback_status"], "not_required")
-                self.assertFalse(projected["store_absence_verified"])
-
-            with self.subTest(reason=reason, rollback="deleted_is_forged"):
-                forged = credential_workflows._approved_adoption_worker_failure(
-                    reason,
-                    rollback_status="deleted",
-                )
-                projected = credential_workflows._project_adoption_worker_result(
-                    forged
+                    child
                 )
                 self.assertEqual(
                     projected["reason_code"],
                     "credential_adoption_worker_state_unknown",
                 )
-                self.assertIsNone(projected["accepted"])
-                self.assertIsNone(projected["persisted"])
-
-        for reason in sorted(legacy_pre_store_reasons):
-            with self.subTest(reason=reason, compatibility="pre_store_v01"):
-                valid = credential_workflows._approved_adoption_worker_failure(
-                    reason,
-                    rollback_status="not_required",
-                )
                 self.assertEqual(
-                    credential_workflows._project_adoption_worker_result(valid)[
-                        "reason_code"
-                    ],
-                    reason,
-                )
-                forged = credential_workflows._approved_adoption_worker_failure(
-                    reason,
-                    rollback_status="deleted",
-                )
-                self.assertEqual(
-                    credential_workflows._project_adoption_worker_result(forged)[
-                        "reason_code"
-                    ],
-                    "credential_adoption_worker_state_unknown",
+                    [projected[field] for field in stage_fields],
+                    [None, None, None, None],
                 )
 
-        for reason in sorted(store_stage_reasons):
-            with self.subTest(reason=reason, compatibility="store_stage_v01"):
-                valid = credential_workflows._approved_adoption_worker_failure(
-                    reason,
-                    rollback_status="deleted",
-                )
-                self.assertEqual(
-                    credential_workflows._project_adoption_worker_result(valid)[
-                        "reason_code"
-                    ],
-                    reason,
-                )
-                forged = credential_workflows._approved_adoption_worker_failure(
-                    reason,
-                    rollback_status="not_required",
-                )
-                self.assertEqual(
-                    credential_workflows._project_adoption_worker_result(forged)[
-                        "reason_code"
-                    ],
-                    "credential_adoption_worker_state_unknown",
+    def test_adoption_projection_rejects_pickle_roundtrip_secret_string_subclasses(
+        self,
+    ) -> None:
+        stage_fields = (
+            "credential_input_received",
+            "complete_line_received",
+            "temporary_store_write_attempted",
+            "provider_request_attempted",
+        )
+
+        def assert_unknown_after_transport(
+            child: dict[str, object],
+            *,
+            field: str,
+            sentinel: str,
+            nested_field: str | None = None,
+        ) -> None:
+            transported = pickle.loads(pickle.dumps(child))
+            transported_value = transported[field]
+            if nested_field is not None:
+                self.assertIsInstance(transported_value, dict)
+                transported_value = transported_value[nested_field]
+            self.assertIs(type(transported_value), SecretStr)
+            self.assertIn(sentinel, repr(transported))
+
+            projected = credential_workflows._project_adoption_worker_result(
+                transported
+            )
+
+            self.assertEqual(
+                projected["reason_code"],
+                "credential_adoption_worker_state_unknown",
+            )
+            self.assertEqual(
+                [projected[stage_field] for stage_field in stage_fields],
+                [None, None, None, None],
+            )
+            public_rendering = repr(projected) + json.dumps(
+                projected,
+                ensure_ascii=False,
+                sort_keys=True,
+            )
+            self.assertNotIn(sentinel, public_rendering)
+
+        valid_failure = credential_workflows._approved_adoption_worker_failure(
+            "provider_auth_rejected",
+            rollback_status="deleted",
+            credential_input_received=True,
+            complete_line_received=True,
+            temporary_store_write_attempted=True,
+            provider_request_attempted=True,
+        )
+        for field, value, sentinel in (
+            (
+                "schema_version",
+                credential_workflows.WORKFLOW_RESULT_SCHEMA_VERSION,
+                "PRIVATE_SCHEMA_SENTINEL",
+            ),
+            (
+                "lifecycle_action",
+                "secure_credential_adoption_execute",
+                "PRIVATE_ACTION_SENTINEL",
+            ),
+            (
+                "reason_code",
+                "provider_auth_rejected",
+                "PRIVATE_REASON_SENTINEL",
+            ),
+            ("rollback_status", "deleted", "PRIVATE_ROLLBACK_SENTINEL"),
+            (
+                "operator_action",
+                "review_the_notion_credential_and_create_a_new_plan",
+                "PRIVATE_OPERATOR_SENTINEL",
+            ),
+        ):
+            with self.subTest(shape="failure", field=field):
+                child = dict(valid_failure)
+                child[field] = SecretStr(value, sentinel)
+                assert_unknown_after_transport(
+                    child,
+                    field=field,
+                    sentinel=sentinel,
                 )
 
-        for reason in sorted(provider_reasons):
-            for rollback in ("deleted", "delete_failed"):
-                with self.subTest(reason=reason, rollback=rollback):
-                    valid = credential_workflows._approved_adoption_worker_failure(
-                        reason,
-                        rollback_status=rollback,
-                    )
-                    projected = credential_workflows._project_adoption_worker_result(
-                        valid
-                    )
-                    self.assertEqual(projected["reason_code"], reason)
-                    self.assertEqual(projected["rollback_status"], rollback)
-                    self.assertEqual(
-                        projected["operator_action"],
-                        (
-                            "stop_and_remove_the_exact_encrypted_store_entry"
-                            if rollback == "delete_failed"
-                            else expected_provider_actions[reason]
-                        ),
-                    )
-                    self.assertEqual(
-                        projected["store_absence_verified"],
-                        rollback == "deleted",
-                    )
+        for nested_field, value, sentinel in (
+            (
+                "live_operation_boundary",
+                "approved_worker_execution_entered",
+                "PRIVATE_OPERATIONS_BOUNDARY_SENTINEL",
+            ),
+            (
+                "count_status",
+                "unknown_may_be_nonzero",
+                "PRIVATE_OPERATIONS_COUNT_SENTINEL",
+            ),
+        ):
+            with self.subTest(shape="failure", field=f"operations.{nested_field}"):
+                child = dict(valid_failure)
+                operations = dict(APPROVED_WORKER_OPERATIONS_UNKNOWN)
+                operations[nested_field] = SecretStr(value, sentinel)
+                child["operations"] = operations
+                assert_unknown_after_transport(
+                    child,
+                    field="operations",
+                    nested_field=nested_field,
+                    sentinel=sentinel,
+                )
 
-            with self.subTest(reason=reason, rollback="not_required_is_forged"):
-                forged = credential_workflows._approved_adoption_worker_failure(
-                    reason,
-                    rollback_status="not_required",
+        valid_success: dict[str, object] = {
+            "schema_version": credential_workflows.WORKFLOW_RESULT_SCHEMA_VERSION,
+            "ok": True,
+            "lifecycle_action": "secure_credential_adoption_execute",
+            "accepted": True,
+            "persisted": True,
+            "reason_code": "credential_adoption_persisted_and_rediscoverable",
+            "credential_id": CREDENTIAL_ID,
+            "authenticated_rediscovery_verified": True,
+            "human_default_decision_required": True,
+            "secret_value_present": False,
+            "reviewed_anchor_present_in_result": False,
+            "backend_target_present": False,
+            "crash_or_power_loss_rollback_guaranteed": False,
+            "operations": dict(APPROVED_WORKER_OPERATIONS_UNKNOWN),
+            "credential_input_received": True,
+            "complete_line_received": True,
+            "temporary_store_write_attempted": True,
+            "provider_request_attempted": True,
+        }
+        projected_success = credential_workflows._project_adoption_worker_result(
+            valid_success
+        )
+        self.assertTrue(projected_success["ok"])
+        self.assertIs(type(projected_success["credential_id"]), str)
+        for field, value, sentinel in (
+            (
+                "schema_version",
+                credential_workflows.WORKFLOW_RESULT_SCHEMA_VERSION,
+                "PRIVATE_SUCCESS_SCHEMA_SENTINEL",
+            ),
+            (
+                "lifecycle_action",
+                "secure_credential_adoption_execute",
+                "PRIVATE_SUCCESS_ACTION_SENTINEL",
+            ),
+            (
+                "reason_code",
+                "credential_adoption_persisted_and_rediscoverable",
+                "PRIVATE_SUCCESS_REASON_SENTINEL",
+            ),
+            ("credential_id", CREDENTIAL_ID, "PRIVATE_SUCCESS_ID_SENTINEL"),
+        ):
+            with self.subTest(shape="success", field=field):
+                child = dict(valid_success)
+                child[field] = SecretStr(value, sentinel)
+                assert_unknown_after_transport(
+                    child,
+                    field=field,
+                    sentinel=sentinel,
                 )
-                projected = credential_workflows._project_adoption_worker_result(
-                    forged
+
+        valid_reuse = {
+            **valid_success,
+            "accepted": False,
+            "reason_code": (
+                "credential_adoption_existing_registration_preserved_without_prompt"
+            ),
+            "secret_prompt_performed": False,
+            "existing_registration_reused": True,
+            "workspace_scope_migrated": False,
+            "credential_input_received": False,
+            "complete_line_received": False,
+            "temporary_store_write_attempted": False,
+            "provider_request_attempted": True,
+        }
+        projected_reuse = credential_workflows._project_adoption_worker_result(
+            valid_reuse
+        )
+        self.assertTrue(projected_reuse["ok"])
+        self.assertIs(type(projected_reuse["reason_code"]), str)
+        self.assertIs(type(projected_reuse["credential_id"]), str)
+        for field, value, sentinel in (
+            (
+                "reason_code",
+                "credential_adoption_existing_registration_preserved_without_prompt",
+                "PRIVATE_REUSE_REASON_SENTINEL",
+            ),
+            ("credential_id", CREDENTIAL_ID, "PRIVATE_REUSE_ID_SENTINEL"),
+        ):
+            with self.subTest(shape="reuse", field=field):
+                child = dict(valid_reuse)
+                child[field] = SecretStr(value, sentinel)
+                assert_unknown_after_transport(
+                    child,
+                    field=field,
+                    sentinel=sentinel,
                 )
-                self.assertEqual(
-                    projected["reason_code"],
-                    "credential_adoption_worker_state_unknown",
-                )
-                self.assertIsNone(projected["accepted"])
-                self.assertIsNone(projected["persisted"])
 
     def test_adoption_worker_start_evidence_controls_zero_vs_unknown(self) -> None:
         class FakeConnection:
-            def __init__(self, *, eof: bool = False) -> None:
-                self.eof = eof
+            def __init__(self, messages=()) -> None:
+                self.messages = list(messages)
 
             def recv(self):
-                if self.eof:
+                if not self.messages:
                     raise EOFError
-                raise AssertionError("send side cannot receive")
+                return self.messages.pop(0)
 
             def close(self) -> None:
                 pass
@@ -785,7 +1057,14 @@ class CredentialWorkflowPlanningTests(unittest.TestCase):
             def Pipe(self, *, duplex: bool):
                 if duplex is not False:
                     raise AssertionError("adoption pipe must be one-way")
-                return FakeConnection(eof=True), FakeConnection()
+                messages = (
+                    ()
+                    if self.process.fail_start
+                    else (
+                        {"worker_transport_status": "popup_child_detached"},
+                    )
+                )
+                return FakeConnection(messages), FakeConnection()
 
             def Process(self, **_kwargs):
                 return self.process
@@ -798,6 +1077,29 @@ class CredentialWorkflowPlanningTests(unittest.TestCase):
             "requested_capabilities": CAPABILITIES,
             "approved": True,
         }
+        fake_sigint = object()
+        fake_sigbreak = object()
+        original_sigint = object()
+        original_sigbreak = object()
+        handlers = {
+            fake_sigint: original_sigint,
+            fake_sigbreak: original_sigbreak,
+        }
+
+        def get_handler(signal_number):
+            return handlers[signal_number]
+
+        def set_handler(signal_number, handler):
+            previous = handlers[signal_number]
+            handlers[signal_number] = handler
+            return previous
+
+        production_spawner = (
+            credential_workflows.SpawnCredentialAdoptionWorkerSpawner(
+                _signal_getter=get_handler,
+                _signal_setter=set_handler,
+            )
+        )
 
         not_started = execute_windows_notion_credential_adoption(
             ".",
@@ -812,14 +1114,61 @@ class CredentialWorkflowPlanningTests(unittest.TestCase):
         self.assertEqual(not_started["operations"], ZERO_LIVE_OPERATIONS)
         self.assertNotIn("durable_state", not_started)
 
+        class InvalidStartEvidenceSpawner:
+            def __init__(self, worker_started, result=None) -> None:
+                self.worker_started = worker_started
+                self.result = result
+
+            def run_worker(self, _invocation):
+                return credential_workflows._CredentialAdoptionWorkerRunOutcome(
+                    worker_started=self.worker_started,
+                    result=self.result,
+                )
+
+        invalid_start_cases = (
+            (None, None),
+            (1, None),
+            ("false", None),
+            (False, {"ok": False}),
+        )
+        for worker_started, child_result in invalid_start_cases:
+            with self.subTest(
+                worker_started=worker_started,
+                child_result=child_result,
+            ):
+                invalid_start = execute_windows_notion_credential_adoption(
+                    ".",
+                    plan,
+                    worker_spawner=InvalidStartEvidenceSpawner(
+                        worker_started,
+                        child_result,
+                    ),
+                    **call_kwargs,
+                )
+                self.assertEqual(
+                    invalid_start["reason_code"],
+                    "credential_adoption_worker_state_unknown",
+                )
+                self.assertIsNone(invalid_start["accepted"])
+                self.assertIsNone(invalid_start["persisted"])
+                self.assertEqual(
+                    invalid_start["durable_state"],
+                    "unknown_may_have_changed",
+                )
+
         with patch.object(
             credential_workflows.multiprocessing,
             "get_context",
             return_value=FakeSpawnContext(fail_start=True),
+        ), patch.object(
+            credential_workflows,
+            "_credential_worker_start_signals",
+            return_value=(fake_sigint, fake_sigbreak),
         ):
             production_prestart = execute_windows_notion_credential_adoption(
                 ".",
                 plan,
+                worker_spawner=production_spawner,
                 **call_kwargs,
             )
         self.assertEqual(
@@ -832,10 +1181,15 @@ class CredentialWorkflowPlanningTests(unittest.TestCase):
             credential_workflows.multiprocessing,
             "get_context",
             return_value=FakeSpawnContext(fail_start=False),
+        ), patch.object(
+            credential_workflows,
+            "_credential_worker_start_signals",
+            return_value=(fake_sigint, fake_sigbreak),
         ):
             production_eof = execute_windows_notion_credential_adoption(
                 ".",
                 plan,
+                worker_spawner=production_spawner,
                 **call_kwargs,
             )
         self.assertEqual(
@@ -848,6 +1202,953 @@ class CredentialWorkflowPlanningTests(unittest.TestCase):
             production_eof["durable_state"], "unknown_may_have_changed"
         )
 
+    def test_spawned_popup_child_freeconsole_signature_and_strict_boolean(self) -> None:
+        class FakeFreeConsole:
+            def __init__(self, result) -> None:
+                self.result = result
+                self.calls = 0
+                self.argtypes = None
+                self.restype = None
+
+            def __call__(self):
+                self.calls += 1
+                if isinstance(self.result, BaseException):
+                    raise self.result
+                return self.result
+
+        class FakeKernel32:
+            def __init__(self, result) -> None:
+                self.FreeConsole = FakeFreeConsole(result)
+
+        for raw_result, expected in (
+            (True, True),
+            (False, False),
+            (1, False),
+            (2, False),
+            (0, False),
+            (None, False),
+            ("true", False),
+        ):
+            with self.subTest(raw_result=repr(raw_result)):
+                kernel32 = FakeKernel32(raw_result)
+                self.assertIs(
+                    credential_workflows._detach_spawned_popup_child_console(
+                        kernel32=kernel32,
+                        platform_name="nt",
+                    ),
+                    expected,
+                )
+                self.assertEqual(kernel32.FreeConsole.calls, 1)
+                self.assertEqual(kernel32.FreeConsole.argtypes, [])
+                self.assertIs(
+                    kernel32.FreeConsole.restype,
+                    credential_workflows.wintypes.BOOL,
+                )
+
+        with self.assertRaises(RuntimeError):
+            credential_workflows._detach_spawned_popup_child_console(
+                kernel32=FakeKernel32(RuntimeError("synthetic detach failure")),
+                platform_name="nt",
+            )
+
+        native_free_console = ctypes.CFUNCTYPE(
+            credential_workflows.wintypes.BOOL
+        )(lambda: 2)
+        native_kernel32 = type(
+            "NativeKernel32",
+            (),
+            {"FreeConsole": native_free_console},
+        )()
+        self.assertIs(
+            credential_workflows._detach_spawned_popup_child_console(
+                kernel32=native_kernel32,
+                platform_name="nt",
+            ),
+            True,
+        )
+        native_zero = ctypes.CFUNCTYPE(
+            credential_workflows.wintypes.BOOL
+        )(lambda: 0)
+        native_kernel32.FreeConsole = native_zero
+        self.assertIs(
+            credential_workflows._detach_spawned_popup_child_console(
+                kernel32=native_kernel32,
+                platform_name="nt",
+            ),
+            False,
+        )
+
+    def test_spawned_entry_detach_failure_returns_only_transport_marker(self) -> None:
+        class ExplodingInvocation:
+            def __getattribute__(self, name):
+                raise AssertionError(f"invocation accessed before detach: {name}")
+
+        class FakeConnection:
+            def __init__(self) -> None:
+                self.sent: list[object] = []
+                self.closed = False
+
+            def send(self, value) -> None:
+                self.sent.append(value)
+
+            def close(self) -> None:
+                self.closed = True
+
+        for detach_result in (
+            False,
+            1,
+            None,
+            RuntimeError("synthetic detach failure"),
+            KeyboardInterrupt(),
+        ):
+            with self.subTest(detach=type(detach_result).__name__):
+                connection = FakeConnection()
+                detach_kwargs = (
+                    {"side_effect": detach_result}
+                    if isinstance(detach_result, BaseException)
+                    else {"return_value": detach_result}
+                )
+                with patch.object(
+                    credential_workflows,
+                    "_detach_spawned_popup_child_console",
+                    **detach_kwargs,
+                ) as detach, patch.object(
+                    credential_workflows,
+                    "CtypesWindowsNativeFacade",
+                ) as native, patch.object(
+                    credential_workflows,
+                    "ArchiveInterprocessRequestPacer",
+                ) as pacer, patch.object(
+                    credential_workflows,
+                    "NotionHttpAdapter",
+                ) as adapter, patch.object(
+                    credential_workflows,
+                    "StableArchiveFingerprintKeyProvider",
+                ) as key_provider, patch.object(
+                    credential_workflows,
+                    "_execute_adoption_inside_worker",
+                ) as execute:
+                    credential_workflows._spawned_adoption_entry(
+                        connection,
+                        ExplodingInvocation(),  # type: ignore[arg-type]
+                    )
+
+                detach.assert_called_once_with()
+                native.assert_not_called()
+                pacer.assert_not_called()
+                adapter.assert_not_called()
+                key_provider.assert_not_called()
+                execute.assert_not_called()
+                self.assertEqual(connection.sent, [])
+                self.assertTrue(connection.closed)
+
+    def test_spawned_entry_ack_send_failure_blocks_all_live_work(self) -> None:
+        events: list[str] = []
+
+        class FakeConnection:
+            def send(self, value) -> None:
+                events.append("ack_send_attempt")
+                self_outer.assertEqual(
+                    value,
+                    {"worker_transport_status": "popup_child_detached"},
+                )
+                raise KeyboardInterrupt("private ACK failure text")
+
+            def close(self) -> None:
+                events.append("close")
+
+        self_outer = self
+        with patch.object(
+            credential_workflows,
+            "_detach_spawned_popup_child_console",
+            return_value=True,
+        ) as detach, patch.object(
+            credential_workflows,
+            "CtypesWindowsNativeFacade",
+        ) as native, patch.object(
+            credential_workflows,
+            "ArchiveInterprocessRequestPacer",
+        ) as pacer, patch.object(
+            credential_workflows,
+            "NotionHttpAdapter",
+        ) as adapter, patch.object(
+            credential_workflows,
+            "StableArchiveFingerprintKeyProvider",
+        ) as key_provider, patch.object(
+            credential_workflows,
+            "_execute_adoption_inside_worker",
+        ) as execute:
+            credential_workflows._spawned_adoption_entry(
+                FakeConnection(),
+                object(),  # type: ignore[arg-type]
+            )
+
+        detach.assert_called_once_with()
+        native.assert_not_called()
+        pacer.assert_not_called()
+        adapter.assert_not_called()
+        key_provider.assert_not_called()
+        execute.assert_not_called()
+        self.assertEqual(events, ["ack_send_attempt", "close"])
+
+    def test_spawned_entry_detaches_once_before_native_and_preserves_child_result(
+        self,
+    ) -> None:
+        events: list[str] = []
+        child_result = {"fixed": "sanitized_child_result"}
+        native_object = object()
+        pacer_object = object()
+        adapter_object = object()
+        key_object = object()
+
+        class FakeConnection:
+            def __init__(self) -> None:
+                self.sent: list[object] = []
+
+            def send(self, value) -> None:
+                events.append(
+                    "send_ack"
+                    if value
+                    == {"worker_transport_status": "popup_child_detached"}
+                    else "send_final"
+                )
+                self.sent.append(value)
+
+            def close(self) -> None:
+                events.append("close")
+
+        def detach() -> bool:
+            events.append("detach")
+            return True
+
+        def make_native(*, cli_live_approved: bool):
+            self.assertIs(cli_live_approved, True)
+            events.append("native")
+            return native_object
+
+        def make_pacer(archive_root):
+            self.assertEqual(archive_root, ".")
+            events.append("pacer")
+            return pacer_object
+
+        def make_adapter(*, request_pacer, max_attempts):
+            self.assertIs(request_pacer, pacer_object)
+            self.assertEqual(max_attempts, 5)
+            events.append("adapter")
+            return adapter_object
+
+        def make_key_provider(native):
+            self.assertIs(native, native_object)
+            events.append("key_provider")
+            return key_object
+
+        def execute(invocation, *, native, notion_adapter, key_provider):
+            self.assertIs(native, native_object)
+            self.assertIs(notion_adapter, adapter_object)
+            self.assertIs(key_provider, key_object)
+            events.append("execute")
+            return child_result
+
+        invocation = credential_workflows.CredentialAdoptionWorkerInvocation(
+            archive_root=".",
+            approval_plan={},
+            expected_plan_digest="sha256:" + ("a" * 64),
+            expected_interaction_context_sha256="sha256:" + ("b" * 64),
+            replacement_approved=False,
+            expected_archive_id=ARCHIVE_ID,
+            reviewed_anchor_uuid=ANCHOR,
+            requested_capabilities=CAPABILITIES,
+        )
+        connection = FakeConnection()
+        with patch.object(
+            credential_workflows,
+            "_detach_spawned_popup_child_console",
+            side_effect=detach,
+        ) as detach_mock, patch.object(
+            credential_workflows,
+            "CtypesWindowsNativeFacade",
+            side_effect=make_native,
+        ), patch.object(
+            credential_workflows,
+            "ArchiveInterprocessRequestPacer",
+            side_effect=make_pacer,
+        ), patch.object(
+            credential_workflows,
+            "NotionHttpAdapter",
+            side_effect=make_adapter,
+        ), patch.object(
+            credential_workflows,
+            "StableArchiveFingerprintKeyProvider",
+            side_effect=make_key_provider,
+        ), patch.object(
+            credential_workflows,
+            "_execute_adoption_inside_worker",
+            side_effect=execute,
+        ):
+            credential_workflows._spawned_adoption_entry(connection, invocation)
+
+        detach_mock.assert_called_once_with()
+        self.assertEqual(
+            events,
+            [
+                "detach",
+                "send_ack",
+                "native",
+                "pacer",
+                "adapter",
+                "key_provider",
+                "execute",
+                "send_final",
+                "close",
+            ],
+        )
+        self.assertEqual(
+            connection.sent[0],
+            {"worker_transport_status": "popup_child_detached"},
+        )
+        self.assertIs(connection.sent[1], child_result)
+
+        source = Path(credential_workflows.__file__).read_text(encoding="utf-8")
+        for forbidden in (
+            "CONIN$",
+            "CONOUT$",
+            "AllocConsole",
+            "SetConsoleMode",
+            "SetConsoleCtrlHandler",
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, source)
+        entry_source = source.split("def _spawned_adoption_entry", 1)[1].split(
+            "def _join_started_credential_worker", 1
+        )[0]
+        self.assertLess(
+            entry_source.index("_detach_spawned_popup_child_console"),
+            entry_source.index("CtypesWindowsNativeFacade"),
+        )
+        parent_source = source.split(
+            "class SpawnCredentialAdoptionWorkerSpawner", 1
+        )[1].split("_ADOPTION_WORKER_SUCCESS_KEYS", 1)[0]
+        self.assertNotIn("FreeConsole", parent_source)
+        self.assertNotIn("_detach_spawned_popup_child_console", parent_source)
+
+    def test_spawned_adoption_parent_waits_for_popup_child_with_atomic_signal_lease(
+        self,
+    ) -> None:
+        events: list[str] = []
+        child_result = {"fixed": "sanitized_child_result"}
+
+        class FakeConnection:
+            def __init__(self, *, receive: bool) -> None:
+                self.receive = receive
+                self.messages = [
+                    {"worker_transport_status": "popup_child_detached"},
+                    child_result,
+                ]
+
+            def recv(self):
+                if not self.receive:
+                    raise AssertionError("send connection cannot receive")
+                if not self.messages:
+                    events.append("receive_eof")
+                    raise EOFError
+                message = self.messages.pop(0)
+                if message == {
+                    "worker_transport_status": "popup_child_detached"
+                }:
+                    events.append("receive_ack")
+                    return message
+                events.append("receive_child_result")
+                return message
+
+            def close(self) -> None:
+                events.append(
+                    "receive_close" if self.receive else "send_close"
+                )
+
+        class FlakyJoinProcess:
+            exitcode = 0
+
+            def __init__(self) -> None:
+                self.join_attempts = 0
+
+            def start(self) -> None:
+                events.append("process_start")
+
+            def join(self) -> None:
+                self.join_attempts += 1
+                events.append(f"process_join_{self.join_attempts}")
+                if self.join_attempts == 1:
+                    raise RuntimeError("synthetic transient join failure")
+                if self.join_attempts == 2:
+                    raise KeyboardInterrupt
+
+            def is_alive(self) -> bool:
+                events.append("process_still_alive")
+                return True
+
+        class FakeSpawnContext:
+            def __init__(self) -> None:
+                self.process = FlakyJoinProcess()
+
+            def Pipe(self, *, duplex: bool):
+                if duplex is not False:
+                    raise AssertionError("adoption pipe must be one-way")
+                return FakeConnection(receive=True), FakeConnection(receive=False)
+
+            def Process(self, **kwargs):
+                self.process_kwargs = kwargs
+                return self.process
+
+        context = FakeSpawnContext()
+        fake_sigint = object()
+        fake_sigbreak = object()
+        original_sigint = object()
+        original_sigbreak = object()
+        handlers = {
+            fake_sigint: original_sigint,
+            fake_sigbreak: original_sigbreak,
+        }
+
+        def get_handler(signal_number):
+            return handlers[signal_number]
+
+        def set_handler(signal_number, handler):
+            previous = handlers[signal_number]
+            handlers[signal_number] = handler
+            return previous
+
+        def interrupted_retry_wait(seconds: float) -> None:
+            self.assertEqual(seconds, 0.05)
+            events.append("join_retry_wait_interrupted")
+            raise KeyboardInterrupt
+
+        invocation = credential_workflows.CredentialAdoptionWorkerInvocation(
+            archive_root=".",
+            approval_plan={},
+            expected_plan_digest="sha256:" + ("a" * 64),
+            expected_interaction_context_sha256="sha256:" + ("b" * 64),
+            replacement_approved=False,
+            expected_archive_id=ARCHIVE_ID,
+            reviewed_anchor_uuid=ANCHOR,
+            requested_capabilities=CAPABILITIES,
+        )
+        with patch.object(
+            credential_workflows.multiprocessing,
+            "get_context",
+            return_value=context,
+        ), patch.object(
+            credential_workflows,
+            "_credential_worker_start_signals",
+            return_value=(fake_sigint, fake_sigbreak),
+        ), patch.object(
+            credential_workflows.time,
+            "sleep",
+            side_effect=interrupted_retry_wait,
+        ):
+            outcome = (
+                credential_workflows.SpawnCredentialAdoptionWorkerSpawner(
+                    _signal_getter=get_handler,
+                    _signal_setter=set_handler,
+                )
+                .run_worker(invocation)
+            )
+
+        self.assertIs(outcome.worker_started, True)
+        self.assertIs(outcome.result, child_result)
+        self.assertLess(
+            events.index("process_start"),
+            events.index("receive_child_result"),
+        )
+        self.assertLess(
+            events.index("receive_child_result"),
+            events.index("process_join_1"),
+        )
+        self.assertEqual(
+            events.count("process_still_alive"),
+            2,
+        )
+        self.assertEqual(
+            events.count("join_retry_wait_interrupted"),
+            2,
+        )
+        self.assertIn("process_join_3", events)
+        self.assertFalse(
+            hasattr(
+                credential_workflows,
+                "_set_parent_console_ctrl_c_ignored",
+            )
+        )
+        self.assertNotIn(
+            "_ctrl_c_setter",
+            credential_workflows.SpawnCredentialAdoptionWorkerSpawner.__dict__,
+        )
+        source = Path(credential_workflows.__file__).read_text(encoding="utf-8")
+        self.assertNotIn("SetConsoleCtrlHandler", source)
+        self.assertNotIn("_ctrl_c_setter", source)
+        self.assertNotIn("threading.Thread", source)
+
+    def test_spawned_adoption_signal_lease_orders_start_restore_recv_and_join(
+        self,
+    ) -> None:
+        events: list[str] = []
+        sigint = object()
+        sigbreak = object()
+        original_int = object()
+        original_break = object()
+        handlers = {
+            sigint: original_int,
+            sigbreak: original_break,
+        }
+        restore_attempts = {sigint: 0, sigbreak: 0}
+        names = {sigint: "int", sigbreak: "break"}
+        child_result = {"fixed": "content_free_child_result"}
+
+        def get_handler(signal_number):
+            events.append(f"get_{names[signal_number]}")
+            return handlers[signal_number]
+
+        def set_handler(signal_number, handler):
+            label = (
+                "ignore"
+                if handler is credential_workflows.signal.SIG_IGN
+                else "original"
+            )
+            events.append(f"set_{names[signal_number]}_{label}")
+            if label == "original":
+                restore_attempts[signal_number] += 1
+                if signal_number is sigbreak and restore_attempts[signal_number] == 1:
+                    events.append("restore_break_interrupted")
+                    raise KeyboardInterrupt("private restore interruption text")
+                if signal_number is sigint and restore_attempts[signal_number] == 1:
+                    handlers[signal_number] = handler
+                    events.append("restore_int_changed_then_interrupted")
+                    raise SystemExit("private restore post-change text")
+            handlers[signal_number] = handler
+
+        class FakeConnection:
+            def __init__(self, *, receive: bool) -> None:
+                self.receive = receive
+                self.messages = [
+                    {"worker_transport_status": "popup_child_detached"},
+                    child_result,
+                ]
+
+            def recv(self):
+                if not self.messages:
+                    events.append("eof")
+                    raise EOFError
+                message = self.messages.pop(0)
+                if message == {
+                    "worker_transport_status": "popup_child_detached"
+                }:
+                    events.append("ack")
+                    return message
+                self.assert_restored()
+                events.append("recv")
+                return message
+
+            def assert_restored(self) -> None:
+                self_outer.assertIs(handlers[sigint], original_int)
+                self_outer.assertIs(handlers[sigbreak], original_break)
+
+            def close(self) -> None:
+                events.append("receive_close" if self.receive else "send_close")
+
+        class FakeProcess:
+            exitcode = 0
+
+            def start(self) -> None:
+                self_outer.assertIs(
+                    handlers[sigint],
+                    credential_workflows.signal.SIG_IGN,
+                )
+                self_outer.assertIs(
+                    handlers[sigbreak],
+                    credential_workflows.signal.SIG_IGN,
+                )
+                events.append("start")
+
+            def join(self) -> None:
+                events.append("join")
+
+        class FakeContext:
+            def __init__(self) -> None:
+                self.process = FakeProcess()
+
+            def Pipe(self, *, duplex: bool):
+                self_outer.assertIs(duplex, False)
+                return FakeConnection(receive=True), FakeConnection(receive=False)
+
+            def Process(self, **_kwargs):
+                return self.process
+
+        self_outer = self
+        context = FakeContext()
+        invocation = credential_workflows.CredentialAdoptionWorkerInvocation(
+            archive_root=".",
+            approval_plan={},
+            expected_plan_digest="sha256:" + ("a" * 64),
+            expected_interaction_context_sha256="sha256:" + ("b" * 64),
+            replacement_approved=False,
+            expected_archive_id=ARCHIVE_ID,
+            reviewed_anchor_uuid=ANCHOR,
+            requested_capabilities=CAPABILITIES,
+        )
+        with patch.object(
+            credential_workflows,
+            "_credential_worker_start_signals",
+            return_value=(sigint, sigbreak),
+        ), patch.object(
+            credential_workflows.multiprocessing,
+            "get_context",
+            return_value=context,
+        ):
+            outcome = credential_workflows.SpawnCredentialAdoptionWorkerSpawner(
+                _signal_getter=get_handler,
+                _signal_setter=set_handler,
+            ).run_worker(invocation)
+
+        self.assertIs(outcome.worker_started, True)
+        self.assertIs(outcome.result, child_result)
+        self.assertIs(handlers[sigint], original_int)
+        self.assertIs(handlers[sigbreak], original_break)
+        self.assertGreaterEqual(restore_attempts[sigint], 1)
+        self.assertGreaterEqual(restore_attempts[sigbreak], 2)
+        self.assertLess(events.index("set_int_ignore"), events.index("start"))
+        self.assertLess(events.index("set_break_ignore"), events.index("start"))
+        self.assertLess(events.index("start"), events.index("set_break_original"))
+        self.assertLess(events.index("send_close"), events.index("ack"))
+        self.assertLess(events.index("set_int_original"), events.index("recv"))
+        self.assertLess(events.index("eof"), events.index("join"))
+        self.assertLess(events.index("recv"), events.index("join"))
+        self.assertNotIn("private restore interruption text", repr(outcome))
+        self.assertNotIn("private restore post-change text", repr(outcome))
+
+    def test_spawned_adoption_pipe_protocol_rejects_wrong_or_extra_messages(
+        self,
+    ) -> None:
+        ack = {"worker_transport_status": "popup_child_detached"}
+        final = {"fixed": "content_free_child_result"}
+
+        class FakeConnection:
+            def __init__(self, messages) -> None:
+                self.messages = list(messages)
+
+            def recv(self):
+                if not self.messages:
+                    raise EOFError
+                message = self.messages.pop(0)
+                if isinstance(message, BaseException):
+                    raise message
+                return message
+
+        rows = (
+            ((), False, None),
+            ((ack, final), True, final),
+            ((ack,), True, None),
+            (({"worker_transport_status": "wrong"},), True, None),
+            (({**ack, "extra": False}, final), True, None),
+            ((ack, final, {"extra": "message"}), True, None),
+            ((ack, "not_a_mapping"), True, None),
+            ((KeyboardInterrupt("private interrupt text"), ack, final), True, final),
+        )
+        for messages, expected_started, expected_result in rows:
+            with self.subTest(messages=len(messages), expected_started=expected_started):
+                outcome = credential_workflows._drain_credential_worker_pipe(
+                    FakeConnection(messages)
+                )
+                self.assertIs(outcome.worker_started, expected_started)
+                self.assertIs(outcome.result, expected_result)
+                self.assertNotIn("private interrupt text", repr(outcome))
+
+    def test_spawned_adoption_pipe_never_returns_before_terminal_eof(self) -> None:
+        ack = {"worker_transport_status": "popup_child_detached"}
+        final = {"fixed": "content_free_child_result"}
+        eof_release = threading.Event()
+        eof_waiting = threading.Event()
+        outcomes: list[object] = []
+
+        class BlockingConnection:
+            def __init__(self) -> None:
+                self.messages = [ack, final]
+
+            def recv(self):
+                if self.messages:
+                    return self.messages.pop(0)
+                eof_waiting.set()
+                eof_release.wait()
+                raise EOFError
+
+        worker = threading.Thread(
+            target=lambda: outcomes.append(
+                credential_workflows._drain_credential_worker_pipe(
+                    BlockingConnection()
+                )
+            ),
+            daemon=False,
+        )
+        worker.start()
+        self.assertTrue(eof_waiting.wait(timeout=1.0))
+        self.assertTrue(worker.is_alive())
+        self.assertEqual(outcomes, [])
+        eof_release.set()
+        worker.join(timeout=1.0)
+        self.assertFalse(worker.is_alive())
+        self.assertEqual(len(outcomes), 1)
+        outcome = outcomes[0]
+        self.assertIs(outcome.worker_started, True)
+        self.assertIs(outcome.result, final)
+
+    def test_spawned_adoption_partial_signal_install_restores_and_never_starts(
+        self,
+    ) -> None:
+        events: list[str] = []
+        sigint = object()
+        sigbreak = object()
+        original_int = object()
+        original_break = object()
+        handlers = {sigint: original_int, sigbreak: original_break}
+        originals = {sigint: original_int, sigbreak: original_break}
+        names = {sigint: "int", sigbreak: "break"}
+        restore_attempts = {sigint: 0, sigbreak: 0}
+        state = {"partial_failure": False, "getter_interrupted": False}
+
+        def get_handler(signal_number):
+            if (
+                state["partial_failure"]
+                and signal_number is sigint
+                and handlers[signal_number] is originals[signal_number]
+                and not state["getter_interrupted"]
+            ):
+                state["getter_interrupted"] = True
+                events.append("restore_get_interrupted")
+                raise SystemExit("private synthetic getter text")
+            events.append(f"get_{names[signal_number]}")
+            return handlers[signal_number]
+
+        def set_handler(signal_number, handler):
+            if handler is credential_workflows.signal.SIG_IGN:
+                handlers[signal_number] = handler
+                events.append(f"set_{names[signal_number]}_ignore")
+                if signal_number is sigbreak:
+                    state["partial_failure"] = True
+                    raise KeyboardInterrupt("private synthetic install text")
+                return
+            restore_attempts[signal_number] += 1
+            events.append(f"restore_{names[signal_number]}")
+            if signal_number is sigbreak and restore_attempts[signal_number] == 1:
+                raise KeyboardInterrupt("private synthetic restore text")
+            handlers[signal_number] = handler
+
+        class FakeConnection:
+            def recv(self):
+                raise AssertionError("pre-start failure must not receive")
+
+            def close(self) -> None:
+                events.append("connection_close")
+
+        class FakeProcess:
+            exitcode = None
+            pid = None
+
+            def start(self) -> None:
+                events.append("UNSAFE_process_start")
+                raise AssertionError("process must not start")
+
+            def join(self) -> None:
+                events.append("UNSAFE_process_join")
+                raise AssertionError("unstarted process must not join")
+
+        class FakeContext:
+            def Pipe(self, *, duplex: bool):
+                self_outer.assertIs(duplex, False)
+                return FakeConnection(), FakeConnection()
+
+            def Process(self, **_kwargs):
+                return FakeProcess()
+
+        self_outer = self
+        invocation = credential_workflows.CredentialAdoptionWorkerInvocation(
+            archive_root=".",
+            approval_plan={},
+            expected_plan_digest="sha256:" + ("a" * 64),
+            expected_interaction_context_sha256="sha256:" + ("b" * 64),
+            replacement_approved=False,
+            expected_archive_id=ARCHIVE_ID,
+            reviewed_anchor_uuid=ANCHOR,
+            requested_capabilities=CAPABILITIES,
+        )
+        with patch.object(
+            credential_workflows,
+            "_credential_worker_start_signals",
+            return_value=(sigint, sigbreak),
+        ), patch.object(
+            credential_workflows.multiprocessing,
+            "get_context",
+            return_value=FakeContext(),
+        ), patch.object(
+            credential_workflows.time,
+            "sleep",
+            side_effect=KeyboardInterrupt("private synthetic delay text"),
+        ):
+            outcome = credential_workflows.SpawnCredentialAdoptionWorkerSpawner(
+                _signal_getter=get_handler,
+                _signal_setter=set_handler,
+            ).run_worker(invocation)
+
+        self.assertIs(outcome.worker_started, False)
+        self.assertIsNone(outcome.result)
+        self.assertIs(handlers[sigint], original_int)
+        self.assertIs(handlers[sigbreak], original_break)
+        self.assertGreaterEqual(restore_attempts[sigint], 2)
+        self.assertGreaterEqual(restore_attempts[sigbreak], 2)
+        self.assertNotIn("UNSAFE_process_start", events)
+        self.assertNotIn("UNSAFE_process_join", events)
+        for private_text in (
+            "private synthetic getter text",
+            "private synthetic install text",
+            "private synthetic restore text",
+            "private synthetic delay text",
+        ):
+            self.assertNotIn(private_text, repr(outcome))
+
+    def test_spawned_adoption_start_exception_uses_ack_and_eof_containment(
+        self,
+    ) -> None:
+        invocation = credential_workflows.CredentialAdoptionWorkerInvocation(
+            archive_root=".",
+            approval_plan={},
+            expected_plan_digest="sha256:" + ("a" * 64),
+            expected_interaction_context_sha256="sha256:" + ("b" * 64),
+            replacement_approved=False,
+            expected_archive_id=ARCHIVE_ID,
+            reviewed_anchor_uuid=ANCHOR,
+            requested_capabilities=CAPABILITIES,
+        )
+
+        for child_created in (False, True):
+            with self.subTest(child_created=child_created):
+                events: list[str] = []
+                sigint = object()
+                sigbreak = object()
+                original_int = object()
+                original_break = object()
+                handlers = {sigint: original_int, sigbreak: original_break}
+                child_result = {"fixed": "content_free_child_result"}
+
+                def get_handler(signal_number):
+                    return handlers[signal_number]
+
+                def set_handler(signal_number, handler):
+                    handlers[signal_number] = handler
+                    events.append(
+                        "restore"
+                        if handler is not credential_workflows.signal.SIG_IGN
+                        else "ignore"
+                    )
+
+                class FakeConnection:
+                    def __init__(self, *, receive: bool) -> None:
+                        self.receive = receive
+                        self.interrupted = False
+                        self.messages = (
+                            [
+                                {"worker_transport_status": "popup_child_detached"},
+                                child_result,
+                            ]
+                            if child_created
+                            else []
+                        )
+
+                    def recv(self):
+                        if child_created and not self.interrupted:
+                            self.interrupted = True
+                            events.append("recv_interrupted")
+                            raise KeyboardInterrupt("private drain interrupt text")
+                        self_outer.assertIs(handlers[sigint], original_int)
+                        self_outer.assertIs(handlers[sigbreak], original_break)
+                        if not self.messages:
+                            events.append("eof")
+                            raise EOFError
+                        message = self.messages.pop(0)
+                        events.append("recv")
+                        return message
+
+                    def close(self) -> None:
+                        events.append("close_receive" if self.receive else "close_send")
+
+                class FakeProcess:
+                    exitcode = 0 if child_created else None
+                    pid = None
+
+                    def __init__(self) -> None:
+                        self.alive = False
+
+                    def start(self) -> None:
+                        events.append("start")
+                        if child_created:
+                            self.pid = 4242
+                            self.alive = True
+                            raise KeyboardInterrupt("private post-create text")
+                        raise OSError("private pre-create text")
+
+                    def is_alive(self) -> bool:
+                        raise AssertionError(
+                            "ambiguous start must not query public process state"
+                        )
+
+                    def join(self) -> None:
+                        raise AssertionError("ambiguous start must not join")
+
+                class FakeContext:
+                    def __init__(self) -> None:
+                        self.process = FakeProcess()
+
+                    def Pipe(self, *, duplex: bool):
+                        self_outer.assertIs(duplex, False)
+                        return (
+                            FakeConnection(receive=True),
+                            FakeConnection(receive=False),
+                        )
+
+                    def Process(self, **_kwargs):
+                        return self.process
+
+                self_outer = self
+                context = FakeContext()
+                with patch.object(
+                    credential_workflows,
+                    "_credential_worker_start_signals",
+                    return_value=(sigint, sigbreak),
+                ), patch.object(
+                    credential_workflows.multiprocessing,
+                    "get_context",
+                    return_value=context,
+                ):
+                    outcome = (
+                        credential_workflows.SpawnCredentialAdoptionWorkerSpawner(
+                            _signal_getter=get_handler,
+                            _signal_setter=set_handler,
+                        ).run_worker(invocation)
+                    )
+
+                self.assertIs(outcome.worker_started, child_created)
+                self.assertIs(
+                    outcome.result,
+                    child_result if child_created else None,
+                )
+                self.assertIs(handlers[sigint], original_int)
+                self.assertIs(handlers[sigbreak], original_break)
+                if child_created:
+                    self.assertLess(events.index("restore"), events.index("recv"))
+                    self.assertIn("recv_interrupted", events)
+                else:
+                    self.assertNotIn("recv", events)
+                self.assertNotIn("join", events)
+                self.assertNotIn("private pre-create text", repr(outcome))
+                self.assertNotIn("private post-create text", repr(outcome))
+                self.assertNotIn("private drain interrupt text", repr(outcome))
+
 
 class CredentialWorkflowEndToEndTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -858,6 +2159,20 @@ class CredentialWorkflowEndToEndTests(unittest.TestCase):
         self.key_provider = StableArchiveFingerprintKeyProvider(
             self.native,
             random_bytes=lambda size: ARCHIVE_KEY if size == 32 else b"",
+        )
+
+    def assert_adoption_stage(self, result: dict, bits: str) -> None:
+        self.assertEqual(
+            tuple(
+                result[field]
+                for field in (
+                    "credential_input_received",
+                    "complete_line_received",
+                    "temporary_store_write_attempted",
+                    "provider_request_attempted",
+                )
+            ),
+            tuple(bit == "1" for bit in bits),
         )
 
     def _adopt(self, *, transport: FakeTransport | None = None) -> tuple[dict, FakeTransport]:
@@ -932,6 +2247,7 @@ class CredentialWorkflowEndToEndTests(unittest.TestCase):
         self.assertTrue(result["authenticated_rediscovery_verified"])
         self.assertTrue(result["human_default_decision_required"])
         self.assertEqual(result["operations"], APPROVED_WORKER_OPERATIONS_UNKNOWN)
+        self.assert_adoption_stage(result, "1111")
 
         listed = list_authenticated_secure_credentials(
             self.root,
@@ -973,6 +2289,7 @@ class CredentialWorkflowEndToEndTests(unittest.TestCase):
         self.assertFalse(failed["persisted"])
         self.assertNotIn("credential_id", failed)
         self.assertEqual(failed["operations"], APPROVED_WORKER_OPERATIONS_UNKNOWN)
+        self.assert_adoption_stage(failed, "1100")
         self.assertEqual(cancelled_native.sid_reads, 1)
         self.assertEqual(cancelled_native.prompts, 1)
         self.assertGreaterEqual(len(cancelled_native.probes), 2)
@@ -1014,8 +2331,70 @@ class CredentialWorkflowEndToEndTests(unittest.TestCase):
         )
         self.assertFalse(repeat["secret_prompt_performed"])
         self.assertTrue(repeat["existing_registration_reused"])
+        self.assert_adoption_stage(repeat, "0001")
         self.assertEqual(self.native.prompts, 1)
         self.assertEqual(len(repeat_transport.calls), 2)
+
+    def test_repeat_adoption_validates_saved_secret_before_provider_revalidation(
+        self,
+    ) -> None:
+        first, _first_transport = self._adopt()
+        self.assertTrue(first["ok"])
+        prompts_before = self.native.prompts
+        writes_before = len(self.native.writes)
+
+        class LocallyInvalidSavedSecretVerifier:
+            def __init__(self) -> None:
+                self.validation_calls = 0
+                self.verify_calls = 0
+
+            def validate_secret_input(
+                self, _secret: memoryview, _provider: str
+            ) -> bool:
+                self.validation_calls += 1
+                return False
+
+            def verify_identity(self, *_args, **_kwargs):
+                self.verify_calls += 1
+                raise AssertionError("provider revalidation must not start")
+
+        verifier = LocallyInvalidSavedSecretVerifier()
+
+        class LocallyInvalidSavedSecretAdapter:
+            def secure_intake_verifier(self):
+                return verifier
+
+        repeat_plan = make_plan(
+            request_id_factory=lambda: "intake_repeat_local_invalid123",
+        )
+        repeat = execute_windows_notion_credential_adoption(
+            self.root,
+            repeat_plan,
+            expected_plan_digest=str(repeat_plan["plan_digest"]),
+            expected_archive_id=ARCHIVE_ID,
+            reviewed_anchor_uuid=ANCHOR,
+            requested_capabilities=CAPABILITIES,
+            approved=True,
+            worker_spawner=InjectedCredentialAdoptionWorkerSpawner(
+                native=self.native,
+                notion_adapter=LocallyInvalidSavedSecretAdapter(),  # type: ignore[arg-type]
+                key_provider=self.key_provider,
+                now_factory=lambda: NOW,
+            ),
+        )
+
+        self.assertFalse(repeat["ok"])
+        self.assertEqual(
+            repeat["reason_code"],
+            "credential_adoption_existing_scope_revalidation_failed",
+        )
+        self.assert_adoption_stage(repeat, "0000")
+        self.assertEqual(repeat["rollback_status"], "not_required")
+        self.assertFalse(repeat["store_absence_verified"])
+        self.assertEqual(verifier.validation_calls, 1)
+        self.assertEqual(verifier.verify_calls, 0)
+        self.assertEqual(self.native.prompts, prompts_before)
+        self.assertEqual(len(self.native.writes), writes_before)
 
     def test_repeat_adoption_reuses_saved_secret_for_another_anchor_in_same_workspace(self) -> None:
         first, _first_transport = self._adopt()
@@ -1819,6 +3198,131 @@ class CredentialWorkflowEndToEndTests(unittest.TestCase):
         self.assertEqual(self.native.writes, [])
         self.assertEqual(transport.calls, [])
 
+    def test_local_invalid_input_stops_before_store_and_provider_with_1100(self) -> None:
+        native = FakeWindowsNative(secret_text=" ")
+        key_provider = StableArchiveFingerprintKeyProvider(
+            native,
+            random_bytes=lambda _size: ARCHIVE_KEY,
+        )
+        transport = FakeTransport([])
+        plan = make_plan(request_id_factory=lambda: "intake_local_invalid123456")
+        result = execute_windows_notion_credential_adoption(
+            self.root,
+            plan,
+            expected_plan_digest=str(plan["plan_digest"]),
+            expected_archive_id=ARCHIVE_ID,
+            reviewed_anchor_uuid=ANCHOR,
+            requested_capabilities=CAPABILITIES,
+            approved=True,
+            worker_spawner=InjectedCredentialAdoptionWorkerSpawner(
+                native,
+                NotionHttpAdapter(transport=transport),
+                key_provider,
+                now_factory=lambda: NOW,
+                credential_id_factory=lambda: CREDENTIAL_ID,
+                backend_id_factory=lambda: BACKEND_ID,
+            ),
+        )
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(
+            result["reason_code"], "credential_input_invalid_for_provider"
+        )
+        self.assertEqual(result["rollback_status"], "not_required")
+        self.assert_adoption_stage(result, "1100")
+        self.assertEqual(transport.calls, [])
+        self.assertFalse(
+            any(
+                "/backend_" in target and "backend_key_" not in target
+                for target in native.values
+            )
+        )
+
+    def test_store_write_failure_rolls_back_without_provider_and_reports_1110(self) -> None:
+        native = FakeWindowsNative(secret_write_fails=True)
+        key_provider = StableArchiveFingerprintKeyProvider(
+            native,
+            random_bytes=lambda _size: ARCHIVE_KEY,
+        )
+        transport = FakeTransport([])
+        plan = make_plan(request_id_factory=lambda: "intake_store_failed1234567")
+        result = execute_windows_notion_credential_adoption(
+            self.root,
+            plan,
+            expected_plan_digest=str(plan["plan_digest"]),
+            expected_archive_id=ARCHIVE_ID,
+            reviewed_anchor_uuid=ANCHOR,
+            requested_capabilities=CAPABILITIES,
+            approved=True,
+            worker_spawner=InjectedCredentialAdoptionWorkerSpawner(
+                native,
+                NotionHttpAdapter(transport=transport),
+                key_provider,
+                now_factory=lambda: NOW,
+                credential_id_factory=lambda: CREDENTIAL_ID,
+                backend_id_factory=lambda: BACKEND_ID,
+            ),
+        )
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["reason_code"], "store_write_failed")
+        self.assertEqual(result["rollback_status"], "deleted")
+        self.assertTrue(result["store_absence_verified"])
+        self.assert_adoption_stage(result, "1110")
+        self.assertEqual(transport.calls, [])
+
+    def test_provider_preflight_failure_is_not_auth_rejection_and_reports_1110(self) -> None:
+        class NoProviderRequestVerifier:
+            def validate_secret_input(
+                self, _secret: memoryview, _provider: str
+            ) -> bool:
+                return True
+
+            def verify_identity(
+                self,
+                _secret: memoryview,
+                *,
+                provider: str,
+                reviewed_anchor_uuid: str,
+                provider_request_observer,
+            ):
+                raise RuntimeError("synthetic pre-transport failure")
+
+        class NoProviderRequestAdapter:
+            def secure_intake_verifier(self):
+                return NoProviderRequestVerifier()
+
+        native = FakeWindowsNative()
+        key_provider = StableArchiveFingerprintKeyProvider(
+            native,
+            random_bytes=lambda _size: ARCHIVE_KEY,
+        )
+        plan = make_plan(request_id_factory=lambda: "intake_no_provider_request123")
+        result = execute_windows_notion_credential_adoption(
+            self.root,
+            plan,
+            expected_plan_digest=str(plan["plan_digest"]),
+            expected_archive_id=ARCHIVE_ID,
+            reviewed_anchor_uuid=ANCHOR,
+            requested_capabilities=CAPABILITIES,
+            approved=True,
+            worker_spawner=InjectedCredentialAdoptionWorkerSpawner(
+                native,
+                NoProviderRequestAdapter(),  # type: ignore[arg-type]
+                key_provider,
+                now_factory=lambda: NOW,
+                credential_id_factory=lambda: CREDENTIAL_ID,
+                backend_id_factory=lambda: BACKEND_ID,
+            ),
+        )
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["reason_code"], "provider_request_not_attempted")
+        self.assertNotEqual(result["reason_code"], "provider_auth_rejected")
+        self.assertEqual(result["rollback_status"], "deleted")
+        self.assertTrue(result["store_absence_verified"])
+        self.assert_adoption_stage(result, "1110")
+
     def test_provider_failure_reports_unknown_live_counts_after_confirmed_delete(self) -> None:
         native = FakeWindowsNative()
         key_provider = StableArchiveFingerprintKeyProvider(
@@ -1846,8 +3350,10 @@ class CredentialWorkflowEndToEndTests(unittest.TestCase):
         )
 
         self.assertFalse(result["ok"])
+        self.assertEqual(result["reason_code"], "provider_auth_rejected")
         self.assertEqual(result["rollback_status"], "deleted")
         self.assertTrue(result["store_absence_verified"])
+        self.assert_adoption_stage(result, "1111")
         self.assertEqual(result["operations"], APPROVED_WORKER_OPERATIONS_UNKNOWN)
         self.assertEqual(native.sid_reads, 1)
         self.assertEqual(native.prompts, 1)
@@ -1963,6 +3469,7 @@ class CredentialWorkflowEndToEndTests(unittest.TestCase):
         self.assertFalse(result["persisted"])
         self.assertEqual(result["rollback_status"], "delete_failed")
         self.assertFalse(result["store_absence_verified"])
+        self.assert_adoption_stage(result, "1111")
         self.assertEqual(
             result["operator_action"],
             "stop_and_remove_the_exact_encrypted_store_entry",

@@ -216,23 +216,72 @@ class NotionSecureIntakeVerifier:
     def __init__(self, adapter: "NotionHttpAdapter") -> None:
         self._adapter = adapter
 
+    def validate_secret_input(self, secret: memoryview, provider: str) -> bool:
+        """Validate one provider token locally without decoding or transport.
+
+        Notion bearer values accepted by this bridge are non-empty, bounded,
+        printable ASCII byte sequences.  Keeping this check byte-only lets the
+        intake worker distinguish malformed console input from a provider
+        authentication rejection before it writes or sends anything.
+        """
+
+        if provider != "notion" or not isinstance(secret, memoryview):
+            return False
+        if (
+            secret.ndim != 1
+            or secret.itemsize != 1
+            or secret.format not in {"B", "b", "c"}
+            or not secret.contiguous
+            or secret.nbytes < 1
+            or secret.nbytes > 4096
+        ):
+            return False
+        try:
+            octets = secret.cast("B")
+            return all(33 <= byte <= 126 for byte in octets)
+        except (TypeError, ValueError):
+            return False
+
     def verify_identity(
         self,
         secret: memoryview,
         *,
         provider: str,
         reviewed_anchor_uuid: str,
+        provider_request_observer: Callable[[], None],
     ) -> NotionSecureIntakeIdentity:
         if provider != "notion":
             raise NotionHttpAdapterError("notion_provider_mismatch")
+        if not callable(provider_request_observer):
+            raise NotionHttpAdapterError("notion_request_observer_invalid")
+        if not self.validate_secret_input(secret, provider):
+            raise CredentialIntakeStageError(
+                "credential_input_invalid_for_provider"
+            )
         try:
             # Decode the mutable worker view directly. The provider still
             # needs a short-lived text Authorization header, but this avoids
             # an additional immutable raw-token bytes copy first.
-            secret_text = codecs.decode(secret, "utf-8", errors="strict")
+            secret_text = codecs.decode(secret, "ascii", errors="strict")
         except (AttributeError, TypeError, UnicodeDecodeError, ValueError):
-            raise CredentialIntakeStageError("provider_auth_rejected") from None
-        evidence = self._adapter.verify_identity(secret_text, reviewed_anchor_uuid)
+            raise CredentialIntakeStageError(
+                "credential_input_invalid_for_provider"
+            ) from None
+
+        provider_request_attempted = False
+
+        def observe_provider_request_once() -> None:
+            nonlocal provider_request_attempted
+            if provider_request_attempted:
+                return
+            provider_request_observer()
+            provider_request_attempted = True
+
+        evidence = self._adapter.verify_identity(
+            secret_text,
+            reviewed_anchor_uuid,
+            provider_request_observer=observe_provider_request_once,
+        )
         if not (
             evidence.get("identity_verified") is True
             and evidence.get("workspace_anchor_verified") is True
@@ -243,7 +292,11 @@ class NotionSecureIntakeVerifier:
             if not isinstance(reason, str) or not reason.startswith("notion_"):
                 reason = "notion_identity_unverified"
             raise CredentialIntakeStageError(
-                _secure_intake_stage_reason(reason, evidence=evidence)
+                _secure_intake_stage_reason(
+                    reason,
+                    evidence=evidence,
+                    provider_request_attempted=provider_request_attempted,
+                )
             )
         normalized_anchor = _normalize_uuid(reviewed_anchor_uuid)
         if normalized_anchor is None:
@@ -415,6 +468,8 @@ class NotionHttpAdapter:
         self,
         secret: str | NotionBearerSecret,
         reviewed_anchor_page_id: str,
+        *,
+        provider_request_observer: Callable[[], None] | None = None,
     ) -> dict[str, Any]:
         """Verify the token identity and one reviewed workspace anchor page."""
 
@@ -426,7 +481,11 @@ class NotionHttpAdapter:
         if wrapped is None:
             return _identity_evidence("notion_secret_invalid")
         try:
-            identity = self._get_json("/v1/users/me", wrapped)
+            identity = self._get_json(
+                "/v1/users/me",
+                wrapped,
+                provider_request_observer=provider_request_observer,
+            )
             if identity.status != 200:
                 return _identity_evidence(
                     _identity_status_reason(identity.status, identity.reason_code)
@@ -522,12 +581,31 @@ class NotionHttpAdapter:
 
         return NotionSecureIntakeVerifier(self)
 
-    def _get_json(self, path: str, secret: NotionBearerSecret) -> _HttpResult:
+    def _get_json(
+        self,
+        path: str,
+        secret: NotionBearerSecret,
+        *,
+        provider_request_observer: Callable[[], None] | None = None,
+    ) -> _HttpResult:
         result = _HttpResult(599, None, {}, "notion_transport_error")
+        provider_request_observed = False
+
+        def observe_provider_request_once() -> None:
+            nonlocal provider_request_observed
+            if provider_request_observed or provider_request_observer is None:
+                return
+            provider_request_observer()
+            provider_request_observed = True
+
         for attempt in range(1, self._max_attempts + 1):
             if not self._pace_request():
                 return _HttpResult(599, None, {}, "notion_transport_error")
-            result = self._get_json_once(path, secret)
+            result = self._get_json_once(
+                path,
+                secret,
+                provider_request_observer=observe_provider_request_once,
+            )
             if result.status not in _RETRYABLE_STATUSES or attempt >= self._max_attempts:
                 return result
             retry_after = _retry_after_seconds(result.headers)
@@ -556,7 +634,13 @@ class NotionHttpAdapter:
         except Exception:
             return False
 
-    def _get_json_once(self, path: str, secret: NotionBearerSecret) -> _HttpResult:
+    def _get_json_once(
+        self,
+        path: str,
+        secret: NotionBearerSecret,
+        *,
+        provider_request_observer: Callable[[], None] | None = None,
+    ) -> _HttpResult:
         # ``path`` is constructed only from fixed literals and normalized UUIDs.
         request = urllib_request.Request(
             OFFICIAL_NOTION_API_BASE + path,
@@ -569,6 +653,8 @@ class NotionHttpAdapter:
         )
         response: Any = None
         try:
+            if provider_request_observer is not None:
+                provider_request_observer()
             if callable(self._transport) and not hasattr(self._transport, "open"):
                 response = self._transport(request, timeout=self._timeout_seconds)
             else:
@@ -867,12 +953,13 @@ def _secure_intake_stage_reason(
     reason: str,
     *,
     evidence: Mapping[str, Any],
+    provider_request_attempted: bool,
 ) -> str:
     """Project a private Notion failure into one fixed operator-visible stage."""
 
     if reason == "notion_secret_invalid":
-        return "provider_auth_rejected"
-    if reason in {
+        return "credential_input_invalid_for_provider"
+    if provider_request_attempted and reason in {
         "notion_identity_unauthorized",
         "notion_identity_forbidden",
     }:

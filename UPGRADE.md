@@ -24,6 +24,113 @@ Before upgrading a real archive:
 
 The archive should never silently rewrite memory.
 
+## v0.3.319 Native Credential Popup And Causal Evidence
+
+Install only after the exact v0.3.319 GitHub Release lists the verified wheel.
+Repository changes do not update an isolated older WOM-kit installation. Start
+a new process, confirm `archive --version`, and discard every older
+`credential-adopt` dry-run digest before planning enrollment again.
+
+### What changed
+
+The failed terminal-input prototypes are withdrawn. First enrollment and
+explicit replacement now use one separate native Windows popup in an isolated
+spawned child. The popup uses a standard single-line password EDIT for ordinary
+editing and paste behavior, but an opaque sibling covers the whole field so no
+value, mask glyph, caret, count, or length is visible. WOM never reads the
+clipboard. Confirm is disabled while empty; Cancel, X, and Escape stop before a
+completed secret.
+
+The exact input intent is now part of the product boundary:
+
+- production `credential-adopt` hard-codes
+  `CredentialPopupInputIntent.live_registration` and shows the blue banner
+  `실제 자격 증명 등록`;
+- the source-tree acceptance helper hard-codes
+  `CredentialPopupInputIntent.synthetic_acceptance`, shows the red banner
+  `합성 입력 테스트 · 실제 키 입력 금지`, and warns never to enter or paste a
+  real credential.
+
+A missing intent or plain string fails before the popup can show or any store or
+provider access can begin.
+
+The child detaches before popup/native/store/provider/archive work and sends the
+fixed `popup_child_detached` acknowledgement. The parent accepts only
+acknowledgement → final mapping → terminal pipe EOF and joins every normally
+started child. Its narrow `SIGINT`/`SIGBREAK` start lease is restored before
+receiving. Raw input and exception text never cross IPC.
+
+### Synthetic popup acceptance
+
+The acceptance helper keeps its historical filename but now emits
+`wom-kit/windows-credential-popup-acceptance/v0.1` and uses popup-only routes.
+It requests no PAT and performs no registration, store write, or provider call.
+
+Run only with the public fixed challenge:
+
+```powershell
+python -B wom-kit/tools/check_windows_credential_console_host.py --host-family codex_desktop --launch-route codex_desktop_native_popup --gesture direct_keyboard_typing --format json
+```
+
+Do not enter an actual credential. A pass requires an exact challenge match,
+the synthetic banner/warning, complete value-and-length opacity, correct Confirm
+gating, normal popup closure, and legible Korean. Injected tests are not physical
+human evidence.
+
+The pre-intent human row remains failed: it received a complete non-empty
+mismatch, and the person later clarified that the old harness copy had led them
+to enter an actual secret. The child wiped it and no value reached receipt JSON,
+IPC, a store, or a provider. That synthetic row remains failed. Do not repeat
+the synthetic helper as a prerequisite for this recovery; it is optional future
+acceptance evidence only.
+
+### Actual registration
+
+After the published v0.3.319 runtime is verified in a new process, the operator
+may create one fresh registration dry-run. The synthetic helper is not a gate:
+
+```powershell
+archive credential-adopt <archive-root> --account-label <public-safe-account-label> --workspace-label <public-safe-workspace-label> --purpose notion-page-recovery --task-summary "<public-safe-task-summary>" --connection-reason "<public-safe-connection-reason>" --reviewed-anchor-page-id <reviewed-anchor-uuid> --interactive --dry-run --format json
+```
+
+Review the exact request digest, then repeat the same public-safe fields once
+with `--expected-request-sha256 <fresh-request-sha256> --approve`. Enter an
+actual PAT only when the popup top banner says `실제 자격 증명 등록`. Never put
+it in chat, argv, an environment variable, ordinary stdin, a document, or the
+synthetic helper. Do not retry automatically.
+
+Actual credential registration is still `not_performed`; this guide does not
+claim store persistence or provider acceptance.
+
+### Causal failures
+
+The v0.3 product envelopes still expose only:
+
+```text
+credential_input_received
+complete_line_received
+temporary_store_write_attempted
+provider_request_attempted
+```
+
+Unknown child state projects four nulls.
+`credential_input_invalid_for_provider` covers complete malformed, control,
+provider-shape-invalid, over-limit, or locally oversized input before store and
+provider work. `credential_input_boundary_failed` preserves truthful `1000`
+or `1100` evidence with operator action
+`repair_secure_input_boundary_and_create_a_new_plan`, rollback not required,
+store false, and provider false. `provider_auth_rejected` requires an actual
+provider request. `provider_request_not_attempted` covers a temporary store
+write whose verifier never crossed the provider boundary. Rollback `deleted`
+requires an exact post-delete absence probe.
+
+### Upgrade truth
+
+A source checkout, fake Win32 tests, DPI-correct render, or passing injected
+acceptance row does not prove merge, external CI, exact tag, GitHub Release,
+wheel publication, fresh installation, physical synthetic acceptance, actual
+registration, provider acceptance, durable persistence, or recovery.
+
 ## v0.3.318 Credential Paste And Failure Stages
 
 Install only after the exact v0.3.318 GitHub Release lists the verified wheel.
@@ -32,59 +139,27 @@ a new process and confirm `archive --version` before making a new adoption
 plan. Discard any older dry-run digest because the running version and reviewed
 request must agree.
 
-The separate black Windows console now explains the supported actions directly
-above the masked input:
+The separate black Windows console explains the supported paste actions
+directly above the masked input: `Ctrl+V`, `Shift+Insert`, Windows Terminal's
+default `Ctrl+Shift+V`, and host-dependent right-click. Characters and length
+remain hidden, `Ctrl+C` is ignored during the prompt, and empty Enter is the
+documented cancellation gesture.
 
-- use `Ctrl+V` or `Shift+Insert`;
-- Windows Terminal's default configuration also supports `Ctrl+Shift+V`;
-- right-click depends on terminal-host settings and may paste, copy, or open a
-  menu, so choose Paste when a menu appears;
-- the value and its length remain hidden; press Enter after pasting;
-- during this short prompt `Ctrl+C` is ignored, and empty Enter is the one
-  documented cancellation gesture.
+After a complete non-empty line reaches WOM, v0.3.318 displays
+`입력값을 받았습니다. 검증 중입니다.` briefly. That confirms receipt at the
+console boundary, not provider acceptance or durable storage. WOM never reads
+the clipboard programmatically.
 
-After a complete non-empty line reaches WOM, the console displays only
-`입력값을 받았습니다. 검증 중입니다.` and briefly remains visible. This
-confirms receipt at the console boundary, not provider acceptance or durable
-storage. WOM never reads the clipboard programmatically. User-customized host
-bindings can still differ.
+The v0.3.318 parent result is `wom-credential-workflow-result/v0.2`; the child
+is `wom-credential-secure-intake-result/v0.2`. Its five fixed outcomes are
+`credential_input_cancelled_or_empty`, `credential_input_not_received`,
+`provider_auth_rejected`, `provider_identity_endpoint_unavailable`, and
+`reviewed_anchor_inaccessible`, with pre-store and rollback relationships.
 
-The public result is now `wom-credential-workflow-result/v0.2`; the child
-secure-intake result is `wom-credential-secure-intake-result/v0.2`. Read these
-five fixed outcomes as follows:
-
-- `credential_input_cancelled_or_empty`: no complete value was accepted;
-  create a new intake plan only when ready.
-- `credential_input_not_received`: the safe console boundary did not return a
-  complete value. This does not prove which physical paste gesture was or was
-  not used; retry a supported console input method with a new plan.
-- `provider_auth_rejected`: Notion rejected the credential. The temporary
-  exact store entry must be deleted or the result reports `delete_failed`;
-  review the credential before creating a new plan.
-- `provider_identity_endpoint_unavailable`: the provider identity service
-  could not be verified. The same rollback rule applies; wait for recovery and
-  create a new plan rather than guessing.
-- `reviewed_anchor_inaccessible`: the reviewed page could not be verified with
-  that connection. The same rollback rule applies; review page sharing and
-  access before a new plan.
-
-The first two outcomes are pre-store and require `rollback_status:
-not_required`. The last three happen only after the exact temporary write and
-require `deleted` or `delete_failed`. A `deleted` result also requires verified
-store absence. Never hand-edit or delete Credential Manager state merely to
-change the public result.
-
-The source test suite and synthetic Win32 API canaries verify Unicode text,
-echo-off input, status dwell, Ctrl+C survival, cleanup ordering, code-page and
-mode restoration, rollback projections, and secret-free output. They do not
-prove a physical `Ctrl+V`, `Ctrl+Shift+V`, `Shift+Insert`, or right-click paste
-under every Windows Terminal, classic Console Host, ConPTY, remote session, or
-customized configuration. Use only a separately reviewed synthetic manual
-acceptance exercise for that host; never test with a real PAT in documentation
-or logs.
-
-See the [v0.3.318 release note](wom-kit/docs/releases/v0.3.318.md),
-[Letter 131 credential console guide](wom-kit/docs/letter131-credential-console-paste-and-failure-stages.md),
+The source tests and synthetic Win32 canaries did not prove a physical paste
+gesture under every terminal host. See the
+[v0.3.318 release note](wom-kit/docs/releases/v0.3.318.md),
+[Letter 131 guide](wom-kit/docs/letter131-credential-console-paste-and-failure-stages.md),
 and [Letter 131 decision](wom-kit/docs/archive-infra-decision-log-2026-08-13-v03318-letter131-credential-input.md).
 
 ## v0.3.317 Credential Console And Staged-Cleanup Safety
