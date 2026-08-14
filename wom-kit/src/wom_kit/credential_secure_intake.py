@@ -45,7 +45,7 @@ NOTION_PAT_SCOPE_FINGERPRINT_DOMAIN = b"wom/notion-pat-token-scope/v1\x00"
 NOTION_WORKSPACE_IDENTITY_BASES = frozenset(
     {NOTION_WORKSPACE_IDENTITY_BASIS, NOTION_PAT_WORKSPACE_IDENTITY_BASIS}
 )
-RESULT_SCHEMA_VERSION = "wom-credential-secure-intake-result/v0.2"
+RESULT_SCHEMA_VERSION = "wom-credential-secure-intake-result/v0.3"
 LIFECYCLE_SCHEMA_VERSION = "wom-credential-duplicate-lifecycle/v0.1"
 CLAIM_SCHEMA_VERSION = "wom-credential-secure-intake-claim/v0.1"
 
@@ -81,7 +81,10 @@ PLAN_ACTIONS = (
 
 FAILURE_OPERATOR_ACTIONS = {
     "credential_input_cancelled_or_empty": "create_a_new_intake_plan_when_ready",
-    "credential_input_not_received": "retry_supported_console_input_with_a_new_plan",
+    "credential_input_not_received": "retry_secure_popup_input_with_a_new_plan",
+    "credential_input_invalid_for_provider": "enter_a_complete_provider_credential_with_a_new_plan",
+    "credential_input_boundary_failed": "repair_secure_input_boundary_and_create_a_new_plan",
+    "provider_request_not_attempted": "stop_and_review_the_provider_adapter_before_retrying",
     "provider_auth_rejected": "review_the_notion_credential_and_create_a_new_plan",
     "provider_identity_endpoint_unavailable": "create_a_new_plan_after_provider_identity_service_recovers",
     "reviewed_anchor_inaccessible": "review_page_access_and_create_a_new_plan",
@@ -111,6 +114,7 @@ _UNKNOWN_WORKER_ERROR = "secure credential intake worker state is unknown"
 
 _STAGE_FAILURE_REASONS = frozenset(
     {
+        "credential_input_invalid_for_provider",
         "provider_auth_rejected",
         "provider_identity_endpoint_unavailable",
         "reviewed_anchor_inaccessible",
@@ -245,7 +249,15 @@ def _normalize_capabilities(values: Sequence[str]) -> tuple[str, ...]:
     return tuple(sorted(normalized))
 
 
-def _fixed_failure(reason_code: str, *, rollback_status: str = "not_required") -> dict[str, Any]:
+def _fixed_failure(
+    reason_code: str,
+    *,
+    rollback_status: str = "not_required",
+    credential_input_received: bool = False,
+    complete_line_received: bool = False,
+    temporary_store_write_attempted: bool = False,
+    provider_request_attempted: bool = False,
+) -> dict[str, Any]:
     if reason_code not in FAILURE_OPERATOR_ACTIONS:
         reason_code = "worker_result_invalid"
     operator_action = FAILURE_OPERATOR_ACTIONS[reason_code]
@@ -262,6 +274,10 @@ def _fixed_failure(reason_code: str, *, rollback_status: str = "not_required") -
         "operator_action": operator_action,
         "rollback_status": rollback_status,
         "error": _FIXED_FAILURE_ERROR,
+        "credential_input_received": credential_input_received,
+        "complete_line_received": complete_line_received,
+        "temporary_store_write_attempted": temporary_store_write_attempted,
+        "provider_request_attempted": provider_request_attempted,
     }
 
 
@@ -1194,10 +1210,106 @@ class FileOneTimeRequestClaims:
             return "request_claim_failed"
 
 
-class HumanOnlySecretUI(Protocol):
-    """Worker-process-only source of one mutable secret buffer."""
+class _HumanSecretInputEvidenceError(RuntimeError):
+    """Private, value-free UI failure that preserves only causal input facts.
 
-    def request_secret(self, *, request_id: str) -> bytearray | None: ...
+    This exception never crosses the worker-result boundary.  It carries no
+    secret, length, gesture, native error, or provider data; the worker uses
+    only the two strict-prefix booleans to choose one fixed public failure.
+    """
+
+    code = "secure_intake_human_input_failed"
+
+    def __init__(
+        self,
+        *,
+        reason_code: str = "credential_input_not_received",
+        credential_input_received: bool = False,
+        complete_line_received: bool = False,
+    ) -> None:
+        if (
+            type(credential_input_received) is not bool
+            or type(complete_line_received) is not bool
+            or (complete_line_received and not credential_input_received)
+        ):
+            raise ValueError("secure_intake_human_input_evidence_invalid")
+        evidence = (credential_input_received, complete_line_received)
+        if (
+            reason_code == "credential_input_not_received"
+            and evidence != (False, False)
+        ) or (
+            reason_code == "credential_input_invalid_for_provider"
+            and evidence != (True, True)
+        ) or (
+            reason_code == "credential_input_boundary_failed"
+            and evidence not in {(True, False), (True, True)}
+        ) or reason_code not in {
+            "credential_input_not_received",
+            "credential_input_invalid_for_provider",
+            "credential_input_boundary_failed",
+        }:
+            raise ValueError("secure_intake_human_input_evidence_invalid")
+        self.__reason_code = reason_code
+        self.__credential_input_received = credential_input_received
+        self.__complete_line_received = complete_line_received
+        super().__init__(self.code)
+
+    @property
+    def reason_code(self) -> str:
+        return self.__reason_code
+
+    @property
+    def credential_input_received(self) -> bool:
+        return self.__credential_input_received
+
+    @property
+    def complete_line_received(self) -> bool:
+        return self.__complete_line_received
+
+    def __repr__(self) -> str:
+        return "_HumanSecretInputEvidenceError()"
+
+
+@dataclass(frozen=True)
+class HumanSecretInputResult:
+    """Private UI outcome whose representation never exposes the secret.
+
+    The booleans are content-free evidence from the interactive UI boundary.
+    They form a strict prefix: a complete line implies some input was received.
+    Cancellation never carries a secret, but may still prove that input or a
+    complete empty line reached WOM.  A non-cancelled complete line owns one
+    mutable buffer.
+    """
+
+    secret: bytearray | None = field(repr=False)
+    credential_input_received: bool
+    complete_line_received: bool
+    cancelled: bool
+
+    def __post_init__(self) -> None:
+        flags = (
+            self.credential_input_received,
+            self.complete_line_received,
+            self.cancelled,
+        )
+        if any(type(value) is not bool for value in flags):
+            raise ValueError("secure_intake_human_input_result_invalid")
+        if self.secret is not None and not isinstance(self.secret, bytearray):
+            raise ValueError("secure_intake_human_input_result_invalid")
+        if self.complete_line_received and not self.credential_input_received:
+            raise ValueError("secure_intake_human_input_result_invalid")
+        if self.cancelled:
+            if self.secret is not None:
+                raise ValueError("secure_intake_human_input_result_invalid")
+            return
+        if self.complete_line_received != (self.secret is not None):
+            raise ValueError("secure_intake_human_input_result_invalid")
+
+
+class HumanOnlySecretUI(Protocol):
+    """Worker-process-only source of one private input outcome."""
+
+    def request_secret(self, *, request_id: str) -> HumanSecretInputResult: ...
 
 
 @dataclass
@@ -1210,16 +1322,18 @@ class WindowsMaskedDialog:
     clipboard, or a plaintext file.
     """
 
-    native_prompt: Callable[[str], bytearray | None] = field(repr=False)
+    native_prompt: Callable[[str], HumanSecretInputResult] = field(repr=False)
 
-    def request_secret(self, *, request_id: str) -> bytearray | None:
+    def request_secret(self, *, request_id: str) -> HumanSecretInputResult:
         if REQUEST_ID_RE.fullmatch(request_id) is None:
             raise RuntimeError("secure_intake_input_unavailable")
         try:
             value = self.native_prompt(request_id)
+        except _HumanSecretInputEvidenceError:
+            raise
         except Exception:
             raise RuntimeError("secure_intake_input_unavailable") from None
-        if value is not None and not isinstance(value, bytearray):
+        if not isinstance(value, HumanSecretInputResult):
             raise RuntimeError("secure_intake_input_unavailable")
         return value
 
@@ -1261,7 +1375,10 @@ class WindowsCredentialManagerExactStore:
         self.native.write_generic(self._target(backend_id), secret)
 
     def probe_exact(self, backend_id: str) -> bool:
-        return bool(self.native.generic_exists(self._target(backend_id)))
+        present = self.native.generic_exists(self._target(backend_id))
+        if type(present) is not bool:
+            raise RuntimeError("windows_credential_probe_failed")
+        return present
 
     def delete_exact(self, backend_id: str) -> None:
         self.native.delete_generic(self._target(backend_id))
@@ -1282,12 +1399,15 @@ class VerifiedCredentialIdentity:
 
 
 class ProviderIdentityVerifier(Protocol):
+    def validate_secret_input(self, secret: memoryview, provider: str) -> bool: ...
+
     def verify_identity(
         self,
         secret: memoryview,
         *,
         provider: str,
         reviewed_anchor_uuid: str,
+        provider_request_observer: Callable[[], None],
     ) -> VerifiedCredentialIdentity: ...
 
 
@@ -1374,9 +1494,16 @@ def _validate_identity(
         capabilities = _normalize_capabilities(identity.capabilities)
     except (AttributeError, TypeError, ValueError):
         return "provider_identity_unverified", (), None
-    if not identity.subject_verified or provider != plan.provider or not account_subject:
+    if (
+        identity.subject_verified is not True
+        or provider != plan.provider
+        or not account_subject
+    ):
         return "provider_identity_unverified", (), None
-    if not identity.anchor_access_verified or anchor != plan.reviewed_anchor_uuid:
+    if (
+        identity.anchor_access_verified is not True
+        or anchor != plan.reviewed_anchor_uuid
+    ):
         return "reviewed_anchor_inaccessible", (), None
     if not workspace_identity:
         return "provider_identity_unverified", (), None
@@ -1428,7 +1555,9 @@ def _workspace_identity_fingerprint(
 def _rollback(store: ExactCredentialStore, backend_id: str) -> str:
     try:
         store.delete_exact(backend_id)
-        return "deleted"
+        # A successful delete call is not absence evidence.  Probe the exact
+        # target after deletion and report ``deleted`` only when it is absent.
+        return "deleted" if store.probe_exact(backend_id) is False else "delete_failed"
     except Exception:
         return "delete_failed"
 
@@ -1500,6 +1629,22 @@ class SecureIntakeWorker:
         secret: bytearray | None = None
         stored = False
         backend_id = ""
+        credential_input_received = False
+        complete_line_received = False
+        temporary_store_write_attempted = False
+        provider_request_attempted = False
+
+        def failure(
+            reason_code: str, *, rollback_status: str = "not_required"
+        ) -> dict[str, Any]:
+            return _fixed_failure(
+                reason_code,
+                rollback_status=rollback_status,
+                credential_input_received=credential_input_received,
+                complete_line_received=complete_line_received,
+                temporary_store_write_attempted=temporary_store_write_attempted,
+                provider_request_attempted=provider_request_attempted,
+            )
 
         def rollback_once() -> str:
             nonlocal stored
@@ -1511,57 +1656,137 @@ class SecureIntakeWorker:
 
         try:
             try:
-                secret = self.ui.request_secret(request_id=plan.request_id)
+                input_result = self.ui.request_secret(request_id=plan.request_id)
+            except _HumanSecretInputEvidenceError as error:
+                try:
+                    reason = error.reason_code
+                    input_received = error.credential_input_received
+                    line_received = error.complete_line_received
+                except Exception:
+                    return failure("credential_input_not_received")
+                if (
+                    type(reason) is not str
+                    or type(input_received) is not bool
+                    or type(line_received) is not bool
+                ):
+                    return failure("credential_input_not_received")
+                evidence = (input_received, line_received)
+                evidence_valid = (
+                    reason == "credential_input_not_received"
+                    and evidence == (False, False)
+                ) or (
+                    reason == "credential_input_invalid_for_provider"
+                    and evidence == (True, True)
+                ) or (
+                    reason == "credential_input_boundary_failed"
+                    and evidence in {(True, False), (True, True)}
+                )
+                if not evidence_valid:
+                    return failure("credential_input_not_received")
+                credential_input_received = input_received
+                complete_line_received = line_received
+                return failure(reason)
             except Exception:
-                return _fixed_failure("credential_input_not_received")
-            if secret is None:
-                return _fixed_failure("credential_input_cancelled_or_empty")
-            if not isinstance(secret, bytearray) or not 0 < len(secret) <= MAX_SECRET_BYTES:
-                return _fixed_failure("credential_input_not_received")
+                return failure("credential_input_not_received")
+            if not isinstance(input_result, HumanSecretInputResult):
+                return failure("credential_input_not_received")
+            credential_input_received = input_result.credential_input_received
+            complete_line_received = input_result.complete_line_received
+            if input_result.cancelled:
+                return failure("credential_input_cancelled_or_empty")
+            if not complete_line_received:
+                return failure("credential_input_not_received")
+            secret = input_result.secret
+            if not isinstance(secret, bytearray):
+                return failure("worker_result_invalid")
+            if not secret:
+                return failure("credential_input_cancelled_or_empty")
+            if len(secret) > MAX_SECRET_BYTES:
+                return failure("credential_input_invalid_for_provider")
             secret_view = memoryview(secret)
+
+            try:
+                locally_valid = self.verifier.validate_secret_input(
+                    secret_view, plan.provider
+                )
+            except Exception:
+                locally_valid = False
+            if locally_valid is not True:
+                return failure("credential_input_invalid_for_provider")
 
             backend_id = str(self.backend_id_factory())
             if BACKEND_ID_RE.fullmatch(backend_id) is None:
-                return _fixed_failure("worker_result_invalid")
+                return failure("worker_result_invalid")
             try:
                 # A native put may write and then fail while returning.  Mark
                 # the entry as rollback-owned before crossing that boundary.
                 stored = True
+                temporary_store_write_attempted = True
                 self.store.put_exact(backend_id, secret_view)
             except Exception:
-                return _fixed_failure(
+                return failure(
                     "store_write_failed", rollback_status=rollback_once()
                 )
             try:
                 present = self.store.probe_exact(backend_id)
             except Exception:
                 present = False
-            if not present:
-                return _fixed_failure(
+            if present is not True:
+                return failure(
                     "store_presence_not_verified",
                     rollback_status=rollback_once(),
                 )
+
+            def observe_provider_request() -> None:
+                nonlocal provider_request_attempted
+                provider_request_attempted = True
+
             try:
                 identity = self.verifier.verify_identity(
                     secret_view,
                     provider=plan.provider,
                     reviewed_anchor_uuid=plan.reviewed_anchor_uuid,
+                    provider_request_observer=observe_provider_request,
                 )
             except CredentialIntakeStageError as error:
-                return _fixed_failure(
-                    error.code,
+                if not provider_request_attempted:
+                    reason = "provider_request_not_attempted"
+                elif error.code in {
+                    "provider_auth_rejected",
+                    "provider_identity_endpoint_unavailable",
+                    "reviewed_anchor_inaccessible",
+                }:
+                    reason = error.code
+                else:
+                    # Once transport was attempted, a verifier must not project
+                    # a pre-provider input reason. Normalize a miswired trusted
+                    # adapter to the generic provider-stage failure instead of
+                    # emitting a causally impossible result.
+                    reason = "provider_identity_unverified"
+                return failure(
+                    reason,
                     rollback_status=rollback_once(),
                 )
             except Exception:
-                return _fixed_failure(
-                    "provider_identity_unverified",
+                reason = (
+                    "provider_identity_unverified"
+                    if provider_request_attempted
+                    else "provider_request_not_attempted"
+                )
+                return failure(
+                    reason,
+                    rollback_status=rollback_once(),
+                )
+            if not provider_request_attempted:
+                return failure(
+                    "provider_request_not_attempted",
                     rollback_status=rollback_once(),
                 )
             identity_failure, capabilities, workspace_identity_basis = _validate_identity(
                 identity, plan
             )
             if identity_failure:
-                return _fixed_failure(
+                return failure(
                     identity_failure,
                     rollback_status=rollback_once(),
                 )
@@ -1574,7 +1799,7 @@ class SecureIntakeWorker:
             )
             credential_id = str(self.credential_id_factory())
             if CREDENTIAL_ID_RE.fullmatch(credential_id) is None:
-                return _fixed_failure(
+                return failure(
                     "worker_result_invalid", rollback_status=rollback_once()
                 )
             verified_at = _timestamp(moment)
@@ -1624,11 +1849,15 @@ class SecureIntakeWorker:
                 "lifecycle_status": "active",
                 "is_default": False,
                 "secret_value_present": False,
+                "credential_input_received": True,
+                "complete_line_received": True,
+                "temporary_store_write_attempted": True,
+                "provider_request_attempted": True,
             }
             try:
                 receipt_ref = self.receipt_committer.commit_atomic(receipt)
             except Exception:
-                return _fixed_failure(
+                return failure(
                     "receipt_commit_failed",
                     rollback_status=rollback_once(),
                 )
@@ -1650,7 +1879,7 @@ class SecureIntakeWorker:
             success_result["receipt_ref"] = public_receipt_ref
             return success_result
         except Exception:
-            return _fixed_failure(
+            return failure(
                 "worker_result_invalid", rollback_status=rollback_once()
             )
         finally:
@@ -1747,6 +1976,10 @@ _WORKER_FAILURE_KEYS = {
     "operator_action",
     "rollback_status",
     "error",
+    "credential_input_received",
+    "complete_line_received",
+    "temporary_store_write_attempted",
+    "provider_request_attempted",
 }
 _WORKER_SUCCESS_KEYS = {
     "schema_version",
@@ -1772,6 +2005,10 @@ _WORKER_SUCCESS_KEYS = {
     "is_default",
     "receipt_ref",
     "secret_value_present",
+    "credential_input_received",
+    "complete_line_received",
+    "temporary_store_write_attempted",
+    "provider_request_attempted",
 }
 _WORKER_FAILURE_REASONS = frozenset(FAILURE_OPERATOR_ACTIONS) - {
     # Only the parent launcher can honestly assert that a worker did not
@@ -1781,10 +2018,8 @@ _WORKER_FAILURE_REASONS = frozenset(FAILURE_OPERATOR_ACTIONS) - {
 _WORKER_ROLLBACK_STATUSES = frozenset(
     {"not_required", "deleted", "delete_failed"}
 )
-_PRE_STORE_FAILURE_REASONS = frozenset(
+_ZERO_EVIDENCE_FAILURE_REASONS = frozenset(
     {
-        "credential_input_cancelled_or_empty",
-        "credential_input_not_received",
         "human_cancelled",
         "secret_input_unavailable",
         "request_expired",
@@ -1794,10 +2029,8 @@ _PRE_STORE_FAILURE_REASONS = frozenset(
         "plan_digest_mismatch",
     }
 )
-_ROLLBACK_REQUIRED_FAILURE_REASONS = frozenset(
+_PROVIDER_ATTEMPTED_FAILURE_REASONS = frozenset(
     {
-        "store_write_failed",
-        "store_presence_not_verified",
         "provider_auth_rejected",
         "provider_identity_endpoint_unavailable",
         "reviewed_anchor_inaccessible",
@@ -1806,6 +2039,66 @@ _ROLLBACK_REQUIRED_FAILURE_REASONS = frozenset(
         "receipt_commit_failed",
     }
 )
+
+
+def _failure_evidence_is_valid(
+    reason: str, rollback: str, plain: Mapping[str, Any]
+) -> bool:
+    evidence = (
+        plain.get("credential_input_received"),
+        plain.get("complete_line_received"),
+        plain.get("temporary_store_write_attempted"),
+        plain.get("provider_request_attempted"),
+    )
+    if any(type(value) is not bool for value in evidence):
+        return False
+    if evidence not in {
+        (False, False, False, False),
+        (True, False, False, False),
+        (True, True, False, False),
+        (True, True, True, False),
+        (True, True, True, True),
+    }:
+        return False
+
+    store_attempted = evidence[2]
+    if store_attempted:
+        if rollback not in {"deleted", "delete_failed"}:
+            return False
+    elif rollback != "not_required":
+        return False
+
+    if reason in _ZERO_EVIDENCE_FAILURE_REASONS:
+        return evidence == (False, False, False, False)
+    if reason == "credential_input_not_received":
+        return evidence in {
+            (False, False, False, False),
+            (True, False, False, False),
+        }
+    if reason == "credential_input_cancelled_or_empty":
+        return evidence in {
+            (False, False, False, False),
+            (True, False, False, False),
+            (True, True, False, False),
+        }
+    if reason == "credential_input_invalid_for_provider":
+        return evidence == (True, True, False, False)
+    if reason == "credential_input_boundary_failed":
+        return evidence in {
+            (True, False, False, False),
+            (True, True, False, False),
+        }
+    if reason in {
+        "store_write_failed",
+        "store_presence_not_verified",
+        "provider_request_not_attempted",
+    }:
+        return evidence == (True, True, True, False)
+    if reason in _PROVIDER_ATTEMPTED_FAILURE_REASONS:
+        return evidence == (True, True, True, True)
+    if reason == "worker_result_invalid":
+        return True
+    return False
 
 
 def _unknown_worker_result() -> dict[str, Any]:
@@ -1820,6 +2113,10 @@ def _unknown_worker_result() -> dict[str, Any]:
         "operator_action": _UNKNOWN_WORKER_ACTION,
         "rollback_status": None,
         "error": _UNKNOWN_WORKER_ERROR,
+        "credential_input_received": None,
+        "complete_line_received": None,
+        "temporary_store_write_attempted": None,
+        "provider_request_attempted": None,
         "secret_value_present": False,
         "reviewed_anchor_present_in_result": False,
         "backend_target_present": False,
@@ -1857,19 +2154,17 @@ def _project_worker_failure(result: Mapping[str, Any]) -> dict[str, Any] | None:
         and reason in _WORKER_FAILURE_REASONS
         and type(rollback) is str
         and rollback in _WORKER_ROLLBACK_STATUSES
-        and (
-            (reason in _PRE_STORE_FAILURE_REASONS and rollback == "not_required")
-            or (
-                reason in _ROLLBACK_REQUIRED_FAILURE_REASONS
-                and rollback in {"deleted", "delete_failed"}
-            )
-            # This internal integrity failure can occur either before the
-            # encrypted write or after it, where rollback is mandatory.
-            or reason == "worker_result_invalid"
-        )
+        and _failure_evidence_is_valid(reason, rollback, plain)
     ):
         return None
-    projected = _fixed_failure(reason, rollback_status=rollback)
+    projected = _fixed_failure(
+        reason,
+        rollback_status=rollback,
+        credential_input_received=plain["credential_input_received"],
+        complete_line_received=plain["complete_line_received"],
+        temporary_store_write_attempted=plain["temporary_store_write_attempted"],
+        provider_request_attempted=plain["provider_request_attempted"],
+    )
     return projected if plain == projected else None
 
 
@@ -1953,6 +2248,7 @@ def _project_worker_success(
         and WORKSPACE_FINGERPRINT_RE.fullmatch(account_fingerprint) is not None
         and type(workspace_fingerprint) is str
         and WORKSPACE_FINGERPRINT_RE.fullmatch(workspace_fingerprint) is not None
+        and type(workspace_identity_basis) is str
         and workspace_identity_basis in NOTION_WORKSPACE_IDENTITY_BASES
         and type(adopted_at) is str
         and type(last_verified_at) is str
@@ -1971,8 +2267,18 @@ def _project_worker_success(
             f"receipt:{credential_id}",
         }
         and plain.get("secret_value_present") is False
+        and plain.get("credential_input_received") is True
+        and plain.get("complete_line_received") is True
+        and plain.get("temporary_store_write_attempted") is True
+        and plain.get("provider_request_attempted") is True
     ):
         return None
+
+    canonical_workspace_identity_basis = (
+        NOTION_WORKSPACE_IDENTITY_BASIS
+        if workspace_identity_basis == NOTION_WORKSPACE_IDENTITY_BASIS
+        else NOTION_PAT_WORKSPACE_IDENTITY_BASIS
+    )
 
     # Reconstruct every output field.  Never return ``plain`` or the original
     # Mapping even after validation: custom child containers and extra values
@@ -1993,7 +2299,7 @@ def _project_worker_success(
         "fingerprint_digest": fingerprint,
         "verified_account_fingerprint": account_fingerprint,
         "verified_workspace_fingerprint": workspace_fingerprint,
-        "workspace_identity_basis": workspace_identity_basis,
+        "workspace_identity_basis": canonical_workspace_identity_basis,
         "adopted_at": canonical_time,
         "last_verified_at": canonical_time,
         "rotation_status": "current",
@@ -2001,6 +2307,10 @@ def _project_worker_success(
         "is_default": False,
         "receipt_ref": receipt_ref,
         "secret_value_present": False,
+        "credential_input_received": True,
+        "complete_line_received": True,
+        "temporary_store_write_attempted": True,
+        "provider_request_attempted": True,
     }
     return projected if plain == projected else None
 
@@ -2131,6 +2441,7 @@ __all__ = [
     "ExactCredentialStore",
     "FileOneTimeRequestClaims",
     "HumanOnlySecretUI",
+    "HumanSecretInputResult",
     "InMemoryOneTimeRequestClaims",
     "LEGACY_RECEIPT_SCHEMA_VERSION",
     "NOTION_WORKSPACE_IDENTITY_BASIS",
@@ -2140,6 +2451,7 @@ __all__ = [
     "IsolatedWorkerSpawner",
     "ProviderIdentityVerifier",
     "RECEIPT_SCHEMA_VERSION",
+    "RESULT_SCHEMA_VERSION",
     "SecureIntakePlan",
     "SecureIntakeProcessLauncher",
     "SecureIntakeWorker",

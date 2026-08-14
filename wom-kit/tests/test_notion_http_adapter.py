@@ -85,6 +85,14 @@ class CountingPacer:
         self.calls += 1
 
 
+class CountingRequestObserver:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def __call__(self) -> None:
+        self.calls += 1
+
+
 def page_payload(page_id=PAGE_ID, **overrides):
     payload = {
         "object": "page",
@@ -634,7 +642,18 @@ class NotionHttpAdapterIdentityTests(unittest.TestCase):
     def test_identity_requests_share_pacer_and_retry_after_policy(self) -> None:
         pacer = CountingPacer()
         sleeps: list[float] = []
-        transport = FakeTransport(
+        provider_requests = CountingRequestObserver()
+
+        class ObserverAwareTransport(FakeTransport):
+            def __init__(self, *outcomes):
+                super().__init__(*outcomes)
+                self.observer_counts_at_open = []
+
+            def open(self, request, *, timeout):
+                self.observer_counts_at_open.append(provider_requests.calls)
+                return super().open(request, timeout=timeout)
+
+        transport = ObserverAwareTransport(
             FakeResponse(status=429, payload={}, headers={"Retry-After": "2"}),
             FakeResponse(payload=user_payload()),
             FakeResponse(payload=page_payload()),
@@ -648,11 +667,17 @@ class NotionHttpAdapterIdentityTests(unittest.TestCase):
             jitter=lambda: 0.0,
         )
 
-        evidence = adapter.verify_identity(SECRET, PAGE_ID)
+        evidence = adapter.verify_identity(
+            SECRET,
+            PAGE_ID,
+            provider_request_observer=provider_requests,
+        )
 
         self.assertTrue(evidence["identity_verified"])
         self.assertTrue(evidence["workspace_anchor_verified"])
         self.assertEqual(len(transport.calls), 3)
+        self.assertEqual(provider_requests.calls, 1)
+        self.assertEqual(transport.observer_counts_at_open, [1, 1, 1])
         self.assertEqual(pacer.calls, 3)
         self.assertEqual(sleeps, [2.0])
         rendered = json.dumps(evidence, ensure_ascii=False)
@@ -693,6 +718,27 @@ class NotionHttpAdapterIdentityTests(unittest.TestCase):
             PRIVATE_URL,
         ):
             self.assertNotIn(private, rendered)
+
+    def test_provider_request_observer_stays_false_before_transport_boundary(self) -> None:
+        class FailingPacer:
+            def before_request(self) -> None:
+                raise RuntimeError(PRIVATE_ERROR)
+
+        transport = FakeTransport()
+        provider_requests = CountingRequestObserver()
+        evidence = NotionHttpAdapter(
+            transport=transport,
+            request_pacer=FailingPacer(),
+        ).verify_identity(
+            SECRET,
+            PAGE_ID,
+            provider_request_observer=provider_requests,
+        )
+
+        self.assertEqual(evidence["reason_code"], "notion_transport_error")
+        self.assertEqual(provider_requests.calls, 0)
+        self.assertEqual(transport.calls, [])
+        self.assertNotIn(PRIVATE_ERROR, json.dumps(evidence))
 
     def test_same_workspace_groups_different_accounts_and_anchors_into_one_scope(self) -> None:
         other_user = str(uuid.UUID(int=777))
@@ -943,11 +989,14 @@ class NotionHttpAdapterIdentityTests(unittest.TestCase):
         )
         verifier = NotionHttpAdapter(transport=transport).secure_intake_verifier()
         secret_buffer = bytearray(SECRET.encode("utf-8"))
+        provider_requests = CountingRequestObserver()
         identity = verifier.verify_identity(
             memoryview(secret_buffer),
             provider="notion",
             reviewed_anchor_uuid=PAGE_ID,
+            provider_request_observer=provider_requests,
         )
+        self.assertEqual(provider_requests.calls, 1)
         self.assertRegex(identity.account_subject, r"^sha256:[0-9a-f]{64}$")
         self.assertRegex(identity.workspace_identity, r"^sha256:[0-9a-f]{64}$")
         self.assertEqual(
@@ -992,6 +1041,7 @@ class NotionHttpAdapterIdentityTests(unittest.TestCase):
             memoryview(secret_buffer),
             provider="notion",
             reviewed_anchor_uuid=PAGE_ID,
+            provider_request_observer=CountingRequestObserver(),
         )
 
         self.assertEqual(
@@ -1007,14 +1057,109 @@ class NotionHttpAdapterIdentityTests(unittest.TestCase):
 
         no_calls = FakeTransport()
         wrong_provider = NotionHttpAdapter(transport=no_calls).secure_intake_verifier()
+        wrong_provider_requests = CountingRequestObserver()
         with self.assertRaises(NotionHttpAdapterError) as context:
             wrong_provider.verify_identity(
                 memoryview(secret_buffer),
                 provider="other",
                 reviewed_anchor_uuid=PAGE_ID,
+                provider_request_observer=wrong_provider_requests,
             )
         self.assertEqual(str(context.exception), "notion_provider_mismatch")
         self.assertEqual(no_calls.calls, [])
+        self.assertEqual(wrong_provider_requests.calls, 0)
+
+    def test_secure_intake_rejects_non_provider_input_without_transport(self) -> None:
+        cases = {
+            "space": bytearray(b"invalid token with spaces"),
+            "non_ascii_utf8": bytearray("비밀값".encode("utf-8")),
+            "invalid_utf8": bytearray(b"token-\xff\xfe"),
+        }
+        for label, secret_buffer in cases.items():
+            with self.subTest(label=label):
+                transport = FakeTransport()
+                verifier = NotionHttpAdapter(
+                    transport=transport,
+                    max_attempts=1,
+                ).secure_intake_verifier()
+                provider_requests = CountingRequestObserver()
+                secret_view = memoryview(secret_buffer)
+                try:
+                    self.assertFalse(
+                        verifier.validate_secret_input(secret_view, "notion")
+                    )
+                    with self.assertRaises(CredentialIntakeStageError) as context:
+                        verifier.verify_identity(
+                            secret_view,
+                            provider="notion",
+                            reviewed_anchor_uuid=PAGE_ID,
+                            provider_request_observer=provider_requests,
+                        )
+                    self.assertEqual(
+                        context.exception.code,
+                        "credential_input_invalid_for_provider",
+                    )
+                    self.assertEqual(transport.calls, [])
+                    self.assertEqual(provider_requests.calls, 0)
+                finally:
+                    secret_view.release()
+                    secret_buffer[:] = b"\x00" * len(secret_buffer)
+
+        shaped_buffer = bytearray(b"abcd")
+        shaped_view = memoryview(shaped_buffer).cast("B", shape=[2, 2])
+        shaped_transport = FakeTransport()
+        shaped_requests = CountingRequestObserver()
+        shaped_verifier = NotionHttpAdapter(
+            transport=shaped_transport,
+        ).secure_intake_verifier()
+        try:
+            self.assertFalse(
+                shaped_verifier.validate_secret_input(shaped_view, "notion")
+            )
+            with self.assertRaises(CredentialIntakeStageError) as context:
+                shaped_verifier.verify_identity(
+                    shaped_view,
+                    provider="notion",
+                    reviewed_anchor_uuid=PAGE_ID,
+                    provider_request_observer=shaped_requests,
+                )
+            self.assertEqual(
+                context.exception.code,
+                "credential_input_invalid_for_provider",
+            )
+            self.assertEqual(shaped_transport.calls, [])
+            self.assertEqual(shaped_requests.calls, 0)
+        finally:
+            shaped_view.release()
+            shaped_buffer[:] = b"\x00" * len(shaped_buffer)
+
+    def test_secure_intake_never_claims_auth_rejection_without_request_attempt(self) -> None:
+        secret_buffer = bytearray(SECRET.encode("ascii"))
+        provider_requests = CountingRequestObserver()
+        try:
+            with patch.object(
+                NotionHttpAdapter,
+                "verify_identity",
+                return_value={
+                    "reason_code": "notion_identity_unauthorized",
+                    "identity_verified": False,
+                    "workspace_anchor_verified": False,
+                },
+            ):
+                with self.assertRaises(CredentialIntakeStageError) as context:
+                    NotionHttpAdapter(
+                        transport=FakeTransport(),
+                    ).secure_intake_verifier().verify_identity(
+                        memoryview(secret_buffer),
+                        provider="notion",
+                        reviewed_anchor_uuid=PAGE_ID,
+                        provider_request_observer=provider_requests,
+                    )
+            self.assertEqual(context.exception.code, "provider_identity_unverified")
+            self.assertNotEqual(context.exception.code, "provider_auth_rejected")
+            self.assertEqual(provider_requests.calls, 0)
+        finally:
+            secret_buffer[:] = b"\x00" * len(secret_buffer)
 
     def test_secure_intake_bridge_preserves_auth_identity_and_anchor_stages(self) -> None:
         cases = [
@@ -1099,10 +1244,12 @@ class NotionHttpAdapterIdentityTests(unittest.TestCase):
         ]
         for label, outcomes, expected in cases:
             with self.subTest(label=label):
+                transport = FakeTransport(*outcomes)
                 verifier = NotionHttpAdapter(
-                    transport=FakeTransport(*outcomes),
+                    transport=transport,
                     max_attempts=1,
                 ).secure_intake_verifier()
+                provider_requests = CountingRequestObserver()
                 secret_buffer = bytearray(SECRET.encode("ascii"))
                 try:
                     with self.assertRaises(CredentialIntakeStageError) as context:
@@ -1110,8 +1257,11 @@ class NotionHttpAdapterIdentityTests(unittest.TestCase):
                             memoryview(secret_buffer),
                             provider="notion",
                             reviewed_anchor_uuid=PAGE_ID,
+                            provider_request_observer=provider_requests,
                         )
                     self.assertEqual(context.exception.code, expected)
+                    self.assertEqual(provider_requests.calls, 1)
+                    self.assertGreaterEqual(len(transport.calls), 1)
                     rendered = repr(context.exception)
                     for private in (
                         SECRET,
@@ -1124,22 +1274,8 @@ class NotionHttpAdapterIdentityTests(unittest.TestCase):
                 finally:
                     secret_buffer[:] = b"\x00" * len(secret_buffer)
 
-        invalid_buffer = bytearray(b"invalid token with spaces")
-        try:
-            with self.assertRaises(CredentialIntakeStageError) as context:
-                NotionHttpAdapter(
-                    transport=FakeTransport(),
-                    max_attempts=1,
-                ).secure_intake_verifier().verify_identity(
-                    memoryview(invalid_buffer),
-                    provider="notion",
-                    reviewed_anchor_uuid=PAGE_ID,
-                )
-            self.assertEqual(context.exception.code, "provider_auth_rejected")
-        finally:
-            invalid_buffer[:] = b"\x00" * len(invalid_buffer)
-
         unknown_buffer = bytearray(SECRET.encode("ascii"))
+        unknown_provider_requests = CountingRequestObserver()
         try:
             with patch.object(
                 NotionHttpAdapter,
@@ -1157,8 +1293,10 @@ class NotionHttpAdapterIdentityTests(unittest.TestCase):
                         memoryview(unknown_buffer),
                         provider="notion",
                         reviewed_anchor_uuid=PAGE_ID,
+                        provider_request_observer=unknown_provider_requests,
                     )
             self.assertEqual(context.exception.code, "provider_identity_unverified")
+            self.assertEqual(unknown_provider_requests.calls, 0)
         finally:
             unknown_buffer[:] = b"\x00" * len(unknown_buffer)
 

@@ -100,30 +100,42 @@ Do not preload every reference.
 - Substantive repeatable tool failures use the reviewed
   `operator-feedback-compose` and `operator-feedback-body-check` route before
   lifecycle binding. Metadata alone does not prove body completeness.
-- Never expose secret values, credential-store responses, private paths, or source
-  excerpts. A read-only result never authorizes provider calls, transport,
-  mint, revise, retire, import, trust, or delete.
-- Never ask for or accept a provider secret in chat. `credential-adopt` is only
-  for first enrollment or an explicitly reviewed replacement. Before using it,
-  check authenticated credential state. Supply one public-safe current-task
-  sentence and one public-safe connection-reason sentence; WOM owns the fixed
-  security notice and the separate echo-disabled Windows console. Tell the
-  human to use `Ctrl+V` or `Shift+Insert`; Windows Terminal defaults also
-  support `Ctrl+Shift+V`, while right-click depends on host settings. During
-  the prompt `Ctrl+C` is ignored and empty Enter is cancellation. After a
-  complete non-empty line, `입력값을 받았습니다. 검증 중입니다.` confirms
-  only console receipt. Interpret the v0.2 public outcomes exactly:
-  `credential_input_cancelled_or_empty`, `credential_input_not_received`,
-  `provider_auth_rejected`, `provider_identity_endpoint_unavailable`, and
-  `reviewed_anchor_inaccessible`. Never infer from
-  `credential_input_not_received` which physical paste gesture did or did not
-  work, and never read the clipboard programmatically. After a
-  successful enrollment and lifecycle choice, later approved work reuses the
-  exact Windows Credential Manager entry without prompting again. The same
-  saved PAT may be revalidated for another reviewed page; do not treat a page
-  UUID or display label as workspace authority. A legacy authenticated receipt
-  may need WOM's no-prompt scope-evolution path, while duplicate or complex
-  lifecycle state requires human review rather than another secret request.
+- Never expose secret values, credential-store responses, private paths, or excerpts.
+  A read-only result never authorizes calls, writes, or deletes.
+- Never ask for a provider secret in chat. Use `credential-adopt` only for first
+  enrollment or reviewed replacement. Check authenticated state; supply only
+  public-safe task/reason sentences; WOM owns every security notice. Production
+  uses a separate native Unicode Windows popup with exact input intent
+  `CredentialPopupInputIntent.live_registration` and banner
+  `실제 자격 증명 등록`. Its isolated spawned child detaches from the inherited
+  console before live work; the parent blocks and does not read ordinary stdin.
+  The popup uses a standard password edit covered by an opaque fixed-text layer,
+  so it reveals no value, mask, caret, character count, or length. Copy and cut
+  are blocked; standard edit paste stays available without WOM reading clipboard
+  data. Do not put a secret in chat, argv, environment, ordinary stdin, or a file.
+  Interpret v0.3 facts exactly: `credential_input_received`,
+  `complete_line_received`, `temporary_store_write_attempted`, and
+  `provider_request_attempted`. `provider_auth_rejected` requires a real request.
+  Complete malformed/control/provider-shape or UTF-8 byte-oversize input is
+  `credential_input_invalid_for_provider` at `1100`;
+  `credential_input_boundary_failed` preserves truthful `1000`/`1100` facts and
+  never attempts store/provider. No transport
+  after store is `provider_request_not_attempted`; `deleted` requires a fresh
+  post-delete absence probe; unknown state has four nulls.
+  The manual helper is synthetic-only: schema
+  `wom-kit/windows-credential-popup-acceptance/v0.1`, route
+  `codex_desktop_native_popup`, and intent
+  `CredentialPopupInputIntent.synthetic_acceptance`. It displays
+  `합성 입력 테스트 · 실제 키 입력 금지`, requires only the fixed synthetic
+  line, never requests a real PAT, and cannot call store/provider. Synthetic
+  acceptance and actual registration are separate actions. The human synthetic
+  row remains failed and is not repeated as a recovery prerequisite; the helper
+  is optional future acceptance only. Actual registration remains
+  `not_performed` and requires a verified published runtime plus confirmation of
+  the blue live-registration banner. Automated evidence is not human
+  acceptance. Later approved work reuses the exact saved credential; another
+  page may reuse the same PAT, but labels are not authority. Legacy scope
+  evolution and complex lifecycle state require human review.
 - Run `backup-evidence --dry-run` before backup claims. Configuration, local
   commit, declared label, generated index, and historical receipt do not prove
   current remote completion.

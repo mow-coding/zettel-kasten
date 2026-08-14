@@ -1,6 +1,6 @@
 # WOM-kit Version Truth Source
 
-Status: v0.3.318 runtime alignment with credential paste and failure-stage corrections
+Status: v0.3.319 runtime alignment with native credential popup and causal-evidence corrections
 
 Previous checkpoint: Status: v0.3.291 read-only runtime alignment plus approval-gated project update
 

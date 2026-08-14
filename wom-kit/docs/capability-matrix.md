@@ -1,8 +1,10 @@
 ﻿# WOM-kit Capability Matrix
 
-Status: v0.3.318 credential paste and failure-stage checkpoint
-Date: 2026-08-13
-Version: v0.3.318 implementation and release scope
+Status: v0.3.319 native credential popup and causal-evidence checkpoint
+Date: 2026-08-14
+Version: v0.3.319 implementation and release scope
+
+Previous checkpoint: Status: v0.3.318 credential paste and failure-stage checkpoint
 
 Previous checkpoint: Status: v0.3.317 credential-console continuity and staged-cleanup evidence checkpoint
 
@@ -287,72 +289,72 @@ Previous checkpoint: Status: v0.3.196 doctor progress-log path-policy clarificat
 
 ## v0.3.311 Letters 118-119 Credential Continuity And Reviewed Notion Recovery
 
-- Five release-facing CLI commands are present: `credential-adopt`,
+Status: v0.3.319 native-popup correction implemented. The human synthetic row
+remains failed and is not repeated as a recovery prerequisite. Actual
+credential registration is `not_performed`.
+
+- Five release-facing CLI commands remain present: `credential-adopt`,
   `credential-secure-list`, `credential-lifecycle`,
   `notion-page-recovery-plan`, and `notion-page-recovery`.
 - `credential-adopt` binds human approval to a stable canonical
-  `request_sha256`. It accepts no PAT/token/secret option and, on approval,
-  opens a separate visible Windows console inside a freshly spawned child.
-  As corrected in v0.3.317, the helper AI must
-  provide reviewed public-safe current-task and connection-reason sentences,
-  while WOM supplies fixed non-overridable security copy. Unicode console APIs
-  and UTF-8 code pages preserve Korean text. Console echo is disabled, and the
-  window closes before the credential-store write begins. Matching
-  authenticated registrations are preserved without another prompt; only an
-  explicit digest-bound `--replace-existing` request may reopen enrollment.
-  As corrected in v0.3.318, the prompt guides `Ctrl+V`, `Shift+Insert`, Windows
-  Terminal's default `Ctrl+Shift+V`, and host-dependent right-click while
-  retaining echo-off cooked input and no programmatic clipboard read. It
-  ignores `Ctrl+C` during the prompt, documents empty Enter as cancellation,
-  and displays only `입력값을 받았습니다. 검증 중입니다.` after receiving a
-  complete non-empty line. Public v0.2 result envelopes distinguish
-  `credential_input_cancelled_or_empty`, `credential_input_not_received`,
-  `provider_auth_rejected`, `provider_identity_endpoint_unavailable`, and
-  `reviewed_anchor_inaccessible` with strict pre-store/rollback relationships.
-  Durable authority requires an exact encrypted-store write and presence
-  proof, provider identity and reviewed workspace-anchor verification, and an
-  authenticated non-secret receipt. A legacy safe label remains metadata only.
-- As corrected in v0.3.317, new authenticated v0.2 receipts name their identity
-  basis. Internal integrations use Notion's `bot.workspace_id`. Person PATs,
-  whose response exposes no workspace ID, use `notion_pat_token_scope_v1` from
-  the archive-keyed fingerprint of the exact saved PAT plus fresh person and
-  reviewed-page verification. The same PAT can serve another reviewed page;
-  different PATs are never automatically merged into one workspace scope.
-- Released v0.3.311-v0.3.316 v0.1 receipts remain immutable. One compatible
-  registration can gain an authenticated append-only workspace-scope evolution
-  after exact secret/provider/page revalidation, with no prompt or Credential
-  Manager write/delete. A simple singleton lifecycle can transition; missing
-  lifecycle remains human-decision required, and duplicate or complex state
-  stops before publication.
-- `credential-secure-list` defaults to unauthenticated, content-free receipt
-  metadata. `--verify` reads only the exact archive authentication-key target
-  to authenticate receipt and lifecycle registry state; it does not enumerate
-  the native vault or resolve a provider credential. `credential-lifecycle`
-  separately plans and records one human-selected active/current/default
-  credential for an exact provider/workspace scope. Other valid entries remain
-  `legacy_valid` or `revocation_pending`; WOM never deletes or revokes them
-  automatically.
-- `notion-page-recovery-plan` accepts only the ignored-local, complete reviewed
-  Letter 118 request under `profiles/local/notion-page-recovery/`: two exact
-  groups of 577 and 43 unique page UUIDs, totaling exactly 620. Dry-run binds a
-  bounded slice and offset into a deterministic plan digest while performing
-  zero credential reads, provider calls, or writes and echoing neither the
-  request path nor page ids.
-- `notion-page-recovery` requires the unchanged plan SHA-256 and a safe human
-  reviewer before a spawned child may authenticate the exact registry-backed
-  default credential, issue read-only Notion GETs, and write content-addressed
-  objet, manifest, private resume/projection, and aggregate receipt evidence.
-  Verified replay is an optimization within that already approved live-call
-  and archive-write capability, not separate or weaker approval authority.
-  Recovery never searches the workspace broadly, writes to Notion, opts into
-  transcripts, downloads media, rewrites canonical zets, infers edges, or
-  mints pages.
-- Source and injected-fake regression evidence exists. No real PAT, Windows
-  vault, Notion provider, 620-item recovery, external source-archive operation, PR/CI,
-  tag, GitHub Release, wheel, fresh install, or human acceptance is proved by
-  this checkpoint. See
-  `docs/letter118-119-credential-continuity-and-notion-page-recovery.md` and
-  `docs/releases/v0.3.311.md`.
+  `request_sha256`. Its current approved UI is the native registration popup
+  described below; the public request still contains no PAT/token/secret option.
+- Current identity semantics remain unchanged. Internal integrations bind
+  `bot.workspace_id`; person PATs bind `notion_pat_token_scope_v1`, and the
+  same PAT can serve another reviewed page after fresh person/page verification.
+  Different PATs are never silently merged by matching labels.
+- One compatible legacy receipt may gain an authenticated append-only
+  workspace-scope evolution after exact secret/provider/page revalidation. That
+  path opens no prompt and never rewrites the old receipt or Credential Manager
+  entry; duplicate or complex lifecycle state stops for human review.
+- `archive credential-adopt ... --dry-run` validates and hashes one stable,
+  public-safe request without reading a secret, opening a popup, calling a
+  provider, or writing.
+- One exact digest-bound `--approve` starts an isolated spawned child and the
+  separate native Windows registration popup. No PAT/token/secret option exists;
+  values never enter AI chat, argv, environment, ordinary stdin, logs,
+  plaintext, JSON, or IPC.
+- The standard single-line password EDIT retains normal keyboard editing,
+  `Ctrl+V`, `Shift+Insert`, and a Paste/Clear-only context menu. WOM does not
+  read the clipboard. An opaque sibling covers the entire field so value, mask,
+  caret, count, and length are not visible; copy/cut are blocked.
+- The closed enum `CredentialPopupInputIntent.live_registration` is hard-coded
+  by production and shows the blue `실제 자격 증명 등록` banner. Manual acceptance
+  uses `synthetic_acceptance`, the red
+  `합성 입력 테스트 · 실제 키 입력 금지` banner, and only the fixed public
+  challenge. Missing/plain-string intent fails before native show or live work.
+- The child detaches and sends `popup_child_detached` before
+  popup/native/store/provider/archive access. The parent restores its narrow
+  start-signal lease before accepting acknowledgement → final mapping → EOF,
+  and joins every normally started child without timeout/terminate.
+- PMv2 DPI, the current Windows message font, measured wrapped rows, IME absence,
+  fixed privacy overlay, Confirm gating, mutable-buffer wiping, and exact
+  window/font/class/DPI cleanup are fail-closed source boundaries.
+- Result envelopes remain v0.3 with only
+  `credential_input_received`, `complete_line_received`,
+  `temporary_store_write_attempted`, and `provider_request_attempted`.
+  Unknown worker state projects four nulls.
+  `credential_input_invalid_for_provider` is local pre-store rejection;
+  `credential_input_boundary_failed` preserves truthful `1000`/`1100`
+  evidence with `repair_secure_input_boundary_and_create_a_new_plan` and
+  store/provider false; `provider_auth_rejected` requires an actual provider
+  request; rollback `deleted` requires an exact post-delete absence probe.
+- An authenticated matching registration can be reused only after exact receipt,
+  store fingerprint, provider identity, workspace basis, and reviewed-anchor
+  validation. Explicit reviewed `--replace-existing` is required for rotation.
+- The complete reviewed request remains exactly 577 and 43 unique page UUIDs,
+  totaling exactly 620. Its plan dry-run performs zero credential reads,
+  provider calls, or writes. Approval is slice-bounded, digest-bound, read-only
+  at the provider, and preserves exact Markdown objet bytes with resumable
+  evidence. Verified replay is an optimization inside the already approved
+  operation, not separate approval authority.
+- The historically named manual helper now emits
+  `wom-kit/windows-credential-popup-acceptance/v0.1` and popup-only routes.
+  It requests no PAT and performs no registration/store/provider work.
+  Automated source/fake-Win32 results are not physical human acceptance.
+- No real PAT, Windows Credential Manager persistence, Notion provider request,
+  620-item recovery, external release, fresh install, or human acceptance is
+  proved by this source checkpoint.
 
 ## v0.3.310 Letter 117 Reviewed Imported References
 
@@ -898,7 +900,7 @@ rollback, or recovery algorithms.
 | Credential ref plan | `read-only preview` | none | CLI `archive credential-ref-plan --dry-run` and MCP `credential_ref_plan` validate safe refs for mail usernames/app passwords/OAuth tokens, OpenAI API keys, OCR API keys, provider API keys, object storage tokens, and backup passwords. They write nothing, read no environment variables, open no OS keyring, store no secrets, call no providers, call no OpenAI or paid OCR APIs, and never echo raw keys, tokens, passwords, email addresses, local paths, or provider URLs. |
 | Credential ref inventory | `read-only preview` | none | CLI `archive credential-ref-inventory --dry-run` and MCP `credential_ref_inventory` list known credential refs from provider bindings, source bindings, and ignored `profiles/local/credential-refs.local.yml` without echoing exact ref values or secrets. Aliases `credentials` and `credential-status` are supported. The inventory reports only credential id, kind, provider, purpose, and ref prefix/store type; it writes nothing, reads no environment variables, opens no OS keyring, calls no providers, and never prints passwords, API keys, OAuth tokens, email addresses, local paths, provider URLs, or full credential refs. |
 | Connected accounts bridge | `read-only preview` | none | CLI `archive connected-accounts --dry-run`, alias `archive accounts --dry-run`, and alias `archive account-status --dry-run` summarize provider/source account metadata and credential store types from `provider-bindings.yml`, `source-bindings.yml`, and ignored `profiles/local/credential-refs.local.yml`. They show safe non-secret account labels and store summaries; malformed ignored local credential catalog rows are reported under nested `credential_catalog.ok/status/blockers` instead of making the account map itself fail. They write nothing, read no environment variables, open no password manager, open no keyring, open no browser password store, start no OAuth, call no providers, open no IMAP connection, read no mail headers/bodies/source bytes, and echo no exact credential refs, local paths, usernames, emails, tokens, provider URLs, or secret values. |
-| Native credential secure intake | `approval-gated local credential write` | dry-run hashes only a stable public request; approve opens one separate visible Windows console in a spawned child, writes one exact Generic Credential, verifies provider identity plus a basis-specific workspace scope, and publishes an authenticated non-secret receipt | Since v0.3.311, CLI `archive credential-adopt <archive-root> --account-label <safe-label> --workspace-label <safe-label> --task-summary "<public-safe current task>" --connection-reason "<public-safe reason>" --reviewed-anchor-page-id <uuid> --interactive --dry-run --format json` returns the canonical `request_sha256` without opening a console, reading a secret, calling a provider, or writing. Approval repeats those exact public arguments with `--expected-request-sha256 <sha256> --approve`; only then does the spawned worker create its own black Unicode console, display the helper AI's digest-bound task/reason beneath a clearly labeled section, display WOM's fixed non-overridable security notice, and accept console input with echo disabled. As corrected in v0.3.318, it guides `Ctrl+V`, `Shift+Insert`, Windows Terminal's default `Ctrl+Shift+V`, and host-dependent right-click; ignores `Ctrl+C` during the prompt; documents empty Enter as cancellation; and shows only `입력값을 받았습니다. 검증 중입니다.` after a complete non-empty line. The child `wom-credential-secure-intake-result/v0.2` and parent `wom-credential-workflow-result/v0.2` distinguish `credential_input_cancelled_or_empty`, `credential_input_not_received`, `provider_auth_rejected`, `provider_identity_endpoint_unavailable`, and `reviewed_anchor_inaccessible`, with pre-store outcomes requiring `not_required` and post-write provider outcomes requiring `deleted` or `delete_failed`. The console closes before the Credential Manager write, so raw secret bytes never cross into the AI parent process. A matching authenticated registration returns without another prompt; explicit reviewed `--replace-existing` is required for rotation. Internal integrations bind `bot.workspace_id`; person PATs bind `notion_pat_token_scope_v1` from the archive-keyed fingerprint of the exact saved token plus fresh person and reviewed-page checks. The same PAT can serve another reviewed page, while different PATs are not silently merged. One compatible released v0.1 receipt may gain an authenticated append-only scope evolution without another prompt or Credential Manager write/delete; ambiguous lifecycle state stops for human review. PAT/token/secret argv options, ordinary stdin, environment, plaintext files, chat, stdout/stderr, process IPC, and programmatic clipboard reads are not supported intake surfaces. A deliberate human paste into the isolated masked console is handled only as console input; WOM and the helper AI never read the clipboard directly. The archive identity, Windows user, exact store target, account/workspace/purpose/capability bindings, helper context, replacement intent, provider identity, basis-specific scope, reviewed page, and authenticated receipt all fail closed on drift. Public results never echo the anchor UUID, native target, PAT, request path, page body, token, secret, or derived key. Synthetic Win32 API canaries verify exact Korean Unicode, echo-off mode, status dwell, Ctrl+C survival, cleanup ordering, and mode/code-page restoration. The opt-in `wom-kit/tools/check_windows_credential_console_host.py` records a separate synthetic human host acceptance without using a real PAT, store, or provider. No actual physical paste gesture acceptance has yet been performed for this release. |
+| Native credential secure intake | `approval-gated local credential write` | dry-run hashes only a stable public request; approve starts one isolated child and separate native registration popup, then may write one exact Generic Credential, verify provider identity/workspace scope, and publish an authenticated non-secret receipt | `archive credential-adopt ... --dry-run` reads no secret and performs no provider/store write. Exact digest approval hard-codes `CredentialPopupInputIntent.live_registration`, shows the blue `실제 자격 증명 등록` banner, and uses a standard password EDIT fully covered by an opaque value-and-length-hiding sibling; normal paste stays OS-owned and WOM calls no clipboard-read API. The child detaches and sends `popup_child_detached` before popup/native/store/provider/archive work. The parent restores its narrow start-signal lease before acknowledgement → final mapping → EOF and joins every normally started child. Raw input never crosses IPC, argv, environment, ordinary stdin, logs, plaintext, or JSON. Product v0.3 results expose only `credential_input_received`, `complete_line_received`, `temporary_store_write_attempted`, and `provider_request_attempted`; local invalid input, native boundary failure, actual provider rejection, and post-delete absence proof remain distinct. Matching authenticated registrations may reuse the saved secret after exact revalidation; rotation requires reviewed `--replace-existing`. The popup-only synthetic helper uses `CredentialPopupInputIntent.synthetic_acceptance`, schema `wom-kit/windows-credential-popup-acceptance/v0.1`, red `합성 입력 테스트 · 실제 키 입력 금지` banner, and fixed public challenge; it requests no PAT and performs no registration/store/provider work. The human synthetic row remains failed and is not repeated as a recovery prerequisite. Actual registration remains `not_performed` and requires published-runtime verification plus explicit confirmation of the blue banner; automated source/fake-Win32 evidence is not human or live-operation evidence. |
 | Authenticated credential registry | `read-only local metadata or authenticated registry verification` | none | Since v0.3.311, CLI `archive credential-secure-list <archive-root> --format json` lists only unauthenticated content-free local receipt metadata. Adding `--verify` reads the exact archive authentication-key target and verifies receipt/lifecycle MACs, but does not enumerate Windows Credential Manager, read a provider credential, call Notion, or echo backend targets, account/workspace values, paths, tokens, or secrets. Legacy credential-reference rows remain `presence: not_checked` and never become persistence authority by naming alone. |
 | Credential default lifecycle | `authenticated read-only plan plus approval-gated registry write` | approve records one unchanged provider/workspace decision; no native credential is deleted or revoked | Since v0.3.311, CLI `archive credential-lifecycle <archive-root> --provider notion --workspace-fingerprint <sha256> --default-credential-id <opaque-id> --dry-run --format json` authenticates receipt state and returns one digest-bound plan. Approval requires the unchanged `--expected-plan-sha256`, a safe `--reviewed-by`, and `--approve`. Exactly one human-selected entry becomes active/current/default; compatible alternatives remain `legacy_valid` or an explicitly selected `revocation_pending` review state. The command never automatically chooses among duplicates, deletes or revokes a native entry, calls a provider, returns a secret, or echoes raw workspace/account identifiers. |
 | Credential store recommendation | `read-only preview` | none | CLI `archive credential-store-recommendation --scenario <scenario> --dry-run` and MCP `credential_store_recommendation` recommend a password manager, browser/platform password manager, OS keyring, developer secret manager class, or break-glass redundancy policy for human scenarios such as local-first personal use, browser/platform login managers, multi-device sync, family/team sharing, automation/dev secrets, local app adapters, institutional mail, `account_recovery_codes`, and `break_glass_secrets`. Account recovery guidance requires at least two independent locations, warns against a single digital copy, and checks circular dependency between the protected account and vault access. They write nothing, open no password manager, read no keyring, read no browser store, read no environment variables, call no providers, and define future credential access broker boundaries without implementing secret retrieval. |

@@ -4,6 +4,7 @@ import hashlib
 import io
 import json
 import os
+import pickle
 import stat as stat_module
 import tempfile
 import threading
@@ -21,11 +22,13 @@ from wom_kit.credential_secure_intake import (
     AtomicJsonReceiptCommitter,
     CredentialIntakeStageError,
     FileOneTimeRequestClaims,
+    HumanSecretInputResult,
     InMemoryOneTimeRequestClaims,
     NOTION_PAT_SCOPE_FINGERPRINT_DOMAIN,
     NOTION_PAT_WORKSPACE_IDENTITY_BASIS,
     NOTION_WORKSPACE_IDENTITY_BASIS,
     RECEIPT_SCHEMA_VERSION,
+    RESULT_SCHEMA_VERSION,
     SecureIntakeProcessLauncher,
     SecureIntakeWorker,
     VerifiedCredentialIdentity,
@@ -45,18 +48,43 @@ FINGERPRINT_KEY = b"stable-local-fingerprint-key-32-bytes-minimum"
 REQUEST_ID = "intake_1234567890abcdef"
 CREDENTIAL_ID = "cred_1234567890abcdef"
 BACKEND_ID = "backend_1234567890abcdef"
+PROJECTION_SENTINEL = "secret-bearing-child-string-must-not-cross-parent"
+
+
+class PickleSecretBearingStr(str):
+    def __new__(cls, value: str, secret_attribute: str):
+        instance = super().__new__(cls, value)
+        instance.secret_attribute = secret_attribute
+        return instance
+
+    def __getnewargs__(self) -> tuple[str, str]:
+        return str(self), self.secret_attribute
+
+    def __repr__(self) -> str:
+        return (
+            f"PickleSecretBearingStr({super().__repr__()}, "
+            f"secret_attribute={self.secret_attribute!r})"
+        )
 
 
 @dataclass
 class FakeUI:
-    value_factory: Any = field(default=lambda: bytearray(SECRET_BYTES), repr=False)
+    value_factory: Any = field(
+        default=lambda: HumanSecretInputResult(
+            secret=bytearray(SECRET_BYTES),
+            credential_input_received=True,
+            complete_line_received=True,
+            cancelled=False,
+        ),
+        repr=False,
+    )
     calls: int = 0
     last_buffer: bytearray | None = field(default=None, repr=False)
 
-    def request_secret(self, *, request_id: str) -> bytearray | None:
+    def request_secret(self, *, request_id: str) -> HumanSecretInputResult:
         self.calls += 1
         value = self.value_factory()
-        self.last_buffer = value
+        self.last_buffer = value.secret if isinstance(value, HumanSecretInputResult) else None
         return value
 
 
@@ -64,15 +92,17 @@ class FakeUI:
 class FakeStore:
     backend_kind: str = "fake_encrypted_store"
     write_error: bool = False
-    probe_result: bool = True
+    probe_result: bool | None = None
     probe_error: bool = False
     delete_error: bool = False
     calls: list[tuple[str, str]] = field(default_factory=list)
     received: list[bytes] = field(default_factory=list, repr=False)
+    exists: bool = False
 
     def put_exact(self, backend_id: str, secret: memoryview) -> None:
         self.calls.append(("put_exact", backend_id))
         self.received.append(bytes(secret))
+        self.exists = True
         if self.write_error:
             raise RuntimeError(f"store exploded around {SECRET_TEXT}")
 
@@ -80,12 +110,13 @@ class FakeStore:
         self.calls.append(("probe_exact", backend_id))
         if self.probe_error:
             raise RuntimeError(f"probe exploded around {SECRET_TEXT}")
-        return self.probe_result
+        return self.exists if self.probe_result is None else self.probe_result
 
     def delete_exact(self, backend_id: str) -> None:
         self.calls.append(("delete_exact", backend_id))
         if self.delete_error:
             raise RuntimeError(f"delete exploded around {SECRET_TEXT}")
+        self.exists = False
 
 
 @dataclass
@@ -96,7 +127,17 @@ class FakeVerifier:
     stage_error: str | None = None
     subject_verified: bool = True
     anchor_access_verified: bool = True
+    local_valid: bool = True
+    local_error: bool = False
+    observe_provider_request: bool = True
+    validated: list[bytes] = field(default_factory=list, repr=False)
     received: list[bytes] = field(default_factory=list, repr=False)
+
+    def validate_secret_input(self, secret: memoryview, provider: str) -> bool:
+        self.validated.append(bytes(secret))
+        if self.local_error:
+            raise CredentialIntakeStageError("credential_input_invalid_for_provider")
+        return self.local_valid
 
     def verify_identity(
         self,
@@ -104,7 +145,10 @@ class FakeVerifier:
         *,
         provider: str,
         reviewed_anchor_uuid: str,
+        provider_request_observer,
     ) -> VerifiedCredentialIdentity:
+        if self.observe_provider_request:
+            provider_request_observer()
         self.received.append(bytes(secret))
         if self.error:
             raise RuntimeError(f"provider leaked {SECRET_TEXT}")
@@ -189,12 +233,27 @@ class SecureCredentialIntakeTests(unittest.TestCase):
         self.assertNotIn(hashlib.sha256(SECRET_BYTES).hexdigest(), rendered)
 
     def assert_failed_without_id(self, result: dict[str, Any], reason: str) -> None:
+        self.assertEqual(result["schema_version"], RESULT_SCHEMA_VERSION)
         self.assertFalse(result["ok"], result)
         self.assertFalse(result["accepted"], result)
         self.assertFalse(result["persisted"], result)
         self.assertEqual(result["reason_code"], reason)
         self.assertNotIn("credential_id", result)
         self.assert_secret_absent(result)
+
+    def assert_evidence(
+        self, result: dict[str, Any], expected: tuple[bool, bool, bool, bool]
+    ) -> None:
+        self.assertEqual(
+            (
+                result["credential_input_received"],
+                result["complete_line_received"],
+                result["temporary_store_write_attempted"],
+                result["provider_request_attempted"],
+            ),
+            expected,
+            result,
+        )
 
     def assert_unknown_worker_state(self, result: dict[str, Any]) -> None:
         self.assertFalse(result["ok"], result)
@@ -210,6 +269,10 @@ class SecureCredentialIntakeTests(unittest.TestCase):
         self.assertFalse(result["secret_value_present"])
         self.assertFalse(result["reviewed_anchor_present_in_result"])
         self.assertFalse(result["backend_target_present"])
+        self.assertIsNone(result["credential_input_received"])
+        self.assertIsNone(result["complete_line_received"])
+        self.assertIsNone(result["temporary_store_write_attempted"])
+        self.assertIsNone(result["provider_request_attempted"])
         counts = result["operations"]
         self.assertEqual(counts["count_status"], "unknown_may_be_nonzero")
         self.assertTrue(
@@ -254,11 +317,148 @@ class SecureCredentialIntakeTests(unittest.TestCase):
                     request_id_factory=lambda: REQUEST_ID,
                 )
 
+    def test_human_input_result_enforces_private_causal_invariants(self) -> None:
+        complete = HumanSecretInputResult(
+            secret=bytearray(SECRET_BYTES),
+            credential_input_received=True,
+            complete_line_received=True,
+            cancelled=False,
+        )
+        empty_enter = HumanSecretInputResult(
+            secret=None,
+            credential_input_received=True,
+            complete_line_received=True,
+            cancelled=True,
+        )
+        explicit_cancel = HumanSecretInputResult(
+            secret=None,
+            credential_input_received=False,
+            complete_line_received=False,
+            cancelled=True,
+        )
+        self.assertNotIn(SECRET_TEXT, repr(complete))
+        self.assertTrue(empty_enter.cancelled)
+        self.assertTrue(empty_enter.complete_line_received)
+        self.assertTrue(explicit_cancel.cancelled)
+
+        invalid_values = (
+            dict(
+                secret=bytearray(SECRET_BYTES),
+                credential_input_received=1,
+                complete_line_received=True,
+                cancelled=False,
+            ),
+            dict(
+                secret=SECRET_BYTES,
+                credential_input_received=True,
+                complete_line_received=True,
+                cancelled=False,
+            ),
+            dict(
+                secret=bytearray(SECRET_BYTES),
+                credential_input_received=False,
+                complete_line_received=True,
+                cancelled=False,
+            ),
+            dict(
+                secret=bytearray(SECRET_BYTES),
+                credential_input_received=True,
+                complete_line_received=True,
+                cancelled=True,
+            ),
+            dict(
+                secret=None,
+                credential_input_received=True,
+                complete_line_received=True,
+                cancelled=False,
+            ),
+            dict(
+                secret=bytearray(SECRET_BYTES),
+                credential_input_received=True,
+                complete_line_received=False,
+                cancelled=False,
+            ),
+        )
+        for value in invalid_values:
+            with self.subTest(value=value):
+                with self.assertRaisesRegex(
+                    ValueError, "secure_intake_human_input_result_invalid"
+                ):
+                    HumanSecretInputResult(**value)
+
+    def test_local_provider_input_validation_precedes_every_store_write(self) -> None:
+        for verifier in (
+            FakeVerifier(local_valid=False),
+            FakeVerifier(local_error=True),
+        ):
+            with self.subTest(local_error=verifier.local_error):
+                worker, ui, store, _, committer = self.worker(verifier=verifier)
+                result = self.execute(worker)
+
+                self.assert_failed_without_id(
+                    result, "credential_input_invalid_for_provider"
+                )
+                self.assert_evidence(result, (True, True, False, False))
+                self.assertEqual(result["rollback_status"], "not_required")
+                self.assertEqual(verifier.validated, [SECRET_BYTES])
+                self.assertEqual(verifier.received, [])
+                self.assertEqual(store.calls, [])
+                self.assertEqual(committer.receipts, [])
+                self.assertEqual(ui.last_buffer, bytearray(len(SECRET_BYTES)))
+
+    def test_provider_failure_without_observer_is_not_reported_as_auth_rejection(
+        self,
+    ) -> None:
+        verifiers = (
+            FakeVerifier(observe_provider_request=False),
+            FakeVerifier(observe_provider_request=False, error=True),
+            FakeVerifier(
+                observe_provider_request=False,
+                stage_error="provider_auth_rejected",
+            ),
+        )
+        for verifier in verifiers:
+            with self.subTest(error=verifier.error, stage_error=verifier.stage_error):
+                worker, _, store, _, committer = self.worker(verifier=verifier)
+                result = self.execute(worker)
+
+                self.assert_failed_without_id(
+                    result, "provider_request_not_attempted"
+                )
+                self.assert_evidence(result, (True, True, True, False))
+                self.assertEqual(result["rollback_status"], "deleted")
+                self.assertEqual(
+                    store.calls[-2:],
+                    [("delete_exact", BACKEND_ID), ("probe_exact", BACKEND_ID)],
+                )
+                self.assertEqual(committer.receipts, [])
+
+    def test_provider_attempt_normalizes_a_miswired_pre_provider_stage_reason(
+        self,
+    ) -> None:
+        verifier = FakeVerifier(
+            stage_error="credential_input_invalid_for_provider",
+        )
+        worker, _, store, _, committer = self.worker(verifier=verifier)
+
+        result = self.execute(worker)
+
+        self.assert_failed_without_id(result, "provider_identity_unverified")
+        self.assert_evidence(result, (True, True, True, True))
+        self.assertEqual(result["rollback_status"], "deleted")
+        self.assertEqual(
+            store.calls[-2:],
+            [("delete_exact", BACKEND_ID), ("probe_exact", BACKEND_ID)],
+        )
+        self.assertEqual(committer.receipts, [])
+
     def test_success_is_atomic_persisted_and_secret_buffer_is_wiped(self) -> None:
         worker, ui, store, verifier, committer = self.worker()
         result = self.execute(worker)
 
         self.assertTrue(result["ok"], result)
+        self.assertEqual(result["schema_version"], RESULT_SCHEMA_VERSION)
+        self.assert_evidence(result, (True, True, True, True))
         self.assertTrue(result["persisted"])
         self.assertEqual(result["credential_id"], CREDENTIAL_ID)
         self.assertEqual(result["encrypted_backend_id"], BACKEND_ID)
@@ -281,6 +481,7 @@ class SecureCredentialIntakeTests(unittest.TestCase):
             [("put_exact", BACKEND_ID), ("probe_exact", BACKEND_ID)],
         )
         self.assertEqual(store.received, [SECRET_BYTES])
+        self.assertEqual(verifier.validated, [SECRET_BYTES])
         self.assertEqual(verifier.received, [SECRET_BYTES])
         self.assertEqual(len(committer.receipts), 1)
         self.assertEqual(
@@ -304,7 +505,9 @@ class SecureCredentialIntakeTests(unittest.TestCase):
             *,
             provider: str,
             reviewed_anchor_uuid: str,
+            provider_request_observer,
         ) -> VerifiedCredentialIdentity:
+            provider_request_observer()
             verifier.received.append(bytes(secret))
             return VerifiedCredentialIdentity(
                 provider=provider,
@@ -346,9 +549,15 @@ class SecureCredentialIntakeTests(unittest.TestCase):
         result = self.execute(worker)
 
         self.assert_failed_without_id(result, "store_write_failed")
+        self.assert_evidence(result, (True, True, True, False))
+        self.assertEqual(result["rollback_status"], "deleted")
         self.assertEqual(
             store.calls,
-            [("put_exact", BACKEND_ID), ("delete_exact", BACKEND_ID)],
+            [
+                ("put_exact", BACKEND_ID),
+                ("delete_exact", BACKEND_ID),
+                ("probe_exact", BACKEND_ID),
+            ],
         )
         self.assertEqual(committer.receipts, [])
 
@@ -359,12 +568,15 @@ class SecureCredentialIntakeTests(unittest.TestCase):
         result = self.execute(worker)
 
         self.assert_failed_without_id(result, "store_presence_not_verified")
+        self.assert_evidence(result, (True, True, True, False))
+        self.assertEqual(result["rollback_status"], "deleted")
         self.assertEqual(
             store.calls,
             [
                 ("put_exact", BACKEND_ID),
                 ("probe_exact", BACKEND_ID),
                 ("delete_exact", BACKEND_ID),
+                ("probe_exact", BACKEND_ID),
             ],
         )
         self.assertEqual(verifier.received, [])
@@ -375,8 +587,51 @@ class SecureCredentialIntakeTests(unittest.TestCase):
         result = self.execute(worker)
 
         self.assert_failed_without_id(result, "provider_identity_unverified")
-        self.assertEqual(store.calls[-1], ("delete_exact", BACKEND_ID))
+        self.assert_evidence(result, (True, True, True, True))
+        self.assertEqual(
+            store.calls[-2:],
+            [("delete_exact", BACKEND_ID), ("probe_exact", BACKEND_ID)],
+        )
         self.assertEqual(committer.receipts, [])
+
+    def test_non_boolean_truthy_identity_flags_cannot_commit_a_receipt(self) -> None:
+        class TruthyIdentityFlag:
+            def __bool__(self) -> bool:
+                return True
+
+            def __repr__(self) -> str:
+                return SECRET_TEXT
+
+        cases = (
+            ("subject_verified", "provider_identity_unverified"),
+            ("anchor_access_verified", "reviewed_anchor_inaccessible"),
+        )
+        for field_name, expected_reason in cases:
+            for raw_value in (1, "yes", TruthyIdentityFlag()):
+                with self.subTest(
+                    field_name=field_name,
+                    raw_type=type(raw_value).__name__,
+                ):
+                    verifier = FakeVerifier(**{field_name: raw_value})
+                    worker, _, store, _, committer = self.worker(verifier=verifier)
+
+                    result = self.execute(worker)
+
+                    self.assert_failed_without_id(result, expected_reason)
+                    self.assert_evidence(result, (True, True, True, True))
+                    self.assertEqual(result["rollback_status"], "deleted")
+                    self.assertEqual(
+                        store.calls,
+                        [
+                            ("put_exact", BACKEND_ID),
+                            ("probe_exact", BACKEND_ID),
+                            ("delete_exact", BACKEND_ID),
+                            ("probe_exact", BACKEND_ID),
+                        ],
+                    )
+                    self.assertEqual(verifier.received, [SECRET_BYTES])
+                    self.assertEqual(committer.receipts, [])
+                    self.assertNotIn(SECRET_TEXT, json.dumps(result))
 
     def test_provider_stage_failures_are_distinct_redacted_and_rolled_back(self) -> None:
         expected_actions = {
@@ -392,6 +647,7 @@ class SecureCredentialIntakeTests(unittest.TestCase):
                 result = self.execute(worker)
 
                 self.assert_failed_without_id(result, reason)
+                self.assert_evidence(result, (True, True, True, True))
                 self.assertEqual(result["rollback_status"], "deleted")
                 self.assertEqual(result["operator_action"], expected_action)
                 self.assertEqual(
@@ -400,6 +656,7 @@ class SecureCredentialIntakeTests(unittest.TestCase):
                         ("put_exact", BACKEND_ID),
                         ("probe_exact", BACKEND_ID),
                         ("delete_exact", BACKEND_ID),
+                        ("probe_exact", BACKEND_ID),
                     ],
                 )
                 self.assertEqual(committer.receipts, [])
@@ -413,9 +670,51 @@ class SecureCredentialIntakeTests(unittest.TestCase):
         result = self.execute(worker)
 
         self.assert_failed_without_id(result, "provider_auth_rejected")
+        self.assert_evidence(result, (True, True, True, True))
         self.assertEqual(result["rollback_status"], "delete_failed")
         self.assertEqual(
             result["operator_action"],
+            "stop_and_remove_the_exact_encrypted_store_entry",
+        )
+
+    def test_rollback_requires_exact_post_delete_absence_probe(self) -> None:
+        still_present_store = FakeStore(probe_result=True)
+        worker, _, _, _, _ = self.worker(
+            store=still_present_store,
+            verifier=FakeVerifier(stage_error="provider_auth_rejected"),
+        )
+        still_present = self.execute(worker)
+        self.assert_failed_without_id(still_present, "provider_auth_rejected")
+        self.assertEqual(still_present["rollback_status"], "delete_failed")
+        self.assertEqual(
+            still_present["operator_action"],
+            "stop_and_remove_the_exact_encrypted_store_entry",
+        )
+        self.assertEqual(
+            still_present_store.calls[-2:],
+            [("delete_exact", BACKEND_ID), ("probe_exact", BACKEND_ID)],
+        )
+
+        class ProbeFailsAfterDeleteStore(FakeStore):
+            probe_calls: int = 0
+
+            def probe_exact(self, backend_id: str) -> bool:
+                self.probe_calls += 1
+                if self.probe_calls > 1:
+                    self.calls.append(("probe_exact", backend_id))
+                    raise RuntimeError(SECRET_TEXT)
+                return super().probe_exact(backend_id)
+
+        probe_error_store = ProbeFailsAfterDeleteStore()
+        worker, _, _, _, _ = self.worker(
+            store=probe_error_store,
+            verifier=FakeVerifier(stage_error="provider_auth_rejected"),
+        )
+        probe_error = self.execute(worker)
+        self.assert_failed_without_id(probe_error, "provider_auth_rejected")
+        self.assertEqual(probe_error["rollback_status"], "delete_failed")
+        self.assertEqual(
+            probe_error["operator_action"],
             "stop_and_remove_the_exact_encrypted_store_entry",
         )
 
@@ -426,7 +725,8 @@ class SecureCredentialIntakeTests(unittest.TestCase):
         result = self.execute(worker)
 
         self.assert_failed_without_id(result, "reviewed_anchor_inaccessible")
-        self.assertEqual(store.calls[-1], ("delete_exact", BACKEND_ID))
+        self.assert_evidence(result, (True, True, True, True))
+        self.assertEqual(store.calls[-1], ("probe_exact", BACKEND_ID))
         self.assertEqual(committer.receipts, [])
 
     def test_receipt_failure_is_redacted_rolls_back_and_issues_no_id(self) -> None:
@@ -434,7 +734,8 @@ class SecureCredentialIntakeTests(unittest.TestCase):
         result = self.execute(worker)
 
         self.assert_failed_without_id(result, "receipt_commit_failed")
-        self.assertEqual(store.calls[-1], ("delete_exact", BACKEND_ID))
+        self.assert_evidence(result, (True, True, True, True))
+        self.assertEqual(store.calls[-1], ("probe_exact", BACKEND_ID))
         self.assertEqual(len(committer.receipts), 1)
         self.assert_secret_absent(committer.receipts)
 
@@ -455,10 +756,32 @@ class SecureCredentialIntakeTests(unittest.TestCase):
         self.assert_secret_absent(result)
 
     def test_human_cancel_and_ui_exception_never_open_store(self) -> None:
-        cancelled_ui = FakeUI(value_factory=lambda: None)
+        cancelled_ui = FakeUI(
+            value_factory=lambda: HumanSecretInputResult(
+                secret=None,
+                credential_input_received=True,
+                complete_line_received=True,
+                cancelled=True,
+            )
+        )
         worker, _, store, _, _ = self.worker(ui=cancelled_ui)
         cancelled = self.execute(worker)
         self.assert_failed_without_id(cancelled, "credential_input_cancelled_or_empty")
+        self.assert_evidence(cancelled, (True, True, False, False))
+        self.assertEqual(store.calls, [])
+
+        incomplete_ui = FakeUI(
+            value_factory=lambda: HumanSecretInputResult(
+                secret=None,
+                credential_input_received=True,
+                complete_line_received=False,
+                cancelled=False,
+            )
+        )
+        worker, _, store, _, _ = self.worker(ui=incomplete_ui)
+        incomplete = self.execute(worker)
+        self.assert_failed_without_id(incomplete, "credential_input_not_received")
+        self.assert_evidence(incomplete, (True, False, False, False))
         self.assertEqual(store.calls, [])
 
         class ExplodingUI:
@@ -468,7 +791,148 @@ class SecureCredentialIntakeTests(unittest.TestCase):
         worker, _, store, _, _ = self.worker(ui=ExplodingUI())
         unavailable = self.execute(worker)
         self.assert_failed_without_id(unavailable, "credential_input_not_received")
+        self.assert_evidence(unavailable, (False, False, False, False))
         self.assertEqual(store.calls, [])
+
+    def test_private_input_failure_preserves_causal_prefix_without_store_or_provider(
+        self,
+    ) -> None:
+        cases = {
+            "before_input": (
+                "credential_input_not_received",
+                (False, False),
+                "credential_input_not_received",
+            ),
+            "partial_input": (
+                "credential_input_boundary_failed",
+                (True, False),
+                "credential_input_boundary_failed",
+            ),
+            "complete_invalid": (
+                "credential_input_invalid_for_provider",
+                (True, True),
+                "credential_input_invalid_for_provider",
+            ),
+            "complete_boundary_failure": (
+                "credential_input_boundary_failed",
+                (True, True),
+                "credential_input_boundary_failed",
+            ),
+        }
+
+        for label, (typed_reason, evidence, public_reason) in cases.items():
+            with self.subTest(label=label):
+                class EvidenceFailingUI:
+                    def request_secret(self, *, request_id: str):
+                        raise secure_intake_module._HumanSecretInputEvidenceError(
+                            reason_code=typed_reason,
+                            credential_input_received=evidence[0],
+                            complete_line_received=evidence[1],
+                        )
+
+                verifier = FakeVerifier()
+                worker, _, store, _, committer = self.worker(
+                    ui=EvidenceFailingUI(),
+                    verifier=verifier,
+                )
+                result = self.execute(worker)
+
+                self.assert_failed_without_id(result, public_reason)
+                self.assert_evidence(result, (*evidence, False, False))
+                self.assertEqual(result["rollback_status"], "not_required")
+                self.assertEqual(store.calls, [])
+                self.assertEqual(verifier.validated, [])
+                self.assertEqual(verifier.received, [])
+                self.assertEqual(committer.receipts, [])
+                self.assert_secret_absent(result)
+
+    def test_mutated_private_input_failure_cannot_inject_non_boolean_evidence(
+        self,
+    ) -> None:
+        class MutatedInputFailure(
+            secure_intake_module._HumanSecretInputEvidenceError
+        ):
+            @property
+            def reason_code(self):
+                return []
+
+            @property
+            def credential_input_received(self):
+                return {"covert": SECRET_TEXT}
+
+        error = MutatedInputFailure()
+        with self.assertRaises(AttributeError):
+            error.complete_line_received = True
+
+        class MutatedFailingUI:
+            def request_secret(self, *, request_id: str):
+                raise error
+
+        worker, _, store, verifier, committer = self.worker(
+            ui=MutatedFailingUI()
+        )
+        result = self.execute(worker)
+
+        self.assert_failed_without_id(result, "credential_input_not_received")
+        self.assert_evidence(result, (False, False, False, False))
+        self.assertEqual(store.calls, [])
+        self.assertEqual(verifier.validated, [])
+        self.assertEqual(verifier.received, [])
+        self.assertEqual(committer.receipts, [])
+
+    def test_non_boolean_store_presence_never_reaches_provider_or_proves_absence(
+        self,
+    ) -> None:
+        class TruthyProbe:
+            def __bool__(self) -> bool:
+                return True
+
+            def __repr__(self) -> str:
+                return SECRET_TEXT
+
+        class RawProbeStore(FakeStore):
+            def __init__(self, raw_result: object) -> None:
+                super().__init__()
+                self.raw_result = raw_result
+
+            def probe_exact(self, backend_id: str):
+                self.calls.append(("probe_exact", backend_id))
+                return self.raw_result
+
+        for raw_result in (1, "yes", TruthyProbe()):
+            with self.subTest(raw_type=type(raw_result).__name__):
+                store = RawProbeStore(raw_result)
+                verifier = FakeVerifier()
+                worker, _, _, _, committer = self.worker(
+                    store=store,
+                    verifier=verifier,
+                )
+
+                result = self.execute(worker)
+
+                self.assert_failed_without_id(
+                    result,
+                    "store_presence_not_verified",
+                )
+                self.assert_evidence(result, (True, True, True, False))
+                self.assertEqual(result["rollback_status"], "delete_failed")
+                self.assertEqual(
+                    result["operator_action"],
+                    "stop_and_remove_the_exact_encrypted_store_entry",
+                )
+                self.assertEqual(
+                    store.calls,
+                    [
+                        ("put_exact", BACKEND_ID),
+                        ("probe_exact", BACKEND_ID),
+                        ("delete_exact", BACKEND_ID),
+                        ("probe_exact", BACKEND_ID),
+                    ],
+                )
+                self.assertEqual(verifier.received, [])
+                self.assertEqual(committer.receipts, [])
+                self.assertNotIn(SECRET_TEXT, json.dumps(result))
+        self.assert_secret_absent(result)
 
     def test_request_expiry_replay_and_owner_binding_close_before_ui(self) -> None:
         plan = self.plan(ttl_seconds=30)
@@ -874,10 +1338,62 @@ class SecureCredentialIntakeTests(unittest.TestCase):
         self.assertFalse(hasattr(adapter, "search"))
         self.assertFalse(hasattr(adapter, "read_secret"))
 
+    def test_windows_store_probe_requires_an_exact_boolean_native_result(self) -> None:
+        class FalseyProbe:
+            def __bool__(self) -> bool:
+                return False
+
+            def __repr__(self) -> str:
+                return SECRET_TEXT
+
+        class RawNative:
+            def __init__(self, raw_result: object) -> None:
+                self.raw_result = raw_result
+
+            def write_generic(self, target_name: str, secret: memoryview) -> None:
+                raise AssertionError("write not expected")
+
+            def generic_exists(self, target_name: str):
+                return self.raw_result
+
+            def delete_generic(self, target_name: str) -> None:
+                raise AssertionError("delete not expected")
+
+        for raw_result in (None, 0, FalseyProbe()):
+            with self.subTest(raw_type=type(raw_result).__name__):
+                adapter = WindowsCredentialManagerExactStore(
+                    native=RawNative(raw_result)
+                )
+                with self.assertRaises(RuntimeError) as error:
+                    adapter.probe_exact(BACKEND_ID)
+                self.assertEqual(
+                    str(error.exception),
+                    "windows_credential_probe_failed",
+                )
+                self.assertNotIn(SECRET_TEXT, str(error.exception) + repr(adapter))
+
+        self.assertFalse(
+            WindowsCredentialManagerExactStore(
+                native=RawNative(False)
+            ).probe_exact(BACKEND_ID)
+        )
+        self.assertTrue(
+            WindowsCredentialManagerExactStore(
+                native=RawNative(True)
+            ).probe_exact(BACKEND_ID)
+        )
+
     def test_masked_dialog_has_no_stdin_fallback_and_redacts_native_error(self) -> None:
-        dialog = WindowsMaskedDialog(native_prompt=lambda request_id: bytearray(SECRET_BYTES))
+        native_result = HumanSecretInputResult(
+            secret=bytearray(SECRET_BYTES),
+            credential_input_received=True,
+            complete_line_received=True,
+            cancelled=False,
+        )
+        dialog = WindowsMaskedDialog(native_prompt=lambda request_id: native_result)
         value = dialog.request_secret(request_id=REQUEST_ID)
-        self.assertEqual(value, bytearray(SECRET_BYTES))
+        self.assertIs(value, native_result)
+        self.assertEqual(value.secret, bytearray(SECRET_BYTES))
 
         def explode(request_id: str):
             raise RuntimeError(SECRET_TEXT)
@@ -937,16 +1453,57 @@ class SecureCredentialIntakeTests(unittest.TestCase):
             projected["verified_capabilities"],
             child_result["verified_capabilities"],
         )
+        self.assertIs(
+            projected["workspace_identity_basis"],
+            NOTION_WORKSPACE_IDENTITY_BASIS,
+        )
         child_result["account_label"] = SECRET_TEXT
         child_result["verified_capabilities"].append("covert_value")
         self.assertEqual(projected["account_label"], "personal")
         self.assertNotIn("covert_value", projected["verified_capabilities"])
         self.assert_secret_absent(projected)
 
+    def test_parent_launcher_rejects_pickled_secret_bearing_identity_basis(
+        self,
+    ) -> None:
+        plan = self.plan()
+        worker, _, _, _, _ = self.worker(
+            store=FakeStore(backend_kind="windows_credential_manager_generic")
+        )
+        child_result = self.execute(worker, plan)
+        child_result["workspace_identity_basis"] = PickleSecretBearingStr(
+            NOTION_WORKSPACE_IDENTITY_BASIS,
+            PROJECTION_SENTINEL,
+        )
+        round_tripped = pickle.loads(pickle.dumps(child_result))
+        transported_basis = round_tripped["workspace_identity_basis"]
+        self.assertIs(type(transported_basis), PickleSecretBearingStr)
+        self.assertEqual(transported_basis.secret_attribute, PROJECTION_SENTINEL)
+        self.assertIn(PROJECTION_SENTINEL, repr(transported_basis))
+
+        class PickleRoundTripSpawner:
+            def run_worker(self, invocation):
+                return round_tripped
+
+        projected = SecureIntakeProcessLauncher(
+            spawner=PickleRoundTripSpawner()
+        ).launch(plan, expected_plan_digest=plan.plan_digest)
+
+        self.assert_unknown_worker_state(projected)
+        rendered = repr(projected) + json.dumps(projected, ensure_ascii=False)
+        self.assertNotIn(PROJECTION_SENTINEL, rendered)
+
     def test_parent_launcher_projects_only_exact_fixed_failures(self) -> None:
         plan = self.plan()
         worker, _, _, _, _ = self.worker(
-            ui=FakeUI(value_factory=lambda: None)
+            ui=FakeUI(
+                value_factory=lambda: HumanSecretInputResult(
+                    secret=None,
+                    credential_input_received=True,
+                    complete_line_received=True,
+                    cancelled=True,
+                )
+            )
         )
         child_result = self.execute(worker, plan)
 
@@ -977,6 +1534,10 @@ class SecureCredentialIntakeTests(unittest.TestCase):
         provider_failure = secure_intake_module._fixed_failure(
             "provider_auth_rejected",
             rollback_status="deleted",
+            credential_input_received=True,
+            complete_line_received=True,
+            temporary_store_write_attempted=True,
+            provider_request_attempted=True,
         )
 
         class ProviderFailureSpawner:
@@ -991,6 +1552,10 @@ class SecureCredentialIntakeTests(unittest.TestCase):
         forged_provider_failure = secure_intake_module._fixed_failure(
             "provider_auth_rejected",
             rollback_status="not_required",
+            credential_input_received=True,
+            complete_line_received=True,
+            temporary_store_write_attempted=True,
+            provider_request_attempted=True,
         )
 
         class ForgedProviderFailureSpawner:
@@ -1002,48 +1567,118 @@ class SecureCredentialIntakeTests(unittest.TestCase):
         ).launch(plan, expected_plan_digest=plan.plan_digest)
         self.assert_unknown_worker_state(blocked_provider)
 
-    def test_core_projection_binds_legacy_failure_stage_to_rollback_state(self) -> None:
-        pre_store = {
-            "human_cancelled",
-            "secret_input_unavailable",
-            "request_expired",
-            "request_replayed",
-            "request_user_mismatch",
-            "request_claim_failed",
-            "plan_digest_mismatch",
-        }
-        rollback_required = {
-            "store_write_failed",
-            "store_presence_not_verified",
-            "provider_identity_unverified",
-            "workspace_anchor_mismatch",
-            "receipt_commit_failed",
-        }
-        for reason in sorted(pre_store):
-            with self.subTest(reason=reason, rollback="not_required"):
-                valid = secure_intake_module._fixed_failure(reason)
-                self.assertEqual(
-                    secure_intake_module._project_worker_failure(valid),
-                    valid,
-                )
-                forged = secure_intake_module._fixed_failure(
+    def test_core_projection_binds_exact_causal_evidence_to_reason_and_rollback(
+        self,
+    ) -> None:
+        cases = (
+            ("request_expired", (False, False, False, False), "not_required"),
+            (
+                "credential_input_not_received",
+                (True, False, False, False),
+                "not_required",
+            ),
+            (
+                "credential_input_cancelled_or_empty",
+                (True, True, False, False),
+                "not_required",
+            ),
+            (
+                "credential_input_invalid_for_provider",
+                (True, True, False, False),
+                "not_required",
+            ),
+            (
+                "credential_input_boundary_failed",
+                (True, False, False, False),
+                "not_required",
+            ),
+            (
+                "credential_input_boundary_failed",
+                (True, True, False, False),
+                "not_required",
+            ),
+            ("store_write_failed", (True, True, True, False), "deleted"),
+            (
+                "provider_request_not_attempted",
+                (True, True, True, False),
+                "deleted",
+            ),
+            (
+                "provider_auth_rejected",
+                (True, True, True, True),
+                "deleted",
+            ),
+            (
+                "receipt_commit_failed",
+                (True, True, True, True),
+                "delete_failed",
+            ),
+        )
+        for reason, evidence, rollback in cases:
+            with self.subTest(reason=reason, evidence=evidence, rollback=rollback):
+                valid = secure_intake_module._fixed_failure(
                     reason,
-                    rollback_status="deleted",
+                    rollback_status=rollback,
+                    credential_input_received=evidence[0],
+                    complete_line_received=evidence[1],
+                    temporary_store_write_attempted=evidence[2],
+                    provider_request_attempted=evidence[3],
                 )
+                self.assertEqual(
+                    secure_intake_module._project_worker_failure(valid), valid
+                )
+
+        valid_auth = secure_intake_module._fixed_failure(
+            "provider_auth_rejected",
+            rollback_status="deleted",
+            credential_input_received=True,
+            complete_line_received=True,
+            temporary_store_write_attempted=True,
+            provider_request_attempted=True,
+        )
+        for name, forged in {
+            "v02_child": {
+                **valid_auth,
+                "schema_version": "wom-credential-secure-intake-result/v0.2",
+            },
+            "non_bool": {**valid_auth, "provider_request_attempted": 1},
+            "provider_not_observed": {
+                **valid_auth,
+                "provider_request_attempted": False,
+            },
+            "rollback_missing": {**valid_auth, "rollback_status": "not_required"},
+            "extra_key": {**valid_auth, "child_debug": SECRET_TEXT},
+        }.items():
+            with self.subTest(forgery=name):
                 self.assertIsNone(
                     secure_intake_module._project_worker_failure(forged)
                 )
-        for reason in sorted(rollback_required):
-            with self.subTest(reason=reason, rollback="deleted"):
-                valid = secure_intake_module._fixed_failure(
-                    reason,
-                    rollback_status="deleted",
-                )
-                self.assertEqual(
-                    secure_intake_module._project_worker_failure(valid),
-                    valid,
-                )
-                forged = secure_intake_module._fixed_failure(reason)
+
+        valid_boundary = secure_intake_module._fixed_failure(
+            "credential_input_boundary_failed",
+            credential_input_received=True,
+            complete_line_received=True,
+        )
+        for name, forged in {
+            "zero_evidence": {
+                **valid_boundary,
+                "credential_input_received": False,
+                "complete_line_received": False,
+            },
+            "store_attempted": {
+                **valid_boundary,
+                "temporary_store_write_attempted": True,
+            },
+            "provider_attempted": {
+                **valid_boundary,
+                "provider_request_attempted": True,
+            },
+            "rollback_claimed": {
+                **valid_boundary,
+                "rollback_status": "deleted",
+            },
+        }.items():
+            with self.subTest(boundary_forgery=name):
                 self.assertIsNone(
                     secure_intake_module._project_worker_failure(forged)
                 )
@@ -1088,6 +1723,18 @@ class SecureCredentialIntakeTests(unittest.TestCase):
                 "receipt_ref": f"private/{CREDENTIAL_ID}/{SECRET_TEXT}",
             },
             "privacy_flag_changed": {**valid, "secret_value_present": True},
+            "input_evidence_changed": {
+                **valid,
+                "credential_input_received": False,
+            },
+            "provider_evidence_non_bool": {
+                **valid,
+                "provider_request_attempted": 1,
+            },
+            "legacy_v02_schema": {
+                **valid,
+                "schema_version": "wom-credential-secure-intake-result/v0.2",
+            },
             "timestamp_not_canonical": {
                 **valid,
                 "last_verified_at": "2026-08-10T03:00:02+00:00",
@@ -1149,7 +1796,7 @@ class SecureCredentialIntakeTests(unittest.TestCase):
             )
             second = self.execute(second_worker)
             self.assert_failed_without_id(second, "receipt_commit_failed")
-            self.assertEqual(second_store.calls[-1], ("delete_exact", BACKEND_ID))
+            self.assertEqual(second_store.calls[-1], ("probe_exact", BACKEND_ID))
             self.assertEqual(receipt_path.read_text("utf-8"), original)
 
     def test_duplicate_lifecycle_requires_human_default_and_never_revokes(self) -> None:

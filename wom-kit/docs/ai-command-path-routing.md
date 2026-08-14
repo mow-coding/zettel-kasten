@@ -1,6 +1,6 @@
 # AI Command-Path Routing
 
-Status: implemented in v0.3.278, extended through v0.3.318
+Status: implemented in v0.3.278, extended through v0.3.319
 
 ## Purpose
 
