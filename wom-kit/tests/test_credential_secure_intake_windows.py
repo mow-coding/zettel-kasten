@@ -14,18 +14,27 @@ from types import SimpleNamespace
 from typing import Any
 
 from wom_kit.credential_secure_intake import (
+    HumanSecretInputResult,
     VerifiedCredentialIdentity,
     create_secure_intake_plan,
 )
 from wom_kit import credential_secure_intake_windows as windows_module
 from wom_kit.credential_secure_intake_windows import (
     CtypesWindowsNativeFacade,
+    CredentialPopupPromptContext,
+    WindowsAttachedConsoleSecretUI,
+    WindowsCredentialPopupSecretUI,
     WindowsDllBundle,
+    WindowsNativeMaskedSecretUI,
     WindowsVisibleConsoleSecretUI,
     WindowsSecureIntakeError,
     build_windows_secure_intake_worker,
     current_windows_owner_binding,
     windows_credential_target,
+)
+from wom_kit.credential_popup_windows import (
+    CredentialPopupInputIntent,
+    CredentialPopupSecretPromptError,
 )
 
 
@@ -45,25 +54,32 @@ TARGET = windows_credential_target(ARCHIVE_SCOPE_ID, BACKEND_ID)
 @dataclass
 class FakeWindowsNative:
     prompt_error: bool = False
-    probe_result: bool = True
+    probe_result: Any = True
     sid: str = SID
     calls: list[tuple[str, str]] = field(default_factory=list)
     stored: dict[str, bytes] = field(default_factory=dict, repr=False)
     last_prompt_buffer: bytearray | None = field(default=None, repr=False)
 
-    def prompt_masked_secret(self, *, request_id: str, context=None) -> bytearray | None:
+    def prompt_masked_secret(
+        self, *, request_id: str, context=None
+    ) -> HumanSecretInputResult:
         self.calls.append(("prompt_masked_secret", request_id))
         if self.prompt_error:
             raise RuntimeError(SYNTHETIC_SECRET.decode("ascii"))
         value = bytearray(SYNTHETIC_SECRET)
         self.last_prompt_buffer = value
-        return value
+        return HumanSecretInputResult(
+            secret=value,
+            credential_input_received=True,
+            complete_line_received=True,
+            cancelled=False,
+        )
 
     def write_generic(self, target_name: str, secret: memoryview) -> None:
         self.calls.append(("write_generic", target_name))
         self.stored[target_name] = bytes(secret)
 
-    def generic_exists(self, target_name: str) -> bool:
+    def generic_exists(self, target_name: str) -> Any:
         self.calls.append(("generic_exists", target_name))
         return self.probe_result and target_name in self.stored
 
@@ -84,13 +100,21 @@ class FakeWindowsNative:
 class FakeVerifier:
     calls: int = 0
 
+    def validate_secret_input(
+        self, secret: memoryview, provider: str
+    ) -> bool:
+        return provider == "notion" and bytes(secret) == SYNTHETIC_SECRET
+
     def verify_identity(
         self,
         secret: memoryview,
         *,
         provider: str,
         reviewed_anchor_uuid: str,
+        provider_request_observer=None,
     ) -> VerifiedCredentialIdentity:
+        if provider_request_observer is not None:
+            provider_request_observer()
         self.calls += 1
         if bytes(secret) != SYNTHETIC_SECRET:
             raise RuntimeError("unexpected synthetic input")
@@ -257,6 +281,82 @@ class WindowsSecureIntakeTests(unittest.TestCase):
             self.assertNotIn(ANCHOR, rendered)
             self.assertTrue(list(receipts.glob(f"{CREDENTIAL_ID}.json")))
 
+    def test_factory_rejects_non_boolean_presence_and_absence_evidence(self) -> None:
+        class FalseyProbe:
+            def __bool__(self) -> bool:
+                return False
+
+            def __repr__(self) -> str:
+                return SYNTHETIC_SECRET.decode("ascii")
+
+        cases = (
+            (None, "delete_failed"),
+            (0, "delete_failed"),
+            (FalseyProbe(), "delete_failed"),
+            (False, "deleted"),
+        )
+        for index, (raw_result, expected_rollback) in enumerate(cases, start=1):
+            with self.subTest(
+                raw_type=type(raw_result).__name__,
+                expected_rollback=expected_rollback,
+            ), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                native = FakeWindowsNative(probe_result=raw_result)
+                verifier = FakeVerifier()
+                worker = build_windows_secure_intake_worker(
+                    cli_live_approved=True,
+                    claims_directory=root / "claims",
+                    archive_root=root,
+                    receipt_directory=root / "receipts",
+                    archive_scope_id=ARCHIVE_SCOPE_ID,
+                    provider_verifier=verifier,
+                    fingerprint_master_key=MASTER_KEY,
+                    native=native,
+                    credential_id_factory=lambda: CREDENTIAL_ID,
+                    backend_id_factory=lambda: BACKEND_ID,
+                    now_factory=lambda: NOW,
+                )
+                request_id = f"intake_{index:016d}"
+                plan = self.make_plan(request_id=request_id)
+
+                result = worker.execute(
+                    plan,
+                    expected_plan_digest=plan.plan_digest,
+                    current_owner_binding=OWNER,
+                )
+
+                self.assertFalse(result["ok"])
+                self.assertEqual(
+                    result["reason_code"],
+                    "store_presence_not_verified",
+                )
+                self.assertEqual(result["rollback_status"], expected_rollback)
+                self.assertEqual(
+                    (
+                        result["credential_input_received"],
+                        result["complete_line_received"],
+                        result["temporary_store_write_attempted"],
+                        result["provider_request_attempted"],
+                    ),
+                    (True, True, True, False),
+                )
+                self.assertEqual(verifier.calls, 0)
+                self.assertEqual(
+                    native.calls[1:],
+                    [
+                        ("prompt_masked_secret", request_id),
+                        ("write_generic", TARGET),
+                        ("generic_exists", TARGET),
+                        ("delete_generic", TARGET),
+                        ("generic_exists", TARGET),
+                    ],
+                )
+                self.assertEqual(list((root / "receipts").glob("*.json")), [])
+                self.assertNotIn(
+                    SYNTHETIC_SECRET.decode("ascii"),
+                    json.dumps(result, sort_keys=True),
+                )
+
     def test_live_and_platform_guards_fire_before_dll_loading(self) -> None:
         with self.assertRaises(WindowsSecureIntakeError) as approval_error:
             CtypesWindowsNativeFacade(
@@ -323,7 +423,7 @@ class WindowsSecureIntakeTests(unittest.TestCase):
             self.assertEqual(native.calls, [])
             self.assertEqual(list(outside.iterdir()), [])
 
-    def test_ctypes_fake_dll_console_write_probe_read_and_delete_are_exact(self) -> None:
+    def test_ctypes_fake_dll_popup_write_probe_read_and_delete_are_exact(self) -> None:
         self.assertRegex(
             TARGET,
             r"^WOM/credential-intake/[0-9a-f]{64}/backend_[A-Za-z0-9_-]+$",
@@ -332,18 +432,29 @@ class WindowsSecureIntakeTests(unittest.TestCase):
         harness = FakeDllHarness()
         prompted_request_ids: list[str] = []
 
-        def fake_console_prompt(*, request_id: str, **_kwargs: object) -> bytearray:
+        def fake_popup_prompt(
+            *, request_id: str, input_intent: object, **_kwargs: object
+        ) -> HumanSecretInputResult:
             prompted_request_ids.append(request_id)
-            return bytearray(SYNTHETIC_SECRET)
+            self.assertIs(
+                input_intent,
+                CredentialPopupInputIntent.live_registration,
+            )
+            return HumanSecretInputResult(
+                secret=bytearray(SYNTHETIC_SECRET),
+                credential_input_received=True,
+                complete_line_received=True,
+                cancelled=False,
+            )
 
         native = CtypesWindowsNativeFacade(
             cli_live_approved=True,
             platform_name="nt",
             dlls=harness.bundle(),
-            console_prompt=fake_console_prompt,
+            popup_prompt=fake_popup_prompt,
         )
 
-        prompt_context = windows_module.VisibleConsolePromptContext(
+        prompt_context = CredentialPopupPromptContext(
             provider="notion",
             purpose="notion_page_recovery",
             account_label="개인 계정",
@@ -355,7 +466,10 @@ class WindowsSecureIntakeTests(unittest.TestCase):
             request_id=REQUEST_ID,
             context=prompt_context,
         )
-        self.assertEqual(prompted, bytearray(SYNTHETIC_SECRET))
+        self.assertEqual(prompted.secret, bytearray(SYNTHETIC_SECRET))
+        self.assertTrue(prompted.credential_input_received)
+        self.assertTrue(prompted.complete_line_received)
+        self.assertFalse(prompted.cancelled)
         self.assertEqual(prompted_request_ids, [REQUEST_ID])
 
         write_buffer = bytearray(SYNTHETIC_SECRET)
@@ -378,30 +492,38 @@ class WindowsSecureIntakeTests(unittest.TestCase):
         self.assertFalse(hasattr(native, "enumerate"))
         self.assertFalse(hasattr(native, "search"))
         self.assertFalse(hasattr(native, "fuzzy_match"))
+        self.assertIn("popup=True", repr(native))
+        self.assertNotIn("attached_console=True", repr(native))
+        self.assertNotIn("visible_console=True", repr(native))
         self.assertNotIn(SYNTHETIC_SECRET.decode("ascii"), repr(native))
 
         # A trusted broker/provider callback owns and wipes the mutable exact
         # read buffer.  No decoded immutable string is required by this module.
         for index in range(len(read_buffer)):
             read_buffer[index] = 0
-        for index in range(len(prompted or bytearray())):
-            assert prompted is not None
-            prompted[index] = 0
+        assert prompted.secret is not None
+        for index in range(len(prompted.secret)):
+            prompted.secret[index] = 0
 
-    def test_production_facade_routes_input_to_visible_console_boundary(self) -> None:
+    def test_production_facade_routes_input_to_native_popup_boundary(self) -> None:
         harness = FakeDllHarness()
-        prompted = bytearray(SYNTHETIC_SECRET)
+        prompted = HumanSecretInputResult(
+            secret=bytearray(SYNTHETIC_SECRET),
+            credential_input_received=True,
+            complete_line_received=True,
+            cancelled=False,
+        )
         with patch.object(
             windows_module,
-            "prompt_masked_secret_in_new_console",
+            "prompt_secret_in_native_popup",
             return_value=prompted,
-        ) as console_prompt:
+        ) as popup_prompt:
             native = CtypesWindowsNativeFacade(
                 cli_live_approved=True,
                 platform_name="nt",
                 dlls=harness.bundle(),
             )
-            prompt_context = windows_module.VisibleConsolePromptContext(
+            prompt_context = CredentialPopupPromptContext(
                 provider="notion",
                 purpose="notion_page_recovery",
                 account_label="개인 계정",
@@ -415,20 +537,150 @@ class WindowsSecureIntakeTests(unittest.TestCase):
             )
 
         self.assertIs(result, prompted)
-        console_prompt.assert_called_once_with(
+        popup_prompt.assert_called_once_with(
             request_id=REQUEST_ID,
             context=prompt_context,
+            input_intent=CredentialPopupInputIntent.live_registration,
             kernel32=harness.kernel32,
             platform_name="nt",
             max_secret_bytes=windows_module.CRED_MAX_CREDENTIAL_BLOB_SIZE,
         )
         self.assertFalse(hasattr(harness, "credui"))
+        self.assertFalse(
+            hasattr(windows_module, "prompt_masked_secret_in_attached_console")
+        )
+
+    def test_all_production_ui_names_are_native_popup_aliases(
+        self,
+    ) -> None:
+        self.assertIs(
+            WindowsVisibleConsoleSecretUI,
+            WindowsCredentialPopupSecretUI,
+        )
+        self.assertIs(
+            WindowsNativeMaskedSecretUI,
+            WindowsCredentialPopupSecretUI,
+        )
+        self.assertIs(
+            WindowsAttachedConsoleSecretUI,
+            WindowsCredentialPopupSecretUI,
+        )
+        self.assertIs(
+            windows_module.VisibleConsolePromptContext,
+            CredentialPopupPromptContext,
+        )
+
+    def test_popup_evidence_error_survives_facade_and_ui_boundaries(
+        self,
+    ) -> None:
+        expected = (True, False)
+
+        def fail_after_partial_input(**_kwargs: object) -> HumanSecretInputResult:
+            raise CredentialPopupSecretPromptError(
+                reason_code="credential_input_boundary_failed",
+                credential_input_received=expected[0],
+                complete_line_received=expected[1],
+            )
+
+        native = CtypesWindowsNativeFacade(
+            cli_live_approved=True,
+            platform_name="nt",
+            dlls=FakeDllHarness().bundle(),
+            popup_prompt=fail_after_partial_input,
+        )
+        context = CredentialPopupPromptContext(
+            provider="notion",
+            purpose="notion_page_recovery",
+            account_label="개인 계정",
+            workspace_label="자료 보관함",
+            task_summary="검토한 Notion 페이지를 WOM 아카이브로 복구하고 있습니다.",
+            connection_reason="복구를 계속하려면 Notion 작업공간 연결을 확인해야 합니다.",
+        )
+        ui = WindowsCredentialPopupSecretUI(native, context)
+
+        with self.assertRaises(CredentialPopupSecretPromptError) as error:
+            ui.request_secret(request_id=REQUEST_ID)
+
+        self.assertEqual(
+            (
+                error.exception.credential_input_received,
+                error.exception.complete_line_received,
+            ),
+            expected,
+        )
+        rendered = str(error.exception) + repr(error.exception) + repr(ui)
+        self.assertNotIn(SYNTHETIC_SECRET.decode("ascii"), rendered)
+
+    def test_overlimit_popup_projects_invalid_1100_before_store_or_provider(
+        self,
+    ) -> None:
+        def fail_after_complete_input(**_kwargs: object) -> HumanSecretInputResult:
+            raise CredentialPopupSecretPromptError(
+                reason_code="credential_input_invalid_for_provider",
+                credential_input_received=True,
+                complete_line_received=True,
+            )
+
+        harness = FakeDllHarness()
+        native = CtypesWindowsNativeFacade(
+            cli_live_approved=True,
+            platform_name="nt",
+            dlls=harness.bundle(),
+            popup_prompt=fail_after_complete_input,
+        )
+        native.current_user_sid = lambda: SID  # type: ignore[method-assign]
+        verifier = FakeVerifier()
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            worker = build_windows_secure_intake_worker(
+                cli_live_approved=True,
+                claims_directory=root / "claims",
+                archive_root=root,
+                receipt_directory=root / "receipts",
+                archive_scope_id=ARCHIVE_SCOPE_ID,
+                provider_verifier=verifier,
+                fingerprint_master_key=MASTER_KEY,
+                native=native,
+                credential_id_factory=lambda: CREDENTIAL_ID,
+                backend_id_factory=lambda: BACKEND_ID,
+                now_factory=lambda: NOW,
+            )
+            plan = self.make_plan()
+            result = worker.execute(
+                plan,
+                expected_plan_digest=plan.plan_digest,
+                current_owner_binding=OWNER,
+            )
+
+            self.assertFalse(result["ok"])
+            self.assertEqual(
+                result["reason_code"],
+                "credential_input_invalid_for_provider",
+            )
+            self.assertEqual(
+                (
+                    result["credential_input_received"],
+                    result["complete_line_received"],
+                    result["temporary_store_write_attempted"],
+                    result["provider_request_attempted"],
+                ),
+                (True, True, False, False),
+            )
+            self.assertEqual(result["rollback_status"], "not_required")
+            self.assertEqual(verifier.calls, 0)
+            self.assertEqual(harness.written_target, "")
+            self.assertEqual(list((root / "receipts").glob("*.json")), [])
+            self.assertNotIn(
+                SYNTHETIC_SECRET.decode("ascii"),
+                json.dumps(result, sort_keys=True),
+            )
 
     def test_masked_ui_and_owner_errors_are_fixed_and_redacted(self) -> None:
         native = FakeWindowsNative(prompt_error=True)
-        ui = WindowsVisibleConsoleSecretUI(
+        ui = WindowsCredentialPopupSecretUI(
             native,
-            windows_module.VisibleConsolePromptContext(
+            CredentialPopupPromptContext(
                 provider="notion",
                 purpose="notion_page_recovery",
                 account_label="개인 계정",
@@ -439,7 +691,9 @@ class WindowsSecureIntakeTests(unittest.TestCase):
         )
         with self.assertRaises(WindowsSecureIntakeError) as dialog_error:
             ui.request_secret(request_id=REQUEST_ID)
-        self.assertEqual(dialog_error.exception.code, "windows_visible_console_failed")
+        self.assertEqual(
+            dialog_error.exception.code, "windows_credential_popup_failed"
+        )
         self.assertNotIn(SYNTHETIC_SECRET.decode("ascii"), str(dialog_error.exception))
         self.assertNotIn(SYNTHETIC_SECRET.decode("ascii"), repr(ui))
 

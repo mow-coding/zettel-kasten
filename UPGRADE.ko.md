@@ -2,61 +2,136 @@
 
 [English Upgrade Guide](UPGRADE.md)
 
+## v0.3.319 native 자격증명 popup과 인과 근거
+
+정확한 v0.3.319 GitHub Release에 검증된 wheel이 실제로 올라온 뒤에만
+설치하세요. 저장소 파일만 바꿔서는 격리된 예전 WOM-kit 설치가 업데이트되지
+않습니다. 새 프로세스에서 `archive --version`을 확인하고, 예전
+`credential-adopt` dry-run digest는 모두 버린 뒤 새 계획을 만드세요.
+
+### 무엇이 바뀌었나
+
+실사용에서 실패한 terminal 입력 시안은 폐기했습니다. 최초 등록과 명시적으로
+검토한 교체는 이제 격리된 spawned child의 별도 native Windows popup을
+사용합니다. 표준 single-line password EDIT가 일반 편집과 paste 동작을
+담당하지만, opaque sibling이 전체 입력란을 덮어 값·mask glyph·caret·개수·
+길이를 모두 숨깁니다. WOM은 clipboard를 직접 읽지 않습니다. 빈 상태에서는
+확인이 비활성화되고, 취소·X·Escape는 complete secret 전에 끝납니다.
+
+정확한 input intent도 제품 경계입니다.
+
+- production `credential-adopt`는
+  `CredentialPopupInputIntent.live_registration`을 고정하고 파란
+  `실제 자격 증명 등록` banner를 표시합니다.
+- source-tree acceptance helper는
+  `CredentialPopupInputIntent.synthetic_acceptance`을 고정하고 빨간
+  `합성 입력 테스트 · 실제 키 입력 금지` banner와 실제 자격증명을 절대
+  입력하거나 붙여넣지 말라는 경고를 표시합니다.
+
+intent가 없거나 plain string이면 popup show, store, provider보다 먼저
+실패합니다.
+
+child는 popup/native/store/provider/archive 작업 전에 detach한 뒤 고정
+`popup_child_detached` acknowledgement를 보냅니다. parent는
+acknowledgement → final mapping → terminal pipe EOF만 받으며 정상 start된
+child는 끝까지 join합니다. 좁은 `SIGINT`/`SIGBREAK` start lease는
+receive 전에 원래 handler로 정확히 복원합니다. raw input과 exception text는
+IPC를 건너지 않습니다.
+
+### 합성 popup 검증
+
+acceptance helper는 예전 파일명을 유지하지만 schema는
+`wom-kit/windows-credential-popup-acceptance/v0.1`이고 route는 popup
+전용입니다. PAT를 요구하지 않으며 실제 등록, credential-store write,
+provider call을 하지 않습니다.
+
+공개 고정 합성 문자열만 사용하세요.
+
+```powershell
+python -B wom-kit/tools/check_windows_credential_console_host.py --host-family codex_desktop --launch-route codex_desktop_native_popup --gesture direct_keyboard_typing --format json
+```
+
+실제 자격증명을 입력하면 안 됩니다. exact challenge match, synthetic
+banner/warning, value·length 완전 비표시, 올바른 확인 버튼 gate, 정상 popup
+종료, 읽을 수 있는 한국어를 모두 사람이 확인해야 pass입니다. injected test는
+실제 사람 입력 근거가 아닙니다.
+
+intent guard 전 사람 row는 failed로 유지합니다. complete non-empty mismatch가
+나왔고, 사람은 예전 harness copy 때문에 고정 합성 문자열이 아니라 실제
+secret을 입력했다고 교정했습니다. child는 buffer를 지웠고 값은 receipt JSON,
+IPC, store, provider에 들어가지 않았습니다. 이 합성 row는 failed로 유지합니다.
+이번 복구의 전제조건으로 synthetic helper를 다시 실행하지 마세요. 향후 선택적
+acceptance evidence일 뿐입니다.
+
+### 실제 등록
+
+배포된 v0.3.319 runtime을 새 process에서 검증한 뒤 새 registration dry-run을
+만들 수 있습니다. synthetic helper는 이 등록의 gate가 아닙니다.
+
+```powershell
+archive credential-adopt <archive-root> --account-label <public-safe-account-label> --workspace-label <public-safe-workspace-label> --purpose notion-page-recovery --task-summary "<public-safe-task-summary>" --connection-reason "<public-safe-connection-reason>" --reviewed-anchor-page-id <reviewed-anchor-uuid> --interactive --dry-run --format json
+```
+
+exact request digest를 검토한 뒤 같은 public-safe field를 한 번만 반복하면서
+`--expected-request-sha256 <fresh-request-sha256> --approve`를 추가합니다.
+popup 위 banner가 `실제 자격 증명 등록`일 때만 실제 PAT를 입력하세요.
+chat, argv, environment, ordinary stdin, 문서, synthetic helper에는 절대
+넣지 마세요. 자동 재시도하지 마세요.
+
+실제 자격증명 등록은 아직 `not_performed`입니다. 이 문서는 store persistence나
+provider acceptance를 주장하지 않습니다.
+
+### 인과 실패
+
+v0.3 제품 envelope는 다음 네 값만 공개합니다.
+
+```text
+credential_input_received
+complete_line_received
+temporary_store_write_attempted
+provider_request_attempted
+```
+
+알 수 없는 child 상태는 네 null로 투영합니다.
+`credential_input_invalid_for_provider`는 store/provider 전 complete
+malformed·control·provider-shape-invalid·over-limit·local oversize를 뜻합니다.
+`credential_input_boundary_failed`는 정확한 `1000` 또는 `1100`과
+`repair_secure_input_boundary_and_create_a_new_plan` action을 보존하며
+rollback not required, store false, provider false입니다.
+`provider_auth_rejected`는 실제 provider request가 있어야만 사용합니다.
+`provider_request_not_attempted`는 temporary store write 뒤 verifier가
+provider boundary를 넘지 못한 경우입니다. rollback `deleted`는 exact
+post-delete absence probe가 있어야만 가능합니다.
+
+### upgrade truth
+
+source checkout, fake Win32 test, DPI-correct render, injected acceptance pass는
+merge, external CI, exact tag, GitHub Release, wheel publication, fresh
+installation, 실제 사람 합성 검증, 실제 등록, provider acceptance, durable
+persistence, recovery를 증명하지 않습니다.
+
 ## v0.3.318 자격증명 paste와 실패 단계
 
 정확한 v0.3.318 GitHub Release에 검증된 wheel이 실제로 올라온 뒤에만
-설치하세요. 저장소 파일만 바꿔서는 격리된 예전 WOM-kit 설치가 업데이트되지
-않습니다. 새 프로세스에서 `archive --version`을 확인한 뒤 새 등록 계획을
-만드세요. 실행 버전과 검토한 요청이 일치해야 하므로 예전 dry-run digest는
-버립니다.
+설치합니다. 별도 검은 Windows 콘솔은 `Ctrl+V`, `Shift+Insert`, Windows
+Terminal 기본 `Ctrl+Shift+V`, host 설정에 따른 오른쪽 클릭을 안내했습니다.
+입력값과 길이는 숨기고, 프롬프트 동안 `Ctrl+C`를 무시하며, 빈 Enter를 취소로
+안내했습니다.
 
-별도 Windows 검은 창은 이제 가려진 입력 바로 위에서 다음 방법을 안내합니다.
+완전한 비어 있지 않은 한 줄이 도착하면 v0.3.318은
+`입력값을 받았습니다. 검증 중입니다.`를 잠시 표시했습니다. 이는 console
+경계 수신이지 provider 인증이나 영구 저장 증거가 아닙니다. WOM은 clipboard를
+프로그램으로 읽지 않습니다.
 
-- `Ctrl+V` 또는 `Shift+Insert`를 사용합니다.
-- Windows Terminal 기본 설정에서는 `Ctrl+Shift+V`도 사용할 수 있습니다.
-- 오른쪽 클릭은 terminal host 설정에 따라 붙여넣기, 복사, 메뉴 열기 중 하나가
-  될 수 있습니다. 메뉴가 뜨면 붙여넣기를 고릅니다.
-- 입력값과 길이는 보이지 않습니다. 붙여넣은 다음 Enter를 누릅니다.
-- 이 짧은 프롬프트 동안 `Ctrl+C`는 무시되고, 빈 Enter만 취소로 안내됩니다.
+v0.3.318 parent 결과는 `wom-credential-workflow-result/v0.2`, child 결과는
+`wom-credential-secure-intake-result/v0.2`입니다. 고정 결과는
+`credential_input_cancelled_or_empty`, `credential_input_not_received`,
+`provider_auth_rejected`, `provider_identity_endpoint_unavailable`,
+`reviewed_anchor_inaccessible`이며 저장 전과 rollback 관계를 구분합니다.
 
-완전한 비어 있지 않은 한 줄이 WOM에 도착하면 검은 창은
-`입력값을 받았습니다. 검증 중입니다.`만 표시하고 잠시 남습니다. 이는 콘솔
-경계가 입력을 받았다는 뜻이지 provider 인증이나 영구 저장 성공을 뜻하지
-않습니다. WOM은 clipboard를 프로그램으로 읽지 않습니다. 사용자가 바꾼 host
-key binding은 여전히 다를 수 있습니다.
-
-공개 결과는 이제 `wom-credential-workflow-result/v0.2`, child secure-intake
-결과는 `wom-credential-secure-intake-result/v0.2`입니다. 고정 결과 다섯 개는
-다음처럼 읽습니다.
-
-- `credential_input_cancelled_or_empty`: 완전한 입력을 받지 않았습니다. 준비가
-  되었을 때만 새 계획을 만듭니다.
-- `credential_input_not_received`: 안전한 콘솔 경계가 완전한 입력을 돌려주지
-  못했습니다. 어떤 물리 paste gesture가 동작했거나 안 했다는 증거는 아닙니다.
-  지원하는 방법으로 새 계획에서 다시 시도합니다.
-- `provider_auth_rejected`: Notion이 자격증명을 거부했습니다. 임시로 쓴 정확한
-  저장 항목은 삭제되어야 하며, 실패하면 `delete_failed`가 나옵니다. 자격증명을
-  검토한 뒤 새 계획을 만듭니다.
-- `provider_identity_endpoint_unavailable`: provider 신원 서비스를 확인할 수
-  없었습니다. 같은 rollback 규칙을 지키며, 복구를 기다린 뒤 새 계획을 만듭니다.
-- `reviewed_anchor_inaccessible`: 해당 연결로 검토 페이지를 확인할 수
-  없었습니다. 같은 rollback 규칙을 지키며 페이지 공유와 접근을 먼저 검토합니다.
-
-앞의 두 결과는 저장 전 단계이므로 `rollback_status: not_required`여야 합니다.
-뒤의 세 결과는 정확한 임시 저장 뒤에만 나올 수 있고 `deleted` 또는
-`delete_failed`여야 합니다. `deleted`는 저장 항목 부재 확인도 요구합니다. 공개
-결과를 바꾸려고 Credential Manager 항목을 손으로 수정하거나 지우지 마세요.
-
-소스 테스트와 합성 Win32 API canary는 Unicode 문구, echo-off 입력, 상태 문구
-표시 시간, Ctrl+C 생존, cleanup 순서, code page와 mode 복원, rollback projection,
-비밀값 없는 출력을 확인했습니다. 하지만 모든 Windows Terminal, classic Console
-Host, ConPTY, 원격 세션, 사용자 설정에서 실제 `Ctrl+V`, `Ctrl+Shift+V`,
-`Shift+Insert`, 오른쪽 클릭 paste가 동작한다는 증거는 아닙니다. 해당 host에서는
-별도로 검토한 합성 수동 acceptance만 사용하고 문서나 로그에 실제 PAT를 넣지
-마세요.
-
-자세한 내용은 [v0.3.318 릴리스 노트](wom-kit/docs/releases/v0.3.318.md),
-[Letter 131 자격증명 콘솔 가이드](wom-kit/docs/letter131-credential-console-paste-and-failure-stages.md),
+소스 테스트와 합성 Win32 canary는 모든 terminal host의 물리 paste gesture를
+증명하지 않았습니다. [v0.3.318 릴리스 노트](wom-kit/docs/releases/v0.3.318.md),
+[Letter 131 가이드](wom-kit/docs/letter131-credential-console-paste-and-failure-stages.md),
 [Letter 131 결정 기록](wom-kit/docs/archive-infra-decision-log-2026-08-13-v03318-letter131-credential-input.md)을
 보세요.
 
