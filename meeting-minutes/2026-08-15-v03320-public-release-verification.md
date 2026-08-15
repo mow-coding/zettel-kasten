@@ -124,7 +124,7 @@ contents.
 This release proves the capability-broker software artifact and public installation
 boundary. It does not prove a live credential registration, Windows Credential Manager
 read/write, Notion authentication, provider request, page recovery, 620-page run,
-Basoon/archive mutation, or human acceptance of a real secret workflow.
+protected-archive mutation, or human acceptance of a real secret workflow.
 
 No real PAT, credential value, account label, workspace label, anchor UUID, reviewed
 request path, provider payload, or archive authentication material was read, written,
