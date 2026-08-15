@@ -159,11 +159,25 @@ registration popup, read or write a real credential store, call Notion, operate
 on any real archive, recover a real page, change a provider account, or inspect
 private archive content.
 
-Implemented source plus passing tests can establish local contract behavior.
-They do not establish merge, external CI, exact tag, GitHub Release, wheel
-publication, fresh installation, live credential registration, provider
-acceptance, completed 620-page recovery, or human acceptance. No tag, release,
-push, deployment, or live operation was part of this task.
+Implemented source plus passing local tests can establish local contract
+behavior. They do not by themselves establish merge, external CI, exact tag,
+GitHub Release, wheel publication, fresh installation, live credential
+registration, provider acceptance, completed 620-page recovery, or human
+acceptance. The continuation committed and pushed the candidate and opened a
+draft pull request. It did not merge, tag, publish a release or wheel, deploy,
+or perform any live credential/provider/archive operation.
+
+## Pull-request CI correction
+
+After the implementation was committed and pushed as draft PR 69, the first
+exact-head CI run found one deterministic documentation-version failure. The
+English and Korean philosophy implementation evidence maps still identified
+their current review as v0.3.319 even though their regression contract reads
+the current WOM-kit version dynamically. Both status lines were advanced to
+v0.3.320 without changing the historical v0.3.252 traceability checkpoint they
+describe. No product behavior, capability authority, secret boundary, or
+historical release artifact changed. The exact failing documentation test and
+the current release-document groups were rerun before the follow-up push.
 
 ## References
 
