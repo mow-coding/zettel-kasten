@@ -246,6 +246,18 @@ class RevalidatingCredential:
         self.close_calls += 1
 
 
+class CapabilityCredential(RevalidatingCredential):
+    def __init__(self, *, fail_on: int | None = None) -> None:
+        super().__init__()
+        self.capability_fail_on = fail_on
+        self.authorization_calls: list[str] = []
+
+    def authorize_provider_request(self, endpoint_class: str) -> None:
+        self.authorization_calls.append(endpoint_class)
+        if self.capability_fail_on == len(self.authorization_calls):
+            raise RuntimeError("PRIVATE CAPABILITY DETAIL")
+
+
 class MutableOwningCredential:
     def __init__(self) -> None:
         self.buffer = bytearray(b"secret-owned-by-broker")
@@ -624,6 +636,32 @@ class NotionPageRecoveryExecutionTests(unittest.TestCase):
                 self.assertEqual(result["operations"][operation], 0)
         self.assertFalse(result["receipt_created"])
 
+    def test_invalid_credential_capability_reference_blocks_before_live_access(self) -> None:
+        manifest = make_manifest((1,))
+        private_marker = "PRIVATE-CAPABILITY-REFERENCE-MUST-NOT-ECHO"
+        provider = NeverProvider()
+        broker = FakeBroker()
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            result = self._execute(
+                root,
+                manifest,
+                provider,
+                broker,
+                credential_capability_reference={"private": private_marker},
+            )
+
+            self.assertFalse(result["ok"], result)
+            self.assertEqual(
+                result["blockers"],
+                ["credential_capability_reference_invalid"],
+            )
+            self._assert_zero_live_access_and_writes(result, provider, broker)
+            self.assertNotIn(
+                private_marker,
+                json.dumps(result, ensure_ascii=False),
+            )
+
     def test_archive_identity_drift_after_pacer_blocks_before_live_provider(self) -> None:
         manifest = make_manifest((1,))
         page_id = manifest["items"][0]["page_id"]
@@ -870,6 +908,64 @@ class NotionPageRecoveryExecutionTests(unittest.TestCase):
             self.assertEqual(result["operations"]["paced_request_count"], 4)
             self.assertEqual(credential.revalidation_calls, 4)
             self.assertEqual(credential.close_calls, 1)
+
+    def test_credential_capability_authorizes_each_fixed_endpoint_class(self) -> None:
+        manifest = make_manifest((1,))
+        page_id = manifest["items"][0]["page_id"]
+        credential = CapabilityCredential()
+        provider = FakeProvider(
+            metadata={page_id: [ok_metadata(page_id), ok_metadata(page_id)]},
+            markdown={page_id: [ok_markdown(page_id, "capability body")]},
+            expected_credential=credential,
+        )
+        with tempfile.TemporaryDirectory() as temp:
+            result = self._execute(
+                Path(temp),
+                manifest,
+                provider,
+                FakeBroker(secret=credential),
+            )
+
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(
+            credential.authorization_calls,
+            ["retrieve_page", "retrieve_page_as_markdown", "retrieve_page"],
+        )
+        self.assertEqual(credential.revalidation_calls, 3)
+        self.assertEqual(credential.close_calls, 1)
+
+    def test_credential_capability_failure_blocks_before_provider_without_detail(self) -> None:
+        manifest = make_manifest((1,))
+        page_id = manifest["items"][0]["page_id"]
+        credential = CapabilityCredential(fail_on=1)
+        provider = FakeProvider(
+            metadata={page_id: [ok_metadata(page_id)]},
+            markdown={page_id: [ok_markdown(page_id, "PRIVATE CAPABILITY BODY")]},
+            expected_credential=credential,
+        )
+        with tempfile.TemporaryDirectory() as temp:
+            result = self._execute(
+                Path(temp),
+                manifest,
+                provider,
+                FakeBroker(secret=credential),
+            )
+
+        self.assertFalse(result["ok"], result)
+        self.assertEqual(result["status_class"], "partial")
+        self.assertEqual(
+            result["blockers"],
+            ["credential_capability_authorization_failed"],
+        )
+        self.assertEqual(credential.authorization_calls, ["retrieve_page"])
+        self.assertEqual(credential.revalidation_calls, 1)
+        self.assertEqual(credential.close_calls, 1)
+        self.assertEqual(provider.metadata_calls, 0)
+        self.assertEqual(provider.markdown_calls, 0)
+        self.assertEqual(result["operations"]["provider_calls"], 0)
+        public = json.dumps(result, ensure_ascii=False)
+        self.assertNotIn("PRIVATE CAPABILITY DETAIL", public)
+        self.assertNotIn("PRIVATE CAPABILITY BODY", public)
 
     def test_verified_replay_performs_zero_credential_authority_revalidation(self) -> None:
         manifest = make_manifest((1,))

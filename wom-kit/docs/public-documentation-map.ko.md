@@ -2,7 +2,7 @@
 
 상태: 공개 navigation baseline
 날짜: 2026-05-27
-갱신: 2026-08-13
+갱신: 2026-08-15
 철학 갱신: 2026-07-15
 하네스 호환 경계 갱신: 2026-07-16
 
@@ -60,6 +60,8 @@
 - [v0.3.318 Letter 131 자격증명 입력 결정 기록](archive-infra-decision-log-2026-08-13-v03318-letter131-credential-input.md)
 - [Letter 132 네이티브 자격증명 팝업과 인과 근거](letter132-credential-console-keyboard-readiness-and-causal-evidence.md)
 - [v0.3.319 Letter 132 자격증명 입력 근거 결정 기록](archive-infra-decision-log-2026-08-14-v03319-letter132-credential-input-evidence.md)
+- [v0.3.320 자격증명 capability broker 결정 기록](archive-infra-decision-log-2026-08-15-v03320-credential-capability-broker.md)
+- [Credential Capability Contract](credential-capability-contract.md)
 - [프로젝트 버전 업데이트](project-version-update.md)
 - [Derived Text Capture와 paired batch 복구](derived-text.md)
 - [Letter 120·123 인덱스 수명주기와 피드백 본문](letter120-123-index-lifecycle-and-feedback-body.md)
@@ -223,6 +225,7 @@
 - [Credential Semantic Extraction Recipe](credential-semantic-extraction-recipe.md)
 - [Credential Plaintext Migration Plan](credential-plaintext-migration-plan.md)
 - [Credential Access Broker Plan](credential-access-broker-plan.md)
+- [Credential Capability Contract](credential-capability-contract.md)
 - [Credential Access Approval Plan](credential-access-approval-plan.md)
 - [Credential Policy Check](credential-policy-check.md)
 - [Credential KeePassXC Command Plan](credential-keepassxc-command-plan.md)
@@ -419,6 +422,7 @@ local archive
 - [v0.2.11 Delegate Capability Contract Work Log](../plans/work-log-2026-05-23-delegate-capability-contract.md)
 - [Changelog](../../CHANGELOG.md)
 - [Release Notes](releases/)
+- [v0.3.320 릴리스 노트](releases/v0.3.320.md)
 - [v0.3.308 릴리스 노트](releases/v0.3.308.md)
 - [v0.3.309 릴리스 노트](releases/v0.3.309.md)
 - [v0.3.310 릴리스 노트](releases/v0.3.310.md)
@@ -459,6 +463,7 @@ Schemas:
 - [Schemas Directory](../schemas/)
 - [Source-Fidelity Draft Receipt Schema](../schemas/source-fidelity-draft-receipt.schema.json)
 - [IMAP Mailbox Adapter Manifest Schema](../schemas/imap-mailbox-adapter-manifest.schema.json)
+- [Credential Capability v0.1 Schema](../schemas/credential-capability-v0.1.schema.json)
 
 이 문서들은 구현 계약에 가깝습니다. 제품 철학 문서보다 더 정확하고 엄격해야 합니다.
 

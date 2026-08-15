@@ -20,7 +20,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import hashlib
 import hmac
 import json
@@ -44,6 +44,16 @@ from .credential_secure_intake import (
     RECEIPT_SCHEMA_VERSION,
 )
 from .credential_secure_intake_windows import windows_credential_target
+from .credential_capability import (
+    CREDENTIAL_CAPABILITY_CONSUMER,
+    CREDENTIAL_CAPABILITY_OPERATION,
+    CREDENTIAL_CAPABILITY_PROVIDER,
+    CREDENTIAL_CAPABILITY_REQUIRED_REGISTERED_CAPABILITIES,
+    CredentialCapability,
+    CredentialCapabilityError,
+    CredentialCapabilityLease,
+    CredentialCapabilityScope,
+)
 from .notion_http_adapter import NotionBearerSecret
 from .notion_page_recovery import ScopeBinding
 
@@ -52,6 +62,7 @@ RECEIPTS_RELATIVE = "profiles/local/credential-intake/receipts"
 EVOLUTIONS_RELATIVE = "profiles/local/credential-intake/evolutions"
 LIFECYCLE_RELATIVE = "profiles/local/credential-intake/lifecycle.json"
 LOCK_RELATIVE = "profiles/local/credential-intake/.registry.lock"
+CAPABILITY_CLAIMS_RELATIVE = "profiles/local/credential-capabilities/claims"
 
 RECEIPT_AUTHENTICATION_SCHEMA = "wom-credential-receipt-authentication/v0.1"
 LIFECYCLE_SCHEMA_VERSION = "wom-credential-secure-registry-lifecycle/v0.1"
@@ -63,6 +74,13 @@ WORKSPACE_SCOPE_EVOLUTION_SCHEMA_VERSION = (
 )
 WORKSPACE_SCOPE_EVOLUTION_AUTHENTICATION_SCHEMA = (
     "wom-credential-workspace-scope-evolution-authentication/v0.1"
+)
+CAPABILITY_USE_CLAIM_SCHEMA_VERSION = "wom-credential-capability-use-claim/v0.1"
+CAPABILITY_USE_SUMMARY_SCHEMA_VERSION = (
+    "wom-credential-capability-use-summary/v0.1"
+)
+CAPABILITY_USE_CLAIM_AUTHENTICATION_SCHEMA = (
+    "wom-credential-capability-use-claim-authentication/v0.1"
 )
 LEGACY_WORKSPACE_IDENTITY_BASIS = "legacy_reviewed_anchor_v1"
 
@@ -76,6 +94,9 @@ ARCHIVE_KEY_TARGET_DOMAIN = b"wom/credential-secure-registry/archive-key-target/
 WORKSPACE_SCOPE_EVOLUTION_AUTHENTICATION_DOMAIN = (
     b"wom/credential-secure-registry/workspace-scope-evolution/v0.1\x00"
 )
+CAPABILITY_USE_CLAIM_AUTHENTICATION_DOMAIN = (
+    b"wom/credential-secure-registry/capability-use-claim/v0.1\x00"
+)
 
 WINDOWS_ARCHIVE_KEY_TARGET_PREFIX = "WOM/credential-intake/backend_key_"
 
@@ -85,6 +106,7 @@ MAX_ARCHIVE_DOCUMENT_BYTES = 256 * 1024
 MAX_RECEIPTS = 512
 MAX_EVOLUTIONS = 512
 MAX_EVOLUTION_BYTES = 64 * 1024
+MAX_CAPABILITY_USE_CLAIM_BYTES = 64 * 1024
 AUTHENTICATION_KEY_BYTES = 32
 REPARSE_FLAG = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
 
@@ -105,6 +127,7 @@ _PURPOSE_RE = re.compile(r"^[a-z][a-z0-9_-]{0,63}$")
 _HEX_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _SHA256_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 _HMAC_SHA256_RE = re.compile(r"^hmac-sha256:[0-9a-f]{64}$")
+_CAPABILITY_ID_RE = re.compile(r"^cap_[0-9a-f]{32}$")
 _SAFE_ARCHIVE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:+/-]{0,255}$")
 _SAFE_REVISION_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:+-]{0,127}$")
 _SAFE_REVIEWER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._@:+-]{0,127}$")
@@ -168,6 +191,25 @@ _EVOLUTION_KEYS = {
     "evolved_workspace_fingerprint",
     "workspace_identity_basis",
     "evolved_at",
+    "authentication",
+}
+_CAPABILITY_USE_CLAIM_KEYS = {
+    "schema_version",
+    "archive_id",
+    "capability_id",
+    "capability_sha256",
+    "request_sha256",
+    "plan_sha256",
+    "provider",
+    "operation",
+    "consumer",
+    "max_uses",
+    "max_provider_requests",
+    "status",
+    "started_at",
+    "finished_at",
+    "failure_code",
+    "provider_requests_authorized",
     "authentication",
 }
 
@@ -2256,6 +2298,518 @@ def persist_duplicate_lifecycle_decision(
     }
 
 
+def _capability_claim_now(clock: Callable[[], datetime]) -> datetime:
+    try:
+        value = clock()
+        if not isinstance(value, datetime) or value.tzinfo is None:
+            raise ValueError
+        if value.utcoffset() != timedelta(0):
+            raise ValueError
+        return value.astimezone(timezone.utc)
+    except Exception:
+        raise _fail("credential_capability_clock_invalid") from None
+
+
+def _capability_claim_timestamp(value: datetime) -> str:
+    return value.replace(microsecond=0).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _parse_capability_claim_timestamp(value: Any) -> datetime:
+    if not isinstance(value, str) or re.fullmatch(
+        r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z",
+        value,
+    ) is None:
+        raise _fail("credential_capability_claim_timestamp_invalid")
+    try:
+        return datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ").replace(
+            tzinfo=timezone.utc
+        )
+    except ValueError:
+        raise _fail("credential_capability_claim_timestamp_invalid") from None
+
+
+def _capability_claim_authentication_payload(
+    document: Mapping[str, Any],
+) -> dict[str, Any]:
+    payload = dict(document)
+    payload.pop("authentication", None)
+    return payload
+
+
+def _capability_claim_mac(
+    document: Mapping[str, Any],
+    key: bytes | bytearray,
+) -> str:
+    return hmac.new(
+        key,
+        CAPABILITY_USE_CLAIM_AUTHENTICATION_DOMAIN
+        + _canonical_json_bytes(_capability_claim_authentication_payload(document)),
+        hashlib.sha256,
+    ).hexdigest()
+
+
+def _validate_capability_claim_document(
+    document: Any,
+    *,
+    archive_id: str,
+) -> dict[str, Any]:
+    if type(document) is not dict or set(document) != _CAPABILITY_USE_CLAIM_KEYS:
+        raise _fail("credential_capability_claim_document_invalid")
+    result = dict(document)
+    if result.get("schema_version") != CAPABILITY_USE_CLAIM_SCHEMA_VERSION:
+        raise _fail("credential_capability_claim_document_invalid")
+    if (
+        not isinstance(result.get("archive_id"), str)
+        or _SAFE_ARCHIVE_ID_RE.fullmatch(result["archive_id"]) is None
+        or not hmac.compare_digest(result["archive_id"], archive_id)
+    ):
+        raise _fail("credential_capability_claim_archive_mismatch")
+    if (
+        not isinstance(result.get("capability_id"), str)
+        or _CAPABILITY_ID_RE.fullmatch(result["capability_id"]) is None
+    ):
+        raise _fail("credential_capability_claim_document_invalid")
+    if (
+        not isinstance(result.get("capability_sha256"), str)
+        or _SHA256_RE.fullmatch(result["capability_sha256"]) is None
+    ):
+        raise _fail("credential_capability_claim_document_invalid")
+    if (
+        not isinstance(result.get("request_sha256"), str)
+        or _SHA256_RE.fullmatch(result["request_sha256"]) is None
+        or not isinstance(result.get("plan_sha256"), str)
+        or _SHA256_RE.fullmatch(result["plan_sha256"]) is None
+    ):
+        raise _fail("credential_capability_claim_document_invalid")
+    if (
+        result.get("provider") != CREDENTIAL_CAPABILITY_PROVIDER
+        or result.get("operation") != CREDENTIAL_CAPABILITY_OPERATION
+        or result.get("consumer") != CREDENTIAL_CAPABILITY_CONSUMER
+        or type(result.get("max_uses")) is not int
+        or result["max_uses"] != 1
+        or type(result.get("max_provider_requests")) is not int
+        or result["max_provider_requests"] < 1
+    ):
+        raise _fail("credential_capability_claim_document_invalid")
+    status = result.get("status")
+    if status not in {"started", "succeeded", "failed"}:
+        raise _fail("credential_capability_claim_state_invalid")
+    started_at = _parse_capability_claim_timestamp(result.get("started_at"))
+    finished_at_value = result.get("finished_at")
+    failure_code = result.get("failure_code")
+    authorized = result.get("provider_requests_authorized")
+    if (
+        type(authorized) is not int
+        or authorized < 0
+        or authorized > result["max_provider_requests"]
+    ):
+        raise _fail("credential_capability_claim_document_invalid")
+    if status == "started":
+        if finished_at_value is not None or failure_code is not None or authorized != 0:
+            raise _fail("credential_capability_claim_state_invalid")
+    else:
+        finished_at = _parse_capability_claim_timestamp(finished_at_value)
+        if finished_at < started_at:
+            raise _fail("credential_capability_claim_state_invalid")
+        if status == "succeeded" and failure_code is not None:
+            raise _fail("credential_capability_claim_state_invalid")
+        if status == "failed" and (
+            not isinstance(failure_code, str)
+            or _PURPOSE_RE.fullmatch(failure_code) is None
+            or _SECRET_SHAPE_RE.search(failure_code) is not None
+        ):
+            raise _fail("credential_capability_claim_state_invalid")
+    authentication = result.get("authentication")
+    if type(authentication) is not dict or set(authentication) != _AUTHENTICATION_KEYS:
+        raise _fail("credential_capability_claim_authentication_invalid")
+    if (
+        authentication.get("schema_version")
+        != CAPABILITY_USE_CLAIM_AUTHENTICATION_SCHEMA
+        or authentication.get("algorithm") != "hmac-sha256"
+        or not isinstance(authentication.get("mac"), str)
+        or _HEX_SHA256_RE.fullmatch(authentication["mac"]) is None
+    ):
+        raise _fail("credential_capability_claim_authentication_invalid")
+    return result
+
+
+def _exclusive_create_capability_claim(
+    root: Path,
+    path: Path,
+    document: Mapping[str, Any],
+) -> None:
+    """Publish a complete claim once; every pre-existing leaf is a replay."""
+
+    _ensure_safe_parent_chain(root, path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    _ensure_safe_parent_chain(root, path)
+    body = _canonical_json_bytes(document) + b"\n"
+    if len(body) > MAX_CAPABILITY_USE_CLAIM_BYTES:
+        raise _fail("credential_capability_claim_document_invalid")
+    temporary = path.parent / f".{path.name}.{secrets.token_hex(8)}.tmp"
+    descriptor: int | None = None
+    try:
+        descriptor = os.open(
+            temporary,
+            os.O_WRONLY
+            | os.O_CREAT
+            | os.O_EXCL
+            | getattr(os, "O_BINARY", 0),
+            0o600,
+        )
+        written = 0
+        while written < len(body):
+            count = os.write(descriptor, body[written:])
+            if count <= 0:
+                raise OSError
+            written += count
+        os.fsync(descriptor)
+        os.close(descriptor)
+        descriptor = None
+        try:
+            os.link(temporary, path)
+        except FileExistsError:
+            raise _fail("credential_capability_claim_replayed") from None
+        _fsync_directory(path.parent)
+    except SecureCredentialRegistryError:
+        raise
+    except Exception:
+        raise _fail("credential_capability_claim_commit_failed") from None
+    finally:
+        if descriptor is not None:
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+        try:
+            temporary.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+def _read_authenticated_capability_claim(
+    root: Path,
+    path: Path,
+    archive_id: str,
+    key: bytes | bytearray,
+    capability: CredentialCapability,
+) -> dict[str, Any]:
+    _ensure_safe_parent_chain(root, path)
+    raw = _read_exact_bytes(
+        path,
+        maximum=MAX_CAPABILITY_USE_CLAIM_BYTES,
+        missing_code="credential_capability_claim_missing",
+    )
+    try:
+        parsed = json.loads(raw.decode("utf-8"))
+    except (UnicodeError, json.JSONDecodeError):
+        raise _fail("credential_capability_claim_document_invalid") from None
+    document = _validate_capability_claim_document(parsed, archive_id=archive_id)
+    canonical = _canonical_json_bytes(document) + b"\n"
+    if not hmac.compare_digest(raw, canonical):
+        raise _fail("credential_capability_claim_document_invalid")
+    authentication = document["authentication"]
+    if not hmac.compare_digest(
+        authentication["mac"],
+        _capability_claim_mac(document, key),
+    ):
+        raise _fail("credential_capability_claim_authentication_invalid")
+    expected_strings = {
+        "capability_id": capability.capability_id,
+        "capability_sha256": capability.digest_sha256,
+        "request_sha256": capability.request_sha256,
+        "plan_sha256": capability.plan_sha256,
+        "provider": capability.provider,
+        "operation": capability.operation,
+        "consumer": capability.consumer,
+    }
+    if any(
+        not hmac.compare_digest(document[name], expected)
+        for name, expected in expected_strings.items()
+    ) or (
+        document["max_uses"] != capability.max_uses
+        or document["max_provider_requests"] != capability.max_provider_requests
+    ):
+        raise _fail("credential_capability_claim_binding_mismatch")
+    return document
+
+
+def _capability_scope_from_binding(scope_binding: ScopeBinding) -> CredentialCapabilityScope:
+    if not isinstance(scope_binding, ScopeBinding):
+        raise _fail("credential_registry_scope_binding_invalid")
+    try:
+        return CredentialCapabilityScope(
+            credential_id=scope_binding.credential_id,
+            workspace_fingerprint=scope_binding.workspace_fingerprint,
+            scope_receipt_sha256=scope_binding.scope_receipt_sha256,
+            revision=scope_binding.revision,
+        )
+    except CredentialCapabilityError as exc:
+        raise _fail(exc.code) from None
+
+
+_CLAIMED_CAPABILITY_FACTORY_TOKEN = object()
+
+
+class ClaimedCredentialCapabilityUse:
+    """One durable, authenticated claim plus its in-memory request budget."""
+
+    __slots__ = (
+        "_archive_root",
+        "_archive_id",
+        "_claim_path",
+        "_authentication_key",
+        "_capability",
+        "_lease",
+        "_started_at",
+        "_clock",
+        "_state_lock",
+        "_status",
+    )
+
+    def __init__(
+        self,
+        *,
+        factory_token: object,
+        archive_root: Path,
+        archive_id: str,
+        claim_path: Path,
+        authentication_key: bytes | bytearray,
+        capability: CredentialCapability,
+        lease: CredentialCapabilityLease,
+        started_at: str,
+        clock: Callable[[], datetime],
+    ) -> None:
+        if factory_token is not _CLAIMED_CAPABILITY_FACTORY_TOKEN:
+            raise _fail("credential_capability_claim_invalid")
+        self._archive_root = archive_root
+        self._archive_id = archive_id
+        self._claim_path = claim_path
+        self._authentication_key = authentication_key
+        self._capability = capability
+        self._lease = lease
+        self._started_at = started_at
+        self._clock = clock
+        self._state_lock = threading.RLock()
+        self._status = "started"
+
+    def __repr__(self) -> str:
+        return "<ClaimedCredentialCapabilityUse claim=authenticated bindings=redacted>"
+
+    @property
+    def capability(self) -> CredentialCapability:
+        return self._capability
+
+    @property
+    def capability_id(self) -> str:
+        return self._capability.capability_id
+
+    @property
+    def capability_sha256(self) -> str:
+        return self._capability.digest_sha256
+
+    @property
+    def claim_created(self) -> bool:
+        return True
+
+    @property
+    def max_uses(self) -> int:
+        return self._capability.max_uses
+
+    @property
+    def provider_request_authorizations(self) -> int:
+        return self._lease.provider_requests_authorized
+
+    @property
+    def provider_requests_remaining(self) -> int:
+        return self._lease.provider_requests_remaining
+
+    @property
+    def status(self) -> str:
+        with self._state_lock:
+            return self._status
+
+    def public_summary(self) -> dict[str, Any]:
+        with self._state_lock:
+            return {
+                "schema_version": CAPABILITY_USE_SUMMARY_SCHEMA_VERSION,
+                "capability_id": self.capability_id,
+                "capability_sha256": self.capability_sha256,
+                "claim_created": True,
+                "max_uses": self.max_uses,
+                "provider_request_authorizations": (
+                    self.provider_request_authorizations
+                ),
+                "status": self._status,
+            }
+
+    def _assert_started_claim(self) -> None:
+        if self._status != "started":
+            raise _fail("credential_capability_claim_state_invalid")
+        with _archive_lock(self._archive_root, create_if_missing=False):
+            document = _read_authenticated_capability_claim(
+                self._archive_root,
+                self._claim_path,
+                self._archive_id,
+                self._authentication_key,
+                self._capability,
+            )
+        if document["status"] != "started" or not hmac.compare_digest(
+            document["started_at"], self._started_at
+        ):
+            raise _fail("credential_capability_claim_state_invalid")
+
+    def assert_ready_for_scope(self, scope: ScopeBinding) -> None:
+        """Check the durable claim and exact scope without spending a request."""
+
+        with self._state_lock:
+            self._assert_started_claim()
+            capability_scope = _capability_scope_from_binding(scope)
+            if capability_scope not in self._capability.scopes:
+                raise _fail("credential_capability_scope_not_allowed")
+
+    def authorize_request(self, endpoint_class: str, *, scope: ScopeBinding) -> int:
+        """Reauthenticate the claim, then atomically spend one request."""
+
+        with self._state_lock:
+            self._assert_started_claim()
+            capability_scope = _capability_scope_from_binding(scope)
+            try:
+                return self._lease.authorize_request(
+                    endpoint_class,
+                    scope=capability_scope,
+                )
+            except CredentialCapabilityError as exc:
+                raise _fail(exc.code) from None
+
+    def _finalize(self, *, status: str, failure_code: str | None) -> None:
+        with self._state_lock:
+            if self._status != "started":
+                raise _fail("credential_capability_claim_state_invalid")
+            finished_at = _capability_claim_timestamp(
+                _capability_claim_now(self._clock)
+            )
+            with _archive_lock(self._archive_root, create_if_missing=False):
+                current = _read_authenticated_capability_claim(
+                    self._archive_root,
+                    self._claim_path,
+                    self._archive_id,
+                    self._authentication_key,
+                    self._capability,
+                )
+                if current["status"] != "started" or not hmac.compare_digest(
+                    current["started_at"], self._started_at
+                ):
+                    raise _fail("credential_capability_claim_state_invalid")
+                finalized = dict(current)
+                finalized.update(
+                    {
+                        "status": status,
+                        "finished_at": finished_at,
+                        "failure_code": failure_code,
+                        "provider_requests_authorized": (
+                            self.provider_request_authorizations
+                        ),
+                    }
+                )
+                finalized["authentication"] = {
+                    "schema_version": CAPABILITY_USE_CLAIM_AUTHENTICATION_SCHEMA,
+                    "algorithm": "hmac-sha256",
+                    "mac": _capability_claim_mac(finalized, self._authentication_key),
+                }
+                _validate_capability_claim_document(
+                    finalized,
+                    archive_id=self._archive_id,
+                )
+                _atomic_replace_json(self._claim_path, finalized)
+            self._status = status
+
+    def finalize_succeeded(self) -> None:
+        self._finalize(status="succeeded", failure_code=None)
+
+    def finalize_failed(self, failure_code: str) -> None:
+        if (
+            not isinstance(failure_code, str)
+            or _PURPOSE_RE.fullmatch(failure_code) is None
+            or _SECRET_SHAPE_RE.search(failure_code) is not None
+        ):
+            raise _fail("credential_capability_failure_code_invalid")
+        self._finalize(status="failed", failure_code=failure_code)
+
+
+def claim_credential_capability_use(
+    archive_root: Path | str,
+    capability: CredentialCapability,
+    receipt_authentication_key: bytes | bytearray | memoryview,
+    *,
+    clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
+) -> ClaimedCredentialCapabilityUse:
+    """Exclusively claim one capability before any native secret read."""
+
+    if type(capability) is not CredentialCapability:
+        raise _fail("credential_capability_invalid")
+    root, archive_id = _validate_archive(archive_root)
+    key = _validate_authentication_key(receipt_authentication_key)
+    claim_path = _archive_path(
+        root,
+        f"{CAPABILITY_CLAIMS_RELATIVE}/{capability.capability_id}.json",
+    )
+    with _archive_lock(root):
+        try:
+            os.lstat(claim_path)
+        except FileNotFoundError:
+            pass
+        except OSError:
+            raise _fail("credential_capability_claim_commit_failed") from None
+        else:
+            # Never inspect or accept an existing leaf. A partial, malformed,
+            # tampered, finalized, or symlink-shaped claim permanently spends
+            # the one-use identifier just like a valid started claim.
+            raise _fail("credential_capability_claim_replayed")
+        claimed_at = _capability_claim_now(clock)
+        try:
+            lease = capability.new_lease(claimed_at=claimed_at)
+        except CredentialCapabilityError as exc:
+            raise _fail(exc.code) from None
+        started_at = _capability_claim_timestamp(claimed_at)
+        document: dict[str, Any] = {
+            "schema_version": CAPABILITY_USE_CLAIM_SCHEMA_VERSION,
+            "archive_id": archive_id,
+            "capability_id": capability.capability_id,
+            "capability_sha256": capability.digest_sha256,
+            "request_sha256": capability.request_sha256,
+            "plan_sha256": capability.plan_sha256,
+            "provider": capability.provider,
+            "operation": capability.operation,
+            "consumer": capability.consumer,
+            "max_uses": capability.max_uses,
+            "max_provider_requests": capability.max_provider_requests,
+            "status": "started",
+            "started_at": started_at,
+            "finished_at": None,
+            "failure_code": None,
+            "provider_requests_authorized": 0,
+        }
+        document["authentication"] = {
+            "schema_version": CAPABILITY_USE_CLAIM_AUTHENTICATION_SCHEMA,
+            "algorithm": "hmac-sha256",
+            "mac": _capability_claim_mac(document, key),
+        }
+        _validate_capability_claim_document(document, archive_id=archive_id)
+        _exclusive_create_capability_claim(root, claim_path, document)
+    return ClaimedCredentialCapabilityUse(
+        factory_token=_CLAIMED_CAPABILITY_FACTORY_TOKEN,
+        archive_root=root,
+        archive_id=archive_id,
+        claim_path=claim_path,
+        authentication_key=key,
+        capability=capability,
+        lease=lease,
+        started_at=started_at,
+        clock=clock,
+    )
+
+
 @dataclass(repr=False)
 class ReceiptBackedNotionCredentialBroker:
     """Resolve one approved Notion scope through one exact native read."""
@@ -2264,6 +2818,9 @@ class ReceiptBackedNotionCredentialBroker:
     native: ExactWindowsCredentialNative = field(repr=False)
     receipt_authentication_key: bytes | bytearray | memoryview = field(repr=False)
     secret_fingerprint_key: bytes | bytearray | memoryview | None = field(
+        default=None, repr=False
+    )
+    claimed_use: ClaimedCredentialCapabilityUse | None = field(
         default=None, repr=False
     )
 
@@ -2317,6 +2874,17 @@ class ReceiptBackedNotionCredentialBroker:
             document = record.document
             if document["provider"] != "notion":
                 raise _fail("credential_registry_provider_not_supported")
+            if document["purpose"] not in {
+                "source_recovery",
+                "notion_page_recovery",
+            }:
+                raise _fail("credential_registry_purpose_not_authorized")
+            if not set(CREDENTIAL_CAPABILITY_REQUIRED_REGISTERED_CAPABILITIES).issubset(
+                document["verified_capabilities"]
+            ):
+                raise _fail(
+                    "credential_registry_registered_capabilities_insufficient"
+                )
             if not hmac.compare_digest(record.authority_sha256, scope_binding.scope_receipt_sha256):
                 raise _fail("credential_registry_scope_receipt_mismatch")
             if not hmac.compare_digest(
@@ -2372,7 +2940,13 @@ class ReceiptBackedNotionCredentialBroker:
         self._assert_current_authority(scope_binding)
 
     def resolve(self, scope_binding: ScopeBinding) -> NotionBearerSecret:
+        claimed_use = self.claimed_use
+        if claimed_use is None:
+            raise _fail("credential_capability_required")
+        if type(claimed_use) is not ClaimedCredentialCapabilityUse:
+            raise _fail("credential_capability_claim_invalid")
         target, expected_fingerprint = self._assert_current_authority(scope_binding)
+        claimed_use.assert_ready_for_scope(scope_binding)
         if self.secret_fingerprint_key is None:
             raise _fail("credential_registry_secret_fingerprint_key_invalid")
         fingerprint_key = _validate_authentication_key(
@@ -2415,7 +2989,19 @@ class ReceiptBackedNotionCredentialBroker:
                 )
             except Exception:
                 wrapped.close()
-                raise _fail("credential_registry_authority_revalidator_invalid") from None
+                raise _fail(
+                    "credential_registry_authority_revalidator_invalid"
+                ) from None
+            try:
+                wrapped._bind_capability_authorizer(
+                    lambda endpoint_class: claimed_use.authorize_request(
+                        endpoint_class,
+                        scope=scope_binding,
+                    )
+                )
+            except Exception:
+                wrapped.close()
+                raise _fail("credential_capability_authorizer_invalid") from None
             return wrapped
         finally:
             if secret_buffer is not None:
@@ -2426,11 +3012,17 @@ class ReceiptBackedNotionCredentialBroker:
 __all__ = [
     "AuthenticatedArchiveReceiptCommitter",
     "AuthenticatedCredentialReuseEvidence",
+    "CAPABILITY_CLAIMS_RELATIVE",
+    "CAPABILITY_USE_CLAIM_AUTHENTICATION_SCHEMA",
+    "CAPABILITY_USE_CLAIM_SCHEMA_VERSION",
+    "CAPABILITY_USE_SUMMARY_SCHEMA_VERSION",
+    "ClaimedCredentialCapabilityUse",
     "ExactWindowsCredentialNative",
     "ReceiptBackedNotionCredentialBroker",
     "SecureCredentialRegistryError",
     "StableArchiveFingerprintKeyProvider",
     "create_archive_atomic_json_receipt_committer",
+    "claim_credential_capability_use",
     "evolve_legacy_authenticated_workspace_scope",
     "list_secure_credentials",
     "lookup_secure_credential",

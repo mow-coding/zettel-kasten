@@ -115,7 +115,8 @@ CURRENT_DATABASE_CANONICAL_SHA256 = (
     "d9a42f08ee12a6d42e40214cfb12441e4077bf50c38c25b2692ec1344328294a"
 )
 RESOURCE_ADDITIONS = {
-    "release-notes/v0.3.319.md",
+        "release-notes/v0.3.320.md",
+        "schemas/credential-capability-v0.1.schema.json",
     "schemas/artifact-lifecycle-inventory.schema.json",
     "schemas/authoring-conventions.schema.json",
     "schemas/draft-discard-receipt.schema.json",
@@ -152,9 +153,9 @@ RESOURCE_ADDITIONS = {
     "schemas/zettel-objet-link-revert-receipt.schema.json",
 }
 RESOURCE_REMOVALS = {"release-notes/v0.3.297.md"}
-CURRENT_RESOURCE_COUNT = 145
+CURRENT_RESOURCE_COUNT = 146
 CURRENT_RESOURCE_CANONICAL_SHA256 = (
-    "a66f3123b9a578b996f4ac9a691abe1866545a56a1ada2ab2df089b4c372b7ba"
+    "8b8ec67c60dada33eaff17ae90ba9e3cd0c0243d939af740acad640545aa2fad"
 )
 
 
@@ -482,10 +483,10 @@ class V03299PredecessorSurfaceTests(unittest.TestCase):
             actual,
             expected,
             "Current package-resource paths must be the full v0.3.297 set plus "
-            "the exact cumulative v0.3.298 through v0.3.319 delta. "
+            "the exact cumulative v0.3.298 through v0.3.320 delta. "
             f"missing={compact(missing)}; extra={compact(extra)}",
         )
-        self.assertEqual(manifest["version"], "0.3.319")
+        self.assertEqual(manifest["version"], "0.3.320")
         self.assertEqual(len(actual), CURRENT_RESOURCE_COUNT)
         self.assertEqual(
             canonical_sha256(actual),
@@ -504,14 +505,14 @@ class V03299PredecessorSurfaceTests(unittest.TestCase):
         self.assertIn("does not undo", predecessor_flat)
         self.assertNotIn("C:\\Users\\", predecessor_text)
 
-    def test_v03319_release_note_is_public_and_synchronized(self) -> None:
-        current_source_release = KIT_ROOT / "docs" / "releases" / "v0.3.319.md"
+    def test_v03320_release_note_is_public_and_synchronized(self) -> None:
+        current_source_release = KIT_ROOT / "docs" / "releases" / "v0.3.320.md"
         current_packaged_release = (
             SRC_ROOT
             / "wom_kit"
             / "_resources"
             / "release-notes"
-            / "v0.3.319.md"
+            / "v0.3.320.md"
         )
         self.assertEqual(
             current_source_release.read_bytes(),
@@ -520,19 +521,18 @@ class V03299PredecessorSurfaceTests(unittest.TestCase):
         current_text = current_source_release.read_text(encoding="utf-8")
         current_flat = " ".join(current_text.split())
         for token in (
-            "Native Credential Popup",
-            "CredentialPopupInputIntent.live_registration",
-            "CredentialPopupInputIntent.synthetic_acceptance",
-            "실제 자격 증명 등록",
-            "합성 입력 테스트 · 실제 키 입력 금지",
-            "wom-kit/windows-credential-popup-acceptance/v0.1",
-            "codex_desktop_native_popup",
-            "credential_input_received",
-            "complete_line_received",
-            "temporary_store_write_attempted",
-            "provider_request_attempted",
-            "provider_auth_rejected",
-            "not_performed",
+            "One-Use Credential Capability Broker",
+            "wom-kit/credential-capability/v0.1",
+            "notion_page_recovery_read",
+            "wom:workflow:notion-page-recovery",
+            "wom-kit/credential-capability-reference/v0.1",
+            "wom-credential-capability-use-summary/v0.1",
+            "claim deadline",
+            "exactly one transport attempt",
+            "HMAC-authenticated claim",
+            "Verified replay stays offline",
+            "Aside",
+            "no new CLI or MCP command",
         ):
             with self.subTest(token=token):
                 self.assertIn(token, current_flat)

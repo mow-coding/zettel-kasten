@@ -24,6 +24,57 @@ Before upgrading a real archive:
 
 The archive should never silently rewrite memory.
 
+## v0.3.320 One-Use Credential Capability Broker
+
+Install only after the exact v0.3.320 GitHub Release lists the verified wheel.
+Repository files do not update an isolated older WOM-kit installation. Start a
+new process and confirm `archive --version` before creating a new recovery plan.
+
+### What changed
+
+The existing `notion-page-recovery` approval now creates one fresh, expiring,
+secret-free capability for that exact spawned worker invocation. It binds the
+request and plan digests, reviewer, selected authenticated receipt/lifecycle
+scopes, fixed read-only Notion endpoints, required registered capabilities,
+one-use ceiling, and a bounded provider-attempt budget.
+
+Inside the isolated worker, WOM validates those bindings and exclusively writes
+an archive-key-HMAC claim before the first native credential read. Any existing
+leaf permanently spends the capability id, including malformed or unfinished
+state. Failure or crash requires a fresh approved invocation; the old id cannot
+be replayed.
+
+Before each provider attempt, WOM reauthenticates the claim and exact current
+credential authority, then spends one allowed endpoint/scope budget unit. The
+HMAC claim stores id/digest, request/plan, budgets, status, and count; the
+durable recovery receipt stores only reference schema/id/digest; the parent
+returns a separately validated secret-free use summary. A claim-finalization
+failure cannot be reported as success.
+
+### What to do
+
+Discard recovery plan digests made by an older runtime. Create a fresh bounded
+preview and approve only its unchanged digest:
+
+```powershell
+archive notion-page-recovery-plan <archive-root> --request <archive-relative-reviewed-recovery-request.json> --max-items 5 --offset 0 --dry-run --format json
+archive notion-page-recovery <archive-root> --request <archive-relative-reviewed-recovery-request.json> --max-items 5 --offset 0 --expected-plan-sha256 <fresh-plan-sha256> --reviewed-by <actor> --approve --format json
+```
+
+Do not retry automatically after an expired, replayed, changed, unknown, or
+finalization-failed capability result. Review the content-free result and make a
+new plan/approval if a retry is appropriate. A fully hash-verified local replay
+creates no claim, reads no credential, and calls no provider.
+
+An existing registered credential does not need to be entered again when its
+authenticated receipt, lifecycle, native fingerprint, provider/workspace, and
+reviewed scope remain valid. v0.3.320 adds no popup or password manager. Never
+put a PAT in chat, argv, environment, ordinary stdin, or a file.
+
+See the [v0.3.320 release note](wom-kit/docs/releases/v0.3.320.md),
+[Credential Capability Contract](wom-kit/docs/credential-capability-contract.md),
+and [decision log](wom-kit/docs/archive-infra-decision-log-2026-08-15-v03320-credential-capability-broker.md).
+
 ## v0.3.319 Native Credential Popup And Causal Evidence
 
 Install only after the exact v0.3.319 GitHub Release lists the verified wheel.

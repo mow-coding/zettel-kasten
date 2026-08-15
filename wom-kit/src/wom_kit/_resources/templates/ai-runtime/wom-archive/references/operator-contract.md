@@ -1152,6 +1152,44 @@ sharing, and connection review before a no-prompt retry. Normal approved work
 reuses the exact Windows Credential Manager entry; never infer rotation from an
 API failure or retry it automatically.
 
+## Approved Notion Recovery Capability
+
+An approved `notion-page-recovery` invocation mints one fresh secret-free
+`wom-kit/credential-capability/v0.1` document in the parent. It is bound to the
+exact request and plan digests, reviewer, selected authenticated
+receipt/lifecycle scopes, provider `notion`, operation
+`notion_page_recovery_read`, consumer
+`wom:workflow:notion-page-recovery`, `GET`, endpoint classes
+`retrieve_page` and `retrieve_page_as_markdown`, all three required registered
+capabilities, expiry, one use, and an exact logical-provider-attempt budget.
+
+The isolated worker recomputes those bindings before credential access. After
+acquiring the exact archive authentication key, it exclusively creates an
+HMAC-authenticated claim under
+`profiles/local/credential-capabilities/claims/` before the first native secret
+read. Any existing leaf for that capability id permanently blocks replay,
+including malformed or unfinished state. Failure and interruption never make
+the id reusable; a human-approved retry receives a fresh id.
+
+Before each provider attempt the worker reauthenticates the claim, revalidates
+receipt/lifecycle authority, and spends one endpoint/scope budget unit. The HTTP
+adapter performs exactly one transport attempt per authorized call. The HMAC
+claim records `capability_id`, capability digest, `request_sha256`,
+`plan_sha256`, budgets, final status, and authorized-request count. The durable
+recovery receipt records only a
+`wom-kit/credential-capability-reference/v0.1` object with schema, capability id,
+and capability digest. The parent result carries a separately validated
+secret-free `wom-credential-capability-use-summary/v0.1`. None exposes the
+authentication MAC, backend target, credential id, workspace fingerprint, page
+id, bearer value, or provider response.
+
+A fully content-hash-verified local replay creates no capability claim, reads no
+credential, and calls no provider. Missing, changed, expired, replayed, or
+over-budget authority blocks. `credential_capability_audit_finalize_failed`
+cannot be treated as successful completion. This capability is internal to the
+existing recovery command; there is no new CLI/MCP surface or generic password
+manager broker.
+
 For an internal Notion integration, the provider-returned `bot.workspace_id`
 is the workspace basis. A person PAT has no returned workspace ID, so WOM binds
 scope to the archive-keyed fingerprint of that exact saved PAT and rechecks the

@@ -6,28 +6,23 @@ The filesystem folder is `wom-kit/`, the Python import package is `wom_kit`, and
 
 See `wom-kit/docs/concepts/naming-and-terminology.md` for the naming baseline.
 
-v0.3.319 replaces the withdrawn terminal-input prototypes with one separate
-native Windows credential popup in an isolated spawned child. The opaque cover
-over the standard password EDIT hides value, mask, caret, count, and length;
-WOM never reads the clipboard. Confirm stays disabled while empty.
+v0.3.320 keeps the v0.3.319 native registration popup unchanged and adds one
+internal security boundary to the existing approved `notion-page-recovery`
+command. The parent issues a fresh expiring one-invocation capability bound to
+the exact request, plan, reviewer, authenticated selected scopes, fixed
+read-only endpoints, registered capabilities, and provider-attempt budget.
 
-Production hard-codes `CredentialPopupInputIntent.live_registration` and
-shows the blue `실제 자격 증명 등록` banner. The source-tree acceptance helper
-hard-codes `synthetic_acceptance`, shows the red
-`합성 입력 테스트 · 실제 키 입력 금지` banner, accepts only the public fixed
-challenge, and performs no PAT request, registration, store write, or provider
-request. Missing or string intent fails before native show or live work.
-
-The child detaches and sends `popup_child_detached` before
-popup/native/store/provider/archive work. The parent restores its start-signal
-lease before accepting acknowledgement → final mapping → EOF and joins every
-normally started child. The v0.3 public result still projects only
-`credential_input_received`, `complete_line_received`,
-`temporary_store_write_attempted`, and `provider_request_attempted`. The human
-synthetic row remains failed and is not repeated as a recovery prerequisite.
-Actual registration is `not_performed`; it requires a verified published
-runtime and explicit confirmation of the blue live-registration banner. See
-`wom-kit/docs/releases/v0.3.319.md` and the Letter 132 guide.
+The isolated worker creates an archive-key-HMAC exclusive claim before the
+first native credential read. Any existing capability-id leaf blocks replay;
+each provider attempt reauthenticates the claim and current credential
+authority. The HMAC claim stores id/digest, request/plan, budgets, status, and
+count; the durable recovery receipt stores only reference schema/id/digest;
+the parent returns a separate validated use summary. Verified local replay
+creates no claim, reads no secret, and calls no provider. There is no new
+CLI/MCP command, popup, password-manager adapter, or AI-visible credential
+value. See
+`wom-kit/docs/releases/v0.3.320.md` and
+`wom-kit/docs/credential-capability-contract.md`.
 
 v0.3.316 closes the supported Python-cache collision gap left after v0.3.315
 detection. The alias-free CLI-only
@@ -62,7 +57,7 @@ Release, wheel, fresh installation, real-archive use, or human acceptance.
 
 v0.3.314 adds one alias-free `operation-control` surface for output-supervised
 `project-version-update`, `index`, and `index-health` runs. The current
-  v0.3.319 also supports `staged-cleanup-check`. A fresh `--output`
+  v0.3.320 also supports `staged-cleanup-check`. A fresh `--output`
 causes an early opaque operation reference; a later process can request
 content-free `status`, a 1-60 second `wait`, or read-only `recovery-plan` with
 the exact starting root. Completed state requires the saved output binding,
@@ -107,7 +102,7 @@ evidence of real-archive repair, external delivery, or human acceptance.
 v0.3.311 adds release-facing `credential-adopt`, `credential-secure-list`,
 `credential-lifecycle`, `notion-page-recovery-plan`, and
 `notion-page-recovery` commands. Credential intake accepts a PAT only through
-the isolated child UI; the current v0.3.319 implementation is the intent-labeled
+the isolated child UI; the current v0.3.320 implementation keeps the intent-labeled
 native registration popup described above. Listing separates
 unauthenticated metadata from authenticated receipt/lifecycle evidence, and
 lifecycle approval never deletes or revokes another credential. The recovery
