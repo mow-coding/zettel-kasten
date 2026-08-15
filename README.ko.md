@@ -32,10 +32,10 @@ wom-kit/docs/releases/에만 쌓고, baseline 사다리와 tag 목록을 여기�
 현재 공개 기준:
 
 ```text
-v0.3.319
+v0.3.320
 ```
 
-이전 공개 기준: v0.3.318.
+이전 공개 기준: v0.3.319.
 
 전체 릴리스 이력은 [CHANGELOG.md](CHANGELOG.md)와 [wom-kit/docs/releases/](wom-kit/docs/releases/)를 보세요.
 
@@ -54,7 +54,7 @@ Roadmap 요약: `v0.1.x`는 아이디어/프로토콜 언어 라인, `v0.2.x`는
 파일이 실제 공개되었다는 증거가 되지는 않습니다.
 
 ```powershell
-uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.319/wom_kit-0.3.319-py3-none-any.whl"
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.320/wom_kit-0.3.320-py3-none-any.whl"
 archive --version
 ```
 
@@ -83,7 +83,7 @@ archive runtime-skill-install --dry-run --format json
 
 - WOM / zet / ZET 설계 기준, specs, schemas, fake archive, release notes, work logs,
 - Letter 117까지의 통합 실사용 피드백 기능. archive-root 경로, source-intake/Objet capture 배치, 구조화된 zet-objet 연결, 빠짐없는 1-based occurrence 검토 권한, 정확한 synced/transclusion placeholder를 위한 검토된 정적 zettel/objet 연결, 엄격한 빈 database 쌍을 위한 검토된 zettel 탐색 연결, 보호된 literal 강화, graph edge를 추론하지 않는 탐색 전용 zettel reference, 정확한 generated-TOC placeholder 제거, paired file과 검토된 page/audio 연결을 포함한 ready-only 손실 없는 마크업 정규화, callout·unknown column·unsupported 구조를 그대로 차단하는 안전 경계를 제공합니다. transcluded child를 재구성하거나 live provider 동작을 보존한다고 주장하지 않습니다. [Letter 117 완료 가이드](wom-kit/docs/letter117-completion.md)를 보세요.
-- 격리된 spawned child의 별도 native Windows popup으로 자격증명을 수령하고, 인증된 수명주기와 Letter 118의 577건+43건 전체 검토 목록을 위한 승인형 Notion 복구를 제공합니다. 미리보기는 비밀값을 읽거나 provider를 호출하거나 파일을 쓰지 않고, 승인된 제한 범위만 정확한 Markdown objet와 재개 가능한 증거로 보존합니다. PAT를 명령 인자·일반 stdin·환경 변수·합성 검증 도구로 받거나 워크스페이스 전체를 검색하거나 Notion에 쓰거나 canonical zet을 자동 수정하지 않습니다. [Letter 118·119 가이드](wom-kit/docs/letter118-119-credential-continuity-and-notion-page-recovery.md)를 보세요.
+- 격리된 spawned child의 별도 native Windows popup으로 자격증명을 수령하고, 인증된 수명주기와 Letter 118의 577건+43건 전체 검토 목록을 위한 승인형 Notion 복구를 제공합니다. v0.3.320은 비밀값을 읽기 전 새 만료형 1회 invocation capability와 배타적 인증 claim을 만들고, 각 요청의 endpoint·scope·budget을 검사하며 세 근거를 구분합니다. HMAC claim에는 전체 사실, recovery receipt에는 reference schema/id/digest만, parent 결과에는 별도 검증한 use summary가 들어갑니다. 미리보기와 검증된 local replay는 비밀값을 읽거나 provider를 호출하지 않습니다. PAT를 명령 인자·일반 stdin·환경 변수·합성 검증 도구로 받거나 워크스페이스 전체를 검색하거나 Notion에 쓰거나 canonical zet을 자동 수정하지 않습니다. [Letter 118·119 가이드](wom-kit/docs/letter118-119-credential-continuity-and-notion-page-recovery.md)와 [Credential Capability Contract](wom-kit/docs/credential-capability-contract.md)를 보세요.
 - 보호된 search, 구조화된 `view-zets`, mint 계획이 하나의 fail-closed current-index 권한을 공유합니다. `mint-zet --progress`는 stdout을 최종 결과 하나에만 쓰면서 내용 없는 시작·heartbeat 근거를 stderr로 보내고, 별도의 operator-feedback 본문 companion은 외부 제출이나 실제 보관함 복구를 주장하지 않은 채 정확한 6개 섹션 비공개 요청, digest-bound 사람 승인, lifecycle 검사를 제공합니다. [Letter 120·123 가이드](wom-kit/docs/letter120-123-index-lifecycle-and-feedback-body.md)를 보세요.
 - 모든 새 AI-assisted·AI-generated 초안에 비공개 source-fidelity gate를 적용합니다. manifest에 등록된 content-addressed 원문, `verbatim`·`faithful_summary`·`sanitized_derivative` 중 하나, 미리보기 해시, 사람의 명시적 승인 replay가 있어야 파일을 씁니다. `private_self` verbatim은 개인 원문을 보존하지만 자격증명 비밀값은 차단하며, AI provenance를 human 경로로 낮춰 우회할 수 없습니다. 민팅은 비공개 receipt를 다시 검증하고 audience 표시는 공유나 내보내기 권한이 아닙니다. [원문 충실도와 비공개 verbatim 보존](wom-kit/docs/source-fidelity-and-private-verbatim.md)을 보세요.
 - v0.3.316 프로젝트 업데이트 캐시 복구를 제공합니다. 여러 Python 캐시 충돌 때문에 업데이트가 멈추면 `project-version-update-collision --action inspect-all`이 하나의 정확한 계획으로 전체 opaque 충돌 집합을 분류합니다. 전부 지원되는 캐시인 정확한 집합만 별도로 검토한 `project-bytecode-repair`로 이어지며, 복구 뒤에는 새 업데이트 미리보기와 별도 업데이트 승인이 필요합니다. 별도 UI를 추가하지 않고 비공개 경로를 추측하거나 사람이 작성한 원본을 지우거나 target을 fetch하거나 updater를 자동 재시도하지 않습니다. [Project Version Update](wom-kit/docs/project-version-update.md), [업그레이드 가이드](UPGRADE.ko.md), [v0.3.316 릴리스 노트](wom-kit/docs/releases/v0.3.316.md)를 보세요.
@@ -411,7 +411,7 @@ WOM, `zettel-kasten`, `zet`, `ZET`는 버전이 있는 protocol family로 관리
 Release tag는 compatibility checkpoint입니다.
 
 ```text
-v0.3.319 (현재 checkpoint)
+v0.3.320 (현재 checkpoint)
 ```
 
 `v0.2.5` 이후의 공개 릴리스에는 compatibility checkpoint tag가 붙습니다. 전체

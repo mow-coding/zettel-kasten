@@ -10,43 +10,33 @@ It is not a website, SaaS app, dashboard, or visual note-taking product. The int
 
 ## Install The Command-Line Tool
 
-The exact v0.3.319 GitHub Release, when present, uses the self-contained wheel
+The exact v0.3.320 GitHub Release, when present, uses the self-contained wheel
 below. Confirm that the release exists and lists the wheel before installing
 it. The versioned URL alone is not proof that the asset is available.
 
 ```powershell
-uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.319/wom_kit-0.3.319-py3-none-any.whl"
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.320/wom_kit-0.3.320-py3-none-any.whl"
 archive --version
 ```
 
-v0.3.319 replaces the withdrawn terminal-input prototypes with one separate
-native Windows credential popup in an isolated spawned child. A standard
-password EDIT retains normal editing and paste behavior, while an opaque
-sibling covers the complete field so value, mask, caret, count, and length are
-not rendered. WOM never reads the clipboard.
+v0.3.320 keeps the v0.3.319 intent-labeled native Windows registration popup
+unchanged and hardens later approved Notion recovery. After exact plan approval,
+the parent mints a fresh expiring one-invocation credential capability. The
+isolated worker validates it and durably creates an archive-key-HMAC claim
+before the first native secret read; any existing capability-id leaf blocks
+replay.
 
-The closed `CredentialPopupInputIntent` distinguishes production
-`live_registration` (blue `실제 자격 증명 등록` banner) from
-`synthetic_acceptance` (red `합성 입력 테스트 · 실제 키 입력 금지` banner and
-an exact warning never to enter a real credential). Missing or string intent
-fails before native show, store, or provider work.
-
-The child detaches before popup/native/store/provider/archive work and sends
-`popup_child_detached`. The parent restores its narrow start-signal lease,
-then accepts only acknowledgement → final mapping → EOF and joins every
-normally started child. Raw input never crosses IPC. PMv2 DPI, Windows message
-font, wrapped layout, IME absence, fixed overlay, mutable-buffer wiping, and
-exact cleanup are automated source boundaries.
-
-The historically named manual helper now emits
-`wom-kit/windows-credential-popup-acceptance/v0.1`, uses only the public
-`WOM-INPUT-ACCEPTANCE-0319` challenge, and performs no PAT request,
-registration, store write, or provider request. Its human mismatch remains
-failed and is not repeated as a recovery prerequisite. Actual registration is
-`not_performed` and requires a verified published runtime plus confirmation of
-the blue live-registration banner. See
-[`docs/releases/v0.3.319.md`](docs/releases/v0.3.319.md) and the
-[`Letter 132 guide`](docs/letter132-credential-console-keyboard-readiness-and-causal-evidence.md).
+Every provider attempt reauthenticates that claim and the exact
+receipt/lifecycle authority, then enforces fixed read-only endpoint, selected
+scope, registered-capability, and request-budget bounds. The HMAC claim stores
+id/digest, request/plan, budgets, status, and count; the recovery receipt stores
+only reference schema/id/digest; the parent returns a separate validated use
+summary. A fully verified local replay creates no claim, reads no credential,
+and calls no provider. This adds no command, popup, password manager, browser
+autofill, or AI-visible secret. See the
+[`v0.3.320 release note`](docs/releases/v0.3.320.md),
+[`Credential Capability Contract`](docs/credential-capability-contract.md),
+and historical [`Letter 132 guide`](docs/letter132-credential-console-keyboard-readiness-and-causal-evidence.md).
 
 v0.3.291 makes runtime version alignment explicit. `archive version <root>`
 distinguishes an aligned runtime, project source that must be repaired or

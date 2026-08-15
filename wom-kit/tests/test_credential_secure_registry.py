@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from datetime import datetime, timedelta, timezone
 import hashlib
 import hmac
 import json
@@ -20,12 +21,19 @@ from wom_kit.credential_secure_intake_windows import (
     windows_credential_target,
     windows_credential_target_prefix,
 )
+from wom_kit.credential_capability import (
+    CredentialCapability,
+    CredentialCapabilityScope,
+)
 from wom_kit.credential_secure_registry import (
+    CAPABILITY_CLAIMS_RELATIVE,
+    _capability_claim_mac,
     _receipt_mac,
     RECEIPT_AUTHENTICATION_SCHEMA,
     ReceiptBackedNotionCredentialBroker,
     SecureCredentialRegistryError,
     StableArchiveFingerprintKeyProvider,
+    claim_credential_capability_use,
     create_archive_atomic_json_receipt_committer,
     list_secure_credentials,
     lookup_secure_credential,
@@ -41,6 +49,9 @@ FINGERPRINT_KEY = b"F" * 32
 WORKSPACE_A = "sha256:" + ("1" * 64)
 WORKSPACE_B = "sha256:" + ("2" * 64)
 SECRET = b"ntn_test_value_that_must_never_be_public"
+CAPABILITY_NOW = datetime(2026, 8, 15, 0, 0, 0, tzinfo=timezone.utc)
+CAPABILITY_REQUEST_SHA256 = "sha256:" + ("6" * 64)
+CAPABILITY_PLAN_SHA256 = "sha256:" + ("7" * 64)
 
 
 class FakeExactWindowsNative:
@@ -94,7 +105,11 @@ def make_receipt(
         "account_label": "organization account",
         "workspace_label": "reviewed workspace",
         "purpose": "source_recovery",
-        "verified_capabilities": ["read_content", "retrieve_page"],
+        "verified_capabilities": [
+            "read_content",
+            "retrieve_page",
+            "retrieve_page_as_markdown",
+        ],
         "encrypted_backend_kind": "windows_credential_manager_generic",
         "encrypted_backend_id": "backend_" + repeated,
         "fingerprint_digest": "hmac-sha256:" + (fingerprint_digit * 64),
@@ -146,6 +161,55 @@ class SecureCredentialRegistryTests(unittest.TestCase):
             self.root,
             expected_archive_id="archive:test",
             receipt_authentication_key=AUTH_KEY,
+        )
+
+    @staticmethod
+    def _capability_scope(scope: ScopeBinding) -> CredentialCapabilityScope:
+        return CredentialCapabilityScope(
+            credential_id=scope.credential_id,
+            workspace_fingerprint=scope.workspace_fingerprint,
+            scope_receipt_sha256=scope.scope_receipt_sha256,
+            revision=scope.revision,
+        )
+
+    def _claim_for_scopes(
+        self,
+        *scopes: ScopeBinding,
+        now: datetime = CAPABILITY_NOW,
+        issued_at: datetime = CAPABILITY_NOW,
+        ttl_seconds: int = 900,
+        max_provider_requests: int = 32,
+        capability: CredentialCapability | None = None,
+    ):
+        selected = capability or CredentialCapability.issue(
+            request_sha256=CAPABILITY_REQUEST_SHA256,
+            plan_sha256=CAPABILITY_PLAN_SHA256,
+            scopes=[self._capability_scope(scope) for scope in scopes],
+            reviewed_by="reviewer-1",
+            max_provider_requests=max_provider_requests,
+            issued_at=issued_at,
+            ttl_seconds=ttl_seconds,
+        )
+        return claim_credential_capability_use(
+            self.root,
+            selected,
+            AUTH_KEY,
+            clock=lambda: now,
+        )
+
+    def _broker(
+        self,
+        native: FakeExactWindowsNative,
+        *scopes: ScopeBinding,
+        secret_fingerprint_key: bytes | None = None,
+        claimed_use=None,
+    ) -> ReceiptBackedNotionCredentialBroker:
+        return ReceiptBackedNotionCredentialBroker(
+            self.root,
+            native,
+            AUTH_KEY,
+            secret_fingerprint_key,
+            claimed_use=(claimed_use or self._claim_for_scopes(*scopes)),
         )
 
     def _approve_lifecycle(
@@ -275,18 +339,17 @@ class SecureCredentialRegistryTests(unittest.TestCase):
             current["scope_binding"]["scope_receipt_sha256"],
             old_scope.scope_receipt_sha256,
         )
-        broker = ReceiptBackedNotionCredentialBroker(
-            self.root,
+        current_scope = scope_from_public(current)
+        broker = self._broker(
             native,
-            AUTH_KEY,
-            FINGERPRINT_KEY,
+            current_scope,
+            secret_fingerprint_key=FINGERPRINT_KEY,
         )
         with self.assertRaisesRegex(
             SecureCredentialRegistryError,
             "credential_registry_scope_receipt_mismatch|credential_registry_scope_workspace_mismatch",
         ):
             broker.resolve(old_scope)
-        current_scope = scope_from_public(current)
         bearer = broker.resolve(current_scope)
         bearer.close()
 
@@ -845,9 +908,8 @@ class SecureCredentialRegistryTests(unittest.TestCase):
             SecureCredentialRegistryError,
             "credential_registry_scope_binding_unverified",
         ):
-            ReceiptBackedNotionCredentialBroker(self.root, native, AUTH_KEY).resolve(
-                scope_from_public(row)
-            )
+            unapproved_scope = scope_from_public(row)
+            self._broker(native, unapproved_scope).resolve(unapproved_scope)
         self.assertEqual(native.read_targets, [])
 
         self._approve_lifecycle(
@@ -884,7 +946,7 @@ class SecureCredentialRegistryTests(unittest.TestCase):
             persisted=True,
             workspace_evidence_verified=True,
         )
-        broker = ReceiptBackedNotionCredentialBroker(self.root, native, AUTH_KEY)
+        broker = self._broker(native, scope)
         with self.assertRaisesRegex(
             SecureCredentialRegistryError,
             "credential_registry_receipt_authentication_invalid",
@@ -899,11 +961,10 @@ class SecureCredentialRegistryTests(unittest.TestCase):
         self.assertEqual(public["lifecycle_status"], "active")
         self.assertEqual(public["rotation_status"], "current")
 
-        credential = ReceiptBackedNotionCredentialBroker(
-            self.root,
+        credential = self._broker(
             native,
-            AUTH_KEY,
-            FINGERPRINT_KEY,
+            scope,
+            secret_fingerprint_key=FINGERPRINT_KEY,
         ).resolve(scope)
 
         self.assertIsInstance(credential, NotionBearerSecret)
@@ -920,11 +981,10 @@ class SecureCredentialRegistryTests(unittest.TestCase):
 
     def test_cached_bearer_revalidates_without_another_secret_read(self) -> None:
         _public, native, scope = self._commit_and_authorize()
-        credential = ReceiptBackedNotionCredentialBroker(
-            self.root,
+        credential = self._broker(
             native,
-            AUTH_KEY,
-            FINGERPRINT_KEY,
+            scope,
+            secret_fingerprint_key=FINGERPRINT_KEY,
         ).resolve(scope)
 
         credential.revalidate_authority()
@@ -963,12 +1023,12 @@ class SecureCredentialRegistryTests(unittest.TestCase):
             "archive:test", str(first["encrypted_backend_id"])
         )
         native.values[target] = bytearray(SECRET)
-        credential = ReceiptBackedNotionCredentialBroker(
-            self.root,
+        current_scope = scope_from_public(public)
+        credential = self._broker(
             native,
-            AUTH_KEY,
-            FINGERPRINT_KEY,
-        ).resolve(scope_from_public(public))
+            current_scope,
+            secret_fingerprint_key=FINGERPRINT_KEY,
+        ).resolve(current_scope)
 
         self._approve_lifecycle(
             provider="notion",
@@ -1011,12 +1071,12 @@ class SecureCredentialRegistryTests(unittest.TestCase):
             "archive:test", str(first["encrypted_backend_id"])
         )
         native.values[target] = bytearray(SECRET)
-        credential = ReceiptBackedNotionCredentialBroker(
-            self.root,
+        current_scope = scope_from_public(public)
+        credential = self._broker(
             native,
-            AUTH_KEY,
-            FINGERPRINT_KEY,
-        ).resolve(scope_from_public(public))
+            current_scope,
+            secret_fingerprint_key=FINGERPRINT_KEY,
+        ).resolve(current_scope)
         first_attempt_finished = threading.Event()
         lifecycle_changed = threading.Event()
         provider_attempts: list[int] = []
@@ -1059,11 +1119,10 @@ class SecureCredentialRegistryTests(unittest.TestCase):
 
     def test_cached_bearer_stops_on_receipt_set_drift_without_secret_reread(self) -> None:
         _public, native, scope = self._commit_and_authorize()
-        credential = ReceiptBackedNotionCredentialBroker(
-            self.root,
+        credential = self._broker(
             native,
-            AUTH_KEY,
-            FINGERPRINT_KEY,
+            scope,
+            secret_fingerprint_key=FINGERPRINT_KEY,
         ).resolve(scope)
         self._committer().commit_atomic(make_receipt("b", fingerprint_digit="6"))
 
@@ -1081,11 +1140,10 @@ class SecureCredentialRegistryTests(unittest.TestCase):
         _public, native, scope = self._commit_and_authorize()
         target = next(iter(native.values))
         native.values[target] = bytearray(b"different-valid-looking-notion-token")
-        broker = ReceiptBackedNotionCredentialBroker(
-            self.root,
+        broker = self._broker(
             native,
-            AUTH_KEY,
-            FINGERPRINT_KEY,
+            scope,
+            secret_fingerprint_key=FINGERPRINT_KEY,
         )
 
         with self.assertRaisesRegex(
@@ -1130,11 +1188,12 @@ class SecureCredentialRegistryTests(unittest.TestCase):
             str(receipt["credential_id"]),
             receipt_authentication_key=AUTH_KEY,
         )
-        ReceiptBackedNotionCredentialBroker(
-            self.root, native, AUTH_KEY, FINGERPRINT_KEY
-        ).resolve(
-            scope_from_public(row)
-        )
+        current_scope = scope_from_public(row)
+        self._broker(
+            native,
+            current_scope,
+            secret_fingerprint_key=FINGERPRINT_KEY,
+        ).resolve(current_scope)
         self.assertEqual(native.read_targets[-1], worker_target)
 
     def test_receipt_tampering_fails_authentication_before_native_read(self) -> None:
@@ -1163,7 +1222,7 @@ class SecureCredentialRegistryTests(unittest.TestCase):
             ),
             "mac": lambda doc: doc["receipt_authentication"].__setitem__("mac", "8" * 64),
         }
-        broker = ReceiptBackedNotionCredentialBroker(self.root, native, AUTH_KEY)
+        broker = self._broker(native, original_scope)
         for label, mutate in mutations.items():
             with self.subTest(label=label):
                 document = json.loads(original.decode("utf-8"))
@@ -1233,7 +1292,7 @@ class SecureCredentialRegistryTests(unittest.TestCase):
 
     def test_scope_hash_workspace_and_revision_must_match_before_read(self) -> None:
         _, native, scope = self._commit_and_authorize()
-        broker = ReceiptBackedNotionCredentialBroker(self.root, native, AUTH_KEY)
+        broker = self._broker(native, scope)
         cases = (
             replace(scope, scope_receipt_sha256="sha256:" + ("0" * 64)),
             replace(scope, workspace_fingerprint=WORKSPACE_B),
@@ -1244,6 +1303,508 @@ class SecureCredentialRegistryTests(unittest.TestCase):
                 with self.assertRaises(SecureCredentialRegistryError):
                     broker.resolve(changed)
                 self.assertEqual(native.read_targets, [])
+
+    def test_broker_requires_claim_before_native_secret_read(self) -> None:
+        _, native, scope = self._commit_and_authorize()
+        broker = ReceiptBackedNotionCredentialBroker(
+            self.root,
+            native,
+            AUTH_KEY,
+            FINGERPRINT_KEY,
+        )
+
+        with self.assertRaisesRegex(
+            SecureCredentialRegistryError,
+            "credential_capability_required",
+        ):
+            broker.resolve(scope)
+
+        self.assertEqual(native.read_targets, [])
+
+    def test_expired_capability_cannot_be_claimed_or_read_native_secret(self) -> None:
+        _, native, scope = self._commit_and_authorize()
+        capability = CredentialCapability.issue(
+            request_sha256=CAPABILITY_REQUEST_SHA256,
+            plan_sha256=CAPABILITY_PLAN_SHA256,
+            scopes=[self._capability_scope(scope)],
+            reviewed_by="reviewer-1",
+            max_provider_requests=1,
+            issued_at=CAPABILITY_NOW,
+            ttl_seconds=30,
+        )
+
+        with self.assertRaisesRegex(
+            SecureCredentialRegistryError,
+            "credential_capability_expired",
+        ):
+            self._claim_for_scopes(
+                scope,
+                capability=capability,
+                now=CAPABILITY_NOW + timedelta(seconds=30),
+            )
+
+        self.assertEqual(native.read_targets, [])
+        self.assertFalse(
+            (
+                self.root
+                / CAPABILITY_CLAIMS_RELATIVE
+                / f"{capability.capability_id}.json"
+            ).exists()
+        )
+
+    def test_claim_scope_mismatch_blocks_before_native_secret_read(self) -> None:
+        _, native, scope = self._commit_and_authorize()
+        different_scope = replace(scope, workspace_fingerprint=WORKSPACE_B)
+        claimed_use = self._claim_for_scopes(different_scope)
+        broker = self._broker(
+            native,
+            scope,
+            secret_fingerprint_key=FINGERPRINT_KEY,
+            claimed_use=claimed_use,
+        )
+
+        with self.assertRaisesRegex(
+            SecureCredentialRegistryError,
+            "credential_capability_scope_not_allowed",
+        ):
+            broker.resolve(scope)
+
+        self.assertEqual(native.read_targets, [])
+
+    def test_receipt_purpose_is_enforced_before_native_secret_read(self) -> None:
+        receipt = make_receipt()
+        receipt["purpose"] = "diagnostic"
+        _, native, scope = self._commit_and_authorize(receipt)
+        broker = self._broker(
+            native,
+            scope,
+            secret_fingerprint_key=FINGERPRINT_KEY,
+        )
+
+        with self.assertRaisesRegex(
+            SecureCredentialRegistryError,
+            "credential_registry_purpose_not_authorized",
+        ):
+            broker.resolve(scope)
+
+        self.assertEqual(native.read_targets, [])
+
+    def test_every_required_registered_capability_is_enforced_before_read(self) -> None:
+        required = (
+            "read_content",
+            "retrieve_page",
+            "retrieve_page_as_markdown",
+        )
+        workspaces = ("8", "9", "a")
+        for index, missing in enumerate(required):
+            with self.subTest(missing=missing):
+                receipt = make_receipt(
+                    chr(ord("b") + index),
+                    workspace="sha256:" + (workspaces[index] * 64),
+                )
+                receipt["verified_capabilities"] = sorted(
+                    capability
+                    for capability in required
+                    if capability != missing
+                )
+                _, native, scope = self._commit_and_authorize(receipt)
+                broker = self._broker(
+                    native,
+                    scope,
+                    secret_fingerprint_key=FINGERPRINT_KEY,
+                )
+                with self.assertRaisesRegex(
+                    SecureCredentialRegistryError,
+                    "credential_registry_registered_capabilities_insufficient",
+                ):
+                    broker.resolve(scope)
+                self.assertEqual(native.read_targets, [])
+
+    def test_any_existing_claim_leaf_blocks_reuse_even_when_malformed(self) -> None:
+        _, native, scope = self._commit_and_authorize()
+        capability = CredentialCapability.issue(
+            request_sha256=CAPABILITY_REQUEST_SHA256,
+            plan_sha256=CAPABILITY_PLAN_SHA256,
+            scopes=[self._capability_scope(scope)],
+            reviewed_by="reviewer-1",
+            max_provider_requests=1,
+            issued_at=CAPABILITY_NOW,
+        )
+        path = (
+            self.root
+            / CAPABILITY_CLAIMS_RELATIVE
+            / f"{capability.capability_id}.json"
+        )
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"{malformed")
+
+        with self.assertRaisesRegex(
+            SecureCredentialRegistryError,
+            "credential_capability_claim_replayed",
+        ):
+            self._claim_for_scopes(scope, capability=capability)
+
+        self.assertEqual(path.read_bytes(), b"{malformed")
+        self.assertEqual(native.read_targets, [])
+
+    def test_claim_ledger_requires_ignored_local_profile(self) -> None:
+        _, native, scope = self._commit_and_authorize()
+        (self.root / ".gitignore").write_text("objects/\n", encoding="utf-8")
+
+        with self.assertRaisesRegex(
+            SecureCredentialRegistryError,
+            "credential_registry_local_profile_not_ignored",
+        ):
+            self._claim_for_scopes(scope)
+
+        self.assertEqual(native.read_targets, [])
+        self.assertFalse((self.root / CAPABILITY_CLAIMS_RELATIVE).exists())
+
+    def test_concurrent_claim_is_exclusive_and_loser_is_replay(self) -> None:
+        _, native, scope = self._commit_and_authorize()
+        capability = CredentialCapability.issue(
+            request_sha256=CAPABILITY_REQUEST_SHA256,
+            plan_sha256=CAPABILITY_PLAN_SHA256,
+            scopes=[self._capability_scope(scope)],
+            reviewed_by="reviewer-1",
+            max_provider_requests=1,
+            issued_at=CAPABILITY_NOW,
+        )
+        barrier = threading.Barrier(3)
+        claimed = []
+        errors: list[str] = []
+
+        def attempt() -> None:
+            barrier.wait()
+            try:
+                claimed.append(
+                    self._claim_for_scopes(scope, capability=capability)
+                )
+            except SecureCredentialRegistryError as exc:
+                errors.append(exc.code)
+
+        workers = [threading.Thread(target=attempt) for _ in range(2)]
+        for worker in workers:
+            worker.start()
+        barrier.wait()
+        for worker in workers:
+            worker.join(timeout=5)
+
+        self.assertTrue(all(not worker.is_alive() for worker in workers))
+        self.assertEqual(len(claimed), 1)
+        self.assertEqual(errors, ["credential_capability_claim_replayed"])
+        self.assertEqual(native.read_targets, [])
+
+    def test_claim_tampering_blocks_provider_authorization(self) -> None:
+        _, native, scope = self._commit_and_authorize()
+        claimed_use = self._claim_for_scopes(scope)
+        credential = self._broker(
+            native,
+            scope,
+            secret_fingerprint_key=FINGERPRINT_KEY,
+            claimed_use=claimed_use,
+        ).resolve(scope)
+        path = (
+            self.root
+            / CAPABILITY_CLAIMS_RELATIVE
+            / f"{claimed_use.capability_id}.json"
+        )
+        document = json.loads(path.read_text(encoding="utf-8"))
+        document["authentication"]["mac"] = "0" * 64
+        path.write_bytes(
+            (
+                json.dumps(
+                    document,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+                + "\n"
+            ).encode("utf-8")
+        )
+
+        with self.assertRaisesRegex(
+            SecureCredentialRegistryError,
+            "credential_capability_claim_authentication_invalid",
+        ):
+            credential.authorize_provider_request("retrieve_page")
+
+        self.assertEqual(len(native.read_targets), 1)
+        self.assertEqual(claimed_use.provider_request_authorizations, 0)
+        credential.close()
+
+    def test_claim_request_and_plan_digests_are_hmac_bound(self) -> None:
+        _, native, scope = self._commit_and_authorize()
+        claimed_use = self._claim_for_scopes(scope)
+        path = (
+            self.root
+            / CAPABILITY_CLAIMS_RELATIVE
+            / f"{claimed_use.capability_id}.json"
+        )
+        original = path.read_bytes()
+        for field, replacement in (
+            ("request_sha256", "sha256:" + ("8" * 64)),
+            ("plan_sha256", "sha256:" + ("9" * 64)),
+        ):
+            with self.subTest(field=field):
+                document = json.loads(original.decode("utf-8"))
+                document[field] = replacement
+                path.write_bytes(
+                    (
+                        json.dumps(
+                            document,
+                            sort_keys=True,
+                            separators=(",", ":"),
+                        )
+                        + "\n"
+                    ).encode("utf-8")
+                )
+                with self.assertRaisesRegex(
+                    SecureCredentialRegistryError,
+                    "credential_capability_claim_authentication_invalid",
+                ):
+                    claimed_use.authorize_request("retrieve_page", scope=scope)
+                path.write_bytes(original)
+
+        self.assertEqual(claimed_use.provider_request_authorizations, 0)
+        self.assertEqual(native.read_targets, [])
+
+    def test_authenticated_digest_drift_still_fails_capability_binding(self) -> None:
+        _, native, scope = self._commit_and_authorize()
+        claimed_use = self._claim_for_scopes(scope)
+        path = (
+            self.root
+            / CAPABILITY_CLAIMS_RELATIVE
+            / f"{claimed_use.capability_id}.json"
+        )
+        document = json.loads(path.read_text(encoding="utf-8"))
+        document["request_sha256"] = "sha256:" + ("8" * 64)
+        document["authentication"]["mac"] = _capability_claim_mac(
+            document,
+            AUTH_KEY,
+        )
+        path.write_bytes(
+            (
+                json.dumps(document, sort_keys=True, separators=(",", ":"))
+                + "\n"
+            ).encode("utf-8")
+        )
+
+        with self.assertRaisesRegex(
+            SecureCredentialRegistryError,
+            "credential_capability_claim_binding_mismatch",
+        ):
+            claimed_use.authorize_request("retrieve_page", scope=scope)
+
+        self.assertEqual(claimed_use.provider_request_authorizations, 0)
+        self.assertEqual(native.read_targets, [])
+
+    def test_endpoint_and_request_budget_are_bound_to_bearer(self) -> None:
+        _, native, scope = self._commit_and_authorize()
+        claimed_use = self._claim_for_scopes(scope, max_provider_requests=2)
+        credential = self._broker(
+            native,
+            scope,
+            secret_fingerprint_key=FINGERPRINT_KEY,
+            claimed_use=claimed_use,
+        ).resolve(scope)
+
+        with self.assertRaisesRegex(
+            SecureCredentialRegistryError,
+            "credential_capability_endpoint_not_allowed",
+        ):
+            credential.authorize_provider_request("create_page")
+        credential.authorize_provider_request("retrieve_page")
+        credential.authorize_provider_request("retrieve_page_as_markdown")
+        with self.assertRaisesRegex(
+            SecureCredentialRegistryError,
+            "credential_capability_request_budget_exhausted",
+        ):
+            credential.authorize_provider_request("retrieve_page")
+
+        self.assertEqual(claimed_use.provider_request_authorizations, 2)
+        self.assertEqual(claimed_use.provider_requests_remaining, 0)
+        self.assertEqual(len(native.read_targets), 1)
+        claimed_use.finalize_succeeded()
+        credential.close()
+
+    def test_concurrent_provider_authorization_cannot_overspend_budget(self) -> None:
+        _, native, scope = self._commit_and_authorize()
+        claimed_use = self._claim_for_scopes(scope, max_provider_requests=1)
+        credential = self._broker(
+            native,
+            scope,
+            secret_fingerprint_key=FINGERPRINT_KEY,
+            claimed_use=claimed_use,
+        ).resolve(scope)
+        barrier = threading.Barrier(3)
+        outcomes: list[str] = []
+
+        def authorize() -> None:
+            barrier.wait()
+            try:
+                credential.authorize_provider_request("retrieve_page")
+                outcomes.append("authorized")
+            except SecureCredentialRegistryError as exc:
+                outcomes.append(exc.code)
+
+        workers = [threading.Thread(target=authorize) for _ in range(2)]
+        for worker in workers:
+            worker.start()
+        barrier.wait()
+        for worker in workers:
+            worker.join(timeout=5)
+
+        self.assertTrue(all(not worker.is_alive() for worker in workers))
+        self.assertCountEqual(
+            outcomes,
+            ["authorized", "credential_capability_request_budget_exhausted"],
+        )
+        self.assertEqual(claimed_use.provider_request_authorizations, 1)
+        claimed_use.finalize_succeeded()
+        credential.close()
+
+    def test_successful_finalize_is_authenticated_single_shot_and_not_reusable(self) -> None:
+        _, native, scope = self._commit_and_authorize()
+        claimed_use = self._claim_for_scopes(scope, max_provider_requests=2)
+        path = (
+            self.root
+            / CAPABILITY_CLAIMS_RELATIVE
+            / f"{claimed_use.capability_id}.json"
+        )
+        self.assertTrue(path.is_file())
+        self.assertEqual(native.read_targets, [])
+        started = json.loads(path.read_text(encoding="utf-8"))
+        self.assertEqual(started["request_sha256"], CAPABILITY_REQUEST_SHA256)
+        self.assertEqual(started["plan_sha256"], CAPABILITY_PLAN_SHA256)
+        claimed_use.authorize_request("retrieve_page", scope=scope)
+        claimed_use.finalize_succeeded()
+
+        summary = claimed_use.public_summary()
+        self.assertEqual(
+            summary["schema_version"],
+            "wom-credential-capability-use-summary/v0.1",
+        )
+        self.assertEqual(summary["status"], "succeeded")
+        self.assertEqual(summary["provider_request_authorizations"], 1)
+        document = json.loads(path.read_text(encoding="utf-8"))
+        self.assertEqual(document["status"], "succeeded")
+        self.assertEqual(document["provider_requests_authorized"], 1)
+        self.assertEqual(document["request_sha256"], CAPABILITY_REQUEST_SHA256)
+        self.assertEqual(document["plan_sha256"], CAPABILITY_PLAN_SHA256)
+        self.assertIsNone(document["failure_code"])
+        with self.assertRaisesRegex(
+            SecureCredentialRegistryError,
+            "credential_capability_claim_state_invalid",
+        ):
+            claimed_use.finalize_succeeded()
+        with self.assertRaisesRegex(
+            SecureCredentialRegistryError,
+            "credential_capability_claim_state_invalid",
+        ):
+            claimed_use.authorize_request("retrieve_page", scope=scope)
+        with self.assertRaisesRegex(
+            SecureCredentialRegistryError,
+            "credential_capability_claim_replayed",
+        ):
+            self._claim_for_scopes(
+                scope,
+                capability=claimed_use.capability,
+            )
+
+    def test_failed_finalize_is_permanent_and_replay_blocked(self) -> None:
+        _, native, scope = self._commit_and_authorize()
+        claimed_use = self._claim_for_scopes(scope)
+        claimed_use.finalize_failed("recovery_cancelled")
+        path = (
+            self.root
+            / CAPABILITY_CLAIMS_RELATIVE
+            / f"{claimed_use.capability_id}.json"
+        )
+        document = json.loads(path.read_text(encoding="utf-8"))
+        self.assertEqual(document["status"], "failed")
+        self.assertEqual(document["failure_code"], "recovery_cancelled")
+        with self.assertRaisesRegex(
+            SecureCredentialRegistryError,
+            "credential_capability_claim_replayed",
+        ):
+            self._claim_for_scopes(
+                scope,
+                capability=claimed_use.capability,
+            )
+        self.assertEqual(native.read_targets, [])
+
+    def test_tampered_claim_cannot_be_finalized(self) -> None:
+        _, native, scope = self._commit_and_authorize()
+        claimed_use = self._claim_for_scopes(scope)
+        path = (
+            self.root
+            / CAPABILITY_CLAIMS_RELATIVE
+            / f"{claimed_use.capability_id}.json"
+        )
+        document = json.loads(path.read_text(encoding="utf-8"))
+        document["authentication"]["mac"] = "f" * 64
+        path.write_bytes(
+            (
+                json.dumps(document, sort_keys=True, separators=(",", ":"))
+                + "\n"
+            ).encode("utf-8")
+        )
+
+        with self.assertRaisesRegex(
+            SecureCredentialRegistryError,
+            "credential_capability_claim_authentication_invalid",
+        ):
+            claimed_use.finalize_failed("recovery_cancelled")
+
+        self.assertEqual(claimed_use.status, "started")
+        self.assertEqual(native.read_targets, [])
+
+    def test_claim_and_public_summary_are_secret_free(self) -> None:
+        receipt = make_receipt()
+        _, native, scope = self._commit_and_authorize(receipt)
+        claimed_use = self._claim_for_scopes(scope)
+        path = (
+            self.root
+            / CAPABILITY_CLAIMS_RELATIVE
+            / f"{claimed_use.capability_id}.json"
+        )
+        summary = claimed_use.public_summary()
+        self.assertNotIn("request_sha256", summary)
+        self.assertNotIn("plan_sha256", summary)
+        claim_document = json.loads(path.read_text(encoding="utf-8"))
+        self.assertEqual(
+            claim_document["request_sha256"],
+            CAPABILITY_REQUEST_SHA256,
+        )
+        self.assertEqual(claim_document["plan_sha256"], CAPABILITY_PLAN_SHA256)
+        serialized = "\n".join(
+            (
+                path.read_text(encoding="utf-8"),
+                json.dumps(summary, sort_keys=True),
+                repr(claimed_use),
+                repr(self._broker(native, scope, claimed_use=claimed_use)),
+            )
+        )
+        for forbidden in (
+            SECRET.decode("ascii"),
+            str(receipt["encrypted_backend_id"]),
+            AUTH_KEY.decode("ascii"),
+            FINGERPRINT_KEY.decode("ascii"),
+            scope.credential_id,
+            scope.workspace_fingerprint,
+            "reviewer-1",
+        ):
+            self.assertNotIn(forbidden, serialized)
+        with self.assertRaises(SecureCredentialRegistryError) as captured:
+            self._claim_for_scopes(
+                scope,
+                capability=claimed_use.capability,
+            )
+        self.assertEqual(
+            str(captured.exception),
+            "credential_capability_claim_replayed",
+        )
 
     def test_lifecycle_requires_human_approval_and_never_revokes(self) -> None:
         receipts = (
@@ -1495,13 +2056,12 @@ class SecureCredentialRegistryTests(unittest.TestCase):
             SecureCredentialRegistryError,
             "credential_registry_lifecycle_not_default",
         ):
-            ReceiptBackedNotionCredentialBroker(self.root, native, AUTH_KEY).resolve(
-                replace(
-                    scope_from_public(row),
-                    persisted=True,
-                    workspace_evidence_verified=True,
-                )
+            forged_scope = replace(
+                scope_from_public(row),
+                persisted=True,
+                workspace_evidence_verified=True,
             )
+            self._broker(native, forged_scope).resolve(forged_scope)
         self.assertEqual(native.read_targets, [])
 
     def test_lifecycle_tampering_blocks_before_native_read(self) -> None:
@@ -1517,7 +2077,7 @@ class SecureCredentialRegistryTests(unittest.TestCase):
             SecureCredentialRegistryError,
             "credential_registry_lifecycle_authentication_invalid",
         ):
-            ReceiptBackedNotionCredentialBroker(self.root, native, AUTH_KEY).resolve(scope)
+            self._broker(native, scope).resolve(scope)
         self.assertEqual(native.read_targets, [])
 
     def test_stable_archive_key_is_created_once_and_buffers_are_wiped(self) -> None:
@@ -1588,7 +2148,7 @@ class SecureCredentialRegistryTests(unittest.TestCase):
             SecureCredentialRegistryError,
             "credential_registry_lifecycle_receipt_set_drift",
         ):
-            ReceiptBackedNotionCredentialBroker(self.root, native, AUTH_KEY).resolve(old_scope)
+            self._broker(native, old_scope).resolve(old_scope)
         self.assertEqual(native.read_targets, [])
 
     def test_lookup_is_exact_and_content_free(self) -> None:

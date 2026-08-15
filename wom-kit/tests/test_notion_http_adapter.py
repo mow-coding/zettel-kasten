@@ -124,6 +124,22 @@ def user_payload(**overrides):
 
 
 class NotionHttpAdapterRequestTests(unittest.TestCase):
+    def test_capability_transport_attempt_count_matches_adapter_retry_limit(self) -> None:
+        for max_attempts in (1, 3, 5):
+            with self.subTest(max_attempts=max_attempts):
+                adapter = NotionHttpAdapter(
+                    transport=FakeTransport(),
+                    max_attempts=max_attempts,
+                )
+                self.assertIs(
+                    type(adapter.capability_transport_attempts_per_call),
+                    int,
+                )
+                self.assertEqual(
+                    adapter.capability_transport_attempts_per_call,
+                    max_attempts,
+                )
+
     def test_default_transport_refuses_redirect_before_bearer_forwarding(self) -> None:
         adapter = NotionHttpAdapter()
         redirect_handlers = [
@@ -189,6 +205,40 @@ class NotionHttpAdapterRequestTests(unittest.TestCase):
         with self.assertRaisesRegex(NotionHttpAdapterError, "notion_secret_closed"):
             wrapped.revalidate_authority()
         self.assertEqual(calls, ["checked", "checked"])
+
+    def test_secret_capability_authorizer_is_fixed_endpoint_only_and_cleared(self) -> None:
+        unbound = NotionBearerSecret(SECRET)
+        with self.assertRaisesRegex(
+            NotionHttpAdapterError,
+            "notion_capability_authorizer_missing",
+        ):
+            unbound.authorize_provider_request("retrieve_page")
+        unbound.close()
+
+        wrapped = NotionBearerSecret(SECRET)
+        calls: list[str] = []
+        wrapped._bind_capability_authorizer(calls.append)
+        wrapped.authorize_provider_request("retrieve_page")
+        wrapped.authorize_provider_request("retrieve_page_as_markdown")
+        self.assertEqual(
+            calls,
+            ["retrieve_page", "retrieve_page_as_markdown"],
+        )
+        with self.assertRaisesRegex(
+            NotionHttpAdapterError,
+            "notion_capability_authorizer_invalid",
+        ):
+            wrapped._bind_capability_authorizer(calls.append)
+        with self.assertRaisesRegex(
+            NotionHttpAdapterError,
+            "notion_endpoint_class_invalid",
+        ):
+            wrapped.authorize_provider_request(1)  # type: ignore[arg-type]
+        self.assertNotIn(SECRET, repr(wrapped))
+
+        wrapped.close()
+        with self.assertRaisesRegex(NotionHttpAdapterError, "notion_secret_closed"):
+            wrapped.authorize_provider_request("retrieve_page")
 
     def test_retrieve_page_uses_fixed_uuid_get_and_minimal_response_projection(self) -> None:
         response = FakeResponse(

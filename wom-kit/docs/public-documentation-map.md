@@ -2,7 +2,7 @@
 
 Status: public navigation baseline
 Date: 2026-06-02
-Updated: 2026-08-13
+Updated: 2026-08-15
 Philosophy clarified: 2026-07-15
 Harness compatibility clarified: 2026-07-16
 
@@ -61,6 +61,8 @@ Supporting philosophy and model docs:
 - [v0.3.318 Letter 131 Credential Input Decision](archive-infra-decision-log-2026-08-13-v03318-letter131-credential-input.md)
 - [Letter 132 Native Credential Popup And Causal Evidence](letter132-credential-console-keyboard-readiness-and-causal-evidence.md)
 - [v0.3.319 Letter 132 Credential Input Evidence Decision](archive-infra-decision-log-2026-08-14-v03319-letter132-credential-input-evidence.md)
+- [v0.3.320 Credential Capability Broker Decision](archive-infra-decision-log-2026-08-15-v03320-credential-capability-broker.md)
+- [Credential Capability Contract](credential-capability-contract.md)
 - [Project Version Update](project-version-update.md)
 - [Derived Text Capture And Paired-Batch Recovery](derived-text.md)
 - [Letters 120 and 123 Index Lifecycle And Feedback Body](letter120-123-index-lifecycle-and-feedback-body.md)
@@ -233,6 +235,7 @@ Onboarding and setup plans:
 - [Credential Semantic Extraction Recipe](credential-semantic-extraction-recipe.md)
 - [Credential Plaintext Migration Plan](credential-plaintext-migration-plan.md)
 - [Credential Access Broker Plan](credential-access-broker-plan.md)
+- [Credential Capability Contract](credential-capability-contract.md)
 - [Credential Access Approval Plan](credential-access-approval-plan.md)
 - [Credential Policy Check](credential-policy-check.md)
 - [Credential KeePassXC Command Plan](credential-keepassxc-command-plan.md)
@@ -432,6 +435,7 @@ These documents record public-safe work already performed.
 - [v0.2.11 Delegate Capability Contract Work Log](../plans/work-log-2026-05-23-delegate-capability-contract.md)
 - [Changelog](../../CHANGELOG.md)
 - [Release Notes](releases/)
+- [v0.3.320 Release Note](releases/v0.3.320.md)
 - [v0.3.308 Release Note](releases/v0.3.308.md)
 - [v0.3.309 Release Note](releases/v0.3.309.md)
 - [v0.3.310 Release Note](releases/v0.3.310.md)
@@ -472,6 +476,7 @@ Schemas:
 - [Schemas Directory](../schemas/)
 - [Source-Fidelity Draft Receipt Schema](../schemas/source-fidelity-draft-receipt.schema.json)
 - [IMAP Mailbox Adapter Manifest Schema](../schemas/imap-mailbox-adapter-manifest.schema.json)
+- [Credential Capability v0.1 Schema](../schemas/credential-capability-v0.1.schema.json)
 
 These documents are closer to implementation contracts. They should stay more precise than product philosophy documents.
 

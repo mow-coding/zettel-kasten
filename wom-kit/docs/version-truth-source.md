@@ -1,6 +1,10 @@
 # WOM-kit Version Truth Source
 
-Status: v0.3.319 runtime alignment with native credential popup and causal-evidence corrections
+Status: v0.3.320 runtime alignment with one-use credential capability hardening
+
+Current checkpoint: Status: v0.3.320 one-use credential capability broker
+
+Previous checkpoint: Status: v0.3.319 native credential popup and causal-evidence corrections
 
 Previous checkpoint: Status: v0.3.291 read-only runtime alignment plus approval-gated project update
 

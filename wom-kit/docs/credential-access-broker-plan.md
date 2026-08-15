@@ -1,7 +1,9 @@
 # Credential Access Broker Plan
 
-Status: v0.3.23 read-only broker planning baseline
-Date: 2026-06-15
+Status: v0.3.23 generic read-only plan; v0.3.320 narrow live Notion recovery capability
+Date: 2026-08-15
+
+Previous checkpoint: Status: v0.3.23 read-only broker planning baseline
 
 This document defines how WOM should let an AI request credential use without
 showing the secret value to the AI.
@@ -19,7 +21,13 @@ human asks AI to do a task
 -> the secret value is not returned to chat
 ```
 
-v0.3.23 does not implement secret retrieval. It only plans the broker request.
+The generic v0.3.23 command does not implement secret retrieval. It only plans
+the broker request.
+
+v0.3.320 separately implements one narrow live broker boundary inside the
+existing approved `notion-page-recovery` worker. It is not exposed as a new
+generic CLI/MCP command. See the
+[Credential Capability Contract](credential-capability-contract.md).
 
 v0.3.31 adds a non-secret approval receipt preview and local writer. See
 [Credential Access Approval Plan](credential-access-approval-plan.md).
@@ -147,3 +155,22 @@ It should not include:
 - mint zets.
 
 It is a broker contract planner, not a broker adapter.
+
+## v0.3.320 Live Recovery Distinction
+
+Do not confuse the generic planner above with the live recovery capability.
+The live path exists only after exact `notion-page-recovery` approval. Its
+parent mints a fresh one-use, expiring, secret-free capability bound to the
+exact request, plan, reviewer, selected authenticated receipt/lifecycle scopes,
+fixed read-only Notion endpoints, and bounded provider-attempt budget.
+
+The isolated worker validates the binding, then creates an exclusive
+archive-key-HMAC claim before the first native credential read. It rechecks the
+claim and exact authority before each provider attempt and finalizes the claim
+with content-free evidence. Any existing claim leaf permanently spends the id.
+A fully verified local replay creates no claim and performs no credential read
+or provider request.
+
+This narrow implementation does not make `credential-access-broker-plan` live,
+does not authorize other action kinds or stores, and does not return a secret to
+AI. The generic multi-provider/password-manager broker remains future work.

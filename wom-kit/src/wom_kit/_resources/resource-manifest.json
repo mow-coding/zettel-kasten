@@ -1,8 +1,8 @@
 {
   "schema": "wom-kit/package-resource-manifest/v0.1",
-  "version": "0.3.319",
+  "version": "0.3.320",
   "source_of_truth": "wom-kit source resource directories",
-  "file_count": 145,
+  "file_count": 146,
   "files": [
     {
       "source": "schemas/activity-group-membership-receipt.schema.json",
@@ -75,6 +75,12 @@
       "packaged": "schemas/credential-adapter-manifest.schema.json",
       "bytes": 4806,
       "sha256": "f1dd8db6dee428c86c0689ba5e5b76eb1091abbb9cd10dac182993b458995509"
+    },
+    {
+      "source": "schemas/credential-capability-v0.1.schema.json",
+      "packaged": "schemas/credential-capability-v0.1.schema.json",
+      "bytes": 3169,
+      "sha256": "0f22b60fe4ec6ced3e47a9711257859b2bdbe1b6b3f61ca80b9de674b5c59729"
     },
     {
       "source": "schemas/delegate-receipt.schema.json",
@@ -577,8 +583,8 @@
     {
       "source": "templates/ai-runtime/wom-archive/SKILL.md",
       "packaged": "templates/ai-runtime/wom-archive/SKILL.md",
-      "bytes": 10864,
-      "sha256": "c42b12c8444aa5c7cfd3ef21560fa01ae0247f3acbfa8006faf66ae3ff79cfea"
+      "bytes": 11072,
+      "sha256": "5f982afa878852969220e247c61a4d9cd0d945c606df2ccdb6be4a2b5509d054"
     },
     {
       "source": "templates/ai-runtime/wom-archive/references/capture-draft-and-publication.md",
@@ -595,8 +601,8 @@
     {
       "source": "templates/ai-runtime/wom-archive/references/operator-contract.md",
       "packaged": "templates/ai-runtime/wom-archive/references/operator-contract.md",
-      "bytes": 75517,
-      "sha256": "8860c18328042c67225d86a2e99d500f528310ef58e31a2924e3d8f018011e74"
+      "bytes": 77736,
+      "sha256": "69af85aa294ee576fee0a265dcb6f90ae29713105eb915d5c241307a9cfccde1"
     },
     {
       "source": "templates/ai-runtime/wom-archive/references/reading-memory-and-revision.md",
@@ -869,10 +875,10 @@
       "sha256": "d619dc26af3216498c8392dfe838b0fe752d4bad9da998a58ca682d668fc510c"
     },
     {
-      "source": "docs/releases/v0.3.319.md",
-      "packaged": "release-notes/v0.3.319.md",
-      "bytes": 11445,
-      "sha256": "7d8a53a84cef25bd58c0a9678dee304e067255f28978c4f3e8bf97dbcd3f0219"
+      "source": "docs/releases/v0.3.320.md",
+      "packaged": "release-notes/v0.3.320.md",
+      "bytes": 6241,
+      "sha256": "4c6710abb93331870df4c18f59976b2cc2a5ef524d9c697647c91c3c77b9a991"
     }
   ]
 }

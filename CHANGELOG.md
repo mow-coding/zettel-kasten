@@ -6,6 +6,27 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.3.320 - 2026-08-15
+
+- Hardened the existing approved Notion page-recovery worker with a fresh,
+  expiring, one-invocation credential capability bound to the exact request,
+  plan, reviewer, authenticated receipt/lifecycle scopes, fixed read-only
+  endpoints, registered capabilities, and provider-attempt budget.
+- Added an archive-key-HMAC exclusive claim before the first native credential
+  read. Any existing leaf permanently spends the capability id; failure or
+  crash requires a fresh approved invocation rather than replay.
+- Reauthenticated the claim and exact credential authority before each provider
+  attempt, then finalized only content-free success/failure evidence. The HMAC
+  claim carries id/digest, request/plan, budgets, status, and count; the durable
+  recovery receipt carries only reference schema/id/digest; the parent returns
+  a separately validated secret-free use summary.
+- Kept fully verified local replay claim-free, credential-free, and provider-
+  free. Added no new CLI/MCP command, popup, password manager, browser autofill,
+  generic vault broker, or AI-visible secret surface.
+- Used Aside only as a proprietary product-level reference for invisible-to-AI,
+  task-scoped, human-approved, audited credential use; no Aside code, protocol,
+  cryptography, storage, or browser implementation was copied.
+
 ## v0.3.319 - 2026-08-14
 
 - Withdrew the terminal-based Letter 132 credential-entry prototypes after

@@ -89,7 +89,12 @@ class NotionBearerSecret:
     The callback never exposes or rereads the bearer itself.
     """
 
-    __slots__ = ("__value", "__closed", "__authority_revalidator")
+    __slots__ = (
+        "__value",
+        "__closed",
+        "__authority_revalidator",
+        "__capability_authorizer",
+    )
 
     def __init__(self, value: str) -> None:
         if not isinstance(value, str):
@@ -122,6 +127,7 @@ class NotionBearerSecret:
         self.__value = value
         self.__closed = False
         self.__authority_revalidator: Callable[[], None] | None = None
+        self.__capability_authorizer: Callable[[str], None] | None = None
 
     def __repr__(self) -> str:
         return "<NotionBearerSecret redacted>"
@@ -143,6 +149,22 @@ class NotionBearerSecret:
             raise NotionHttpAdapterError("notion_authority_revalidator_invalid")
         self.__authority_revalidator = callback
 
+    def _bind_capability_authorizer(
+        self,
+        callback: Callable[[str], None],
+    ) -> None:
+        """Bind one broker-owned endpoint capability exactly once.
+
+        The callback receives only a fixed endpoint-class label.  It never
+        receives the bearer, URL, request object, response, or page id.
+        """
+
+        if self.__closed:
+            raise NotionHttpAdapterError("notion_secret_closed")
+        if not callable(callback) or self.__capability_authorizer is not None:
+            raise NotionHttpAdapterError("notion_capability_authorizer_invalid")
+        self.__capability_authorizer = callback
+
     def revalidate_authority(self) -> None:
         """Revalidate the receipt/lifecycle authority without reading the secret."""
 
@@ -153,12 +175,25 @@ class NotionBearerSecret:
             raise NotionHttpAdapterError("notion_authority_revalidator_missing")
         callback()
 
+    def authorize_provider_request(self, endpoint_class: str) -> None:
+        """Consume one fixed endpoint authorization before a provider call."""
+
+        if self.__closed:
+            raise NotionHttpAdapterError("notion_secret_closed")
+        callback = self.__capability_authorizer
+        if callback is None:
+            raise NotionHttpAdapterError("notion_capability_authorizer_missing")
+        if type(endpoint_class) is not str:
+            raise NotionHttpAdapterError("notion_endpoint_class_invalid")
+        callback(endpoint_class)
+
     def close(self) -> None:
         if self.__closed:
             return
         for index in range(len(self.__value)):
             self.__value[index] = 0
         self.__authority_revalidator = None
+        self.__capability_authorizer = None
         self.__closed = True
 
 
@@ -383,6 +418,17 @@ class NotionHttpAdapter:
             "<NotionHttpAdapter provider=notion api_version="
             f"{NOTION_API_VERSION} transport=redacted>"
         )
+
+    @property
+    def capability_transport_attempts_per_call(self) -> int:
+        """Return the transport retry multiplier used by live recovery.
+
+        Capability-backed recovery accepts only ``1``.  That makes each
+        consumed logical authorization correspond to at most one raw HTTP
+        transport attempt.
+        """
+
+        return self._max_attempts
 
     def retrieve_page(
         self,
