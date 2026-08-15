@@ -135,7 +135,10 @@ Do not preload every reference.
   the blue live-registration banner. Automated evidence is not human
   acceptance. Later approved work reuses the exact saved credential; another
   page may reuse the same PAT, but labels are not authority. Legacy scope
-  evolution and complex lifecycle state require human review.
+  evolution and complex lifecycle state require human review. Approved live
+  Notion recovery requires a fresh plan-bound one-use capability, durably
+  claimed before secret read. Replayed, expired, or changed authority blocks;
+  verified local replay creates no claim.
 - Run `backup-evidence --dry-run` before backup claims. Configuration, local
   commit, declared label, generated index, and historical receipt do not prove
   current remote completion.

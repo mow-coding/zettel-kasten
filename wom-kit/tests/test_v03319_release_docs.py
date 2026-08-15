@@ -1,12 +1,9 @@
 from __future__ import annotations
 
 import hashlib
-import json
 from pathlib import Path
 import subprocess
 import unittest
-
-from wom_kit import __version__
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -111,26 +108,11 @@ class V03319ReleaseDocsTests(unittest.TestCase):
                     expected_sha256,
                 )
 
-    def test_version_and_current_packaged_release_are_synchronized(self) -> None:
-        self.assertEqual(__version__, "0.3.319")
-        self.assertEqual(RELEASE.read_bytes(), PACKAGED_RELEASE.read_bytes())
+    def test_v03319_release_is_historical_source_only(self) -> None:
+        self.assertTrue(RELEASE.is_file())
+        self.assertFalse(PACKAGED_RELEASE.exists())
         self.assertTrue(HISTORICAL_RELEASE.is_file())
         self.assertFalse(HISTORICAL_PACKAGED_RELEASE.exists())
-
-        manifest = json.loads(
-            (
-                KIT
-                / "src"
-                / "wom_kit"
-                / "_resources"
-                / "resource-manifest.json"
-            ).read_text(encoding="utf-8")
-        )
-        self.assertEqual(manifest["version"], "0.3.319")
-        self.assertEqual(len(manifest["files"]), 145)
-        packaged = {row["packaged"] for row in manifest["files"]}
-        self.assertIn("release-notes/v0.3.319.md", packaged)
-        self.assertNotIn("release-notes/v0.3.318.md", packaged)
 
     def test_release_guide_and_decision_define_native_popup_contract(self) -> None:
         documents = {
@@ -368,20 +350,12 @@ class V03319ReleaseDocsTests(unittest.TestCase):
             self.assertNotIn("Bearer ", homework)
             self.assertIn("`not_performed`", text)
 
-    def test_current_maps_readmes_and_install_guides_point_to_v03319(self) -> None:
+    def test_public_history_keeps_v03319_links(self) -> None:
         paths = (
-            ROOT / "README.md",
-            ROOT / "README.ko.md",
+            ROOT / "CHANGELOG.md",
             ROOT / "UPGRADE.md",
             ROOT / "UPGRADE.ko.md",
-            ROOT / "VERSIONING.md",
-            KIT / "README.md",
-            KIT / "cli" / "README.md",
-            KIT / "docs" / "python-tool-install.md",
-            KIT / "docs" / "python-tool-install.ko.md",
             KIT / "docs" / "runtime-canonical-entrypoints.md",
-            KIT / "docs" / "version-truth-source.md",
-            KIT / "docs" / "ai-command-path-routing.md",
             KIT / "docs" / "capability-matrix.md",
             KIT / "docs" / "public-documentation-map.md",
             KIT / "docs" / "public-documentation-map.ko.md",
@@ -389,11 +363,6 @@ class V03319ReleaseDocsTests(unittest.TestCase):
         for path in paths:
             with self.subTest(document=path.name):
                 self.assertIn("0.3.319", path.read_text(encoding="utf-8"))
-
-        install = (KIT / "docs" / "python-tool-install.md").read_text(
-            encoding="utf-8"
-        )
-        self.assertIn("wom_kit-0.3.319-py3-none-any.whl", install)
 
         status = "Status: v0.3.319 native credential popup and causal-evidence checkpoint"
         for path in (

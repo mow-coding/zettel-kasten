@@ -37,6 +37,9 @@ PLAN_SCHEMA = "wom-kit/notion-page-recovery-plan/v0.1"
 RESUME_SCHEMA = "wom-kit/notion-page-recovery-resume/v0.1"
 PROJECTION_SCHEMA = "wom-kit/notion-page-recovery-projection/v0.1"
 RECEIPT_SCHEMA = "wom-kit/notion-page-recovery-receipt/v0.1"
+CREDENTIAL_CAPABILITY_REFERENCE_SCHEMA = (
+    "wom-kit/credential-capability-reference/v0.1"
+)
 NOTION_API_VERSION = "2026-03-11"
 MAX_REQUEST_ITEMS = 1000
 MAX_UNKNOWN_BLOCK_IDS = 100
@@ -72,6 +75,7 @@ _RETRYABLE_GET_STATUSES = {409, 429, 500, 502, 503, 504, 529, 599}
 
 _SAFE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:+-]{0,127}$")
 _CREDENTIAL_ID_RE = re.compile(r"^cred_[A-Za-z0-9_-]{16,96}$")
+_CAPABILITY_ID_RE = re.compile(r"^cap_[0-9a-f]{32}$")
 _SECRET_SHAPE_RE = re.compile(
     r"(?i)(?:github_pat_[A-Za-z0-9_]{20,}|sk-[A-Za-z0-9_-]{8,}"
     r"|(?:secret|ntn)_[A-Za-z0-9_-]{12,})"
@@ -1339,6 +1343,41 @@ def plan_recovery(
     }
 
 
+def _validate_credential_capability_reference(
+    value: Mapping[str, Any] | None,
+) -> dict[str, str] | None:
+    if value is None:
+        return None
+    expected_keys = {
+        "schema_version",
+        "capability_id",
+        "capability_sha256",
+    }
+    if type(value) is not dict or set(value) != expected_keys:
+        raise RecoveryExecutionBoundaryError(
+            "credential_capability_reference_invalid"
+        )
+    schema = value.get("schema_version")
+    capability_id = value.get("capability_id")
+    capability_sha256 = value.get("capability_sha256")
+    if not (
+        type(schema) is str
+        and schema == CREDENTIAL_CAPABILITY_REFERENCE_SCHEMA
+        and type(capability_id) is str
+        and _CAPABILITY_ID_RE.fullmatch(capability_id) is not None
+        and type(capability_sha256) is str
+        and _SHA256_RE.fullmatch(capability_sha256) is not None
+    ):
+        raise RecoveryExecutionBoundaryError(
+            "credential_capability_reference_invalid"
+        )
+    return {
+        "schema_version": CREDENTIAL_CAPABILITY_REFERENCE_SCHEMA,
+        "capability_id": capability_id,
+        "capability_sha256": capability_sha256,
+    }
+
+
 def execute_recovery(
     archive_root: Path | str,
     manifest: Mapping[str, Any],
@@ -1348,6 +1387,7 @@ def execute_recovery(
     max_items: int,
     provider: NotionPageProvider,
     credential_broker: CredentialBroker | Callable[[ScopeBinding], object],
+    credential_capability_reference: Mapping[str, Any] | None = None,
     offset: int = 0,
     storage: FilesystemRecoveryStorage | None = None,
     request_pacer: ProviderRequestPacer | Callable[[], None] | None = None,
@@ -1365,6 +1405,13 @@ def execute_recovery(
     except ManifestValidationError as exc:
         return _invalid_execute_result(exc.codes)
     blockers: list[str] = []
+    try:
+        capability_reference = _validate_credential_capability_reference(
+            credential_capability_reference
+        )
+    except RecoveryExecutionBoundaryError as exc:
+        capability_reference = None
+        blockers.append(exc.code)
     if expected_plan_sha256 != plan.plan_sha256 or not _SHA256_RE.fullmatch(
         str(expected_plan_sha256)
     ):
@@ -1548,6 +1595,8 @@ def execute_recovery(
         "privacy_guards": _privacy_guards(),
         "blockers": sorted(set(blockers)),
     }
+    if capability_reference is not None:
+        receipt["credential_capability_reference"] = capability_reference
     try:
         receipt_created = (
             state.write_receipt(plan.plan_sha256, receipt) if storage_usable else False
@@ -1616,9 +1665,10 @@ def _retrieve_one_page(
     max_attempts: int,
     max_retry_delay_seconds: float,
 ) -> tuple[str, tuple[bytes, ...] | None, bool]:
-    def assert_request_authority() -> None:
+    def assert_request_authority(endpoint_class: str) -> None:
         before_provider_request()
         _revalidate_credential_authority(credential)
+        _authorize_credential_provider_request(credential, endpoint_class)
 
     metadata = _retry_get(
         lambda: provider.retrieve_page(
@@ -1627,7 +1677,7 @@ def _retrieve_one_page(
         stats,
         request_pacer=request_pacer,
         before_request_pacing=before_provider_request,
-        before_provider_request=assert_request_authority,
+        before_provider_request=lambda: assert_request_authority("retrieve_page"),
         sleep=sleep,
         jitter=jitter,
         max_attempts=max_attempts,
@@ -1674,7 +1724,9 @@ def _retrieve_one_page(
             stats,
             request_pacer=request_pacer,
             before_request_pacing=before_provider_request,
-            before_provider_request=assert_request_authority,
+            before_provider_request=lambda: assert_request_authority(
+                "retrieve_page_as_markdown"
+            ),
             sleep=sleep,
             jitter=jitter,
             max_attempts=max_attempts,
@@ -1703,7 +1755,7 @@ def _retrieve_one_page(
         stats,
         request_pacer=request_pacer,
         before_request_pacing=before_provider_request,
-        before_provider_request=assert_request_authority,
+        before_provider_request=lambda: assert_request_authority("retrieve_page"),
         sleep=sleep,
         jitter=jitter,
         max_attempts=max_attempts,
@@ -2152,6 +2204,32 @@ def _revalidate_credential_authority(credential: object) -> None:
         revalidate()
     except Exception:
         raise RecoveryExecutionBoundaryError("credential_authority_changed") from None
+
+
+def _authorize_credential_provider_request(
+    credential: object,
+    endpoint_class: str,
+) -> None:
+    """Consume one broker capability immediately before a provider attempt.
+
+    Injected provider-neutral test credentials may omit this optional method.
+    The production ``NotionBearerSecret`` always exposes it, and fails closed
+    when its receipt-backed broker did not bind a claimed capability.
+    """
+
+    authorize = getattr(credential, "authorize_provider_request", None)
+    if authorize is None:
+        return
+    if not callable(authorize):
+        raise RecoveryExecutionBoundaryError(
+            "credential_capability_authorization_failed"
+        )
+    try:
+        authorize(endpoint_class)
+    except Exception:
+        raise RecoveryExecutionBoundaryError(
+            "credential_capability_authorization_failed"
+        ) from None
 
 
 def _close_resolved_credentials(credentials: Iterable[object]) -> bool:

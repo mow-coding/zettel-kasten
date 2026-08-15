@@ -1,7 +1,9 @@
 # Credential Access Approval Plan
 
-Status: v0.3.31 credential approval receipt writer checkpoint
-Date: 2026-06-15
+Status: v0.3.31 generic approval receipt writer; clarified for v0.3.320 live recovery
+Date: 2026-08-15
+
+Previous checkpoint: Status: v0.3.31 credential approval receipt writer checkpoint
 
 This document defines the receipt preview and local receipt writer that must
 exist before a future credential access broker is allowed to use a secret.
@@ -84,6 +86,13 @@ preview-only.
 Even a recorded `approve_once` receipt does not grant live access by itself. A
 future adapter still needs a policy check and its own non-echoing execution
 gate.
+
+The v0.3.320 Notion recovery capability is a separate product path. The
+existing `notion-page-recovery` human approval and exact plan digest cause the
+parent to mint a fresh invocation-only capability; a generic access-approval
+receipt is not silently converted into live authority. The isolated worker
+must durably claim that capability before reading the registered credential.
+See the [Credential Capability Contract](credential-capability-contract.md).
 
 For KeePassXC, v0.3.32 adds a read-only command preflight after the policy
 check. See [Credential KeePassXC Command Plan](credential-keepassxc-command-plan.md).

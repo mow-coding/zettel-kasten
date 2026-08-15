@@ -3,7 +3,7 @@ from __future__ import annotations
 import copy
 import ctypes
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 from pathlib import Path
@@ -15,6 +15,7 @@ from unittest.mock import patch
 import uuid
 
 import wom_kit.credential_workflows as credential_workflows
+from wom_kit.credential_capability import CredentialCapability
 from wom_kit.credential_secure_intake import (
     AtomicJsonReceiptCommitter,
     HumanSecretInputResult,
@@ -149,9 +150,37 @@ class StaticRecoveryWorkerSpawner:
     result: object
     calls: int = 0
 
-    def run_worker(self, _invocation):
+    def run_worker(self, invocation):
         self.calls += 1
-        return self.result
+        if not isinstance(self.result, dict):
+            return self.result
+        candidate = copy.deepcopy(self.result)
+        capability = CredentialCapability.from_document(
+            dict(invocation.credential_capability)
+        )
+        operations = candidate.get("operations", {})
+        provider_calls = (
+            operations.get("provider_calls", 0)
+            if isinstance(operations, dict)
+            else 0
+        )
+        candidate.setdefault(
+            "credential_capability_use",
+            {
+                "schema_version": (
+                    "wom-credential-capability-use-summary/v0.1"
+                ),
+                "capability_id": capability.capability_id,
+                "capability_sha256": capability.digest_sha256,
+                "claim_created": True,
+                "max_uses": 1,
+                "provider_request_authorizations": provider_calls,
+                "status": (
+                    "succeeded" if candidate.get("ok") is True else "failed"
+                ),
+            },
+        )
+        return candidate
 
 
 class RaisingRecoveryWorkerSpawner:
@@ -2198,6 +2227,51 @@ class CredentialWorkflowEndToEndTests(unittest.TestCase):
         )
         return result, selected_transport
 
+    def _prepare_pending_recovery(
+        self,
+    ) -> tuple[dict[str, object], dict[str, object]]:
+        """Create one approved credential scope with one unrecovered item."""
+
+        adopted, _transport = self._adopt()
+        self.assertTrue(adopted["ok"])
+        listed = list_authenticated_secure_credentials(
+            self.root,
+            native=self.native,
+            key_provider=self.key_provider,
+        )
+        row = listed["credentials"][0]
+        workspace = str(row["verified_workspace_fingerprint"])
+        lifecycle_plan = plan_authenticated_credential_lifecycle(
+            self.root,
+            provider="notion",
+            workspace_fingerprint=workspace,
+            selected_default_credential_id=CREDENTIAL_ID,
+            revocation_pending_credential_ids=(),
+            native=self.native,
+            key_provider=self.key_provider,
+        )
+        lifecycle = approve_authenticated_credential_lifecycle(
+            self.root,
+            provider="notion",
+            workspace_fingerprint=workspace,
+            selected_default_credential_id=CREDENTIAL_ID,
+            revocation_pending_credential_ids=(),
+            expected_plan_sha256=str(lifecycle_plan["plan_sha256"]),
+            reviewed_by="tester-1",
+            native=self.native,
+            key_provider=self.key_provider,
+        )
+        self.assertTrue(lifecycle["ok"])
+        approved_row = list_authenticated_secure_credentials(
+            self.root,
+            native=self.native,
+            key_provider=self.key_provider,
+        )["credentials"][0]
+        manifest = make_manifest(dict(approved_row["scope_binding"]))
+        preview = plan_recovery(self.root, manifest, max_items=1)
+        self.assertTrue(preview["ok"])
+        return manifest, preview
+
     def _replace_current_receipt_with_released_v01(
         self, *, anchor: str
     ) -> dict[str, object]:
@@ -3480,6 +3554,294 @@ class CredentialWorkflowEndToEndTests(unittest.TestCase):
         self.assertNotIn(SECRET_TEXT, rendered)
         self.assertNotIn(BACKEND_ID, rendered)
 
+    def test_recovery_receipt_survives_capability_finalize_replace_failure(self) -> None:
+        manifest, preview = self._prepare_pending_recovery()
+        metadata = {
+            "object": "page",
+            "id": PAGE_ID,
+            "last_edited_time": "2026-08-10T01:00:00.000Z",
+            "in_trash": False,
+        }
+        transport = FakeTransport(
+            [
+                FakeResponse(metadata),
+                FakeResponse(
+                    {
+                        "object": "page_markdown",
+                        "id": PAGE_ID,
+                        "markdown": "# reviewed original\n\nexact body\n",
+                        "truncated": False,
+                        "unknown_block_ids": [],
+                    }
+                ),
+                FakeResponse(metadata),
+            ]
+        )
+        private_failure = f"{SECRET_TEXT}: synthetic finalize replace failure"
+
+        with patch(
+            "wom_kit.credential_secure_registry._atomic_replace_json",
+            side_effect=OSError(private_failure),
+        ):
+            recovery = execute_spawned_authenticated_notion_page_recovery(
+                self.root,
+                manifest,
+                expected_plan_sha256=str(preview["plan_sha256"]),
+                reviewed_by="tester-1",
+                max_items=1,
+                approved=True,
+                capability_clock=lambda: NOW,
+                worker_spawner=InjectedNotionRecoveryWorkerSpawner(
+                    native=self.native,
+                    notion_adapter=NotionHttpAdapter(transport=transport),
+                    key_provider=self.key_provider,
+                    request_pacer=NoOpPacer(),
+                    sleep=lambda _seconds: None,
+                    jitter=lambda: 0.0,
+                    clock=lambda: NOW,
+                    capability_clock=lambda: NOW,
+                ),
+            )
+
+        self.assertFalse(recovery["ok"])
+        self.assertEqual(recovery["status_class"], "partial")
+        self.assertEqual(
+            recovery["reason_code"],
+            "notion_page_recovery_partial",
+        )
+        self.assertEqual(
+            recovery["blockers"],
+            ["credential_capability_audit_finalize_failed"],
+        )
+        self.assertTrue(recovery["receipt_created"])
+        capability_use = recovery["credential_capability_use"]
+        self.assertEqual(capability_use["status"], "finalization_failed")
+        self.assertTrue(capability_use["claim_created"])
+        self.assertEqual(
+            capability_use["provider_request_authorizations"],
+            recovery["operations"]["provider_calls"],
+        )
+
+        claim_path = (
+            self.root
+            / "profiles"
+            / "local"
+            / "credential-capabilities"
+            / "claims"
+            / f"{capability_use['capability_id']}.json"
+        )
+        claim = json.loads(claim_path.read_text(encoding="utf-8"))
+        self.assertEqual(claim["status"], "started")
+        self.assertIsNone(claim["finished_at"])
+        self.assertIsNone(claim["failure_code"])
+        self.assertEqual(claim["request_sha256"], preview["request_sha256"])
+        self.assertEqual(claim["plan_sha256"], preview["plan_sha256"])
+        self.assertEqual(
+            claim["capability_sha256"],
+            capability_use["capability_sha256"],
+        )
+        self.assertEqual(
+            claim["authentication"]["algorithm"],
+            "hmac-sha256",
+        )
+
+        receipts = list(
+            (self.root / "receipts" / "notion-page-recovery").glob(
+                "*.receipt.json"
+            )
+        )
+        self.assertEqual(len(receipts), 1)
+        receipt = json.loads(receipts[0].read_text(encoding="utf-8"))
+        self.assertEqual(
+            receipt["credential_capability_reference"],
+            {
+                "schema_version": (
+                    "wom-kit/credential-capability-reference/v0.1"
+                ),
+                "capability_id": capability_use["capability_id"],
+                "capability_sha256": capability_use["capability_sha256"],
+            },
+        )
+        rendered = json.dumps(
+            {"result": recovery, "claim": claim, "receipt": receipt},
+            ensure_ascii=False,
+        )
+        self.assertNotIn(SECRET_TEXT, rendered)
+        self.assertNotIn("synthetic finalize replace failure", rendered)
+
+    def test_started_capability_claim_replay_blocks_before_secret_or_provider(self) -> None:
+        class FixedKeyProvider:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def use_key(
+                self,
+                _archive_root,
+                consumer,
+                *,
+                create_if_missing: bool = False,
+            ):
+                self.calls += 1
+                if create_if_missing is not False:
+                    raise AssertionError("recovery must not create an archive key")
+                key = bytearray(ARCHIVE_KEY)
+                try:
+                    return consumer(memoryview(key))
+                finally:
+                    for index in range(len(key)):
+                        key[index] = 0
+
+        manifest = make_manifest(
+            {
+                "credential_id": CREDENTIAL_ID,
+                "workspace_fingerprint": "sha256:" + "1" * 64,
+                "scope_receipt_sha256": "sha256:" + "2" * 64,
+                "revision": "started-claim-crash-test",
+                "persisted": True,
+                "workspace_evidence_verified": True,
+            }
+        )
+        preview = plan_recovery(self.root, manifest, max_items=1)
+        capability = CredentialCapability.issue(
+            request_sha256=str(preview["request_sha256"]),
+            plan_sha256=str(preview["plan_sha256"]),
+            scopes=credential_workflows._credential_capability_scopes(
+                manifest,
+                max_items=1,
+                offset=0,
+            ),
+            reviewed_by="tester-1",
+            max_provider_requests=25,
+            issued_at=NOW,
+        )
+        # This durable started claim models a process crash immediately after
+        # the exclusive claim commit and before broker/native-secret access.
+        started = credential_workflows.claim_credential_capability_use(
+            self.root,
+            capability,
+            ARCHIVE_KEY,
+            clock=lambda: NOW,
+        )
+        self.assertEqual(started.status, "started")
+        key_provider = FixedKeyProvider()
+        transport = FakeTransport([])
+        native_reads_before = list(self.native.reads)
+        sid_reads_before = self.native.sid_reads
+
+        replay = execute_authenticated_notion_page_recovery(
+            self.root,
+            manifest,
+            expected_plan_sha256=str(preview["plan_sha256"]),
+            reviewed_by="tester-1",
+            max_items=1,
+            approved=True,
+            native=self.native,
+            credential_capability=capability.canonical_document(),
+            notion_adapter=NotionHttpAdapter(transport=transport),
+            key_provider=key_provider,
+            capability_clock=lambda: NOW,
+        )
+
+        self.assertFalse(replay["ok"])
+        self.assertEqual(replay["status_class"], "blocked")
+        self.assertEqual(replay["blockers"], ["credential_capability_replayed"])
+        self.assertEqual(replay["operations"]["credential_reads"], 0)
+        self.assertEqual(replay["operations"]["provider_calls"], 0)
+        self.assertEqual(
+            replay["credential_capability_use"]["status"],
+            "rejected",
+        )
+        self.assertFalse(
+            replay["credential_capability_use"]["claim_created"]
+        )
+        self.assertEqual(key_provider.calls, 1)
+        self.assertEqual(self.native.reads, native_reads_before)
+        self.assertEqual(self.native.sid_reads, sid_reads_before)
+        self.assertEqual(transport.calls, [])
+        claim_path = (
+            self.root
+            / "profiles"
+            / "local"
+            / "credential-capabilities"
+            / "claims"
+            / f"{capability.capability_id}.json"
+        )
+        claim = json.loads(claim_path.read_text(encoding="utf-8"))
+        self.assertEqual(claim["status"], "started")
+        self.assertEqual(claim["request_sha256"], preview["request_sha256"])
+        self.assertEqual(claim["plan_sha256"], preview["plan_sha256"])
+        self.assertNotIn(SECRET_TEXT, json.dumps(replay, ensure_ascii=False))
+
+    def test_outer_retry_transport_calls_equal_capability_authorizations(self) -> None:
+        manifest, preview = self._prepare_pending_recovery()
+        metadata = {
+            "object": "page",
+            "id": PAGE_ID,
+            "last_edited_time": "2026-08-10T01:00:00.000Z",
+            "in_trash": False,
+        }
+        transport = FakeTransport(
+            [
+                FakeResponse({}, status=500),
+                FakeResponse(metadata),
+                FakeResponse(
+                    {
+                        "object": "page_markdown",
+                        "id": PAGE_ID,
+                        "markdown": "# reviewed original\n\nexact body\n",
+                        "truncated": False,
+                        "unknown_block_ids": [],
+                    }
+                ),
+                FakeResponse(metadata),
+            ]
+        )
+        pacer = NoOpPacer()
+        delays: list[float] = []
+        recovery = execute_spawned_authenticated_notion_page_recovery(
+            self.root,
+            manifest,
+            expected_plan_sha256=str(preview["plan_sha256"]),
+            reviewed_by="tester-1",
+            max_items=1,
+            approved=True,
+            capability_clock=lambda: NOW,
+            worker_spawner=InjectedNotionRecoveryWorkerSpawner(
+                native=self.native,
+                notion_adapter=NotionHttpAdapter(transport=transport),
+                key_provider=self.key_provider,
+                request_pacer=pacer,
+                sleep=delays.append,
+                jitter=lambda: 0.0,
+                clock=lambda: NOW,
+                capability_clock=lambda: NOW,
+            ),
+        )
+
+        self.assertTrue(recovery["ok"])
+        self.assertEqual(recovery["operations"]["retry_count"], 1)
+        self.assertEqual(recovery["operations"]["provider_calls"], 4)
+        self.assertEqual(len(transport.calls), 4)
+        self.assertEqual(pacer.calls, 4)
+        self.assertEqual(delays, [1.0])
+        self.assertEqual(
+            recovery["credential_capability_use"][
+                "provider_request_authorizations"
+            ],
+            recovery["operations"]["provider_calls"],
+        )
+        claim_path = (
+            self.root
+            / "profiles"
+            / "local"
+            / "credential-capabilities"
+            / "claims"
+            / f"{recovery['credential_capability_use']['capability_id']}.json"
+        )
+        claim = json.loads(claim_path.read_text(encoding="utf-8"))
+        self.assertEqual(claim["status"], "succeeded")
+        self.assertEqual(claim["provider_requests_authorized"], 4)
+
     def test_lifecycle_then_recovery_replays_without_live_reads(self) -> None:
         transport = intake_transport(include_recovery=True)
         adopted, _ = self._adopt(transport=transport)
@@ -3581,6 +3943,56 @@ class CredentialWorkflowEndToEndTests(unittest.TestCase):
         self.assertEqual(recovery["status_class"], "written")
         self.assertEqual(recovery["operations"]["credential_reads"], 1)
         self.assertEqual(recovery["operations"]["credential_resolution_attempts"], 1)
+        capability_use = recovery["credential_capability_use"]
+        self.assertEqual(capability_use["status"], "succeeded")
+        self.assertTrue(capability_use["claim_created"])
+        self.assertEqual(capability_use["max_uses"], 1)
+        self.assertEqual(
+            capability_use["provider_request_authorizations"],
+            recovery["operations"]["provider_calls"],
+        )
+        self.assertRegex(capability_use["capability_id"], r"^cap_[0-9a-f]{32}$")
+        self.assertRegex(
+            capability_use["capability_sha256"], r"^sha256:[0-9a-f]{64}$"
+        )
+        claim_paths = list(
+            (
+                self.root
+                / "profiles"
+                / "local"
+                / "credential-capabilities"
+                / "claims"
+            ).glob("*.json")
+        )
+        self.assertEqual(len(claim_paths), 1)
+        claim_document = json.loads(claim_paths[0].read_text(encoding="utf-8"))
+        self.assertEqual(claim_document["status"], "succeeded")
+        self.assertEqual(
+            claim_document["provider_requests_authorized"],
+            recovery["operations"]["provider_calls"],
+        )
+        self.assertNotIn(SECRET_TEXT, claim_paths[0].read_text(encoding="utf-8"))
+        recovery_receipts = list(
+            (
+                self.root
+                / "receipts"
+                / "notion-page-recovery"
+            ).glob("*.receipt.json")
+        )
+        self.assertEqual(len(recovery_receipts), 1)
+        recovery_receipt = json.loads(
+            recovery_receipts[0].read_text(encoding="utf-8")
+        )
+        self.assertEqual(
+            recovery_receipt["credential_capability_reference"],
+            {
+                "schema_version": (
+                    "wom-kit/credential-capability-reference/v0.1"
+                ),
+                "capability_id": capability_use["capability_id"],
+                "capability_sha256": capability_use["capability_sha256"],
+            },
+        )
         self.assertEqual(len(derived_fingerprint_keys), 1)
         self.assertTrue(all(value == 0 for value in derived_fingerprint_keys[0]))
         self.assertEqual(len(transport.calls), 5)
@@ -3601,6 +4013,21 @@ class CredentialWorkflowEndToEndTests(unittest.TestCase):
         self.assertEqual(replay["status_class"], "no_change")
         self.assertEqual(replay["operations"]["provider_calls"], 0)
         self.assertEqual(replay["operations"]["credential_reads"], 0)
+        self.assertEqual(
+            replay["credential_capability_use"],
+            {
+                "schema_version": (
+                    "wom-credential-capability-use-summary/v0.1"
+                ),
+                "capability_id": None,
+                "capability_sha256": None,
+                "claim_created": False,
+                "max_uses": 0,
+                "provider_request_authorizations": 0,
+                "status": "not_required",
+            },
+        )
+        self.assertEqual(len(list(claim_paths[0].parent.glob("*.json"))), 1)
         self.assertEqual(len(self.native.reads), native_reads_before)
         self.assertEqual(len(transport.calls), provider_calls_before)
         self.assertEqual(self.native.prompts, 1)
@@ -3630,6 +4057,18 @@ class CredentialWorkflowEndToEndTests(unittest.TestCase):
         self.assertEqual(accepted["request_sha256"], preview["request_sha256"])
         self.assertEqual(accepted["plan_sha256"], preview["plan_sha256"])
 
+        lost_evidence_capability = CredentialCapability.issue(
+            request_sha256=str(preview["request_sha256"]),
+            plan_sha256=str(preview["plan_sha256"]),
+            scopes=credential_workflows._credential_capability_scopes(
+                manifest,
+                max_items=1,
+                offset=0,
+            ),
+            reviewed_by="tester-1",
+            max_provider_requests=100,
+            issued_at=NOW,
+        )
         lost_evidence_contract = credential_workflows._RecoveryProjectionContract(
             request_sha256=str(preview["request_sha256"]),
             plan_sha256=str(preview["plan_sha256"]),
@@ -3639,6 +4078,7 @@ class CredentialWorkflowEndToEndTests(unittest.TestCase):
             unselected_item_count=0,
             recovered_verified_count=1,
             provider_pending_count=1,
+            credential_capability=lost_evidence_capability,
         )
         refetched = copy.deepcopy(valid)
         refetched["counts"].update(
@@ -3668,6 +4108,15 @@ class CredentialWorkflowEndToEndTests(unittest.TestCase):
                 "resume_rows_created": 4,
             }
         )
+        refetched["credential_capability_use"] = {
+            "schema_version": "wom-credential-capability-use-summary/v0.1",
+            "capability_id": lost_evidence_capability.capability_id,
+            "capability_sha256": lost_evidence_capability.digest_sha256,
+            "claim_created": True,
+            "max_uses": 1,
+            "provider_request_authorizations": 6,
+            "status": "succeeded",
+        }
         lost_evidence_projection = (
             credential_workflows._project_recovery_worker_result(
                 refetched,
@@ -3705,6 +4154,44 @@ class CredentialWorkflowEndToEndTests(unittest.TestCase):
         candidate = copy.deepcopy(valid)
         candidate["operations"]["paced_request_count"] = 2
         polluted.append(candidate)
+        candidate = copy.deepcopy(valid)
+        candidate["status_class"] = SecretStr("written", SECRET_TEXT)
+        polluted.append(candidate)
+        candidate = copy.deepcopy(valid)
+        candidate["reason_code"] = SecretStr(
+            "notion_page_recovery_written",
+            SECRET_TEXT,
+        )
+        polluted.append(candidate)
+        candidate = copy.deepcopy(valid)
+        candidate.update(
+            {
+                "ok": False,
+                "status_class": "blocked",
+                "reason_code": "notion_page_recovery_blocked",
+                "blockers": [
+                    SecretStr("credential_resolution_failed", SECRET_TEXT)
+                ],
+            }
+        )
+        candidate["counts"].update(
+            {
+                "processed_item_count": 0,
+                "pending_item_count": 1,
+                "outcomes": {
+                    "recovered": 0,
+                    "deleted": 0,
+                    "forbidden": 0,
+                    "not_found_or_not_shared": 0,
+                    "retryable_error": 0,
+                    "partial": 0,
+                },
+            }
+        )
+        candidate["operations"] = {
+            key: 0 for key in valid["operations"]
+        }
+        polluted.append(candidate)
 
         for raw_result in polluted:
             with self.subTest(raw_result=raw_result):
@@ -3737,6 +4224,11 @@ class CredentialWorkflowEndToEndTests(unittest.TestCase):
                 self.assertEqual(blocked["plan_sha256"], preview["plan_sha256"])
                 self.assertNotIn(
                     "arbitrary_child_channel",
+                    json.dumps(blocked, ensure_ascii=False),
+                )
+                self.assertNotIn(SECRET_TEXT, repr(blocked))
+                self.assertNotIn(
+                    SECRET_TEXT,
                     json.dumps(blocked, ensure_ascii=False),
                 )
 
@@ -4138,6 +4630,165 @@ class CredentialWorkflowEndToEndTests(unittest.TestCase):
         self.assertEqual(self.native.writes, [])
         self.assertEqual(self.native.reads, [])
         self.assertEqual(before, after)
+
+    def test_recovery_capability_preflight_blocks_before_key_secret_and_provider(self) -> None:
+        class FailIfKeyUsed:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def use_key(self, *_args, **_kwargs):
+                self.calls += 1
+                raise AssertionError("capability preflight must precede key access")
+
+        manifest = make_manifest(
+            {
+                "credential_id": CREDENTIAL_ID,
+                "workspace_fingerprint": "sha256:" + "1" * 64,
+                "scope_receipt_sha256": "sha256:" + "2" * 64,
+                "revision": "capability-preflight-test",
+                "persisted": True,
+                "workspace_evidence_verified": True,
+            }
+        )
+        preview = plan_recovery(self.root, manifest, max_items=1)
+        capability = CredentialCapability.issue(
+            request_sha256=str(preview["request_sha256"]),
+            plan_sha256=str(preview["plan_sha256"]),
+            scopes=credential_workflows._credential_capability_scopes(
+                manifest,
+                max_items=1,
+                offset=0,
+            ),
+            reviewed_by="tester-1",
+            max_provider_requests=25,
+            issued_at=NOW,
+            ttl_seconds=30,
+        )
+        tampered = capability.canonical_document()
+        tampered["plan_sha256"] = "sha256:" + "0" * 64
+        cases = (
+            (None, NOW, NotionHttpAdapter(), "credential_capability_invalid"),
+            (tampered, NOW, NotionHttpAdapter(), "credential_capability_invalid"),
+            (
+                capability.canonical_document(),
+                NOW + timedelta(seconds=30),
+                NotionHttpAdapter(),
+                "credential_capability_expired",
+            ),
+            (
+                capability.canonical_document(),
+                NOW,
+                NotionHttpAdapter(max_attempts=2),
+                "credential_capability_invalid",
+            ),
+        )
+        for document, current, adapter, blocker in cases:
+            with self.subTest(blocker=blocker, retry_count=adapter.capability_transport_attempts_per_call):
+                key_provider = FailIfKeyUsed()
+                result = execute_authenticated_notion_page_recovery(
+                    self.root,
+                    manifest,
+                    expected_plan_sha256=str(preview["plan_sha256"]),
+                    reviewed_by="tester-1",
+                    max_items=1,
+                    approved=True,
+                    native=self.native,
+                    credential_capability=document,
+                    notion_adapter=adapter,
+                    key_provider=key_provider,
+                    capability_clock=lambda current=current: current,
+                )
+                self.assertFalse(result["ok"])
+                self.assertEqual(result["blockers"], [blocker])
+                self.assertEqual(result["operations"]["credential_reads"], 0)
+                self.assertEqual(result["operations"]["provider_calls"], 0)
+                self.assertFalse(
+                    result["credential_capability_use"]["claim_created"]
+                )
+                self.assertEqual(
+                    result["credential_capability_use"]["status"],
+                    "rejected",
+                )
+                self.assertEqual(key_provider.calls, 0)
+
+    def test_expired_parent_capability_projects_explicit_rejection(self) -> None:
+        class FailIfKeyUsed:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def use_key(self, *_args, **_kwargs):
+                self.calls += 1
+                raise AssertionError("expired capability must precede key access")
+
+        manifest = make_manifest(
+            {
+                "credential_id": CREDENTIAL_ID,
+                "workspace_fingerprint": "sha256:" + "1" * 64,
+                "scope_receipt_sha256": "sha256:" + "2" * 64,
+                "revision": "capability-expiry-projection-test",
+                "persisted": True,
+                "workspace_evidence_verified": True,
+            }
+        )
+        preview = plan_recovery(self.root, manifest, max_items=1)
+        capability = CredentialCapability.issue(
+            request_sha256=str(preview["request_sha256"]),
+            plan_sha256=str(preview["plan_sha256"]),
+            scopes=credential_workflows._credential_capability_scopes(
+                manifest,
+                max_items=1,
+                offset=0,
+            ),
+            reviewed_by="tester-1",
+            max_provider_requests=25,
+            issued_at=NOW,
+            ttl_seconds=30,
+        )
+        key_provider = FailIfKeyUsed()
+        child_result = execute_authenticated_notion_page_recovery(
+            self.root,
+            manifest,
+            expected_plan_sha256=str(preview["plan_sha256"]),
+            reviewed_by="tester-1",
+            max_items=1,
+            approved=True,
+            native=self.native,
+            credential_capability=capability.canonical_document(),
+            notion_adapter=NotionHttpAdapter(),
+            key_provider=key_provider,
+            capability_clock=lambda: NOW + timedelta(seconds=30),
+        )
+        contract = credential_workflows._build_recovery_projection_contract(
+            preview,
+            expected_plan_sha256=str(preview["plan_sha256"]),
+            credential_capability=capability,
+        )
+
+        projected = credential_workflows._project_recovery_worker_result(
+            child_result,
+            contract=contract,
+        )
+
+        self.assertFalse(projected["ok"])
+        self.assertEqual(
+            projected["blockers"],
+            ["credential_capability_expired"],
+        )
+        self.assertEqual(projected["operations"]["credential_reads"], 0)
+        self.assertEqual(projected["operations"]["provider_calls"], 0)
+        self.assertEqual(key_provider.calls, 0)
+        self.assertEqual(
+            projected["credential_capability_use"],
+            {
+                "schema_version": "wom-credential-capability-use-summary/v0.1",
+                "capability_id": capability.capability_id,
+                "capability_sha256": capability.digest_sha256,
+                "claim_created": False,
+                "max_uses": 1,
+                "provider_request_authorizations": 0,
+                "status": "rejected",
+            },
+        )
 
 
 if __name__ == "__main__":
