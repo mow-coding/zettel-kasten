@@ -1,7 +1,9 @@
 # Credential Store Contract
 
-Status: v0.3.20 read-only credential reference baseline
-Date: 2026-06-14
+Status: v0.3.20 reference baseline; v0.3.320 narrow registered-credential capability
+Date: 2026-08-15
+
+Previous checkpoint: Status: v0.3.20 read-only credential reference baseline
 
 This document defines how WOM-kit talks about secrets without storing secrets in
 the archive.
@@ -160,6 +162,15 @@ the same approval receipt, and still never records the secret value, database
 password, `.kdbx` path, exact credential ref, raw adapter output, username,
 email address, token, or provider URL.
 
+v0.3.311 added a separate authenticated Windows Credential Manager registry for
+reviewed Notion recovery. v0.3.320 hardens that already-live recovery path with
+a fresh, expiring, one-use capability and HMAC-authenticated exclusive claim
+before the first native credential read. The capability is bound to the exact
+request, plan, reviewer, selected receipt/lifecycle scopes, fixed read-only
+Notion endpoints, and request budget. It does not make the generic `env:`,
+`keyring:`, `secret:`, or `wallet:` reference planner live. See the
+[Credential Capability Contract](credential-capability-contract.md).
+
 ## Mail Sources
 
 Mail source access should use refs such as:
@@ -216,6 +227,11 @@ v0.3.20 does not:
 - mint zets.
 
 It creates a safe contract for future local adapters.
+
+The v0.3.320 exception is only the already-registered, authenticated Notion
+recovery worker described above. It adds no generic keyring reader, external
+password-manager access, browser autofill, credential sharing, or AI-visible
+secret value.
 
 ## Future Workflow
 

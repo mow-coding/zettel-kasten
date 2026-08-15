@@ -1,19 +1,19 @@
 # Install WOM-kit As A Python Tool
 
-Status: v0.3.319 conditional GitHub wheel and credential-input readiness corrections
+Status: v0.3.320 conditional GitHub wheel and one-use credential capability
 
 WOM-kit is a command-line tool. It should live in its own Python environment
 instead of being mixed into an application project's dependencies.
 
-The v0.3.319 URL below is a conditional contract, not proof that an artifact is
+The v0.3.320 URL below is a conditional contract, not proof that an artifact is
 public. Use it only after the matching GitHub Release exists and lists the
-verified wheel. See the [v0.3.319 release note](releases/v0.3.319.md) for the
+verified wheel. See the [v0.3.320 release note](releases/v0.3.320.md) for the
 separate source and release-evidence boundary.
 
-An installed v0.3.317 client does not contain the corrected paste guidance,
-receipt status, or five-stage credential result contract. Updating
+An installed v0.3.319 client does not contain the one-use recovery capability,
+exclusive authenticated claim, or bidirectional claim/recovery linkage. Updating
 repository files alone does not replace the isolated `uv tool` or
-virtual-environment wheel. After the verified v0.3.319 asset exists, install
+virtual-environment wheel. After the verified v0.3.320 asset exists, install
 that exact wheel and start a new process.
 
 ## Recommended Install
@@ -23,7 +23,7 @@ verified wheel. The versioned URL alone is not proof that the asset is
 available:
 
 ```powershell
-uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.319/wom_kit-0.3.319-py3-none-any.whl"
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.320/wom_kit-0.3.320-py3-none-any.whl"
 archive --version
 ```
 
@@ -41,7 +41,7 @@ Plain `pip` works when it is placed inside a dedicated virtual environment:
 
 ```powershell
 py -m venv "$HOME\.wom-tools\wom-kit"
-& "$HOME\.wom-tools\wom-kit\Scripts\python.exe" -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.319/wom_kit-0.3.319-py3-none-any.whl"
+& "$HOME\.wom-tools\wom-kit\Scripts\python.exe" -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.320/wom_kit-0.3.320-py3-none-any.whl"
 & "$HOME\.wom-tools\wom-kit\Scripts\archive.exe" --version
 ```
 

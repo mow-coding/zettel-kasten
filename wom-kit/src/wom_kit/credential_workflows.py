@@ -36,6 +36,11 @@ import signal
 import time
 from typing import Any, Protocol
 
+from .credential_capability import (
+    CredentialCapability,
+    CredentialCapabilityError,
+    CredentialCapabilityScope,
+)
 from .credential_secure_intake import (
     FileOneTimeRequestClaims,
     SecureIntakePlan,
@@ -60,10 +65,12 @@ from .credential_secure_intake_windows import (
 )
 from .credential_secure_registry import (
     AuthenticatedCredentialReuseEvidence,
+    ClaimedCredentialCapabilityUse,
     LEGACY_WORKSPACE_IDENTITY_BASIS,
     ReceiptBackedNotionCredentialBroker,
     SecureCredentialRegistryError,
     StableArchiveFingerprintKeyProvider,
+    claim_credential_capability_use,
     create_archive_atomic_json_receipt_committer,
     evolve_legacy_authenticated_workspace_scope,
     list_secure_credentials,
@@ -73,12 +80,15 @@ from .credential_secure_registry import (
 from .notion_http_adapter import NotionHttpAdapter, NotionHttpAdapterError
 from .notion_page_recovery import (
     ArchiveInterprocessRequestPacer,
+    CREDENTIAL_CAPABILITY_REFERENCE_SCHEMA,
     DEFAULT_MAX_ATTEMPTS,
     DEFAULT_MAX_RETRY_DELAY_SECONDS,
     FilesystemRecoveryStorage,
     MAX_UNKNOWN_BLOCK_IDS,
     ProviderRequestPacer,
+    build_plan,
     execute_recovery,
+    parse_manifest,
     plan_recovery,
 )
 
@@ -2308,6 +2318,215 @@ class _NeverWindowsNative:
         raise RuntimeError("unexpected_native_call")
 
 
+_CAPABILITY_USE_SUMMARY_SCHEMA = (
+    "wom-credential-capability-use-summary/v0.1"
+)
+_CAPABILITY_USE_SUMMARY_KEYS = {
+    "schema_version",
+    "capability_id",
+    "capability_sha256",
+    "claim_created",
+    "max_uses",
+    "provider_request_authorizations",
+    "status",
+}
+_CAPABILITY_USE_STATUSES = {
+    "not_required",
+    "rejected",
+    "unknown",
+    "started",
+    "succeeded",
+    "failed",
+    "finalization_failed",
+}
+
+
+def _credential_capability_scopes(
+    manifest: Mapping[str, Any],
+    *,
+    max_items: int,
+    offset: int,
+) -> tuple[CredentialCapabilityScope, ...]:
+    """Rebuild the exact selected receipt scopes without page identifiers."""
+
+    request = parse_manifest(manifest)
+    plan = build_plan(request, max_items=max_items, offset=offset)
+    selected_group_ids = {item.group_id for item in plan.selected_items}
+    scopes = {
+        CredentialCapabilityScope(
+            credential_id=group.scope_binding.credential_id,
+            workspace_fingerprint=group.scope_binding.workspace_fingerprint,
+            scope_receipt_sha256=group.scope_binding.scope_receipt_sha256,
+            revision=group.scope_binding.revision,
+        )
+        for group in request.groups
+        if group.group_id in selected_group_ids
+    }
+    return tuple(sorted(scopes, key=lambda scope: scope.sort_key))
+
+
+def _credential_capability_request_budget(selected_item_count: int) -> int:
+    """Bound every logical provider attempt approved by the recovery plan."""
+
+    if (
+        type(selected_item_count) is not int
+        or selected_item_count < 1
+    ):
+        raise ValueError("credential_capability_request_budget_invalid")
+    return (
+        selected_item_count
+        * (MAX_UNKNOWN_BLOCK_IDS + 3)
+        * DEFAULT_MAX_ATTEMPTS
+    )
+
+
+def _capability_use_summary(
+    capability: CredentialCapability | None,
+    *,
+    claim_created: bool | None,
+    provider_request_authorizations: int | None,
+    status: str,
+) -> dict[str, Any]:
+    if status not in _CAPABILITY_USE_STATUSES:
+        raise ValueError("credential_capability_summary_invalid")
+    if capability is None:
+        capability_id: str | None = None
+        capability_sha256: str | None = None
+        max_uses = 0
+    else:
+        capability_id = capability.capability_id
+        capability_sha256 = capability.digest_sha256
+        max_uses = capability.max_uses
+    return {
+        "schema_version": _CAPABILITY_USE_SUMMARY_SCHEMA,
+        "capability_id": capability_id,
+        "capability_sha256": capability_sha256,
+        "claim_created": claim_created,
+        "max_uses": max_uses,
+        "provider_request_authorizations": provider_request_authorizations,
+        "status": status,
+    }
+
+
+def _attach_capability_use_summary(
+    result: Mapping[str, Any],
+    summary: Mapping[str, Any],
+) -> dict[str, Any]:
+    attached = dict(result)
+    attached["credential_capability_use"] = dict(summary)
+    return attached
+
+
+def _capability_blocked_recovery_result(
+    preview: Mapping[str, Any],
+    *,
+    blocker: str,
+    summary: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Return a truthful zero-provider recovery result for capability preflight."""
+
+    counts = preview.get("counts")
+    if not isinstance(counts, Mapping):
+        raise ValueError("notion_page_recovery_preview_invalid")
+    input_count = counts.get("input_item_count")
+    selected_count = counts.get("selected_item_count")
+    unselected_count = counts.get("unselected_item_count")
+    if any(type(value) is not int for value in (input_count, selected_count, unselected_count)):
+        raise ValueError("notion_page_recovery_preview_invalid")
+    return {
+        "ok": False,
+        "dry_run": False,
+        "lifecycle_action": "notion_page_recovery_execute",
+        "status_class": "blocked",
+        "reason_code": "notion_page_recovery_blocked",
+        "request_sha256": preview["request_sha256"],
+        "plan_sha256": preview["plan_sha256"],
+        "counts": {
+            "input_item_count": input_count,
+            "selected_item_count": selected_count,
+            "processed_item_count": 0,
+            "pending_item_count": selected_count,
+            "unselected_item_count": unselected_count,
+            "replayed_recovered_count": 0,
+            "outcomes": {name: 0 for name in sorted(_RECOVERY_OUTCOMES)},
+            "total_accounted_count": input_count,
+        },
+        "operations": {name: 0 for name in sorted(_RECOVERY_OPERATION_KEYS)},
+        "receipt_created": False,
+        "privacy_guards": dict(_RECOVERY_PRIVACY_GUARDS),
+        "blockers": [blocker],
+        "credential_capability_use": dict(summary),
+    }
+
+
+def _credential_capability_blocker(code: object) -> str:
+    if code == "credential_capability_claim_replayed":
+        return "credential_capability_replayed"
+    if code in {
+        "credential_capability_claim_commit_failed",
+        "credential_capability_claim_missing",
+        "credential_capability_claim_document_invalid",
+        "credential_capability_claim_authentication_invalid",
+        "credential_capability_claim_binding_mismatch",
+        "credential_capability_claim_state_invalid",
+    }:
+        return "credential_capability_claim_failed"
+    if code in {
+        "credential_capability_expired",
+        "credential_capability_not_yet_valid",
+    }:
+        return "credential_capability_expired"
+    return "credential_capability_invalid"
+
+
+def _mark_capability_finalization_failed(
+    result: Mapping[str, Any],
+    capability: CredentialCapability,
+    claimed_use: ClaimedCredentialCapabilityUse,
+) -> dict[str, Any]:
+    updated = dict(result)
+    counts = result.get("counts")
+    operations = result.get("operations")
+    observed = False
+    if isinstance(counts, Mapping):
+        observed = type(counts.get("processed_item_count")) is int and (
+            counts["processed_item_count"] > 0
+        )
+    if isinstance(operations, Mapping):
+        observed = observed or any(
+            isinstance(value, (int, float))
+            and not isinstance(value, bool)
+            and value > 0
+            for value in operations.values()
+        )
+    updated.update(
+        {
+            "ok": False,
+            "status_class": "partial" if observed else "blocked",
+            "reason_code": (
+                "notion_page_recovery_partial"
+                if observed
+                else "notion_page_recovery_blocked"
+            ),
+            "blockers": sorted(
+                set(result.get("blockers", ()))
+                | {"credential_capability_audit_finalize_failed"}
+            ),
+        }
+    )
+    return _attach_capability_use_summary(
+        updated,
+        _capability_use_summary(
+            capability,
+            claim_created=True,
+            provider_request_authorizations=(
+                claimed_use.provider_request_authorizations
+            ),
+            status="finalization_failed",
+        ),
+    )
+
+
 def execute_authenticated_notion_page_recovery(
     archive_root: Path | str,
     manifest: Mapping[str, Any],
@@ -2317,6 +2536,7 @@ def execute_authenticated_notion_page_recovery(
     max_items: int,
     approved: bool,
     native: WindowsSecureIntakeNative,
+    credential_capability: Mapping[str, Any] | None = None,
     notion_adapter: NotionHttpAdapter | None = None,
     key_provider: StableArchiveFingerprintKeyProvider | None = None,
     offset: int = 0,
@@ -2325,6 +2545,7 @@ def execute_authenticated_notion_page_recovery(
     sleep: Callable[[float], None] | None = None,
     jitter: Callable[[], float] | None = None,
     clock: Callable[[], datetime] | None = None,
+    capability_clock: Callable[[], datetime] | None = None,
     max_attempts: int = 5,
     max_retry_delay_seconds: float = 60.0,
 ) -> dict[str, Any]:
@@ -2387,37 +2608,174 @@ def execute_authenticated_notion_page_recovery(
         # Replayed objects are already content-hash verified by plan_recovery.
         # A never-provider/never-broker closes the TOCTOU boundary: if that
         # state changes, execution blocks instead of silently becoming live.
-        return execute_recovery(
+        replayed = execute_recovery(
             archive_root,
             manifest,
             provider=_NeverNotionProvider(),
             credential_broker=_NeverCredentialBroker(),
             **execute_kwargs,
         )
+        return _attach_capability_use_summary(
+            replayed,
+            _capability_use_summary(
+                None,
+                claim_created=False,
+                provider_request_authorizations=0,
+                status="not_required",
+            ),
+        )
 
-    selected = _key_provider(native, key_provider)
+    capability: CredentialCapability | None = None
+    try:
+        if type(credential_capability) is not dict:
+            raise CredentialCapabilityError("credential_capability_required")
+        capability = CredentialCapability.from_document(credential_capability)
+        scopes = _credential_capability_scopes(
+            manifest,
+            max_items=max_items,
+            offset=offset,
+        )
+        capability_now = (
+            capability_clock() if capability_clock is not None
+            else datetime.now(timezone.utc)
+        )
+        capability.validate_recovery_binding(
+            request_sha256=str(preview["request_sha256"]),
+            plan_sha256=str(preview["plan_sha256"]),
+            scopes=scopes,
+            reviewed_by=reviewed_by,
+            now_utc=capability_now,
+        )
+    except Exception as exc:
+        blocker = _credential_capability_blocker(getattr(exc, "code", None))
+        return _capability_blocked_recovery_result(
+            preview,
+            blocker=blocker,
+            summary=_capability_use_summary(
+                capability,
+                claim_created=False,
+                provider_request_authorizations=0,
+                status="rejected",
+            ),
+        )
+
     provider = notion_adapter if notion_adapter is not None else NotionHttpAdapter()
+    if not (
+        type(provider) is NotionHttpAdapter
+        and type(provider.capability_transport_attempts_per_call) is int
+        and provider.capability_transport_attempts_per_call == 1
+    ):
+        return _capability_blocked_recovery_result(
+            preview,
+            blocker="credential_capability_invalid",
+            summary=_capability_use_summary(
+                capability,
+                claim_created=False,
+                provider_request_authorizations=0,
+                status="rejected",
+            ),
+        )
+    selected = _key_provider(native, key_provider)
 
     def recover_with_archive_key(key_view: memoryview) -> dict[str, Any]:
-        owner_binding = current_windows_owner_binding(native)
-        fingerprint_key = derive_windows_fingerprint_key(key_view, owner_binding)
+        claim_clock = capability_clock or (lambda: datetime.now(timezone.utc))
         try:
+            claimed_use = claim_credential_capability_use(
+                archive_root,
+                capability,
+                key_view,
+                clock=claim_clock,
+            )
+        except Exception as exc:
+            code = getattr(exc, "code", None)
+            blocker = _credential_capability_blocker(code)
+            claim_created: bool | None = (
+                None
+                if code == "credential_capability_claim_commit_failed"
+                else False
+            )
+            status = "unknown" if claim_created is None else "rejected"
+            return _capability_blocked_recovery_result(
+                preview,
+                blocker=blocker,
+                summary=_capability_use_summary(
+                    capability,
+                    claim_created=claim_created,
+                    provider_request_authorizations=(
+                        None if claim_created is None else 0
+                    ),
+                    status=status,
+                ),
+            )
+
+        fingerprint_key: bytearray | None = None
+        try:
+            owner_binding = current_windows_owner_binding(native)
+            fingerprint_key = derive_windows_fingerprint_key(
+                key_view,
+                owner_binding,
+            )
             broker = ReceiptBackedNotionCredentialBroker(
                 archive_root=archive_root,
                 native=native,
                 receipt_authentication_key=key_view,
                 secret_fingerprint_key=fingerprint_key,
+                claimed_use=claimed_use,
             )
-            return execute_recovery(
+            result = execute_recovery(
                 archive_root,
                 manifest,
                 provider=provider,
                 credential_broker=broker,
+                credential_capability_reference={
+                    "schema_version": CREDENTIAL_CAPABILITY_REFERENCE_SCHEMA,
+                    "capability_id": capability.capability_id,
+                    "capability_sha256": capability.digest_sha256,
+                },
                 **execute_kwargs,
             )
+
+            failure_code = result.get("reason_code")
+            if not (
+                type(failure_code) is str
+                and _FIXED_CODE_RE.fullmatch(failure_code) is not None
+            ):
+                failure_code = "notion_page_recovery_result_invalid"
+            try:
+                if result.get("ok") is True:
+                    claimed_use.finalize_succeeded()
+                else:
+                    claimed_use.finalize_failed(failure_code)
+            except Exception:
+                return _mark_capability_finalization_failed(
+                    result,
+                    capability,
+                    claimed_use,
+                )
+            return _attach_capability_use_summary(
+                result,
+                _capability_use_summary(
+                    capability,
+                    claim_created=True,
+                    provider_request_authorizations=(
+                        claimed_use.provider_request_authorizations
+                    ),
+                    status=claimed_use.status,
+                ),
+            )
+        except Exception:
+            if claimed_use.status == "started":
+                try:
+                    claimed_use.finalize_failed(
+                        "notion_page_recovery_execution_failed"
+                    )
+                except Exception:
+                    pass
+            raise
         finally:
-            for index in range(len(fingerprint_key)):
-                fingerprint_key[index] = 0
+            if fingerprint_key is not None:
+                for index in range(len(fingerprint_key)):
+                    fingerprint_key[index] = 0
 
     try:
         result = selected.use_key(
@@ -2441,6 +2799,7 @@ class NotionRecoveryWorkerInvocation:
 
     archive_root: str = field(repr=False)
     manifest: Mapping[str, Any] = field(repr=False)
+    credential_capability: Mapping[str, Any] = field(repr=False)
     expected_plan_sha256: str
     reviewed_by: str = field(repr=False)
     max_items: int
@@ -2478,6 +2837,10 @@ class InjectedNotionRecoveryWorkerSpawner:
     sleep: Callable[[float], None] | None = field(default=None, repr=False)
     jitter: Callable[[], float] | None = field(default=None, repr=False)
     clock: Callable[[], datetime] | None = field(default=None, repr=False)
+    capability_clock: Callable[[], datetime] | None = field(
+        default=None,
+        repr=False,
+    )
 
     def run_worker(
         self,
@@ -2494,6 +2857,7 @@ class InjectedNotionRecoveryWorkerSpawner:
                 offset=invocation.offset,
                 approved=True,
                 native=self.native,
+                credential_capability=invocation.credential_capability,
                 notion_adapter=self.notion_adapter,
                 key_provider=self.key_provider,
                 storage=self.storage,
@@ -2501,6 +2865,7 @@ class InjectedNotionRecoveryWorkerSpawner:
                 sleep=self.sleep,
                 jitter=self.jitter,
                 clock=self.clock,
+                capability_clock=self.capability_clock,
             ),
         )
 
@@ -2528,6 +2893,7 @@ def _spawned_recovery_entry(
             offset=invocation.offset,
             approved=True,
             native=native,
+            credential_capability=invocation.credential_capability,
             notion_adapter=NotionHttpAdapter(),
             key_provider=StableArchiveFingerprintKeyProvider(native),
         )
@@ -2610,6 +2976,7 @@ _RECOVERY_RESULT_KEYS = {
     "receipt_created",
     "privacy_guards",
     "blockers",
+    "credential_capability_use",
 }
 _RECOVERY_COUNT_KEYS = {
     "input_item_count",
@@ -2686,6 +3053,13 @@ _RECOVERY_EXECUTION_BLOCKERS = _RECOVERY_STORAGE_BLOCKERS | {
     "credential_close_failed",
     "count_invariant_failed",
     "receipt_write_failed",
+    "credential_capability_invalid",
+    "credential_capability_expired",
+    "credential_capability_replayed",
+    "credential_capability_claim_failed",
+    "credential_capability_authorization_failed",
+    "credential_capability_audit_finalize_failed",
+    "credential_capability_reference_invalid",
 }
 
 
@@ -2701,12 +3075,17 @@ class _RecoveryProjectionContract:
     unselected_item_count: int
     recovered_verified_count: int
     provider_pending_count: int
+    credential_capability: CredentialCapability | None = field(
+        default=None,
+        repr=False,
+    )
 
 
 def _build_recovery_projection_contract(
     preview: Mapping[str, Any],
     *,
     expected_plan_sha256: str,
+    credential_capability: CredentialCapability | None = None,
 ) -> _RecoveryProjectionContract:
     if (
         preview.get("ok") is not True
@@ -2763,6 +3142,7 @@ def _build_recovery_projection_contract(
         unselected_item_count=counts["unselected_item_count"],
         recovered_verified_count=counts["recovered_verified_count"],
         provider_pending_count=counts["provider_pending_count"],
+        credential_capability=credential_capability,
     )
 
 
@@ -2802,9 +3182,126 @@ def _uncertain_recovery_worker_result(
         "receipt_created": None,
         "privacy_guards": dict(_RECOVERY_PRIVACY_GUARDS),
         "blockers": ["notion_page_recovery_worker_state_unknown"],
+        "credential_capability_use": _capability_use_summary(
+            contract.credential_capability,
+            claim_created=None,
+            provider_request_authorizations=None,
+            status="unknown",
+        ),
         "durable_state": "unknown_may_have_changed",
         "operator_action": "reconcile_and_rerun_same_approved_plan",
         "worker_result_accepted": False,
+    }
+
+
+def _project_credential_capability_use(
+    value: object,
+    *,
+    contract: _RecoveryProjectionContract,
+    result_ok: bool,
+    blockers: Sequence[str],
+    provider_calls: int,
+) -> dict[str, Any]:
+    if type(value) is not dict or set(value) != _CAPABILITY_USE_SUMMARY_KEYS:
+        raise ValueError("credential_capability_summary_invalid")
+    if (
+        type(value.get("schema_version")) is not str
+        or value["schema_version"] != _CAPABILITY_USE_SUMMARY_SCHEMA
+        or type(value.get("status")) is not str
+    ):
+        raise ValueError("credential_capability_summary_invalid")
+    capability = contract.credential_capability
+    if capability is None:
+        if value != _capability_use_summary(
+            None,
+            claim_created=False,
+            provider_request_authorizations=0,
+            status="not_required",
+        ):
+            raise ValueError("credential_capability_summary_invalid")
+        return _capability_use_summary(
+            None,
+            claim_created=False,
+            provider_request_authorizations=0,
+            status="not_required",
+        )
+
+    if not (
+        type(value.get("capability_id")) is str
+        and hmac.compare_digest(value["capability_id"], capability.capability_id)
+        and type(value.get("capability_sha256")) is str
+        and hmac.compare_digest(
+            value["capability_sha256"], capability.digest_sha256
+        )
+        and type(value.get("max_uses")) is int
+        and value["max_uses"] == capability.max_uses == 1
+    ):
+        raise ValueError("credential_capability_summary_invalid")
+    status = value["status"]
+    claim_created = value.get("claim_created")
+    authorizations = value.get("provider_request_authorizations")
+    capability_blockers = set(blockers) & {
+        "credential_capability_invalid",
+        "credential_capability_expired",
+        "credential_capability_replayed",
+        "credential_capability_claim_failed",
+        "credential_capability_authorization_failed",
+        "credential_capability_audit_finalize_failed",
+    }
+    if status == "rejected":
+        if not (
+            result_ok is False
+            and claim_created is False
+            and type(authorizations) is int
+            and authorizations == provider_calls == 0
+            and capability_blockers
+            <= {
+                "credential_capability_invalid",
+                "credential_capability_expired",
+                "credential_capability_replayed",
+            }
+            and capability_blockers
+        ):
+            raise ValueError("credential_capability_summary_invalid")
+    elif status == "unknown":
+        if not (
+            result_ok is False
+            and claim_created is None
+            and authorizations is None
+            and capability_blockers == {"credential_capability_claim_failed"}
+            and provider_calls == 0
+        ):
+            raise ValueError("credential_capability_summary_invalid")
+    elif status in {"succeeded", "failed", "finalization_failed"}:
+        if not (
+            claim_created is True
+            and type(authorizations) is int
+            and 0 <= authorizations <= capability.max_provider_requests
+            and authorizations == provider_calls
+        ):
+            raise ValueError("credential_capability_summary_invalid")
+        if status == "succeeded" and result_ok is not True:
+            raise ValueError("credential_capability_summary_invalid")
+        if status == "failed" and result_ok is not False:
+            raise ValueError("credential_capability_summary_invalid")
+        if not (
+            (status == "finalization_failed")
+            == (
+                "credential_capability_audit_finalize_failed"
+                in capability_blockers
+            )
+        ):
+            raise ValueError("credential_capability_summary_invalid")
+    else:
+        raise ValueError("credential_capability_summary_invalid")
+    return {
+        "schema_version": _CAPABILITY_USE_SUMMARY_SCHEMA,
+        "capability_id": capability.capability_id,
+        "capability_sha256": capability.digest_sha256,
+        "claim_created": claim_created,
+        "max_uses": 1,
+        "provider_request_authorizations": authorizations,
+        "status": status,
     }
 
 
@@ -2816,79 +3313,111 @@ def _project_recovery_worker_result(
     """Rebuild only parent-bound aggregate fields allowed across IPC."""
 
     try:
-        if set(result) != _RECOVERY_RESULT_KEYS:
-            raise ValueError
-        status_class = result.get("status_class")
-        reason_code = result.get("reason_code")
         if (
-            not isinstance(result.get("ok"), bool)
-            or result.get("dry_run") is not False
-            or result.get("lifecycle_action") != "notion_page_recovery_execute"
-            or status_class not in _RECOVERY_REASON_BY_STATUS
-            or reason_code
-            not in {
+            type(result) is not dict
+            or set(result) != _RECOVERY_RESULT_KEYS
+            or any(type(key) is not str for key in result)
+        ):
+            raise ValueError
+        status_values = {value: value for value in _RECOVERY_REASON_BY_STATUS}
+        reason_values = {
+            value: value
+            for value in {
                 *_RECOVERY_REASON_BY_STATUS.values(),
                 "notion_page_recovery_approval_blocked",
             }
-            or not isinstance(result.get("receipt_created"), bool)
+        }
+        raw_status = result.get("status_class")
+        raw_reason = result.get("reason_code")
+        if type(raw_status) is not str or type(raw_reason) is not str:
+            raise ValueError
+        status_class = status_values.get(raw_status)
+        reason_code = reason_values.get(raw_reason)
+        if (
+            type(result.get("ok")) is not bool
+            or result.get("dry_run") is not False
+            or result.get("lifecycle_action") != "notion_page_recovery_execute"
+            or status_class is None
+            or reason_code is None
+            or type(result.get("receipt_created")) is not bool
         ):
             raise ValueError
         if not (
-            result.get("request_sha256") == contract.request_sha256
-            and result.get("plan_sha256") == contract.plan_sha256
+            type(result.get("request_sha256")) is str
+            and hmac.compare_digest(
+                result["request_sha256"], contract.request_sha256
+            )
+            and type(result.get("plan_sha256")) is str
+            and hmac.compare_digest(
+                result["plan_sha256"], contract.plan_sha256
+            )
         ):
             raise ValueError
         counts = result.get("counts")
         operations = result.get("operations")
         privacy = result.get("privacy_guards")
         blockers = result.get("blockers")
-        if not isinstance(counts, Mapping) or set(counts) != _RECOVERY_COUNT_KEYS:
+        if (
+            type(counts) is not dict
+            or set(counts) != _RECOVERY_COUNT_KEYS
+            or any(type(key) is not str for key in counts)
+        ):
             raise ValueError
         if any(
-            not isinstance(counts.get(name), int)
-            or isinstance(counts.get(name), bool)
+            type(counts.get(name)) is not int
             or counts[name] < 0
             for name in _RECOVERY_COUNT_KEYS - {"outcomes"}
         ):
             raise ValueError
         outcomes = counts.get("outcomes")
         if (
-            not isinstance(outcomes, Mapping)
+            type(outcomes) is not dict
             or set(outcomes) != _RECOVERY_OUTCOMES
+            or any(type(key) is not str for key in outcomes)
             or any(
-                not isinstance(value, int) or isinstance(value, bool) or value < 0
+                type(value) is not int or value < 0
                 for value in outcomes.values()
             )
         ):
             raise ValueError
-        if not isinstance(operations, Mapping) or set(operations) != _RECOVERY_OPERATION_KEYS:
+        if (
+            type(operations) is not dict
+            or set(operations) != _RECOVERY_OPERATION_KEYS
+            or any(type(key) is not str for key in operations)
+        ):
             raise ValueError
         for name, value in operations.items():
             if name == "sleep_seconds":
                 if (
-                    not isinstance(value, (int, float))
-                    or isinstance(value, bool)
+                    type(value) not in {int, float}
                     or not math.isfinite(float(value))
                     or value < 0
                 ):
                     raise ValueError
-            elif not isinstance(value, int) or isinstance(value, bool) or value < 0:
+            elif type(value) is not int or value < 0:
                 raise ValueError
         if (
-            not isinstance(privacy, Mapping)
+            type(privacy) is not dict
+            or any(type(key) is not str for key in privacy)
+            or any(type(value) is not bool for value in privacy.values())
             or dict(privacy) != _RECOVERY_PRIVACY_GUARDS
         ):
             raise ValueError
+        blocker_values = {
+            value: value
+            for value in _RECOVERY_EXECUTION_BLOCKERS | {"reviewed_by_invalid"}
+        }
         if (
-            not isinstance(blockers, list)
+            type(blockers) is not list
             or blockers != sorted(set(blockers))
+            or any(type(code) is not str for code in blockers)
             or any(
-                code
-                not in _RECOVERY_EXECUTION_BLOCKERS | {"reviewed_by_invalid"}
+                code not in blocker_values
                 for code in blockers
             )
         ):
             raise ValueError
+        blockers = [blocker_values[code] for code in blockers]
 
         input_count = counts["input_item_count"]
         selected_count = counts["selected_item_count"]
@@ -2998,6 +3527,13 @@ def _project_recovery_worker_result(
             and result["receipt_created"] is not False
         ):
             raise ValueError
+        capability_use = _project_credential_capability_use(
+            result.get("credential_capability_use"),
+            contract=contract,
+            result_ok=result["ok"],
+            blockers=blockers,
+            provider_calls=operations["provider_calls"],
+        )
         return {
             "ok": result["ok"],
             "dry_run": False,
@@ -3018,6 +3554,7 @@ def _project_recovery_worker_result(
             "receipt_created": result["receipt_created"],
             "privacy_guards": dict(_RECOVERY_PRIVACY_GUARDS),
             "blockers": list(blockers),
+            "credential_capability_use": capability_use,
         }
     except Exception:
         return _uncertain_recovery_worker_result(contract)
@@ -3033,6 +3570,7 @@ def execute_spawned_authenticated_notion_page_recovery(
     offset: int = 0,
     approved: bool = True,
     worker_spawner: NotionRecoveryWorkerSpawner | None = None,
+    capability_clock: Callable[[], datetime] | None = None,
 ) -> dict[str, Any]:
     """Run live recovery in a child; verified replay stays zero-live in parent."""
 
@@ -3065,13 +3603,6 @@ def execute_spawned_authenticated_notion_page_recovery(
         and hmac.compare_digest(expected_plan_sha256, actual)
     ):
         return _workflow_failure(action, "expected_plan_sha256_mismatch")
-    try:
-        projection_contract = _build_recovery_projection_contract(
-            preview,
-            expected_plan_sha256=expected_plan_sha256,
-        )
-    except Exception:
-        return _workflow_failure(action, "notion_page_recovery_plan_failed")
     if preview.get("counts", {}).get("provider_pending_count") == 0:
         return execute_authenticated_notion_page_recovery(
             archive_root,
@@ -3083,10 +3614,48 @@ def execute_spawned_authenticated_notion_page_recovery(
             approved=True,
             native=_NeverWindowsNative(),
         )
+
+    capability: CredentialCapability | None = None
+    try:
+        scopes = _credential_capability_scopes(
+            manifest,
+            max_items=max_items,
+            offset=offset,
+        )
+        issue_kwargs: dict[str, Any] = {}
+        if capability_clock is not None:
+            issue_kwargs["issued_at"] = capability_clock()
+        capability = CredentialCapability.issue(
+            request_sha256=str(preview["request_sha256"]),
+            plan_sha256=str(preview["plan_sha256"]),
+            scopes=scopes,
+            reviewed_by=reviewed_by,
+            max_provider_requests=_credential_capability_request_budget(
+                int(preview["counts"]["selected_item_count"])
+            ),
+            **issue_kwargs,
+        )
+        projection_contract = _build_recovery_projection_contract(
+            preview,
+            expected_plan_sha256=expected_plan_sha256,
+            credential_capability=capability,
+        )
+    except Exception:
+        return _capability_blocked_recovery_result(
+            preview,
+            blocker="credential_capability_invalid",
+            summary=_capability_use_summary(
+                capability,
+                claim_created=False,
+                provider_request_authorizations=0,
+                status="rejected",
+            ),
+        )
     try:
         invocation = NotionRecoveryWorkerInvocation(
             archive_root=str(Path(archive_root).resolve()),
             manifest=dict(manifest),
+            credential_capability=capability.canonical_document(),
             expected_plan_sha256=expected_plan_sha256,
             reviewed_by=reviewed_by,
             max_items=max_items,

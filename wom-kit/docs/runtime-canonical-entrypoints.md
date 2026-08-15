@@ -1,6 +1,8 @@
 # Runtime Canonical Entry Points
 
-Status: v0.3.319 native credential popup and causal-evidence checkpoint
+Status: v0.3.320 one-use credential capability broker checkpoint
+
+Previous checkpoint: Status: v0.3.319 native credential popup and causal-evidence checkpoint
 
 When an AI runtime enters a WOM archive, it needs a small, explicit "start
 here" map. The archive may contain zets, source bindings, provider metadata,
@@ -275,7 +277,7 @@ secret reader, provider caller, or archive writer:
 | `credential-secure-list` | Lists unauthenticated content-free receipt metadata by default. `--verify` reads only the exact archive authentication-key target and verifies receipt/lifecycle MACs; it neither enumerates the native vault nor resolves a provider credential. |
 | `credential-lifecycle` | Authenticates and digest-plans one human-selected active/current/default credential for an exact provider/workspace scope, then records only that unchanged approved decision. It never deletes or revokes another credential. |
 | `notion-page-recovery-plan` | Validates the exact ignored-local two-group request of 577 plus 43 unique page UUIDs, exactly 620, and digest-plans a bounded slice with zero credential reads, provider calls, or writes. |
-| `notion-page-recovery` | Repeats the same plan in dry-run or, with the exact reviewed plan SHA and reviewer, invokes spawned authenticated read-only Notion recovery and writes only content-addressed objets plus private recovery evidence. |
+| `notion-page-recovery` | Repeats the same plan in dry-run or, with the exact reviewed plan SHA and reviewer, invokes spawned authenticated read-only Notion recovery. A live slice gets one fresh plan-bound capability and exclusive authenticated claim before secret read; each provider attempt enforces exact endpoint/scope/budget authority. Fully verified replay creates no claim. Recovery writes only content-addressed objets plus private recovery evidence. |
 
 The v0.3.319 correction replaces the rejected terminal-input prototypes with
 one separate native Windows popup. Production hard-codes
@@ -312,6 +314,24 @@ The human synthetic row remains failed and is not repeated as a recovery
 prerequisite. Actual registration remains `not_performed`; it may proceed only
 after published-runtime verification and explicit confirmation of the blue
 live-registration banner. Automated evidence is not human/live evidence.
+
+The v0.3.320 correction leaves that popup and every public command unchanged.
+After exact recovery approval, the parent issues one
+`wom-kit/credential-capability/v0.1` document bound to request, plan, reviewer,
+selected authenticated scopes, fixed read-only endpoints, registered
+capabilities, a claim deadline, one use, and a request budget. The isolated
+worker exclusively creates an archive-key-HMAC claim before the first native
+secret read. TTL is only the claim deadline; a successfully claimed bounded
+invocation is not cut off mid-run. Any existing id leaf blocks replay. Each
+provider authorization maps to exactly one adapter transport attempt and
+reauthenticates current authority.
+
+The HMAC claim stores id/digest, request/plan, budgets, final status, and count.
+The durable recovery receipt stores only
+`wom-kit/credential-capability-reference/v0.1` schema/id/digest. The parent returns
+a separately validated `wom-credential-capability-use-summary/v0.1`. A fully
+verified replay creates no claim, reads no credential, and calls no provider.
+See the [Credential Capability Contract](credential-capability-contract.md).
 
 For internal integrations, current scope authority comes from Notion's
 `bot.workspace_id`. A person PAT has no provider-returned workspace ID, so WOM

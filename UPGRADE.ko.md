@@ -2,6 +2,59 @@
 
 [English Upgrade Guide](UPGRADE.md)
 
+## v0.3.320 1회용 자격증명 capability broker
+
+정확한 v0.3.320 GitHub Release에 검증된 wheel이 실제로 올라온 뒤에만
+설치하세요. 저장소 파일만 바꿔서는 격리된 예전 WOM-kit 설치가 업데이트되지
+않습니다. 새 recovery plan을 만들기 전에 새 프로세스에서
+`archive --version`을 확인하세요.
+
+### 무엇이 바뀌었나
+
+기존 `notion-page-recovery` 승인은 이제 그 exact spawned worker invocation
+하나만 위한 새 만료형 secret-free capability를 만듭니다. 이 문서는 request와
+plan digest, reviewer, 선택된 인증 receipt/lifecycle scope, 고정 read-only
+Notion endpoint, 필요한 등록 capability, 1회 사용 한도, 제한된 provider 시도
+budget을 모두 묶습니다.
+
+격리된 worker는 이 binding을 확인한 뒤 첫 native credential read보다 먼저
+archive-key-HMAC claim을 배타적으로 씁니다. malformed 또는 미완료 상태까지
+포함해 같은 capability id leaf가 하나라도 있으면 그 id는 영구적으로 사용된
+것입니다. 실패나 crash 뒤에도 같은 id를 replay할 수 없고, 새 승인 invocation이
+새 id를 받아야 합니다.
+
+각 provider 시도 전에는 claim과 현재 exact credential authority를 다시
+인증하고 허용된 endpoint/scope budget 1회를 소비합니다. HMAC claim은
+id/digest·request/plan·budget·status·count를 저장하고, durable recovery
+receipt는 reference schema/id/digest만 저장하며, parent는 별도로 검증한
+secret-free use summary를 반환합니다. claim finalization이 실패하면 성공으로
+보고할 수 없습니다.
+
+### 무엇을 해야 하나
+
+예전 runtime이 만든 recovery plan digest는 버리고, 새 제한형 preview를 만든 뒤
+바뀌지 않은 digest만 승인하세요.
+
+```powershell
+archive notion-page-recovery-plan <archive-root> --request <archive-relative-reviewed-recovery-request.json> --max-items 5 --offset 0 --dry-run --format json
+archive notion-page-recovery <archive-root> --request <archive-relative-reviewed-recovery-request.json> --max-items 5 --offset 0 --expected-plan-sha256 <fresh-plan-sha256> --reviewed-by <actor> --approve --format json
+```
+
+expired, replayed, changed, unknown, finalization-failed capability 결과를 자동으로
+재시도하지 마세요. 내용 없는 결과를 검토하고 적절할 때만 새 plan과 승인을
+만드세요. 모든 local objet의 hash가 검증된 replay는 claim을 만들지 않고,
+credential을 읽거나 provider를 호출하지 않습니다.
+
+인증 receipt, lifecycle, native fingerprint, provider/workspace, 검토 scope가
+여전히 유효하면 기존 등록 credential을 다시 입력할 필요가 없습니다.
+v0.3.320은 새 popup이나 password manager를 추가하지 않습니다. PAT를 chat,
+argv, environment, 일반 stdin, 파일에 넣지 마세요.
+
+[v0.3.320 릴리스 노트](wom-kit/docs/releases/v0.3.320.md),
+[Credential Capability Contract](wom-kit/docs/credential-capability-contract.md),
+[결정 기록](wom-kit/docs/archive-infra-decision-log-2026-08-15-v03320-credential-capability-broker.md)을
+보세요.
+
 ## v0.3.319 native 자격증명 popup과 인과 근거
 
 정확한 v0.3.319 GitHub Release에 검증된 wheel이 실제로 올라온 뒤에만
