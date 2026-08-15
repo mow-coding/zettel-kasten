@@ -130,8 +130,14 @@ No real PAT, credential value, account label, workspace label, anchor UUID, revi
 request path, provider payload, or archive authentication material was read, written,
 logged, transmitted, or included in this record.
 
-The merge-SHA build root and anonymous-install root remain retained only until this
-evidence is committed and pushed. The short-lived v0.3.320 implementation/closeout
-branches and dedicated worktree remain pending safe cleanup. Older v0.3.319 evidence
-roots are out of scope and remain preserved because their corresponding durable
-cleanup record has not been established here.
+The release evidence was first committed and pushed on the closeout branch. After that
+durable remote copy existed, the registered detached merge-SHA build worktree was
+removed through `git worktree remove`, and the exact task-owned v0.3.320 build and
+anonymous-install TEMP roots were deleted. No task-owned process referenced either
+root at deletion time, and both paths were confirmed absent afterward.
+
+The short-lived v0.3.320 implementation/closeout branches and dedicated closeout
+worktree remain only until this records-only change is merged; they are then removed
+with safe branch/worktree commands. Older v0.3.319 evidence roots are out of scope and
+remain preserved because their corresponding durable cleanup record has not been
+established here. The user's primary workspace is also preserved unchanged.
