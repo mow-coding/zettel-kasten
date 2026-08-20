@@ -4,11 +4,13 @@ import hashlib
 import io
 import json
 import os
+import queue
 import shutil
 import sqlite3
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -1586,22 +1588,63 @@ class McpServerTests(unittest.TestCase):
 
     def test_closed_stdout_pipe_exits_without_stderr_traceback(self) -> None:
         process = self.start_server()
-        assert process.stdin is not None
-        assert process.stdout is not None
-        assert process.stderr is not None
-        process.stdout.close()
-        process.stdin.write(
-            '{"jsonrpc":"2.0","id":96,"method":"ping","params":{}}\n'
-        )
-        process.stdin.flush()
-        process.stdin.close()
+        readiness_reader: threading.Thread | None = None
+        try:
+            assert process.stdin is not None
+            assert process.stdout is not None
+            assert process.stderr is not None
+            readiness_result: queue.Queue[str | Exception] = queue.Queue(maxsize=1)
 
-        returncode = process.wait(timeout=15)
-        stderr = process.stderr.read()
-        process.stderr.close()
+            def read_readiness_line() -> None:
+                try:
+                    readiness_result.put(process.stdout.readline())
+                except Exception as exc:
+                    readiness_result.put(exc)
 
-        self.assertEqual(returncode, 0, stderr)
-        self.assertEqual(stderr, "")
+            readiness_reader = threading.Thread(
+                target=read_readiness_line,
+                name="mcp-readiness-reader",
+                daemon=True,
+            )
+            readiness_reader.start()
+            process.stdin.write(
+                '{"jsonrpc":"2.0","id":95,"method":"ping","params":{}}\n'
+            )
+            process.stdin.flush()
+
+            try:
+                readiness_value = readiness_result.get(timeout=30)
+            except queue.Empty:
+                self.fail("Server did not become ready within 30 seconds.")
+            if isinstance(readiness_value, Exception):
+                raise AssertionError("Server readiness reader failed.") from readiness_value
+            self.assertTrue(
+                readiness_value,
+                "Server did not return a readiness response.",
+            )
+            self.assertEqual(
+                json.loads(readiness_value),
+                {"jsonrpc": "2.0", "id": 95, "result": {}},
+            )
+            readiness_reader.join(timeout=1)
+            self.assertFalse(readiness_reader.is_alive())
+
+            process.stdout.close()
+            process.stdin.write(
+                '{"jsonrpc":"2.0","id":96,"method":"ping","params":{}}\n'
+            )
+            process.stdin.flush()
+            process.stdin.close()
+
+            returncode = process.wait(timeout=5)
+            stderr = process.stderr.read()
+
+            self.assertEqual(returncode, 0, stderr)
+            self.assertEqual(stderr, "")
+        finally:
+            self.stop_server(process)
+            if readiness_reader is not None:
+                readiness_reader.join(timeout=1)
 
     def test_request_params_normalize_only_null_and_object(self) -> None:
         server = mcp_server.JsonRpcMcpServer()
