@@ -1,19 +1,21 @@
 # WOM-kit Python 도구 설치
 
-상태: v0.3.320 조건부 GitHub wheel 및 1회용 자격증명 capability 계약
+상태: v0.4.0 조건부 GitHub wheel 및 정확한 사람 제어 경계
 
 WOM-kit은 명령줄 도구입니다. 일반 앱 프로젝트의 Python 의존성과 섞지 말고
 별도의 격리된 Python 환경에 설치하는 것이 좋습니다.
 
-아래 v0.3.320 URL은 조건부 계약이며 공개 자산이 실제로 존재한다는 증거가
+아래 v0.4.0 URL은 조건부 계약이며 공개 자산이 실제로 존재한다는 증거가
 아닙니다. 정확히 일치하는 GitHub Release가 존재하고 검증된 wheel을 자산으로
 나열한 뒤에만 사용하세요. 소스 상태와 릴리스 증거의 구분은
-[v0.3.320 릴리스 노트](releases/v0.3.320.md)를 보세요.
+[v0.4.0 릴리스 노트](releases/v0.4.0.md)를 보세요.
 
-이미 설치된 v0.3.319 client에는 1회용 recovery capability, 배타적 인증 claim,
-claim/recovery 양방향 연결이 없습니다. 저장소 파일만 업데이트해도 분리된
-`uv tool` 또는 가상환경 wheel은 바뀌지 않습니다. 검증된 v0.3.320 자산이
-실제로 생긴 뒤 그 정확한 wheel을 설치하고 새 프로세스를 시작하세요.
+이미 설치된 v0.3.320 client에는 exact-human TaskDialog, 인증된 1회용
+approval claim, approval-link 인증, human-artifact registry, duplicate
+reconciliation, approval-integrity overlay가 없습니다. 저장소 파일만
+업데이트해도 분리된 `uv tool` 또는 가상환경 wheel은 바뀌지 않습니다.
+검증된 v0.4.0 자산이 실제로 생긴 뒤 그 정확한 wheel을 설치하고
+새 프로세스를 시작하세요.
 
 ## 권장 설치
 
@@ -22,7 +24,7 @@ claim/recovery 양방향 연결이 없습니다. 저장소 파일만 업데이�
 증거가 되지는 않습니다.
 
 ```powershell
-uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.320/wom_kit-0.3.320-py3-none-any.whl"
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.0/wom_kit-0.4.0-py3-none-any.whl"
 archive --version
 ```
 
@@ -40,7 +42,7 @@ archive --version
 
 ```powershell
 py -m venv "$HOME\.wom-tools\wom-kit"
-& "$HOME\.wom-tools\wom-kit\Scripts\python.exe" -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.320/wom_kit-0.3.320-py3-none-any.whl"
+& "$HOME\.wom-tools\wom-kit\Scripts\python.exe" -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.0/wom_kit-0.4.0-py3-none-any.whl"
 & "$HOME\.wom-tools\wom-kit\Scripts\archive.exe" --version
 ```
 
@@ -101,9 +103,9 @@ alias를 지운 뒤 정확한 object id 전용 finder가 `wom_kit`만 불러오�
 업데이트·재설치·제거하지 않습니다. WOM은 그 도구가 pip, uv, pipx,
 editable 설치 중 무엇으로 관리되는지도 추측하지 않습니다.
 
-기존 Windows 프로젝트 미러에서는 이전 CRLF checkout 때문에 raw-byte 관문을
-통과하지 못할 수 있습니다. 승인된 `project-version-update`는 대상
-commit의 추적 파일 전체를 정확한 blob으로 직접 다시 만듭니다. 시작 전에
+기존 프로젝트 미러에서는 이전 CRLF checkout 때문에 raw-byte 관문을
+통과하지 못할 수 있습니다. `project-version-update --dry-run`은 대상
+commit의 추적 파일 전체를 검사합니다. 시작 전에
 Windows·macOS·Linux에서 충돌할 경로와 파일/폴더 전환을 검사하고, index를
 다시 만든 뒤 원본 바이트와 리소스를 검증합니다. `git status`와 저장소
 filter를 사용하지 않습니다. 폴더 scan은 entry 수 상한을 둔 streaming
@@ -112,13 +114,10 @@ filter를 사용하지 않습니다. 폴더 scan은 entry 수 상한을 둔 stre
 관찰한 변경을 감지하지만, 파일 단위의 원자적 compare-and-swap은 아닙니다.
 따라서 외부 writer가 파일을 절대 덮지 않는다고 보장하지 않습니다.
 
-모든 승인 전에 먼저 dry-run을 실행하세요. 그 다음 editor, 동기화 client,
-backup 도구, 다른 모든 Git writer를 전체 업데이트 transaction 동안
-멈추고, 멈춘 상태에서 다음처럼 승인해야 합니다.
-
-```powershell
-archive project-version-update <project-or-archive-root> --target vX.Y.Z --approve --reviewed-by <actor> --affirm-external-writers-quiescent --progress --output .zettel-kasten/diagnostics/update-20260811-001.json --format json
-```
+v0.4.0에서는 dry-run 뒤에 멈춥니다. 승인 요청은 비공개 project를 읽거나
+fetch, tree materialization, pin 변경, lock 생성, receipt 발행을 하기 전에
+`compound_exact_human_approval_binding_required`로 실패합니다. 아래 transaction
+설명은 과거 v0.3 receipt 의미이며 현재 실행 절차가 아닙니다.
 
 v0.3.314부터 명시한 output은 시작 직후 내용 없는 `operation_ref`도 출력합니다.
 호출 화면이 timeout으로 먼저 끝나면 updater를 중복 실행하지 말고, 그 reference와
@@ -147,19 +146,18 @@ complete_project_version_update_transaction}`가 남습니다. 기존 v0.1
 직전 묶인 설정 digest가 달라지면 복원을 건너뛰고 소유한 lock을 보존하며
 rollback을 불완전 상태로 보고합니다.
 
-v0.3.291의 실제 승인은 Windows에서만 가능합니다. WOM은 project,
+과거 v0.3.291 writer는 Windows에서만 가능했습니다. WOM은 project,
 source/`.git`, pin, lock, receipt 경로의 검증된 폴더 handle을
 `FILE_SHARE_DELETE` 없이 계속 잡아 둡니다. 그래서 실행 중 다른 process가
 그 폴더를 rename·삭제하거나 junction으로 바꿀 수 없습니다. receipt 상위
 폴더와 최종 폴더가 없으면 한 단계씩 만들고 바로 hold하며, hold되지 않은
 receipt root에는 영수증을 쓰지 않습니다.
 
-POSIX에서도 읽기 전용 dry-run은 끝까지 실행됩니다. 다만 결과 status는
+v0.4.0에서도 읽기 전용 dry-run은 끝까지 실행됩니다. POSIX 결과 status는
 `preview_only_platform_unsupported`이고
-`write_boundary.approval_platform_supported`는 `false`입니다. POSIX의 열린
-directory descriptor는 경로 rename을 막지 못하므로 `--approve`는 차단되며,
-Git과 전체 트리 작업이 처음부터 끝까지 descriptor-relative가 된 뒤에야
-승인 지원을 검토할 수 있습니다.
+`write_boundary.approval_platform_supported`는 `false`입니다. 모든 플랫폼의
+승인 요청은 비공개 project read/write 전에
+`compound_exact_human_approval_binding_required`로 실패합니다.
 
 runtime Agent Skill은 또 다른 별도 lifecycle입니다. Python 도구를
 설치·업데이트해도 Skill이 자동 설치되지 않으며, `runtime-skill-install`도
@@ -171,7 +169,9 @@ Python CLI를 교체하지 않습니다.
 archive onboard --target-root <새-아카이브-폴더> --type personal --archive-id <아카이브-아이디> --principal-id <주체-아이디> --dry-run --format json
 ```
 
-미리보기를 검토한 뒤에만 `--dry-run`을 `--approve`로 바꿉니다.
+v0.4.0에서는 미리보기에서 멈춥니다. 온보딩 승인은 대상·템플릿·제공자
+정보를 읽기 전에 `compound_exact_human_approval_binding_required`로 차단되며
+아카이브를 만들지 않습니다.
 
 ## 선택형 Agent Skill 활성화
 
@@ -200,6 +200,11 @@ python wom-kit/tools/check_wheel_install.py --format json
 두 MCP 별칭에는 초기화·도구 목록·EOF 절차를 실행합니다. 이때 엄격한 UTF-8,
 비어 있는 표준 오류, 제한된 출력량과 실행 시간, 하위 프로세스 격리, 완전하고
 바이트 단위로 같은 도구 목록을 요구합니다. 이어서 버릴 수 있는 호스트
-폴더에서 Agent Skill 미리보기·설치·검증·제거를 실행하고, 버릴 수 있는
-아카이브를 미리 본 뒤 실제 생성하고, 엄격한 검진까지 실행합니다. 이 전체
-검사가 통과한 wheel만 릴리스 자산으로 보존할 수 있습니다.
+폴더에서 Agent Skill 미리보기·설치·검증·제거를 실행합니다. 아카이브
+온보딩은 미리보기만 정상 실행하고, 실제 쓰기 요청은 파일을 하나도 만들지
+않은 채 고정 차단되는지 검증합니다. 엄격한 검진은 설치된 엔트리포인트로
+저장소의 가짜 아카이브 fixture를 검사합니다. JSON 결과는
+`wom-kit/wheel-install-check/v0.3`을 사용하고 온보딩 쓰기 상태를
+`fixed_closed`로 기록합니다. 즉, v0.4가 새 아카이브를 실제로 만들었다고
+주장하지 않습니다. 이 전체 검사가 통과한 wheel만 릴리스 자산으로 보존할
+수 있습니다.

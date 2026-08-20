@@ -81,8 +81,8 @@ The planner returns:
   `target_mode=embed_edge`, `edge_type=embed`, `confidence`, and `join_basis`,
 - `write_status` such as `not_written`, `already_referenced`, or
   `blocked_until_manifest_review`,
-- next safe actions for human review and later `zettel-edge` or
-  `zettel-edge-batch` approval gates.
+- next safe actions for human review and a later operation-specific exact-human
+  `zettel-edge`; `zettel-edge-batch` remains preview-only in v0.4.0.
 
 ## Boundary
 
@@ -115,8 +115,10 @@ Use this order:
    join evidence.
 5. `notion-objet-link-index` and `notion-objet-link-plan` only when imported
    zettels still contain provider locators.
-6. `notion-objet-link-rewrite-plan` and `notion-objet-link-convert` for the
-   older body-locator review path.
+6. `notion-objet-link-rewrite-plan` and dry-run-only
+   `notion-objet-link-convert` for the older body-locator review path. Convert
+   approval returns `compound_exact_human_approval_binding_required` and writes
+   nothing in v0.4.0.
 7. `zettel-objet-links` after reviewed object refs or embed edges exist.
 
 ## Import-Time Contract

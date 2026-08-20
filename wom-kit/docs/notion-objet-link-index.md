@@ -1,6 +1,6 @@
 # Notion Objet Link Index
 
-Status: v0.3.96 read-only bulk locator index
+Status: v0.4.0 read-only bulk locator index; conversion approval is fixed closed
 Date: 2026-06-17
 
 `notion-objet-link-index` is the archive-wide companion to
@@ -120,17 +120,23 @@ This keeps the bulk discovery step separate from the high-trust conversion
 step.
 
 If the index finds locator rows but 0 manifest candidates even though Notion
-source-export objects exist, use
-`notion-objet-manifest-locator-label` after human review to add the missing
-non-secret locator fingerprint to the chosen object manifest record.
+source-export objects exist, the
+`notion-objet-manifest-locator-label --dry-run` preview can report a candidate
+missing non-secret locator fingerprint. It cannot add that label in v0.4.0.
 
-## Current Write Path And Future Work
+## Current Write Boundary And Future Work
 
-Approval-gated manifest locator labels now exist through
-`notion-objet-manifest-locator-label`.
+Manifest locator labeling is dry-run-only in v0.4.0. Non-dry-run
+`notion-objet-manifest-locator-label` returns
+`compound_exact_human_approval_binding_required` before manifest reads or
+writes, so no locator label exists until a future compound approval binding is
+implemented.
 
-Approval-gated reviewed `embed` edge conversion now exists through
-`notion-objet-link-convert --target-mode embed_edge`.
+`notion-objet-link-convert --target-mode embed_edge` remains a dry-run preview
+in v0.4.0. Approval returns
+`compound_exact_human_approval_binding_required` before private target reads or
+mutation and writes no edge or conversion receipt. A separately reviewed
+single `zettel-edge` operation retains its own exact-human path.
 
 Body replacement remains future work. A later command can still replace
 reviewed Notion provider locators with `objet:sha256:<hex>` refs after a

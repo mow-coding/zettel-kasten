@@ -51,12 +51,9 @@ project-intake-plan
 -> project-intake-unpack-choice
 -> project-intake-item-plan
 -> source-intake --project-intake-receipt
--> source-intake-record
--> objet-capture-selection
--> objet-capture --project-intake-receipt
--> derive-text capture when external text already exists
--> create-draft --source-intake-plan
--> mint-zet after explicit approval
+-> stop after read-only source/capture previews in v0.4.0
+-> create-draft or mint only through their separate exact authority for an
+   already reviewed manifested source; this intake preview grants neither
 -> staged-cleanup-check before any manual deletion
 ```
 
@@ -92,13 +89,14 @@ The local archive root is the Git-friendly control plane.
 The intake layout ruling (D2, 2026-07-03) splits the two staging shapes by
 destination:
 
-- Capture intake stages INSIDE the archive root under `staging/incoming/`
+- Capture review intake stages INSIDE the archive root under `staging/incoming/`
   (date layer recommended, not required), because `objet-capture-selection`
-  requires archive-relative staged paths. Originals end up in the
-  content-addressed `objects/sha256/` store.
+  dry-run requires archive-relative staged paths. In v0.4.0 approval is fixed
+  closed and does not move originals into `objects/sha256/`.
 - The sibling local objet store holds bulk external originals that must never
   enter git. It stays under never-touch protection and is represented through
-  `prehashed-objet-ledger` plus `object-storage-upload-evidence` evidence.
+  dry-run `prehashed-objet-ledger` and `object-storage-upload-evidence`
+  planning; their approvals write no manifest evidence in v0.4.0.
 - A raw in-root `objets/` folder is discouraged; the migration guide lives in
   [artifact-hygiene.md](artifact-hygiene.md) section 5.
 
@@ -145,8 +143,8 @@ WOM-kit already has safe primitives that can support parts of this flow:
 | Context | `archive runtime-context` | Read-only archive identity and safe-action context. |
 | Health | `archive doctor --strict` | Validates the archive; does not migrate private data. |
 | Upgrade safety | `archive upgrade-check --dry-run` | Reports upgrade-readiness signals; writes nothing and is not a migration engine. |
-| Source registration | `archive add-source` | Can write source binding metadata only after approval. |
-| Source scan | `archive scan-source` | Metadata-first; approved mode writes source maps and receipts. |
+| Source registration | `archive add-source` | Fixed fail-closed in v0.4.0: approval returns `compound_exact_human_approval_binding_required` before private target read or mutation and writes no source binding or receipt. |
+| Source scan | `archive scan-source --dry-run` | Metadata-first preview. In v0.4.0 approval is fixed closed before source/archive/credential/provider reads and writes no source map or receipt. |
 | Staging guide | `archive project-intake-staging-guide --dry-run` / MCP `project_intake_staging_guide` | Shows the recommended intake staging paths for one project slug: the canonical in-archive capture staging shape `staging/incoming/<YYYY-MM-DD>/<project_slug>` plus the sibling objet-store shape for bulk external originals. It creates no folders and moves no files. |
 | Session guide | `archive project-intake-session-guide --dry-run` / MCP `project_intake_session_guide` | Shows the next safe human-guided step from a project slug, staged folder, or existing decisions receipt. It writes nothing, echoes no decision values, reads no bodies, and authorizes no automatic execution. |
 | Session planning | `archive project-intake-plan --dry-run` / MCP `project_intake_plan` | Plans one staged project folder session with top-level counts, human review checklist, suggested classification labels, and no writes. |
@@ -158,13 +156,13 @@ WOM-kit already has safe primitives that can support parts of this flow:
 | Decision recording | `archive project-intake-decisions --dry-run|--approve` | Validates a user-reviewed checklist JSON file; approved mode writes a local receipt under `receipts/project-intake/` without running capture, drafting, minting, provider calls, or cleanup. |
 | Decision status | `archive project-intake-status --dry-run` / MCP `project_intake_status` | Reviews one approved decisions receipt for checklist coverage and integrity, and returns `next_review_prompts` for missing checklist ids without echoing answer text or authorizing automatic execution. |
 | Item plan | `archive project-intake-item-plan --dry-run` / MCP `project_intake_item_plan` | Previews the next `source-intake --dry-run` route for one human-selected local file. It redacts local paths, reads no file body, calculates no content hash, creates no selection manifest, and writes nothing. |
-| Source-intake record | `archive source-intake-record --dry-run|--approve` | Validates a reviewed `source-intake --dry-run` JSON file and writes the redacted plan under `receipts/sources/` for later capture evidence. It blocks unredacted local paths, provider URLs, tokens, and secrets. |
-| Capture selection | `archive objet-capture-selection --dry-run|--approve` | Hashes one staged file, validates the recorded source-intake plan, and writes only a reviewed selection manifest for later `objet-capture`; it does not capture bytes, append object manifests, draft, mint, upload, or clean. |
+| Source-intake record | `archive source-intake-record --dry-run` | Validates a reviewed `source-intake --dry-run` JSON file. In v0.4.0 approval fixed-closes before private plan/archive read or mutation and writes no receipt. |
+| Capture selection | `archive objet-capture-selection --dry-run` | Previews the historical bridge without reading private staged bytes. In v0.4.0 approval fixed-closes before private selection/staged-file read or mutation and writes no selection manifest. |
 | Artifact hygiene | `wom-kit/tools/check_artifact_hygiene.py` | Report-only artifact classification and generated `.gitignore` checks; never cleans files. |
 | Per-item intake | `archive source-intake --dry-run` / MCP `source_intake_plan` | Classifies exactly one locator; reads no bodies and writes nothing. Optional `--project-intake-receipt` / `project_intake_receipt` validates a decisions receipt as session context only. |
-| Local objet capture | `archive objet-capture --dry-run|--approve` | Captures explicitly approved staged originals into the local content-addressed store for sandbox-marked or capture-enabled archives; optional `--project-intake-receipt` or `project_intake_receipt_path` validates a decisions receipt before staged bytes are read; never deletes staged originals. |
-| Derived text capture | `archive derive-text capture --dry-run|--approve` | Registers already extracted UTF-8 text for an existing `object_id`; single-file and JSONL batch input are supported. |
-| Drafting | `archive create-draft --dry-run` | Previews an inbox draft; can preserve validated source-intake `project_intake_context` as receipt evidence; approved write is separate from minting. |
+| Local objet capture | `archive objet-capture --dry-run` | Preview only in v0.4.0. Approval returns `compound_exact_human_approval_binding_required` before private selection/staged-byte/archive read and writes no object, manifest row, derived text, or receipt. |
+| Derived text capture | `archive derive-text capture --dry-run` | Previews already extracted text for an existing `object_id`; single-file and JSONL batch previews remain, while v0.4.0 approval is fixed closed before private reads and writes nothing. |
+| Drafting | `archive create-draft --dry-run` | Previews an inbox draft and can preserve validated source-intake context. Only the exact reviewed AI TaskDialog/claim route may write in v0.4.0; human/non-exact non-dry-run requests are fixed closed. |
 | Minting | `archive mint-zet --dry-run` / `--approve` | Mints only after explicit approval and writes receipts/snapshots. |
 | Cleanup verification | `archive staged-cleanup-check --dry-run` | Reports whether staged files have complete preservation evidence. A deferred item remains staged and blocks whole-folder cleanup; the command never deletes. |
 | Index | `archive index` / `archive search` | Generated SQLite index; rebuildable local search. |

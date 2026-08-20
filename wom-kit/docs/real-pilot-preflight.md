@@ -102,23 +102,33 @@ missing source maps when --require-source-maps is requested
 
 Preflight warns about broad but sometimes intentional folders, such as Desktop, Documents, Downloads, OneDrive, or Google Drive roots. For the first pilot, choose a smaller folder inside them.
 
-## Recovery Drill Before Real Sources
+## Recovery Preview Before Real Sources
 
-Before connecting real sources, verify that the archive control plane can be restored:
+Before connecting real sources, inspect the content-free recovery and restore
+plans. This preview does not verify that the archive can actually be restored:
 
 ```powershell
 $env:PYTHONPATH='src'; python -m wom_kit.archive_cli recovery-plan .\archives\personal-life --format json
 $env:PYTHONPATH='src'; python -m wom_kit.archive_cli restore-drill .\archives\personal-life --target C:\tmp\personal-life-restore --dry-run --format json
-$env:PYTHONPATH='src'; python -m wom_kit.archive_cli restore-drill .\archives\personal-life --target C:\tmp\personal-life-restore --approve --reviewed-by person:me
 ```
 
-After a successful drill, preflight can require it:
+In v0.4.0 restore approval is fixed closed before source/target reads and
+creates no restored tree or receipt.
+
+Preflight can still require and validate an already existing historical v0.3
+drill receipt:
 
 ```powershell
 $env:PYTHONPATH='src'; python -m wom_kit.archive_cli preflight .\archives\personal-life --strict --require-restore-drill
 ```
 
-The restore drill copies only the archive control plane. It does not copy every PC, SSD, SaaS, or object-storage original.
+v0.4.0 cannot create a fresh successful drill receipt, so this option cannot be
+satisfied by running the current dry-run alone.
+
+The v0.4.0 dry-run returns only a content-free restore plan and copies nothing.
+Historical v0.3 execution copied only the archive control plane, not every PC,
+SSD, SaaS, or object-storage original; real copying is fixed closed in v0.4.0
+before source or target reads and writes.
 
 ## First Safe Real Loop
 
@@ -126,14 +136,16 @@ Use this order:
 
 ```powershell
 $env:PYTHONPATH='src'; python -m wom_kit.archive_cli onboard --target-root .\archives\personal-life --type personal --archive-id archive:personal:life --principal-id person:me --dry-run
-$env:PYTHONPATH='src'; python -m wom_kit.archive_cli onboard --target-root .\archives\personal-life --type personal --archive-id archive:personal:life --principal-id person:me --approve
 $env:PYTHONPATH='src'; python -m wom_kit.archive_cli preflight .\archives\personal-life --strict
 $env:PYTHONPATH='src'; python -m wom_kit.archive_cli restore-drill .\archives\personal-life --target C:\tmp\personal-life-restore --dry-run
 $env:PYTHONPATH='src'; python -m wom_kit.archive_cli add-source .\archives\personal-life --source-id local:first-folder --type local_folder --dry-run
 $env:PYTHONPATH='src'; python -m wom_kit.archive_cli scan-source .\archives\personal-life --source local:first-folder --source-root <narrow-folder> --dry-run
 ```
 
-Only approve a scan after the dry-run item count and source root look right.
+In v0.4.0 onboarding and scan approval both return
+`compound_exact_human_approval_binding_required` before private/provider reads
+and mutation. Use this sequence only with an already existing archive and stop
+after each preview.
 
 ## MCP Boundary
 

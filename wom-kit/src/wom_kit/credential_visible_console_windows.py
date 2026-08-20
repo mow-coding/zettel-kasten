@@ -306,7 +306,7 @@ def _utf8_from_wchar_buffer(
         raise VisibleConsoleSecretPromptError() from None
 
 
-def prompt_masked_secret_in_new_console(
+def _prompt_masked_secret_in_new_console(
     *,
     request_id: str,
     context: VisibleConsolePromptContext,
@@ -593,5 +593,4 @@ def prompt_masked_secret_in_new_console(
 __all__ = [
     "VisibleConsolePromptContext",
     "VisibleConsoleSecretPromptError",
-    "prompt_masked_secret_in_new_console",
 ]

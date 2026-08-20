@@ -1,6 +1,10 @@
 # Archive Identity Reconcile
 
-Status: implemented in v0.3.226
+Status: dry-run-only in v0.4.0; v0.3.226 write receipts are historical
+
+Current boundary: `identity-reconcile` approval fails with
+`compound_exact_human_approval_binding_required` before private target read or
+mutation. It edits neither identity file and writes no receipt.
 
 ## Purpose
 

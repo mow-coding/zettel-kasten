@@ -632,7 +632,7 @@ def _rollback_read_boundary_is_preopen_coherent(
     )
 
 
-class PrivateObjetIndexReadAPI:
+class _PrivateObjetIndexReadAPI:
     """Restricted materializing query API; it never returns a cursor/connection."""
 
     __slots__ = ("__connection", "__active")
@@ -800,21 +800,21 @@ def _require_stable_authority_and_db(
 def _with_private_objet_index_read_session(
     root: Path | str,
     internal_consumer: Callable[
-        [PrivateObjetIndexReadAPI, Mapping[str, object]],
+        [_PrivateObjetIndexReadAPI, Mapping[str, object]],
         None,
     ],
     *,
     capture_authority: Callable[[], object],
     inspect_health: Callable[
-        [PrivateObjetIndexReadAPI, object],
+        [_PrivateObjetIndexReadAPI, object],
         Mapping[str, object],
     ],
-    final_check: Callable[[PrivateObjetIndexReadAPI, object], bool],
+    final_check: Callable[[_PrivateObjetIndexReadAPI, object], bool],
 ) -> dict[str, object]:
     """Run one opaque, pinned, read-only lifecycle and return only health."""
 
     connection: sqlite3.Connection | None = None
-    read_api: PrivateObjetIndexReadAPI | None = None
+    read_api: _PrivateObjetIndexReadAPI | None = None
     failure: BaseException | None = None
     cleanup_failed = False
     result: dict[str, object] | None = None
@@ -859,7 +859,7 @@ def _with_private_objet_index_read_session(
         connection.execute("SELECT name FROM sqlite_schema ORDER BY name LIMIT 1").fetchone()
         connection.set_authorizer(_sqlite_read_authorizer)
 
-        read_api = PrivateObjetIndexReadAPI(connection)
+        read_api = _PrivateObjetIndexReadAPI(connection)
         health = validate_private_objet_metadata_health_envelope(
             inspect_health(read_api, authority_a)
         )
@@ -935,7 +935,6 @@ __all__ = [
     "PRIVATE_HEALTH_KEYS",
     "PRIVATE_HEALTH_SCHEMA",
     "PRIVATE_INDEX_RELATIVE_PATH",
-    "PrivateObjetIndexReadAPI",
     "PrivateObjetIndexSessionError",
     "PrivateObjetMetadataCounts",
     "PrivateObjetMetadataHealthDecision",

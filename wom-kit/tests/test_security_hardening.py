@@ -227,11 +227,51 @@ class SecurityHardeningTests(unittest.TestCase):
                 self.skipTest(f"Symlinks are not available in this environment: {exc}")
 
             with self.assertRaises(archive_services.ArchiveServiceError):
-                archive_services.create_draft_zettel(
+                archive_services.archive_internal_path(
                     root,
-                    title="Should not escape",
-                    body="This write should not leave the archive.",
+                    "inbox/should-not-escape.md",
                 )
+
+            before = {
+                path.relative_to(root).as_posix(): (
+                    path.lstat().st_mtime_ns,
+                    path.read_bytes() if path.is_file() and not path.is_symlink() else None,
+                )
+                for path in root.rglob("*")
+            }
+            result = archive_services.create_draft_zettel(
+                root,
+                title="Should not escape",
+                body="This write should not leave the archive.",
+            )
+            self.assertEqual(
+                result,
+                {
+                    "ok": False,
+                    "dry_run": False,
+                    "state": "blocked",
+                    "status": "blocked",
+                    "write_status": "blocked",
+                    "lifecycle_action": "create_draft",
+                    "blockers": ["compound_exact_human_approval_binding_required"],
+                    "reason_codes": ["compound_exact_human_approval_binding_required"],
+                    "warnings": [],
+                    "would_change": [],
+                    "files_written": [],
+                    "private_values_echoed": False,
+                },
+            )
+            self.assertEqual(
+                {
+                    path.relative_to(root).as_posix(): (
+                        path.lstat().st_mtime_ns,
+                        path.read_bytes() if path.is_file() and not path.is_symlink() else None,
+                    )
+                    for path in root.rglob("*")
+                },
+                before,
+            )
+            self.assertEqual(list(outside.iterdir()), [])
 
     def test_optional_docker_runtime_is_non_root_read_only_except_archives(self) -> None:
         if os.environ.get("AI_ARCHIVE_RUN_DOCKER_TESTS") != "1":

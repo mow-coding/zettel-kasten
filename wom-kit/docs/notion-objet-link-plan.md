@@ -1,6 +1,6 @@
 # Notion Objet Link Plan
 
-Status: v0.3.89 read-only locator bridge
+Status: v0.4.0 read-only locator bridge; conversion approval is fixed closed
 Date: 2026-06-17
 
 `notion-objet-link-plan` is the safe bridge before converting Notion provider
@@ -124,17 +124,23 @@ That split keeps the dangerous provider locator layer separate from the stable
 content-addressed objet layer.
 
 If the zettel has locator fingerprints but the manifest candidates are missing,
-use `notion-objet-manifest-locator-label` after human review to add a
-non-secret fingerprint label to the selected object manifest record. Then run
-this plan again.
+`notion-objet-manifest-locator-label --dry-run` can only report a candidate
+missing non-secret fingerprint label. It cannot add the label or make this plan
+match in v0.4.0.
 
-## Current Write Path And Future Work
+## Current Write Boundary And Future Work
 
-Approval-gated manifest locator labels now exist through
-`notion-objet-manifest-locator-label`.
+Manifest locator labeling is dry-run-only in v0.4.0. Non-dry-run
+`notion-objet-manifest-locator-label` returns
+`compound_exact_human_approval_binding_required` before manifest reads or
+writes. The plan therefore continues to report a missing candidate until a
+future compound approval binding exists.
 
-Approval-gated reviewed `embed` edge conversion now exists through
-`notion-objet-link-convert --target-mode embed_edge`.
+`notion-objet-link-convert --target-mode embed_edge` remains a dry-run preview
+in v0.4.0. Approval returns
+`compound_exact_human_approval_binding_required` before private target reads or
+mutation and writes no edge or conversion receipt. A separately reviewed
+single `zettel-edge` operation retains its own exact-human path.
 
 Body replacement remains future work. A later command can still replace
 reviewed Notion provider locators with `objet:sha256:<hex>` refs after a

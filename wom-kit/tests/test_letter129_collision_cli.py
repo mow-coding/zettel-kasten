@@ -295,7 +295,7 @@ class Letter129CollisionCliTests(unittest.TestCase):
         self.assertIn(MATERIALIZATION_PLAN, command)
         self.assertNotIn("separately", command)
 
-    def test_bytecode_text_reports_binding_directories_and_partial_guidance(
+    def test_bytecode_text_reports_binding_directories_and_fixed_close(
         self,
     ) -> None:
         with patch.object(
@@ -349,8 +349,8 @@ class Letter129CollisionCliTests(unittest.TestCase):
                     "Run a fresh project-bytecode-repair-plan."
                 ],
             },
-        ):
-            repair_code, repair_stdout, _ = self.run_cli(
+        ) as repair_service:
+            repair_code, repair_stdout, repair_stderr = self.run_cli(
                 [
                     "project-bytecode-repair",
                     ".",
@@ -369,44 +369,62 @@ class Letter129CollisionCliTests(unittest.TestCase):
                 ]
             )
         self.assertEqual(repair_code, 1)
-        self.assertIn("Project bytecode repair: partial", repair_stdout)
-        self.assertIn("removed cache directories: 0", repair_stdout)
-        self.assertIn("writes may have occurred: True", repair_stdout)
-        self.assertIn("NEXT: Run a fresh", repair_stdout)
+        repair_service.assert_not_called()
+        self.assertEqual(repair_stdout, "")
+        self.assertIn(
+            "Exact compound human-approval binding is not implemented",
+            repair_stderr,
+        )
+        self.assertIn("the write did not start", repair_stderr)
+        self.assertNotIn("partial", repair_stdout + repair_stderr)
 
-    def test_approved_repair_exception_reports_unverified_outcome(self) -> None:
+    def test_approved_repair_fixed_closes_before_service_or_write(self) -> None:
         private_error = "PRIVATE_LETTER129_EXCEPTION_PATH"
-        with patch.object(
-            archive_cli.completion_workflows,
-            "project_bytecode_repair",
-            side_effect=RuntimeError(private_error),
-        ):
-            code, stdout, stderr = self.run_cli(
-                [
-                    "project-bytecode-repair",
-                    ".",
-                    "--expected-plan-sha256",
-                    REPAIR_PLAN,
-                    "--target",
-                    TARGET,
-                    "--expected-materialization-plan-sha256",
-                    MATERIALIZATION_PLAN,
-                    "--approve",
-                    "--reviewed-by",
-                    "person:letter129-reviewer",
-                    "--affirm-external-writers-quiescent",
-                    "--format",
-                    "json",
-                ]
-            )
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "project"
+            root.mkdir()
+            marker = root / "unchanged.txt"
+            marker.write_text("unchanged", encoding="utf-8")
+            before = sorted(path.relative_to(root) for path in root.rglob("*"))
+            with patch.object(
+                archive_cli.completion_workflows,
+                "project_bytecode_repair",
+                side_effect=RuntimeError(private_error),
+            ) as repair_service:
+                code, stdout, stderr = self.run_cli(
+                    [
+                        "project-bytecode-repair",
+                        str(root),
+                        "--expected-plan-sha256",
+                        REPAIR_PLAN,
+                        "--target",
+                        TARGET,
+                        "--expected-materialization-plan-sha256",
+                        MATERIALIZATION_PLAN,
+                        "--approve",
+                        "--reviewed-by",
+                        "person:letter129-reviewer",
+                        "--affirm-external-writers-quiescent",
+                        "--format",
+                        "json",
+                    ]
+                )
+            after = sorted(path.relative_to(root) for path in root.rglob("*"))
+            marker_after = marker.read_text(encoding="utf-8")
 
         result = json.loads(stdout)
         self.assertEqual(code, 1)
-        self.assertEqual(result["state"], "recovery_required")
-        self.assertFalse(result["outcome_verified"])
-        self.assertTrue(result["writes_may_have_occurred"])
-        self.assertIsNone(result["privacy_guards"]["writes"])
+        repair_service.assert_not_called()
+        self.assertEqual(result["state"], "blocked")
+        self.assertEqual(
+            result["reason_codes"],
+            ["compound_exact_human_approval_binding_required"],
+        )
+        self.assertFalse(result["private_values_echoed"])
+        self.assertEqual(before, after)
+        self.assertEqual(marker_after, "unchanged")
         self.assertNotIn(private_error, stdout + stderr)
+        self.assertNotIn(str(root), stdout + stderr)
 
 
 if __name__ == "__main__":

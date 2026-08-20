@@ -12,10 +12,22 @@ KIT_ROOT = Path(__file__).resolve().parents[1]
 
 class DoctorProgressVolumeBenchmarkTests(unittest.TestCase):
     def test_synthetic_progress_keeps_compact_output_bounded(self) -> None:
+        benchmark_path = KIT_ROOT / "tools" / "benchmark_doctor_progress_volume.py"
+        source_root = KIT_ROOT / "src"
+        test_only_runner = (
+            "import sys;"
+            f"sys.path.insert(0, {str(source_root)!r});"
+            "from runpy import run_path;"
+            "from wom_kit import archive_cli;"
+            "archive_cli.make_stage_progress_callback="
+            "archive_cli._make_stage_progress_callback;"
+            f"run_path({str(benchmark_path)!r}, run_name='__main__')"
+        )
         completed = subprocess.run(
             [
                 sys.executable,
-                str(KIT_ROOT / "tools" / "benchmark_doctor_progress_volume.py"),
+                "-c",
+                test_only_runner,
                 "--source-count",
                 "100",
                 "--index-receipt-count",

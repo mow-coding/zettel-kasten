@@ -20,7 +20,7 @@ from wom_kit import private_objet_metadata_index_session as private_session
 from wom_kit import private_objet_metadata_writer as writer
 from wom_kit import private_objet_metadata_writer_contract as contract
 from wom_kit.private_objet_metadata_index_authority import (
-    capture_private_objet_index_authority,
+    _capture_private_objet_index_authority as capture_private_objet_index_authority,
 )
 
 
@@ -125,7 +125,7 @@ def _install_projection(root: Path, *, nonempty: bool) -> Path:
     if nonempty:
         _install_private_authority(root)
     authority = capture_private_objet_index_authority(root, ARCHIVE_ID)
-    projection = generated_index.compile_private_objet_index_projection(
+    projection = generated_index._compile_private_objet_index_projection(
         authority.compiler_input
     )
     db_path = root / "db" / "archive-index.sqlite"

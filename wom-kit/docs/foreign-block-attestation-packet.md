@@ -64,14 +64,17 @@ archive foreign-block-quarantine <archive-root> --stdin --dry-run --format json
 
 `ready_for_future_quarantine_write` is not trust, not import, not quarantine, and not approval.
 
-v0.2.32 adds the first CLI-only approved isolation write:
+The historical v0.2.32 isolation writer is preview-only in v0.4.0:
 
 ```bash
 archive quarantine-foreign-block <archive-root> --plan <json-file> --dry-run --format json
-archive quarantine-foreign-block <archive-root> --plan <json-file> --approve --reviewed-by <actor-id> --format json
 ```
 
-Approved mode writes only a sanitized quarantine case and quarantine write receipt. It keeps `trust_state: untrusted_foreign` and still does not trust, import, mint, attest, anchor, delegate, sign, execute, or accept the foreign block.
+Approval now returns `compound_exact_human_approval_binding_required` before
+private plan/target reads or mutation. It writes no quarantine case or receipt.
+Historical cases keep `trust_state: untrusted_foreign` and remain readable, but
+they grant no current trust, import, mint, attest, anchor, delegate, sign,
+execute, or acceptance authority.
 
 v0.2.33 adds a read-only review index for those existing quarantine cases:
 

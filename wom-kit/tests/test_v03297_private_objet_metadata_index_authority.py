@@ -17,7 +17,7 @@ from wom_kit.private_objet_metadata_index_authority import (
     EMPTY_SHA256,
     PrivateObjetAuthorityError,
     _inventory_bytes,
-    capture_private_objet_index_authority,
+    _capture_private_objet_index_authority as capture_private_objet_index_authority,
 )
 
 
@@ -236,7 +236,7 @@ def test_valid_one_row_capture_is_semantically_bound_and_defensive(
     assert generated_index.build_private_objet_authority_fingerprint(
         capture.compiler_input
     ) == (capture.fingerprint_bytes, capture.fingerprint_sha256)
-    projection = generated_index.compile_private_objet_index_projection(
+    projection = generated_index._compile_private_objet_index_projection(
         capture.compiler_input
     )
     assert projection.authority_fingerprint_bytes == capture.fingerprint_bytes

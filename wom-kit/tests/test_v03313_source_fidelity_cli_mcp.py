@@ -12,6 +12,8 @@ from wom_kit import archive_cli, archive_services, mcp_server
 SOURCE_OBJECT_ID = "sha256:" + "a" * 64
 BODY_SHA256 = "b" * 64
 PLAN_SHA256 = "c" * 64
+DRAFT_ID = "zet_20260820_letter136"
+CREATED_AT = "2026-08-20T12:00:00+09:00"
 
 
 class SourceFidelityCliTests(unittest.TestCase):
@@ -125,6 +127,10 @@ class SourceFidelityCliTests(unittest.TestCase):
                     "--creation-mode",
                     "ai_assisted",
                     "--approve",
+                    "--draft-id",
+                    DRAFT_ID,
+                    "--created-at",
+                    CREATED_AT,
                     "--format",
                     "json",
                 ]
@@ -141,7 +147,14 @@ class SourceFidelityCliTests(unittest.TestCase):
         self.assertNotIn(private_body, stdout + stderr)
 
     def test_ai_create_draft_requires_exactly_one_execution_mode(self) -> None:
-        for switches in ([], ["--dry-run", "--approve"]):
+        cases = (
+            ([], ["compound_exact_human_approval_binding_required"]),
+            (
+                ["--dry-run", "--approve"],
+                ["create_draft_ai_execution_mode_invalid"],
+            ),
+        )
+        for switches, expected_reason_codes in cases:
             with self.subTest(switches=switches):
                 with mock.patch.object(
                     archive_services,
@@ -167,15 +180,38 @@ class SourceFidelityCliTests(unittest.TestCase):
                 create_draft.assert_not_called()
                 self.assertEqual(
                     json.loads(stdout)["reason_codes"],
-                    ["create_draft_ai_execution_mode_invalid"],
+                    expected_reason_codes,
                 )
 
     def test_ai_approve_passes_exact_review_evidence(self) -> None:
-        with mock.patch.object(
-            archive_services,
-            "create_draft_zettel",
-            return_value={"ok": True, "dry_run": False},
-        ) as create_draft:
+        preview = {
+            "ok": True,
+            "dry_run": True,
+            "source_fidelity_plan_sha256": PLAN_SHA256,
+            "body_sha256": BODY_SHA256,
+            "warnings": [],
+        }
+
+        def execute(_root, _context, writer):
+            return writer(mock.sentinel.approval_claim)
+
+        with (
+            mock.patch.object(
+                archive_services,
+                "create_draft_zettel",
+                side_effect=[preview, {"ok": True, "dry_run": False}],
+            ) as create_draft,
+            mock.patch.object(
+                archive_cli,
+                "_exact_human_approval_context",
+                return_value=mock.sentinel.approval_context,
+            ),
+            mock.patch.object(
+                archive_cli,
+                "_execute_exact_human_approved_write",
+                side_effect=execute,
+            ),
+        ):
             code, _stdout, stderr = self.run_cli(
                 [
                     "create-draft",
@@ -187,6 +223,10 @@ class SourceFidelityCliTests(unittest.TestCase):
                     "--creation-mode",
                     "ai_generated",
                     "--approve",
+                    "--draft-id",
+                    DRAFT_ID,
+                    "--created-at",
+                    CREATED_AT,
                     "--draft-approved-by",
                     "person:reviewer",
                     "--expected-body-sha256",
@@ -199,9 +239,16 @@ class SourceFidelityCliTests(unittest.TestCase):
             )
 
         self.assertEqual(code, 0, stderr)
-        kwargs = create_draft.call_args.kwargs
+        self.assertEqual(create_draft.call_count, 2)
+        kwargs = create_draft.call_args_list[-1].kwargs
         self.assertTrue(kwargs["approved"])
         self.assertFalse(kwargs["dry_run"])
+        self.assertIs(
+            kwargs["exact_human_approval_claim"],
+            mock.sentinel.approval_claim,
+        )
+        self.assertEqual(kwargs["draft_id"], DRAFT_ID)
+        self.assertEqual(kwargs["created_at"], CREATED_AT)
         self.assertEqual(kwargs["draft_approved_by"], "person:reviewer")
         self.assertEqual(kwargs["expected_body_sha256"], BODY_SHA256)
         self.assertEqual(
@@ -209,13 +256,13 @@ class SourceFidelityCliTests(unittest.TestCase):
             PLAN_SHA256,
         )
 
-    def test_human_legacy_create_draft_does_not_require_new_approval_switch(self) -> None:
+    def test_human_legacy_create_draft_is_fixed_closed_without_service_call(self) -> None:
         with mock.patch.object(
             archive_services,
             "create_draft_zettel",
             return_value={"ok": True, "dry_run": False},
         ) as create_draft:
-            code, _stdout, stderr = self.run_cli(
+            code, stdout, stderr = self.run_cli(
                 [
                     "create-draft",
                     "C:/private/archive",
@@ -228,9 +275,14 @@ class SourceFidelityCliTests(unittest.TestCase):
                 ]
             )
 
-        self.assertEqual(code, 0, stderr)
-        self.assertFalse(create_draft.call_args.kwargs["approved"])
-        self.assertFalse(create_draft.call_args.kwargs["dry_run"])
+        self.assertEqual(code, 1, stderr)
+        create_draft.assert_not_called()
+        result = json.loads(stdout)
+        self.assertEqual(
+            result["reason_codes"],
+            ["compound_exact_human_approval_binding_required"],
+        )
+        self.assertFalse(result["private_values_echoed"])
 
     def test_create_draft_parser_error_never_echoes_private_arguments(self) -> None:
         private_archive = "C:/SECRET_ARCHIVE_PATH"
@@ -260,11 +312,42 @@ class SourceFidelityCliTests(unittest.TestCase):
             self.assertNotIn(private_value, combined)
 
     def test_mint_approve_passes_expected_fidelity_plan(self) -> None:
-        with mock.patch.object(
-            archive_services,
-            "mint_zettel",
-            return_value={"ok": True, "warnings": []},
-        ) as mint:
+        binding = mock.Mock(
+            plan_sha256="sha256:" + "d" * 64,
+            target_binding_sha256="sha256:" + "e" * 64,
+        )
+        binding.context.return_value = mock.sentinel.approval_context
+
+        def execute(_root, _context, writer):
+            return writer(mock.sentinel.approval_claim)
+
+        with (
+            mock.patch.object(
+                archive_services,
+                "mint_zettel_dry_run",
+                return_value={"ok": True, "dry_run": True},
+            ),
+            mock.patch.object(
+                archive_cli.operation_approval_binding,
+                "mint_zet_approval_binding",
+                return_value=binding,
+            ),
+            mock.patch.object(
+                archive_services,
+                "read_archive_id",
+                return_value="archive:personal:test",
+            ),
+            mock.patch.object(
+                archive_cli,
+                "_execute_exact_human_approved_write",
+                side_effect=execute,
+            ),
+            mock.patch.object(
+                archive_services,
+                "mint_zettel",
+                return_value={"ok": True, "warnings": []},
+            ) as mint,
+        ):
             code, _stdout, stderr = self.run_cli(
                 [
                     "mint-zet",
@@ -285,6 +368,10 @@ class SourceFidelityCliTests(unittest.TestCase):
         self.assertEqual(
             mint.call_args.kwargs["expected_source_fidelity_plan_sha256"],
             PLAN_SHA256,
+        )
+        self.assertIs(
+            mint.call_args.kwargs["exact_human_approval_claim"],
+            mock.sentinel.approval_claim,
         )
 
     def test_mint_dry_run_preserves_current_fidelity_plan_in_json(self) -> None:
@@ -353,6 +440,10 @@ class SourceFidelityMcpTests(unittest.TestCase):
             properties["expected_source_fidelity_plan_sha256"]["pattern"],
             "^[0-9a-f]{64}$",
         )
+        self.assertEqual(
+            properties["fidelity_session_evidence_id"]["pattern"],
+            "^source-fidelity-session-evidence:[0-9a-f]{64}$",
+        )
         self.assertNotIn("body", schema["required"])
         self.assertTrue(
             {
@@ -362,8 +453,21 @@ class SourceFidelityMcpTests(unittest.TestCase):
                 "facets",
                 "source_fidelity_mode",
                 "source_fidelity_audience",
-                "fidelity_source_object_id",
             }.issubset(set(schema["required"]))
+        )
+        self.assertNotIn("fidelity_source_object_id", schema["required"])
+        self.assertEqual(
+            schema["oneOf"],
+            [
+                {
+                    "required": ["fidelity_source_object_id"],
+                    "not": {"required": ["fidelity_session_evidence_id"]},
+                },
+                {
+                    "required": ["fidelity_session_evidence_id"],
+                    "not": {"required": ["fidelity_source_object_id"]},
+                },
+            ],
         )
 
     def test_create_tool_defaults_to_ai_assisted_dry_run(self) -> None:
@@ -384,6 +488,7 @@ class SourceFidelityMcpTests(unittest.TestCase):
                     "archive_root": "C:/private/archive",
                     "title": "Private title",
                     "body": "Private body",
+                    "fidelity_source_object_id": SOURCE_OBJECT_ID,
                 }
             )
 
@@ -450,7 +555,7 @@ class SourceFidelityMcpTests(unittest.TestCase):
                 )
         call_service.assert_not_called()
 
-    def test_create_tool_approve_passes_review_and_fidelity_inputs(self) -> None:
+    def test_create_tool_approve_requires_local_ui_without_service_call(self) -> None:
         with mock.patch.object(
             mcp_server,
             "call_service",
@@ -464,6 +569,8 @@ class SourceFidelityMcpTests(unittest.TestCase):
                     "creation_mode": "ai_generated",
                     "dry_run": False,
                     "approved": True,
+                    "draft_id": DRAFT_ID,
+                    "created_at": CREATED_AT,
                     "draft_approved_by": "person:reviewer",
                     "expected_body_sha256": BODY_SHA256,
                     "source_fidelity_mode": "sanitized_derivative",
@@ -473,16 +580,14 @@ class SourceFidelityMcpTests(unittest.TestCase):
                 }
             )
 
-        kwargs = call_service.call_args.kwargs
-        self.assertTrue(kwargs["approved"])
-        self.assertFalse(kwargs["dry_run"])
-        self.assertEqual(kwargs["source_fidelity_mode"], "sanitized_derivative")
-        self.assertEqual(kwargs["source_fidelity_audience"], "client_report")
-        self.assertEqual(kwargs["fidelity_source_object_id"], SOURCE_OBJECT_ID)
+        call_service.assert_not_called()
+        payload = result["structuredContent"]
+        self.assertFalse(payload["ok"])
         self.assertEqual(
-            kwargs["expected_source_fidelity_plan_sha256"],
-            PLAN_SHA256,
+            payload["reason_codes"],
+            ["exact_human_approval_cli_required"],
         )
+        self.assertFalse(payload["private_values_echoed"])
         summary = result["content"][0]["text"]
         for private_value in (
             "Private title",

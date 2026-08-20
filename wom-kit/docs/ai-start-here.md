@@ -82,16 +82,18 @@ fixed evidence layers without echoing the private query or rows; index
 replay for AI-assisted inbox drafts. Raw grep/SQL do not prove a WOM search
 result, and direct Markdown writes to `inbox/` are forbidden. The same object
 states that local version inspection does not check remote release freshness
-and that saved-view recommendation has no persistent writer yet. It also
+  and that saved-view recommendation has no available persistent writer in
+  v0.4.0. It also
 routes historical inbox-shape review through the read-only
 `inbox-pipeline-audit`, whose classifications are not proof and trigger no
 repair. Explicit event-membership review routes through the read-only
-`activity-group-membership-plan`; approved additions then route through the
-digest-bound `activity-group-membership-write`, and interrupted transactions
-route through a separate plan/approval recovery pair. Explicit removals route
-through `activity-group-membership-removal-plan`, the separate digest-bound
-`activity-group-membership-removal-write`, and their own
-recovery-plan/approval pair. v0.3.284 advances the routing object to v0.6.
+  `activity-group-membership-plan`; add, removal, and recovery executors remain
+  dry-run only in v0.4.0. Their approval branches return
+  `compound_exact_human_approval_binding_required` before private target reads
+  or mutation. Explicit removals route through the read-only
+  `activity-group-membership-removal-plan`; there is no approved writer or
+  recovery command to continue into. v0.3.284 advanced the historical routing
+  object to v0.6.
 Addition and removal share one global writer lock and block retained journals
 across both private roots, but their request, journal, receipt, and recovery
 contracts remain separate. No route infers membership, authorizes a direct
@@ -111,8 +113,10 @@ archive identity-reconcile <archive-root> --dry-run --format json
 
 The preview reads no zet or objet content and does not expose duplicated
 identity values. Principal or archive-id conflicts block automatic repair.
-Only a same-principal display mismatch and a missing or template-like identity
-id can proceed through the separate reviewed approval command. See
+In v0.4.0 even an otherwise repairable mismatch stops at the dry-run.
+`identity-reconcile --approve` returns
+`compound_exact_human_approval_binding_required` before private target read or
+mutation and changes no identity or receipt. See
 [Archive Identity Reconcile](archive-identity-reconcile.md).
 
 ## Explicit Full Doctor

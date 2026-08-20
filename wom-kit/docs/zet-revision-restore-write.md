@@ -1,11 +1,13 @@
 # Canonical zet Exact-Byte Restore Write
 
-Status: approval-gated exact-byte canonical restore in v0.3.239
+Status: v0.4.0 dry-run-only exact-byte restore planning; historical receipts remain readable
 
-`zet-revision-restore-write` completes one evidence-backed recovery loop. It
-does not recreate missing words from hashes. It installs only complete old zet
-bytes that were separately recovered into private scratch and accepted by
-`zet-revision-restore-plan`.
+`zet-revision-restore-write` does not recreate missing words from hashes. Its
+dry-run verifies complete old zet bytes that were separately recovered into
+private scratch and accepted by `zet-revision-restore-plan`. The historical
+writer changes canonical bytes, receipt history, and lock state as one compound
+effect. v0.4.0 has no exact-human binding for that complete effect set, so its
+approve path is intentionally closed.
 
 ## Three Steps
 
@@ -36,26 +38,20 @@ archive zet-revision-restore-write <archive-root> `
   --dry-run --format json
 ```
 
-Only after private human review, rerun the unchanged command with the returned
-`write_plan.actual_digest`:
+Do not rerun it as an approved write. Any `--approve` request stops before
+private target read or mutation with:
 
-```powershell
-archive zet-revision-restore-write <archive-root> `
-  <the-same-bound-inputs-and-revision-at> `
-  --expected-write-plan-digest <sha256> `
-  --approve `
-  --reviewed-by person:<reviewer> `
-  --affirm-restore-reviewed `
-  --affirm-abstract-body-pair-reviewed `
-  --format json
+```text
+compound_exact_human_approval_binding_required
 ```
 
-Add `--affirm-edge-changes-reviewed` when the plan says edges changed. Aliases
-are `canonical-revision-restore-write` and `zet-restore-write`.
+Aliases `canonical-revision-restore-write` and `zet-restore-write` have the
+same gate. Reviewer and affirmation flags cannot bypass it.
 
-## Exact-Byte Contract
+## Historical Exact-Byte Contract
 
-The approved writer uses the same private per-canonical lock as ordinary
+Existing v0.3 receipts describe a writer that used the same private
+per-canonical lock as ordinary
 `zet-revision-write`. Immediately before mutation it repeats the complete
 history, source receipt, current state, recovered proposal, policy, event-time,
 and digest checks.
@@ -71,7 +67,10 @@ semantic, abstract, and body hashes join the ordinary and restore events into
 one chronological chain. It also supplies reviewed abstract/body evidence to
 `abstract-freshness` without storing either text.
 
-## Failure And Restart
+v0.4.0 does not enter that writer, replace a canonical zet, create a lock, or
+append a restore receipt.
+
+## Historical Failure And Restart Evidence
 
 Handled runtime failure restores the exact previous canonical bytes, removes
 any partial restore receipt, and removes the transaction lock when rollback
@@ -89,8 +88,8 @@ affirmation, or digest blocks without guessing.
 
 ## Honest Boundary
 
-`applied` proves exact reviewed local replacement and a continuous local
-receipt history. It does not prove factual truth, backup completeness,
-external synchronization, legal clearance, or model understanding. The
-command calls no model, provider, object store, database, credential store, or
-network, and MCP exposes no restore writer duplicate.
+A v0.4.0 result proves only that the exact restore effect was planned without
+writing and cannot report `applied`. Historical `applied` receipts remain
+auditable evidence of their recorded local event, not authority for replay.
+The command calls no model, provider, object store, database, credential store,
+or network, and MCP exposes no restore writer duplicate.

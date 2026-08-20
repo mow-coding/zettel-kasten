@@ -144,12 +144,10 @@ edit installed-version pins. Preview first:
 archive project-version-update <project-or-archive-root> --target vX.Y.Z --dry-run --progress --format json
 ```
 
-Only after human review, pause editors, sync/backup clients, and other Git
-writers for the complete transaction. Windows approval requires:
-
-```bash
-archive project-version-update <project-or-archive-root> --target vX.Y.Z --approve --reviewed-by <actor> --affirm-external-writers-quiescent --progress --format json
-```
+In v0.4.0 stop after the dry-run. `project-version-update` approval is fixed
+fail-closed before private project reads or mutation with
+`compound_exact_human_approval_binding_required`; editor quiescence or an
+affirmation flag cannot substitute for the missing exact-human binding.
 
 When a result carries `materialization_plan_sha256` and an opaque
 `update-entry:NNNN`, use only the separate CLI collision surface. For the
@@ -165,11 +163,12 @@ same target and materialization digest:
 
 ```bash
 archive project-bytecode-repair-plan <project-or-archive-root> --target vX.Y.Z --expected-materialization-plan-sha256 sha256:<digest> --dry-run --format json
-archive project-bytecode-repair <project-or-archive-root> --target vX.Y.Z --expected-materialization-plan-sha256 sha256:<digest> --expected-plan-sha256 <repair-plan-sha256> --approve --reviewed-by <actor> --affirm-external-writers-quiescent --format json
 ```
 
-Repair shares the updater lock, accepts only the exact supported ignored cache
-set, and never fetches, changes `HEAD`/pin, retries, or grants update approval.
+The repair planner remains read-only. In v0.4.0 the repair approval branch is
+fixed fail-closed with `compound_exact_human_approval_binding_required`; it
+removes no cache file, fetches nothing, changes no `HEAD`/pin, and does not
+retry or grant update approval.
 Run a fresh updater preview and separate approval afterward. Counts alone do
 not authorize repair; mixed or unsupported sets remain unavailable.
 
@@ -292,21 +291,12 @@ the exact `proposal.sha256` returned by the plan:
 archive zet-abstract-backfill-write <archive-root> --proposal .wom-scratch/abstract-backfill/<private>.jsonl --expected-proposal-sha256 <proposal.sha256> --dry-run --progress --format json
 ```
 
-Only a human-authorized run may add the reviewed abstracts:
-
-```bash
-archive zet-abstract-backfill-write <archive-root> --proposal .wom-scratch/abstract-backfill/<private>.jsonl --expected-proposal-sha256 <proposal.sha256> --approve --reviewed-by person:<reviewer> --affirm-abstracts-reviewed --progress --format json
-```
-
-Never infer the affirmation, reviewer, or approval from a green plan. The
-writer revalidates every canonical hash, changes only `frontmatter.abstract`,
-writes one revision receipt, and rolls back every attempted canonical byte on a
-runtime item or receipt failure. Do not edit the same targets concurrently.
-Since v0.3.265, an approved apply publishes a private hash-only transaction
-journal before its first canonical mutation. Forced termination retains that
-journal and its lock for audit; it does not automatically resume or roll back.
-Preserve both files until the archive-wide audit and a deliberate forensic
-decision establish the next action.
+In v0.4.0 stop after the plan and writer dry-run. The apply approval branch is
+fixed fail-closed before private target read or mutation with
+`compound_exact_human_approval_binding_required`; an affirmation or reviewer
+label cannot authorize it. Historical v0.3 applies published a private
+hash-only transaction journal before mutation. Preserve any retained journal
+and lock for audit; their existence does not reactivate the executor.
 
 If a human later decides to remove that whole applied abstract batch, never
 hand-edit the zets and never infer removal authority. Retain the applied
@@ -316,18 +306,10 @@ writer's `receipt.sha256`, then audit the receipt and exact inverse first:
 archive zet-abstract-backfill-revert <archive-root> --receipt receipts/revisions/abstract-backfill/<digest>.zet-abstract-backfill.json --expected-receipt-sha256 <receipt.sha256> --dry-run --progress --format json
 ```
 
-Only after a human reviews every removal may the host run:
-
-```bash
-archive zet-abstract-backfill-revert <archive-root> --receipt receipts/revisions/abstract-backfill/<digest>.zet-abstract-backfill.json --expected-receipt-sha256 <receipt.sha256> --approve --reviewed-by person:<reviewer> --affirm-abstract-removal-reviewed --progress --format json
-```
-
-Any later canonical change blocks the revert. Preserve both receipts. A matching
-retry is `already_reverted`; reapplying even the same text requires a newly
-reviewed proposal byte sequence and new proposal hash. The scratch lock does
-not protect against external editors. Since v0.3.265, approved revert also
-publishes the private pre-mutation journal; forced termination retains journal
-plus lock but still has no automatic recovery.
+In v0.4.0 the revert approval branch is also fixed fail-closed before private
+target read or mutation with the same blocker. Preserve historical receipts,
+journals, and locks for audit. The scratch lock does not protect against
+external editors, and historical evidence does not grant new removal authority.
 
 After one or more abstract apply/revert batches, and at session handoff, audit
 the whole bounded receipt lifecycle:
@@ -367,19 +349,16 @@ plan digest, and fixed action to the separate executor preview:
 archive zet-abstract-backfill-recover <archive-root> --operation <apply|revert> --basis-sha256 <case.basis_sha256> --expected-plan-digest <plan.plan_digest> --expected-action <case.recommended_action> --dry-run --max-receipts 5000 --max-locks 5000 --max-cases 100 --progress --format json
 ```
 
-Only after a human reviews that exact case, confirms the original process has
-stopped, and makes the archive quiescent may the host approve:
-
-```bash
-archive zet-abstract-backfill-recover <archive-root> --operation <apply|revert> --basis-sha256 <case.basis_sha256> --expected-plan-digest <plan.plan_digest> --expected-action <case.recommended_action> --approve --reviewed-by person:<reviewer> --affirm-recovery-reviewed --affirm-archive-quiescent --max-receipts 5000 --max-locks 5000 --max-cases 100 --progress --format json
-```
-
-The executor reruns the complete plan under a recovery-only OS advisory guard,
-reacquires a missing matching basis lock, and revalidates every participant
-hash. It never executes `manual_forensic_hold`. Failure or forced termination
-retains the journal and lock and does not reverse already completed
-safe-direction recovery writes; generate a fresh plan and obtain fresh approval
-before resuming. The guard does not lock external editors, older WOM versions,
+In v0.4.0 stop after the recovery plan and executor dry-run. Approval is fixed
+fail-closed before private target read or mutation with
+`compound_exact_human_approval_binding_required`; archive quiescence and
+affirmation flags cannot authorize recovery. The historical executor reran the
+complete plan under a recovery-only OS advisory guard, reacquired a missing
+matching basis lock, and revalidated every participant
+hash. It never executes `manual_forensic_hold`. Historical failure or forced
+termination retained the journal and lock and did not reverse already completed
+safe-direction recovery writes; in v0.4.0 use a fresh plan for diagnosis only
+and do not attempt resumption. The historical guard does not lock external editors, older WOM versions,
 or ordinary different-basis writers, so never infer archive quiescence from a
 lock filename. Recovery-produced revert receipts require WOM-kit v0.3.267 or
 newer for audit because they truthfully record
@@ -388,10 +367,11 @@ newer for audit because they truthfully record
 journal, and never edit an immutable receipt to silence this audit.
 
 For an ordinary correction to one canonical zet, prepare a complete private
-proposal under `.wom-scratch/revisions/`, use `zet-revision-plan`, preview the
-separate CLI-only `zet-revision-write`, and obtain explicit human approval
-before applying it. Never hand-edit the canonical file to bypass those hashes.
-After one or more approved revisions, and before session handoff, run:
+proposal under `.wom-scratch/revisions/`, use `zet-revision-plan`, and preview
+the separate CLI-only `zet-revision-write`. In v0.4.0 stop there: approval is
+fixed fail-closed before private target read or mutation with
+`compound_exact_human_approval_binding_required`. Never hand-edit the canonical
+file to bypass those hashes. To audit historical revisions before handoff, run:
 
 ```bash
 archive zet-revision-receipt-audit <archive-root> --dry-run --max-receipts 5000 --max-locks 5000 --max-problems 100 --progress --format json
@@ -434,14 +414,11 @@ current, proposal, and plan hashes to the separate writer preview:
 archive zet-revision-restore-write <archive-root> --receipt receipts/revisions/canonical/<digest>.zet-revision.json --expected-receipt-sha256 <sha256> --restore-proposal .wom-scratch/revisions/restores/<private>.md --expected-current-sha256 <sha256> --expected-restore-proposal-sha256 <sha256> --expected-restore-proposal-semantic-sha256 <sha256> --expected-restore-plan-digest <sha256> --revision-at <timezone-aware-event-time> --dry-run --format json
 ```
 
-Only after private human review may the host reuse the unchanged event time
-and `write_plan.actual_digest` with `--approve --reviewed-by <actor>
---affirm-restore-reviewed --affirm-abstract-body-pair-reviewed`. Add
-`--affirm-edge-changes-reviewed` when required. The writer installs the
-reviewed bytes exactly and keeps their historical `updated_at`; the new event
-time lives in its restore receipt. If a process stops, rerun the exact approved
-command. Never delete the shared revision lock manually. Run the receipt audit
-again after success. MCP has no restore writer.
+In v0.4.0 stop after this writer preview. Restore approval is fixed fail-closed
+before private target read or mutation with
+`compound_exact_human_approval_binding_required`; review labels and affirmation
+flags cannot authorize it. Never delete the shared revision lock manually or
+copy the proposal over the canonical zet. MCP has no restore writer.
 
 Use paged `zet-catalog` when the host needs one stdout page, manual continuation,
 or MCP rather than a complete CLI pass:
@@ -526,6 +503,12 @@ archive source-intake <archive-root> --dry-run --format json
 
 Use exactly one locator mode. Continue with `create-draft --dry-run` only after `ok` is true and the returned plan has no blockers.
 
+In v0.4.0 `source-intake-record` approval is fixed fail-closed before private
+plan/archive read or mutation with
+`compound_exact_human_approval_binding_required`; it writes no source receipt.
+The source-intake dry-run itself is review evidence, not capture or draft
+authority.
+
 The same gate applies BEFORE physically copying any local file into the archive or an objet store, not just before drafting:
 
 ```bash
@@ -537,37 +520,42 @@ with one bounded manifest and one exact review gate:
 
 ```text
 archive source-intake-batch <archive-root> --manifest <archive-relative-json> --dry-run --format json
-archive source-intake-batch <archive-root> --manifest <same-json> --expected-plan-sha256 <sha256:...> --approve --reviewed-by <actor> --format json
 ```
 
 Relative item paths resolve from the archive root. The request is capped at
-1,000 items. The command stores the ordinary redacted per-item source-intake
-plans plus one aggregate receipt, does not read file bodies or calculate
-content hashes, and claims bounded per-item replay convergence rather than
-transaction-wide atomicity.
+1,000 items. In v0.4.0 batch approval is fixed fail-closed before private item
+read or mutation with `compound_exact_human_approval_binding_required`; it
+stores no per-item plan or aggregate receipt.
 
-Follow the returned `next_safe_actions`: stage the file inside the archive root (recommended `staging/incoming/<YYYY-MM-DD>/<project_slug>/`; capture requires archive-relative staged paths), prepare ONE reviewed selection with `objet-capture-selection` (optionally pairing an existing vendor transcript through `--derived-text-staged-path` so a single approval covers both halves), then capture only through `objet-capture --selection <path> --dry-run` first and `--approve --reviewed-by <actor-id>` after human approval. Real (non-sandbox) archives additionally need an owner-approved `objet-capture-enable` record. For bulk stores whose bytes already live in an external content-addressed store, register evidence with `prehashed-objet-ledger` and `object-storage-upload-evidence` instead of copying files in. Capture authority comes ONLY from the reviewed selection plus the approved capture (plus enablement); a source-intake plan is never permission to copy, capture, import, or upload, and a raw in-root `objets/` folder is not an approved destination.
+Follow the returned `next_safe_actions` only as a staging/preview guide. In
+v0.4.0 `objet-capture-selection`, `objet-capture`, and
+`objet-capture-enable` approval branches are fixed fail-closed before private
+input read or mutation with `compound_exact_human_approval_binding_required`.
+A source-intake or capture preview is never authority to copy, capture, import,
+or upload, and a raw in-root `objets/` folder is not an approved destination.
 
 For one reviewed request containing many ordinary staged files, prefer:
 
 ```text
 archive objet-capture-batch <archive-root> --manifest <archive-relative-json> --dry-run --format json
-archive objet-capture-batch <archive-root> --manifest <same-json> --expected-plan-sha256 <exact-plan-sha256> --approve --reviewed-by <actor> --format json
 ```
 
 The complete request is structurally checked before source bytes are opened.
-The operation is bounded to 2,000 items and converges per item on replay. Since
-v0.3.315, paired rows preserve derived-text path and reviewed metadata into the
-exact selection. Request and staged text reads are stable and capped at 64 MiB.
-The lower result must bind the exact selection and `files_written` delta.
-Original and derived requested/written-or-ready/skipped/blocked counts close
-separately and the batch receipt is attempt-bound. `partial`,
-`evidence_incomplete`, `recovery_required`, and
-`batch_capture_outcome_unverified` are review states, never permission for
-automatic replay. A same-request replay may skip existing originals and finish
-derived text; if staging originals are unavailable, use durable capture receipt
-object IDs with a separately reviewed `derive-text capture --from-manifest`.
-The batch does not promise transaction-wide atomicity.
+The dry-run is bounded to 2,000 items. In v0.4.0 approval is fixed fail-closed
+before private source read or mutation with
+`compound_exact_human_approval_binding_required`; it writes no object, manifest
+row, item receipt, or batch receipt. Historical partial/recovery evidence stays
+auditable and never authorizes automatic replay.
+
+Object-storage plans and audits remain available, but v0.4.0 fixed-closes
+approval for `object-storage`, `prehashed-objet-ledger`,
+`object-storage-upload-evidence`, `object-storage-upload`,
+`object-storage-adopt-existing`, and
+`object-storage-wom-location-reconcile`. Each returns
+`compound_exact_human_approval_binding_required` before private ledger/object,
+credential, provider, or archive target read; provider call; mutation; or
+receipt publication. Do not present historical upload/adopt/reconcile commands
+as runnable instructions.
 
 ## External Locators, Relation Review, And Markup Normalization
 
@@ -577,15 +565,18 @@ never reflects the locator value. A locator may carry safe `service_ref`,
 provider locator to appear more than once when each occurrence is distinct.
 Recovery output reveals only whether those coordinates exist, never their
 values. Multiple locators may coexist, but their presence proves neither live
-remote reachability nor global recoverability. Use
-`external-locator-recovery-plan` to inspect safe candidates and the dedicated
-`external-locator-revert` dry-run/approval path to restore exact prior state.
+remote reachability nor global recoverability. Use the read-only
+`external-locator-recovery-plan` and mutation previews only. In v0.4.0 locator
+record, deactivate, and revert approvals are fixed fail-closed before private
+target read or mutation with `compound_exact_human_approval_binding_required`.
 
 Use `relation-semantics-guide` before reviewing ambiguous continuation,
 recurrence, sequence, third-party Principal, or format-variant meaning.
 `relation-candidate-plan` reads frontmatter only and creates no edge.
-`relation-candidate-decide` requires a human reason, confidence, decision, and
-explicit edge type on acceptance. Rejection is durable suppression evidence.
+`relation-candidate-decide` can retain the supported non-accept review route.
+In v0.4.0 acceptance is a compound edge-plus-judgment effect and approval fails
+before private target read or mutation with
+`compound_exact_human_approval_binding_required`.
 
 The decision rule is exact:
 
@@ -605,22 +596,24 @@ unused:
 
 ```text
 archive migrate <archive-root> --target base-link-types --link-type sequence --dry-run --format json
-archive migrate <archive-root> --target base-link-types --link-type sequence --approve --reviewed-by <actor> --format json
 archive migrate <archive-root> --target base-link-types --link-type sequence --revert --dry-run --format json
 ```
+
+In v0.4.0 migration apply and revert approvals are fixed fail-closed before
+private archive read or mutation with
+`compound_exact_human_approval_binding_required`.
 
 Register a third-party Principal before using a person, institution, team, or
 role as a Zettel edge target:
 
 ```text
 archive principal-register-plan <archive-root> --principal-id company:example --kind company --display-name <reviewed-name> --dry-run --format json
-archive principal-register <archive-root> --principal-id company:example --kind company --display-name <same-name> --expected-plan-sha256 <sha256> --approve --reviewed-by <actor> --format json
 archive principal-list <archive-root> --format json
 ```
 
-Registration never changes the archive owner. Unregistration is a separate
-digest-bound approval and blocks while any zettel edge still targets that
-Principal. The generated SQLite `principals` table is a disposable projection;
+In v0.4.0 register and unregister approvals are fixed fail-closed before private
+target read or mutation with `compound_exact_human_approval_binding_required`.
+The generated SQLite `principals` table is a disposable projection;
 `archive.yml` plus `principals/*.yml` remain authoritative.
 
 For private Notion recovery joins, use exact nested
@@ -648,16 +641,17 @@ video, media, mention, and synced-ref tags require an archive-local binding
 manifest whose exact fragment SHA-256 points to an already-existing manifested
 objet, active external locator, or source-zettel edge.
 
-Approval snapshots exact before and after bytes and writes a journal before
-the first canonical mutation. If a process stops, inspect that journal with:
+Historical v0.3 approval snapshots and journals remain auditable. If one exists,
+inspect it with:
 
 ```text
 archive markup-normalization-recovery <archive-root> --journal <archive-relative-journal> --mode resume|rollback --dry-run --format json
 ```
 
-Approve only the fresh recovery SHA-256. Do not delete the journal or edit
-affected zets by hand. Completed normalization uses the separate exact-byte
-`markup-normalization-revert` path.
+In v0.4.0 normalization apply, recovery, and revert approvals are fixed
+fail-closed before private target read or mutation with
+`compound_exact_human_approval_binding_required`. Do not delete a historical
+journal or edit affected zets by hand.
 
 ```bash
 archive create-draft <archive-root> --dry-run --source-intake-plan <source-intake-plan.json> --prompt-boundary-report <prompt-boundary-report.json> --expected-archive-id <id> --expected-type <type> --profile-id <profile-id> --creation-mode ai_assisted --created-by ai_runtime:codex --assisted-by ai_runtime:codex --format json
@@ -692,17 +686,18 @@ or separate approval gate blocks, report that immediately rather than leaving
 the request silent.
 
 Revise an unminted draft in place; title changes do not authorize deletion and
-recreation. To intentionally remove a never-minted draft, run `discard-draft`
-first as a dry-run, then approve only the exact plan SHA-256 with a safe reason
-and reviewer. The command stores an exact private snapshot and immutable
-receipt. Restore only through `discard-draft-restore`; it refuses path
-collisions and unrelated later files.
+recreation. `discard-draft` and `discard-draft-restore` remain dry-run previews
+in v0.4.0. Their approval branches fail before private target read or mutation
+with `compound_exact_human_approval_binding_required` and store no snapshot or
+receipt.
 
-To bind an already-manifested objet into structured zettel frontmatter, use
-`zettel-objet-link --dry-run` and its exact approved replay. The strict `assets`
+To preview binding an already-manifested objet into structured zettel
+frontmatter, use `zettel-objet-link --dry-run`. In v0.4.0 both link and revert
+approval branches fail before private target read or mutation with
+`compound_exact_human_approval_binding_required`. The strict `assets`
 item is `{object_id, role, label?}`; `object_id` must be the complete
-`sha256:<64 hex>` value. `zettel-objet-link-revert` restores exact prior bytes
-only while the zet still matches the link write. Mint review warns on truncated
+`sha256:<64 hex>` value. Historical receipts remain auditable but grant no
+write/revert authority. Mint review warns on truncated
 objet hashes and on likely tool traces or stale internal status claims.
 
 An incomplete draft may remain in `inbox/` without an abstract. Before minting or legacy promotion, require one human-reviewed, normalized, bounded, safe explicit `frontmatter.abstract`. `gist`, `summary`, `description`, and `overview` never authorize canonical publication. Inspect the dry-run `first_read_check` and proceed only when `ready_for_publication` is true. The real write binds the full draft SHA-256 and abstract SHA-256, rereads one byte snapshot, and blocks before canonical, receipt, or snapshot creation if any draft byte drifted or the abstract is missing or invalid. This structural gate does not judge semantic truth, completeness, freshness, or model consumption.
@@ -757,14 +752,16 @@ archive foreign-block-quarantine <archive-root> --stdin --dry-run --format json
 
 Even `ready_for_future_quarantine_write` is not trust, not import, not quarantine, and not approval. It only means a future explicit quarantine-write workflow could be shown to a human/operator.
 
-After human/operator quarantine approval, use the CLI-only quarantine write path:
+Preview a possible quarantine record through the CLI-only dry-run:
 
 ```bash
 archive quarantine-foreign-block <archive-root> --plan <foreign-block-quarantine-plan.json> --dry-run --format json
-archive quarantine-foreign-block <archive-root> --plan <foreign-block-quarantine-plan.json> --approve --reviewed-by <actor-id> --format json
 ```
 
-This writes only a sanitized untrusted quarantine case and quarantine write receipt. It does not import, trust, mint, attest, anchor, delegate, sign, execute, or accept the foreign block. MCP may only run `quarantine_foreign_block_check`; it must not write quarantine cases.
+In v0.4.0 quarantine approval is fixed fail-closed with
+`compound_exact_human_approval_binding_required` before private plan/archive
+read or mutation. It writes no case or receipt. MCP may only run
+`quarantine_foreign_block_check`; it must not write quarantine cases.
 
 After quarantine cases exist, list them for human review only:
 
@@ -783,14 +780,16 @@ archive quarantine-decision <archive-root> --case-id <safe-id> --dry-run --forma
 
 The decision preview may propose `keep_quarantined`, `reject_and_keep_record`, `eligible_for_attestation_review`, or `needs_more_review`. It records no decision. It does not trust, import, attest, mint, anchor, delegate, sign, execute, accept, apply, or write files. MCP may only run `foreign_block_quarantine_decision_check`; it must not expose decision apply/write/accept tools.
 
-After the human/operator approves recording the decision, preview or record the local decision through CLI only:
+Preview a possible local decision through CLI only:
 
 ```bash
 archive record-quarantine-decision <archive-root> --decision-preview <json-file> --dry-run --format json
-archive record-quarantine-decision <archive-root> --decision-preview <json-file> --approve --reviewed-by <actor-id> --format json
 ```
 
-This writes only a quarantine decision JSON and a matching receipt after re-validating the current case and receipt. It keeps the foreign block untrusted and unimported. MCP may only run `record_quarantine_decision_check`; it must not expose decision write/apply/accept tools.
+In v0.4.0 decision approval is fixed fail-closed with the same blocker before
+private decision/case read or mutation. It writes no decision or receipt. MCP
+may only run `record_quarantine_decision_check`; it must not expose decision
+write/apply/accept tools.
 
 After decision records exist, index them for human review only:
 
@@ -1154,7 +1153,15 @@ API failure or retry it automatically.
 
 ## Approved Notion Recovery Capability
 
-An approved `notion-page-recovery` invocation mints one fresh secret-free
+This section records the historical v0.3.320 capability design. In v0.4.0
+`notion-page-recovery`, `notion-recover`, and
+`notion-ancestor-fetch-adapter-run` execution are fixed fail-closed with
+`compound_exact_human_approval_binding_required` before credential/private
+target read, provider call, object write, or receipt publication. Their
+read-only plan and dry-run surfaces remain available; the capability semantics
+below do not authorize current execution.
+
+Historically, an approved `notion-page-recovery` invocation minted one fresh secret-free
 `wom-kit/credential-capability/v0.1` document in the parent. It is bound to the
 exact request and plan digests, reviewer, selected authenticated
 receipt/lifecycle scopes, provider `notion`, operation

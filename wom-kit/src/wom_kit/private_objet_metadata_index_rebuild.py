@@ -23,15 +23,15 @@ from typing import Any, Callable
 from .private_objet_metadata_index import (
     PrivateObjetIndexContractError,
     PrivateObjetIndexInspection,
-    PrivateObjetIndexProjection,
-    compile_private_objet_index_projection,
+    _PrivateObjetIndexProjection,
+    _compile_private_objet_index_projection,
     insert_private_objet_index_metadata,
     replace_private_objet_index_rows,
 )
 from .private_objet_metadata_index_authority import (
     PrivateObjetAuthorityError,
-    PrivateObjetIndexAuthorityCapture,
-    capture_private_objet_index_authority,
+    _PrivateObjetIndexAuthorityCapture,
+    _capture_private_objet_index_authority,
 )
 
 
@@ -88,16 +88,16 @@ class PrivateObjetIndexRebuildError(RuntimeError):
 @dataclass(frozen=True)
 class _RebuildDependencies:
     capture: Callable[
-        [Path, str], PrivateObjetIndexAuthorityCapture
-    ] = capture_private_objet_index_authority
+        [Path, str], _PrivateObjetIndexAuthorityCapture
+    ] = _capture_private_objet_index_authority
     compile: Callable[
-        [dict[str, Any]], PrivateObjetIndexProjection
-    ] = compile_private_objet_index_projection
+        [dict[str, Any]], _PrivateObjetIndexProjection
+    ] = _compile_private_objet_index_projection
     replace_rows: Callable[
-        [sqlite3.Connection, PrivateObjetIndexProjection], None
+        [sqlite3.Connection, _PrivateObjetIndexProjection], None
     ] = replace_private_objet_index_rows
     insert_metadata: Callable[
-        [sqlite3.Connection, PrivateObjetIndexProjection],
+        [sqlite3.Connection, _PrivateObjetIndexProjection],
         PrivateObjetIndexInspection,
     ] = insert_private_objet_index_metadata
     connect: Callable[[Path, int], sqlite3.Connection] | None = None
@@ -324,7 +324,7 @@ def _resolved_index_paths(
     return root, candidate
 
 
-class PrivateObjetIndexRebuildSession:
+class _PrivateObjetIndexRebuildSession:
     """Own one rebuild's authority, connection, transaction, and lock unwind."""
 
     def __init__(
@@ -369,8 +369,8 @@ class PrivateObjetIndexRebuildSession:
         self._committed = False
         self._rows_installed = False
         self._connection: sqlite3.Connection | None = None
-        self._authority_a: PrivateObjetIndexAuthorityCapture | None = None
-        self._projection: PrivateObjetIndexProjection | None = None
+        self._authority_a: _PrivateObjetIndexAuthorityCapture | None = None
+        self._projection: _PrivateObjetIndexProjection | None = None
         self._inspection: PrivateObjetIndexInspection | None = None
         self._storage_identity: _IndexStorageIdentity | None = None
         self._win32: Any | None = None
@@ -379,7 +379,7 @@ class PrivateObjetIndexRebuildSession:
 
     def __repr__(self) -> str:
         return (
-            "PrivateObjetIndexRebuildSession("
+            "_PrivateObjetIndexRebuildSession("
             f"entered={self._entered!r}, "
             f"committed={self._committed!r}, "
             f"closed={self._closed!r})"
@@ -413,13 +413,13 @@ class PrivateObjetIndexRebuildSession:
         loader = self._dependencies.load_win32 or _default_load_win32
         try:
             win32 = loader()
-            guard = win32.PrivateMetadataMutationGuard(self._root)
+            guard = win32._PrivateMetadataMutationGuard(self._root)
             self._win32 = win32
             self._guard = guard
             guard.hold_chain(self._root / "db")
             guard.hold_chain(self._root / "objects" / "manifests")
             guard.validate_all()
-            locks = win32.PrivateMetadataLockPair(guard)
+            locks = win32._PrivateMetadataLockPair(guard)
             self._locks = locks
             locks.acquire()
             locks.validate()
@@ -444,7 +444,7 @@ class PrivateObjetIndexRebuildSession:
             authority.as_compiler_input()
         )
         if (
-            not isinstance(projection, PrivateObjetIndexProjection)
+            not isinstance(projection, _PrivateObjetIndexProjection)
             or projection.authority_fingerprint_sha256
             != authority.fingerprint_sha256
         ):
@@ -536,7 +536,7 @@ class PrivateObjetIndexRebuildSession:
         )
         self._storage_identity = current
 
-    def __enter__(self) -> "PrivateObjetIndexRebuildSession":
+    def __enter__(self) -> "_PrivateObjetIndexRebuildSession":
         if self._entered or self._closed:
             raise PrivateObjetIndexRebuildError(
                 PRIVATE_OBJET_METADATA_REBUILD_FAILED
@@ -584,7 +584,7 @@ class PrivateObjetIndexRebuildSession:
             raise _sanitize_failure(exc, committed=False) from None
         self._rows_installed = True
 
-    def _capture_b(self) -> PrivateObjetIndexAuthorityCapture:
+    def _capture_b(self) -> _PrivateObjetIndexAuthorityCapture:
         if self._platform_name == "nt":
             assert self._guard is not None
             assert self._locks is not None
@@ -787,17 +787,17 @@ class PrivateObjetIndexRebuildSession:
         return False
 
 
-def private_objet_index_rebuild_session(
+def _private_objet_index_rebuild_session(
     archive_root: Path | str,
     archive_id: str,
     db_path: Path | str,
     *,
     busy_timeout_ms: int = DEFAULT_BUSY_TIMEOUT_MS,
     _dependencies: _RebuildDependencies | None = None,
-) -> PrivateObjetIndexRebuildSession:
+) -> _PrivateObjetIndexRebuildSession:
     """Construct the one lifecycle owner used by ``archive index``."""
 
-    return PrivateObjetIndexRebuildSession(
+    return _PrivateObjetIndexRebuildSession(
         archive_root,
         archive_id,
         db_path,
@@ -815,6 +815,4 @@ __all__ = [
     "PRIVATE_OBJET_METADATA_REBUILD_NOT_COMMITTED",
     "PRIVATE_OBJET_METADATA_SNAPSHOT_CHANGED",
     "PrivateObjetIndexRebuildError",
-    "PrivateObjetIndexRebuildSession",
-    "private_objet_index_rebuild_session",
 ]

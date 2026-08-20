@@ -85,11 +85,10 @@ Its materialized proposal is independently editable and cannot mutate the
 immutable snapshot through a shared hard link.
 
 Since v0.3.239, pass the exact plan evidence to the separate CLI-only
-`zet-revision-restore-write --dry-run`. Its approval path repeats the
-whole-history and exact-state checks, requires explicit restore and
-abstract/body review plus changed-edge review, serializes with ordinary
-revision writes, atomically installs the exact reviewed bytes, and creates an
-immutable restore receipt with runtime rollback and interruption recovery. See
+`zet-revision-restore-write --dry-run`. In v0.4.0 its approval path returns
+`compound_exact_human_approval_binding_required` before private target reads or
+mutation; it installs no bytes and creates no lock, snapshot, journal, or
+restore receipt. Historical v0.3 receipts remain readable. See
 [Canonical zet Exact-Byte Restore Write](zet-revision-restore-write.md).
 
 The command calls no model, provider, object store, database, credential store,

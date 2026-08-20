@@ -96,10 +96,11 @@ tools must not read, clean, sweep, or prune it by default.
 
 The intake layout ruling (D2, 2026-07-03): capture intake stages INSIDE the
 archive root under `staging/incoming/` (date layer recommended, not required),
-because capture requires archive-relative staged paths and originals land in
-the content-addressed `objects/sha256/` store; the sibling store holds bulk
-external originals represented through `prehashed-objet-ledger` plus
-`object-storage-upload-evidence` evidence; a raw in-root `objets/` folder is
+because capture dry-run requires archive-relative staged paths. In v0.4.0 its
+approval is fixed closed and moves no original into `objects/sha256/`; the
+sibling store holds human-controlled bulk originals eligible only for dry-run
+`prehashed-objet-ledger` and `object-storage-upload-evidence` review. Those
+approvals write no manifest evidence. A raw in-root `objets/` folder is
 discouraged, with the migration guide in
 [artifact-hygiene.md](artifact-hygiene.md) section 5.
 
@@ -118,11 +119,15 @@ In practical terms:
   source maps, zets or explicit deferrals, receipts, and `archive doctor
   --strict` have been reviewed.
 
-The first implemented derived-text write path is `archive derive-text capture`.
-It registers already extracted UTF-8 text for an existing `object_id`, stores
-the text body under `objects/derived-text/sha256/`, appends
-`objects/manifests/derived-text.jsonl`, and writes a receipt. It does not run
-OCR, ASR, parsers, LLM vision, provider APIs, drafting, or minting.
+Historically in v0.3, `archive derive-text capture` could register already
+extracted UTF-8 text for an existing `object_id`, store the text body under
+`objects/derived-text/sha256/`, append
+`objects/manifests/derived-text.jsonl`, and write a receipt. In v0.4.0 only its
+dry-run plan remains available. Any non-dry-run capture returns
+`compound_exact_human_approval_binding_required` before private object, text,
+manifest, or target reads and writes no derived body, manifest row, or receipt.
+Neither the historical path nor the current preview runs OCR, ASR, parsers,
+LLM vision, provider APIs, drafting, or minting.
 
 ## 4. File-Type Guidance
 
@@ -266,11 +271,12 @@ store_ref  -> which reviewed external store label contains those bytes
 `retrieval-ledger-batch-001`. It must not be a raw local absolute path, private
 URL, account id, token, email address, or secret.
 
-Today, `archive prehashed-objet-ledger --approve` records external manifest
-entries and a receipt. It does not read blob bytes, copy objects, upload, call
-providers, or prove that the external bytes are still available. Use
-`objet-capture` when WOM-kit should verify staged bytes and keep a local
-content-addressed copy.
+In v0.4.0 `archive prehashed-objet-ledger --dry-run` can inspect the content-free
+shape and counts of an external ledger. Approval returns
+`compound_exact_human_approval_binding_required` before private ledger/archive
+read or mutation, so it writes no external manifest entry or receipt.
+`objet-capture` is also preview-only in v0.4.0; its approval branch stops before
+private selection/staged-byte read or mutation.
 
 When an external ledger includes safe MIME values, pass `--mime-field mime` so
 those values are copied into the manifest. This is especially important before
@@ -341,7 +347,9 @@ The default prefix proposal is:
 archives/<archive_id>/objets/
 ```
 
-Dry-run writes nothing and calls no provider APIs. Approved mode writes only safe local provider metadata and a setup receipt. It still does not create buckets, run OAuth, upload, sync, copy source files, hash files, or import source content.
+Dry-run writes nothing and calls no provider APIs. In v0.4.0 setup approval
+returns `compound_exact_human_approval_binding_required` before private target
+read or mutation and writes no provider metadata or receipt.
 
 ## 11. v0.2.22 Source Intake Planner
 

@@ -1,9 +1,12 @@
 # IMAP Mailbox Header Metadata Scan
 
-Status: v0.3.62 approval-gated local IMAP header metadata scan baseline
+Status: v0.4.0 dry-run-only IMAP header scan preflight; live scan fixed closed
 Date: 2026-06-16
 
-v0.3.62 opens the first narrow live IMAP adapter path.
+v0.3.62 documented the historical narrow live IMAP adapter path. In v0.4.0
+only dry-run remains operational. Approval returns
+`compound_exact_human_approval_binding_required` before manifest, receipt,
+credential, provider, mailbox, or target reads and writes nothing.
 
 It is intentionally small:
 
@@ -52,12 +55,12 @@ imap-header-metadata-scan
 mailbox-header-metadata-scan
 ```
 
-Use `--approve` instead of `--dry-run` only after reviewing the manifest,
-approval receipt, selection rule, and execution contract.
+Stop after `--dry-run` in v0.4.0. A reviewed manifest, receipt, selection rule,
+or execution contract is advisory and grants no live scan authority.
 
-## Required Setup
+## Preview Inputs
 
-The command requires:
+The dry-run validates the shapes of:
 
 - an IMAP adapter manifest,
 - a credential access approval receipt,
@@ -68,17 +71,15 @@ The command requires:
 v0.3.62 does not read `keyring:`, `secret:`, or `wallet:` refs. Those remain
 future adapters.
 
-## What It Does In Approved Mode
+## Approval Boundary
 
-Approved mode may:
+Approval always:
 
-- read the two environment variables named by the safe `env:` refs,
-- open an IMAP TLS connection,
-- attempt login,
-- select `INBOX` read-only,
-- search candidate messages using the reviewed selection rule,
-- fetch limited header metadata for up to `--max-messages`,
-- write a non-secret receipt under `receipts/imap/adapter-executions/`.
+- returns the fixed content-free blocker;
+- reads neither environment variable;
+- opens no IMAP TLS connection; and
+- stops before login, mailbox selection, search, header fetch, or receipt
+  publication.
 
 ## What It Never Returns
 
@@ -106,7 +107,7 @@ Candidate refs are opaque hashes such as `imap-candidate:<sha256>`.
 
 ## Still Future Work
 
-The first live adapter does not implement:
+The current dry-run does not implement:
 
 - OAuth,
 - OS keyring retrieval,

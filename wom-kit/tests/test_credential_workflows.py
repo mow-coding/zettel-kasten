@@ -15,9 +15,9 @@ from unittest.mock import patch
 import uuid
 
 import wom_kit.credential_workflows as credential_workflows
-from wom_kit.credential_capability import CredentialCapability
+from wom_kit.credential_capability import _CredentialCapability as CredentialCapability
 from wom_kit.credential_secure_intake import (
-    AtomicJsonReceiptCommitter,
+    _AtomicJsonReceiptCommitter as AtomicJsonReceiptCommitter,
     HumanSecretInputResult,
     NOTION_PAT_SCOPE_FINGERPRINT_DOMAIN,
     NOTION_PAT_WORKSPACE_IDENTITY_BASIS,
@@ -25,21 +25,24 @@ from wom_kit.credential_secure_intake import (
 from wom_kit.credential_secure_registry import (
     _receipt_mac,
     RECEIPT_AUTHENTICATION_SCHEMA,
-    StableArchiveFingerprintKeyProvider,
+    _StableArchiveFingerprintKeyProvider as StableArchiveFingerprintKeyProvider,
 )
 from wom_kit.credential_workflows import (
-    CredentialAdoptionWorkerInvocation,
-    InjectedCredentialAdoptionWorkerSpawner,
-    InjectedNotionRecoveryWorkerSpawner,
-    approve_authenticated_credential_lifecycle,
-    execute_authenticated_notion_page_recovery,
-    execute_spawned_authenticated_notion_page_recovery,
-    execute_windows_notion_credential_adoption,
+    _CredentialAdoptionWorkerInvocation as CredentialAdoptionWorkerInvocation,
+    _InjectedCredentialAdoptionWorkerSpawner as InjectedCredentialAdoptionWorkerSpawner,
+    _InjectedNotionRecoveryWorkerSpawner as InjectedNotionRecoveryWorkerSpawner,
+    _execute_authenticated_notion_page_recovery_core as execute_authenticated_notion_page_recovery,
+    _execute_spawned_authenticated_notion_page_recovery_core as execute_spawned_authenticated_notion_page_recovery,
+    _execute_windows_notion_credential_adoption_core as execute_windows_notion_credential_adoption,
+    _approve_authenticated_credential_lifecycle_core as approve_authenticated_credential_lifecycle,
     list_authenticated_secure_credentials,
     plan_authenticated_credential_lifecycle,
     plan_secure_credential_adoption,
 )
-from wom_kit.notion_http_adapter import NOTION_API_VERSION, NotionHttpAdapter
+from wom_kit.notion_http_adapter import (
+    NOTION_API_VERSION,
+    _NotionHttpAdapter as NotionHttpAdapter,
+)
 from wom_kit.notion_page_recovery import REQUEST_SCHEMA, plan_recovery
 
 
@@ -457,6 +460,54 @@ def make_valid_recovery_worker_result(preview: dict[str, object]) -> dict[str, o
 
 
 class CredentialWorkflowPlanningTests(unittest.TestCase):
+    def test_public_lifecycle_non_boolean_approval_blocks_before_key_access(self) -> None:
+        class FalseyNonBoolean:
+            def __bool__(self) -> bool:
+                return False
+
+        with (
+            patch.object(
+                credential_workflows,
+                "_decide_authenticated_credential_lifecycle_core",
+                side_effect=AssertionError("private lifecycle core must not start"),
+            ) as private_core,
+            patch.object(
+                credential_workflows,
+                "_key_provider",
+                side_effect=AssertionError("archive key must not be selected"),
+            ) as key_selector,
+            patch.object(
+                credential_workflows,
+                "_persist_duplicate_lifecycle_decision",
+                side_effect=AssertionError("credential registry must not be read"),
+            ) as registry,
+        ):
+            results = [
+                credential_workflows.decide_authenticated_credential_lifecycle(
+                    "archive-must-not-be-read",
+                    provider="notion",
+                    workspace_fingerprint="sha256:" + "0" * 64,
+                    selected_default_credential_id=None,
+                    approved=value,
+                    native=object(),
+                    key_provider=object(),
+                )
+                for value in (1, FalseyNonBoolean())
+            ]
+
+        for result in results:
+            self.assertFalse(result["ok"])
+            self.assertEqual(
+                result["reason_code"],
+                "compound_exact_human_approval_binding_required",
+            )
+            self.assertEqual(result["operations"], ZERO_LIVE_OPERATIONS)
+            self.assertFalse(result["secret_value_present"])
+            self.assertFalse(result["backend_target_present"])
+        private_core.assert_not_called()
+        key_selector.assert_not_called()
+        registry.assert_not_called()
+
     def test_plan_is_content_free_write_free_and_hides_exact_anchor(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             untouched = Path(temporary) / "must-not-exist"
@@ -1124,7 +1175,7 @@ class CredentialWorkflowPlanningTests(unittest.TestCase):
             return previous
 
         production_spawner = (
-            credential_workflows.SpawnCredentialAdoptionWorkerSpawner(
+            credential_workflows._SpawnCredentialAdoptionWorkerSpawner(
                 _signal_getter=get_handler,
                 _signal_setter=set_handler,
             )
@@ -1343,16 +1394,16 @@ class CredentialWorkflowPlanningTests(unittest.TestCase):
                     **detach_kwargs,
                 ) as detach, patch.object(
                     credential_workflows,
-                    "CtypesWindowsNativeFacade",
+                    "_CtypesWindowsNativeFacade",
                 ) as native, patch.object(
                     credential_workflows,
                     "ArchiveInterprocessRequestPacer",
                 ) as pacer, patch.object(
                     credential_workflows,
-                    "NotionHttpAdapter",
+                    "_NotionHttpAdapter",
                 ) as adapter, patch.object(
                     credential_workflows,
-                    "StableArchiveFingerprintKeyProvider",
+                    "_StableArchiveFingerprintKeyProvider",
                 ) as key_provider, patch.object(
                     credential_workflows,
                     "_execute_adoption_inside_worker",
@@ -1393,16 +1444,16 @@ class CredentialWorkflowPlanningTests(unittest.TestCase):
             return_value=True,
         ) as detach, patch.object(
             credential_workflows,
-            "CtypesWindowsNativeFacade",
+            "_CtypesWindowsNativeFacade",
         ) as native, patch.object(
             credential_workflows,
             "ArchiveInterprocessRequestPacer",
         ) as pacer, patch.object(
             credential_workflows,
-            "NotionHttpAdapter",
+            "_NotionHttpAdapter",
         ) as adapter, patch.object(
             credential_workflows,
-            "StableArchiveFingerprintKeyProvider",
+            "_StableArchiveFingerprintKeyProvider",
         ) as key_provider, patch.object(
             credential_workflows,
             "_execute_adoption_inside_worker",
@@ -1478,7 +1529,7 @@ class CredentialWorkflowPlanningTests(unittest.TestCase):
             events.append("execute")
             return child_result
 
-        invocation = credential_workflows.CredentialAdoptionWorkerInvocation(
+        invocation = credential_workflows._CredentialAdoptionWorkerInvocation(
             archive_root=".",
             approval_plan={},
             expected_plan_digest="sha256:" + ("a" * 64),
@@ -1495,7 +1546,7 @@ class CredentialWorkflowPlanningTests(unittest.TestCase):
             side_effect=detach,
         ) as detach_mock, patch.object(
             credential_workflows,
-            "CtypesWindowsNativeFacade",
+            "_CtypesWindowsNativeFacade",
             side_effect=make_native,
         ), patch.object(
             credential_workflows,
@@ -1503,11 +1554,11 @@ class CredentialWorkflowPlanningTests(unittest.TestCase):
             side_effect=make_pacer,
         ), patch.object(
             credential_workflows,
-            "NotionHttpAdapter",
+            "_NotionHttpAdapter",
             side_effect=make_adapter,
         ), patch.object(
             credential_workflows,
-            "StableArchiveFingerprintKeyProvider",
+            "_StableArchiveFingerprintKeyProvider",
             side_effect=make_key_provider,
         ), patch.object(
             credential_workflows,
@@ -1552,10 +1603,10 @@ class CredentialWorkflowPlanningTests(unittest.TestCase):
         )[0]
         self.assertLess(
             entry_source.index("_detach_spawned_popup_child_console"),
-            entry_source.index("CtypesWindowsNativeFacade"),
+            entry_source.index("_CtypesWindowsNativeFacade"),
         )
         parent_source = source.split(
-            "class SpawnCredentialAdoptionWorkerSpawner", 1
+            "class _SpawnCredentialAdoptionWorkerSpawner", 1
         )[1].split("_ADOPTION_WORKER_SUCCESS_KEYS", 1)[0]
         self.assertNotIn("FreeConsole", parent_source)
         self.assertNotIn("_detach_spawned_popup_child_console", parent_source)
@@ -1651,7 +1702,7 @@ class CredentialWorkflowPlanningTests(unittest.TestCase):
             events.append("join_retry_wait_interrupted")
             raise KeyboardInterrupt
 
-        invocation = credential_workflows.CredentialAdoptionWorkerInvocation(
+        invocation = credential_workflows._CredentialAdoptionWorkerInvocation(
             archive_root=".",
             approval_plan={},
             expected_plan_digest="sha256:" + ("a" * 64),
@@ -1675,7 +1726,7 @@ class CredentialWorkflowPlanningTests(unittest.TestCase):
             side_effect=interrupted_retry_wait,
         ):
             outcome = (
-                credential_workflows.SpawnCredentialAdoptionWorkerSpawner(
+                credential_workflows._SpawnCredentialAdoptionWorkerSpawner(
                     _signal_getter=get_handler,
                     _signal_setter=set_handler,
                 )
@@ -1709,7 +1760,7 @@ class CredentialWorkflowPlanningTests(unittest.TestCase):
         )
         self.assertNotIn(
             "_ctrl_c_setter",
-            credential_workflows.SpawnCredentialAdoptionWorkerSpawner.__dict__,
+            credential_workflows._SpawnCredentialAdoptionWorkerSpawner.__dict__,
         )
         source = Path(credential_workflows.__file__).read_text(encoding="utf-8")
         self.assertNotIn("SetConsoleCtrlHandler", source)
@@ -1813,7 +1864,7 @@ class CredentialWorkflowPlanningTests(unittest.TestCase):
 
         self_outer = self
         context = FakeContext()
-        invocation = credential_workflows.CredentialAdoptionWorkerInvocation(
+        invocation = credential_workflows._CredentialAdoptionWorkerInvocation(
             archive_root=".",
             approval_plan={},
             expected_plan_digest="sha256:" + ("a" * 64),
@@ -1832,7 +1883,7 @@ class CredentialWorkflowPlanningTests(unittest.TestCase):
             "get_context",
             return_value=context,
         ):
-            outcome = credential_workflows.SpawnCredentialAdoptionWorkerSpawner(
+            outcome = credential_workflows._SpawnCredentialAdoptionWorkerSpawner(
                 _signal_getter=get_handler,
                 _signal_setter=set_handler,
             ).run_worker(invocation)
@@ -1997,7 +2048,7 @@ class CredentialWorkflowPlanningTests(unittest.TestCase):
                 return FakeProcess()
 
         self_outer = self
-        invocation = credential_workflows.CredentialAdoptionWorkerInvocation(
+        invocation = credential_workflows._CredentialAdoptionWorkerInvocation(
             archive_root=".",
             approval_plan={},
             expected_plan_digest="sha256:" + ("a" * 64),
@@ -2020,7 +2071,7 @@ class CredentialWorkflowPlanningTests(unittest.TestCase):
             "sleep",
             side_effect=KeyboardInterrupt("private synthetic delay text"),
         ):
-            outcome = credential_workflows.SpawnCredentialAdoptionWorkerSpawner(
+            outcome = credential_workflows._SpawnCredentialAdoptionWorkerSpawner(
                 _signal_getter=get_handler,
                 _signal_setter=set_handler,
             ).run_worker(invocation)
@@ -2044,7 +2095,7 @@ class CredentialWorkflowPlanningTests(unittest.TestCase):
     def test_spawned_adoption_start_exception_uses_ack_and_eof_containment(
         self,
     ) -> None:
-        invocation = credential_workflows.CredentialAdoptionWorkerInvocation(
+        invocation = credential_workflows._CredentialAdoptionWorkerInvocation(
             archive_root=".",
             approval_plan={},
             expected_plan_digest="sha256:" + ("a" * 64),
@@ -2155,7 +2206,7 @@ class CredentialWorkflowPlanningTests(unittest.TestCase):
                     return_value=context,
                 ):
                     outcome = (
-                        credential_workflows.SpawnCredentialAdoptionWorkerSpawner(
+                        credential_workflows._SpawnCredentialAdoptionWorkerSpawner(
                             _signal_getter=get_handler,
                             _signal_setter=set_handler,
                         ).run_worker(invocation)
@@ -2189,6 +2240,75 @@ class CredentialWorkflowEndToEndTests(unittest.TestCase):
             self.native,
             random_bytes=lambda size: ARCHIVE_KEY if size == 32 else b"",
         )
+
+    def test_public_recovery_executors_fail_closed_before_internal_engine(
+        self,
+    ) -> None:
+        private_value = "PRIVATE-PUBLIC-RECOVERY-BOUNDARY-SECRET"
+        manifest = {"private_marker": private_value}
+        before = {
+            path.relative_to(self.root).as_posix(): hashlib.sha256(
+                path.read_bytes()
+            ).hexdigest()
+            for path in self.root.rglob("*")
+            if path.is_file()
+        }
+
+        with patch.object(
+            credential_workflows,
+            "_execute_recovery",
+            side_effect=AssertionError("internal recovery engine entered"),
+        ) as engine, patch.object(
+            credential_workflows,
+            "list_secure_credentials",
+            side_effect=AssertionError("credential registry read entered"),
+        ) as registry_read:
+            direct = (
+                credential_workflows.execute_authenticated_notion_page_recovery(
+                    self.root,
+                    manifest,
+                    expected_plan_sha256=private_value,
+                    reviewed_by=private_value,
+                    max_items=1,
+                    approved=True,
+                    native=self.native,
+                )
+            )
+            spawned = (
+                credential_workflows.execute_spawned_authenticated_notion_page_recovery(
+                    self.root,
+                    manifest,
+                    expected_plan_sha256=private_value,
+                    reviewed_by=private_value,
+                    max_items=1,
+                    approved=True,
+                )
+            )
+
+        engine.assert_not_called()
+        registry_read.assert_not_called()
+        after = {
+            path.relative_to(self.root).as_posix(): hashlib.sha256(
+                path.read_bytes()
+            ).hexdigest()
+            for path in self.root.rglob("*")
+            if path.is_file()
+        }
+        self.assertEqual(after, before)
+        for result in (direct, spawned):
+            self.assertFalse(result["ok"])
+            self.assertEqual(result["state"], "blocked")
+            self.assertEqual(
+                result["reason_codes"],
+                ["compound_exact_human_approval_binding_required"],
+            )
+            self.assertEqual(result["files_written"], [])
+            self.assertEqual(result["would_change"], [])
+            self.assertIs(result["private_values_echoed"], False)
+            self.assertNotIn(
+                private_value,
+                json.dumps(result, ensure_ascii=False),
+            )
 
     def assert_adoption_stage(self, result: dict, bits: str) -> None:
         self.assertEqual(
@@ -2408,6 +2528,166 @@ class CredentialWorkflowEndToEndTests(unittest.TestCase):
         self.assert_adoption_stage(repeat, "0001")
         self.assertEqual(self.native.prompts, 1)
         self.assertEqual(len(repeat_transport.calls), 2)
+
+    def test_production_repeat_adoption_blocks_before_secret_or_provider_reuse(self) -> None:
+        first, _first_transport = self._adopt()
+        self.assertTrue(first["ok"])
+        prompts_before = self.native.prompts
+        reads_before = len(self.native.reads)
+        repeat_transport = intake_transport()
+        repeat_plan = make_plan(
+            request_id_factory=lambda: "intake_production_repeat_block1234"
+        )
+
+        repeat = execute_windows_notion_credential_adoption(
+            self.root,
+            repeat_plan,
+            expected_plan_digest=str(repeat_plan["plan_digest"]),
+            expected_archive_id=ARCHIVE_ID,
+            reviewed_anchor_uuid=ANCHOR,
+            requested_capabilities=CAPABILITIES,
+            approved=True,
+            worker_spawner=InjectedCredentialAdoptionWorkerSpawner(
+                native=self.native,
+                notion_adapter=NotionHttpAdapter(transport=repeat_transport),
+                key_provider=self.key_provider,
+                now_factory=lambda: NOW,
+                _allow_legacy_existing_registration=False,
+            ),
+        )
+
+        self.assertFalse(repeat["ok"])
+        self.assertEqual(
+            repeat["reason_code"],
+            "credential_adoption_existing_registration_exact_human_approval_required",
+        )
+        self.assertEqual(self.native.prompts, prompts_before)
+        self.assertEqual(len(self.native.reads), reads_before)
+        self.assertEqual(repeat_transport.calls, [])
+        self.assertFalse(repeat["provider_request_attempted"])
+
+    def test_concurrent_different_purpose_receipt_blocks_before_live_adoption(self) -> None:
+        donor_root = make_archive(Path(self.temporary.name) / "race-donor")
+        donor_native = FakeWindowsNative()
+        donor_key_provider = StableArchiveFingerprintKeyProvider(
+            donor_native,
+            random_bytes=lambda size: ARCHIVE_KEY if size == 32 else b"",
+        )
+        donor_transport = intake_transport()
+        donor_plan = make_plan(
+            purpose="provider_api_access",
+            request_id_factory=lambda: "intake_race_donor_receipt1234",
+        )
+        donor_result = execute_windows_notion_credential_adoption(
+            donor_root,
+            donor_plan,
+            expected_plan_digest=str(donor_plan["plan_digest"]),
+            expected_archive_id=ARCHIVE_ID,
+            reviewed_anchor_uuid=ANCHOR,
+            requested_capabilities=CAPABILITIES,
+            approved=True,
+            worker_spawner=InjectedCredentialAdoptionWorkerSpawner(
+                native=donor_native,
+                notion_adapter=NotionHttpAdapter(transport=donor_transport),
+                key_provider=donor_key_provider,
+                now_factory=lambda: NOW,
+                credential_id_factory=lambda: "cred_race_donor_receipt1234",
+                backend_id_factory=lambda: "backend_race_donor_receipt1234",
+            ),
+        )
+        self.assertTrue(donor_result["ok"], donor_result)
+        donor_receipts = list(
+            (
+                donor_root
+                / "profiles"
+                / "local"
+                / "credential-intake"
+                / "receipts"
+            ).glob("*.json")
+        )
+        self.assertEqual(len(donor_receipts), 1)
+        concurrent_receipt = json.loads(
+            donor_receipts[0].read_text(encoding="utf-8")
+        )
+        self.assertEqual(concurrent_receipt["purpose"], "provider_api_access")
+        self.assertEqual(
+            credential_workflows.list_secure_credentials(self.root)[
+                "credential_count"
+            ],
+            0,
+        )
+
+        class ReceiptInjectingKeyProvider:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def use_key(
+                self,
+                _archive_root,
+                consumer,
+                *,
+                create_if_missing: bool = False,
+            ):
+                self.calls += 1
+                self_outer.assertIs(create_if_missing, True)
+                receipt_root = (
+                    self_outer.root
+                    / "profiles"
+                    / "local"
+                    / "credential-intake"
+                    / "receipts"
+                )
+                AtomicJsonReceiptCommitter(receipt_root).commit_atomic(
+                    concurrent_receipt
+                )
+                key = bytearray(ARCHIVE_KEY)
+                try:
+                    return consumer(memoryview(key))
+                finally:
+                    for index in range(len(key)):
+                        key[index] = 0
+
+        self_outer = self
+        key_provider = ReceiptInjectingKeyProvider()
+        transport = intake_transport()
+        plan = make_plan(
+            request_id_factory=lambda: "intake_race_target_receipt1234"
+        )
+        with patch.object(
+            credential_workflows,
+            "_SecureIntakeWorker",
+            side_effect=AssertionError("secure intake worker must not start"),
+        ) as worker:
+            result = execute_windows_notion_credential_adoption(
+                self.root,
+                plan,
+                expected_plan_digest=str(plan["plan_digest"]),
+                expected_archive_id=ARCHIVE_ID,
+                reviewed_anchor_uuid=ANCHOR,
+                requested_capabilities=CAPABILITIES,
+                approved=True,
+                worker_spawner=InjectedCredentialAdoptionWorkerSpawner(
+                    native=self.native,
+                    notion_adapter=NotionHttpAdapter(transport=transport),
+                    key_provider=key_provider,
+                    now_factory=lambda: NOW,
+                    _allow_legacy_existing_registration=False,
+                ),
+            )
+
+        worker.assert_not_called()
+        self.assertEqual(key_provider.calls, 1)
+        self.assertFalse(result["ok"])
+        self.assertEqual(
+            result["reason_code"],
+            "credential_adoption_existing_registration_exact_human_approval_required",
+        )
+        self.assert_adoption_stage(result, "0000")
+        self.assertEqual(self.native.prompts, 0)
+        self.assertEqual(self.native.reads, [])
+        self.assertEqual(self.native.writes, [])
+        self.assertEqual(transport.calls, [])
+        self.assertFalse(result["provider_request_attempted"])
 
     def test_repeat_adoption_validates_saved_secret_before_provider_revalidation(
         self,
@@ -2755,7 +3035,7 @@ class CredentialWorkflowEndToEndTests(unittest.TestCase):
             key_provider=self.key_provider,
         )
         self.assertTrue(approved_lifecycle["ok"])
-        real_evolve = credential_workflows.evolve_legacy_authenticated_workspace_scope
+        real_evolve = credential_workflows._evolve_legacy_authenticated_workspace_scope
 
         def interrupting_evolve(*args, **kwargs):
             def interrupt_after_publication() -> None:
@@ -2772,7 +3052,7 @@ class CredentialWorkflowEndToEndTests(unittest.TestCase):
         )
         with patch.object(
             credential_workflows,
-            "evolve_legacy_authenticated_workspace_scope",
+            "_evolve_legacy_authenticated_workspace_scope",
             side_effect=interrupting_evolve,
         ):
             interrupted = execute_windows_notion_credential_adoption(
@@ -3716,7 +3996,7 @@ class CredentialWorkflowEndToEndTests(unittest.TestCase):
         )
         # This durable started claim models a process crash immediately after
         # the exclusive claim commit and before broker/native-secret access.
-        started = credential_workflows.claim_credential_capability_use(
+        started = credential_workflows._claim_credential_capability_use(
             self.root,
             capability,
             ARCHIVE_KEY,

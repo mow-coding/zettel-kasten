@@ -1,6 +1,6 @@
 # Zettel Edge Write
 
-Status: v0.3.290 active-registry endpoint type enforcement contract
+Status: v0.4.0 exact single-edge approval; batch and rollback approve fail closed
 Previous checkpoint: Status: v0.3.108 approval-gated zettel edge write and revert checkpoint
 Rollback checkpoint: Status: v0.3.108 receipt-based edge revert checkpoint
 Batch checkpoint: Status: v0.3.102 approval-gated policy batch zettel edge write ergonomics checkpoint
@@ -10,14 +10,15 @@ Original checkpoint: Status: v0.3.82 approval-gated zettel edge write checkpoint
 writes exactly one reviewed edge from one source zet to one existing target zet
 or manifested objet.
 
-It is still the single-edge safety gate. `archive zettel-edge-batch` reuses
-this gate for policy-approved batches, but the single command here remains the
-smallest approval path.
+It is still the single-edge safety gate. v0.4.0 binds this one operation to a
+native TaskDialog, one authenticated durable `started` claim before the writer,
+writer-side revalidation immediately before mutation, and workflow-only
+finalization.
 
-`archive revert-edge` is the matching single-edge rollback gate. It removes one
-edge by reading the original `receipts/edges/*.zettel-edge.json` receipt, writes
-a new `receipts/edges/reverts/*.zettel-edge-revert.json` receipt, and preserves
-the original write receipt.
+`archive zettel-edge-batch`, `archive revert-edge`, and `archive revert-batch`
+still provide read-only plans. They do not have a v0.4.0 multi-target approval
+binding. Every `--approve` attempt stops before mutation with
+`compound_exact_human_approval_binding_required`.
 
 It does not consume real Notion exports or candidate fixture records
 automatically.
@@ -65,15 +66,9 @@ archive revert-edge <archive-root> `
   --format json
 ```
 
-Rollback approve:
-
-```powershell
-archive revert-edge <archive-root> `
-  --receipt receipts/edges/<edge>.zettel-edge.json `
-  --approve `
-  --reviewed-by person:reviewer `
-  --format json
-```
+Rollback approve is intentionally unavailable in v0.4.0. This shape fails
+closed and writes nothing. There is no approved revert-edge command to copy or
+run.
 
 Rollback alias:
 
@@ -161,11 +156,10 @@ plan lists it under `policy.auto_write_edge_types`, gives it high confidence,
 and omits a human-review flag. Dry-run and approve both leave that row
 unwritten. Use the single-edge command above for the reviewed pair.
 
-If a stale archive has its own local `zettel-kasten/types.yml`, first preview
-and approve `archive migrate <archive-root> --target base-link-types`.
-That sync appends missing base types but never overwrites a custom same-id
-record. It has no automatic revert, so review `present_not_overwritten` before
-using the local definition.
+If a stale archive has its own local `zettel-kasten/types.yml`, preview
+`archive migrate <archive-root> --target base-link-types --dry-run`. In v0.4.0
+migration approval returns `compound_exact_human_approval_binding_required`
+before private archive reads or mutation, so it appends no base type or receipt.
 
 ## Writes
 
@@ -193,17 +187,13 @@ Duplicate `type + target` edges are blocked.
 
 ## Reverts
 
-With `archive revert-edge --approve --reviewed-by <safe-id>`, WOM-kit:
-
-```text
-zettels/*.md or inbox/*.md frontmatter edges -1
-zettels/*.md or inbox/*.md frontmatter updated_at
-receipts/edges/reverts/*.zettel-edge-revert.json
-```
-
-The command matches the edge by the original receipt's `edge_id` first and only
-falls back to the receipt path plus `type + target` tuple for older-compatible
-records. It does not delete or rewrite the original edge write receipt.
+`archive revert-edge --dry-run` still verifies the original receipt, current
+source state, and exact edge identity and returns the compensation plan. It
+writes nothing. The historical v0.3 executor matched `edge_id` first and fell
+back to receipt path plus `type + target` for older-compatible evidence, but
+that code path is not authority in v0.4.0. `--approve` always returns
+`compound_exact_human_approval_binding_required`, does not edit the zettel, and
+does not create a revert receipt.
 
 ## Closed Actions
 
@@ -226,7 +216,7 @@ This command does not:
 - echo page titles, comment bodies, account ids, emails, tokens, or secret
   values.
 
-MCP does not expose a write or revert tool for this surface in v0.3.108.
+MCP does not expose a write or revert tool for this surface.
 
-For policy-level batch approval, see
+For the current read-only batch and rollback plans, see
 [Zettel Edge Batch](zettel-edge-batch.md).

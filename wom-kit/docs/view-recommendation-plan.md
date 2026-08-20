@@ -1,6 +1,6 @@
 # View Recommendation Plan
 
-Status: v0.3.302 read-only recommendation plus separate reviewed writer
+Status: v0.4.0 read-only recommendation; v0.3.302 writer evidence is historical
 Date: 2026-06-17
 
 `view-recommendation-plan` is the safe next step after `view-health`.
@@ -10,8 +10,10 @@ facet distributions. It proposes candidate saved-view filters from likely
 navigation facets such as `subject`, `institution`, `record_type`,
 `source_category`, and `domain`.
 
-It does not edit `views/*.yml`. v0.3.302 adds a separate approval-gated
-`saved-view-write` command for a human-reviewed private request.
+It does not edit `views/*.yml`. In v0.4.0 `saved-view-write` and
+`saved-view-revert` approval return
+`compound_exact_human_approval_binding_required` before private request/target
+reads or mutation. They write no view, journal, or receipt.
 
 ## Commands
 
@@ -96,7 +98,9 @@ Use `view-health` to diagnose whether saved views are active, empty, or blocked.
 Use `view-recommendation-plan` when you want candidate replacement or expansion
 filters based on actual indexed navigation facets.
 
-After reviewing a recommendation, put the final name and filters in a private
-`saved-view-write-request/v0.1` JSON file. Preview and approve it through
-`archive saved-view-write`; an AI must not directly edit persistent view YAML.
-See [Saved-View Write And Exact Revert](saved-view-write.md).
+After reviewing a recommendation, a private `saved-view-write-request/v0.1`
+may be prepared only for dry-run validation or historical audit. In v0.4.0
+`archive saved-view-write --approve` is unavailable and returns
+`compound_exact_human_approval_binding_required`; an AI must not directly edit
+persistent view YAML. See
+[Saved-View Write And Exact Revert](saved-view-write.md).

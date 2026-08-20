@@ -1,6 +1,12 @@
 # zet Abstract Backfill Recovery Executor
 
-Status: implemented as a single-case approval-gated CLI writer in v0.3.267
+Historical v0.3 record — Status: implemented as a single-case approval-gated CLI writer in v0.3.267
+
+Current v0.4.0 boundary: the recovery plan and executor dry-run remain
+available. Approval returns `compound_exact_human_approval_binding_required`
+before private target read or mutation and changes no canonical, receipt,
+journal, lock, or recovery guard. The executor details below are historical
+v0.3 semantics, not current write authority.
 
 ## Purpose
 
@@ -39,21 +45,12 @@ archive abstract-backfill-recover
 
 A successful preview returns `ready_to_recover` and writes nothing.
 
-## Approval
+## Current v0.4.0 Approval Boundary
 
-Only after a human reviews that exact case, confirms that the original process
-has stopped, and makes the archive quiescent may the host replace `--dry-run`
-with:
-
-```text
---approve \
---reviewed-by person:<reviewer> \
---affirm-recovery-reviewed \
---affirm-archive-quiescent
-```
-
-Exactly one of `--dry-run` and `--approve` is allowed. Approval additionally
-requires:
+Do not continue past preview. Approval is fixed fail-closed with
+`compound_exact_human_approval_binding_required`. Historical v0.3 recovery
+required the following evidence, but those values do not grant current
+authority:
 
 - a complete, untruncated receipt/lock/journal audit;
 - the same complete recovery-plan digest;

@@ -100,17 +100,9 @@ docker compose run --rm archive-cli onboard \
   --dry-run
 ```
 
-Apply after review:
-
-```bash
-docker compose run --rm archive-cli onboard \
-  --target-root /archives/personal \
-  --type personal \
-  --archive-id archive:personal:me \
-  --principal-id person:me \
-  --principal-name "Me" \
-  --approve
-```
+Stop after the preview in v0.4.0. Onboarding approval returns
+`compound_exact_human_approval_binding_required` before target, template,
+identity, or provider reads and creates no archive or receipt.
 
 ## Provider Profiles
 
@@ -131,11 +123,14 @@ Provider profiles never store real secrets. They only write env var names, role 
 
 MCP exposes `archive_onboarding_plan` as check-only. AI can help plan setup, explain blockers, and prepare commands, but MCP does not create archive folders or mutate external provider accounts.
 
-Real archive creation is CLI-only through:
+The CLI onboarding preview is:
 
 ```text
-archive onboard --approve
+archive onboard --dry-run
 ```
+
+In v0.4.0 approval is fixed closed before target/template/provider reads and
+creates no archive. MCP remains plan-only.
 
 ## Docker Desktop Note
 

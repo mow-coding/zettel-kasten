@@ -11,7 +11,7 @@ one command
 -> start Docker
 -> prepare archive mount folder and .env
 -> run container smoke test
--> run archive onboarding
+-> preview archive onboarding
 ```
 
 ## Commands
@@ -28,27 +28,12 @@ macOS/Linux:
 sh scripts/setup-unix.sh --dry-run
 ```
 
-After reviewing the dry-run, run without the dry-run flag.
+In v0.4.0 stop after the dry-run. Real `onboard` is fixed closed before
+target/template/provider reads and creates no archive. Do not remove the dry-run
+flag expecting archive creation.
 
-Example with onboarding values:
-
-```powershell
-.\scripts\setup-windows.ps1 `
-  -ArchiveId archive:personal:me `
-  -PrincipalId person:me `
-  -PrincipalName "Me" `
-  -ProviderProfile local_only `
-  -Yes
-```
-
-```bash
-sh scripts/setup-unix.sh \
-  --archive-id archive:personal:me \
-  --principal-id person:me \
-  --principal-name "Me" \
-  --provider-profile local_only \
-  --yes
-```
+Historical non-dry-run setup examples are intentionally omitted in v0.4.0.
+Supply onboarding values only to the dry-run if you need a complete preview.
 
 If the script is running in a real interactive terminal and onboarding values are missing, it asks beginner-friendly questions:
 
@@ -66,7 +51,8 @@ If the script is running non-interactively, such as through an AI tool or CI job
 setup-windows.ps1 / setup-unix.sh
   Full one-command orchestrator.
   Checks Docker, optionally installs or guides Docker, starts Docker,
-  runs compose checks, runs container doctor, and starts onboarding.
+  runs compose checks, runs container doctor, and previews onboarding in the
+  supported v0.4.0 flow.
 
 install-windows.ps1 / install-unix.sh
   Lower-level baseline step.

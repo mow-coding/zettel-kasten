@@ -3,6 +3,11 @@
 Status: v0.3.158 objet-capture enablement checkpoint
 Date: 2026-07-03
 
+Current v0.4.0 boundary: enable, revoke, and reenable approval fail with
+`compound_exact_human_approval_binding_required` before archive read or
+mutation. The state preview remains read-only; no enablement record or receipt
+is written. Approval examples below are historical.
+
 This document describes `archive objet-capture-enable` (alias
 `archive capture-enable`): the explicit, receipted, revocable owner consent
 flow that lets a real (non-sandbox) archive run local objet capture.
@@ -29,53 +34,25 @@ the objet-capture run path). `derive-text capture` and
 `tiro-lossless-recovery-capture` keep their own rules; the record carries
 `scope: "objet-capture"` and the gate rejects any other scope value.
 
-## 3. Command Grammar
+## 3. Current Command Grammar
 
 ```text
-archive objet-capture-enable <archive-root>
-    (--dry-run | --approve --reviewed-by <actor>)
+archive objet-capture-enable <archive-root> --dry-run
     [--revoke] [--acknowledge-never-touch-name] [--reenable]
     [--format text|json]
 ```
 
-- `--dry-run` — read-only eligibility report; writes nothing. Returns
-  `ok: true` with a `state` field, one of (by precedence):
-  `enabled` > `revoked` > `invalid_record` > `sandbox_marked` >
-  `not_an_archive` > `not_enabled`; plus the orthogonal boolean
-  `never_touch_name_match` (the name pattern never blocks ENABLEMENT, so it is
-  not reported as a blocking state), `planned_writes` (the two relative paths
-  `--approve` would write; empty for an already-final state; for a `revoked`
-  record the actual `--approve` additionally requires `--reenable`), and a
-  `reason` string when the state is `invalid_record`. `--dry-run` is also
-  valid with `--revoke`: every write has a preview. Note `sandbox_marked`
-  reports marker presence, not capture eligibility: on a never-touch-named
-  root the CAPTURE gate still refuses without an enablement record (the marker
-  cannot override the name pattern; check `never_touch_name_match`).
-- `--approve --reviewed-by <actor>` — evaluates every blocker BEFORE any
-  write, then writes the receipt first and the record second. Blockers:
-  exactly-one-mode, missing/unsafe `--reviewed-by`, `not_an_archive`
-  (`archive.yml` missing or without a readable `archive_id`),
-  `never_touch_acknowledgement_required` (pattern-matched root without
-  `--acknowledge-never-touch-name`), `revoked_record_present_use_reenable`
-  (existing revoked record without `--reenable`), and `unsafe_record_path`
-  (record/receipt path escapes the root or crosses a symlink/junction).
-- `--revoke --approve --reviewed-by <actor>` — loads the existing record,
-  sets `enabled: false`, `revoked_by`, `revoked_at`, and writes a revoke
-  receipt then the record. Blockers: `nothing_to_revoke` when no record
-  exists, `invalid_record_present` when the record is unparseable.
-  `--reenable` and `--acknowledge-never-touch-name` are NOT required to
-  revoke: revoking must never be harder than enabling.
-- `--reenable` — required to approve enablement over a previously revoked
-  record, so an operator cannot silently undo a human revocation.
+Dry-run is a read-only eligibility/state report and writes nothing. It may
+classify `enabled`, `revoked`, `invalid_record`, `sandbox_marked`,
+`not_an_archive`, or `not_enabled`, and may show the historical planned record
+and receipt paths without authorizing them.
 
-Re-enabling overwrites the singleton record; the timestamped receipts
-directory is the audit trail. Receipt timestamps have second granularity, so
-two actions within the same second share one receipt file (last write wins).
+In v0.4.0 every enable, revoke, or re-enable approval returns
+`compound_exact_human_approval_binding_required` before reading private archive
+targets or writing a record/receipt. No flag combination reactivates the
+historical writer. The command is CLI-only and has no MCP writer.
 
-The command is CLI-only. It is NOT exposed via MCP: a consent command that
-writes an owner approval record belongs on the CLI where a human runs it.
-
-## 4. Record Schema
+## 4. Historical Record Schema
 
 Singleton record at `ops/capture-enablement.yml`:
 
@@ -108,7 +85,7 @@ Read footprint: when `ops/capture-enablement.yml` is absent the gate performs
 a single stat and reads nothing; when present, the gate reads at most the two
 control files (`ops/capture-enablement.yml` and `archive.yml`).
 
-## 5. Receipt Schema
+## 5. Historical Receipt Schema
 
 Receipts live at
 `receipts/capture-enablement/capture-enablement.<compact-ts>.json` (fixed
@@ -122,21 +99,18 @@ data stream on Windows):
  "record_sha256": "<sha256 of the record YAML text>", "created_at": "<iso>"}
 ```
 
-The gate does NOT require receipts: receipts are evidence, enforcement is the
-record. `--approve` writes the receipt BEFORE the record so "a valid record
-implies at least one receipt" holds across a crash, and doctor warns when a
-valid record has zero receipts.
+Historical gates did not require receipts: receipts were evidence and the
+record was enforcement. v0.4.0 creates neither artifact. Doctor may still warn
+when an existing historical record has no matching receipt.
 
-## 6. Gate Behavior After Enablement
+## 6. Gate Behavior For Existing Historical Enablement
 
-For a validly-enabled root, the objet-capture gate allows the run, and the
-per-item never-touch checks evaluate the name pattern on the path components
-RELATIVE to the enabled root only. The root's own owner-enabled name no longer
-re-blocks every item, but a staged item whose OWN relative component matches
-the pattern (for example `staging/incoming/evil-objets/…`) still blocks with
-`resolved_path_never_touch`. Non-enabled roots keep the absolute-path
-semantics unchanged, and `target_looks_external_live_never_touch` itself is
-identical in both of its copies (runtime and hygiene checker).
+Historically, a valid enablement record let the capture gate continue to the
+per-item never-touch checks. In v0.4.0 an existing record grants no capture
+authority: enablement, selection, and capture approval return
+`compound_exact_human_approval_binding_required` before private target reads or
+mutation. Relative-component and `resolved_path_never_touch` rules remain
+available to dry-run validation and historical audit only.
 
 Refusals keep their existing `blocked_by` ids (`sandbox_marker_required`,
 `external_live_never_touch`) and gain one additive field,
@@ -151,12 +125,11 @@ Revoking blocks FUTURE captures. It does not and cannot undo the past:
   deletes),
 - object manifest records remain,
 - capture receipts remain,
-- the record is last-writer-wins: `--approve --reenable` re-flips it,
+- the historical record was last-writer-wins; v0.4.0 cannot re-enable it,
 - receipts are plain files inside the archive and are deletable in-archive.
 
-Re-approving over a revoked record additionally requires `--reenable`, which
-prevents an AI operator from SILENTLY undoing a human revocation — but this is
-an honesty measure, not an enforcement boundary.
+A revoked historical record stays revoked through this command in v0.4.0;
+approval is fixed fail-closed.
 
 ## 8. Safety Boundary
 

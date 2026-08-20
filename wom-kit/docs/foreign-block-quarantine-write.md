@@ -2,6 +2,11 @@
 
 Status: v0.2.37 compatible baseline
 
+Current v0.4.0 boundary: quarantine-write approval fails with
+`compound_exact_human_approval_binding_required` before private plan/target read
+or mutation. It writes no case or receipt. The v0.2 write semantics retained
+below are historical evidence, not an executable command.
+
 ## Principle
 
 ```text
@@ -23,11 +28,9 @@ Dry-run:
 archive quarantine-foreign-block <archive-root> --plan <json-file> --dry-run --format json
 ```
 
-Approved write:
-
-```bash
-archive quarantine-foreign-block <archive-root> --plan <json-file> --approve --reviewed-by <actor-id> --format json
-```
+Do not replay the dry-run with approval in v0.4.0. The approval branch returns
+`compound_exact_human_approval_binding_required` before private plan/archive
+read or mutation.
 
 Optional safe replay checks:
 
@@ -55,9 +58,9 @@ The plan must still be:
 
 Plans that still require hold/manual review are refused in v0.2.32.
 
-## Writes
+## Historical v0.2 Writes
 
-Approved mode writes only:
+The historical v0.2 approved mode wrote only:
 
 ```text
 quarantine/foreign-blocks/<case-id>/quarantine-case.json
@@ -111,14 +114,16 @@ This is a candidate decision aid only. It does not record approval, write a deci
 
 ## Decision Write
 
-v0.2.35 adds a CLI-only approved decision record after the preview:
+v0.2.35 historically added a CLI-only approved decision record after the
+preview. In v0.4.0 only the dry-run remains executable:
 
 ```bash
 archive record-quarantine-decision <archive-root> --decision-preview workbench/foreign-block-quarantine-decision.json --dry-run --format json
-archive record-quarantine-decision <archive-root> --decision-preview workbench/foreign-block-quarantine-decision.json --approve --reviewed-by person:reviewer --format json
 ```
 
-Approved mode writes only `quarantine/foreign-blocks/<case-id>/quarantine-decision.json` and `receipts/quarantine/<case-id>.foreign-block-quarantine-decision.json`. It does not trust, import, attest, mint, anchor, delegate, sign, execute, accept, apply, share, or call providers.
+The v0.4.0 approval branch returns the same fixed blocker before private
+decision/case read or mutation and writes no decision or receipt. Historical
+decision records remain available to the read-only review index.
 
 ## Decision Review Index
 

@@ -24,14 +24,14 @@ from wom_kit.archive_services import (
 )
 from wom_kit.notion_page_recovery import (
     ArchiveInterprocessRequestPacer,
-    FilesystemRecoveryStorage,
+    _FilesystemRecoveryStorage as FilesystemRecoveryStorage,
     FixedIntervalRequestPacer,
     ManifestValidationError,
     MAX_UNKNOWN_BLOCK_IDS,
     OUTCOMES,
     ProviderResponse,
     REQUEST_SCHEMA,
-    execute_recovery,
+    _execute_recovery as execute_recovery,
     parse_manifest,
     plan_recovery,
 )

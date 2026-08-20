@@ -17,9 +17,9 @@ Commands:
   runtime-skill-uninstall
           Preview or approve removal of an unchanged WOM-kit-managed Agent Skill.
   legacy-coordination-cleanup
-          Preview or explicitly approve destructive cleanup of retired local
-          coordination state; approval is Windows-only, and collab/ is never
-          traversed or changed.
+          Preview retired local coordination state. The v0.4.0 write is
+          unavailable until an exact compound human-approval binding exists;
+          collab/ is never traversed or changed.
   project-version-update
           Preview or approve one verified project source-mirror and version-pin update.
   project-version-update-collision
@@ -189,7 +189,7 @@ Commands:
   credential-secure-list
           List local receipt metadata, or explicitly verify it with the exact archive authentication key.
   credential-lifecycle
-          Plan or approve one authenticated human default/legacy decision without deleting or revoking credentials.
+          Plan one authenticated default/legacy decision; v0.4.0 approval is unavailable.
   credential-ref-inventory
           List known credential refs without echoing ref values or secrets.
   credential-store-recommendation
@@ -387,19 +387,24 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 from fnmatch import fnmatchcase
 from pathlib import Path, PurePosixPath
-from typing import Any, Callable, Iterable
+from typing import Any, Callable, Iterable, Mapping
 from uuid import UUID
 
 from . import (
     __version__,
+    approval_integrity,
     archive_services,
     artifact_lifecycle_inventory,
     completion_workflows,
+    duplicate_object_reconciliation,
+    human_artifact_registry,
     legacy_coordination_cleanup as legacy_cleanup,
     operation_control,
+    operation_approval_binding,
     runtime_guidance,
     runtime_skill_install,
     saved_view_workflows,
+    source_fidelity_session_evidence,
 )
 from .paths import (
     ArchivePathError,
@@ -407,6 +412,20 @@ from .paths import (
     contains_forbidden_location_reference,
     is_path_within_root,
     resolve_archive_relative_path,
+)
+from .exact_human_approval import (
+    ExactHumanApprovalError,
+    exact_human_approval_archive_identity_sha256,
+)
+from .exact_human_approval_windows import (
+    ExactHumanApprovalContext,
+    ExactHumanApprovalOperation,
+    exact_human_approval_warning_codes,
+    ExactHumanApprovalWindowsError,
+)
+from .exact_human_approval_workflow import (
+    ExactHumanApprovalWorkflowError,
+    _execute_exact_human_approved_write,
 )
 from .resource_paths import runtime_release_note_path, runtime_resource_root
 from .schema_validator import validate_schema
@@ -1044,7 +1063,7 @@ def build_validation_scope(root: Path, since_refs: list[str] | None, raw_scope_f
     return scope
 
 
-def make_stage_progress_callback(
+def _make_stage_progress_callback(
     enabled: bool,
     *,
     label: str,
@@ -1173,7 +1192,7 @@ class CommandProgressReporter:
         heartbeat_interval_seconds: float = 10.0,
         stage_order: tuple[str, ...] | None = None,
     ) -> None:
-        self._callback = make_stage_progress_callback(enabled, label=label, detail="compact")
+        self._callback = _make_stage_progress_callback(enabled, label=label, detail="compact")
         self._interval = max(0.01, heartbeat_interval_seconds)
         self._state_lock = threading.Lock()
         self._callback_lock = threading.Lock()
@@ -1621,7 +1640,7 @@ class MintProgressReporter:
 
 
 def make_validate_progress_callback(enabled: bool) -> ProgressCallback | None:
-    return make_stage_progress_callback(enabled, label="validate")
+    return _make_stage_progress_callback(enabled, label="validate")
 
 
 def make_doctor_progress_callback(
@@ -1630,7 +1649,7 @@ def make_doctor_progress_callback(
     detail: str = "compact",
     progress_log_path: str | Path | None = None,
 ) -> ProgressCallback | None:
-    return make_stage_progress_callback(
+    return _make_stage_progress_callback(
         enabled,
         label="doctor",
         detail=detail,
@@ -4341,7 +4360,7 @@ def command_doctor(args: argparse.Namespace) -> int:
     output_path = None
     if getattr(args, "output", None):
         try:
-            output_path = write_doctor_output_file(str(args.output), archive_root, diagnostics)
+            output_path = _write_doctor_output_file(str(args.output), archive_root, diagnostics)
         except (OSError, ValueError) as exc:
             print(f"Failed to write doctor output file: {exc}", file=sys.stderr)
             return 1
@@ -4525,6 +4544,12 @@ def command_runtime_guidance_readiness(args: argparse.Namespace) -> int:
 
 
 def command_runtime_skill_install(args: argparse.Namespace) -> int:
+    if args.approve:
+        return _exact_human_approval_cli_error(
+            args,
+            lifecycle_action="runtime_skill_install",
+            reason_code="compound_exact_human_approval_binding_required",
+        )
     result = runtime_skill_install.runtime_skill_install(
         dry_run=bool(args.dry_run),
         approve=bool(args.approve),
@@ -4540,6 +4565,12 @@ def command_runtime_skill_install(args: argparse.Namespace) -> int:
 
 
 def command_runtime_skill_uninstall(args: argparse.Namespace) -> int:
+    if args.approve:
+        return _exact_human_approval_cli_error(
+            args,
+            lifecycle_action="runtime_skill_uninstall",
+            reason_code="compound_exact_human_approval_binding_required",
+        )
     result = runtime_skill_install.runtime_skill_uninstall(
         dry_run=bool(args.dry_run),
         approve=bool(args.approve),
@@ -4601,6 +4632,12 @@ def print_legacy_coordination_cleanup_result_text(
 
 
 def command_legacy_coordination_cleanup(args: argparse.Namespace) -> int:
+    if args.approve:
+        return _exact_human_approval_cli_error(
+            args,
+            lifecycle_action="legacy_coordination_cleanup",
+            reason_code="compound_exact_human_approval_binding_required",
+        )
     try:
         if args.dry_run:
             result = legacy_cleanup.legacy_coordination_cleanup(
@@ -5347,6 +5384,12 @@ def _project_update_collision_cli_blockers(
 def command_project_version_update_collision(
     args: argparse.Namespace,
 ) -> int:
+    if args.approve:
+        return _exact_human_approval_cli_error(
+            args,
+            lifecycle_action="project_version_update_collision",
+            reason_code="compound_exact_human_approval_binding_required",
+        )
     if args.action == "inspect-all":
         return _command_project_update_collision_inspect_all(args)
     cli_blockers = _project_update_collision_cli_blockers(args)
@@ -5453,11 +5496,17 @@ def command_project_version_update_collision(
 
 
 def command_project_version_update(args: argparse.Namespace) -> int:
+    if args.approve:
+        return _exact_human_approval_cli_error(
+            args,
+            lifecycle_action="project_version_update",
+            reason_code="compound_exact_human_approval_binding_required",
+        )
     reporter = CommandProgressReporter(
         bool(getattr(args, "progress", False)),
         label="project-version-update",
     )
-    capture: CommandRunResultCapture | None = None
+    capture: _CommandRunResultCapture | None = None
     operation_journal: operation_control.OperationRunJournal | None = None
     try:
         if getattr(args, "output", None):
@@ -5465,7 +5514,7 @@ def command_project_version_update(args: argparse.Namespace) -> int:
                 Path(args.inspection_root)
             )
             archive_scoped = (control_root / "archive.yml").is_file()
-            capture = CommandRunResultCapture.prepare(
+            capture = _CommandRunResultCapture.prepare(
                 str(args.output),
                 control_root,
                 command="project-version-update",
@@ -5909,10 +5958,16 @@ def command_operator_feedback_compose(args: argparse.Namespace) -> int:
         )
     try:
         api = _operator_feedback_body_api()
+        strict_root_kwargs = (
+            {"require_archive_marker": True}
+            if getattr(api, "CLI_REQUIRE_ARCHIVE_MARKER", False) is True
+            else {}
+        )
         if args.dry_run:
             result = api.plan_operator_feedback_body(
                 Path(args.archive_root),
                 args.request,
+                **strict_root_kwargs,
             )
         else:
             result = api.approve_operator_feedback_body(
@@ -5920,6 +5975,7 @@ def command_operator_feedback_compose(args: argparse.Namespace) -> int:
                 args.request,
                 expected_plan_sha256=args.expected_plan_sha256,
                 reviewed_by=args.reviewed_by,
+                **strict_root_kwargs,
             )
         if not isinstance(result, dict):
             raise TypeError("operator_feedback_body_result_invalid")
@@ -5936,6 +5992,13 @@ def command_operator_feedback_compose(args: argparse.Namespace) -> int:
         print("Operator feedback body composition.")
         print(f"State: {result.get('state') or '-'}")
         print("Approved: " + ("yes" if args.approve and result.get("ok", True) else "no"))
+        requirements = result.get("requirements") if isinstance(result.get("requirements"), dict) else {}
+        if requirements:
+            print(f"Required request path: {requirements.get('request_path_pattern') or '-'}")
+        if result.get("blockers"):
+            print("Blockers:")
+            for blocker in result["blockers"]:
+                print(f"- {blocker}")
     return 0 if result.get("ok", True) else 1
 
 
@@ -5948,9 +6011,15 @@ def command_operator_feedback_body_check(args: argparse.Namespace) -> int:
         )
     try:
         api = _operator_feedback_body_api()
+        strict_root_kwargs = (
+            {"require_archive_marker": True}
+            if getattr(api, "CLI_REQUIRE_ARCHIVE_MARKER", False) is True
+            else {}
+        )
         result = api.check_operator_feedback_body(
             Path(args.archive_root),
             args.feedback_id,
+            **strict_root_kwargs,
         )
         if not isinstance(result, dict):
             raise TypeError("operator_feedback_body_result_invalid")
@@ -5971,6 +6040,12 @@ def command_operator_feedback_body_check(args: argparse.Namespace) -> int:
 
 
 def command_objet_capture_enable(args: argparse.Namespace) -> int:
+    if args.approve:
+        return _exact_human_approval_cli_error(
+            args,
+            lifecycle_action="objet_capture_enable",
+            reason_code="compound_exact_human_approval_binding_required",
+        )
     try:
         result = archive_services.objet_capture_enable(
             Path(args.archive_root),
@@ -6344,6 +6419,12 @@ def command_validate(args: argparse.Namespace) -> int:
 
 
 def command_repair_gitignore(args: argparse.Namespace) -> int:
+    if args.approve:
+        return _exact_human_approval_cli_error(
+            args,
+            lifecycle_action="repair_gitignore",
+            reason_code="compound_exact_human_approval_binding_required",
+        )
     if args.dry_run and args.approve:
         print("Use either --dry-run or --approve, not both.", file=sys.stderr)
         return 1
@@ -6373,6 +6454,12 @@ def command_repair_gitignore(args: argparse.Namespace) -> int:
 
 
 def command_migrate(args: argparse.Namespace) -> int:
+    if args.approve:
+        return _exact_human_approval_cli_error(
+            args,
+            lifecycle_action="migrate_archive",
+            reason_code="compound_exact_human_approval_binding_required",
+        )
     reviewed_by = getattr(args, "reviewed_by", None)
     if args.target == archive_services.BASE_LINK_TYPES_TARGET and args.approve and not reviewed_by:
         print(
@@ -6555,7 +6642,7 @@ def command_ai_start_here(args: argparse.Namespace) -> int:
         reporter.progress("compose-start-here", "done", None, None)
         if getattr(args, "output", None):
             reporter.progress("write-output", "start", None, None)
-            output_metadata = write_command_result_output_file(
+            output_metadata = _write_command_result_output_file(
                 str(args.output),
                 archive_root,
                 result,
@@ -6919,6 +7006,12 @@ def command_ai_usage_report(args: argparse.Namespace) -> int:
 
 
 def command_github_repo(args: argparse.Namespace) -> int:
+    if args.approve:
+        return _exact_human_approval_cli_error(
+            args,
+            lifecycle_action="approve_github_repository_setup_plan",
+            reason_code="compound_exact_human_approval_binding_required",
+        )
     if args.dry_run and args.approve:
         print("Use either --dry-run or --approve, not both.", file=sys.stderr)
         return 1
@@ -6983,6 +7076,12 @@ def command_github_repo(args: argparse.Namespace) -> int:
 
 
 def command_object_storage(args: argparse.Namespace) -> int:
+    if args.approve:
+        return _exact_human_approval_cli_error(
+            args,
+            lifecycle_action="object_storage_setup",
+            reason_code="compound_exact_human_approval_binding_required",
+        )
     if args.dry_run and args.approve:
         print("Use either --dry-run or --approve, not both.", file=sys.stderr)
         return 1
@@ -7143,6 +7242,743 @@ def command_human_artifact_store(args: argparse.Namespace) -> int:
             for warning in result["warnings"]:
                 print(f"- {warning}")
     return 0 if result.get("ok", True) else 1
+
+
+def _human_artifact_cli_error(
+    args: argparse.Namespace,
+    *,
+    lifecycle_action: str,
+    reason_code: str,
+) -> int:
+    """Report a fixed, content-free registry failure."""
+
+    safe_reason = (
+        reason_code
+        if re.fullmatch(r"[a-z][a-z0-9_]{0,95}", str(reason_code or ""))
+        else "human_artifact_operation_failed"
+    )
+    if getattr(args, "format", None) == "json":
+        print_json(
+            {
+                "ok": False,
+                "state": "blocked",
+                "lifecycle_action": lifecycle_action,
+                "reason_codes": [safe_reason],
+                "private_values_echoed": False,
+            }
+        )
+    else:
+        print(
+            "Human-artifact registry operation was blocked. "
+            f"Reason code: {safe_reason}.",
+            file=sys.stderr,
+        )
+    return 1
+
+
+def _human_artifact_related_refs(args: argparse.Namespace) -> list[dict[str, str]]:
+    refs: list[dict[str, str]] = []
+    for raw in list(getattr(args, "related_ref", None) or []):
+        kind, separator, ref = str(raw).partition("=")
+        if not separator or not kind or not ref:
+            raise ValueError("human_artifact_related_ref_invalid")
+        refs.append({"kind": kind, "ref": ref})
+    return refs
+
+
+def command_human_artifact_register_root(args: argparse.Namespace) -> int:
+    """Plan or locally approve one external artifact-root registration."""
+
+    if bool(args.dry_run) == bool(args.approve):
+        return _human_artifact_cli_error(
+            args,
+            lifecycle_action="human_artifact_project_root_registration",
+            reason_code="human_artifact_execution_mode_invalid",
+        )
+    if args.approve and not str(args.reviewed_by or "").strip():
+        return _human_artifact_cli_error(
+            args,
+            lifecycle_action="human_artifact_project_root_registration",
+            reason_code="human_artifact_reviewer_required",
+        )
+
+    try:
+        archive_root = Path(args.archive_root)
+        project_root = Path(args.project_root)
+        preview = human_artifact_registry.plan_project_root_registration(
+            archive_root,
+            project_root,
+            root_kind=args.root_kind,
+        )
+        if args.dry_run:
+            result = preview
+        else:
+            expected_plan_sha256 = str(
+                args.expected_plan_sha256 or ""
+            ).strip().lower()
+            if not secrets.compare_digest(
+                expected_plan_sha256,
+                str(preview.get("plan_sha256") or ""),
+            ):
+                return _human_artifact_cli_error(
+                    args,
+                    lifecycle_action=(
+                        "human_artifact_project_root_registration"
+                    ),
+                    reason_code="human_artifact_expected_plan_mismatch",
+                )
+            reviewer = str(args.reviewed_by).strip()
+            context = (
+                human_artifact_registry.project_root_registration_approval_context(
+                    archive_root,
+                    project_root,
+                    reviewer_claim=reviewer,
+                    root_kind=args.root_kind,
+                )
+            )
+
+            def _write_registration(approval_claim) -> dict[str, Any]:
+                return human_artifact_registry.register_project_root(
+                    archive_root,
+                    project_root,
+                    expected_plan_sha256=expected_plan_sha256,
+                    approval_claim=approval_claim,
+                    reviewer_claim=reviewer,
+                    root_kind=args.root_kind,
+                )
+
+            result = _execute_exact_human_approved_write(
+                archive_root,
+                context,
+                _write_registration,
+            )
+    except human_artifact_registry.HumanArtifactRegistryError as exc:
+        return _human_artifact_cli_error(
+            args,
+            lifecycle_action="human_artifact_project_root_registration",
+            reason_code=exc.code,
+        )
+    except (
+        ExactHumanApprovalError,
+        ExactHumanApprovalWindowsError,
+        ExactHumanApprovalWorkflowError,
+    ) as exc:
+        return _human_artifact_cli_error(
+            args,
+            lifecycle_action="human_artifact_project_root_registration",
+            reason_code=getattr(
+                exc,
+                "code",
+                "exact_human_approval_state_unknown",
+            ),
+        )
+    except (OSError, TypeError, ValueError):
+        return _human_artifact_cli_error(
+            args,
+            lifecycle_action="human_artifact_project_root_registration",
+            reason_code="human_artifact_operation_failed",
+        )
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        print(
+            "Human-artifact root registration: "
+            + str(result.get("state") or "unknown")
+            + "."
+        )
+        print(f"Plan SHA-256: {result.get('plan_sha256') or '-'}")
+        print(f"Scan scope: {result.get('scan_scope') or '-'}")
+        if result.get("root_id"):
+            print(f"Root id: {result['root_id']}")
+        approval = result.get("exact_human_approval")
+        if isinstance(approval, dict):
+            print(f"Exact approval: {approval.get('status') or '-'}")
+    return 0 if result.get("ok") is True else 1
+
+
+def command_human_artifact_scan(args: argparse.Namespace) -> int:
+    """Run the registry's bounded metadata-only scan."""
+
+    try:
+        result = human_artifact_registry.scan_human_artifacts(
+            Path(args.archive_root),
+            max_entries_per_root=args.max_entries_per_root,
+        )
+    except human_artifact_registry.HumanArtifactRegistryError as exc:
+        return _human_artifact_cli_error(
+            args,
+            lifecycle_action="human_artifact_registry_scan",
+            reason_code=exc.code,
+        )
+    except (OSError, TypeError, ValueError):
+        return _human_artifact_cli_error(
+            args,
+            lifecycle_action="human_artifact_registry_scan",
+            reason_code="human_artifact_operation_failed",
+        )
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        print(f"Human-artifact registry scan: {result.get('state') or 'unknown'}.")
+        print(f"Artifacts: {result.get('artifact_count', 0)}")
+        print(f"Unresolved: {result.get('unresolved_artifact_count', 0)}")
+        print(
+            "Coverage complete: "
+            + ("yes" if result.get("coverage_complete") else "no")
+        )
+        print(
+            "Closeout complete: "
+            + ("yes" if result.get("closeout_complete") else "no")
+        )
+    return 0 if result.get("ok") is True else 1
+
+
+def command_human_artifact_transition(args: argparse.Namespace) -> int:
+    """Plan or locally approve one append-only lifecycle transition."""
+
+    if bool(args.dry_run) == bool(args.approve):
+        return _human_artifact_cli_error(
+            args,
+            lifecycle_action="human_artifact_transition",
+            reason_code="human_artifact_execution_mode_invalid",
+        )
+    if args.approve and not str(args.reviewed_by or "").strip():
+        return _human_artifact_cli_error(
+            args,
+            lifecycle_action="human_artifact_transition",
+            reason_code="human_artifact_reviewer_required",
+        )
+
+    try:
+        archive_root = Path(args.archive_root)
+        related_refs = _human_artifact_related_refs(args)
+        common = {
+            "target_state": args.target_state,
+            "content_sha256": str(args.content_sha256).strip().lower(),
+            "size_bytes": args.size_bytes,
+            "related_refs": related_refs,
+            "max_entries_per_root": args.max_entries_per_root,
+        }
+        preview = human_artifact_registry.plan_artifact_transition(
+            archive_root,
+            args.artifact_id,
+            **common,
+        )
+        if args.dry_run:
+            result = preview
+        else:
+            expected_plan_sha256 = str(
+                args.expected_plan_sha256 or ""
+            ).strip().lower()
+            expected_current_state_sha256 = str(
+                args.expected_current_state_sha256 or ""
+            ).strip().lower()
+            if not (
+                secrets.compare_digest(
+                    expected_plan_sha256,
+                    str(preview.get("plan_sha256") or ""),
+                )
+                and secrets.compare_digest(
+                    expected_current_state_sha256,
+                    str(preview.get("expected_current_state_sha256") or ""),
+                )
+            ):
+                return _human_artifact_cli_error(
+                    args,
+                    lifecycle_action="human_artifact_transition",
+                    reason_code="human_artifact_expected_plan_mismatch",
+                )
+            reviewer = str(args.reviewed_by).strip()
+            context = human_artifact_registry.artifact_transition_approval_context(
+                archive_root,
+                args.artifact_id,
+                reviewer_claim=reviewer,
+                **common,
+            )
+
+            def _write_transition(approval_claim) -> dict[str, Any]:
+                return human_artifact_registry.write_artifact_transition(
+                    archive_root,
+                    args.artifact_id,
+                    expected_plan_sha256=expected_plan_sha256,
+                    expected_current_state_sha256=(
+                        expected_current_state_sha256
+                    ),
+                    approval_claim=approval_claim,
+                    reviewer_claim=reviewer,
+                    **common,
+                )
+
+            result = _execute_exact_human_approved_write(
+                archive_root,
+                context,
+                _write_transition,
+            )
+    except human_artifact_registry.HumanArtifactRegistryError as exc:
+        return _human_artifact_cli_error(
+            args,
+            lifecycle_action="human_artifact_transition",
+            reason_code=exc.code,
+        )
+    except (
+        ExactHumanApprovalError,
+        ExactHumanApprovalWindowsError,
+        ExactHumanApprovalWorkflowError,
+    ) as exc:
+        return _human_artifact_cli_error(
+            args,
+            lifecycle_action="human_artifact_transition",
+            reason_code=getattr(
+                exc,
+                "code",
+                "exact_human_approval_state_unknown",
+            ),
+        )
+    except (OSError, TypeError, ValueError):
+        return _human_artifact_cli_error(
+            args,
+            lifecycle_action="human_artifact_transition",
+            reason_code="human_artifact_operation_failed",
+        )
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        print(
+            "Human-artifact lifecycle transition: "
+            + str(result.get("state") or "unknown")
+            + "."
+        )
+        print(f"Artifact id: {result.get('artifact_id') or '-'}")
+        print(f"From: {result.get('from_state') or '-'}")
+        print(f"To: {result.get('to_state') or '-'}")
+        print(f"Plan SHA-256: {result.get('plan_sha256') or '-'}")
+        approval = result.get("exact_human_approval")
+        if isinstance(approval, dict):
+            print(f"Exact approval: {approval.get('status') or '-'}")
+    return 0 if result.get("ok") is True else 1
+
+
+def _archive_integrity_cli_error(
+    args: argparse.Namespace,
+    *,
+    lifecycle_action: str,
+    reason_code: str,
+) -> int:
+    """Return one fixed failure without reflecting a receipt or object id."""
+
+    safe_reason = (
+        reason_code
+        if re.fullmatch(r"[a-z][a-z0-9_]{0,95}", str(reason_code or ""))
+        else "archive_integrity_operation_failed"
+    )
+    if getattr(args, "format", None) == "json":
+        print_json(
+            {
+                "ok": False,
+                "state": "blocked",
+                "lifecycle_action": lifecycle_action,
+                "reason_codes": [safe_reason],
+                "private_values_echoed": False,
+            }
+        )
+    else:
+        print(
+            "Archive integrity operation was blocked. "
+            f"Reason code: {safe_reason}.",
+            file=sys.stderr,
+        )
+    return 1
+
+
+def _use_archive_receipt_authentication_key(
+    archive_root: Path,
+    consumer: Callable[[memoryview], dict[str, Any]],
+) -> dict[str, Any]:
+    """Use the established callback-only Windows key boundary read-only."""
+
+    from .credential_secure_intake_windows import _CtypesWindowsNativeFacade
+    from .credential_secure_registry import _StableArchiveFingerprintKeyProvider
+
+    native = _CtypesWindowsNativeFacade(cli_live_approved=True)
+    provider = _StableArchiveFingerprintKeyProvider(native)
+    return provider.use_key(
+        archive_root,
+        consumer,
+        create_if_missing=False,
+    )
+
+
+def command_duplicate_object_reconcile(args: argparse.Namespace) -> int:
+    """Plan or exactly approve removal of byte-identical duplicate rows."""
+
+    lifecycle_action = "duplicate_object_reconciliation"
+    if bool(args.dry_run) == bool(args.approve):
+        return _archive_integrity_cli_error(
+            args,
+            lifecycle_action=lifecycle_action,
+            reason_code="duplicate_object_execution_mode_invalid",
+        )
+    if args.approve and not str(args.reviewed_by or "").strip():
+        return _archive_integrity_cli_error(
+            args,
+            lifecycle_action=lifecycle_action,
+            reason_code="duplicate_object_reviewer_required",
+        )
+
+    try:
+        archive_root = Path(args.archive_root)
+        plan = (
+            duplicate_object_reconciliation._plan_duplicate_object_reconciliation_core(
+                archive_root
+            )
+        )
+        preview = plan.public_document()
+        if args.dry_run:
+            result = preview
+        else:
+            expected_plan_sha256 = str(
+                args.expected_plan_sha256 or ""
+            ).strip().lower()
+            expected_manifest_sha256 = str(
+                args.expected_manifest_sha256 or ""
+            ).strip().lower()
+            if not (
+                plan.approveable
+                and secrets.compare_digest(
+                    expected_plan_sha256,
+                    plan.plan_sha256,
+                )
+                and secrets.compare_digest(
+                    expected_manifest_sha256,
+                    plan.manifest_sha256,
+                )
+            ):
+                return _archive_integrity_cli_error(
+                    args,
+                    lifecycle_action=lifecycle_action,
+                    reason_code="duplicate_object_plan_invalid",
+                )
+            reviewer = str(args.reviewed_by).strip()
+            context = (
+                duplicate_object_reconciliation._duplicate_object_reconciliation_context(
+                    plan,
+                    reviewer_claim=reviewer,
+                )
+            )
+
+            def _write_reconciliation(approval_claim) -> dict[str, Any]:
+                return duplicate_object_reconciliation._apply_duplicate_object_reconciliation_core(
+                    plan,
+                    approval_claim=approval_claim,
+                    context=context,
+                )
+
+            result = _execute_exact_human_approved_write(
+                archive_root,
+                context,
+                _write_reconciliation,
+            )
+    except (
+        duplicate_object_reconciliation.DuplicateObjectReconciliationError
+    ) as exc:
+        return _archive_integrity_cli_error(
+            args,
+            lifecycle_action=lifecycle_action,
+            reason_code=exc.code,
+        )
+    except (
+        ExactHumanApprovalError,
+        ExactHumanApprovalWindowsError,
+        ExactHumanApprovalWorkflowError,
+    ) as exc:
+        return _archive_integrity_cli_error(
+            args,
+            lifecycle_action=lifecycle_action,
+            reason_code=getattr(
+                exc,
+                "code",
+                "exact_human_approval_state_unknown",
+            ),
+        )
+    except (OSError, TypeError, ValueError):
+        return _archive_integrity_cli_error(
+            args,
+            lifecycle_action=lifecycle_action,
+            reason_code="duplicate_object_reconciliation_state_unknown",
+        )
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        print(
+            "Duplicate-object reconciliation: "
+            + str(result.get("reason_code") or "unknown")
+            + "."
+        )
+        print(f"Plan SHA-256: {result.get('plan_sha256') or '-'}")
+        print(
+            "Exact duplicate rows removable/removed: "
+            + str(
+                result.get(
+                    "removed_exact_duplicate_row_count",
+                    result.get("removable_row_count", 0),
+                )
+            )
+        )
+        approval = result.get("exact_human_approval")
+        if isinstance(approval, dict):
+            print(f"Exact approval: {approval.get('status') or '-'}")
+    return 0 if result.get("ok") is True else 1
+
+
+def _approval_integrity_context(
+    archive_root: Path,
+    plan: dict[str, Any],
+    *,
+    reviewer_claim: str,
+) -> ExactHumanApprovalContext:
+    """Build the exact context required by the frozen overlay writer."""
+
+    return ExactHumanApprovalContext(
+        operation=ExactHumanApprovalOperation.integrity_repair,
+        archive_identity_sha256=(
+            exact_human_approval_archive_identity_sha256(
+                archive_services.read_archive_id(archive_root)
+            )
+        ),
+        plan_sha256=str(plan["plan_sha256"]),
+        target_binding_sha256=str(plan["target_binding_sha256"]),
+        reviewer_claim=reviewer_claim,
+        review_binding_codes=tuple(plan["review_binding_codes"]),
+        warning_codes=tuple(plan["warning_codes"]),
+    )
+
+
+def command_approval_integrity_audit(args: argparse.Namespace) -> int:
+    lifecycle_action = "approval_integrity_audit"
+    try:
+        archive_root = Path(args.archive_root)
+        result = _use_archive_receipt_authentication_key(
+            archive_root,
+            lambda key: approval_integrity.audit_approval_integrity(
+                archive_root,
+                max_receipts=args.max_receipts,
+                receipt_authentication_key=key,
+            ),
+        )
+    except approval_integrity.ApprovalIntegrityError as exc:
+        return _archive_integrity_cli_error(
+            args,
+            lifecycle_action=lifecycle_action,
+            reason_code=exc.code,
+        )
+    except Exception:
+        return _archive_integrity_cli_error(
+            args,
+            lifecycle_action=lifecycle_action,
+            reason_code="approval_integrity_key_unavailable",
+        )
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        print(
+            "Approval-integrity audit: "
+            + ("complete" if result.get("complete") else "blocked")
+            + "."
+        )
+        print(f"Receipts inspected: {result.get('receipt_count', 0)}")
+        print(
+            "Exact claims checked: "
+            + ("yes" if result.get("exact_human_approval_claims_checked") else "no")
+        )
+        for classification, count in sorted(
+            dict(result.get("classification_counts") or {}).items()
+        ):
+            print(f"{classification}: {count}")
+    return 0 if result.get("ok") is True else 1
+
+
+def command_approval_integrity_guard(args: argparse.Namespace) -> int:
+    lifecycle_action = "approval_integrity_guard"
+    try:
+        archive_root = Path(args.archive_root)
+        result = _use_archive_receipt_authentication_key(
+            archive_root,
+            lambda key: approval_integrity.approval_integrity_guard(
+                archive_root,
+                affected_kind=args.affected_kind,
+                affected_id_sha256=str(args.affected_id_sha256).strip().lower(),
+                receipt_authentication_key=key,
+                max_overlays=args.max_overlays,
+            ),
+        )
+    except approval_integrity.ApprovalIntegrityError as exc:
+        return _archive_integrity_cli_error(
+            args,
+            lifecycle_action=lifecycle_action,
+            reason_code=exc.code,
+        )
+    except Exception:
+        return _archive_integrity_cli_error(
+            args,
+            lifecycle_action=lifecycle_action,
+            reason_code="approval_integrity_key_unavailable",
+        )
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        print(
+            "Approval-integrity guard: "
+            + ("allowed" if result.get("allowed") else "blocked")
+            + "."
+        )
+        print(f"Current state: {result.get('current_state') or '-'}")
+        print(f"Overlay entries: {result.get('entry_count', 0)}")
+        if result.get("blocker_codes"):
+            print("Blockers:")
+            for blocker in result["blocker_codes"]:
+                print(f"- {blocker}")
+    return 0 if result.get("ok") is True and result.get("allowed") is True else 1
+
+
+def command_approval_integrity_overlay(args: argparse.Namespace) -> int:
+    lifecycle_action = "approval_integrity_overlay"
+    if bool(args.dry_run) == bool(args.approve):
+        return _archive_integrity_cli_error(
+            args,
+            lifecycle_action=lifecycle_action,
+            reason_code="approval_integrity_execution_mode_invalid",
+        )
+    if args.approve and not (
+        str(args.reviewed_by or "").strip()
+        and str(args.expected_plan_sha256 or "").strip()
+        and str(args.expected_current_overlay_digest or "").strip()
+    ):
+        return _archive_integrity_cli_error(
+            args,
+            lifecycle_action=lifecycle_action,
+            reason_code="approval_integrity_approval_evidence_required",
+        )
+
+    try:
+        archive_root = Path(args.archive_root)
+        operation_receipt_sha256 = str(
+            args.expected_operation_receipt_sha256
+        ).strip().lower()
+        affected_id_sha256 = str(args.affected_id_sha256).strip().lower()
+        expected_current = (
+            str(args.expected_current_overlay_digest).strip().lower()
+            if args.expected_current_overlay_digest
+            else None
+        )
+        common = {
+            "operation_receipt": args.operation_receipt,
+            "expected_operation_receipt_sha256": operation_receipt_sha256,
+            "affected_kind": args.affected_kind,
+            "affected_id_sha256": affected_id_sha256,
+            "state": args.state,
+            "expected_current_overlay_digest": expected_current,
+            "max_overlays": args.max_overlays,
+        }
+        plan = _use_archive_receipt_authentication_key(
+            archive_root,
+            lambda key: approval_integrity.plan_approval_integrity_overlay(
+                archive_root,
+                receipt_authentication_key=key,
+                **common,
+            ),
+        )
+        if args.dry_run:
+            result = plan
+        else:
+            expected_plan_sha256 = str(
+                args.expected_plan_sha256
+            ).strip().lower()
+            if not (
+                secrets.compare_digest(
+                    expected_plan_sha256,
+                    str(plan.get("plan_sha256") or ""),
+                )
+                and secrets.compare_digest(
+                    str(expected_current or ""),
+                    str(plan.get("prior_overlay_digest") or ""),
+                )
+            ):
+                return _archive_integrity_cli_error(
+                    args,
+                    lifecycle_action=lifecycle_action,
+                    reason_code="approval_integrity_overlay_plan_mismatch",
+                )
+            reviewer = str(args.reviewed_by).strip()
+            context = _approval_integrity_context(
+                archive_root,
+                plan,
+                reviewer_claim=reviewer,
+            )
+
+            def _write_overlay(approval_claim) -> dict[str, Any]:
+                return approval_integrity.create_approval_integrity_overlay(
+                    archive_root,
+                    expected_plan_sha256=expected_plan_sha256,
+                    approval_claim=approval_claim,
+                    approval_context=context,
+                    **common,
+                )
+
+            result = _execute_exact_human_approved_write(
+                archive_root,
+                context,
+                _write_overlay,
+            )
+    except approval_integrity.ApprovalIntegrityError as exc:
+        return _archive_integrity_cli_error(
+            args,
+            lifecycle_action=lifecycle_action,
+            reason_code=exc.code,
+        )
+    except (
+        ExactHumanApprovalError,
+        ExactHumanApprovalWindowsError,
+        ExactHumanApprovalWorkflowError,
+    ) as exc:
+        return _archive_integrity_cli_error(
+            args,
+            lifecycle_action=lifecycle_action,
+            reason_code=getattr(
+                exc,
+                "code",
+                "exact_human_approval_state_unknown",
+            ),
+        )
+    except Exception:
+        return _archive_integrity_cli_error(
+            args,
+            lifecycle_action=lifecycle_action,
+            reason_code="approval_integrity_key_unavailable",
+        )
+
+    if args.format == "json":
+        print_json(result)
+    else:
+        print(
+            "Approval-integrity overlay: "
+            + str(result.get("state") or result.get("classification") or "ready")
+            + "."
+        )
+        print(f"Plan SHA-256: {result.get('plan_sha256') or '-'}")
+        print(
+            "Current overlay digest: "
+            + str(result.get("current_overlay_digest") or "-")
+        )
+        approval = result.get("exact_human_approval")
+        if isinstance(approval, dict):
+            print(f"Exact approval: {approval.get('status') or '-'}")
+    return 0 if result.get("ok") is True else 1
 
 
 def command_external_export_plan(args: argparse.Namespace) -> int:
@@ -7501,6 +8337,12 @@ def command_notion_ancestor_fetch_adapter_execution_contract(args: argparse.Name
 
 
 def command_notion_ancestor_fetch_adapter_run(args: argparse.Namespace) -> int:
+    if args.approve:
+        return _exact_human_approval_cli_error(
+            args,
+            lifecycle_action="notion_ancestor_fetch_adapter_run",
+            reason_code="compound_exact_human_approval_binding_required",
+        )
     if args.dry_run == args.approve:
         print("Choose exactly one mode: --dry-run or --approve.", file=sys.stderr)
         return 1
@@ -7572,6 +8414,12 @@ def command_notion_ancestor_fetch_adapter_run(args: argparse.Namespace) -> int:
 
 
 def command_notion_recover(args: argparse.Namespace) -> int:
+    if args.approve or not args.dry_run:
+        return _exact_human_approval_cli_error(
+            args,
+            lifecycle_action="notion_recover",
+            reason_code="compound_exact_human_approval_binding_required",
+        )
     if args.dry_run and args.approve:
         print("Choose at most one mode: --dry-run or --approve.", file=sys.stderr)
         return 1
@@ -7617,7 +8465,7 @@ def command_notion_recover(args: argparse.Namespace) -> int:
     cleanup_env_previous_value: str | None = None
     credential_handoff_source = "environment"
     if notion_recover_is_file_ref(credential_ref):
-        token_result = notion_recover_read_file_ref_token(credential_ref)
+        token_result = _notion_recover_read_file_ref_token(credential_ref)
         if not token_result.get("ok"):
             result = notion_recover_blocked_result(
                 plan,
@@ -7687,7 +8535,7 @@ def notion_recover_is_file_ref(credential_ref: str) -> bool:
     return str(credential_ref or "").strip().lower().startswith("file:")
 
 
-def notion_recover_read_file_ref_token(credential_ref: str) -> dict[str, Any]:
+def _notion_recover_read_file_ref_token(credential_ref: str) -> dict[str, Any]:
     raw_path = str(credential_ref or "").strip()[5:].strip()
     if not raw_path:
         return {"ok": False, "blocker": "The file credential ref did not include a local file path."}
@@ -7703,13 +8551,13 @@ def notion_recover_read_file_ref_token(credential_ref: str) -> dict[str, Any]:
     except (OSError, UnicodeDecodeError):
         return {"ok": False, "blocker": "The local credential file could not be read as UTF-8 text."}
 
-    token = notion_recover_extract_notion_token(text)
+    token = _notion_recover_extract_notion_token(text)
     if not token:
         return {"ok": False, "blocker": "No Notion integration token was found in the local credential file."}
     return {"ok": True, "token": token}
 
 
-def notion_recover_extract_notion_token(text: str) -> str | None:
+def _notion_recover_extract_notion_token(text: str) -> str | None:
     for pattern in (r"\bntn_[A-Za-z0-9_-]{20,}\b", r"\bsecret_[A-Za-z0-9_-]{20,}\b"):
         match = re.search(pattern, text or "")
         if match:
@@ -7727,6 +8575,12 @@ def run_approved_notion_recover(
     *,
     credential_handoff_source: str = "environment",
 ) -> dict[str, Any]:
+    return archive_services._compound_exact_human_approval_blocked(
+        lifecycle_action="notion_recover",
+    )
+
+    # Dormant legacy implementation retained for compatibility analysis.
+    # It is not an approval authority.
     archive_root = Path(args.archive_root)
     selected_tree_path = str(plan.get("selected_tree_path") or "")
     request_count = int(plan.get("auto_scope_summary", {}).get("location_request_count", 0) or 0)
@@ -8448,56 +9302,296 @@ def command_notion_client_fixture_request_plan(args: argparse.Namespace) -> int:
     return 0 if result.get("ok", True) else 1
 
 
+def _print_zettel_edge_result(
+    result: dict[str, Any],
+    output_format: str,
+) -> None:
+    if output_format == "json":
+        print_json(result)
+        return
+    state = result.get("write_status") or (
+        "passed" if result.get("ok") else "blocked"
+    )
+    print(f"Zettel edge: {state}.")
+    print(f"Archive: {result.get('archive_id') or '-'}")
+    source = result.get("source") if isinstance(result.get("source"), dict) else {}
+    target = result.get("target") if isinstance(result.get("target"), dict) else {}
+    print(f"Source: {source.get('zettel_id') or '-'}")
+    print(f"Target: {target.get('ref') or '-'}")
+    print(f"Edge type: {result.get('edge_type') or '-'}")
+    print(f"Visibility: {result.get('visibility') or '-'}")
+    print(f"Receipt: {result.get('receipt_path') or '-'}")
+    if result.get("files_written"):
+        print("Files written:")
+        for path in result["files_written"]:
+            print(f"- {path}")
+    elif result.get("would_change"):
+        print("Would change:")
+        for path in result["would_change"]:
+            print(f"- {path}")
+    if result.get("blockers"):
+        print("Blockers:")
+        for blocker in result["blockers"]:
+            print(f"- {blocker}")
+    if result.get("warnings"):
+        print("Warnings:")
+        for warning in result["warnings"]:
+            print(f"- {warning}")
+
+
+def _zettel_edge_blocked_preview_projection(
+    preview: dict[str, Any],
+) -> dict[str, Any]:
+    """Project an approval preflight failure onto fixed, content-free fields."""
+
+    raw_contract = (
+        preview.get("entity_type_contract")
+        if isinstance(preview.get("entity_type_contract"), dict)
+        else {}
+    )
+    allowed_registry_sources = {"archive_local", "packaged_kit"}
+    allowed_entity_types = {
+        "Zettel",
+        "OriginalObject",
+        "Principal",
+        "ExternalReference",
+        "Unknown",
+    }
+    allowed_statuses = {"allowed", "blocked", "malformed", "unavailable"}
+    raw_from_allowed = raw_contract.get("from_allowed")
+    raw_to_allowed = raw_contract.get("to_allowed")
+    raw_target = (
+        preview.get("target")
+        if isinstance(preview.get("target"), dict)
+        else {}
+    )
+    target_kind = (
+        raw_target.get("kind")
+        if raw_target.get("kind") in {"zettel", "objet", "principal"}
+        else None
+    )
+    blocker_codes = [
+        item
+        for item in raw_contract.get("blocker_codes", [])
+        if isinstance(item, str)
+        and re.fullmatch(r"[a-z][a-z0-9_]{0,79}", item)
+    ]
+    entity_type_contract = {
+        "registry_source": (
+            raw_contract.get("registry_source")
+            if raw_contract.get("registry_source")
+            in allowed_registry_sources
+            else None
+        ),
+        "source_entity_type": (
+            raw_contract.get("source_entity_type")
+            if raw_contract.get("source_entity_type")
+            in allowed_entity_types
+            else None
+        ),
+        "target_entity_type": (
+            raw_contract.get("target_entity_type")
+            if raw_contract.get("target_entity_type")
+            in allowed_entity_types
+            else None
+        ),
+        "from_allowed": (
+            raw_from_allowed
+            if isinstance(raw_from_allowed, bool) or raw_from_allowed is None
+            else None
+        ),
+        "to_allowed": (
+            raw_to_allowed
+            if isinstance(raw_to_allowed, bool) or raw_to_allowed is None
+            else None
+        ),
+        "status": (
+            raw_contract.get("status")
+            if raw_contract.get("status") in allowed_statuses
+            else "unavailable"
+        ),
+        "blocker_codes": blocker_codes,
+    }
+    raw_receipt_path = preview.get("receipt_path")
+    receipt_path = (
+        raw_receipt_path
+        if isinstance(raw_receipt_path, str)
+        and raw_receipt_path.startswith("receipts/edges/")
+        and "\\" not in raw_receipt_path
+        and ":" not in raw_receipt_path
+        and ".." not in raw_receipt_path.split("/")
+        else None
+    )
+    allowed_blockers = {
+        "Use either --dry-run or --approve, not both.",
+        "zettel-edge requires --dry-run or --approve.",
+        "Provide exactly one of --from-zettel or --from-path.",
+        "zettel-edge --approve requires --reviewed-by.",
+        "reviewed_by must be a safe non-secret scalar.",
+        "edge_type is required.",
+        "visibility must be a safe non-secret scalar.",
+        "source zettel id must be a safe zet_<id> value.",
+        "target principal id is not registered.",
+        "target principal id is ambiguous.",
+        "target_ref must be a safe non-secret scalar.",
+        "target zettel id was not found.",
+        "target zettel content is unavailable.",
+        "target object_id was not found in objects/manifests/files.jsonl.",
+        (
+            "target_ref must be an existing zet_<id>, registered Principal id, "
+            "sha256:<64hex>, or objet:sha256:<64hex> ref."
+        ),
+        "Active link type contract is unavailable.",
+        "edge_type must be defined in zettel-kasten/types.yml.",
+        "Active link type contract must define a non-empty safe from list.",
+        "Active link type contract does not allow the writer source entity type.",
+        "Active link type contract must define a non-empty safe to list.",
+        "Active link type contract does not allow the resolved target entity type.",
+        "source and target must be different.",
+        "source zettel frontmatter edges must be a list.",
+        "edge already exists on the source zettel.",
+        "edge receipt already exists.",
+    }
+    blockers = [
+        item
+        for item in preview.get("blockers", [])
+        if isinstance(item, str) and item in allowed_blockers
+    ]
+    if not blockers:
+        blockers = ["zettel_edge_preflight_blocked"]
+    return {
+        "ok": False,
+        "dry_run": False,
+        "state": "blocked",
+        "write_status": "blocked",
+        "lifecycle_action": "zettel_edge_write",
+        "target": {"kind": target_kind},
+        "entity_type_contract": entity_type_contract,
+        "receipt_path": receipt_path,
+        "blockers": blockers,
+        "reason_codes": ["zettel_edge_preflight_blocked"],
+        "warnings": [],
+        "would_change": [],
+        "files_written": [],
+        "closed_actions": {
+            "zettel_frontmatter_written": False,
+            "receipt_written": False,
+            "provider_api_called": False,
+        },
+        "private_values_echoed": False,
+    }
+
+
 def command_zettel_edge(args: argparse.Namespace) -> int:
+    if args.approve and not args.reviewed_by:
+        result = {
+            "ok": False,
+            "dry_run": False,
+            "state": "blocked",
+            "write_status": "blocked",
+            "lifecycle_action": "zettel_edge_write",
+            "blockers": ["zettel-edge --approve requires --reviewed-by."],
+            "reason_codes": ["zettel_edge_reviewed_by_required"],
+            "warnings": [],
+            "would_change": [],
+            "files_written": [],
+            "private_values_echoed": False,
+        }
+        _print_zettel_edge_result(result, args.format)
+        return 1
     try:
-        result = archive_services.zettel_edge_write(
-            Path(args.archive_root),
-            from_zettel=args.from_zettel,
-            from_path=args.from_path,
-            target_ref=args.target,
-            edge_type=args.edge_type,
-            visibility=args.visibility,
-            dry_run=args.dry_run,
-            approve=args.approve,
-            reviewed_by=args.reviewed_by,
-        )
-    except (archive_services.ArchiveServiceError, OSError) as exc:
-        print(str(exc), file=sys.stderr)
+        archive_root = Path(args.archive_root)
+        common = {
+            "from_zettel": args.from_zettel,
+            "from_path": args.from_path,
+            "target_ref": args.target,
+            "edge_type": args.edge_type,
+            "visibility": args.visibility,
+        }
+        if args.approve:
+            preview = archive_services.zettel_edge_write(
+                archive_root,
+                dry_run=True,
+                approve=False,
+                reviewed_by=None,
+                **common,
+            )
+            if preview.get("ok") is not True:
+                _print_zettel_edge_result(
+                    _zettel_edge_blocked_preview_projection(preview),
+                    args.format,
+                )
+                return 1
+            binding = operation_approval_binding.zettel_edge_approval_binding(
+                preview
+            )
+            context = binding.context(
+                archive_id=archive_services.read_archive_id(archive_root),
+                reviewer_claim=str(args.reviewed_by or "").strip(),
+            )
+
+            def _write_edge(claim) -> dict[str, Any]:
+                return archive_services.zettel_edge_write(
+                    archive_root,
+                    dry_run=False,
+                    approve=True,
+                    reviewed_by=args.reviewed_by,
+                    expected_exact_approval_plan_sha256=binding.plan_sha256,
+                    expected_exact_approval_target_binding_sha256=(
+                        binding.target_binding_sha256
+                    ),
+                    exact_human_approval_claim=claim,
+                    **common,
+                )
+
+            result = _execute_exact_human_approved_write(
+                archive_root,
+                context,
+                _write_edge,
+            )
+        else:
+            result = archive_services.zettel_edge_write(
+                archive_root,
+                dry_run=args.dry_run,
+                approve=False,
+                reviewed_by=args.reviewed_by,
+                **common,
+            )
+    except (
+        archive_services.ArchiveServiceError,
+        operation_approval_binding.OperationApprovalBindingError,
+        ExactHumanApprovalError,
+        ExactHumanApprovalWindowsError,
+        ExactHumanApprovalWorkflowError,
+        OSError,
+    ):
+        result = {
+            "ok": False,
+            "dry_run": bool(args.dry_run),
+            "state": "blocked",
+            "write_status": "blocked",
+            "lifecycle_action": "zettel_edge_write",
+            "blockers": ["zettel_edge_failed_safely"],
+            "reason_codes": ["zettel_edge_failed_safely"],
+            "warnings": [],
+            "would_change": [],
+            "files_written": [],
+            "private_values_echoed": False,
+        }
+        _print_zettel_edge_result(result, args.format)
         return 1
 
-    if args.format == "json":
-        print_json(result)
-    else:
-        state = result.get("write_status") or ("passed" if result.get("ok") else "blocked")
-        print(f"Zettel edge: {state}.")
-        print(f"Archive: {result.get('archive_id') or '-'}")
-        source = result.get("source") if isinstance(result.get("source"), dict) else {}
-        target = result.get("target") if isinstance(result.get("target"), dict) else {}
-        print(f"Source: {source.get('zettel_id') or '-'}")
-        print(f"Target: {target.get('ref') or '-'}")
-        print(f"Edge type: {result.get('edge_type') or '-'}")
-        print(f"Visibility: {result.get('visibility') or '-'}")
-        print(f"Receipt: {result.get('receipt_path') or '-'}")
-        if result.get("files_written"):
-            print("Files written:")
-            for path in result["files_written"]:
-                print(f"- {path}")
-        elif result.get("would_change"):
-            print("Would change:")
-            for path in result["would_change"]:
-                print(f"- {path}")
-        if result.get("blockers"):
-            print("Blockers:")
-            for blocker in result["blockers"]:
-                print(f"- {blocker}")
-        if result.get("warnings"):
-            print("Warnings:")
-            for warning in result["warnings"]:
-                print(f"- {warning}")
+    _print_zettel_edge_result(result, args.format)
     return 0 if result.get("ok", True) else 1
 
 
 def command_zettel_edge_batch(args: argparse.Namespace) -> int:
+    if args.approve:
+        return _exact_human_approval_cli_error(
+            args,
+            lifecycle_action="zettel_edge_batch",
+            reason_code="compound_exact_human_approval_binding_required",
+        )
     try:
         result = archive_services.zettel_edge_batch_write(
             Path(args.archive_root),
@@ -8546,6 +9640,12 @@ def command_zettel_edge_batch(args: argparse.Namespace) -> int:
 
 
 def command_revert_edge(args: argparse.Namespace) -> int:
+    if args.approve:
+        return _exact_human_approval_cli_error(
+            args,
+            lifecycle_action="zettel_edge_revert",
+            reason_code="compound_exact_human_approval_binding_required",
+        )
     try:
         result = archive_services.zettel_edge_revert(
             Path(args.archive_root),
@@ -8590,6 +9690,12 @@ def command_revert_edge(args: argparse.Namespace) -> int:
 
 
 def command_revert_batch(args: argparse.Namespace) -> int:
+    if args.approve:
+        return _exact_human_approval_cli_error(
+            args,
+            lifecycle_action="zettel_edge_batch_revert",
+            reason_code="compound_exact_human_approval_binding_required",
+        )
     try:
         result = archive_services.zettel_edge_batch_revert(
             Path(args.archive_root),
@@ -8632,6 +9738,12 @@ def command_revert_batch(args: argparse.Namespace) -> int:
 
 
 def command_prehashed_objet_ledger(args: argparse.Namespace) -> int:
+    if args.approve:
+        return _exact_human_approval_cli_error(
+            args,
+            lifecycle_action="prehashed_objet_ledger_register",
+            reason_code="compound_exact_human_approval_binding_required",
+        )
     if args.dry_run == args.approve:
         print("prehashed-objet-ledger requires exactly one of --dry-run or --approve.", file=sys.stderr)
         return 1
@@ -8662,6 +9774,12 @@ def command_prehashed_objet_ledger(args: argparse.Namespace) -> int:
 
 
 def command_object_storage_upload_evidence(args: argparse.Namespace) -> int:
+    if args.approve:
+        return _exact_human_approval_cli_error(
+            args,
+            lifecycle_action="object_storage_upload_evidence_register",
+            reason_code="compound_exact_human_approval_binding_required",
+        )
     if args.dry_run == args.approve:
         print("object-storage-upload-evidence requires exactly one of --dry-run or --approve.", file=sys.stderr)
         return 1
@@ -8851,6 +9969,12 @@ def command_object_storage_upload_verify(args: argparse.Namespace) -> int:
 
 
 def command_object_storage_upload(args: argparse.Namespace) -> int:
+    if args.approve:
+        return _exact_human_approval_cli_error(
+            args,
+            lifecycle_action="object_storage_upload_run",
+            reason_code="compound_exact_human_approval_binding_required",
+        )
     # Three-way gate (mirrors command_remint_reconcile); service re-enforces it.
     if args.dry_run and args.approve:
         print("Use either --dry-run or --approve, not both.", file=sys.stderr)
@@ -8913,6 +10037,12 @@ def command_object_storage_upload(args: argparse.Namespace) -> int:
 
 
 def command_object_storage_adopt_existing(args: argparse.Namespace) -> int:
+    if args.approve:
+        return _exact_human_approval_cli_error(
+            args,
+            lifecycle_action="object_storage_adopt_existing",
+            reason_code="compound_exact_human_approval_binding_required",
+        )
     if args.dry_run and args.approve:
         print("Use either --dry-run or --approve, not both.", file=sys.stderr)
         return 1
@@ -8928,7 +10058,7 @@ def command_object_storage_adopt_existing(args: argparse.Namespace) -> int:
     accept_unverified = bool(getattr(args, "accept_unverified_adopt", False))
     stop_after_plan = bool(getattr(args, "stop_after_plan", False))
     send = archive_services._default_urllib_sender() if (approve and not accept_unverified and not stop_after_plan) else None
-    progress_callback = make_stage_progress_callback(
+    progress_callback = _make_stage_progress_callback(
         bool(getattr(args, "progress", False)), label="object-storage-adopt"
     )
     try:
@@ -8965,6 +10095,12 @@ def command_object_storage_adopt_existing(args: argparse.Namespace) -> int:
 
 
 def command_object_storage_wom_location_reconcile(args: argparse.Namespace) -> int:
+    if args.approve:
+        return _exact_human_approval_cli_error(
+            args,
+            lifecycle_action="object_storage_wom_location_reconcile",
+            reason_code="compound_exact_human_approval_binding_required",
+        )
     if args.dry_run and args.approve:
         print("Use either --dry-run or --approve, not both.", file=sys.stderr)
         return 1
@@ -9438,9 +10574,9 @@ def command_credential_secure_list(args: argparse.Namespace) -> int:
         root = archive_services.require_existing_archive_root(Path(args.archive_root))
         if args.verify:
             from . import credential_workflows
-            from .credential_secure_intake_windows import CtypesWindowsNativeFacade
+            from .credential_secure_intake_windows import _CtypesWindowsNativeFacade
 
-            native = CtypesWindowsNativeFacade(cli_live_approved=True)
+            native = _CtypesWindowsNativeFacade(cli_live_approved=True)
             result = credential_workflows.list_authenticated_secure_credentials(
                 root,
                 native=native,
@@ -9466,6 +10602,12 @@ def command_credential_secure_list(args: argparse.Namespace) -> int:
 
 def command_credential_lifecycle(args: argparse.Namespace) -> int:
     action = "authenticated_credential_lifecycle_decision"
+    if args.approve:
+        return _exact_human_approval_cli_error(
+            args,
+            lifecycle_action=action,
+            reason_code="compound_exact_human_approval_binding_required",
+        )
     if args.dry_run == args.approve:
         result = _credential_cli_blocked(
             action, "credential_lifecycle_choose_dry_run_or_approve"
@@ -9489,9 +10631,9 @@ def command_credential_lifecycle(args: argparse.Namespace) -> int:
         try:
             root = archive_services.require_existing_archive_root(Path(args.archive_root))
             from . import credential_workflows
-            from .credential_secure_intake_windows import CtypesWindowsNativeFacade
+            from .credential_secure_intake_windows import _CtypesWindowsNativeFacade
 
-            native = CtypesWindowsNativeFacade(cli_live_approved=True)
+            native = _CtypesWindowsNativeFacade(cli_live_approved=True)
             common = {
                 "provider": args.provider,
                 "workspace_fingerprint": args.workspace_fingerprint,
@@ -9888,6 +11030,12 @@ def _notion_page_recovery_execute_blocked(code: str) -> dict[str, Any]:
 
 
 def command_notion_page_recovery(args: argparse.Namespace) -> int:
+    if args.approve:
+        return _exact_human_approval_cli_error(
+            args,
+            lifecycle_action="authenticated_notion_page_recovery_execute",
+            reason_code="compound_exact_human_approval_binding_required",
+        )
     if args.dry_run and args.approve:
         result = _notion_page_recovery_execute_blocked(
             "notion_page_recovery_choose_dry_run_or_approve"
@@ -10672,6 +11820,12 @@ def command_credential_adapter_audit_plan(args: argparse.Namespace) -> int:
 
 
 def command_credential_keepassxc_write(args: argparse.Namespace) -> int:
+    if args.approve:
+        return _exact_human_approval_cli_error(
+            args,
+            lifecycle_action="credential_keepassxc_write",
+            reason_code="compound_exact_human_approval_binding_required",
+        )
     if args.dry_run == args.approve:
         print("Choose exactly one mode: --dry-run or --approve.", file=sys.stderr)
         return 1
@@ -11343,6 +12497,12 @@ def command_tiro_lossless_recovery_plan(args: argparse.Namespace) -> int:
 
 
 def command_tiro_lossless_recovery_capture(args: argparse.Namespace) -> int:
+    if args.approve:
+        return _exact_human_approval_cli_error(
+            args,
+            lifecycle_action="tiro_lossless_recovery_capture",
+            reason_code="compound_exact_human_approval_binding_required",
+        )
     try:
         result = archive_services.tiro_lossless_recovery_capture(
             Path(args.archive_root),
@@ -11384,6 +12544,12 @@ def command_tiro_lossless_recovery_capture(args: argparse.Namespace) -> int:
 
 
 def command_tiro_lossless_recovery_fetch_run(args: argparse.Namespace) -> int:
+    if args.approve:
+        return _exact_human_approval_cli_error(
+            args,
+            lifecycle_action="tiro_lossless_recovery_fetch_run",
+            reason_code="compound_exact_human_approval_binding_required",
+        )
     try:
         result = archive_services.tiro_lossless_recovery_fetch_run(
             Path(args.archive_root),
@@ -11496,6 +12662,12 @@ def command_authoring_conventions(args: argparse.Namespace) -> int:
 
 
 def command_source_intake_record(args: argparse.Namespace) -> int:
+    if args.approve:
+        return _exact_human_approval_cli_error(
+            args,
+            lifecycle_action="source_intake_record",
+            reason_code="compound_exact_human_approval_binding_required",
+        )
     try:
         result = archive_services.source_intake_record(
             Path(args.archive_root),
@@ -11513,6 +12685,12 @@ def command_source_intake_record(args: argparse.Namespace) -> int:
 
 
 def command_source_intake_batch(args: argparse.Namespace) -> int:
+    if args.approve:
+        return _exact_human_approval_cli_error(
+            args,
+            lifecycle_action="source_intake_batch",
+            reason_code="compound_exact_human_approval_binding_required",
+        )
     try:
         result = archive_services.source_intake_batch(
             Path(args.archive_root),
@@ -11634,7 +12812,7 @@ def command_zet_catalog(args: argparse.Namespace) -> int:
         )
         if getattr(args, "output", None):
             reporter.progress("write-output", "start", None, None)
-            output_metadata = write_command_result_output_file(
+            output_metadata = _write_command_result_output_file(
                 str(args.output),
                 archive_root,
                 result,
@@ -11951,6 +13129,12 @@ def command_first_read_readiness(args: argparse.Namespace) -> int:
 
 
 def command_zet_title_remap_write(args: argparse.Namespace) -> int:
+    if args.approve:
+        return _exact_human_approval_cli_error(
+            args,
+            lifecycle_action="zet_title_remap_write",
+            reason_code="compound_exact_human_approval_binding_required",
+        )
     reporter = CommandProgressReporter(
         bool(getattr(args, "progress", False)),
         label="zet-title-remap-write",
@@ -12222,6 +13406,12 @@ def command_zet_title_remap_revert_plan(
 def command_zet_title_remap_revert(
     args: argparse.Namespace,
 ) -> int:
+    if args.approve:
+        return _exact_human_approval_cli_error(
+            args,
+            lifecycle_action="zet_title_remap_revert",
+            reason_code="compound_exact_human_approval_binding_required",
+        )
     if bool(args.dry_run) == bool(args.approve):
         print(
             "zet-title-remap-revert requires exactly one of --dry-run or --approve.",
@@ -12504,6 +13694,12 @@ def command_zet_title_remap_revert_recovery_plan(
 def command_zet_title_remap_recover(
     args: argparse.Namespace,
 ) -> int:
+    if args.approve:
+        return _exact_human_approval_cli_error(
+            args,
+            lifecycle_action="zet_title_remap_recover",
+            reason_code="compound_exact_human_approval_binding_required",
+        )
     reporter = CommandProgressReporter(
         bool(getattr(args, "progress", False)),
         label="zet-title-remap-recover",
@@ -12590,6 +13786,12 @@ def command_zet_title_remap_recover(
 def command_zet_title_remap_revert_recover(
     args: argparse.Namespace,
 ) -> int:
+    if args.approve:
+        return _exact_human_approval_cli_error(
+            args,
+            lifecycle_action="zet_title_remap_revert_recover",
+            reason_code="compound_exact_human_approval_binding_required",
+        )
     reporter = CommandProgressReporter(
         bool(getattr(args, "progress", False)),
         label="zet-title-remap-revert-recover",
@@ -12781,6 +13983,12 @@ def command_zet_revision_plan(args: argparse.Namespace) -> int:
 
 
 def command_zet_revision_write(args: argparse.Namespace) -> int:
+    if args.approve:
+        return _exact_human_approval_cli_error(
+            args,
+            lifecycle_action="zet_revision_write",
+            reason_code="compound_exact_human_approval_binding_required",
+        )
     if bool(args.dry_run) == bool(args.approve):
         print(
             "zet-revision-write requires exactly one of --dry-run or --approve.",
@@ -13105,6 +14313,12 @@ def command_zet_revision_restore_plan(args: argparse.Namespace) -> int:
 
 
 def command_zet_revision_restore_write(args: argparse.Namespace) -> int:
+    if args.approve:
+        return _exact_human_approval_cli_error(
+            args,
+            lifecycle_action="zet_revision_restore_write",
+            reason_code="compound_exact_human_approval_binding_required",
+        )
     if bool(args.dry_run) == bool(args.approve):
         print(
             "zet-revision-restore-write requires exactly one of --dry-run or --approve.",
@@ -13286,6 +14500,12 @@ def command_zet_catalog_pass_read(args: argparse.Namespace) -> int:
 
 
 def command_zet_catalog_pass_cleanup(args: argparse.Namespace) -> int:
+    if args.approve:
+        return _exact_human_approval_cli_error(
+            args,
+            lifecycle_action="zet_catalog_pass_cleanup",
+            reason_code="compound_exact_human_approval_binding_required",
+        )
     if bool(args.dry_run) == bool(args.approve):
         print("zet-catalog-pass-cleanup requires exactly one of --dry-run or --approve.", file=sys.stderr)
         return 1
@@ -13294,7 +14514,7 @@ def command_zet_catalog_pass_cleanup(args: argparse.Namespace) -> int:
         return 1
     reporter = CommandProgressReporter(bool(getattr(args, "progress", False)), label="zet-catalog-pass-cleanup")
     try:
-        result = cleanup_zet_catalog_pass_output_file(
+        result = _cleanup_zet_catalog_pass_output_file_legacy_core(
             str(args.input),
             Path(args.archive_root),
             expected_sha256=str(args.expected_sha256),
@@ -13352,6 +14572,12 @@ def command_zet_abstract_backfill_plan(args: argparse.Namespace) -> int:
 
 
 def command_zet_abstract_backfill_write(args: argparse.Namespace) -> int:
+    if args.approve:
+        return _exact_human_approval_cli_error(
+            args,
+            lifecycle_action="zet_abstract_backfill_write",
+            reason_code="compound_exact_human_approval_binding_required",
+        )
     if bool(args.dry_run) == bool(args.approve):
         print("zet-abstract-backfill-write requires exactly one of --dry-run or --approve.", file=sys.stderr)
         return 1
@@ -13390,6 +14616,12 @@ def command_zet_abstract_backfill_write(args: argparse.Namespace) -> int:
 
 
 def command_zet_abstract_backfill_revert(args: argparse.Namespace) -> int:
+    if args.approve:
+        return _exact_human_approval_cli_error(
+            args,
+            lifecycle_action="zet_abstract_backfill_revert",
+            reason_code="compound_exact_human_approval_binding_required",
+        )
     if bool(args.dry_run) == bool(args.approve):
         print("zet-abstract-backfill-revert requires exactly one of --dry-run or --approve.", file=sys.stderr)
         return 1
@@ -13532,6 +14764,12 @@ def command_zet_abstract_backfill_recovery_plan(args: argparse.Namespace) -> int
 def command_zet_abstract_backfill_recover(
     args: argparse.Namespace,
 ) -> int:
+    if args.approve:
+        return _exact_human_approval_cli_error(
+            args,
+            lifecycle_action="zet_abstract_backfill_recover",
+            reason_code="compound_exact_human_approval_binding_required",
+        )
     reporter = CommandProgressReporter(
         bool(getattr(args, "progress", False)),
         label="zet-abstract-backfill-recover",
@@ -14002,7 +15240,7 @@ def command_notion_import_locator_loss_audit(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         return 1
-    progress_callback = make_stage_progress_callback(
+    progress_callback = _make_stage_progress_callback(
         bool(getattr(args, "progress", False)),
         label="notion-locator-loss-audit",
         detail="compact",
@@ -14189,6 +15427,37 @@ def _print_zettel_objet_link_result(
         print(f"WARNING: {warning}")
 
 
+def _zettel_objet_link_compound_write_blocked(
+    lifecycle_action: str,
+) -> dict[str, Any]:
+    """Mirror the fixed service gate without entering the service writer."""
+
+    reason = "compound_exact_human_approval_binding_required"
+    return {
+        "ok": False,
+        "state": "blocked",
+        "dry_run": False,
+        "approved": False,
+        "lifecycle_action": lifecycle_action,
+        "summary": {},
+        "blockers": [reason],
+        "reason_codes": [reason],
+        "warnings": [],
+        "would_change": [],
+        "files_written": [],
+        "privacy_guards": {
+            "label_echoed": False,
+            "zettel_body_echoed": False,
+            "snapshot_bytes_echoed": False,
+            "object_bytes_read": False,
+            "provider_called": False,
+            "network_checked": False,
+            "local_absolute_path_echoed": False,
+            "writes": False,
+        },
+    }
+
+
 def command_zettel_objet_link(args: argparse.Namespace) -> int:
     if args.dry_run == args.approve:
         print(
@@ -14207,20 +15476,55 @@ def command_zettel_objet_link(args: argparse.Namespace) -> int:
                 label=args.label,
             )
         else:
-            result = completion_workflows.zettel_objet_link_apply(
-                Path(args.archive_root),
-                zettel_id=args.zettel_id,
-                relative_path=args.path,
-                object_id=args.object_id,
-                role=args.role,
-                label=args.label,
-                expected_plan_sha256=args.expected_plan_sha256,
-                reviewed_by=args.reviewed_by,
+            result = _zettel_objet_link_compound_write_blocked(
+                "zettel_objet_link_apply"
             )
     except Exception:
         print("zettel-objet-link failed safely.", file=sys.stderr)
         return 1
     _print_zettel_objet_link_result(result, args.format)
+    return 0 if result.get("ok") else 1
+
+
+def command_zettel_objet_link_receipts(args: argparse.Namespace) -> int:
+    if not args.dry_run:
+        print(
+            "zettel-objet-link-receipts is read-only and requires --dry-run.",
+            file=sys.stderr,
+        )
+        return 1
+    try:
+        result = completion_workflows.zettel_objet_link_receipts(
+            Path(args.archive_root),
+            zettel_id=args.zettel_id,
+            relative_path=args.path,
+            object_id=args.object_id,
+            role=args.role,
+            dry_run=True,
+            max_receipts=args.max_receipts,
+        )
+    except Exception:
+        print("zettel-objet-link-receipts failed safely.", file=sys.stderr)
+        return 1
+    if args.format == "json":
+        print_json(result)
+    else:
+        summary = (
+            result.get("summary")
+            if isinstance(result.get("summary"), dict)
+            else {}
+        )
+        print(f"Zettel-Objet link receipts: {result.get('state') or '-'}")
+        print(f"- zettel: {summary.get('zettel_id') or '-'}")
+        print(f"- validated receipts: {summary.get('validated_receipt_count', 0)}")
+        print(f"- revert-ready receipts: {summary.get('revert_ready_count', 0)}")
+        print(f"- selected receipt: {summary.get('selected_receipt_path') or '-'}")
+        for blocker in result.get("blockers", []):
+            print(f"BLOCKED: {blocker}")
+        for warning in result.get("warnings", []):
+            print(f"WARNING: {warning}")
+        for action in result.get("next_safe_actions", []):
+            print(f"NEXT: {action}")
     return 0 if result.get("ok") else 1
 
 
@@ -14238,11 +15542,8 @@ def command_zettel_objet_link_revert(args: argparse.Namespace) -> int:
                 receipt=args.receipt,
             )
         else:
-            result = completion_workflows.zettel_objet_link_revert(
-                Path(args.archive_root),
-                receipt=args.receipt,
-                expected_plan_sha256=args.expected_plan_sha256,
-                reviewed_by=args.reviewed_by,
+            result = _zettel_objet_link_compound_write_blocked(
+                "zettel_objet_link_revert"
             )
     except Exception:
         print("zettel-objet-link-revert failed safely.", file=sys.stderr)
@@ -14270,6 +15571,12 @@ def _print_draft_discard_result(
 
 
 def command_discard_draft(args: argparse.Namespace) -> int:
+    if args.approve:
+        return _exact_human_approval_cli_error(
+            args,
+            lifecycle_action="discard_draft_apply",
+            reason_code="compound_exact_human_approval_binding_required",
+        )
     if args.dry_run == args.approve:
         print(
             "discard-draft requires exactly one of --dry-run or --approve.",
@@ -14301,6 +15608,12 @@ def command_discard_draft(args: argparse.Namespace) -> int:
 
 
 def command_discard_draft_restore(args: argparse.Namespace) -> int:
+    if args.approve:
+        return _exact_human_approval_cli_error(
+            args,
+            lifecycle_action="discard_draft_restore",
+            reason_code="compound_exact_human_approval_binding_required",
+        )
     if args.dry_run == args.approve:
         print(
             "discard-draft-restore requires exactly one of --dry-run or --approve.",
@@ -14352,6 +15665,12 @@ def command_external_locator_plan(args: argparse.Namespace) -> int:
 
 
 def command_external_locator_record(args: argparse.Namespace) -> int:
+    if args.approve:
+        return _exact_human_approval_cli_error(
+            args,
+            lifecycle_action="external_locator_record",
+            reason_code="compound_exact_human_approval_binding_required",
+        )
     if not args.approve:
         print(
             "external-locator-record requires --approve.",
@@ -14402,6 +15721,12 @@ def command_external_locator_deactivate_plan(args: argparse.Namespace) -> int:
 
 
 def command_external_locator_deactivate(args: argparse.Namespace) -> int:
+    if args.approve:
+        return _exact_human_approval_cli_error(
+            args,
+            lifecycle_action="external_locator_deactivate",
+            reason_code="compound_exact_human_approval_binding_required",
+        )
     if not args.approve:
         print(
             "external-locator-deactivate requires --approve.",
@@ -14450,6 +15775,12 @@ def command_external_locator_recovery_plan(args: argparse.Namespace) -> int:
 
 
 def command_external_locator_revert(args: argparse.Namespace) -> int:
+    if args.approve:
+        return _exact_human_approval_cli_error(
+            args,
+            lifecycle_action="external_locator_revert",
+            reason_code="compound_exact_human_approval_binding_required",
+        )
     if args.dry_run == args.approve:
         print(
             "external-locator-revert requires exactly one of --dry-run or --approve.",
@@ -14528,6 +15859,12 @@ def command_notion_objet_link_rewrite_plan(args: argparse.Namespace) -> int:
 
 
 def command_notion_objet_link_convert(args: argparse.Namespace) -> int:
+    if args.approve:
+        return _exact_human_approval_cli_error(
+            args,
+            lifecycle_action="notion_objet_link_convert",
+            reason_code="compound_exact_human_approval_binding_required",
+        )
     try:
         result = archive_services.notion_objet_link_convert(
             Path(args.archive_root),
@@ -14584,6 +15921,12 @@ def command_notion_objet_link_convert(args: argparse.Namespace) -> int:
 
 
 def command_notion_objet_manifest_locator_label(args: argparse.Namespace) -> int:
+    if args.approve:
+        return _exact_human_approval_cli_error(
+            args,
+            lifecycle_action="notion_objet_manifest_locator_label",
+            reason_code="compound_exact_human_approval_binding_required",
+        )
     try:
         result = archive_services.notion_objet_manifest_locator_label(
             Path(args.archive_root),
@@ -14651,6 +15994,7 @@ def _create_draft_cli_error(
                 "state": "blocked",
                 "lifecycle_action": "create_draft",
                 "reason_codes": [reason_code],
+                "files_written": [],
                 "private_values_echoed": False,
             }
         )
@@ -14686,6 +16030,299 @@ def _source_fidelity_plan_sha256_from_result(result: dict[str, Any]) -> str | No
     return None
 
 
+def _exact_human_sha256_ref(value: Any) -> str:
+    """Retag an already-computed SHA-256 without hashing private values."""
+
+    normalized = str(value or "").strip().lower()
+    if SHA256_RE.fullmatch(normalized):
+        return "sha256:" + normalized
+    if re.fullmatch(r"sha256:[0-9a-f]{64}", normalized):
+        return normalized
+    raise ValueError("exact_human_approval_binding_unavailable")
+
+
+def _exact_human_approval_context(
+    archive_root: Path,
+    *,
+    operation: ExactHumanApprovalOperation,
+    plan_sha256: Any,
+    target_binding_sha256: Any,
+    reviewer_claim: Any,
+    review_binding_codes: tuple[str, ...],
+    warnings: list[str] | tuple[str, ...],
+) -> ExactHumanApprovalContext:
+    """Build the content-free live boundary from service-owned digests only."""
+
+    archive_id = archive_services.read_archive_id(archive_root)
+    return ExactHumanApprovalContext(
+        operation=operation,
+        archive_identity_sha256=(
+            exact_human_approval_archive_identity_sha256(archive_id)
+        ),
+        plan_sha256=_exact_human_sha256_ref(plan_sha256),
+        target_binding_sha256=_exact_human_sha256_ref(
+            target_binding_sha256
+        ),
+        reviewer_claim=str(reviewer_claim or "").strip(),
+        review_binding_codes=review_binding_codes,
+        warning_codes=exact_human_approval_warning_codes(warnings),
+    )
+
+
+def _exact_human_approval_cli_error(
+    args: argparse.Namespace,
+    *,
+    lifecycle_action: str,
+    reason_code: str,
+) -> int:
+    """Emit only a fixed code after an approval-boundary failure."""
+
+    safe_reason = (
+        reason_code
+        if re.fullmatch(r"[a-z][a-z0-9_]{0,95}", str(reason_code or ""))
+        else "exact_human_approval_state_unknown"
+    )
+    if getattr(args, "format", None) == "json":
+        print_json(
+            {
+                "ok": False,
+                "state": "blocked",
+                "lifecycle_action": lifecycle_action,
+                "reason_codes": [safe_reason],
+                "files_written": [],
+                "private_values_echoed": False,
+            }
+        )
+    elif safe_reason == "exact_human_approval_cancelled":
+        print(
+            "Exact human approval was cancelled; the write did not start.",
+            file=sys.stderr,
+        )
+    elif safe_reason == "exact_human_approval_preflight_blocked":
+        print(
+            "Exact human approval preflight was blocked; the write did not start.",
+            file=sys.stderr,
+        )
+    elif safe_reason == "compound_exact_human_approval_binding_required":
+        print(
+            "Exact compound human-approval binding is not implemented for "
+            "this command; the write did not start. Use its dry-run or plan "
+            "mode only.",
+            file=sys.stderr,
+        )
+    else:
+        print(
+            "Exact human approval failed or its write state is uncertain; "
+            "inspect the local approval claim before retrying.",
+            file=sys.stderr,
+        )
+    return 1
+
+
+def _print_exact_human_reconciliation_notice(
+    result: Mapping[str, Any],
+) -> bool:
+    """Print one content-free notice for a started claim needing reconciliation."""
+
+    reconciliation = result.get("exact_human_approval_reconciliation")
+    approval = result.get("exact_human_approval")
+    if not (
+        result.get("ok") is False
+        and isinstance(reconciliation, Mapping)
+        and reconciliation.get("required") is True
+        and isinstance(approval, Mapping)
+        and approval.get("status") == "started"
+    ):
+        return False
+    print(
+        "Exact human-approved write requires reconciliation; do not retry "
+        "automatically."
+    )
+    print(f"Operation state: {result.get('state') or 'unknown'}")
+    print("Approval claim: started")
+    return True
+
+
+def command_source_fidelity_session_evidence(args: argparse.Namespace) -> int:
+    if bool(args.dry_run) == bool(args.approve):
+        return _create_draft_cli_error(
+            args,
+            reason_code="session_evidence_execution_mode_invalid",
+            message=(
+                "source-fidelity-session-evidence requires exactly one of "
+                "--dry-run or --approve."
+            ),
+        )
+    try:
+        common = {
+            "session_ref": str(args.session_ref),
+            "source_role": str(args.source_role),
+            "producer_kind": str(args.producer_kind),
+            "produced_at": str(args.produced_at),
+            "captured_at": str(args.captured_at),
+            "input_provenance_sha256": list(
+                args.input_provenance_sha256 or []
+            ),
+        }
+        if args.dry_run:
+            result = source_fidelity_session_evidence.plan_session_evidence(
+                Path(args.archive_root),
+                args.source_file,
+                **common,
+            )
+        else:
+            archive_root = Path(args.archive_root)
+            preview = source_fidelity_session_evidence.plan_session_evidence(
+                archive_root,
+                args.source_file,
+                **common,
+            )
+            plan_sha256 = preview.get("plan_sha256")
+            source = (
+                preview.get("source")
+                if isinstance(preview.get("source"), dict)
+                else {}
+            )
+            supplied_plan_sha256 = str(
+                args.expected_plan_sha256 or ""
+            ).strip().lower()
+            if (
+                preview.get("ok") is not True
+                or not isinstance(plan_sha256, str)
+                or not SHA256_RE.fullmatch(plan_sha256)
+                or not isinstance(source.get("raw_sha256"), str)
+                or not SHA256_RE.fullmatch(source["raw_sha256"])
+                or not secrets.compare_digest(
+                    plan_sha256, supplied_plan_sha256
+                )
+            ):
+                return _exact_human_approval_cli_error(
+                    args,
+                    lifecycle_action=(
+                        "source_fidelity_session_evidence_approve"
+                    ),
+                    reason_code="exact_human_approval_preflight_blocked",
+                )
+            context = _exact_human_approval_context(
+                archive_root,
+                operation=(
+                    ExactHumanApprovalOperation.source_fidelity_session_evidence
+                ),
+                plan_sha256=plan_sha256,
+                target_binding_sha256=source["raw_sha256"],
+                reviewer_claim=args.reviewed_by,
+                review_binding_codes=(
+                    "evidence_bytes_reviewed",
+                    "provenance_reviewed",
+                    "storage_intent_reviewed",
+                ),
+                warnings=(
+                    preview.get("warnings")
+                    if isinstance(preview.get("warnings"), list)
+                    else []
+                ),
+            )
+
+            def _write_session_evidence(
+                approval_claim,
+            ) -> dict[str, Any]:
+                return source_fidelity_session_evidence.approve_session_evidence(
+                    archive_root,
+                    args.source_file,
+                    expected_plan_sha256=supplied_plan_sha256,
+                    reviewed_by=str(args.reviewed_by or ""),
+                    exact_human_approval_claim=approval_claim,
+                    **common,
+                )
+
+            result = _execute_exact_human_approved_write(
+                archive_root,
+                context,
+                _write_session_evidence,
+            )
+    except (
+        ExactHumanApprovalError,
+        ExactHumanApprovalWindowsError,
+        ExactHumanApprovalWorkflowError,
+    ) as exc:
+        return _exact_human_approval_cli_error(
+            args,
+            lifecycle_action="source_fidelity_session_evidence_approve",
+            reason_code=getattr(
+                exc, "code", "exact_human_approval_state_unknown"
+            ),
+        )
+    except (
+        archive_services.ArchiveServiceError,
+        OSError,
+        ValueError,
+        TypeError,
+    ):
+        return _create_draft_cli_error(
+            args,
+            reason_code="session_evidence_failed",
+            message=(
+                "source-fidelity-session-evidence failed before a "
+                "privacy-safe result could be produced."
+            ),
+        )
+    if args.format == "json":
+        print_json(result)
+    else:
+        if _print_exact_human_reconciliation_notice(result):
+            return 1
+        print(
+            "Source-fidelity session evidence: "
+            + str(result.get("state") or "unknown")
+        )
+        print(f"Evidence id: {result.get('evidence_id') or '-'}")
+        print(f"Plan SHA-256: {result.get('plan_sha256') or '-'}")
+        print(
+            "Files written this run: "
+            + str(
+                result.get("persistence", {}).get(
+                    "files_written_count", 0
+                )
+            )
+        )
+        if result.get("blockers"):
+            print("Blockers:")
+            for blocker in result["blockers"]:
+                print(f"- {blocker}")
+    return 0 if result.get("ok") else 1
+
+
+def command_facet_vocabulary(args: argparse.Namespace) -> int:
+    try:
+        result = archive_services.facet_vocabulary(
+            Path(args.archive_root), dry_run=True
+        )
+    except (archive_services.ArchiveServiceError, OSError, ValueError):
+        print(
+            "facet-vocabulary could not read the bounded facet registry.",
+            file=sys.stderr,
+        )
+        return 1
+    if args.format == "json":
+        print_json(result)
+    else:
+        print("WOM facet vocabulary (read-only)")
+        for item in result.get("keys", []):
+            if isinstance(item, dict):
+                print(f"- {item.get('key')}: {item.get('role')}")
+        print(
+            "Unknown keys warn but do not block create-draft: "
+            + (
+                "yes"
+                if result.get("unknown_key_policy", {}).get(
+                    "accepted_for_draft"
+                )
+                else "no"
+            )
+        )
+    return 0 if result.get("ok") else 1
+
+
 def command_create_draft(args: argparse.Namespace) -> int:
     if args.list_kinds:
         try:
@@ -14708,6 +16345,24 @@ def command_create_draft(args: argparse.Namespace) -> int:
                 print(f"- {kind_id}")
         return 0
 
+    ai_creation_mode = archive_services.source_fidelity_ai_provenance_declared(
+        creation_mode=args.creation_mode,
+        created_by=args.created_by or "cli:archive",
+        assisted_by=args.assisted_by,
+        local_ai_sessions=build_local_ai_session_refs(args),
+    )
+    if (args.approve and not ai_creation_mode) or (
+        not args.dry_run and not (ai_creation_mode and args.approve)
+    ):
+        return _create_draft_cli_error(
+            args,
+            reason_code="compound_exact_human_approval_binding_required",
+            message=(
+                "Human-declared create-draft writes are unavailable in v0.4.0; "
+                "the write did not start. Use --dry-run."
+            ),
+        )
+
     if not args.title:
         return _create_draft_cli_error(
             args,
@@ -14728,7 +16383,6 @@ def command_create_draft(args: argparse.Namespace) -> int:
             ),
         )
 
-    ai_creation_mode = args.creation_mode in {"ai_assisted", "ai_generated"}
     if ai_creation_mode and bool(args.dry_run) == bool(args.approve):
         return _create_draft_cli_error(
             args,
@@ -14739,6 +16393,23 @@ def command_create_draft(args: argparse.Namespace) -> int:
             ),
         )
     if ai_creation_mode and args.approve:
+        missing_replay_identity = [
+            option
+            for option, value in (
+                ("--draft-id", args.draft_id),
+                ("--created-at", args.created_at),
+            )
+            if not isinstance(value, str) or not value.strip()
+        ]
+        if missing_replay_identity:
+            return _create_draft_cli_error(
+                args,
+                reason_code="create_draft_ai_replay_identity_required",
+                message=(
+                    "AI draft approval must reuse both --draft-id and "
+                    "--created-at from approval_replay."
+                ),
+            )
         missing_approval_fields = [
             option
             for option, value in (
@@ -14766,12 +16437,12 @@ def command_create_draft(args: argparse.Namespace) -> int:
         body = (
             ""
             if args.body is None and args.body_file is None
-            else read_body_arg(args)
+            else _read_body_arg(args)
         )
         created_by = args.created_by or "cli:archive"
         source = args.source or "cli_command"
-        result = archive_services.create_draft_zettel(
-            Path(args.archive_root),
+        archive_root = Path(args.archive_root)
+        create_kwargs = dict(
             title=args.title,
             body=body,
             abstract=args.abstract,
@@ -14780,7 +16451,6 @@ def command_create_draft(args: argparse.Namespace) -> int:
             facets=parse_key_value_pairs(args.facet or []),
             created_by=created_by,
             source=source,
-            dry_run=args.dry_run,
             expected_archive_id=args.expected_archive_id,
             expected_type=args.expected_type,
             profile_id=args.profile_id,
@@ -14791,19 +16461,109 @@ def command_create_draft(args: argparse.Namespace) -> int:
             supervised_by=args.supervised_by,
             derived_from=args.derived_from,
             source_refs=parse_source_ref_pairs(args.source_ref or []),
-            source_intake_plan=load_source_intake_plan_file(args.source_intake_plan),
-            prompt_boundary_report=load_prompt_boundary_report_file(args.prompt_boundary_report),
+            source_intake_plan=_load_source_intake_plan_file(args.source_intake_plan),
+            prompt_boundary_report=_load_prompt_boundary_report_file(args.prompt_boundary_report),
             local_ai_sessions=build_local_ai_session_refs(args),
             draft_id=args.draft_id,
             created_at=args.created_at,
             expected_body_sha256=args.expected_body_sha256,
             draft_approved_by=args.draft_approved_by,
-            approved=args.approve,
             source_fidelity_mode=args.source_fidelity,
             source_fidelity_audience=args.fidelity_audience,
             fidelity_source_object_id=args.fidelity_source_object_id,
+            fidelity_session_evidence_id=(
+                args.fidelity_session_evidence_id
+            ),
             expected_source_fidelity_plan_sha256=(
                 args.expected_source_fidelity_plan_sha256
+            ),
+        )
+        if ai_creation_mode and args.approve:
+            preview = archive_services.create_draft_zettel(
+                archive_root,
+                dry_run=True,
+                approved=True,
+                **create_kwargs,
+            )
+            plan_sha256 = _source_fidelity_plan_sha256_from_result(
+                preview
+            )
+            body_sha256 = preview.get("body_sha256")
+            expected_plan_sha256 = str(
+                args.expected_source_fidelity_plan_sha256 or ""
+            ).strip().lower()
+            expected_body_sha256 = str(
+                args.expected_body_sha256 or ""
+            ).strip().lower()
+            if (
+                preview.get("ok") is not True
+                or not isinstance(plan_sha256, str)
+                or not SHA256_RE.fullmatch(plan_sha256)
+                or not isinstance(body_sha256, str)
+                or not SHA256_RE.fullmatch(body_sha256)
+                or not secrets.compare_digest(
+                    plan_sha256, expected_plan_sha256
+                )
+                or not secrets.compare_digest(
+                    body_sha256, expected_body_sha256
+                )
+            ):
+                return _exact_human_approval_cli_error(
+                    args,
+                    lifecycle_action="create_draft",
+                    reason_code="exact_human_approval_preflight_blocked",
+                )
+            context = _exact_human_approval_context(
+                archive_root,
+                operation=ExactHumanApprovalOperation.create_draft,
+                plan_sha256=plan_sha256,
+                target_binding_sha256=body_sha256,
+                reviewer_claim=args.draft_approved_by,
+                review_binding_codes=(
+                    "body_digest_reviewed",
+                    "draft_identity_reviewed",
+                    "source_fidelity_reviewed",
+                ),
+                warnings=(
+                    preview.get("warnings")
+                    if isinstance(preview.get("warnings"), list)
+                    else []
+                ),
+            )
+
+            def _write_ai_draft(
+                approval_claim,
+            ) -> dict[str, Any]:
+                return archive_services.create_draft_zettel(
+                    archive_root,
+                    dry_run=False,
+                    approved=True,
+                    exact_human_approval_claim=approval_claim,
+                    **create_kwargs,
+                )
+
+            result = _execute_exact_human_approved_write(
+                archive_root,
+                context,
+                _write_ai_draft,
+            )
+        else:
+            result = archive_services.create_draft_zettel(
+                archive_root,
+                dry_run=args.dry_run,
+                approved=args.approve,
+                **create_kwargs,
+            )
+    except (
+        ExactHumanApprovalError,
+        ExactHumanApprovalWindowsError,
+        ExactHumanApprovalWorkflowError,
+    ) as exc:
+        return _exact_human_approval_cli_error(
+            args,
+            lifecycle_action="create_draft",
+            reason_code=getattr(
+                exc, "code", "exact_human_approval_state_unknown"
             ),
         )
     except (archive_services.ArchiveServiceError, ValueError, OSError):
@@ -14819,6 +16579,8 @@ def command_create_draft(args: argparse.Namespace) -> int:
     if args.format == "json":
         print_json(result)
     else:
+        if _print_exact_human_reconciliation_notice(result):
+            return 1
         if result.get("dry_run"):
             print(f"Draft dry-run for {result['frontmatter_preview']['id']}")
             print(f"Proposed path: {result['proposed_path']}")
@@ -14826,6 +16588,15 @@ def command_create_draft(args: argparse.Namespace) -> int:
                 print("Blockers:")
                 for blocker in result["blockers"]:
                     print(f"- {blocker}")
+            duplicate_check = (
+                result.get("duplicate_check")
+                if isinstance(result.get("duplicate_check"), dict)
+                else {}
+            )
+            if duplicate_check.get("next_safe_actions"):
+                print("Next safe actions:")
+                for action in duplicate_check["next_safe_actions"]:
+                    print(f"- {action}")
             if result["warnings"]:
                 print("Warnings:")
                 for warning in result["warnings"]:
@@ -15093,6 +16864,12 @@ def command_activity_group_membership_removal_plan(
 
 
 def command_activity_group_membership_write(args: argparse.Namespace) -> int:
+    if args.approve:
+        return _exact_human_approval_cli_error(
+            args,
+            lifecycle_action="activity_group_membership_write",
+            reason_code="compound_exact_human_approval_binding_required",
+        )
     if bool(args.dry_run) == bool(args.approve):
         print(
             "activity-group-membership-write requires exactly one of --dry-run or --approve.",
@@ -15244,6 +17021,12 @@ def command_activity_group_membership_recovery_plan(
 def command_activity_group_membership_recover(
     args: argparse.Namespace,
 ) -> int:
+    if args.approve:
+        return _exact_human_approval_cli_error(
+            args,
+            lifecycle_action="activity_group_membership_recover",
+            reason_code="compound_exact_human_approval_binding_required",
+        )
     if not args.approve:
         print(
             "activity-group-membership-recover requires --approve.",
@@ -15319,6 +17102,12 @@ def command_activity_group_membership_recover(
 def command_activity_group_membership_removal_write(
     args: argparse.Namespace,
 ) -> int:
+    if args.approve:
+        return _exact_human_approval_cli_error(
+            args,
+            lifecycle_action="activity_group_membership_removal_write",
+            reason_code="compound_exact_human_approval_binding_required",
+        )
     if bool(args.dry_run) == bool(args.approve):
         print(
             "activity-group-membership-removal-write requires exactly one of --dry-run or --approve.",
@@ -15472,6 +17261,12 @@ def command_activity_group_membership_removal_recovery_plan(
 def command_activity_group_membership_removal_recover(
     args: argparse.Namespace,
 ) -> int:
+    if args.approve:
+        return _exact_human_approval_cli_error(
+            args,
+            lifecycle_action="activity_group_membership_removal_recover",
+            reason_code="compound_exact_human_approval_binding_required",
+        )
     if not args.approve:
         print(
             "activity-group-membership-removal-recover requires --approve.",
@@ -15943,6 +17738,12 @@ def command_foreign_block_quarantine(args: argparse.Namespace) -> int:
 
 
 def command_quarantine_foreign_block(args: argparse.Namespace) -> int:
+    if args.approve:
+        return _exact_human_approval_cli_error(
+            args,
+            lifecycle_action="quarantine_foreign_block",
+            reason_code="compound_exact_human_approval_binding_required",
+        )
     try:
         result = archive_services.quarantine_foreign_block(
             Path(args.archive_root),
@@ -16044,6 +17845,12 @@ def command_quarantine_decision(args: argparse.Namespace) -> int:
 
 
 def command_record_quarantine_decision(args: argparse.Namespace) -> int:
+    if args.approve:
+        return _exact_human_approval_cli_error(
+            args,
+            lifecycle_action="record_quarantine_decision",
+            reason_code="compound_exact_human_approval_binding_required",
+        )
     try:
         result = archive_services.record_quarantine_decision(
             Path(args.archive_root),
@@ -16402,6 +18209,29 @@ def command_attestation_statement_draft_decision(args: argparse.Namespace) -> in
     return 0 if result.get("ok") else 1
 
 
+def _exact_write_cli_error(
+    args: argparse.Namespace,
+    *,
+    lifecycle_action: str,
+    reason_code: str,
+    message: str,
+) -> int:
+    if getattr(args, "format", None) == "json":
+        print_json(
+            {
+                "ok": False,
+                "state": "blocked",
+                "lifecycle_action": lifecycle_action,
+                "reason_codes": [reason_code],
+                "files_written": [],
+                "private_values_echoed": False,
+            }
+        )
+    else:
+        print(message, file=sys.stderr)
+    return 1
+
+
 def command_promote(args: argparse.Namespace) -> int:
     if args.dry_run:
         try:
@@ -16410,9 +18240,13 @@ def command_promote(args: argparse.Namespace) -> int:
                 zettel_id=args.zettel_id,
                 relative_path=args.path,
             )
-        except archive_services.ArchiveServiceError as exc:
-            print(str(exc), file=sys.stderr)
-            return 1
+        except archive_services.ArchiveServiceError:
+            return _exact_write_cli_error(
+                args,
+                lifecycle_action="promote_zettel",
+                reason_code="promote_preflight_failed_safely",
+                message="Promotion preflight failed safely; private values were not echoed.",
+            )
 
         if args.format == "json":
             print_json(result)
@@ -16439,6 +18273,15 @@ def command_promote(args: argparse.Namespace) -> int:
                 print("Blockers:")
                 for blocker in result["blockers"]:
                     print(f"- {blocker}")
+            duplicate_check = (
+                result.get("duplicate_check")
+                if isinstance(result.get("duplicate_check"), dict)
+                else {}
+            )
+            if duplicate_check.get("next_safe_actions"):
+                print("Next safe actions:")
+                for action in duplicate_check["next_safe_actions"]:
+                    print(f"- {action}")
             if result["warnings"]:
                 print("Warnings:")
                 for warning in result["warnings"]:
@@ -16447,27 +18290,98 @@ def command_promote(args: argparse.Namespace) -> int:
         return 0 if result["ok"] else 1
 
     if not args.approve:
-        print("Real promotion requires --approve.", file=sys.stderr)
-        return 1
+        return _exact_write_cli_error(
+            args,
+            lifecycle_action="promote_zettel",
+            reason_code="promote_approval_required",
+            message="Real promotion requires --approve.",
+        )
     if not args.reviewed_by:
-        print("Real promotion requires --reviewed-by.", file=sys.stderr)
-        return 1
+        return _exact_write_cli_error(
+            args,
+            lifecycle_action="promote_zettel",
+            reason_code="promote_reviewer_required",
+            message="Real promotion requires --reviewed-by.",
+        )
 
     try:
-        result = archive_services.promote_zettel(
-            Path(args.archive_root),
+        archive_root = Path(args.archive_root)
+        preview = archive_services.promote_zettel_dry_run(
+            archive_root,
             zettel_id=args.zettel_id,
             relative_path=args.path,
-            reviewed_by=args.reviewed_by,
-            allow_warnings=args.allow_warnings,
         )
-    except (archive_services.ArchiveServiceError, OSError) as exc:
-        print(str(exc), file=sys.stderr)
-        return 1
+        if preview.get("ok") is not True or preview.get("blockers"):
+            return _exact_write_cli_error(
+                args,
+                lifecycle_action="promote_zettel",
+                reason_code="promote_preflight_blocked",
+                message="Promotion blocked by dry-run.",
+            )
+        if preview.get("warnings") and not args.allow_warnings:
+            return _exact_write_cli_error(
+                args,
+                lifecycle_action="promote_zettel",
+                reason_code="promote_warning_override_required",
+                message=(
+                    "Promotion has warnings; rerun with --allow-warnings only "
+                    "after reviewing them."
+                ),
+            )
+
+        binding = (
+            operation_approval_binding.warning_override_approval_binding(
+                preview
+            )
+            if preview.get("warnings")
+            else operation_approval_binding.promote_zet_approval_binding(
+                preview
+            )
+        )
+        context = binding.context(
+            archive_id=archive_services.read_archive_id(archive_root),
+            reviewer_claim=str(args.reviewed_by).strip(),
+        )
+
+        def _write_promotion(claim) -> dict[str, Any]:
+            return archive_services.promote_zettel(
+                archive_root,
+                zettel_id=args.zettel_id,
+                relative_path=args.path,
+                reviewed_by=args.reviewed_by,
+                allow_warnings=args.allow_warnings,
+                expected_exact_approval_plan_sha256=binding.plan_sha256,
+                expected_exact_approval_target_binding_sha256=(
+                    binding.target_binding_sha256
+                ),
+                exact_human_approval_claim=claim,
+            )
+
+        result = _execute_exact_human_approved_write(
+            archive_root,
+            context,
+            _write_promotion,
+        )
+    except (
+        archive_services.ArchiveServiceError,
+        operation_approval_binding.OperationApprovalBindingError,
+        ExactHumanApprovalError,
+        ExactHumanApprovalWindowsError,
+        ExactHumanApprovalWorkflowError,
+        OSError,
+    ):
+        return _exact_write_cli_error(
+            args,
+            lifecycle_action="promote_zettel",
+            reason_code="promote_workflow_failed_safely",
+            message="Promotion failed safely; private values were not echoed.",
+        )
 
     if args.format == "json":
         print_json(result)
     else:
+        if _print_exact_human_reconciliation_notice(result):
+            return 1
         print(f"Promoted {result['zettel_id']} to canonical memory.")
         print(f"Canonical path: {result['canonical_path']}")
         print(f"Receipt path: {result['receipt_path']}")
@@ -16475,7 +18389,7 @@ def command_promote(args: argparse.Namespace) -> int:
             print("Warnings approved:")
             for warning in result["warnings"]:
                 print(f"- {warning}")
-    return 0
+    return 0 if result.get("ok") is True else 1
 
 
 def _mint_cli_error(
@@ -16485,12 +18399,13 @@ def _mint_cli_error(
     message: str,
     progress_summary: dict[str, object] | None = None,
 ) -> int:
-    if getattr(args, "format", None) == "json" and bool(getattr(args, "progress", False)):
+    if getattr(args, "format", None) == "json":
         result: dict[str, object] = {
             "ok": False,
             "state": "blocked",
             "lifecycle_action": "mint_zettel",
             "reason_codes": [reason_code],
+            "files_written": [],
             "private_values_echoed": False,
         }
         if progress_summary is not None:
@@ -16556,24 +18471,80 @@ def command_mint_zettel(args: argparse.Namespace) -> int:
                 progress_callback=progress_callback,
             )
         else:
-            result = archive_services.mint_zettel(
-                Path(args.archive_root),
+            archive_root = Path(args.archive_root)
+            preview = archive_services.mint_zettel_dry_run(
+                archive_root,
                 zettel_id=args.zettel_id,
                 relative_path=args.path,
-                reviewed_by=args.reviewed_by,
-                allow_warnings=args.allow_warnings,
                 affirmations=affirmations,
                 progress_callback=progress_callback,
-                expected_source_fidelity_plan_sha256=(
-                    args.expected_source_fidelity_plan_sha256
-                ),
+            )
+            if preview.get("ok") is not True:
+                reporter.finish()
+                return _mint_cli_error(
+                    args,
+                    reason_code="mint_preflight_blocked",
+                    message="Minting blocked by dry-run.",
+                    progress_summary=reporter.summary(),
+                )
+            if preview.get("warnings") and not args.allow_warnings:
+                reporter.finish()
+                return _mint_cli_error(
+                    args,
+                    reason_code="mint_warning_override_required",
+                    message=(
+                        "Minting has warnings; rerun with --allow-warnings only "
+                        "after reviewing them."
+                    ),
+                    progress_summary=reporter.summary(),
+                )
+            binding = operation_approval_binding.mint_zet_approval_binding(
+                preview
+            )
+            context = binding.context(
+                archive_id=archive_services.read_archive_id(archive_root),
+                reviewer_claim=reviewer,
+            )
+
+            def _write_mint(claim) -> dict[str, Any]:
+                return archive_services.mint_zettel(
+                    archive_root,
+                    zettel_id=args.zettel_id,
+                    relative_path=args.path,
+                    reviewed_by=args.reviewed_by,
+                    allow_warnings=args.allow_warnings,
+                    affirmations=affirmations,
+                    progress_callback=progress_callback,
+                    expected_source_fidelity_plan_sha256=(
+                        args.expected_source_fidelity_plan_sha256
+                    ),
+                    expected_exact_approval_plan_sha256=(
+                        binding.plan_sha256
+                    ),
+                    expected_exact_approval_target_binding_sha256=(
+                        binding.target_binding_sha256
+                    ),
+                    exact_human_approval_claim=claim,
+                )
+
+            result = _execute_exact_human_approved_write(
+                archive_root,
+                context,
+                _write_mint,
             )
         reporter.finish()
-    except (archive_services.ArchiveServiceError, OSError) as exc:
+    except (
+        archive_services.ArchiveServiceError,
+        operation_approval_binding.OperationApprovalBindingError,
+        ExactHumanApprovalError,
+        ExactHumanApprovalWindowsError,
+        ExactHumanApprovalWorkflowError,
+        OSError,
+    ):
         return _mint_cli_error(
             args,
             reason_code="mint_service_failed",
-            message=str(exc),
+            message="Minting failed safely; private values were not echoed.",
             progress_summary=reporter.summary(),
         )
     finally:
@@ -16617,6 +18588,8 @@ def command_mint_zettel(args: argparse.Namespace) -> int:
     if args.format == "json":
         print_json(result)
     else:
+        if _print_exact_human_reconciliation_notice(result):
+            return 1
         print(f"Minted {result['zettel_id']} into canonical private archive memory.")
         print(f"Canonical path: {result['canonical_path']}")
         print(f"Mint receipt path: {result['mint_receipt_path']}")
@@ -16697,14 +18670,14 @@ def command_zet_quality_check(args: argparse.Namespace) -> int:
 
 
 def command_ai_scratch_gc(args: argparse.Namespace) -> int:
-    if args.dry_run and args.approve:
-        print("Use either --dry-run or --approve, not both.", file=sys.stderr)
-        return 1
+    if args.approve:
+        return _exact_human_approval_cli_error(
+            args,
+            lifecycle_action="ai_scratch_gc",
+            reason_code="compound_exact_human_approval_binding_required",
+        )
     if not args.dry_run and not args.approve:
         print("ai-scratch-gc requires --dry-run or --approve.", file=sys.stderr)
-        return 1
-    if args.approve and not args.reviewed_by:
-        print("ai-scratch-gc requires --reviewed-by when --approve is used.", file=sys.stderr)
         return 1
     try:
         result = archive_services.ai_scratch_gc_for_zettel(
@@ -16759,6 +18732,7 @@ def command_ai_artifact_inventory(args: argparse.Namespace) -> int:
         result = archive_services.ai_artifact_inventory(
             Path(args.archive_root),
             include_roots=args.include_root,
+            project_root=getattr(args, "project_root", None),
             max_items=args.max_items,
             show_relative_paths=args.show_relative_paths,
             dry_run=True,
@@ -16836,30 +18810,99 @@ def command_artifact_lifecycle_inventory(args: argparse.Namespace) -> int:
 
 def command_retire_draft(args: argparse.Namespace) -> int:
     if args.dry_run and args.approve:
-        print("Use either --dry-run or --approve, not both.", file=sys.stderr)
-        return 1
+        return _exact_write_cli_error(
+            args,
+            lifecycle_action="retire_minted_draft",
+            reason_code="retire_mode_conflict",
+            message="Use either --dry-run or --approve, not both.",
+        )
     if not args.dry_run and not args.approve:
-        print("retire-draft requires --dry-run or --approve.", file=sys.stderr)
-        return 1
+        return _exact_write_cli_error(
+            args,
+            lifecycle_action="retire_minted_draft",
+            reason_code="retire_execution_mode_required",
+            message="retire-draft requires --dry-run or --approve.",
+        )
     if args.approve and not args.reviewed_by:
-        print("retire-draft requires --reviewed-by when --approve is used.", file=sys.stderr)
-        return 1
+        return _exact_write_cli_error(
+            args,
+            lifecycle_action="retire_minted_draft",
+            reason_code="retire_reviewer_required",
+            message="retire-draft requires --reviewed-by when --approve is used.",
+        )
 
     try:
-        result = archive_services.retire_minted_draft(
-            Path(args.archive_root),
-            zettel_id=args.zettel_id,
-            relative_path=args.path,
-            reviewed_by=args.reviewed_by,
-            approve=args.approve,
+        archive_root = Path(args.archive_root)
+        if args.approve:
+            preview = archive_services.retire_minted_draft(
+                archive_root,
+                zettel_id=args.zettel_id,
+                relative_path=args.path,
+                reviewed_by=None,
+                approve=False,
+            )
+            if preview.get("ok") is not True:
+                return _exact_write_cli_error(
+                    args,
+                    lifecycle_action="retire_minted_draft",
+                    reason_code="retire_preflight_blocked",
+                    message="Retire draft blocked by dry-run.",
+                )
+            binding = operation_approval_binding.retire_draft_approval_binding(
+                preview
+            )
+            context = binding.context(
+                archive_id=archive_services.read_archive_id(archive_root),
+                reviewer_claim=str(args.reviewed_by or "").strip(),
+            )
+
+            def _write_retirement(claim) -> dict[str, Any]:
+                return archive_services.retire_minted_draft(
+                    archive_root,
+                    zettel_id=args.zettel_id,
+                    relative_path=args.path,
+                    reviewed_by=args.reviewed_by,
+                    approve=True,
+                    expected_exact_approval_plan_sha256=binding.plan_sha256,
+                    expected_exact_approval_target_binding_sha256=(
+                        binding.target_binding_sha256
+                    ),
+                    exact_human_approval_claim=claim,
+                )
+
+            result = _execute_exact_human_approved_write(
+                archive_root,
+                context,
+                _write_retirement,
+            )
+        else:
+            result = archive_services.retire_minted_draft(
+                archive_root,
+                zettel_id=args.zettel_id,
+                relative_path=args.path,
+                reviewed_by=args.reviewed_by,
+                approve=False,
+            )
+    except (
+        archive_services.ArchiveServiceError,
+        operation_approval_binding.OperationApprovalBindingError,
+        ExactHumanApprovalError,
+        ExactHumanApprovalWindowsError,
+        ExactHumanApprovalWorkflowError,
+        OSError,
+    ):
+        return _exact_write_cli_error(
+            args,
+            lifecycle_action="retire_minted_draft",
+            reason_code="retire_workflow_failed_safely",
+            message="Retire draft failed safely; private values were not echoed.",
         )
-    except (archive_services.ArchiveServiceError, OSError) as exc:
-        print(str(exc), file=sys.stderr)
-        return 1
 
     if args.format == "json":
         print_json(result)
     else:
+        if _print_exact_human_reconciliation_notice(result):
+            return 1
         state = "passed" if result.get("ok") else "blocked"
         print(f"Retire draft {state} for {result.get('zettel_id') or result.get('draft_path')}.")
         print(f"Draft path: {result.get('draft_path') or '-'}")
@@ -16914,6 +18957,12 @@ def command_remint_reconcile(args: argparse.Namespace) -> int:
         print("Use either --dry-run or --approve, not both.", file=sys.stderr)
         return 1
     approve = bool(args.approve)
+    if approve:
+        return _exact_human_approval_cli_error(
+            args,
+            lifecycle_action="remint_reconcile",
+            reason_code="compound_exact_human_approval_binding_required",
+        )
     diagnostic_only = bool(getattr(args, "diagnostic_only", False))
     if approve and not (args.reviewed_by or "").strip():
         print("remint-reconcile requires --reviewed-by when --approve is used.", file=sys.stderr)
@@ -17022,6 +19071,12 @@ def command_retire_draft_reconcile(args: argparse.Namespace) -> int:
         print("Use either --dry-run or --approve, not both.", file=sys.stderr)
         return 1
     approve = bool(args.approve)
+    if approve:
+        return _exact_human_approval_cli_error(
+            args,
+            lifecycle_action="retire_draft_reconcile",
+            reason_code="compound_exact_human_approval_binding_required",
+        )
     if approve and not (args.reviewed_by or "").strip():
         print("retire-draft-reconcile requires --reviewed-by when --approve is used.", file=sys.stderr)
         return 1
@@ -17094,6 +19149,12 @@ def command_retire_draft_reconcile(args: argparse.Namespace) -> int:
 
 
 def command_mint_zettel_batch(args: argparse.Namespace) -> int:
+    if args.approve:
+        return _exact_human_approval_cli_error(
+            args,
+            lifecycle_action="mint_zet_batch",
+            reason_code="compound_exact_human_approval_binding_required",
+        )
     try:
         result = archive_services.mint_zet_batch(
             Path(args.archive_root),
@@ -17121,6 +19182,12 @@ def command_mint_zettel_batch(args: argparse.Namespace) -> int:
 
 
 def command_retire_draft_batch(args: argparse.Namespace) -> int:
+    if args.approve:
+        return _exact_human_approval_cli_error(
+            args,
+            lifecycle_action="retire_draft_batch",
+            reason_code="compound_exact_human_approval_binding_required",
+        )
     try:
         result = archive_services.retire_draft_batch(
             Path(args.archive_root),
@@ -17169,11 +19236,11 @@ def command_index(args: argparse.Namespace) -> int:
             "index-commit",
         ),
     )
-    capture: CommandRunResultCapture | None = None
+    capture: _CommandRunResultCapture | None = None
     operation_journal: operation_control.OperationRunJournal | None = None
     try:
         if getattr(args, "output", None):
-            capture = CommandRunResultCapture.prepare(
+            capture = _CommandRunResultCapture.prepare(
                 str(args.output),
                 archive_root,
                 command="index",
@@ -17465,6 +19532,12 @@ def command_view_recommendation_plan(args: argparse.Namespace) -> int:
 
 
 def command_saved_view_write(args: argparse.Namespace) -> int:
+    if args.approve:
+        return _exact_human_approval_cli_error(
+            args,
+            lifecycle_action="saved_view_write",
+            reason_code="compound_exact_human_approval_binding_required",
+        )
     if bool(args.dry_run) == bool(args.approve):
         print("Provide exactly one of --dry-run or --approve.", file=sys.stderr)
         return 1
@@ -17500,6 +19573,12 @@ def command_saved_view_write(args: argparse.Namespace) -> int:
 
 
 def command_saved_view_revert(args: argparse.Namespace) -> int:
+    if args.approve:
+        return _exact_human_approval_cli_error(
+            args,
+            lifecycle_action="saved_view_revert",
+            reason_code="compound_exact_human_approval_binding_required",
+        )
     if bool(args.dry_run) == bool(args.approve):
         print("Provide exactly one of --dry-run or --approve.", file=sys.stderr)
         return 1
@@ -17550,11 +19629,11 @@ def command_index_health(args: argparse.Namespace) -> int:
             "index-health-compare",
         ),
     )
-    capture: CommandRunResultCapture | None = None
+    capture: _CommandRunResultCapture | None = None
     operation_journal: operation_control.OperationRunJournal | None = None
     try:
         if getattr(args, "output", None):
-            capture = CommandRunResultCapture.prepare(
+            capture = _CommandRunResultCapture.prepare(
                 str(args.output),
                 archive_root,
                 command="index-health",
@@ -17823,6 +19902,12 @@ def command_objet_rediscovery_plan(args: argparse.Namespace) -> int:
 
 
 def command_objet_source_metadata_write(args: argparse.Namespace) -> int:
+    if args.approve:
+        return _exact_human_approval_cli_error(
+            args,
+            lifecycle_action="private_objet_source_metadata_write",
+            reason_code="compound_exact_human_approval_binding_required",
+        )
     if args.dry_run is args.approve:
         print(
             "objet-source-metadata-write requires exactly one of --dry-run and --approve.",
@@ -17894,27 +19979,11 @@ def command_objet_source_metadata_write(args: argparse.Namespace) -> int:
 
 
 def command_pack(args: argparse.Namespace) -> int:
-    try:
-        result = archive_services.pack_work_context(
-            Path(args.archive_root),
-            view_id=args.view,
-            purpose=args.purpose,
-            mode=args.mode,
-            target_archive=args.target_archive,
-        )
-    except (archive_services.ArchiveServiceError, OSError) as exc:
-        print(str(exc), file=sys.stderr)
-        return 1
-
-    if args.format == "json":
-        print_json(result)
-    else:
-        print(f"Created parcel {result['package_id']} at {result['package_path']}")
-        print(f"View: {result['view_id']}")
-        print(f"Mode: {result['mode']}")
-        print(f"zets: {result['zettels']}")
-        print(f"Objects: {result['objects']} metadata record(s)")
-    return 0
+    return _exact_human_approval_cli_error(
+        args,
+        lifecycle_action="pack_work_context",
+        reason_code="compound_exact_human_approval_binding_required",
+    )
 
 
 def command_import_workpack(args: argparse.Namespace) -> int:
@@ -18040,12 +20109,12 @@ def command_staged_cleanup_check(args: argparse.Namespace) -> int:
             "store-hash",
         ),
     )
-    capture: CommandRunResultCapture | None = None
+    capture: _CommandRunResultCapture | None = None
     operation_journal: operation_control.OperationRunJournal | None = None
     terminal_output_ref: str | None = None
     try:
         if getattr(args, "output", None):
-            capture = CommandRunResultCapture.prepare(
+            capture = _CommandRunResultCapture.prepare(
                 str(args.output),
                 archive_root,
                 command="staged-cleanup-check",
@@ -18193,6 +20262,12 @@ def command_staged_cleanup_check(args: argparse.Namespace) -> int:
 
 
 def command_objet_capture_batch(args: argparse.Namespace) -> int:
+    if args.approve:
+        return _exact_human_approval_cli_error(
+            args,
+            lifecycle_action="objet_capture_batch",
+            reason_code="compound_exact_human_approval_binding_required",
+        )
     if args.dry_run == args.approve:
         print(
             "objet-capture-batch requires exactly one of --dry-run or --approve.",
@@ -18326,6 +20401,12 @@ def command_markup_normalization_plan(args: argparse.Namespace) -> int:
 
 
 def command_markup_normalization(args: argparse.Namespace) -> int:
+    if args.approve:
+        return _exact_human_approval_cli_error(
+            args,
+            lifecycle_action="markup_normalization",
+            reason_code="compound_exact_human_approval_binding_required",
+        )
     if not args.approve:
         print("markup-normalization requires --approve.", file=sys.stderr)
         return 1
@@ -18348,6 +20429,12 @@ def command_markup_normalization(args: argparse.Namespace) -> int:
 
 
 def command_markup_normalization_revert(args: argparse.Namespace) -> int:
+    if args.approve:
+        return _exact_human_approval_cli_error(
+            args,
+            lifecycle_action="markup_normalization_revert",
+            reason_code="compound_exact_human_approval_binding_required",
+        )
     if args.dry_run == args.approve:
         print(
             "markup-normalization-revert requires exactly one of --dry-run or --approve.",
@@ -18375,6 +20462,12 @@ def command_markup_normalization_revert(args: argparse.Namespace) -> int:
 
 
 def command_markup_normalization_recovery(args: argparse.Namespace) -> int:
+    if args.approve:
+        return _exact_human_approval_cli_error(
+            args,
+            lifecycle_action="markup_normalization_recovery",
+            reason_code="compound_exact_human_approval_binding_required",
+        )
     if args.dry_run == args.approve:
         print(
             "markup-normalization-recovery requires exactly one of --dry-run or --approve.",
@@ -18441,6 +20534,12 @@ def command_principal_register_plan(args: argparse.Namespace) -> int:
 
 
 def command_principal_register(args: argparse.Namespace) -> int:
+    if args.approve:
+        return _exact_human_approval_cli_error(
+            args,
+            lifecycle_action="principal_register",
+            reason_code="compound_exact_human_approval_binding_required",
+        )
     if not args.approve:
         print("principal-register requires --approve.", file=sys.stderr)
         return 1
@@ -18493,6 +20592,12 @@ def command_principal_unregister_plan(args: argparse.Namespace) -> int:
 
 
 def command_principal_unregister(args: argparse.Namespace) -> int:
+    if args.approve:
+        return _exact_human_approval_cli_error(
+            args,
+            lifecycle_action="principal_unregister",
+            reason_code="compound_exact_human_approval_binding_required",
+        )
     if not args.approve:
         print("principal-unregister requires --approve.", file=sys.stderr)
         return 1
@@ -18564,6 +20669,12 @@ def command_relation_candidate_decide(args: argparse.Namespace) -> int:
     if not args.approve:
         print("relation-candidate-decide requires --approve.", file=sys.stderr)
         return 1
+    if str(args.decision or "").strip().lower() == "accept":
+        return _exact_human_approval_cli_error(
+            args,
+            lifecycle_action="relation_candidate_accept",
+            reason_code="compound_exact_human_approval_binding_required",
+        )
     try:
         result = completion_workflows.relation_candidate_decide(
             Path(args.archive_root),
@@ -18639,6 +20750,12 @@ def command_project_bytecode_repair_plan(args: argparse.Namespace) -> int:
 
 
 def command_project_bytecode_repair(args: argparse.Namespace) -> int:
+    if args.approve:
+        return _exact_human_approval_cli_error(
+            args,
+            lifecycle_action="project_bytecode_repair",
+            reason_code="compound_exact_human_approval_binding_required",
+        )
     if not args.approve:
         print("project-bytecode-repair requires --approve.", file=sys.stderr)
         return 1
@@ -18712,6 +20829,12 @@ def command_project_bytecode_repair(args: argparse.Namespace) -> int:
 
 
 def command_objet_capture_selection(args: argparse.Namespace) -> int:
+    if args.approve:
+        return _exact_human_approval_cli_error(
+            args,
+            lifecycle_action="objet_capture_selection_record",
+            reason_code="compound_exact_human_approval_binding_required",
+        )
     if args.dry_run == args.approve:
         print("objet-capture-selection requires exactly one of --dry-run or --approve.", file=sys.stderr)
         return 1
@@ -18800,6 +20923,12 @@ def print_objet_capture_selection_result(result: dict[str, Any], output_format: 
 
 
 def command_objet_capture(args: argparse.Namespace) -> int:
+    if args.approve:
+        return _exact_human_approval_cli_error(
+            args,
+            lifecycle_action="objet_capture",
+            reason_code="compound_exact_human_approval_binding_required",
+        )
     if args.dry_run and args.approve:
         print("Use either --dry-run or --approve, not both.", file=sys.stderr)
         return 1
@@ -18841,6 +20970,16 @@ def command_objet_capture(args: argparse.Namespace) -> int:
 
 
 def command_derive_text_capture(args: argparse.Namespace) -> int:
+    if args.approve:
+        return _exact_human_approval_cli_error(
+            args,
+            lifecycle_action=(
+                "derived_text_capture_manifest_apply"
+                if args.from_manifest
+                else "derived_text_capture_apply"
+            ),
+            reason_code="compound_exact_human_approval_binding_required",
+        )
     if args.dry_run and args.approve:
         print("Use either --dry-run or --approve, not both.", file=sys.stderr)
         return 1
@@ -19068,6 +21207,12 @@ def command_derive_text_doctor(args: argparse.Namespace) -> int:
 
 
 def command_import_external(args: argparse.Namespace) -> int:
+    if args.approve:
+        return _exact_human_approval_cli_error(
+            args,
+            lifecycle_action="import_external_archive",
+            reason_code="compound_exact_human_approval_binding_required",
+        )
     if args.dry_run and args.approve:
         print("Use either --dry-run or --approve, not both.", file=sys.stderr)
         return 1
@@ -19167,6 +21312,12 @@ def command_share(args: argparse.Namespace) -> int:
 
 
 def command_delegate_zet(args: argparse.Namespace) -> int:
+    if args.approve:
+        return _exact_human_approval_cli_error(
+            args,
+            lifecycle_action="delegate",
+            reason_code="compound_exact_human_approval_binding_required",
+        )
     if args.dry_run and args.approve:
         print("Use either --dry-run or --approve, not both.", file=sys.stderr)
         return 1
@@ -19862,6 +22013,12 @@ def command_imap_mailbox_adapter_execution_contract(args: argparse.Namespace) ->
 
 
 def command_imap_mailbox_header_metadata_scan(args: argparse.Namespace) -> int:
+    if args.approve:
+        return _exact_human_approval_cli_error(
+            args,
+            lifecycle_action="imap_mailbox_header_metadata_scan",
+            reason_code="compound_exact_human_approval_binding_required",
+        )
     if args.dry_run == args.approve:
         print("Choose exactly one mode: --dry-run or --approve.", file=sys.stderr)
         return 1
@@ -20344,6 +22501,12 @@ def command_imap_mailbox_adapter_manifest_plan(args: argparse.Namespace) -> int:
 
 
 def command_imap_mailbox_adapter_manifest_write(args: argparse.Namespace) -> int:
+    if args.approve:
+        return _exact_human_approval_cli_error(
+            args,
+            lifecycle_action="imap_mailbox_adapter_manifest_write",
+            reason_code="compound_exact_human_approval_binding_required",
+        )
     if args.dry_run == args.approve:
         print("Choose exactly one mode: --dry-run or --approve.", file=sys.stderr)
         return 1
@@ -20414,6 +22577,12 @@ def command_sources(args: argparse.Namespace) -> int:
 
 
 def command_scan_source(args: argparse.Namespace) -> int:
+    if args.approve:
+        return _exact_human_approval_cli_error(
+            args,
+            lifecycle_action="scan_source",
+            reason_code="compound_exact_human_approval_binding_required",
+        )
     if args.dry_run and args.approve:
         print("Use either --dry-run or --approve, not both.", file=sys.stderr)
         return 1
@@ -20473,6 +22642,12 @@ def command_scan_source(args: argparse.Namespace) -> int:
 
 
 def command_add_source(args: argparse.Namespace) -> int:
+    if args.approve:
+        return _exact_human_approval_cli_error(
+            args,
+            lifecycle_action="add_source_binding",
+            reason_code="compound_exact_human_approval_binding_required",
+        )
     if args.dry_run and args.approve:
         print("Use either --dry-run or --approve, not both.", file=sys.stderr)
         return 1
@@ -20617,7 +22792,7 @@ def command_upgrade_check(args: argparse.Namespace) -> int:
         reporter.progress("upgrade-readiness", "done", None, None)
         if getattr(args, "output", None):
             reporter.progress("write-output", "start", None, None)
-            output_metadata = write_command_result_output_file(
+            output_metadata = _write_command_result_output_file(
                 str(args.output),
                 archive_root,
                 result,
@@ -21134,6 +23309,12 @@ def print_project_intake_item_plan_result(result: dict[str, Any], output_format:
 
 
 def command_restore_drill(args: argparse.Namespace) -> int:
+    if args.approve:
+        return _exact_human_approval_cli_error(
+            args,
+            lifecycle_action="restore_drill",
+            reason_code="compound_exact_human_approval_binding_required",
+        )
     if args.dry_run and args.approve:
         print("Use either --dry-run or --approve, not both.", file=sys.stderr)
         return 1
@@ -21417,6 +23598,12 @@ def docker_runtime_check_from_state(state: str) -> dict[str, Any]:
 
 
 def command_onboard(args: argparse.Namespace) -> int:
+    if args.approve:
+        return _exact_human_approval_cli_error(
+            args,
+            lifecycle_action="onboard",
+            reason_code="compound_exact_human_approval_binding_required",
+        )
     require_yaml()
     if args.guided:
         fill_guided_onboarding_args(args)
@@ -21478,15 +23665,15 @@ def command_onboard(args: argparse.Namespace) -> int:
         dry_run=False,
     )
     target.mkdir(parents=True, exist_ok=True)
-    copy_template(template, target)
-    copy_zettel_kasten_layer(target)
-    create_recommended_dirs(target)
-    write_safe_gitignore(target)
-    update_archive_yml(target, namespace)
-    update_archive_identity_yml(target, namespace)
-    update_provider_bindings_yml(target, namespace)
-    update_source_bindings_yml(target, namespace)
-    apply_provider_profile(target, args.provider_profile)
+    _copy_template(template, target)
+    _copy_zettel_kasten_layer(target)
+    _create_recommended_dirs(target)
+    _write_safe_gitignore(target)
+    _update_archive_yml(target, namespace)
+    _update_archive_identity_yml(target, namespace)
+    _update_provider_bindings_yml(target, namespace)
+    _update_source_bindings_yml(target, namespace)
+    _apply_provider_profile(target, args.provider_profile)
 
     doctor = Doctor(target)
     diagnostics = doctor.run()
@@ -21551,6 +23738,12 @@ def print_onboarding_result(result: dict[str, Any], output_format: str) -> None:
 
 
 def command_transfer_ownership(args: argparse.Namespace) -> int:
+    if args.approve:
+        return _exact_human_approval_cli_error(
+            args,
+            lifecycle_action="transfer_archive_ownership",
+            reason_code="compound_exact_human_approval_binding_required",
+        )
     if args.dry_run and args.approve:
         print("Use either --dry-run or --approve, not both.", file=sys.stderr)
         return 1
@@ -21633,6 +23826,12 @@ def command_transfer_ownership(args: argparse.Namespace) -> int:
 
 
 def command_identity_reconcile(args: argparse.Namespace) -> int:
+    if args.approve:
+        return _exact_human_approval_cli_error(
+            args,
+            lifecycle_action="archive_identity_reconcile",
+            reason_code="compound_exact_human_approval_binding_required",
+        )
     if args.dry_run == args.approve:
         print("identity-reconcile requires exactly one of --dry-run or --approve.", file=sys.stderr)
         return 1
@@ -21676,6 +23875,12 @@ def command_identity_reconcile(args: argparse.Namespace) -> int:
 
 
 def command_init(args: argparse.Namespace) -> int:
+    if not args.dry_run:
+        return _exact_human_approval_cli_error(
+            args,
+            lifecycle_action="archive_init",
+            reason_code="compound_exact_human_approval_binding_required",
+        )
     require_yaml()
 
     target = Path(args.archive_root).resolve()
@@ -21692,23 +23897,10 @@ def command_init(args: argparse.Namespace) -> int:
         print(f"Would initialize {args.type} archive at {target}")
         return 0
 
-    target.mkdir(parents=True, exist_ok=True)
-    copy_template(template, target)
-    copy_zettel_kasten_layer(target)
-    create_recommended_dirs(target)
-    write_safe_gitignore(target)
-    update_archive_yml(target, args)
-    update_archive_identity_yml(target, args)
-    update_provider_bindings_yml(target, args)
-    update_source_bindings_yml(target, args)
-
-    print(f"Initialized {args.type} archive at {target}")
-    print(f"archive_id: {args.archive_id}")
-    print(f"principal_id: {args.principal_id}")
-    return 0
+    raise AssertionError("archive_init_non_dry_run_must_fail_closed")
 
 
-def copy_template(template: Path, target: Path) -> None:
+def _copy_template(template: Path, target: Path) -> None:
     for child in template.iterdir():
         destination = target / child.name
         if child.is_dir():
@@ -21717,12 +23909,12 @@ def copy_template(template: Path, target: Path) -> None:
             shutil.copy2(child, destination)
 
 
-def copy_zettel_kasten_layer(target: Path) -> None:
+def _copy_zettel_kasten_layer(target: Path) -> None:
     destination = target / "zettel-kasten"
     shutil.copytree(KIT_ZETTEL_KASTEN_ROOT, destination, dirs_exist_ok=True)
 
 
-def create_recommended_dirs(target: Path) -> None:
+def _create_recommended_dirs(target: Path) -> None:
     for relative in [
         "inbox",
         "zettels",
@@ -21747,7 +23939,7 @@ def create_recommended_dirs(target: Path) -> None:
         (target / relative).mkdir(parents=True, exist_ok=True)
 
 
-def write_safe_gitignore(target: Path) -> None:
+def _write_safe_gitignore(target: Path) -> None:
     gitignore = target / ".gitignore"
     if gitignore.exists():
         return
@@ -21813,7 +24005,7 @@ def gitignore_missing_patterns(gitignore: Path) -> list[str]:
     return [pattern for pattern in RECOMMENDED_GITIGNORE_PATTERNS if pattern not in lines]
 
 
-def append_gitignore_patterns(gitignore: Path, missing: list[str]) -> None:
+def _append_gitignore_patterns(gitignore: Path, missing: list[str]) -> None:
     if not gitignore.is_file():
         gitignore.write_text(
             "\n".join(["# WOM-kit safe defaults", *RECOMMENDED_GITIGNORE_PATTERNS, ""]),
@@ -21827,6 +24019,34 @@ def append_gitignore_patterns(gitignore: Path, missing: list[str]) -> None:
 
 
 def repair_gitignore(root: Path, *, approve: bool, reviewed_by: str | None) -> dict[str, Any]:
+    if approve is not False:
+        return {
+            "ok": False,
+            "dry_run": False,
+            "state": "blocked",
+            "status": "blocked",
+            "write_status": "blocked",
+            "lifecycle_action": "repair_gitignore",
+            "blockers": ["compound_exact_human_approval_binding_required"],
+            "reason_codes": ["compound_exact_human_approval_binding_required"],
+            "warnings": [],
+            "would_change": [],
+            "files_written": [],
+            "private_values_echoed": False,
+        }
+    return _repair_gitignore_legacy_core(
+        root,
+        approve=approve,
+        reviewed_by=reviewed_by,
+    )
+
+
+def _repair_gitignore_legacy_core(
+    root: Path,
+    *,
+    approve: bool,
+    reviewed_by: str | None,
+) -> dict[str, Any]:
     archive_root = archive_services.require_existing_archive_root(root)
     archive_id = archive_services.read_archive_id(archive_root)
     gitignore = archive_root / ".gitignore"
@@ -21854,11 +24074,11 @@ def repair_gitignore(root: Path, *, approve: bool, reviewed_by: str | None) -> d
         return result
     if not reviewed_by or not str(reviewed_by).strip():
         return {**result, "ok": False, "action": "blocked", "blockers": ["reviewed_by_required"]}
-    append_gitignore_patterns(gitignore, missing)
+    _append_gitignore_patterns(gitignore, missing)
     return {**result, "action": action, "changed_paths": [".gitignore"]}
 
 
-def update_archive_yml(target: Path, args: argparse.Namespace) -> None:
+def _update_archive_yml(target: Path, args: argparse.Namespace) -> None:
     path = target / "archive.yml"
     data = load_yaml(path.read_text(encoding="utf-8"))
     if not isinstance(data, dict):
@@ -21893,7 +24113,7 @@ def update_archive_yml(target: Path, args: argparse.Namespace) -> None:
     path.write_text(dump_yaml(data), encoding="utf-8")
 
 
-def update_archive_identity_yml(target: Path, args: argparse.Namespace) -> None:
+def _update_archive_identity_yml(target: Path, args: argparse.Namespace) -> None:
     path = target / "archive-identity.yml"
     data: dict[str, Any] = {}
     if path.is_file():
@@ -21948,7 +24168,7 @@ def update_archive_identity_yml(target: Path, args: argparse.Namespace) -> None:
     path.write_text(dump_yaml(data), encoding="utf-8")
 
 
-def update_provider_bindings_yml(target: Path, args: argparse.Namespace) -> None:
+def _update_provider_bindings_yml(target: Path, args: argparse.Namespace) -> None:
     path = target / "provider-bindings.yml"
     if not path.is_file():
         return
@@ -21959,7 +24179,7 @@ def update_provider_bindings_yml(target: Path, args: argparse.Namespace) -> None
     path.write_text(dump_yaml(data), encoding="utf-8")
 
 
-def update_source_bindings_yml(target: Path, args: argparse.Namespace) -> None:
+def _update_source_bindings_yml(target: Path, args: argparse.Namespace) -> None:
     path = target / "source-bindings.yml"
     if not path.is_file():
         return
@@ -21970,7 +24190,7 @@ def update_source_bindings_yml(target: Path, args: argparse.Namespace) -> None:
     path.write_text(dump_yaml(data), encoding="utf-8")
 
 
-def apply_provider_profile(target: Path, provider_profile: str | None) -> None:
+def _apply_provider_profile(target: Path, provider_profile: str | None) -> None:
     path = target / "provider-bindings.yml"
     if not path.is_file():
         return
@@ -22179,7 +24399,7 @@ def resolve_command_result_output_path(
     return root, resolve_archive_relative_path(root, normalized), normalized
 
 
-def write_complete_json_no_overwrite(
+def _write_complete_json_no_overwrite(
     output_path: Path,
     payload: dict[str, Any],
     *,
@@ -22229,7 +24449,7 @@ def write_complete_json_no_overwrite(
 
 
 @dataclass
-class CommandRunResultCapture:
+class _CommandRunResultCapture:
     """Publish one complete CLI result without treating scratch as a receipt."""
 
     output_path: Path
@@ -22251,7 +24471,7 @@ class CommandRunResultCapture:
         command: str,
         required_prefix: str = operation_control.ARCHIVE_OUTPUT_PREFIX,
         require_archive_root: bool = True,
-    ) -> "CommandRunResultCapture":
+    ) -> "_CommandRunResultCapture":
         root, output_path, normalized = resolve_command_result_output_path(
             archive_root,
             path_arg,
@@ -22350,7 +24570,7 @@ class CommandRunResultCapture:
             "error": error_payload,
         }
         payload["cli_output_artifact"] = self.metadata
-        write_complete_json_no_overwrite(
+        _write_complete_json_no_overwrite(
             self.output_path,
             payload,
             run_id=self.run_id,
@@ -22359,7 +24579,7 @@ class CommandRunResultCapture:
 
 
 def prepare_operation_tracking(
-    capture: CommandRunResultCapture,
+    capture: _CommandRunResultCapture,
 ) -> operation_control.OperationRunJournal:
     journal = operation_control.OperationRunJournal.prepare(
         capture.archive_root,
@@ -22396,7 +24616,7 @@ def operation_progress_callback(
 
 def complete_operation_tracking(
     journal: operation_control.OperationRunJournal | None,
-    capture: CommandRunResultCapture | None,
+    capture: _CommandRunResultCapture | None,
     *,
     exit_code: int,
     result_available: bool,
@@ -22424,7 +24644,7 @@ def complete_operation_tracking(
         journal.close()
 
 
-def write_command_result_output_file(
+def _write_command_result_output_file(
     path_arg: str,
     archive_root: Path,
     result: dict[str, Any],
@@ -23201,7 +25421,7 @@ def inspect_zet_catalog_pass_output_file(
     }
 
 
-def cleanup_zet_catalog_pass_output_file(
+def _cleanup_zet_catalog_pass_output_file_legacy_core(
     path_arg: str,
     archive_root: Path,
     *,
@@ -23294,7 +25514,7 @@ def cleanup_zet_catalog_pass_output_file(
     }
 
 
-def write_doctor_output_file(path_arg: str, archive_root: Path, diagnostics: list[Diagnostic]) -> str:
+def _write_doctor_output_file(path_arg: str, archive_root: Path, diagnostics: list[Diagnostic]) -> str:
     output_path = resolve_archive_relative_path(archive_root, path_arg)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     payload = [item.as_dict() for item in diagnostics]
@@ -23368,7 +25588,7 @@ def parse_source_ref_pairs(items: list[str]) -> list[dict[str, str]]:
     return refs
 
 
-def load_source_intake_plan_file(path: str | None) -> dict[str, Any] | None:
+def _load_source_intake_plan_file(path: str | None) -> dict[str, Any] | None:
     if not path:
         return None
     try:
@@ -23380,7 +25600,7 @@ def load_source_intake_plan_file(path: str | None) -> dict[str, Any] | None:
     return data
 
 
-def load_prompt_boundary_report_file(path: str | None) -> dict[str, Any] | None:
+def _load_prompt_boundary_report_file(path: str | None) -> dict[str, Any] | None:
     if not path:
         return None
     report_path = Path(path)
@@ -23434,7 +25654,7 @@ def build_local_ai_session_refs(args: argparse.Namespace) -> list[dict[str, str]
     return sessions
 
 
-def read_body_arg(args: argparse.Namespace) -> str:
+def _read_body_arg(args: argparse.Namespace) -> str:
     if args.body_file:
         return Path(args.body_file).read_text(encoding="utf-8")
     return args.body
@@ -23469,6 +25689,121 @@ def add_runtime_skill_target_arguments(command: argparse.ArgumentParser) -> None
         help="Include the resolved local skill target path in output.",
     )
     command.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
+
+
+COMPOUND_APPROVAL_BLOCKED_HELP = (
+    "Unavailable in v0.4.0: this write needs an exact compound human-approval "
+    "binding that is not implemented yet. Use the command's dry-run, plan, or "
+    "audit mode only."
+)
+
+
+COMPOUND_APPROVAL_BLOCKED_COMMANDS = frozenset(
+    {
+        "activity-group-membership-recover",
+        "activity-group-membership-removal-recover",
+        "activity-group-membership-removal-write",
+        "activity-group-membership-write",
+        "add-source",
+        "ai-scratch-gc",
+        "credential-keepassxc-write",
+        "credential-lifecycle",
+        "delegate-zet",
+        "discard-draft",
+        "discard-draft-restore",
+        "external-locator-deactivate",
+        "external-locator-record",
+        "external-locator-revert",
+        "github-repo",
+        "identity-reconcile",
+        "imap-mailbox-adapter-manifest-write",
+        "imap-mailbox-header-metadata-scan",
+        "import-external",
+        "legacy-coordination-cleanup",
+        "markup-normalization",
+        "markup-normalization-recovery",
+        "markup-normalization-revert",
+        "migrate",
+        "mint-zet-batch",
+        "notion-ancestor-fetch-adapter-run",
+        "notion-objet-manifest-locator-label",
+        "notion-objet-link-convert",
+        "notion-page-recovery",
+        "notion-recover",
+        "object-storage",
+        "object-storage-adopt-existing",
+        "object-storage-upload",
+        "object-storage-upload-evidence",
+        "object-storage-wom-location-reconcile",
+        "objet-capture",
+        "objet-capture-batch",
+        "objet-capture-enable",
+        "objet-capture-selection",
+        "objet-source-metadata-write",
+        "onboard",
+        "prehashed-objet-ledger",
+        "principal-register",
+        "principal-unregister",
+        "project-bytecode-repair",
+        "project-version-update",
+        "project-version-update-collision",
+        "repair-gitignore",
+        "quarantine-foreign-block",
+        "record-quarantine-decision",
+        "remint-reconcile",
+        "retire-draft-batch",
+        "retire-draft-reconcile",
+        "runtime-skill-install",
+        "runtime-skill-uninstall",
+        "revert-batch",
+        "revert-edge",
+        "restore-drill",
+        "saved-view-revert",
+        "saved-view-write",
+        "scan-source",
+        "source-intake-batch",
+        "source-intake-record",
+        "tiro-lossless-recovery-capture",
+        "tiro-lossless-recovery-fetch-run",
+        "transfer-ownership",
+        "zet-abstract-backfill-recover",
+        "zet-abstract-backfill-revert",
+        "zet-abstract-backfill-write",
+        "zet-revision-restore-write",
+        "zet-revision-write",
+        "zet-title-remap-recover",
+        "zet-title-remap-revert",
+        "zet-title-remap-revert-recover",
+        "zet-title-remap-write",
+        "zet-catalog-pass-cleanup",
+        "zettel-edge-batch",
+        "zettel-objet-link",
+        "zettel-objet-link-revert",
+    }
+)
+
+
+def _mark_compound_approval_help(
+    subcommands: argparse._SubParsersAction,
+) -> None:
+    """Make every fixed-closed public approval option honest in ``--help``."""
+
+    for command_name in sorted(COMPOUND_APPROVAL_BLOCKED_COMMANDS):
+        command_parser = subcommands.choices.get(command_name)
+        if command_parser is None:
+            raise RuntimeError(
+                "compound_approval_help_command_missing:" + command_name
+            )
+        approval_actions = [
+            action
+            for action in command_parser._actions
+            if "--approve" in action.option_strings
+        ]
+        if len(approval_actions) != 1:
+            raise RuntimeError(
+                "compound_approval_help_action_invalid:" + command_name
+            )
+        approval_actions[0].help = COMPOUND_APPROVAL_BLOCKED_HELP
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -23625,8 +25960,9 @@ def build_parser() -> argparse.ArgumentParser:
     legacy_coordination_cleanup_parser = subcommands.add_parser(
         "legacy-coordination-cleanup",
         help=(
-            "Destructive opt-in cleanup of only retired .mow-harness local "
-            "state after digest-bound review; collab/ is never traversed or changed."
+            "Preview retired .mow-harness local state. Unavailable in v0.4.0: "
+            "the write needs an exact compound human-approval binding; "
+            "collab/ is never traversed or changed."
         ),
     )
     legacy_coordination_cleanup_parser.add_argument(
@@ -23927,7 +26263,7 @@ def build_parser() -> argparse.ArgumentParser:
     operator_feedback_compose.add_argument(
         "--request",
         required=True,
-        help="Archive-relative private operator-feedback body request.",
+        help="Archive-relative private request at profiles/local/operator-feedback/requests/<name>.json.",
     )
     operator_feedback_compose_action = operator_feedback_compose.add_mutually_exclusive_group(required=True)
     operator_feedback_compose_action.add_argument("--dry-run", action="store_true", help="Plan only; write nothing.")
@@ -24600,6 +26936,375 @@ def build_parser() -> argparse.ArgumentParser:
     )
     human_artifact_store.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     human_artifact_store.set_defaults(func=command_human_artifact_store)
+
+    human_artifact_register_root = subcommands.add_parser(
+        "human-artifact-register-root",
+        aliases=["human-artifact-project-root"],
+        help=(
+            "Preview or locally approve exactly one external project-scratch "
+            "or delivery root; artifact bodies are never read."
+        ),
+    )
+    human_artifact_register_root.add_argument(
+        "archive_root",
+        help="Archive root whose ignored local registry will hold the binding.",
+    )
+    human_artifact_register_root.add_argument(
+        "--project-root",
+        "--external-root",
+        dest="project_root",
+        required=True,
+        help=(
+            "Exact external directory to register. The selected --root-kind "
+            "determines the bounded metadata-only scan scope."
+        ),
+    )
+    human_artifact_register_root.add_argument(
+        "--root-kind",
+        choices=sorted(human_artifact_registry.EXTERNAL_ROOT_KINDS),
+        default="external_project",
+        help=(
+            "external_project scans only <root>/.wom-scratch; "
+            "external_delivery scans the explicitly reviewed root itself."
+        ),
+    )
+    human_artifact_register_root.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Show the content-free registration plan; write nothing.",
+    )
+    human_artifact_register_root.add_argument(
+        "--approve",
+        action="store_true",
+        help=(
+            "Open the native exact-approval dialog, then write the private "
+            "root binding only if the reviewed plan still matches."
+        ),
+    )
+    human_artifact_register_root.add_argument(
+        "--expected-plan-sha256",
+        help=(
+            "Exact sha256:<64 hex> plan from the immediately preceding "
+            "--dry-run; required with --approve."
+        ),
+    )
+    human_artifact_register_root.add_argument(
+        "--reviewed-by",
+        help="Safe reviewer claim such as person:local-reviewer; required with --approve.",
+    )
+    human_artifact_register_root.add_argument(
+        "--format",
+        choices=["text", "json"],
+        default="text",
+        help="Output format.",
+    )
+    human_artifact_register_root.set_defaults(
+        func=command_human_artifact_register_root
+    )
+
+    human_artifact_scan = subcommands.add_parser(
+        "human-artifact-scan",
+        aliases=["human-artifact-registry-scan"],
+        help=(
+            "Run an always-read-only, bounded metadata scan; file names, "
+            "paths, and artifact bodies are not returned."
+        ),
+    )
+    human_artifact_scan.add_argument(
+        "archive_root",
+        help="Archive root whose private human-artifact registry will be read.",
+    )
+    human_artifact_scan.add_argument(
+        "--max-entries-per-root",
+        type=int,
+        default=human_artifact_registry.DEFAULT_MAX_ENTRIES_PER_ROOT,
+        help=(
+            "Maximum directory entries inspected in each registered scan "
+            "scope (default: 10000)."
+        ),
+    )
+    human_artifact_scan.add_argument(
+        "--format",
+        choices=["text", "json"],
+        default="text",
+        help="Output format.",
+    )
+    human_artifact_scan.set_defaults(func=command_human_artifact_scan)
+
+    human_artifact_transition = subcommands.add_parser(
+        "human-artifact-transition",
+        aliases=["human-artifact-transition-record"],
+        help=(
+            "Preview or locally approve one append-only lifecycle receipt; "
+            "the artifact itself is never changed or deleted."
+        ),
+    )
+    human_artifact_transition.add_argument(
+        "archive_root",
+        help="Archive root whose private registry will hold the receipt.",
+    )
+    human_artifact_transition.add_argument(
+        "--artifact-id",
+        required=True,
+        help="Opaque artifact id returned by human-artifact-scan.",
+    )
+    human_artifact_transition.add_argument(
+        "--target-state",
+        choices=sorted(human_artifact_registry.LIFECYCLE_STATES),
+        required=True,
+        help="Reviewed lifecycle state to append.",
+    )
+    human_artifact_transition.add_argument(
+        "--content-sha256",
+        required=True,
+        help=(
+            "Caller-computed sha256:<64 hex> digest of the exact reviewed "
+            "artifact bytes; the registry will not open the artifact body."
+        ),
+    )
+    human_artifact_transition.add_argument(
+        "--size-bytes",
+        type=int,
+        required=True,
+        help="Exact reviewed artifact byte count.",
+    )
+    human_artifact_transition.add_argument(
+        "--related-ref",
+        action="append",
+        default=[],
+        metavar="KIND=REF",
+        help=(
+            "Optional destination binding; repeat as needed. Kinds: "
+            "object_id, zet_id, receipt_id, artifact_version_id."
+        ),
+    )
+    human_artifact_transition.add_argument(
+        "--max-entries-per-root",
+        type=int,
+        default=human_artifact_registry.DEFAULT_MAX_ENTRIES_PER_ROOT,
+        help="Maximum directory entries inspected per registered scan scope.",
+    )
+    human_artifact_transition.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Show the exact transition plan; write nothing.",
+    )
+    human_artifact_transition.add_argument(
+        "--approve",
+        action="store_true",
+        help=(
+            "Open the native exact-approval dialog, then append one receipt "
+            "only if every reviewed binding still matches."
+        ),
+    )
+    human_artifact_transition.add_argument(
+        "--expected-plan-sha256",
+        help="Exact plan_sha256 from the immediately preceding --dry-run.",
+    )
+    human_artifact_transition.add_argument(
+        "--expected-current-state-sha256",
+        help="Exact expected_current_state_sha256 from the preceding --dry-run.",
+    )
+    human_artifact_transition.add_argument(
+        "--reviewed-by",
+        help="Safe reviewer claim required with --approve.",
+    )
+    human_artifact_transition.add_argument(
+        "--format",
+        choices=["text", "json"],
+        default="text",
+        help="Output format.",
+    )
+    human_artifact_transition.set_defaults(func=command_human_artifact_transition)
+
+    duplicate_object_reconcile = subcommands.add_parser(
+        "duplicate-object-reconcile",
+        aliases=["duplicate-object-reconciliation"],
+        help=(
+            "Classify duplicate object-manifest rows and, after local native "
+            "approval, remove only byte-identical repeats."
+        ),
+    )
+    duplicate_object_reconcile.add_argument(
+        "archive_root",
+        help="Archive root containing objects/manifests/files.jsonl.",
+    )
+    duplicate_object_reconcile.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Return counts and digests only; never change the manifest.",
+    )
+    duplicate_object_reconcile.add_argument(
+        "--approve",
+        action="store_true",
+        help=(
+            "Open the local native exact-approval dialog and apply only an "
+            "unchanged byte-identical-row plan."
+        ),
+    )
+    duplicate_object_reconcile.add_argument(
+        "--expected-plan-sha256",
+        help="Exact sha256:<64 hex> plan from the preceding --dry-run.",
+    )
+    duplicate_object_reconcile.add_argument(
+        "--expected-manifest-sha256",
+        help="Exact manifest_sha256 from the same preceding --dry-run.",
+    )
+    duplicate_object_reconcile.add_argument(
+        "--reviewed-by",
+        help="Safe reviewer claim required with --approve.",
+    )
+    duplicate_object_reconcile.add_argument(
+        "--format",
+        choices=["text", "json"],
+        default="text",
+        help="Output format.",
+    )
+    duplicate_object_reconcile.set_defaults(
+        func=command_duplicate_object_reconcile
+    )
+
+    approval_integrity_audit = subcommands.add_parser(
+        "approval-integrity-audit",
+        aliases=["approval-receipt-integrity-audit"],
+        help=(
+            "Read and classify the bounded operation-receipt set using the "
+            "existing archive authentication key; no artifact bodies are read."
+        ),
+    )
+    approval_integrity_audit.add_argument(
+        "archive_root",
+        help="Archive root whose operation receipts will be audited.",
+    )
+    approval_integrity_audit.add_argument(
+        "--max-receipts",
+        type=int,
+        default=4096,
+        help="Maximum operation receipts to inspect (default: 4096).",
+    )
+    approval_integrity_audit.add_argument(
+        "--format",
+        choices=["text", "json"],
+        default="text",
+        help="Output format.",
+    )
+    approval_integrity_audit.set_defaults(func=command_approval_integrity_audit)
+
+    approval_integrity_guard = subcommands.add_parser(
+        "approval-integrity-guard",
+        help=(
+            "Read one hashed target's authenticated overlay chain and fail "
+            "closed when review is required or the ledger is invalid."
+        ),
+    )
+    approval_integrity_guard.add_argument("archive_root", help="Archive root to inspect.")
+    approval_integrity_guard.add_argument(
+        "--affected-kind",
+        choices=sorted(approval_integrity.AFFECTED_KINDS),
+        required=True,
+        help="Operation kind returned by approval-integrity-audit.",
+    )
+    approval_integrity_guard.add_argument(
+        "--affected-id-sha256",
+        required=True,
+        help="Opaque sha256:<64 hex> affected-id digest returned by the audit.",
+    )
+    approval_integrity_guard.add_argument(
+        "--max-overlays",
+        type=int,
+        default=1024,
+        help="Maximum overlay entries to inspect (default: 1024).",
+    )
+    approval_integrity_guard.add_argument(
+        "--format",
+        choices=["text", "json"],
+        default="text",
+        help="Output format.",
+    )
+    approval_integrity_guard.set_defaults(func=command_approval_integrity_guard)
+
+    approval_integrity_overlay = subcommands.add_parser(
+        "approval-integrity-overlay",
+        aliases=["approval-integrity-repair"],
+        help=(
+            "Plan or locally approve one append-only approval-integrity "
+            "overlay; the historical operation receipt is never rewritten."
+        ),
+    )
+    approval_integrity_overlay.add_argument("archive_root", help="Archive root to inspect or update.")
+    approval_integrity_overlay.add_argument(
+        "--operation-receipt",
+        required=True,
+        help=(
+            "Exact archive-relative mint, edge, or retired-draft receipt path. "
+            "The path is never echoed."
+        ),
+    )
+    approval_integrity_overlay.add_argument(
+        "--expected-operation-receipt-sha256",
+        required=True,
+        help="Exact sha256:<64 hex> operation-receipt digest from the audit.",
+    )
+    approval_integrity_overlay.add_argument(
+        "--affected-kind",
+        choices=sorted(approval_integrity.AFFECTED_KINDS),
+        required=True,
+        help="Operation kind returned by the audit.",
+    )
+    approval_integrity_overlay.add_argument(
+        "--affected-id-sha256",
+        required=True,
+        help="Opaque affected-id digest returned by the audit.",
+    )
+    approval_integrity_overlay.add_argument(
+        "--state",
+        choices=sorted(approval_integrity.OVERLAY_STATES),
+        required=True,
+        help="Reviewed overlay lifecycle state to append.",
+    )
+    approval_integrity_overlay.add_argument(
+        "--expected-current-overlay-digest",
+        help=(
+            "Current overlay digest from the guard/plan. Required for "
+            "--approve and optional during the first --dry-run."
+        ),
+    )
+    approval_integrity_overlay.add_argument(
+        "--max-overlays",
+        type=int,
+        default=1024,
+        help="Maximum overlay entries to inspect (default: 1024).",
+    )
+    approval_integrity_overlay.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Compute the exact append-only transition plan; write nothing.",
+    )
+    approval_integrity_overlay.add_argument(
+        "--approve",
+        action="store_true",
+        help=(
+            "Open the local native exact-approval dialog and append only the "
+            "unchanged reviewed transition."
+        ),
+    )
+    approval_integrity_overlay.add_argument(
+        "--expected-plan-sha256",
+        help="Exact plan_sha256 from the immediately preceding --dry-run.",
+    )
+    approval_integrity_overlay.add_argument(
+        "--reviewed-by",
+        help="Safe reviewer claim required with --approve.",
+    )
+    approval_integrity_overlay.add_argument(
+        "--format",
+        choices=["text", "json"],
+        default="text",
+        help="Output format.",
+    )
+    approval_integrity_overlay.set_defaults(
+        func=command_approval_integrity_overlay
+    )
 
     prehashed_objet_ledger = subcommands.add_parser(
         "prehashed-objet-ledger",
@@ -25312,7 +28017,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     credential_lifecycle = subcommands.add_parser(
         "credential-lifecycle",
-        help="Plan or approve one authenticated default/legacy decision without deleting or revoking credentials.",
+        help="Plan one authenticated default/legacy decision; v0.4.0 approval is unavailable.",
     )
     credential_lifecycle.add_argument("archive_root", help="Archive root containing authenticated credential receipts.")
     credential_lifecycle.add_argument("--provider", default="notion", help="Safe provider label. Defaults to notion.")
@@ -25333,14 +28038,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     credential_lifecycle.add_argument(
         "--expected-plan-sha256",
-        help="Required with --approve. Exact digest returned by the authenticated dry-run.",
+        help="Legacy compatibility input only; v0.4.0 approval is unavailable.",
     )
     credential_lifecycle.add_argument(
         "--reviewed-by",
-        help="Required with --approve. Safe human reviewer label.",
+        help="Legacy compatibility input only; a reviewer label is not v0.4.0 write authority.",
     )
     credential_lifecycle.add_argument("--dry-run", action="store_true", help="Authenticate receipts and return the complete decision plan without writing it.")
-    credential_lifecycle.add_argument("--approve", action="store_true", help="Record only the unchanged human-reviewed lifecycle decision; never delete or revoke.")
+    credential_lifecycle.add_argument("--approve", action="store_true", help="Unavailable in v0.4.0; use the authenticated dry-run plan only.")
     credential_lifecycle.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
     credential_lifecycle.set_defaults(func=command_credential_lifecycle)
 
@@ -26967,7 +29672,12 @@ def build_parser() -> argparse.ArgumentParser:
     zet_revision_plan.add_argument(
         "--proposal",
         required=True,
-        help="Private Markdown proposal under .wom-scratch/revisions/; its path and text are not echoed.",
+        help=(
+            "Private COMPLETE zet Markdown document under .wom-scratch/revisions/: "
+            "opening and closing YAML frontmatter delimiters, the full preserved "
+            "frontmatter, and the full proposed body are required. A body-only "
+            "snippet or patch is invalid; path and text are not echoed."
+        ),
     )
     zet_revision_plan.add_argument(
         "--dry-run",
@@ -26998,7 +29708,11 @@ def build_parser() -> argparse.ArgumentParser:
     zet_revision_write.add_argument(
         "--proposal",
         required=True,
-        help="Private Markdown proposal under .wom-scratch/revisions/; never echoed.",
+        help=(
+            "Private COMPLETE zet Markdown document under .wom-scratch/revisions/ "
+            "with full YAML frontmatter and full body; snippets and patches are "
+            "invalid and the path is never echoed."
+        ),
     )
     zet_revision_write.add_argument(
         "--expected-canonical-sha256",
@@ -27967,6 +30681,57 @@ def build_parser() -> argparse.ArgumentParser:
     zettel_objet_link.add_argument("--format", choices=["text", "json"], default="text")
     zettel_objet_link.set_defaults(func=command_zettel_objet_link)
 
+    zettel_objet_link_receipts = subcommands.add_parser(
+        "zettel-objet-link-receipts",
+        aliases=["zet-objet-link-receipts"],
+        help=(
+            "Find internally validated receipts for current structured Objet links "
+            "without reading object bytes or changing the zettel."
+        ),
+    )
+    zettel_objet_link_receipts.add_argument(
+        "archive_root",
+        help="Archive root to inspect.",
+    )
+    zettel_objet_receipt_target = (
+        zettel_objet_link_receipts.add_mutually_exclusive_group(required=True)
+    )
+    zettel_objet_receipt_target.add_argument(
+        "--zettel-id",
+        help="Target zettel id.",
+    )
+    zettel_objet_receipt_target.add_argument(
+        "--path",
+        help="Archive-relative inbox/ or zettels/ path.",
+    )
+    zettel_objet_link_receipts.add_argument(
+        "--object-id",
+        help="Optional full sha256:<64 hex> current asset identity.",
+    )
+    zettel_objet_link_receipts.add_argument(
+        "--role",
+        help="Optional current structured asset role.",
+    )
+    zettel_objet_link_receipts.add_argument(
+        "--max-receipts",
+        type=int,
+        default=100,
+        help="Maximum matching receipt generations to validate (1-500).",
+    )
+    zettel_objet_link_receipts.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Required. Read-only lookup; writes nothing.",
+    )
+    zettel_objet_link_receipts.add_argument(
+        "--format",
+        choices=["text", "json"],
+        default="text",
+    )
+    zettel_objet_link_receipts.set_defaults(
+        func=command_zettel_objet_link_receipts
+    )
+
     zettel_objet_link_revert = subcommands.add_parser(
         "zettel-objet-link-revert",
         aliases=["zet-objet-link-revert"],
@@ -28716,6 +31481,108 @@ def build_parser() -> argparse.ArgumentParser:
     attestation_statement_draft_decision.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     attestation_statement_draft_decision.set_defaults(func=command_attestation_statement_draft_decision)
 
+    session_evidence = subcommands.add_parser(
+        "source-fidelity-session-evidence",
+        aliases=["session-evidence"],
+        help=(
+            "Preview or approve private reviewed session evidence without "
+            "echoing source text, paths, or the raw session ref."
+        ),
+    )
+    session_evidence.add_argument(
+        "archive_root", help="Archive root containing the private evidence input."
+    )
+    session_evidence.add_argument(
+        "--source-file",
+        required=True,
+        help=(
+            "Private archive-relative UTF-8 input at "
+            ".wom-scratch/private/source-fidelity/session-evidence/<name>.txt; "
+            "never echoed or stored in the receipt."
+        ),
+    )
+    session_evidence.add_argument(
+        "--session-ref",
+        required=True,
+        help="Safe non-locator session ref; only its SHA-256 is stored.",
+    )
+    session_evidence.add_argument(
+        "--source-role",
+        required=True,
+        choices=sorted(source_fidelity_session_evidence.SOURCE_ROLES),
+        help="Reviewed provenance role for these exact bytes.",
+    )
+    session_evidence.add_argument(
+        "--producer-kind",
+        required=True,
+        choices=sorted(source_fidelity_session_evidence.PRODUCER_KINDS),
+        help="Who or what produced the evidence bytes.",
+    )
+    session_evidence.add_argument(
+        "--produced-at",
+        required=True,
+        help="Timezone-aware time the evidence bytes were produced.",
+    )
+    session_evidence.add_argument(
+        "--captured-at",
+        required=True,
+        help="Timezone-aware time the reviewed session evidence was captured.",
+    )
+    session_evidence.add_argument(
+        "--input-provenance-sha256",
+        action="append",
+        help=(
+            "Optional sha256:<64 hex> input-provenance binding. May be repeated; "
+            "required by policy when a reviewed bundle needs underlying evidence."
+        ),
+    )
+    session_evidence_mode = session_evidence.add_mutually_exclusive_group(
+        required=True
+    )
+    session_evidence_mode.add_argument(
+        "--dry-run", action="store_true", help="Hash and plan only; write nothing."
+    )
+    session_evidence_mode.add_argument(
+        "--approve",
+        action="store_true",
+        help="Create the exact private bytes and digest-only receipt once.",
+    )
+    session_evidence.add_argument(
+        "--expected-plan-sha256",
+        help="Exact 64-hex plan SHA-256 required for --approve.",
+    )
+    session_evidence.add_argument(
+        "--reviewed-by",
+        help="Safe reviewer id required for --approve; not echoed.",
+    )
+    session_evidence.add_argument(
+        "--format", choices=["text", "json"], default="json", help="Output format."
+    )
+    session_evidence.set_defaults(
+        func=command_source_fidelity_session_evidence
+    )
+
+    facet_vocabulary_parser = subcommands.add_parser(
+        "facet-vocabulary",
+        aliases=["list-facets", "facet-discovery"],
+        help=(
+            "List read-only stable facet keys and roles; facet values and "
+            "zettel bodies are never read."
+        ),
+    )
+    facet_vocabulary_parser.add_argument(
+        "archive_root", help="Archive root whose local types.yml may extend the base vocabulary."
+    )
+    facet_vocabulary_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Optional explicit read-only marker; this command never writes.",
+    )
+    facet_vocabulary_parser.add_argument(
+        "--format", choices=["text", "json"], default="json", help="Output format."
+    )
+    facet_vocabulary_parser.set_defaults(func=command_facet_vocabulary)
+
     create_draft = subcommands.add_parser("create-draft", help="Create a draft zettel in inbox/.")
     create_draft.add_argument("archive_root", help="Archive root to write to.")
     create_draft.add_argument("--title", help="Draft title. Required unless --list-kinds is used.")
@@ -28739,8 +31606,9 @@ def build_parser() -> argparse.ArgumentParser:
         "--approve",
         action="store_true",
         help=(
-            "Approve an exact reviewed AI draft replay. AI-assisted/generated "
-            "creation requires exactly one of --dry-run or --approve."
+            "Approve only an exact reviewed AI draft replay through the local "
+            "TaskDialog and authenticated claim. Human-declared/non-AI writes "
+            "are unavailable in v0.4.0; use --dry-run."
         ),
     )
     create_draft.add_argument("--expected-archive-id", help="Expected archive id; mismatch blocks.")
@@ -28766,8 +31634,14 @@ def build_parser() -> argparse.ArgumentParser:
     create_draft.add_argument("--source-intake-plan", help="JSON file from source-intake --dry-run to merge into draft refs.")
     create_draft.add_argument("--prompt-boundary-report", help="JSON file from prompt-boundary --dry-run to preserve untrusted-text handling metadata.")
     create_draft.add_argument("--local-ai-session", action="append", help="Safe local AI session ref. May be repeated.")
-    create_draft.add_argument("--draft-id", help="Deterministic draft zet id for dry-run replay.")
-    create_draft.add_argument("--created-at", help="Deterministic ISO timestamp for dry-run replay.")
+    create_draft.add_argument(
+        "--draft-id",
+        help="Deterministic draft zet id from approval_replay; required for AI approval.",
+    )
+    create_draft.add_argument(
+        "--created-at",
+        help="Deterministic ISO timestamp from approval_replay; required for AI approval.",
+    )
     create_draft.add_argument("--expected-body-sha256", help="Expected SHA-256 of the normalized draft body.")
     create_draft.add_argument("--draft-approved-by", help="Human actor approving inbox draft creation.")
     create_draft.add_argument(
@@ -28783,11 +31657,20 @@ def build_parser() -> argparse.ArgumentParser:
         choices=sorted(archive_services.ZET_QUALITY_AUDIENCES),
         help="Intended audience bound into the source-fidelity plan.",
     )
-    create_draft.add_argument(
+    fidelity_authority = create_draft.add_mutually_exclusive_group()
+    fidelity_authority.add_argument(
         "--fidelity-source-object-id",
         help=(
             "Content-addressed source object id in "
             "sha256:<64 lowercase hex> form; no local source path is accepted."
+        ),
+    )
+    fidelity_authority.add_argument(
+        "--fidelity-session-evidence-id",
+        help=(
+            "Approved reviewed-session evidence id in "
+            "source-fidelity-session-evidence:<64 hex> form; mutually "
+            "exclusive with --fidelity-source-object-id."
         ),
     )
     create_draft.add_argument(
@@ -29379,6 +32262,14 @@ def build_parser() -> argparse.ArgumentParser:
         action="append",
         help="Archive-relative AI artifact root to include; must stay under .wom-scratch/, workbench/ai-scratch/, staging/ai/inbox/, or staging/ai/reviewed/.",
     )
+    ai_artifact_inventory.add_argument(
+        "--project-root",
+        help=(
+            "Optional exact direct parent of the archive root to inspect for "
+            "unmanaged .wom-scratch metadata only; any other root is rejected "
+            "without scanning, and its files are never inventory or GC candidates."
+        ),
+    )
     ai_artifact_inventory.add_argument("--max-items", type=int, default=100, help="Maximum listed candidates; capped at 1000.")
     ai_artifact_inventory.add_argument(
         "--show-relative-paths",
@@ -29806,7 +32697,15 @@ def build_parser() -> argparse.ArgumentParser:
     pack = subcommands.add_parser(
         "parcel",
         aliases=["pack"],
-        help="Create a portable parcel from a saved view. Alias: pack.",
+        help=(
+            "Unavailable in v0.4.0: parcel/pack creation needs an exact "
+            "compound human-approval binding."
+        ),
+        description=(
+            "Unavailable in v0.4.0: parcel/pack creation needs an exact "
+            "compound human-approval binding. No view, zettel body, object "
+            "manifest, or target path is read."
+        ),
     )
     pack.add_argument("archive_root", help="Source archive root.")
     pack.add_argument("--view", required=True, help="View id to pack.")
@@ -30244,7 +33143,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     derive_text_capture.add_argument("--born-digital", action="store_true", help="Mark text as extracted from born-digital content.")
     derive_text_capture.add_argument("--dry-run", action="store_true", help="Preview derived text capture without writing files.")
-    derive_text_capture.add_argument("--approve", action="store_true", help="Store derived text, append manifest record, and write receipt.")
+    derive_text_capture.add_argument(
+        "--approve",
+        action="store_true",
+        help=COMPOUND_APPROVAL_BLOCKED_HELP,
+    )
     derive_text_capture.add_argument("--reviewed-by", help="Reviewer id required for approved capture.")
     derive_text_capture.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     derive_text_capture.set_defaults(func=command_derive_text_capture)
@@ -32927,7 +35830,18 @@ def build_parser() -> argparse.ArgumentParser:
     identity_reconcile.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
     identity_reconcile.set_defaults(func=command_identity_reconcile)
 
-    init = subcommands.add_parser("init", help="Initialize a new archive from a template.")
+    init = subcommands.add_parser(
+        "init",
+        help=(
+            "Dry-run archive initialization only; real initialization is "
+            "unavailable in v0.4.0 pending exact compound human approval."
+        ),
+        description=(
+            "Dry-run archive initialization only. Real initialization is "
+            "unavailable in v0.4.0 and is blocked before the target is read "
+            "or written."
+        ),
+    )
     init.add_argument("archive_root", help="Target archive root. Must be absent or empty.")
     init.add_argument("--type", choices=["personal", "company", "family"], required=True, help="Archive template type.")
     init.add_argument("--archive-id", required=True, help="Archive id, e.g. archive:personal:me.")
@@ -32940,9 +35854,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="Principal kind.",
     )
     init.add_argument("--name", help="Human-readable archive name.")
-    init.add_argument("--dry-run", action="store_true", help="Show what would happen without writing files.")
+    init.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Required in v0.4.0. Preview initialization without writing files.",
+    )
     init.set_defaults(func=command_init)
 
+    _mark_compound_approval_help(subcommands)
     return parser
 
 
@@ -32980,6 +35899,43 @@ def command_source_reference_coverage_audit(
     return command_source_reference_coverage_audit_argv(
         args.coverage_audit_argv
     )
+
+
+def _selected_cli_argument_parser(
+    parser: argparse.ArgumentParser,
+    raw_argv: list[str],
+) -> argparse.ArgumentParser | None:
+    """Return the deepest recognized command parser without parsing values."""
+
+    current = parser
+    remaining = list(raw_argv)
+    selected: argparse.ArgumentParser | None = None
+    while remaining:
+        subparser_action = next(
+            (
+                action
+                for action in current._actions
+                if isinstance(action, argparse._SubParsersAction)
+            ),
+            None,
+        )
+        if subparser_action is None:
+            break
+        command_token = remaining[0]
+        if command_token not in subparser_action.choices:
+            break
+        selected = subparser_action.choices[command_token]
+        current = selected
+        remaining = remaining[1:]
+    return selected
+
+
+def _argument_parser_error_message(rendered: str) -> str:
+    for line in reversed(rendered.splitlines()):
+        marker = ": error: "
+        if marker in line:
+            return line.split(marker, 1)[1]
+    return "command arguments are invalid"
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -33046,10 +36002,7 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     parser_stderr = io.StringIO()
     try:
-        if json_requested or privacy_sensitive_command:
-            with redirect_stderr(parser_stderr):
-                args = parser.parse_args(raw_argv)
-        else:
+        with redirect_stderr(parser_stderr):
             args = parser.parse_args(raw_argv)
     except SystemExit as exc:
         exit_code = int(exc.code or 0)
@@ -33062,6 +36015,16 @@ def main(argv: list[str] | None = None) -> int:
             )
             return exit_code
         if not json_requested:
+            selected_parser = _selected_cli_argument_parser(parser, raw_argv)
+            if selected_parser is not None:
+                selected_parser.print_usage(file=sys.stderr)
+                print(
+                    f"{selected_parser.prog}: error: "
+                    + _argument_parser_error_message(parser_stderr.getvalue()),
+                    file=sys.stderr,
+                )
+            else:
+                print(parser_stderr.getvalue(), file=sys.stderr, end="")
             return exit_code
         parser_error = parser_stderr.getvalue()
         missing_arguments: list[str] = []

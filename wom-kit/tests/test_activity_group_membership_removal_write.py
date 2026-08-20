@@ -4,6 +4,7 @@ import copy
 import io
 import json
 import os
+import shutil
 import sys
 import tempfile
 import unittest
@@ -44,6 +45,36 @@ REMOVAL_AFFIRMATION = (
 )
 
 
+def _historical_activity_group_membership_removal_write(
+    archive_root: Path | str,
+    **kwargs: Any,
+) -> dict[str, Any]:
+    """Exercise the frozen removal core, not the public v0.4 gate."""
+
+    if "affirm_removals_reviewed" in kwargs:
+        kwargs["affirm_memberships_reviewed"] = kwargs.pop(
+            "affirm_removals_reviewed"
+        )
+    return archive_services._activity_group_membership_write(
+        archive_root,
+        operation_contract=archive_services.ACTIVITY_GROUP_MEMBERSHIP_REMOVE,
+        **kwargs,
+    )
+
+
+def _historical_activity_group_membership_removal_recover(
+    archive_root: Path | str,
+    **kwargs: Any,
+) -> dict[str, Any]:
+    """Exercise the frozen removal recovery core, not the public v0.4 gate."""
+
+    return archive_services._activity_group_membership_recover(
+        archive_root,
+        operation_contract=archive_services.ACTIVITY_GROUP_MEMBERSHIP_REMOVE,
+        **kwargs,
+    )
+
+
 class ActivityGroupMembershipRemovalWriteTests(unittest.TestCase):
     """Release-blocking service tests for the explicit removal writer.
 
@@ -60,23 +91,79 @@ class ActivityGroupMembershipRemovalWriteTests(unittest.TestCase):
         return code, output.getvalue()
 
     def _init_archive(self, root: Path, archive_id: str) -> None:
-        code, output = self._run_cli(
-            [
-                "init",
-                str(root),
-                "--type",
-                "personal",
-                "--archive-id",
-                archive_id,
-                "--principal-id",
-                "person:test",
-                "--principal-name",
-                "Test Person",
-                "--name",
-                "Test Personal Archive",
-            ]
+        """Install the checked-in pre-v0.4 template without calling init."""
+
+        fixture_root = root.resolve()
+        template_root = (KIT_ROOT / "templates" / "personal").resolve()
+        zettel_kasten_root = (KIT_ROOT / "zettel-kasten").resolve()
+        self.assertEqual(template_root.parent, (KIT_ROOT / "templates").resolve())
+        self.assertTrue(template_root.is_dir())
+        self.assertEqual(zettel_kasten_root, (KIT_ROOT / "zettel-kasten").resolve())
+        self.assertTrue(zettel_kasten_root.is_dir())
+        self.assertFalse(fixture_root.exists())
+
+        shutil.copytree(template_root, fixture_root)
+        shutil.copytree(
+            zettel_kasten_root,
+            fixture_root / "zettel-kasten",
+            dirs_exist_ok=True,
         )
-        self.assertEqual(code, 0, output)
+        for relative in (
+            "inbox",
+            "zettels",
+            "views",
+            "source-maps",
+            "objects/manifests",
+            "objects/derived-text/sha256",
+            "db",
+            "workbench",
+            "receipts",
+            "receipts/recovery",
+        ):
+            destination = (fixture_root / relative).resolve()
+            self.assertTrue(destination.is_relative_to(fixture_root))
+            destination.mkdir(parents=True, exist_ok=True)
+
+        archive_path = fixture_root / "archive.yml"
+        archive_doc = archive_cli.load_yaml(archive_path.read_text(encoding="utf-8"))
+        archive_doc["archive_id"] = archive_id
+        archive_doc["name"] = "Test Personal Archive"
+        archive_doc["type"] = "personal"
+        archive_doc["principal"] = {
+            "principal_id": "person:test",
+            "display_name": "Test Person",
+            "kind": "person",
+        }
+        archive_path.write_text(archive_cli.dump_yaml(archive_doc), encoding="utf-8")
+
+        identity_path = fixture_root / "archive-identity.yml"
+        identity_doc = archive_cli.load_yaml(identity_path.read_text(encoding="utf-8"))
+        identity_doc["identity"].update(
+            {
+                "archive_id": archive_id,
+                "identity_id": f"identity:{archive_id}",
+                "scope": "personal",
+                "principal_id": "person:test",
+                "display_name": "Test Person",
+            }
+        )
+        identity_doc["ownership"].update(
+            {
+                "owner_id": "person:test",
+                "owner_kind": "person",
+                "owner_display_name": "Test Person",
+                "owner_archive_id": archive_id,
+            }
+        )
+        identity_path.write_text(archive_cli.dump_yaml(identity_doc), encoding="utf-8")
+
+        for filename in ("provider-bindings.yml", "source-bindings.yml"):
+            binding_path = fixture_root / filename
+            binding_doc = archive_cli.load_yaml(binding_path.read_text(encoding="utf-8"))
+            binding_doc["archive_id"] = archive_id
+            binding_path.write_text(archive_cli.dump_yaml(binding_doc), encoding="utf-8")
+
+        self.assertEqual(archive_services.read_archive_id(fixture_root), archive_id)
 
     def _create_canonical(
         self,
@@ -253,7 +340,7 @@ class ActivityGroupMembershipRemovalWriteTests(unittest.TestCase):
             ],
         }
         arguments.update(overrides)
-        return archive_services.activity_group_membership_removal_write(
+        return _historical_activity_group_membership_removal_write(
             fixture["root"],
             **arguments,
         )
@@ -320,7 +407,7 @@ class ActivityGroupMembershipRemovalWriteTests(unittest.TestCase):
         reviewed_by: str,
     ) -> dict[str, Any]:
         return (
-            archive_services.activity_group_membership_removal_recover(
+            _historical_activity_group_membership_removal_recover(
                 fixture["root"],
                 expected_request_sha256=fixture["plan"][
                     "request"
@@ -469,7 +556,7 @@ class ActivityGroupMembershipRemovalWriteTests(unittest.TestCase):
             snapshot_candidates: list[dict[str, Any]] = []
             canonical_cas_paths: list[Path] = []
             original_bound_write = (
-                archive_services.write_activity_group_bytes_new_file_bound
+                archive_services._write_activity_group_bytes_new_file_bound
             )
             original_preserve = (
                 archive_services
@@ -477,7 +564,7 @@ class ActivityGroupMembershipRemovalWriteTests(unittest.TestCase):
             )
             original_cas = (
                 archive_services
-                .replace_activity_group_canonical_bytes_compare_and_swap
+                ._replace_activity_group_canonical_bytes_compare_and_swap
             )
 
             def capture_bound_write(
@@ -520,7 +607,7 @@ class ActivityGroupMembershipRemovalWriteTests(unittest.TestCase):
             with (
                 patch.object(
                     archive_services,
-                    "write_activity_group_bytes_new_file_bound",
+                    "_write_activity_group_bytes_new_file_bound",
                     side_effect=capture_bound_write,
                 ),
                 patch.object(
@@ -531,7 +618,7 @@ class ActivityGroupMembershipRemovalWriteTests(unittest.TestCase):
                 patch.object(
                     archive_services,
                     (
-                        "replace_activity_group_canonical_bytes_"
+                        "_replace_activity_group_canonical_bytes_"
                         "compare_and_swap"
                     ),
                     side_effect=capture_cas,
@@ -684,7 +771,7 @@ class ActivityGroupMembershipRemovalWriteTests(unittest.TestCase):
             root = fixture["root"]
             before = self._file_state(root)
             original_bound_write = (
-                archive_services.write_activity_group_bytes_new_file_bound
+                archive_services._write_activity_group_bytes_new_file_bound
             )
             original_preserve = (
                 archive_services
@@ -692,12 +779,12 @@ class ActivityGroupMembershipRemovalWriteTests(unittest.TestCase):
             )
             original_cas = (
                 archive_services
-                .replace_activity_group_canonical_bytes_compare_and_swap
+                ._replace_activity_group_canonical_bytes_compare_and_swap
             )
             with (
                 patch.object(
                     archive_services,
-                    "write_activity_group_bytes_new_file_bound",
+                    "_write_activity_group_bytes_new_file_bound",
                     wraps=original_bound_write,
                 ) as bound_write,
                 patch.object(
@@ -708,7 +795,7 @@ class ActivityGroupMembershipRemovalWriteTests(unittest.TestCase):
                 patch.object(
                     archive_services,
                     (
-                        "replace_activity_group_canonical_bytes_"
+                        "_replace_activity_group_canonical_bytes_"
                         "compare_and_swap"
                     ),
                     wraps=original_cas,
@@ -864,6 +951,38 @@ class ActivityGroupMembershipRemovalWriteTests(unittest.TestCase):
                 "affirm_removals_reviewed_required",
                 missing_authority["blockers"],
             )
+            with patch.object(
+                archive_services,
+                "_activity_group_membership_write",
+                side_effect=AssertionError(
+                    "blocked public approval reached private core"
+                ),
+            ) as private_core:
+                blocked = (
+                    archive_services
+                    .activity_group_membership_removal_write(
+                        root,
+                        request_path=fixture["request_relative"],
+                        expected_request_sha256=fixture["plan"][
+                            "request"
+                        ]["sha256"],
+                        expected_review_plan_sha256=fixture["plan"][
+                            "review_plan_sha256"
+                        ],
+                        approve=True,
+                        reviewed_by="person:private-service-reviewer",
+                        affirm_removals_reviewed=True,
+                    )
+                )
+            private_core.assert_not_called()
+            self.assertFalse(blocked["ok"], blocked)
+            self.assertEqual(blocked["state"], "blocked")
+            self.assertEqual(
+                blocked["reason_codes"],
+                ["compound_exact_human_approval_binding_required"],
+            )
+            self.assertFalse(blocked["private_values_echoed"])
+            self.assertEqual(before, self._file_state(root))
 
     def test_under_lock_absent_to_present_drift_is_blocked(
         self,
@@ -910,7 +1029,7 @@ class ActivityGroupMembershipRemovalWriteTests(unittest.TestCase):
             )
             original_cas = (
                 archive_services
-                .replace_activity_group_canonical_bytes_compare_and_swap
+                ._replace_activity_group_canonical_bytes_compare_and_swap
             )
             plan_calls = 0
 
@@ -935,7 +1054,7 @@ class ActivityGroupMembershipRemovalWriteTests(unittest.TestCase):
                 patch.object(
                     archive_services,
                     (
-                        "replace_activity_group_canonical_bytes_"
+                        "_replace_activity_group_canonical_bytes_"
                         "compare_and_swap"
                     ),
                     wraps=original_cas,
@@ -1004,12 +1123,12 @@ class ActivityGroupMembershipRemovalWriteTests(unittest.TestCase):
             )
             original_cas = (
                 archive_services
-                .replace_activity_group_canonical_bytes_compare_and_swap
+                ._replace_activity_group_canonical_bytes_compare_and_swap
             )
             with patch.object(
                 archive_services,
                 (
-                    "replace_activity_group_canonical_bytes_"
+                    "_replace_activity_group_canonical_bytes_"
                     "compare_and_swap"
                 ),
                 wraps=original_cas,
@@ -1138,7 +1257,7 @@ class ActivityGroupMembershipRemovalWriteTests(unittest.TestCase):
             with patch.object(
                 archive_services,
                 (
-                    "replace_activity_group_canonical_bytes_"
+                    "_replace_activity_group_canonical_bytes_"
                     "compare_and_swap"
                 ),
                 side_effect=KeyboardInterrupt(
@@ -1225,7 +1344,7 @@ class ActivityGroupMembershipRemovalWriteTests(unittest.TestCase):
             paths = self._recovery_evidence_paths(fixture)
             original_cas = (
                 archive_services
-                .replace_activity_group_canonical_bytes_compare_and_swap
+                ._replace_activity_group_canonical_bytes_compare_and_swap
             )
             ready_names = {
                 path.name for path in member_paths[:4]
@@ -1249,7 +1368,7 @@ class ActivityGroupMembershipRemovalWriteTests(unittest.TestCase):
             with patch.object(
                 archive_services,
                 (
-                    "replace_activity_group_canonical_bytes_"
+                    "_replace_activity_group_canonical_bytes_"
                     "compare_and_swap"
                 ),
                 side_effect=interrupt_second_swap,
@@ -1336,7 +1455,7 @@ class ActivityGroupMembershipRemovalWriteTests(unittest.TestCase):
             member_before = member_path.read_bytes()
             paths = self._recovery_evidence_paths(fixture)
             original_bound_write = (
-                archive_services.write_activity_group_bytes_new_file_bound
+                archive_services._write_activity_group_bytes_new_file_bound
             )
             receipt_written = False
 
@@ -1355,7 +1474,7 @@ class ActivityGroupMembershipRemovalWriteTests(unittest.TestCase):
 
             with patch.object(
                 archive_services,
-                "write_activity_group_bytes_new_file_bound",
+                "_write_activity_group_bytes_new_file_bound",
                 side_effect=interrupt_after_receipt,
             ):
                 with self.assertRaises(KeyboardInterrupt):
@@ -1578,26 +1697,6 @@ class ActivityGroupMembershipRemovalWriteTests(unittest.TestCase):
                     before = self._file_state(fixture["root"])
                     outputs: list[str] = []
 
-                    no_mode_code, no_mode_output = self._run_cli(
-                        base_args
-                    )
-                    outputs.append(no_mode_output)
-                    self.assertEqual(no_mode_code, 1, no_mode_output)
-                    self.assertIn(
-                        "requires exactly one of --dry-run or --approve",
-                        no_mode_output,
-                    )
-
-                    both_code, both_output = self._run_cli(
-                        [*base_args, "--dry-run", "--approve"]
-                    )
-                    outputs.append(both_output)
-                    self.assertEqual(both_code, 1, both_output)
-                    self.assertIn(
-                        "requires exactly one of --dry-run or --approve",
-                        both_output,
-                    )
-
                     preview_code, preview_output = self._run_cli(
                         [*base_args, "--dry-run"]
                     )
@@ -1628,106 +1727,61 @@ class ActivityGroupMembershipRemovalWriteTests(unittest.TestCase):
                         self._file_state(fixture["root"]),
                     )
 
-                    reviewer_only_code, reviewer_only_output = (
-                        self._run_cli(
-                            [
-                                *base_args,
-                                "--approve",
-                                "--reviewed-by",
-                                "person:PRIVATE_CLI_REMOVAL_REVIEWER",
-                            ]
-                        )
-                    )
-                    outputs.append(reviewer_only_output)
-                    self.assertEqual(
-                        reviewer_only_code,
-                        1,
-                        reviewer_only_output,
-                    )
-                    reviewer_only = json.loads(
-                        reviewer_only_output
-                    )
-                    self.assertEqual(
-                        reviewer_only["schema"],
-                        REMOVAL_WRITE_SCHEMA,
-                    )
-                    self.assertEqual(
-                        reviewer_only["status"],
-                        "blocked",
-                    )
-                    self.assertIn(
-                        "affirm_removals_reviewed_required",
-                        reviewer_only["blockers"],
-                    )
-
-                    affirmation_only_code, affirmation_only_output = (
-                        self._run_cli(
-                            [
-                                *base_args,
-                                "--approve",
-                                "--affirm-removals-reviewed",
-                            ]
-                        )
-                    )
-                    outputs.append(affirmation_only_output)
-                    self.assertEqual(
-                        affirmation_only_code,
-                        1,
-                        affirmation_only_output,
-                    )
-                    affirmation_only = json.loads(
-                        affirmation_only_output
-                    )
-                    self.assertEqual(
-                        affirmation_only["schema"],
-                        REMOVAL_WRITE_SCHEMA,
-                    )
-                    self.assertEqual(
-                        affirmation_only["status"],
-                        "blocked",
-                    )
-                    self.assertIn(
-                        "safe_reviewed_by_required",
-                        affirmation_only["blockers"],
-                    )
-                    self.assertEqual(
-                        before,
-                        self._file_state(fixture["root"]),
-                    )
-
-                    applied_code, applied_output = self._run_cli(
+                    approval_variants = (
+                        ["--approve"],
                         [
-                            *base_args,
                             "--approve",
                             "--reviewed-by",
                             "person:PRIVATE_CLI_REMOVAL_REVIEWER",
                             "--affirm-removals-reviewed",
-                        ]
+                        ],
+                        [
+                            "--dry-run",
+                            "--approve",
+                            "--reviewed-by",
+                            "person:PRIVATE_CLI_REMOVAL_REVIEWER",
+                            "--affirm-removals-reviewed",
+                        ],
                     )
-                    outputs.append(applied_output)
-                    self.assertEqual(
-                        applied_code,
-                        0,
-                        applied_output,
-                    )
-                    applied = json.loads(applied_output)
-                    self.assertTrue(applied["ok"], applied)
-                    self.assertEqual(
-                        applied["schema"],
-                        REMOVAL_WRITE_SCHEMA,
-                    )
-                    self.assertEqual(
-                        applied["lifecycle_action"],
-                        "activity_group_membership_removal_write",
-                    )
-                    self.assertEqual(applied["status"], "applied")
-                    self.assertFalse(applied["dry_run"])
-                    self.assertTrue(applied["approved"])
-                    self.assertTrue(
-                        applied["human_review"][
-                            "all_removals_reviewed_affirmed"
-                        ]
-                    )
+                    with patch.object(
+                        archive_services,
+                        "_activity_group_membership_write",
+                        side_effect=AssertionError(
+                            "blocked public approval reached private core"
+                        ),
+                    ) as private_core:
+                        for approval_args in approval_variants:
+                            blocked_code, blocked_output = self._run_cli(
+                                [*base_args, *approval_args]
+                            )
+                            outputs.append(blocked_output)
+                            self.assertEqual(
+                                blocked_code,
+                                1,
+                                blocked_output,
+                            )
+                            blocked = json.loads(blocked_output)
+                            self.assertFalse(blocked["ok"], blocked)
+                            self.assertEqual(blocked["state"], "blocked")
+                            self.assertEqual(
+                                blocked["lifecycle_action"],
+                                "activity_group_membership_removal_write",
+                            )
+                            self.assertEqual(
+                                blocked["reason_codes"],
+                                [
+                                    "compound_exact_human_approval_"
+                                    "binding_required"
+                                ],
+                            )
+                            self.assertFalse(
+                                blocked["private_values_echoed"]
+                            )
+                            self.assertEqual(
+                                before,
+                                self._file_state(fixture["root"]),
+                            )
+                    private_core.assert_not_called()
                     self._assert_result_is_content_free(
                         outputs,
                         fixture,
@@ -1908,120 +1962,98 @@ class ActivityGroupMembershipRemovalWriteTests(unittest.TestCase):
                         "requires --approve",
                         missing_approve_output,
                     )
-
-                    reviewer_only_code, reviewer_only_output = (
-                        self._run_cli(
-                            [
-                                *base_args,
-                                "--approve",
-                                "--reviewed-by",
-                                "person:PRIVATE_CLI_RECOVERY_REVIEWER",
-                            ]
+                    approval_variants = (
+                        ["--approve"],
+                        [
+                            "--approve",
+                            "--reviewed-by",
+                            "person:PRIVATE_CLI_RECOVERY_REVIEWER",
+                            "--affirm-recovery-reviewed",
+                        ],
+                    )
+                    with patch.object(
+                        archive_services,
+                        "_activity_group_membership_recover",
+                        side_effect=AssertionError(
+                            "blocked public recovery reached private core"
+                        ),
+                    ) as private_core:
+                        for approval_args in approval_variants:
+                            blocked_code, blocked_output = self._run_cli(
+                                [*base_args, *approval_args]
+                            )
+                            outputs.append(blocked_output)
+                            self.assertEqual(
+                                blocked_code,
+                                1,
+                                blocked_output,
+                            )
+                            blocked = json.loads(blocked_output)
+                            self.assertFalse(blocked["ok"], blocked)
+                            self.assertEqual(blocked["state"], "blocked")
+                            self.assertEqual(
+                                blocked["lifecycle_action"],
+                                "activity_group_membership_removal_recover",
+                            )
+                            self.assertEqual(
+                                blocked["reason_codes"],
+                                [
+                                    "compound_exact_human_approval_"
+                                    "binding_required"
+                                ],
+                            )
+                            self.assertFalse(
+                                blocked["private_values_echoed"]
+                            )
+                            self.assertEqual(
+                                before,
+                                self._file_state(fixture["root"]),
+                            )
+                    private_core.assert_not_called()
+                    self.assertTrue(paths["lock"].is_file())
+                    self.assertFalse(paths["journal"].exists())
+                    self.assertFalse(paths["guard"].exists())
+                    with patch.object(
+                        archive_services,
+                        "_activity_group_membership_recover",
+                        side_effect=AssertionError(
+                            "blocked public recovery reached private core"
+                        ),
+                    ) as service_core:
+                        service_blocked = (
+                            archive_services
+                            .activity_group_membership_removal_recover(
+                                fixture["root"],
+                                expected_request_sha256=fixture["plan"][
+                                    "request"
+                                ]["sha256"],
+                                expected_recovery_plan_sha256=(
+                                    recovery_plan[
+                                        "recovery_plan_sha256"
+                                    ]
+                                ),
+                                approve=True,
+                                reviewed_by=(
+                                    "person:private-service-reviewer"
+                                ),
+                                affirm_recovery_reviewed=True,
+                            )
                         )
-                    )
-                    outputs.append(reviewer_only_output)
+                    service_core.assert_not_called()
                     self.assertEqual(
-                        reviewer_only_code,
-                        1,
-                        reviewer_only_output,
+                        service_blocked["reason_codes"],
+                        [
+                            "compound_exact_human_approval_"
+                            "binding_required"
+                        ],
                     )
-                    reviewer_only = json.loads(
-                        reviewer_only_output
-                    )
-                    self.assertEqual(
-                        reviewer_only["schema"],
-                        REMOVAL_RECOVER_SCHEMA,
-                    )
-                    self.assertEqual(
-                        reviewer_only["lifecycle_action"],
-                        "activity_group_membership_removal_recover",
-                    )
-                    self.assertEqual(
-                        reviewer_only["status"],
-                        "blocked",
-                    )
-                    self.assertIn(
-                        "affirm_recovery_reviewed_required",
-                        reviewer_only["blockers"],
-                    )
-
-                    affirmation_only_code, affirmation_only_output = (
-                        self._run_cli(
-                            [
-                                *base_args,
-                                "--approve",
-                                "--affirm-recovery-reviewed",
-                            ]
-                        )
-                    )
-                    outputs.append(affirmation_only_output)
-                    self.assertEqual(
-                        affirmation_only_code,
-                        1,
-                        affirmation_only_output,
-                    )
-                    affirmation_only = json.loads(
-                        affirmation_only_output
-                    )
-                    self.assertEqual(
-                        affirmation_only["schema"],
-                        REMOVAL_RECOVER_SCHEMA,
-                    )
-                    self.assertEqual(
-                        affirmation_only["status"],
-                        "blocked",
-                    )
-                    self.assertIn(
-                        "safe_reviewed_by_required",
-                        affirmation_only["blockers"],
+                    self.assertFalse(
+                        service_blocked["private_values_echoed"]
                     )
                     self.assertEqual(
                         before,
                         self._file_state(fixture["root"]),
                     )
-
-                    recovered_code, recovered_output = self._run_cli(
-                        [
-                            *base_args,
-                            "--approve",
-                            "--reviewed-by",
-                            "person:PRIVATE_CLI_RECOVERY_REVIEWER",
-                            "--affirm-recovery-reviewed",
-                        ]
-                    )
-                    outputs.append(recovered_output)
-                    self.assertEqual(
-                        recovered_code,
-                        0,
-                        recovered_output,
-                    )
-                    recovered = json.loads(recovered_output)
-                    self.assertTrue(recovered["ok"], recovered)
-                    self.assertEqual(
-                        recovered["schema"],
-                        REMOVAL_RECOVER_SCHEMA,
-                    )
-                    self.assertEqual(
-                        recovered["lifecycle_action"],
-                        "activity_group_membership_removal_recover",
-                    )
-                    self.assertEqual(
-                        recovered["status"],
-                        "cleanup_completed",
-                    )
-                    self.assertTrue(recovered["approved"])
-                    self.assertEqual(
-                        recovered["recovery_action"],
-                        "cleanup_unstarted_removal_lock",
-                    )
-                    self.assertTrue(
-                        recovered["human_review"][
-                            "recovery_reviewed_affirmed"
-                        ]
-                    )
-                    self.assertFalse(paths["lock"].exists())
-                    self.assertFalse(paths["journal"].exists())
-                    self.assertFalse(paths["guard"].exists())
                     self._assert_result_is_content_free(
                         outputs,
                         fixture,

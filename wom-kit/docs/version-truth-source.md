@@ -1,8 +1,10 @@
 # WOM-kit Version Truth Source
 
-Status: v0.3.320 runtime alignment with one-use credential capability hardening
+Status: v0.4.0 runtime alignment with exact human approval
 
-Current checkpoint: Status: v0.3.320 one-use credential capability broker
+Current checkpoint: Status: v0.4.0 exact human approval and operator-friction checkpoint
+
+Previous checkpoint: Status: v0.3.320 one-use credential capability broker
 
 Previous checkpoint: Status: v0.3.319 native credential popup and causal-evidence corrections
 
@@ -192,9 +194,10 @@ The bridge runs the verified project source for one invocation. It does not:
 If source/pin metadata is incomplete or inconsistent, or any local release
 integrity check fails, the result fails closed and provides no executable
 bridge argv. A present but unverified mirror also makes the command nonzero.
-Preview a verified `project-version-update` first and, when a write is needed,
-pause editors, sync/backup clients, and other Git writers for the complete
-transaction before completing its affirmed approval from Windows.
+Preview a verified `project-version-update --dry-run` and stop. In v0.4.0
+updater approval returns `compound_exact_human_approval_binding_required`
+before private project/source/Git/pin reads, fetch, or mutation and writes no
+source, pin, lock, or receipt.
 
 ## Source Development Launcher
 
@@ -255,10 +258,9 @@ process, rerun `archive version <root> --format json`, and follow its
 `next_safe_actions`. For pristine recovery, use a separate exact tagged
 checkout and keep the original checkout unchanged for diagnosis.
 
-## Approval-Gated Project Update
+## Project Update Preview And Historical Contract
 
-Starting in v0.3.215, a separate command can perform that bounded update after
-an explicit preview and human approval:
+The current v0.4.0 command provides the bounded preview only:
 
 ```powershell
 archive project-version-update <project-or-archive-root> `
@@ -267,16 +269,12 @@ archive project-version-update <project-or-archive-root> `
   --progress `
   --output .zettel-kasten/diagnostics/update-preview-20260811-001.json `
   --format json
-
-archive project-version-update <project-or-archive-root> `
-  --target vX.Y.Z `
-  --approve `
-  --reviewed-by <actor> `
-  --affirm-external-writers-quiescent `
-  --progress `
-  --output .zettel-kasten/diagnostics/update-apply-20260811-001.json `
-  --format json
 ```
+
+Approval returns `compound_exact_human_approval_binding_required` before
+private project reads, fetch, materialization, pin mutation, lock creation, or
+receipt publication. The implementation details below describe historical
+v0.3.315 evidence only and grant no v0.4.0 write authority.
 
 From v0.3.315, a locally available exact target uses the same digest-bound
 materialization planner in preview and approval. Its cross-map covers the

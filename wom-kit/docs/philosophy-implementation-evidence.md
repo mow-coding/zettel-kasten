@@ -1,7 +1,7 @@
 # WOM Philosophy Implementation Evidence
 
-Status: v0.3.320 review of the v0.3.252 public traceability checkpoint
-Date: 2026-08-04
+Status: v0.4.0 review of the v0.3.252 public traceability checkpoint
+Date: 2026-08-20
 
 ## Purpose
 
@@ -33,13 +33,13 @@ layers.
 | Goal and loop belong to the host AI application's task UX, not to WOM's archive ontology. | `ai-start-here`, catalog continuation evidence, and the Agent Skill give Codex, Claude, or another host bounded memory and safe next actions without persisting one canonical WOM-owned goal or loop. | Runtime entrypoint, catalog continuation, and runtime-skill tests. | The host decides task branching, continuation, and completion. WOM records durable context and evidence but does not claim control of the host's session lifecycle. |
 | Ties, edges, indexes, embeddings, and graphs are routes or reviewable claims, not authority. | Runtime guidance forbids silent identity merges; strict catalog traversal remains live-node based; the complete catalog artifact is private scratch with a SHA-bound read and approval-gated cleanup lifecycle. | Runtime-skill and artifact-primacy documentation checks, plus behavioral catalog pass/read/cleanup tests. | WOM has no global entity resolver and makes no claim that every future third-party integration will preserve this boundary. |
 | Local reviewed state is authoritative; remote systems are backup or replica layers. | `local-sovereignty` declares the authority model. `backup-evidence` reports GitHub, object-storage, and external-database lanes without turning configuration into completion. | Local-sovereignty and backup-evidence cases in `test_cli.py`, plus capability/documentation checks. | There is no generic GitHub or external-database completion receipt. Object receipts prove recorded-time coverage only, not current remote availability or whole-backup completion. |
-| Writes require human review, provenance, and an explicit approval boundary. | Mutating workflows use dry-run plans, exact digests, `--approve`, reviewer identity, fail-closed revalidation, and receipts. | Command-specific plan/write/rollback/replay tests across mint, revision, capture, handoff, and provider adapter workflows. | WOM can verify the command boundary; it cannot infer that a person understood every semantic consequence. |
+| Writes require human review, provenance, and an explicit approval boundary. | The supported exact single-write workflows use a native TaskDialog, an authenticated durable `started` claim, writer-side revalidation, and workflow finalization. The 79 top-level approval routes without that complete binding, plus nested derive capture, non-exact/non-AI draft creation, real init, and parcel creation, are dry-run/plan/audit-only or unavailable in v0.4.0 and return `compound_exact_human_approval_binding_required` before sensitive reads or writes. | Exact-human workflow tests plus the 79-command CLI/help and service fail-closed suites. | WOM can verify the command boundary; it cannot infer that a person understood every semantic consequence, and a historical approval receipt grants no current write authority. |
 | AI-generated documents and conversation-derived work must not evaporate. | `ai-artifact-inventory` classifies local AI artifacts, operational context records unfinished work, and `session-handoff-checkpoint` blocks a clean handoff when durable capture evidence is missing or stale. | AI artifact inventory and session-handoff CLI tests. | The tool does not ingest chat automatically or decide which generated artifact deserves preservation. Human/AI review remains necessary. |
 | AI operation should use progressive disclosure and plain human language. | The packaged Agent Skill has a compact root, goal-focused references, a machine-readable capabilities manifest, and a human-language response contract and terminology guide. | Runtime-skill package validation, capability tests, and documentation contract tests. | Plain-language quality and good judgment are guidance-level behavior; WOM cannot deterministically validate every model response. |
 
 ## Current Engineering Conclusion
 
-The public v0.3.x implementation contains concrete, regression-checked
+The public v0.4.0 implementation contains concrete, regression-checked
 mechanisms for the Memento Problem: first-read reconstruction, artifact-first
 reasoning, reviewed revision and recovery, durable session handoff, and honest
 local backup evidence. These mechanisms are not merely roadmap prose.

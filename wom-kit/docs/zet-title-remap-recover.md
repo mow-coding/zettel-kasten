@@ -1,6 +1,12 @@
 # zet Title Remap Recover
 
-Status: v0.3.272 approval-gated single-case interrupted-title recovery
+Historical status: v0.3.272 approval-gated single-case interrupted-title recovery
+
+Current v0.4.0 boundary: the recovery plan and executor dry-run remain
+available. Approval returns `compound_exact_human_approval_binding_required`
+before private target read or mutation and changes no canonical, snapshot,
+receipt, journal, lock, or recovery guard. Later executor details are historical
+v0.3 semantics only.
 
 ## Boundary
 
@@ -44,19 +50,12 @@ Preview reruns the complete bounded plan and writes nothing. It succeeds only
 when exactly one case SHA exists, the plan digest is unchanged, the expected
 action matches, and that action is implemented.
 
-## Approval
+## Current v0.4.0 Approval Boundary
 
-```text
-archive zet-title-remap-recover <archive-root> \
-  --case-sha256 sha256:<journal-bytes-digest> \
-  --expected-plan-digest sha256:<complete-plan-digest> \
-  --expected-action <fixed-action> \
-  --approve \
-  --reviewed-by person:<safe-reviewer-id> \
-  --affirm-recovery-reviewed \
-  --affirm-archive-quiescent \
-  --format json
-```
+Do not continue past preview. Approval is fixed fail-closed with
+`compound_exact_human_approval_binding_required`; historical reviewer,
+recovery-review, and archive-quiescence affirmations do not grant current
+authority.
 
 Approval requires all three human fields. The archive-quiescent affirmation
 means the original title writer has stopped and no editor or other title writer

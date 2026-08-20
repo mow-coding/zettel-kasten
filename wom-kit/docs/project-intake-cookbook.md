@@ -24,7 +24,7 @@ cookbook once per raw file. Split the migration into two layers:
 already-hashed raw store
         |
         v
-archive prehashed-objet-ledger --ledger ... --approve
+archive prehashed-objet-ledger --ledger ... --dry-run
         |
         v
 raw bytes are represented in the object manifest
@@ -36,11 +36,10 @@ human selects a small meaningful subset
 this cookbook: ask, record, capture selection, draft, mint
 ```
 
-`prehashed-objet-ledger` is the bulk raw-preservation bridge. It can register
-one or more external content-addressed ledgers without reading blob bytes,
-copying objects, drafting, minting, uploading, or cleaning. This cookbook is the
-human-guided promotion spine for the selected subset that should become visible
-drafts or zets.
+The diagram above is historical v0.3 context. In v0.4.0
+`prehashed-objet-ledger` is preview-only and approval returns
+`compound_exact_human_approval_binding_required` before private ledger/archive
+read or mutation. It registers no manifest entry or receipt.
 
 Earlier revisions used a sibling `archive-objets/` as a recommended local staging
 root for new intake rehearsals. Since the intake layout ruling (D2, 2026-07-03),
@@ -166,21 +165,19 @@ archive project-intake-item-plan "$tmp\archive" --receipt $projectReceipt --loca
 archive source-intake "$tmp\archive" --dry-run --local-path "$tmp\archive\staging\incoming\project-note.txt" --project-intake-receipt $projectReceipt --redact-local-paths --format json
 ```
 
-Save and review the source-intake JSON outside the command, then record it:
+Save and review the source-intake JSON outside the command, then validate it:
 
 ```powershell
 $sourcePlan = "$tmp\source-intake-plan.json"
 # Write the reviewed source-intake dry-run JSON to $sourcePlan.
 archive source-intake-record "$tmp\archive" --source-intake-plan $sourcePlan --dry-run --format json
-archive source-intake-record "$tmp\archive" --source-intake-plan $sourcePlan --approve --reviewed-by person:test --format json
 ```
 
-Save the approved command's returned `receipt_path` as `$sourceIntakeReceipt`
-for the capture-selection commands:
-
-```powershell
-$sourceIntakeReceipt = "<receipt_path from the approved source-intake-record command>"
-```
+Stop here in v0.4.0. `source-intake-record`, `objet-capture-selection`, and
+`objet-capture` approval are fixed fail-closed before private plan, staged-byte,
+or target read and write no receipt, selection, object, manifest row, or derived
+text. Therefore the historical capture chain below has no current executable
+input receipt.
 
 ## 6. Capture Only After A Separate Selection
 
@@ -189,24 +186,25 @@ staged file, then pass that selection to `objet-capture`.
 
 ```powershell
 archive objet-capture-selection "$tmp\archive" --staged-path staging/incoming/project-note.txt --source-intake-receipt $sourceIntakeReceipt --dry-run --format json
-archive objet-capture-selection "$tmp\archive" --staged-path staging/incoming/project-note.txt --source-intake-receipt $sourceIntakeReceipt --approve --reviewed-by person:test --format json
-$selectionJson = "<selection path from the approved objet-capture-selection command>"
-archive objet-capture "$tmp\archive" --selection $selectionJson --project-intake-receipt $projectReceipt --dry-run --format json
-archive objet-capture "$tmp\archive" --selection $selectionJson --project-intake-receipt $projectReceipt --approve --reviewed-by person:test --format json
 ```
 
 Capture still does not draft, mint, upload, or clean.
 
-## 7. Draft, Mint, Then Check Cleanup
+## 7. Preview Drafting And Check Cleanup
 
-After capture and any derived text review, draft and mint remain separate
-approval gates:
+Because the v0.4.0 cookbook capture chain stops before it creates a receipt or
+manifested source authority, this rehearsal cannot create or mint a draft.
+Preview the draft request and cleanup report only:
 
 ```powershell
-archive create-draft "$tmp\archive" --title "Rehearsal zet" --body "Rehearsal body from a reviewed captured source." --source-intake-plan $sourcePlan --format json
-archive mint-zet "$tmp\archive" --path <draft-path> --approve --reviewed-by person:test --allow-warnings --format json
+archive create-draft "$tmp\archive" --title "Rehearsal zet" --body "Rehearsal body from a reviewed captured source." --source-intake-plan $sourcePlan --dry-run --format json
 archive staged-cleanup-check "$tmp\archive" --staged staging/incoming --dry-run --format json
 ```
+
+A later draft write is a separate workflow: it requires the fully reviewed AI
+route with a Windows TaskDialog, a matching authenticated started claim, and
+source-fidelity evidence. The human/non-exact create route shown by older
+versions is fixed closed in v0.4.0; this cookbook grants no write authority.
 
 Only the cleanup report can say whether the staged folder is safe to remove.
 WOM-kit still never deletes it for you.

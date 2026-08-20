@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://wom.local/schemas/duplicate-object-reconciliation-receipt-v0.1.schema.json",
+  "title": "WOM exact duplicate object row reconciliation receipt v0.1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "reconciliation_id",
+    "plan_sha256",
+    "manifest_before_sha256",
+    "manifest_after_sha256",
+    "removed_exact_duplicate_row_count",
+    "compatible_group_count",
+    "conflicting_group_count",
+    "approval_reference",
+    "snapshot_preserved",
+    "automatic_merge_performed",
+    "object_ids_stored_in_receipt",
+    "paths_echoed_in_public_result"
+  ],
+  "properties": {
+    "schema_version": {"const": "wom-kit/duplicate-object-reconciliation-receipt/v0.1"},
+    "reconciliation_id": {"type": "string", "pattern": "^[0-9a-f]{24}$"},
+    "plan_sha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "manifest_before_sha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "manifest_after_sha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "removed_exact_duplicate_row_count": {"type": "integer", "minimum": 1},
+    "compatible_group_count": {"const": 0},
+    "conflicting_group_count": {"const": 0},
+    "approval_reference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "approval_id", "context_sha256", "approval_authority_sha256", "one_use"],
+      "properties": {
+        "schema_version": {"const": "wom-kit/exact-human-approval-reference/v0.1"},
+        "approval_id": {"type": "string", "pattern": "^approval_[0-9a-f]{32}$"},
+        "context_sha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+        "approval_authority_sha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+        "one_use": {"const": true}
+      }
+    },
+    "snapshot_preserved": {"const": true},
+    "automatic_merge_performed": {"const": false},
+    "object_ids_stored_in_receipt": {"const": false},
+    "paths_echoed_in_public_result": {"const": false}
+  }
+}

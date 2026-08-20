@@ -11,7 +11,7 @@ from unittest.mock import patch
 
 from wom_kit import legacy_coordination_cleanup as cleanup_module
 from wom_kit.legacy_coordination_cleanup import (
-    legacy_coordination_cleanup,
+    _legacy_coordination_cleanup_legacy_core,
     legacy_coordination_cleanup_plan,
 )
 
@@ -64,7 +64,69 @@ class LegacyCoordinationCleanupTests(unittest.TestCase):
             "max_bytes": MAX_BYTES,
         }
         arguments.update(overrides)
-        return legacy_coordination_cleanup(workspace, **arguments)
+        return _legacy_coordination_cleanup_legacy_core(workspace, **arguments)
+
+    def test_public_cleanup_rejects_falsey_non_boolean_before_plan_read(self) -> None:
+        class FalseyNonBoolean:
+            def __bool__(self) -> bool:
+                return False
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp) / "workspace-must-not-be-read"
+            with (
+                patch.object(
+                    cleanup_module,
+                    "_legacy_coordination_cleanup_legacy_core",
+                    side_effect=AssertionError("private cleanup core must not start"),
+                ) as private_core,
+                patch.object(
+                    cleanup_module,
+                    "_build_private_plan",
+                    side_effect=AssertionError("cleanup plan must not be read"),
+                ) as plan_reader,
+                patch.object(
+                    cleanup_module,
+                    "_delete_exact_approved_file",
+                    side_effect=AssertionError("file delete must not start"),
+                ) as file_delete,
+                patch.object(
+                    cleanup_module,
+                    "_delete_exact_approved_empty_directory",
+                    side_effect=AssertionError("directory delete must not start"),
+                ) as directory_delete,
+            ):
+                results = [
+                    cleanup_module.legacy_coordination_cleanup(
+                        workspace,
+                        dry_run=False,
+                        approve=value,
+                        reviewed_by="person:test-owner",
+                        expected_plan_sha256="0" * 64,
+                        affirm_workspace_owner_authorized=True,
+                        affirm_external_writers_quiescent=True,
+                        affirm_retired_state_disposable=True,
+                        affirm_backups_and_receipts_disposable=True,
+                        max_files=MAX_FILES,
+                        max_bytes=MAX_BYTES,
+                    )
+                    for value in (0, FalseyNonBoolean())
+                ]
+
+            self.assertFalse(workspace.exists())
+
+        for result in results:
+            self.assertEqual(result["status"], "blocked")
+            self.assertEqual(
+                result["reason_codes"],
+                ["compound_exact_human_approval_binding_required"],
+            )
+        for guarded in (
+            private_core,
+            plan_reader,
+            file_delete,
+            directory_delete,
+        ):
+            guarded.assert_not_called()
 
     def test_absent_target_is_safe_idempotent_noop(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -130,7 +192,7 @@ class LegacyCoordinationCleanupTests(unittest.TestCase):
             target_file = workspace / ".mow-harness" / "update.log"
             target_file.write_bytes(b"unchanged")
             before = target_file.read_bytes()
-            result = legacy_coordination_cleanup(
+            result = _legacy_coordination_cleanup_legacy_core(
                 workspace,
                 dry_run=True,
                 approve=False,
@@ -147,7 +209,7 @@ class LegacyCoordinationCleanupTests(unittest.TestCase):
             self.assertEqual(result["status"], "dry_run_ready")
             self.assertEqual(target_file.read_bytes(), before)
 
-            rejected = legacy_coordination_cleanup(
+            rejected = _legacy_coordination_cleanup_legacy_core(
                 workspace,
                 dry_run=True,
                 approve=True,
@@ -306,7 +368,7 @@ class LegacyCoordinationCleanupTests(unittest.TestCase):
             workspace = self.make_workspace(Path(tmp))
             lock = workspace / cleanup_module.LOCK_NAME
             escaped = workspace / "escaped-owned-lock"
-            real_delete = cleanup_module.delete_exact_approved_file
+            real_delete = cleanup_module._delete_exact_approved_file
 
             def replace_before_bound_delete(
                 root: Path,
@@ -326,7 +388,7 @@ class LegacyCoordinationCleanupTests(unittest.TestCase):
                 )
                 with patch.object(
                     cleanup_module,
-                    "delete_exact_approved_file",
+                    "_delete_exact_approved_file",
                     side_effect=replace_before_bound_delete,
                 ):
                     released = cleanup_module._release_lock(

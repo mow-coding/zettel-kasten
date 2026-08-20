@@ -2,6 +2,11 @@
 
 Status: v0.3.308 implementation and operator guide
 
+Current v0.4.0 override: the normalization, locator, and related compound
+approval routes recorded below are historical evidence only. Approval returns
+`compound_exact_human_approval_binding_required` before private reads or
+mutation and writes nothing. Their read-only plans/audits remain available.
+
 ## Requirement map
 
 | Letter 115 gap | v0.3.308 behavior |

@@ -1,0 +1,133 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "wom-kit/approval-integrity-audit-result/v0.1",
+  "title": "WOM-kit content-free approval integrity audit result",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "ok",
+    "complete",
+    "bounded",
+    "receipt_limit",
+    "receipt_count",
+    "classification_counts",
+    "results",
+    "blocker_codes",
+    "operation_receipts_authenticated",
+    "exact_human_approval_claims_checked",
+    "privacy"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "wom-kit/approval-integrity-audit-result/v0.1"
+    },
+    "ok": {"type": "boolean"},
+    "complete": {"type": "boolean"},
+    "bounded": {"const": true},
+    "receipt_limit": {"type": "integer", "minimum": 1, "maximum": 10000},
+    "receipt_count": {"type": "integer", "minimum": 0, "maximum": 10000},
+    "classification_counts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "exact_v0400",
+        "legacy_unbound_approval",
+        "circular_self_source",
+        "unsupported_affirmation",
+        "receipt_invalid",
+        "unknown"
+      ],
+      "properties": {
+        "exact_v0400": {"type": "integer", "minimum": 0},
+        "legacy_unbound_approval": {"type": "integer", "minimum": 0},
+        "circular_self_source": {"type": "integer", "minimum": 0},
+        "unsupported_affirmation": {"type": "integer", "minimum": 0},
+        "receipt_invalid": {"type": "integer", "minimum": 0},
+        "unknown": {"type": "integer", "minimum": 0}
+      }
+    },
+    "results": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/result"}
+    },
+    "blocker_codes": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"type": "string", "pattern": "^[a-z][a-z0-9_]{0,95}$"}
+    },
+    "operation_receipts_authenticated": {"const": false},
+    "exact_human_approval_claims_checked": {"type": "boolean"},
+    "privacy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "private_content_read",
+        "private_content_echoed",
+        "private_identifier_echoed",
+        "receipt_path_echoed"
+      ],
+      "properties": {
+        "private_content_read": {"const": false},
+        "private_content_echoed": {"const": false},
+        "private_identifier_echoed": {"const": false},
+        "receipt_path_echoed": {"const": false}
+      }
+    }
+  },
+  "$defs": {
+    "sha256_ref": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "affected_kind",
+        "affected_id_sha256",
+        "operation_receipt_sha256",
+        "classification",
+        "operation_receipt_mac_or_signature_verified",
+        "exact_human_approval_reference_present",
+        "exact_human_approval_claim_verified",
+        "legacy_actor_present",
+        "unsupported_affirmation_present",
+        "mechanical_equality_proven",
+        "provenance_facts_proven",
+        "related_fidelity_receipt_valid",
+        "private_content_read",
+        "private_identifier_echoed",
+        "receipt_path_echoed"
+      ],
+      "properties": {
+        "affected_kind": {
+          "enum": ["canonical_mint", "zettel_edge", "retired_draft"]
+        },
+        "affected_id_sha256": {"$ref": "#/$defs/sha256_ref"},
+        "operation_receipt_sha256": {"$ref": "#/$defs/sha256_ref"},
+        "classification": {
+          "enum": [
+            "exact_v0400",
+            "legacy_unbound_approval",
+            "circular_self_source",
+            "unsupported_affirmation",
+            "receipt_invalid",
+            "unknown"
+          ]
+        },
+        "operation_receipt_mac_or_signature_verified": {"const": false},
+        "exact_human_approval_reference_present": {"type": "boolean"},
+        "exact_human_approval_claim_verified": {"type": "boolean"},
+        "legacy_actor_present": {"type": "boolean"},
+        "unsupported_affirmation_present": {"type": "boolean"},
+        "mechanical_equality_proven": {"type": "boolean"},
+        "provenance_facts_proven": {"type": "boolean"},
+        "related_fidelity_receipt_valid": {"type": "boolean"},
+        "private_content_read": {"const": false},
+        "private_identifier_echoed": {"const": false},
+        "receipt_path_echoed": {"const": false}
+      }
+    }
+  }
+}

@@ -451,16 +451,15 @@ Then route safely:
   `notion-ancestor-fetch-adapter-execution-contract --tree
   workbench/notion-nested-tree.sample.json --source notion --scope-generation-id
   DB1 --dry-run` before a scoped live run.
-- Run the first local Notion ancestor structure fetch after credential approval:
+- Preview the historical Notion ancestor structure fetch request:
   use `notion-ancestor-fetch-adapter-run --tree
   workbench/notion-nested-tree.sample.json --output
   workbench/notion-ancestor-result.live.json --source notion
   --scope-ancestor-ref page:<32hex> --approval-decision approve_once
-  --approval-receipt <receipt> --dry-run|--approve`. The live fetch subject is
-  a WOM local credential-bounded adapter process; the AI chat runtime must not
-  hand-roll provider crawling or receive credential values. The run writes only
-  a sanitized ancestor fixture plus a non-secret receipt and still does not read
-  page titles, page bodies, comments, or media bytes.
+  --approval-receipt <receipt> --dry-run`. In v0.4.0 approval returns
+  `compound_exact_human_approval_binding_required` before credential/private
+  reads, provider calls, or writes. The AI chat runtime must not hand-roll
+  provider crawling or receive credential values.
 - Preview the future Notion media byte fetch adapter contract: use
   `notion-media-fetch-adapter-execution-contract --tree
   workbench/notion-nested-tree.sample.json --source notion --scope-leaf-ref
@@ -482,7 +481,10 @@ Then route safely:
   workbench/notion-ancestor-result.sample.json --source notion --dry-run`.
 - Request the minimal sanitized fixtures needed for client verification: use
   `notion-client-fixture-request-plan --source notion --dry-run`.
-- Register known external hashes: use `prehashed-objet-ledger`.
+- Preview known external hashes with `prehashed-objet-ledger --dry-run`, then
+  stop. Its v0.4.0 approval returns
+  `compound_exact_human_approval_binding_required` before private ledger or
+  archive reads and writes no manifest row or receipt.
 - Register already extracted text: use `derive-text capture`.
 - Check extraction completeness: use `derive-text coverage`.
 - Explain local/remote object lookup: use `resolve-objet-ref` or

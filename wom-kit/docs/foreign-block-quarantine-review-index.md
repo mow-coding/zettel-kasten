@@ -13,7 +13,9 @@ Review indexing is read-only.
 
 ## Purpose
 
-`quarantine-review` is the read-only step after a CLI-only approved `quarantine-foreign-block` isolation write.
+`quarantine-review` is the read-only view over historical
+`quarantine-foreign-block` isolation records. The writer is fixed fail-closed
+in v0.4.0.
 
 It inventories existing untrusted foreign block quarantine cases so a human/operator can see what is waiting for review. It also checks whether the matching quarantine write receipt is present and internally consistent.
 
@@ -65,14 +67,15 @@ archive quarantine-decision <archive-root> --case-id case-review-001 --dry-run -
 
 The preview may propose `keep_quarantined`, `reject_and_keep_record`, `eligible_for_attestation_review`, or `needs_more_review`. It records no decision and does not trust, import, attest, mint, anchor, delegate, sign, execute, accept, or apply the foreign block.
 
-v0.2.35 adds a CLI-only decision record after a saved preview is reviewed:
+The historical v0.2.35 decision writer is preview-only in v0.4.0:
 
 ```bash
 archive record-quarantine-decision <archive-root> --decision-preview workbench/foreign-block-quarantine-decision.json --dry-run --format json
-archive record-quarantine-decision <archive-root> --decision-preview workbench/foreign-block-quarantine-decision.json --approve --reviewed-by person:reviewer --format json
 ```
 
-The write is limited to one decision JSON and one decision receipt. It keeps the case untrusted and isolated.
+Approval returns `compound_exact_human_approval_binding_required` before private
+target reads or mutation and writes no decision JSON or receipt. The case stays
+untrusted and isolated.
 
 v0.2.36 adds a read-only index over recorded decisions:
 

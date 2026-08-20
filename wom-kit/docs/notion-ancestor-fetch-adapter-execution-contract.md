@@ -2,6 +2,12 @@
 
 Status: v0.3.134 read-only recursive fetch contract and live-run handoff checkpoint
 
+Current v0.4.0 boundary: this contract remains read-only, while
+`notion-ancestor-fetch-adapter-run` approval is fixed fail-closed with
+`compound_exact_human_approval_binding_required` before credential/private
+target reads, provider calls, or writes. Historical live-run language below is
+architecture/evidence only, not an executable handoff.
+
 `archive notion-ancestor-fetch-adapter-execution-contract` previews the contract
 that a credential-bounded Notion ancestor fetch adapter must satisfy.
 

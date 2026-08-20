@@ -1,6 +1,13 @@
 # Activity-Group Membership Removal Write And Recovery
 
-Status: v0.3.284 approval-gated explicit removal and interruption recovery
+Historical status: v0.3.284 approval-gated explicit removal and interruption recovery
+
+Current v0.4.0 boundary: removal and recovery planning plus writer dry-run
+remain available. `activity-group-membership-removal-write` and
+`activity-group-membership-removal-recover` approvals return
+`compound_exact_human_approval_binding_required` before private target read or
+mutation. They create no canonical change, snapshot, journal, lock, receipt,
+guard, or cleanup. Later transaction details are historical v0.3 semantics.
 
 `activity-group-membership-removal-write` is the CLI-only continuation of the
 read-only
@@ -54,24 +61,15 @@ Alias:
 event-group-membership-removal-write
 ```
 
-Exactly one of `--dry-run` and `--approve` is required. The preview writes
-nothing. It reconstructs the exact mutation set and returns
-`write_plan_sha256`.
+The preview writes nothing. It reconstructs the exact historical mutation set
+and returns `write_plan_sha256`, but grants no current write authority.
 
-## Approve The Removal
+## Current v0.4.0 Approval Boundary
 
-After a human verifies every requested removal and every already-absent row:
-
-```powershell
-archive activity-group-membership-removal-write C:\path\to\archive `
-  --request .wom-scratch/private/activity-group-removals/reviewed.json `
-  --expected-request-sha256 sha256:<request-digest> `
-  --expected-review-plan-sha256 sha256:<review-plan-digest> `
-  --approve `
-  --reviewed-by person:<reviewer> `
-  --affirm-removals-reviewed `
-  --progress --format json
-```
+Stop after preview. Request/review digests, a reviewer label, and the historical
+`--affirm-removals-reviewed` flag do not grant authority. Approval fails with
+`compound_exact_human_approval_binding_required` before private target read or
+mutation.
 
 Approval requires:
 
@@ -249,19 +247,12 @@ Safe classifications may select:
 Missing, malformed, foreign, mismatched, changed, or ambiguous evidence
 selects non-executable `manual_forensic_hold`.
 
-## Approve Recovery
+## Current v0.4.0 Recovery Boundary
 
-For a non-forensic action, review the exact plan and execute:
-
-```powershell
-archive activity-group-membership-removal-recover C:\path\to\archive `
-  --expected-request-sha256 sha256:<request-digest> `
-  --expected-recovery-plan-sha256 sha256:<recovery-plan-digest> `
-  --approve `
-  --reviewed-by person:<reviewer> `
-  --affirm-recovery-reviewed `
-  --progress --format json
-```
+For a non-forensic action, review the exact plan, then stop. Approval fails with
+`compound_exact_human_approval_binding_required` before private target read or
+mutation. The historical `--affirm-recovery-reviewed` flag does not grant
+current recovery authority.
 
 Alias:
 

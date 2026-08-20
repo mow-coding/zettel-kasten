@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://wom.local/schemas/agent-instruction-policy-v0.1.schema.json",
+  "title": "WOM local agent instruction policy marker v0.1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "policy_id",
+    "policy_version",
+    "status",
+    "scope_role",
+    "directives"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "wom-kit/agent-instruction-policy/v0.1"
+    },
+    "policy_id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9._-]{0,95}$"
+    },
+    "policy_version": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 1000000
+    },
+    "status": {
+      "enum": ["active", "retired", "historical"]
+    },
+    "scope_role": {
+      "enum": ["project_current", "archive_local"]
+    },
+    "directives": {
+      "type": "object",
+      "maxProperties": 64,
+      "propertyNames": {
+        "pattern": "^[a-z][a-z0-9_]{0,63}$"
+      },
+      "additionalProperties": {
+        "enum": [
+          "required",
+          "forbidden",
+          "enabled",
+          "disabled",
+          "read_only",
+          "retired",
+          "advisory"
+        ]
+      }
+    }
+  }
+}

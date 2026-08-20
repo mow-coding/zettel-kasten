@@ -16,16 +16,16 @@ from typing import Any
 from .private_objet_metadata_index import (
     PRIVATE_TABLE_NAMES,
     PrivateObjetIndexInspection,
-    PrivateObjetIndexProjection,
-    compile_private_objet_index_projection,
+    _PrivateObjetIndexProjection,
+    _compile_private_objet_index_projection,
 )
 from .private_objet_metadata_index_authority import (
-    PrivateObjetIndexAuthorityCapture,
-    capture_private_objet_index_authority,
+    _PrivateObjetIndexAuthorityCapture,
+    _capture_private_objet_index_authority,
 )
 from .private_objet_metadata_index_session import (
     PRIVATE_HEALTH_KEYS,
-    PrivateObjetIndexReadAPI,
+    _PrivateObjetIndexReadAPI,
     PrivateObjetIndexSessionError,
     PrivateObjetMetadataCounts,
     PrivateObjetMetadataHealthDecision,
@@ -144,9 +144,9 @@ def _counts_from_inspection(
 
 
 def _probe_private_projection(
-    api: PrivateObjetIndexReadAPI,
+    api: _PrivateObjetIndexReadAPI,
     *,
-    expected: PrivateObjetIndexProjection | None = None,
+    expected: _PrivateObjetIndexProjection | None = None,
 ) -> _ProjectionProbe:
     rows = api.fetch_all(
         _PRIVATE_TABLE_PRESENCE_SQL,
@@ -197,9 +197,9 @@ def _probe_private_projection(
 
 def _envelope_from_probe(
     probe: _ProjectionProbe,
-    authority: PrivateObjetIndexAuthorityCapture,
+    authority: _PrivateObjetIndexAuthorityCapture,
 ) -> dict[str, object]:
-    if not isinstance(authority, PrivateObjetIndexAuthorityCapture):
+    if not isinstance(authority, _PrivateObjetIndexAuthorityCapture):
         raise _closed_session_error(
             "private_objet_metadata_projection_invalid"
         )
@@ -314,24 +314,24 @@ def _evaluate_private_objet_metadata_index_with_consumer(
     root: Path | str,
     archive_id: str,
     internal_consumer: Callable[
-        [PrivateObjetIndexReadAPI, Mapping[str, object]],
+        [_PrivateObjetIndexReadAPI, Mapping[str, object]],
         None,
     ],
 ) -> PrivateObjetMetadataHealthDecision:
     """Run the shared opaque health/consumer/final-check read lifecycle."""
 
     final_probe: _ProjectionProbe | None = None
-    final_expected: PrivateObjetIndexProjection | None = None
+    final_expected: _PrivateObjetIndexProjection | None = None
 
-    def capture_authority() -> PrivateObjetIndexAuthorityCapture:
-        return capture_private_objet_index_authority(Path(root), archive_id)
+    def capture_authority() -> _PrivateObjetIndexAuthorityCapture:
+        return _capture_private_objet_index_authority(Path(root), archive_id)
 
     def inspect_health(
-        api: PrivateObjetIndexReadAPI,
+        api: _PrivateObjetIndexReadAPI,
         authority: object,
     ) -> Mapping[str, object]:
         nonlocal final_expected, final_probe
-        if not isinstance(authority, PrivateObjetIndexAuthorityCapture):
+        if not isinstance(authority, _PrivateObjetIndexAuthorityCapture):
             raise _closed_session_error(
                 "private_objet_metadata_projection_invalid"
             )
@@ -341,7 +341,7 @@ def _evaluate_private_objet_metadata_index_with_consumer(
             and final_probe.inspection.authority_fingerprint_sha256
             == authority.fingerprint_sha256
         ):
-            final_expected = compile_private_objet_index_projection(
+            final_expected = _compile_private_objet_index_projection(
                 authority.compiler_input
             )
             verified_probe = _probe_private_projection(
@@ -356,7 +356,7 @@ def _evaluate_private_objet_metadata_index_with_consumer(
         return _envelope_from_probe(final_probe, authority)
 
     def final_check(
-        api: PrivateObjetIndexReadAPI,
+        api: _PrivateObjetIndexReadAPI,
         _authority: object,
     ) -> bool:
         if final_probe is None:

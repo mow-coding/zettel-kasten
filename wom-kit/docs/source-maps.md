@@ -112,19 +112,10 @@ $env:PYTHONPATH='src'; python -m wom_kit.archive_cli add-source .\my-archive `
   --format json
 ```
 
-Apply after review:
-
-```powershell
-$env:PYTHONPATH='src'; python -m wom_kit.archive_cli add-source .\my-archive `
-  --source-id local:desktop `
-  --type local_folder `
-  --local-root C:\Users\example\Desktop `
-  --write-local-profile `
-  --approve `
-  --reviewed-by person:me
-```
-
-This writes the safe source binding to `source-bindings.yml`. The real local path goes only to ignored `profiles/local/source-roots.local.yml` when `--write-local-profile` is used.
+Stop after review. In v0.4.0 `add-source` approval returns
+`compound_exact_human_approval_binding_required` before reading the private
+source target or writing. It creates neither `source-bindings.yml` changes nor
+an ignored local-profile entry.
 
 Show Docker mount guidance:
 
@@ -144,17 +135,11 @@ $env:PYTHONPATH='src'; python -m wom_kit.archive_cli scan-source .\my-archive `
   --format json
 ```
 
-Apply after review:
+Stop after the preview in v0.4.0. Scan approval returns
+`compound_exact_human_approval_binding_required` before source, credential,
+provider, archive, or target reads and writes nothing.
 
-```powershell
-$env:PYTHONPATH='src'; python -m wom_kit.archive_cli scan-source .\my-archive `
-  --source local:personal-documents `
-  --source-root C:\Users\example\Documents `
-  --approve `
-  --reviewed-by person:me
-```
-
-Approved scans write:
+Historical v0.3 approved scans used this layout; it remains audit evidence only:
 
 ```text
 source-maps/<source_id>.jsonl
@@ -174,7 +159,11 @@ source_intake_plan
 imap_mailbox_plan
 ```
 
-It does not expose a real source scan apply tool. Human-approved writes stay in the CLI.
+Neither MCP nor CLI exposes a live source scan or source-registration apply path
+in v0.4.0. Their preview/plan surfaces remain available, while `scan-source`
+and `add-source` approval return
+`compound_exact_human_approval_binding_required` before private source or
+archive reads and write no source map, scan result, or receipt.
 
 ## Indexing
 

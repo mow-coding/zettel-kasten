@@ -96,8 +96,8 @@ For every new AI-assisted or AI-generated draft, report the dry-run body and
 source-fidelity plan evidence separately from the approved draft write and its
 private receipt. Declared AI provenance cannot be described as human-written.
 Before claiming publication, report the mint-time source/body re-verification
-and the approved current fidelity-plan digest. Human-written creation remains
-compatible; an older AI draft's attributed legacy review is not retrospective
+and the approved current fidelity-plan digest. Human-declared/non-AI
+non-dry-run creation is fixed closed in v0.4.0; an older AI draft's attributed legacy review is not retrospective
 verbatim proof. Reviewer attribution remains explicit, but private source
 authority and excerpts stay out of ordinary output. Audience is not an ACL or
 evidence of sharing, export, transport, or provider execution.

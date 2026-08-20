@@ -24,6 +24,25 @@ from wom_kit import archive_cli, archive_services, completion_workflows
 
 
 class ObjetCaptureBatchDerivedTextTests(unittest.TestCase):
+    def setUp(self) -> None:
+        # These are pre-v0.4 durability/recovery fixtures. Keep the public
+        # approval surfaces fixed-closed and opt this test class into the two
+        # underscore-only historical engines explicitly.
+        batch_apply = mock.patch.object(
+            completion_workflows,
+            "objet_capture_batch_apply",
+            completion_workflows._objet_capture_batch_apply_legacy_core,
+        )
+        derived_register = mock.patch.object(
+            archive_services,
+            "_derived_text_register",
+            archive_services._derived_text_register_legacy_core,
+        )
+        batch_apply.start()
+        derived_register.start()
+        self.addCleanup(derived_register.stop)
+        self.addCleanup(batch_apply.stop)
+
     def fake_archive(self, target: Path) -> Path:
         shutil.copytree(KIT_ROOT / "examples" / "fake-life-archive", target)
         (target / ".wom-sandbox").write_text(
@@ -253,9 +272,10 @@ class ObjetCaptureBatchDerivedTextTests(unittest.TestCase):
             json.dumps(selection, ensure_ascii=False),
             encoding="utf-8",
         )
-        applied = archive_services.objet_capture_apply(
+        applied = archive_services._objet_capture_run(
             archive_root,
             selection_path,
+            approve=True,
             reviewed_by="person:letter128-v0314",
         )
         self.assertTrue(applied["ok"], applied)
@@ -643,7 +663,7 @@ class ObjetCaptureBatchDerivedTextTests(unittest.TestCase):
             attacker_selection_bytes = completion_workflows._canonical_json_bytes(
                 attacker_selection
             )
-            real_apply = archive_services.objet_capture_apply
+            real_apply = archive_services._objet_capture_run
             passed_selection_document: dict[str, object] = {}
 
             def swap_then_apply(
@@ -674,7 +694,7 @@ class ObjetCaptureBatchDerivedTextTests(unittest.TestCase):
             derived_before = self.line_count(derived_manifest)
             with mock.patch.object(
                 archive_services,
-                "objet_capture_apply",
+                "_objet_capture_run",
                 side_effect=swap_then_apply,
             ):
                 applied = completion_workflows.objet_capture_batch_apply(
@@ -2053,16 +2073,18 @@ class ObjetCaptureBatchDerivedTextTests(unittest.TestCase):
                 archive_root,
                 manifest_path=request_path,
             )
-            real_apply = archive_services.objet_capture_apply
+            real_apply = archive_services._objet_capture_run
 
             def apply_then_raise(
                 *args: object,
                 **kwargs: object,
             ) -> dict[str, object]:
-                real_apply(*args, **kwargs)
-                raise RuntimeError(
-                    r"private C:\outside\must-not-echo after durable write"
-                )
+                result = real_apply(*args, **kwargs)
+                if kwargs.get("approve") is True:
+                    raise RuntimeError(
+                        r"private C:\outside\must-not-echo after durable write"
+                    )
+                return result
 
             files_manifest = archive_root / "objects/manifests/files.jsonl"
             derived_manifest = (
@@ -2073,7 +2095,7 @@ class ObjetCaptureBatchDerivedTextTests(unittest.TestCase):
             derived_before = self.line_count(derived_manifest)
             with mock.patch.object(
                 archive_services,
-                "objet_capture_apply",
+                "_objet_capture_run",
                 side_effect=apply_then_raise,
             ):
                 failed = completion_workflows.objet_capture_batch_apply(
@@ -2120,27 +2142,39 @@ class ObjetCaptureBatchDerivedTextTests(unittest.TestCase):
                     archive_root,
                     manifest_path=request_path,
                 )
+                real_apply = archive_services._objet_capture_run
                 if case_name == "non-dict":
-                    side_effect: object = ["invalid-lower-result"]
+
+                    def invalid_apply_result(
+                        *args: object,
+                        **kwargs: object,
+                    ) -> object:
+                        if kwargs.get("approve") is True:
+                            return ["invalid-lower-result"]
+                        return real_apply(*args, **kwargs)
+
+                    side_effect: object = invalid_apply_result
                 else:
-                    real_apply = archive_services.objet_capture_apply
 
                     def corrupt_count(
                         *args: object,
                         **kwargs: object,
                     ) -> dict[str, object]:
                         value = real_apply(*args, **kwargs)
-                        value["summary"] = {
-                            **value["summary"],
-                            "captured": value["summary"].get("captured", 0)
-                            + 1,
-                        }
+                        if kwargs.get("approve") is True:
+                            value["summary"] = {
+                                **value["summary"],
+                                "captured": value["summary"].get(
+                                    "captured", 0
+                                )
+                                + 1,
+                            }
                         return value
 
                     side_effect = corrupt_count
                 with mock.patch.object(
                     archive_services,
-                    "objet_capture_apply",
+                    "_objet_capture_run",
                     side_effect=(
                         side_effect if callable(side_effect) else None
                     ),
@@ -2255,36 +2289,9 @@ class ObjetCaptureBatchDerivedTextTests(unittest.TestCase):
             self.assertEqual(self.line_count(files_manifest), original_before + 1)
             self.assertEqual(self.line_count(derived_manifest), derived_before + 1)
 
-    def test_cli_apply_text_uses_actual_partial_counts_and_json_is_exact(
+    def test_cli_apply_is_fixed_closed_before_partial_service_projection(
         self,
     ) -> None:
-        partial_result = {
-            "ok": False,
-            "state": "partial",
-            "summary": {
-                "batch_id": "letter128-cli-partial",
-                "item_count": 2,
-                # These are plan-time fields and must never be presented as the
-                # terminal apply outcome.
-                "ready_item_count": 2,
-                "blocked_item_count": 0,
-                "original_requested_item_count": 2,
-                "original_written_item_count": 2,
-                "original_skipped_item_count": 0,
-                "original_blocked_item_count": 0,
-                "derived_text_requested_item_count": 2,
-                "derived_text_written_item_count": 1,
-                "derived_text_skipped_item_count": 0,
-                "derived_text_blocked_item_count": 1,
-                "convergence_model": "bounded_per_item_with_replay",
-                "plan_sha256": "a" * 64,
-            },
-            "blockers": ["batch_derived_text_completion_incomplete"],
-            "warnings": [],
-            "next_safe_actions": list(
-                archive_services.OBJET_CAPTURE_PARTIAL_NEXT_SAFE_ACTIONS
-            ),
-        }
         args = SimpleNamespace(
             dry_run=False,
             approve=True,
@@ -2300,67 +2307,25 @@ class ObjetCaptureBatchDerivedTextTests(unittest.TestCase):
             mock.patch.object(
                 completion_workflows,
                 "objet_capture_batch_apply",
-                return_value=partial_result,
-            ),
-            mock.patch.object(sys, "stdout", stdout),
-            mock.patch.object(sys, "stderr", stderr),
-        ):
-            return_code = archive_cli.command_objet_capture_batch(args)
-        rendered = stdout.getvalue()
-        self.assertEqual(return_code, 1)
-        self.assertEqual(stderr.getvalue(), "")
-        self.assertIn("Objet capture batch: partial", rendered)
-        self.assertIn(
-            "- original written/skipped/blocked: 2/0/0",
-            rendered,
-        )
-        self.assertIn(
-            "- derived text written/skipped/blocked: 1/0/1",
-            rendered,
-        )
-        self.assertNotIn("- ready/blocked: 2/0", rendered)
-        self.assertIn(
-            "BLOCKED: batch_derived_text_completion_incomplete",
-            rendered,
-        )
-        for action in archive_services.OBJET_CAPTURE_PARTIAL_NEXT_SAFE_ACTIONS:
-            self.assertIn(f"NEXT: {action}", rendered)
-
-        args.format = "json"
-        stdout = io.StringIO()
-        stderr = io.StringIO()
-        with (
-            mock.patch.object(
-                completion_workflows,
-                "objet_capture_batch_apply",
-                return_value=partial_result,
-            ),
+                return_value={"ok": True, "files_written": ["unexpected"]},
+            ) as service,
             mock.patch.object(sys, "stdout", stdout),
             mock.patch.object(sys, "stderr", stderr),
         ):
             return_code = archive_cli.command_objet_capture_batch(args)
         self.assertEqual(return_code, 1)
-        self.assertEqual(stderr.getvalue(), "")
-        self.assertEqual(json.loads(stdout.getvalue()), partial_result)
+        self.assertEqual(stdout.getvalue(), "")
+        self.assertEqual(
+            stderr.getvalue(),
+            "Exact compound human-approval binding is not implemented for "
+            "this command; the write did not start. Use its dry-run or plan "
+            "mode only.\n",
+        )
+        service.assert_not_called()
 
-    def test_cli_recovery_text_shows_truth_flags_and_next_actions(self) -> None:
-        recovery_result = {
-            "ok": False,
-            "state": "recovery_required",
-            "summary": {
-                "batch_id": "letter128-cli-recovery",
-                "item_count": 1,
-                "convergence_model": "bounded_per_item_with_replay",
-                "plan_sha256": "c" * 64,
-            },
-            "blockers": ["batch_capture_outcome_unverified"],
-            "warnings": [],
-            "writes_may_have_occurred": True,
-            "outcome_unverified": True,
-            "next_safe_actions": list(
-                completion_workflows.OBJET_CAPTURE_BATCH_OUTCOME_UNVERIFIED_NEXT_SAFE_ACTIONS
-            ),
-        }
+    def test_cli_apply_json_is_fixed_closed_before_recovery_service_projection(
+        self,
+    ) -> None:
         args = SimpleNamespace(
             dry_run=False,
             approve=True,
@@ -2368,7 +2333,7 @@ class ObjetCaptureBatchDerivedTextTests(unittest.TestCase):
             expected_plan_sha256="c" * 64,
             archive_root="unused",
             manifest="unused.json",
-            format="text",
+            format="json",
         )
         stdout = io.StringIO()
         stderr = io.StringIO()
@@ -2376,34 +2341,28 @@ class ObjetCaptureBatchDerivedTextTests(unittest.TestCase):
             mock.patch.object(
                 completion_workflows,
                 "objet_capture_batch_apply",
-                return_value=recovery_result,
-            ),
+                return_value={"ok": True, "files_written": ["unexpected"]},
+            ) as service,
             mock.patch.object(sys, "stdout", stdout),
             mock.patch.object(sys, "stderr", stderr),
         ):
             return_code = archive_cli.command_objet_capture_batch(args)
-        rendered = stdout.getvalue()
         self.assertEqual(return_code, 1)
         self.assertEqual(stderr.getvalue(), "")
-        self.assertIn("Objet capture batch: recovery_required", rendered)
-        self.assertIn("- writes may have occurred: yes", rendered)
-        self.assertIn("- outcome unverified: yes", rendered)
-        for action in recovery_result["next_safe_actions"]:
-            self.assertIn(f"NEXT: {action}", rendered)
-
-        args.format = "json"
-        stdout = io.StringIO()
-        with (
-            mock.patch.object(
-                completion_workflows,
-                "objet_capture_batch_apply",
-                return_value=recovery_result,
-            ),
-            mock.patch.object(sys, "stdout", stdout),
-        ):
-            return_code = archive_cli.command_objet_capture_batch(args)
-        self.assertEqual(return_code, 1)
-        self.assertEqual(json.loads(stdout.getvalue()), recovery_result)
+        self.assertEqual(
+            json.loads(stdout.getvalue()),
+            {
+                "ok": False,
+                "state": "blocked",
+                "lifecycle_action": "objet_capture_batch",
+                "reason_codes": [
+                    "compound_exact_human_approval_binding_required"
+                ],
+                "files_written": [],
+                "private_values_echoed": False,
+            },
+        )
+        service.assert_not_called()
 
     def test_cli_dry_run_text_keeps_ready_blocked_projection(self) -> None:
         plan_result = {

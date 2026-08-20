@@ -32,12 +32,13 @@ from ._legacy_cleanup_fs import (
     stat_identity,
 )
 from .archive_services import (
-    activity_group_bound_directory_chain,
+    _compound_exact_human_approval_blocked,
+    _activity_group_bound_directory_chain,
     safe_foreign_quarantine_actor_id,
 )
 from .legacy_cleanup_bound_delete import (
-    delete_exact_approved_empty_directory,
-    delete_exact_approved_file,
+    _delete_exact_approved_empty_directory,
+    _delete_exact_approved_file,
 )
 
 
@@ -479,7 +480,7 @@ def _stream_regular_file_bound(
         except LegacyCleanupFilesystemError as exc:
             _translate_mount_boundary_error(exc)
 
-    with activity_group_bound_directory_chain(
+    with _activity_group_bound_directory_chain(
         workspace_root,
         path.parent,
     ) as binding:
@@ -555,7 +556,7 @@ def _list_directory_bound(
                 raise _DirectoryEntryLimitError(exc.code) from exc
             _translate_mount_boundary_error(exc)
 
-    with activity_group_bound_directory_chain(
+    with _activity_group_bound_directory_chain(
         workspace_root,
         directory,
     ) as binding:
@@ -1355,7 +1356,7 @@ def _release_lock(
     except OSError:
         return False
     try:
-        delete_exact_approved_file(
+        _delete_exact_approved_file(
             workspace_root,
             lock_path,
             expected_record,
@@ -1402,7 +1403,7 @@ def _unlink_verified_file(
     path: Path,
     expected: dict[str, Any],
 ) -> None:
-    delete_exact_approved_file(workspace_root, path, expected)
+    _delete_exact_approved_file(workspace_root, path, expected)
 
 
 def _remove_verified_empty_directory(
@@ -1410,7 +1411,7 @@ def _remove_verified_empty_directory(
     path: Path,
     expected: dict[str, Any],
 ) -> None:
-    delete_exact_approved_empty_directory(workspace_root, path, expected)
+    _delete_exact_approved_empty_directory(workspace_root, path, expected)
 
 
 def legacy_coordination_cleanup(
@@ -1428,6 +1429,44 @@ def legacy_coordination_cleanup(
     max_bytes: int,
 ) -> dict[str, Any]:
     """Preview or remove exactly one fully reviewed retired-state directory."""
+
+    if type(dry_run) is not bool or type(approve) is not bool or approve:
+        return _compound_exact_human_approval_blocked(
+            lifecycle_action="legacy_coordination_cleanup",
+        )
+
+    return _legacy_coordination_cleanup_legacy_core(
+        workspace_root,
+        dry_run=dry_run,
+        approve=approve,
+        reviewed_by=reviewed_by,
+        expected_plan_sha256=expected_plan_sha256,
+        affirm_workspace_owner_authorized=affirm_workspace_owner_authorized,
+        affirm_external_writers_quiescent=affirm_external_writers_quiescent,
+        affirm_retired_state_disposable=affirm_retired_state_disposable,
+        affirm_backups_and_receipts_disposable=(
+            affirm_backups_and_receipts_disposable
+        ),
+        max_files=max_files,
+        max_bytes=max_bytes,
+    )
+
+
+def _legacy_coordination_cleanup_legacy_core(
+    workspace_root: Path | str,
+    *,
+    dry_run: bool = False,
+    approve: bool = False,
+    reviewed_by: str | None,
+    expected_plan_sha256: str | None,
+    affirm_workspace_owner_authorized: bool,
+    affirm_external_writers_quiescent: bool,
+    affirm_retired_state_disposable: bool,
+    affirm_backups_and_receipts_disposable: bool,
+    max_files: int,
+    max_bytes: int,
+) -> dict[str, Any]:
+    """Exercise the pre-v0.4 cleanup in bounded historical tests only."""
 
     private_plan, public_plan = _build_private_plan(
         workspace_root,

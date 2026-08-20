@@ -1,0 +1,111 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "wom-kit/approval-integrity-overlay-entry/v0.1",
+  "title": "WOM-kit append-only approval integrity overlay entry",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "entry_digest",
+    "archive_identity_sha256",
+    "operation_receipt_sha256",
+    "operation_receipt_mac_or_signature_verified",
+    "affected_kind",
+    "affected_id_sha256",
+    "classification_at_transition",
+    "state",
+    "prior_overlay_digest",
+    "transition_plan_sha256",
+    "target_binding_sha256",
+    "exact_human_approval",
+    "created_at",
+    "private_content_read",
+    "private_identifier_echoed",
+    "authentication"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "wom-kit/approval-integrity-overlay-entry/v0.1"
+    },
+    "entry_digest": {"$ref": "#/$defs/sha256_ref"},
+    "archive_identity_sha256": {"$ref": "#/$defs/sha256_ref"},
+    "operation_receipt_sha256": {"$ref": "#/$defs/sha256_ref"},
+    "operation_receipt_mac_or_signature_verified": {"const": false},
+    "affected_kind": {
+      "enum": ["canonical_mint", "zettel_edge", "retired_draft"]
+    },
+    "affected_id_sha256": {"$ref": "#/$defs/sha256_ref"},
+    "classification_at_transition": {
+      "enum": [
+        "exact_v0400",
+        "legacy_unbound_approval",
+        "circular_self_source",
+        "unsupported_affirmation",
+        "receipt_invalid",
+        "unknown"
+      ]
+    },
+    "state": {
+      "enum": [
+        "review_required",
+        "evidence_supplemented",
+        "withdrawn",
+        "repair_planned"
+      ]
+    },
+    "prior_overlay_digest": {"$ref": "#/$defs/sha256_ref"},
+    "transition_plan_sha256": {"$ref": "#/$defs/sha256_ref"},
+    "target_binding_sha256": {"$ref": "#/$defs/sha256_ref"},
+    "exact_human_approval": {"$ref": "#/$defs/exact_reference"},
+    "created_at": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{6}Z$"
+    },
+    "private_content_read": {"const": false},
+    "private_identifier_echoed": {"const": false},
+    "authentication": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "algorithm", "mac"],
+      "properties": {
+        "schema_version": {
+          "const": "wom-kit/approval-integrity-overlay-authentication/v0.1"
+        },
+        "algorithm": {"const": "hmac-sha256"},
+        "mac": {
+          "type": "string",
+          "pattern": "^hmac-sha256:[0-9a-f]{64}$"
+        }
+      }
+    }
+  },
+  "$defs": {
+    "sha256_ref": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "exact_reference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "approval_id",
+        "context_sha256",
+        "approval_authority_sha256",
+        "one_use"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "wom-kit/exact-human-approval-reference/v0.1"
+        },
+        "approval_id": {
+          "type": "string",
+          "pattern": "^approval_[0-9a-f]{32}$"
+        },
+        "context_sha256": {"$ref": "#/$defs/sha256_ref"},
+        "approval_authority_sha256": {"$ref": "#/$defs/sha256_ref"},
+        "one_use": {"const": true}
+      }
+    }
+  }
+}

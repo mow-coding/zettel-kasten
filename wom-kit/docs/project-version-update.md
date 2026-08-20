@@ -1,6 +1,12 @@
 # Project Version Update
 
-Status: implemented in v0.3.215; bounded Git batch and operation observation in v0.3.314
+Status: read-only preview/inspection in v0.4.0; v0.3 mutation contract is historical
+
+Current boundary: `project-version-update`, collision preserve-relocate, and
+`project-bytecode-repair` approval fail with
+`compound_exact_human_approval_binding_required` before private project read or
+mutation. The dry-runs and inspections below remain available; older approval
+examples describe historical receipts only and are not v0.4.0 run instructions.
 
 ## Plain-Language Purpose
 
@@ -31,25 +37,15 @@ archive project-version-update <project-or-archive-root> `
 ```
 
 The target may not exist locally yet. In that case
-Windows may report `ready_to_fetch_on_approve`, which means only that local
-preconditions passed and the approved command will fetch and verify the release
-before materializing the target commit tree. POSIX instead reports the
-preview-only platform status described below.
+Windows may report the historical status `ready_to_fetch_on_approve`. In
+v0.4.0 that status is diagnostic only: approval is fixed fail-closed before
+private project reads, fetch, or materialization. POSIX also remains preview
+only.
 
-After a human reviews the preview, pause editors, sync clients, backup tools,
-and every other Git writer for the complete transaction. While they remain
-paused, run approval on Windows with the required affirmation:
-
-```powershell
-archive project-version-update <project-or-archive-root> `
-  --target vX.Y.Z `
-  --approve `
-  --reviewed-by <actor> `
-  --affirm-external-writers-quiescent `
-  --progress `
-  --output .zettel-kasten/diagnostics/update-apply-20260811-001.json `
-  --format json
-```
+After a human reviews the preview, stop. In v0.4.0 approval returns
+`compound_exact_human_approval_binding_required` before reading the private
+project target, fetching refs, materializing a tree, changing a pin, creating
+a lock, or publishing a receipt.
 
 These project-local output paths opt into v0.3.314 operation observation. When
 the command is started from an archive root, use a fresh
@@ -61,8 +57,9 @@ and completion still requires a fresh-process `archive version` check.
 
 ## Ignored-Entry Collision Inspection And Preservation
 
-The ordinary preflight and the approved updater use the same bounded
-materialization planner whenever the exact target commit is locally available.
+The ordinary preflight retains the bounded materialization planner whenever
+the exact target commit is locally available. Historical approved updater
+evidence used the same planner.
 The public plan reports only fixed reason codes, counts, a
 `materialization_plan_sha256`, and sorted ordinal references such as
 `update-entry:0001`. An ordinal is meaningful only together with that exact
@@ -101,20 +98,14 @@ archive project-bytecode-repair-plan <project-or-archive-root> `
   --expected-materialization-plan-sha256 sha256:<64-lowercase-hex> `
   --dry-run --format json
 
-archive project-bytecode-repair <project-or-archive-root> `
-  --target vX.Y.Z `
-  --expected-materialization-plan-sha256 sha256:<64-lowercase-hex> `
-  --expected-plan-sha256 <repair-plan-sha256> `
-  --approve --reviewed-by <actor> `
-  --affirm-external-writers-quiescent --format json
-
 archive project-version-update <project-or-archive-root> `
   --target vX.Y.Z --dry-run --format json
 ```
 
-Review the repair plan before the second command. The third command is always a
-fresh preview; neither collision inspection nor repair automatically retries an
-old updater approval.
+Review the repair plan, then stop. `project-bytecode-repair` approval returns
+`compound_exact_human_approval_binding_required` before private project reads
+or mutation and removes no bytecode/cache entry or receipt. A later updater
+invocation must also remain a fresh preview.
 
 If a result reports one of these references, inspect it without rerunning the
 updater:
@@ -148,20 +139,10 @@ archive project-version-update-collision <project-or-archive-root> `
   --format json
 ```
 
-Approval replays the unchanged plan and requires a reviewer plus whole-operation
-writer quiescence:
-
-```powershell
-archive project-version-update-collision <project-or-archive-root> `
-  --target vX.Y.Z `
-  --entry-ref update-entry:0001 `
-  --expected-plan-sha256 sha256:<64-lowercase-hex> `
-  --action preserve-relocate `
-  --approve `
-  --reviewed-by <actor> `
-  --affirm-external-writers-quiescent `
-  --format json
-```
+Do not replay it as an approved preservation. In v0.4.0 approval returns
+`compound_exact_human_approval_binding_required` before private project reads
+or mutation and moves no payload or receipt. The detailed transaction below
+describes historical v0.3.315 evidence only.
 
 This is a preservation-only transaction, not cleanup. It is limited to an
 exact verified target-tree file key whose local obstruction is Git-ignored,
@@ -224,24 +205,25 @@ sets both `preservation_relocation_attempted` and
 identity is available. The same exception during inspection or dry-run remains
 a verified zero-write failure with false relocation fields.
 
-After preservation, run a new `project-version-update --dry-run`. Approval of
-the preservation action grants no authority to approve the updater. The
-collision surface is CLI-only and has no aliases or MCP method.
+After auditing historical preservation evidence, run a new
+`project-version-update --dry-run`. Historical preservation grants no current
+authority. The collision surface is CLI-only and has no aliases or MCP method.
 
 ## Platform Boundary
 
-In v0.3.291, the approved write transaction is supported only on Windows.
+Historically in v0.3.291, the write transaction was supported only on Windows.
 Windows directory handles are opened without `FILE_SHARE_DELETE`, so every
 held write-path directory behind the project root, `.zettel-kasten/source`,
 its `.git` tree, pins, lock, and receipts cannot be renamed, deleted, or
 replaced by a junction while the transaction resolves child paths.
 
-POSIX can still run the useful read-only dry-run. Its result is
+Every v0.4.0 platform can still run the useful read-only dry-run. POSIX result is
 `status: preview_only_platform_unsupported`, includes a warning, and reports
-`write_boundary.approval_platform_supported: false`. Running `--approve` on
-POSIX is a blocker and writes nothing. An open POSIX directory descriptor does
-not prevent another process from renaming that pathname, and the Git plus
-complete-tree update is not yet descriptor-relative end to end.
+`write_boundary.approval_platform_supported: false`. v0.4.0 approval on every
+platform returns `compound_exact_human_approval_binding_required` before
+private project reads or writes. An open POSIX directory descriptor does not
+prevent another process from renaming that pathname, and the Git plus complete
+tree update is not descriptor-relative end to end.
 
 ## What Approval Verifies
 

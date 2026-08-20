@@ -63,12 +63,11 @@ these content-free states:
 - `completed_lock_leftover`: a matching immutable receipt exists; inspect the
   stale lock before any later cleanup;
 - `recoverable_missing_receipt`: the canonical candidate is already present
-  but its receipt is missing; rerun the exact original approved
-  ordinary `zet-revision-write` or restore `zet-revision-restore-write`
-  command to finish only the receipt;
+  but its receipt is missing; in v0.4.0 do not replay either writer because
+  approval is fixed fail-closed; retain the case for manual forensic review;
 - `prewrite_lock_leftover`: the canonical zet still matches its before hash;
-  rerun the exact original approved ordinary-revision or restore command so it
-  can revalidate and resume; the audit itself never cleans the lock;
+  retain it for manual forensic review; v0.4.0 writer approval cannot resume
+  it and the audit itself never cleans the lock;
 - `ambiguous_lock`: current bytes match neither bound state or the lock and
   receipt disagree;
 - `invalid_lock`: the text-free evidence cannot satisfy the revision receipt
@@ -107,6 +106,8 @@ still require separately recovered bytes. New v0.2 receipts preserve those
 bytes as local objets, but the v0.3.248 restore planner still accepts a complete
 privately reviewed scratch proposal and binds it to the selected receipt's
 before hashes. The selected receipt must be the actual newest event. The
-separately approved CLI-only `zet-revision-restore-write` can install the exact
-reviewed bytes and append one restore event. MCP exposes no duplicate
-receipt-audit or revision/restore write tool.
+CLI-only `zet-revision-restore-write --dry-run` can preview the exact reviewed
+bytes. In v0.4.0 approval returns
+`compound_exact_human_approval_binding_required` before private target reads or
+mutation and installs nothing. MCP exposes no duplicate receipt-audit or
+revision/restore write tool.

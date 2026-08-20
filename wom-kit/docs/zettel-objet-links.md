@@ -1,8 +1,8 @@
 # Zettel Objet Links
 
-Status: v0.3.18 read-only preview
-Extended: v0.3.301 approval-gated structured link writer
-Date: 2026-08-07
+Status: v0.4.0 read-only preview; structured link apply/revert fail closed
+Historical extension: v0.3.301 structured link receipts remain readable
+Date: 2026-08-20
 
 `zettel-objet-links` is the first small reading-side bridge between a human
 zettel and source objets referenced by content address.
@@ -53,32 +53,27 @@ Inputs:
 - `dry_run`, which must be true
 - optional `max_refs`
 
-## Add A Structured Link
+## Plan A Structured Link
 
-The read-only preview remains unchanged. v0.3.301 adds a separate CLI-only
-writer for one reviewed asset entry:
+The read-only preview remains unchanged. The singular command can still plan
+one reviewed asset entry:
 
 ```text
 archive zettel-objet-link <archive-root> --zettel-id <id> \
   --object-id sha256:<64-hex> --role source --dry-run --format json
-
-archive zettel-objet-link <archive-root> --zettel-id <id> \
-  --object-id sha256:<64-hex> --role source \
-  --expected-plan-sha256 <sha256:...> --approve --reviewed-by <actor> \
-  --format json
 ```
 
-The objet must already exist in `objects/manifests/files.jsonl`. The writer
-adds one strict `assets` entry containing `object_id`, a safe role, and an
-optional label. A complete SHA-256 is mandatory. Truncated hashes are not
-guessed or expanded.
+The objet must already exist in `objects/manifests/files.jsonl`. A complete
+SHA-256 is mandatory. Truncated hashes are not guessed or expanded.
 
-Before changing the zet, approval re-runs the full plan under a per-zettel
-lock. The workflow stores the exact earlier bytes privately and writes an
-immutable receipt. `zettel-objet-link-revert` restores those exact bytes only
-while the zet still equals the recorded post-write bytes, so unrelated later
-human edits cannot be overwritten. Neither command reads or echoes object
-bytes.
+The historical v0.3 writer affected canonical zettel bytes, private snapshot
+state, and receipt history together; its revert read those records before
+restoring bytes. v0.4.0 has no exact-human binding for either complete effect
+set. `zettel-objet-link --approve` and
+`zettel-objet-link-revert --approve` therefore stop before private target read
+or mutation with `compound_exact_human_approval_binding_required`. They write
+no zettel, snapshot, or receipt. Historical receipts remain readable and are
+never deleted or silently treated as new authority.
 
 ## What It Scans
 
@@ -162,8 +157,9 @@ store_ref: notion-export-20260614
 
 ## Privacy And Safety Boundaries
 
-`zettel-objet-links` is read-only. The singular
-`zettel-objet-link` writer is CLI-only and approval-gated.
+`zettel-objet-links` is read-only. The singular `zettel-objet-link` and its
+revert are CLI-only preview surfaces in v0.4.0; their approve branches fail
+closed as described above.
 
 It does not:
 

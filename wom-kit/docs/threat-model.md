@@ -159,8 +159,9 @@ Defense:
 
 ```text
 archive recovery-plan shows what is and is not recoverable.
-archive restore-drill copies the control plane to a clean folder, runs doctor, rebuilds index, and writes a receipt.
-preflight can require a successful restore drill receipt before real source pilot.
+archive restore-drill --dry-run previews a bounded recovery rehearsal.
+In v0.4.0 approval stops before source/target reads and copies/rebuilds/writes nothing.
+Historical restore receipts may still be audited; they do not authorize replay.
 ```
 
 ## Current Non-Goals

@@ -10,7 +10,7 @@ import pytest
 
 from wom_kit.private_objet_metadata_index import (
     PrivateObjetIndexContractError,
-    compile_private_objet_index_projection,
+    _compile_private_objet_index_projection as compile_private_objet_index_projection,
     empty_private_objet_authority,
     insert_private_objet_index_metadata,
     replace_private_objet_index_rows,
@@ -49,7 +49,7 @@ def test_existing_index_requires_one_canonical_filesystem_name(
     os.link(alternate_path, db_path)
 
     with pytest.raises(rebuild.PrivateObjetIndexRebuildError) as caught:
-        rebuild.private_objet_index_rebuild_session(
+        rebuild._private_objet_index_rebuild_session(
             root,
             "archive-test",
             db_path,
@@ -218,8 +218,8 @@ def _fake_win32(
             self.object_acquired = False
 
     class Module:
-        PrivateMetadataMutationGuard = Guard
-        PrivateMetadataLockPair = Locks
+        _PrivateMetadataMutationGuard = Guard
+        _PrivateMetadataLockPair = Locks
 
     return Module
 
@@ -314,7 +314,7 @@ def _run_successful_rebuild(
     dependencies: rebuild._RebuildDependencies,
     public_value: str,
 ) -> None:
-    with rebuild.private_objet_index_rebuild_session(
+    with rebuild._private_objet_index_rebuild_session(
         root,
         "archive-test",
         db_path,
@@ -447,7 +447,7 @@ def test_default_authority_compiler_and_installer_empty_end_to_end(
 ) -> None:
     root, db_path = _archive(tmp_path)
 
-    with rebuild.private_objet_index_rebuild_session(
+    with rebuild._private_objet_index_rebuild_session(
         root,
         "archive-test",
         db_path,
@@ -478,7 +478,7 @@ def test_real_windows_lifecycle_keeps_zero_byte_persistent_locks(
 ) -> None:
     root, db_path = _archive(tmp_path)
 
-    with rebuild.private_objet_index_rebuild_session(
+    with rebuild._private_objet_index_rebuild_session(
         root,
         "archive-test",
         db_path,
@@ -527,7 +527,7 @@ def test_snapshot_b_drift_rolls_back_old_public_and_private_snapshot(
         platform_name="posix",
     )
     with pytest.raises(rebuild.PrivateObjetIndexRebuildError) as caught:
-        with rebuild.private_objet_index_rebuild_session(
+        with rebuild._private_objet_index_rebuild_session(
             root,
             "archive-test",
             db_path,
@@ -591,7 +591,7 @@ def test_private_installer_failure_preserves_old_public_and_private_snapshot(
 
     dependencies = replace(base, replace_rows=fail_after_private_rows)
     with pytest.raises(rebuild.PrivateObjetIndexRebuildError) as caught:
-        with rebuild.private_objet_index_rebuild_session(
+        with rebuild._private_objet_index_rebuild_session(
             root,
             "archive-test",
             db_path,
@@ -623,7 +623,7 @@ def test_first_build_failure_leaves_no_partial_schema_or_rows(
     dependencies = _dependencies(events, platform_name="posix")
 
     with pytest.raises(rebuild.PrivateObjetIndexRebuildError) as caught:
-        with rebuild.private_objet_index_rebuild_session(
+        with rebuild._private_objet_index_rebuild_session(
             root,
             "archive-test",
             db_path,
@@ -656,7 +656,7 @@ def test_bounded_rollback_retries_then_preserves_snapshot(
     )
 
     with pytest.raises(rebuild.PrivateObjetIndexRebuildError):
-        with rebuild.private_objet_index_rebuild_session(
+        with rebuild._private_objet_index_rebuild_session(
             root,
             "archive-test",
             db_path,
@@ -688,7 +688,7 @@ def test_sqlite_busy_is_bounded_and_sanitized(
     dependencies = _dependencies(events, platform_name="posix")
     try:
         with pytest.raises(rebuild.PrivateObjetIndexRebuildError) as caught:
-            with rebuild.private_objet_index_rebuild_session(
+            with rebuild._private_objet_index_rebuild_session(
                 root,
                 "archive-test",
                 db_path,
@@ -727,7 +727,7 @@ def test_windows_lock_contention_stops_before_snapshot_or_connection(
     )
 
     with pytest.raises(rebuild.PrivateObjetIndexRebuildError) as caught:
-        with rebuild.private_objet_index_rebuild_session(
+        with rebuild._private_objet_index_rebuild_session(
             root,
             "archive-test",
             db_path,
@@ -756,7 +756,7 @@ def test_private_lock_contention_stops_before_snapshot_or_connection(
     )
 
     with pytest.raises(rebuild.PrivateObjetIndexRebuildError):
-        with rebuild.private_objet_index_rebuild_session(
+        with rebuild._private_objet_index_rebuild_session(
             root,
             "archive-test",
             db_path,
@@ -791,7 +791,7 @@ def test_first_or_second_lock_interruption_unwinds_before_rethrow(
     )
 
     with pytest.raises(KeyboardInterrupt):
-        with rebuild.private_objet_index_rebuild_session(
+        with rebuild._private_objet_index_rebuild_session(
             root,
             "archive-test",
             db_path,
@@ -963,7 +963,7 @@ def test_unproved_connection_close_exits_74_before_unlocking(
     )
 
     with pytest.raises(SystemExit) as caught:
-        with rebuild.private_objet_index_rebuild_session(
+        with rebuild._private_objet_index_rebuild_session(
             root,
             "archive-test",
             db_path,
@@ -989,7 +989,7 @@ def test_postcommit_output_failure_never_rolls_back_committed_db(
     dependencies = _dependencies(events, platform_name="posix")
 
     with pytest.raises(rebuild.PrivateObjetIndexRebuildError) as caught:
-        with rebuild.private_objet_index_rebuild_session(
+        with rebuild._private_objet_index_rebuild_session(
             root,
             "archive-test",
             db_path,
@@ -1023,7 +1023,7 @@ def test_context_without_final_commit_rolls_back_and_fails_closed(
     dependencies = _dependencies(events, platform_name="posix")
 
     with pytest.raises(rebuild.PrivateObjetIndexRebuildError) as caught:
-        with rebuild.private_objet_index_rebuild_session(
+        with rebuild._private_objet_index_rebuild_session(
             root,
             "archive-test",
             db_path,

@@ -1,6 +1,13 @@
 # zet Abstract Backfill Write
 
-Status: implemented as an approval-gated transactional write in v0.3.219
+Historical v0.3 record — Status: implemented as an approval-gated transactional write in v0.3.219
+
+Current v0.4.0 boundary: the plan and writer dry-run remain available, but the
+writer approval is fixed fail-closed. It returns
+`compound_exact_human_approval_binding_required` before private target read or
+mutation and creates no canonical change, snapshot, journal, lock, or receipt.
+The implementation details below describe readable historical v0.3 evidence;
+they do not reactivate the executor.
 
 ## Purpose
 
@@ -8,9 +15,9 @@ Status: implemented as an approval-gated transactional write in v0.3.219
 safe and bound to exact current canonical bytes. It does not decide that the
 text is true or grant permission to change canonical knowledge.
 
-`zet-abstract-backfill-write` is the separate human-authority boundary. It can
-add reviewed `frontmatter.abstract` values only after the proposal has been
-inspected and explicitly approved.
+`zet-abstract-backfill-write --dry-run` is the current exact effect preview.
+The multi-file/evidence effect has no complete operation-specific exact-human
+binding in v0.4.0.
 
 ## Required Flow
 
@@ -19,7 +26,7 @@ inspected and explicitly approved.
 3. Run `zet-abstract-backfill-plan --dry-run`.
 4. Retain `proposal.sha256` and inspect every proposed abstract as a human.
 5. Preview the writer with that exact proposal hash.
-6. Approve only after all rows have been reviewed.
+6. Stop after review; v0.4.0 does not authorize the compound mutation.
 
 Preview:
 
@@ -27,17 +34,13 @@ Preview:
 archive zet-abstract-backfill-write <archive-root> --proposal .wom-scratch/abstract-backfill/<private>.jsonl --expected-proposal-sha256 <proposal.sha256> --max-items 500 --dry-run --progress --format json
 ```
 
-Approved write:
+Current approval result: any approval attempt returns
+`compound_exact_human_approval_binding_required` before private target read or
+mutation. The historical v0.3 contract required
+`--affirm-abstracts-reviewed`; that flag and a reviewer label do not grant
+authority in v0.4.0.
 
-```text
-archive zet-abstract-backfill-write <archive-root> --proposal .wom-scratch/abstract-backfill/<private>.jsonl --expected-proposal-sha256 <proposal.sha256> --max-items 500 --approve --reviewed-by person:<reviewer> --affirm-abstracts-reviewed --progress --format json
-```
-
-Exactly one of `--dry-run` and `--approve` is required. A new approved write
-also requires a safe reviewer id and the explicit review affirmation. An AI
-must never infer either one from a green plan or from prior conversation.
-
-## Revalidation
+## Historical v0.3.219 Revalidation
 
 Before a new mutation, WOM-kit:
 

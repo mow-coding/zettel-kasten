@@ -1,9 +1,12 @@
 # Notion Objet Manifest Locator Label
 
-Status: v0.3.100 approval-gated manifest locator label write checkpoint
+Status: v0.4.0 dry-run-only manifest locator label preview
 
-`archive notion-objet-manifest-locator-label` adds one reviewed, non-secret
-Notion locator fingerprint to one existing object manifest record.
+`archive notion-objet-manifest-locator-label --dry-run` previews one reviewed,
+non-secret Notion locator fingerprint for an existing object manifest record.
+In v0.4.0 approval returns
+`compound_exact_human_approval_binding_required` before private manifest or
+target reads and adds nothing.
 
 It exists for this gap:
 
@@ -29,26 +32,15 @@ archive notion-objet-manifest-locator-label <archive-root> `
   --format json
 ```
 
-Approve:
-
-```powershell
-archive notion-objet-manifest-locator-label <archive-root> `
-  --object-id sha256:<64 lowercase hex characters> `
-  --locator-fingerprint sha256:<64 lowercase hex characters> `
-  --approve `
-  --reviewed-by person:reviewer `
-  --format json
-```
-
 Alias:
 
 ```text
 notion-objet-locator-label
 ```
 
-## What It Writes
+## Historical Write Layout
 
-Approved mode rewrites only:
+v0.3 approved mode used this layout. v0.4.0 creates neither file:
 
 ```text
 objects/manifests/files.jsonl
@@ -84,7 +76,8 @@ candidates without storing provider locator text.
 
 ## Safety Boundary
 
-This command is CLI-only. MCP exposes no write tool for it.
+This preview is CLI-only. MCP exposes no write tool for it. Approval reads no
+private target and writes no manifest row or receipt.
 
 It does not:
 
@@ -116,6 +109,10 @@ archive notion-objet-link-plan <archive-root> --path <zet.md> --dry-run
 ```
 
 Once the manifest match appears, use
-`archive notion-objet-link-rewrite-plan`, then
-`archive notion-objet-link-convert --target-mode embed_edge` for a reviewed
-`embed` edge write. Body rewrite remains separate future work.
+`archive notion-objet-link-rewrite-plan --dry-run`, then only
+`archive notion-objet-link-convert --target-mode embed_edge --dry-run` to
+preview the conversion. In v0.4.0 conversion approval returns
+`compound_exact_human_approval_binding_required` before private target read or
+mutation and writes no edge or receipt. A separately reviewed single
+`zettel-edge` retains its operation-specific exact-human path. Body rewrite
+remains separate future work.

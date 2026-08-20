@@ -18,6 +18,18 @@ if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
 from wom_kit import archive_services
+from wom_kit.exact_human_approval import (
+    _claim_exact_human_approval_core as claim_exact_human_approval,
+)
+from wom_kit.exact_human_approval_windows import (
+    _ExactHumanApprovalDecision as ExactHumanApprovalDecision,
+)
+from wom_kit.operation_approval_binding import (
+    mint_zet_approval_binding,
+    promote_zet_approval_binding,
+    retire_draft_approval_binding,
+    warning_override_approval_binding,
+)
 
 
 PROMOTION_CHECKLIST_IDS = (
@@ -50,6 +62,90 @@ def current_evidence(*, count: int = 0) -> dict[str, object]:
 
 
 class IndexLifecycleV03312Tests(unittest.TestCase):
+    def exact_claim(self, root: Path, binding, reviewer: str):
+        context = binding.context(
+            archive_id=archive_services.read_archive_id(root),
+            reviewer_claim=reviewer,
+        )
+        claim = claim_exact_human_approval(
+            root,
+            context,
+            ExactHumanApprovalDecision(
+                approved=True,
+                synthetic_acknowledged=False,
+                reason_code="exact_human_approval_approved",
+                plan_sha256=context.plan_sha256,
+                target_binding_sha256=context.target_binding_sha256,
+            ),
+            bytearray(b"i" * 32),
+        )
+        self.addCleanup(claim.close)
+        return claim
+
+    def mint_zettel(self, root: Path, **kwargs):
+        preview = archive_services.mint_zettel_dry_run(
+            root,
+            zettel_id=kwargs.get("zettel_id"),
+            relative_path=kwargs.get("relative_path"),
+            affirmations=kwargs.get("affirmations"),
+            progress_callback=kwargs.get("progress_callback"),
+        )
+        binding = mint_zet_approval_binding(preview)
+        reviewer = str(kwargs.get("reviewed_by") or "")
+        return archive_services.mint_zettel(
+            root,
+            expected_exact_approval_plan_sha256=binding.plan_sha256,
+            expected_exact_approval_target_binding_sha256=(
+                binding.target_binding_sha256
+            ),
+            exact_human_approval_claim=self.exact_claim(root, binding, reviewer),
+            **kwargs,
+        )
+
+    def promote_zettel(self, root: Path, **kwargs):
+        preview = archive_services.promote_zettel_dry_run(
+            root,
+            zettel_id=kwargs.get("zettel_id"),
+            relative_path=kwargs.get("relative_path"),
+            progress_callback=kwargs.get("progress_callback"),
+        )
+        binding = (
+            warning_override_approval_binding(preview)
+            if preview.get("warnings") and kwargs.get("allow_warnings")
+            else promote_zet_approval_binding(preview)
+        )
+        reviewer = str(kwargs.get("reviewed_by") or "")
+        return archive_services.promote_zettel(
+            root,
+            expected_exact_approval_plan_sha256=binding.plan_sha256,
+            expected_exact_approval_target_binding_sha256=(
+                binding.target_binding_sha256
+            ),
+            exact_human_approval_claim=self.exact_claim(root, binding, reviewer),
+            **kwargs,
+        )
+
+    def retire_draft(self, root: Path, **kwargs):
+        if not kwargs.get("approve"):
+            return archive_services.retire_minted_draft(root, **kwargs)
+        preview = archive_services.retire_minted_draft(
+            root,
+            zettel_id=kwargs.get("zettel_id"),
+            relative_path=kwargs.get("relative_path"),
+            approve=False,
+        )
+        binding = retire_draft_approval_binding(preview)
+        reviewer = str(kwargs.get("reviewed_by") or "")
+        return archive_services.retire_minted_draft(
+            root,
+            expected_exact_approval_plan_sha256=binding.plan_sha256,
+            expected_exact_approval_target_binding_sha256=(
+                binding.target_binding_sha256
+            ),
+            exact_human_approval_claim=self.exact_claim(root, binding, reviewer),
+            **kwargs,
+        )
+
     def copy_archive(self, parent: Path) -> Path:
         root = parent / "archive"
         shutil.copytree(KIT_ROOT / "examples" / "fake-life-archive", root)
@@ -449,7 +545,7 @@ class IndexLifecycleV03312Tests(unittest.TestCase):
                 "upsert_zettel_index_entry",
                 side_effect=sqlite3.OperationalError("synthetic index failure"),
             ):
-                result = archive_services.mint_zettel(
+                result = self.mint_zettel(
                     root,
                     relative_path="inbox/zet_20260519_draft_ai_lunch_note.md",
                     reviewed_by="person:test",
@@ -483,7 +579,7 @@ class IndexLifecycleV03312Tests(unittest.TestCase):
                 newline="\n",
             )
             archive_services.index_archive(root)
-            minted = archive_services.mint_zettel(
+            minted = self.mint_zettel(
                 root,
                 relative_path="inbox/zet_20260519_draft_ai_lunch_note.md",
                 reviewed_by="person:test",
@@ -491,7 +587,7 @@ class IndexLifecycleV03312Tests(unittest.TestCase):
             )
             self.assertTrue(minted["ok"], minted)
             before = archive_services.require_current_zettel_index(root)
-            retired = archive_services.retire_minted_draft(
+            retired = self.retire_draft(
                 root,
                 zettel_id="zet_20260519_draft_ai_lunch_note",
                 reviewed_by="person:test",
@@ -520,7 +616,7 @@ class IndexLifecycleV03312Tests(unittest.TestCase):
             root = self.copy_archive(Path(tmp))
             self.ready_draft(root, body="Retirement failure fixture body. " * 20)
             archive_services.index_archive(root)
-            minted = archive_services.mint_zettel(
+            minted = self.mint_zettel(
                 root,
                 relative_path="inbox/zet_20260519_draft_ai_lunch_note.md",
                 reviewed_by="person:test",
@@ -532,7 +628,7 @@ class IndexLifecycleV03312Tests(unittest.TestCase):
                 "delete_zettel_index_entry",
                 side_effect=sqlite3.OperationalError("synthetic retire index failure"),
             ):
-                retired = archive_services.retire_minted_draft(
+                retired = self.retire_draft(
                     root,
                     zettel_id="zet_20260519_draft_ai_lunch_note",
                     reviewed_by="person:test",
@@ -579,7 +675,7 @@ class IndexLifecycleV03312Tests(unittest.TestCase):
                         with patch.object(
                             Path, "open", new=crash_first_canonical_open
                         ):
-                            archive_services.promote_zettel(
+                            self.promote_zettel(
                                 root,
                                 relative_path="inbox/zet_20260519_draft_ai_lunch_note.md",
                                 reviewed_by="person:test",
@@ -591,7 +687,7 @@ class IndexLifecycleV03312Tests(unittest.TestCase):
                             "_write_bytes_create_if_absent",
                             new=crash_first_canonical_create,
                         ):
-                            archive_services.mint_zettel(
+                            self.mint_zettel(
                                 root,
                                 relative_path="inbox/zet_20260519_draft_ai_lunch_note.md",
                                 reviewed_by="person:test",
@@ -610,7 +706,7 @@ class IndexLifecycleV03312Tests(unittest.TestCase):
             root = self.copy_archive(Path(tmp))
             draft = self.ready_draft(root, body="retire dirty intent fixture body. " * 20)
             archive_services.index_archive(root)
-            minted = archive_services.mint_zettel(
+            minted = self.mint_zettel(
                 root,
                 relative_path="inbox/zet_20260519_draft_ai_lunch_note.md",
                 reviewed_by="person:test",
@@ -626,7 +722,7 @@ class IndexLifecycleV03312Tests(unittest.TestCase):
 
             with patch.object(Path, "unlink", new=crash_before_unlink):
                 with self.assertRaisesRegex(RuntimeError, "before draft unlink"):
-                    archive_services.retire_minted_draft(
+                    self.retire_draft(
                         root,
                         zettel_id="zet_20260519_draft_ai_lunch_note",
                         reviewed_by="person:test",
@@ -655,7 +751,7 @@ class IndexLifecycleV03312Tests(unittest.TestCase):
                 "upsert_zettel_index_entry",
                 side_effect=corrupt_then_upsert,
             ):
-                result = archive_services.mint_zettel(
+                result = self.mint_zettel(
                     root,
                     relative_path="inbox/zet_20260519_draft_ai_lunch_note.md",
                     reviewed_by="person:test",
@@ -722,7 +818,7 @@ class IndexLifecycleV03312Tests(unittest.TestCase):
                 "upsert_zettel_index_entry",
                 side_effect=mutate_unrelated_then_upsert,
             ):
-                result = archive_services.mint_zettel(
+                result = self.mint_zettel(
                     root,
                     relative_path="inbox/zet_20260519_draft_ai_lunch_note.md",
                     reviewed_by="person:test",
@@ -739,7 +835,7 @@ class IndexLifecycleV03312Tests(unittest.TestCase):
             root = self.copy_archive(Path(tmp))
             draft = self.ready_draft(root, body="retire restore conflict fixture body. " * 20)
             archive_services.index_archive(root)
-            minted = archive_services.mint_zettel(
+            minted = self.mint_zettel(
                 root,
                 relative_path="inbox/zet_20260519_draft_ai_lunch_note.md",
                 reviewed_by="person:test",
@@ -771,7 +867,7 @@ class IndexLifecycleV03312Tests(unittest.TestCase):
                     archive_services.ArchiveServiceError,
                     "retired_draft_restore_conflict",
                 ):
-                    archive_services.retire_minted_draft(
+                    self.retire_draft(
                         root,
                         zettel_id="zet_20260519_draft_ai_lunch_note",
                         reviewed_by="person:test",
@@ -821,14 +917,14 @@ class IndexLifecycleV03312Tests(unittest.TestCase):
                 with patch.object(Path, "open", new=replace_then_fail_receipt):
                     with self.assertRaisesRegex(OSError, "after replacement"):
                         if operation == "promote":
-                            archive_services.promote_zettel(
+                            self.promote_zettel(
                                 root,
                                 relative_path=archive_services.archive_relative_path(draft, root),
                                 reviewed_by="person:test",
                                 allow_warnings=True,
                             )
                         else:
-                            archive_services.mint_zettel(
+                            self.mint_zettel(
                                 root,
                                 relative_path=archive_services.archive_relative_path(draft, root),
                                 reviewed_by="person:test",

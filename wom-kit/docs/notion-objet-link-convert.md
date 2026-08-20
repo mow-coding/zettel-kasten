@@ -1,35 +1,28 @@
 # Notion Objet Link Convert
 
-Status: v0.3.101 approval-gated embed edge conversion checkpoint
-Date: 2026-06-17
+Status: v0.4.0 dry-run-only embed conversion planning
+Historical checkpoint: v0.3.101 conversion receipts remain readable
+Date: 2026-08-20
 
-`notion-objet-link-convert` is the first approved write after
-`notion-objet-link-rewrite-plan`.
+`notion-objet-link-convert` is a dry-run-only companion after
+`notion-objet-link-rewrite-plan` in v0.4.0.
 
-It does not rewrite zettel body text. In v0.3.101 it supports only
-`target_mode=embed_edge`: after a human has reviewed one Notion locator
-fingerprint and one manifested object id, WOM-kit can write one `embed` edge
-from the zettel to that object and write a conversion receipt.
+It does not rewrite zettel body text. `target_mode=embed_edge` can still plan a
+reviewed locator/object conversion, but the historical executor affected an
+edge and two receipt families as one compound write. v0.4.0 has no exact-human
+binding for that complete effect set.
 
 ## Commands
 
 CLI:
 
 ```text
-archive notion-objet-link-convert <archive-root> --path inbox/example.md --locator-fingerprint sha256:<hex> --object-id sha256:<hex> --target-mode embed_edge --expected-occurrence-count 1 --dry-run
+python -m wom_kit.archive_cli notion-objet-link-convert <archive-root> --path inbox/example.md --locator-fingerprint sha256:<hex> --object-id sha256:<hex> --target-mode embed_edge --expected-occurrence-count 1 --dry-run
 ```
 
-```powershell
-$env:PYTHONPATH='wom-kit\src'; python -m wom_kit.archive_cli notion-objet-link-convert <archive-root> `
-  --path inbox/example.md `
-  --locator-fingerprint sha256:<64 lowercase hex characters> `
-  --object-id sha256:<64 lowercase hex characters> `
-  --target-mode embed_edge `
-  --expected-occurrence-count 1 `
-  --approve `
-  --reviewed-by person:reviewer `
-  --format json
-```
+An `--approve` request returns
+`compound_exact_human_approval_binding_required` before private target read or
+mutation. It writes no edge or conversion receipt.
 
 There is no MCP write tool for this surface.
 
@@ -41,9 +34,8 @@ The command requires:
 - one selected `--locator-fingerprint`,
 - one selected manifested `--object-id`,
 - `--target-mode embed_edge`,
-- either `--dry-run` or `--approve`,
-- `--reviewed-by` when approving,
-- `--expected-occurrence-count` when approving.
+- `--dry-run`, and
+- an optional `--expected-occurrence-count` drift guard.
 
 The occurrence count is a drift guard. It must be copied from the reviewed
 `notion-objet-link-rewrite-plan` output so the write blocks if the zettel
@@ -51,21 +43,13 @@ changed after review.
 
 ## What It Writes
 
-Approved mode writes:
-
-- one `embed` edge in the source zettel frontmatter,
-- one normal `receipts/edges/*.zettel-edge.json` receipt through the existing
-  `zettel-edge` gate,
-- one conversion receipt under
-  `receipts/objects/notion-link-conversions/`.
-
-If any write fails partway, WOM-kit restores the touched zettel and receipt
-paths.
+Nothing in v0.4.0. Historical edge and conversion receipts remain readable,
+but neither they nor old reviewer flags reactivate the executor.
 
 ## Privacy And Safety Boundaries
 
-The command re-runs the read-only rewrite plan before writing and uses the
-same single-edge validation path as `zettel-edge`.
+The command re-runs the read-only rewrite plan and uses the same single-edge
+validation rules as `zettel-edge`, without entering a writer.
 
 It does not:
 
@@ -101,6 +85,7 @@ Use the tools in this order:
    reviewed locator fingerprint.
 4. `notion-objet-link-rewrite-plan` to validate one selected locator/object
    pair and occurrence count.
-5. `notion-objet-link-convert` to approve one `embed` edge write.
-6. `zettel-objet-links` after the edge exists, to inspect safe object link
-   candidates.
+5. `notion-objet-link-convert --dry-run` to inspect the bounded conversion
+   effect. No approved conversion exists in v0.4.0.
+6. Use exact `zettel-edge --dry-run|--approve` only when the reviewed action is
+   one direct edge, then use `zettel-objet-links` to inspect safe candidates.
