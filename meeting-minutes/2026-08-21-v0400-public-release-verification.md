@@ -92,9 +92,13 @@ protected archive was repaired.
 
 ## Cleanup checkpoint
 
-The authoritative wheel-candidate directory and anonymous-install verification
-directory remain preserved until this first closeout commit is stored on the
-remote branch. Their cleanup result will be appended in a second closeout
-commit. Older non-authoritative temporary evidence is outside this cleanup
-scope and will not be touched.
-
+The first closeout commit,
+`1a27b6df81cd878447d174e6a69ce93aeed5b206`, was stored on the remote branch
+before cleanup. The exact authoritative wheel-candidate directory and the exact
+anonymous-install verification directory were then verified as ordinary
+directories below the operating-system temporary root and moved to the Windows
+Recycle Bin. Both are absent from their original locations and remain
+recoverable from the Recycle Bin. The public Release asset and annotated tag
+remain published. Older non-authoritative temporary evidence was outside this
+cleanup scope and was not touched. The implementation and closeout worktrees
+and branches remain until the closeout pull request is merged.
