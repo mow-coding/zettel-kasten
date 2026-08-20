@@ -18,6 +18,7 @@ from unittest import mock
 
 KIT_ROOT = Path(__file__).resolve().parents[1]
 SRC_ROOT = KIT_ROOT / "src"
+MCP_STDIO_COLD_START_TOTAL_TIMEOUT_SECONDS = 30
 
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
@@ -1323,7 +1324,7 @@ class McpServerTests(unittest.TestCase):
             capture_output=True,
             text=True,
             encoding="utf-8",
-            timeout=15,
+            timeout=MCP_STDIO_COLD_START_TOTAL_TIMEOUT_SECONDS,
             check=False,
         )
 
@@ -1354,7 +1355,7 @@ class McpServerTests(unittest.TestCase):
             input=b"\xffSENTINEL_INVALID_UTF8\n" + following_ping + b"\n",
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            timeout=15,
+            timeout=MCP_STDIO_COLD_START_TOTAL_TIMEOUT_SECONDS,
             check=False,
         )
 
@@ -1533,7 +1534,7 @@ class McpServerTests(unittest.TestCase):
             capture_output=True,
             text=True,
             encoding="utf-8",
-            timeout=15,
+            timeout=MCP_STDIO_COLD_START_TOTAL_TIMEOUT_SECONDS,
             check=False,
         )
 
