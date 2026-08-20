@@ -513,3 +513,27 @@ remaining sequence is exact-path staging, implementation PR and required CI,
 merge, annotated tag and GitHub Release with the verified wheel, anonymous
 public-download installation, and a small release-verification closeout record.
 Letter 138 recovery begins immediately after that release boundary closes.
+
+## First public-CI correction
+
+The implementation candidate was committed as
+`c186b6f88e9f053c0a0da7beba9cda2171c82ec9` and opened as GitHub pull request
+71. Its first Required CI run completed every job and exposed exactly three
+test-contract problems; it did not expose a new product write bypass.
+
+Two cross-platform symlink tests still expected legacy approved writers to
+reach archive-path inspection. The v0.4 public writers now correctly return a
+content-free compound-approval blocker before those reads. The tests were
+split so the direct or dry-run path still proves `symlink_not_allowed`, while
+the public apply path separately proves pre-read fixed closure, zero writes,
+and no dormant-core dispatch.
+
+One Windows MCP subprocess test closed stdout before the child had completed a
+14-to-16-second cold start, then counted that startup time against a 15-second
+BrokenPipe exit limit. The server did exit normally after startup, but the test
+timed out first and failed to reap the child. The corrected test first receives
+a ping response to prove server readiness, then closes stdout and measures only
+the post-ready exit with a five-second bound. Its `finally` path always reaps
+the child and closes all streams. A delayed-start reproduction, a deliberate
+post-ready hang control, a 25-run ResourceWarning check, adjacent tests, and the
+affected frozen local shards are required before the single CI-fix push.

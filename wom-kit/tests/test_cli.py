@@ -66997,9 +66997,39 @@ class ObjetCaptureTests(unittest.TestCase):
                 "archive:personal:capture",
                 [self._item("staging/incoming/link.txt", digest, plan_path, plan_sha)],
             )
-            result = archive_services.objet_capture_apply(archive_root, selection, reviewed_by="person:test")
-            self.assertFalse(result["ok"])
-            self.assertIn("symlink_not_allowed", result["items"][0]["blockers"])
+            before = self._inventory(archive_root)
+            preview = archive_services.objet_capture_dry_run(archive_root, selection)
+            self.assertFalse(preview["ok"])
+            self.assertIn("symlink_not_allowed", preview["items"][0]["blockers"])
+            self.assertEqual(self._inventory(archive_root), before)
+
+            with patch.object(
+                archive_services,
+                "_objet_capture_run",
+                side_effect=AssertionError("dormant capture writer must not run"),
+            ) as dormant_core:
+                blocked = self._assert_objet_capture_apply_fails_closed(
+                    archive_root,
+                    selection,
+                )
+            dormant_core.assert_not_called()
+            self.assertEqual(
+                blocked,
+                {
+                    "ok": False,
+                    "dry_run": False,
+                    "state": "blocked",
+                    "status": "blocked",
+                    "write_status": "blocked",
+                    "lifecycle_action": "objet_capture",
+                    "blockers": ["compound_exact_human_approval_binding_required"],
+                    "reason_codes": ["compound_exact_human_approval_binding_required"],
+                    "warnings": [],
+                    "would_change": [],
+                    "files_written": [],
+                    "private_values_echoed": False,
+                },
+            )
 
     def test_objet_capture_rejects_traversal_internal_and_reserved_paths(
         self,
