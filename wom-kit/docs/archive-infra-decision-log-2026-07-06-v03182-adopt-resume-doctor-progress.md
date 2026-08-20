@@ -6,7 +6,7 @@ Anchor: v0.3.181 public release.
 
 ## Problem
 
-The basoon v0.3.180 revalidation showed that the v0.3.180 adopt-plan manifest index worked on the
+The protected pilot archive's v0.3.180 revalidation showed that the v0.3.180 adopt-plan manifest index worked on the
 real large archive, but the next bottlenecks were still operationally painful:
 
 - `adopt-verify` remote HEADs were roughly 0.49 seconds per object across about 19k objects.
@@ -33,7 +33,7 @@ real large archive, but the next bottlenecks were still operationally painful:
 
 ## Consequences
 
-For basoon's partial adopt state, the next intended retry shape is:
+For the protected pilot's partial adopt state, the next intended retry shape is:
 
 ```bash
 archive object-storage-adopt-existing <archive-root> ... \

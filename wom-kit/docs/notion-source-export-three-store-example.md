@@ -116,25 +116,11 @@ If the ledger includes a safe MIME field, keep it with `--mime-field mime`.
 That lets later `derive-text coverage` classify textual candidates without
 falling back to `application/octet-stream`.
 
-If the dry-run is reviewed and the external store should be declared as a WOM
-objet source, approve the manifest registration with a safe store label:
-
-```bash
-archive prehashed-objet-ledger <archive-root> \
-  --ledger retrieval-ledger.jsonl \
-  --ledger deep-ledger.jsonl \
-  --ledger workspace-dl-ledger.jsonl \
-  --store-kind notion_source_export \
-  --store-ref notion-export-20260613 \
-  --mime-field mime \
-  --approve \
-  --reviewed-by person:me \
-  --format json
-```
-
-Approved mode appends external records to `objects/manifests/files.jsonl` and
-writes a receipt under `receipts/prehashed-objet-ledger/`. It still does not
-read blob bytes, copy objects, call Notion, upload, sync, draft, mint, or clean.
+After reviewing the dry-run, stop. In v0.4.0 approval returns
+`compound_exact_human_approval_binding_required` before reading the private
+ledger/archive target or writing. It appends no external manifest record or
+receipt and does not read blob bytes, copy objects, call Notion, upload, sync,
+draft, mint, or clean.
 
 MCP exposes only the read-only preview as `prehashed_objet_ledger_preview`.
 
@@ -152,25 +138,23 @@ human-reviewed conclusion -> draft or minted zet
 ```
 
 If the snapshot bytes are already in an externally verified
-content-addressed store, include them in the prehashed ledger and approve them
-with a safe `--store-ref` label. If WOM-kit should hash and copy a staged JSON
-file itself, use the separate `objet-capture` path.
+content-addressed store, include them in the prehashed-ledger dry-run with a
+safe `--store-ref` label. `prehashed-objet-ledger` and `objet-capture` approval
+are fixed fail-closed in v0.4.0 and write nothing.
 
 See [Notion Page Snapshot Model](notion-page-snapshot-model.md).
 
 ## Current Boundary
 
-Today, `objet-capture` still verifies bytes from staged local files. The
-prehashed ledger path is separate: it can register externally verified object
-IDs in the manifest without re-reading blob bytes, but it does not prove,
-copy, or materialize those bytes inside the archive.
+Today, `objet-capture` and the prehashed-ledger route retain their dry-run
+validation only. Neither route may register, copy, or materialize bytes in
+v0.4.0.
 
 Recommended order:
 
 - keep the external source-export ledger as raw evidence,
 - preview it with `prehashed-objet-ledger --dry-run`,
-- approve it with `--approve --reviewed-by <actor> --store-ref <safe-label>`
-  only after human review,
+- stop after human review because approval returns
+  `compound_exact_human_approval_binding_required`,
 - use project-intake and source-intake receipts for human-reviewed context,
-- use `objet-capture` only when WOM-kit is allowed to verify staged bytes and
-  store local content-addressed copies.
+- use `objet-capture --dry-run` only to preview staged-byte handling.

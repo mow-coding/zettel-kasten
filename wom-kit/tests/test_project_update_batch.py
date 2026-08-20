@@ -91,7 +91,7 @@ class ProjectUpdateBatchTests(unittest.TestCase):
                 "Popen",
                 side_effect=recording_popen,
             ):
-                entries = archive_services.wom_kit_project_update_tree_blobs(
+                entries = archive_services._wom_kit_project_update_tree_blobs(
                     repository,
                     "HEAD",
                 )
@@ -134,10 +134,10 @@ class ProjectUpdateBatchTests(unittest.TestCase):
 
             with patch.object(
                 archive_services,
-                "wom_kit_project_update_run_batch_capped",
+                "_wom_kit_project_update_run_batch_capped",
                 side_effect=fake_batch,
             ):
-                entries = archive_services.wom_kit_project_update_tree_blobs(
+                entries = archive_services._wom_kit_project_update_tree_blobs(
                     repository,
                     "HEAD",
                 )
@@ -197,12 +197,12 @@ class ProjectUpdateBatchTests(unittest.TestCase):
                 self.subTest(case=case_name),
                 patch.object(
                     archive_services,
-                    "wom_kit_project_update_run_batch_capped",
+                    "_wom_kit_project_update_run_batch_capped",
                     return_value=(0, output),
                 ),
             ):
                 self.assertIsNone(
-                    archive_services.wom_kit_project_update_git_blob_batch(
+                    archive_services._wom_kit_project_update_git_blob_batch(
                         Path("unused-mirror"),
                         {object_id: 1},
                     )
@@ -226,12 +226,12 @@ class ProjectUpdateBatchTests(unittest.TestCase):
                 self.subTest(case=case_name),
                 patch.object(
                     archive_services,
-                    "wom_kit_project_update_run_batch_capped",
+                    "_wom_kit_project_update_run_batch_capped",
                     return_value=(0, output),
                 ),
             ):
                 self.assertIsNone(
-                    archive_services.wom_kit_project_update_git_blob_batch(
+                    archive_services._wom_kit_project_update_git_blob_batch(
                         Path("unused-mirror"),
                         {object_id: path_count},
                     )
@@ -239,7 +239,7 @@ class ProjectUpdateBatchTests(unittest.TestCase):
 
     def test_batch_transport_enforces_output_cap_and_timeout(self) -> None:
         environment = dict(os.environ)
-        overflow = archive_services.wom_kit_project_update_run_batch_capped(
+        overflow = archive_services._wom_kit_project_update_run_batch_capped(
             [
                 sys.executable,
                 "-c",
@@ -256,7 +256,7 @@ class ProjectUpdateBatchTests(unittest.TestCase):
         )
         self.assertIsNone(overflow)
 
-        timed_out = archive_services.wom_kit_project_update_run_batch_capped(
+        timed_out = archive_services._wom_kit_project_update_run_batch_capped(
             [
                 sys.executable,
                 "-c",

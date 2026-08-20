@@ -9,7 +9,7 @@ from wom_kit import __version__
 
 KIT_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = KIT_ROOT.parent
-EXPECTED_CURRENT_VERSION = "0.3.320"
+EXPECTED_CURRENT_VERSION = "0.4.0"
 EXPECTED_CURRENT_TAG = f"v{EXPECTED_CURRENT_VERSION}"
 CURRENT_VERSION = f"v{__version__}"
 CURRENT_RELEASE_NOTE = f"{EXPECTED_CURRENT_TAG}.md"
@@ -20,7 +20,7 @@ CURRENT_WHEEL_URL = (
     f"wom_kit-{EXPECTED_CURRENT_VERSION}-py3-none-any.whl"
 )
 CURRENT_RUNTIME_STATUS = (
-    f"Status: {CURRENT_VERSION} one-use credential capability broker checkpoint"
+    f"Status: {CURRENT_VERSION} exact human approval and operator-friction checkpoint"
 )
 CURRENT_MATRIX_VERSION = f"Version: {CURRENT_VERSION} implementation and release scope"
 MATRIX_PATH = KIT_ROOT / "docs" / "capability-matrix.md"
@@ -414,7 +414,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "Status: v0.3.230 digest-bound content-change review checkpoint",
             CURRENT_MATRIX_VERSION,
             "Previous checkpoint: Status: v0.3.229",
-            "--reviewed-plan-sha256 <sha256>",
+            "compound_exact_human_approval_binding_required",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
@@ -751,9 +751,8 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "Status: v0.3.235 canonical zet revision write checkpoint",
             CURRENT_MATRIX_VERSION,
             "Canonical zet revision write",
-            "approval-gated local CLI write",
-            "MCP exposes no writer",
-            "Distinct plans serialize through the per-canonical lock",
+            "dry-run-only in v0.4.0",
+            "compound_exact_human_approval_binding_required",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
@@ -771,11 +770,10 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
                 self.assertIn("zet-revision-write", text)
         for phrase in (
             "write_plan.actual_digest",
-            "--affirm-abstract-body-pair-reviewed",
-            "--affirm-edge-changes-reviewed",
             "receipts/revisions/canonical/",
-            "process is interrupted",
-            "no revision write tool",
+            "Approval Is Closed In v0.4.0",
+            "before private target read or mutation",
+            "compound_exact_human_approval_binding_required",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase.lower(), guide_compact.lower())
@@ -1195,17 +1193,17 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "Status: v0.3.239 approved exact-byte canonical restore checkpoint",
             CURRENT_MATRIX_VERSION,
             "Canonical zet exact-byte restore write",
-            "implemented approval-gated local CLI",
-            "writes the recovered proposal bytes exactly",
-            "MCP exposes no restore writer",
+            "dry-run-only in v0.4.0",
+            "compound_exact_human_approval_binding_required",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "approval-gated exact-byte canonical restore in v0.3.239",
+            "dry-run-only exact-byte restore planning",
             "does not recreate missing words from hashes",
             "recovered historical `updated_at`",
-            "resume when the canonical zet still has its prewrite bytes",
+            "before private target read or mutation",
+            "compound_exact_human_approval_binding_required",
             "calls no model, provider, object store, database, credential store, or network",
         ):
             with self.subTest(phrase=phrase):
@@ -1314,9 +1312,11 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
                 self.assertIn(phrase, imports_text)
         for phrase in (
             "External import",
-            "archive import-external <archive-root> --source notion|google_drive --export <folder-or-manifest> --dry-run|--approve --reviewed-by <actor>",
+            "archive import-external <archive-root> --source notion|google_drive --export <folder-or-manifest> --dry-run",
             "source_ref_count",
             "source_refs_preserved",
+            "compound_exact_human_approval_binding_required",
+            "writes no inbox draft or import receipt",
             "does not call Notion or Google Drive APIs",
             "MCP exposes read-only `external_import_plan` only",
         ):
@@ -1525,11 +1525,12 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         releases_readme_text = (KIT_ROOT / "docs" / "releases" / "README.md").read_text(encoding="utf-8")
         release_text = (KIT_ROOT / "docs" / "releases" / "v0.3.115.md").read_text(encoding="utf-8")
         for phrase in (
-            "Status: v0.3.115 public roadmap baseline",
+            "Status: v0.4.0 current roadmap checkpoint",
+            "Historical baseline: v0.3.115 public roadmap baseline",
             "`v0.1.x` | Idea and protocol language",
             "`v0.2.x` | Local implementation",
             "`v0.3.x` | WOM real-use feedback",
-            "`v0.4.x` | Custom UI control layer",
+            "`v0.4.x` | Human-control layer",
             "`v0.5.x` | ZET real-use feedback",
             "It is not a promise that future features already exist.",
             "It is not a claim that production ZET",
@@ -1539,14 +1540,14 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         for phrase in (
             "v0.3.116 pre-release",
             "[WOM Product Roadmap](wom-kit/docs/product-roadmap.md)",
-            "v0.3.x` is the current WOM real-use",
+            "v0.4.x` is the current human-control",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, readme_text)
         for phrase in (
-            "Status: v0.3.115 public roadmap baseline",
+            "v0.4.0 implements a native exact-human TaskDialog foundation",
             "Public product roadmap",
-            "planned `v0.4.x` custom UI control layer",
+            "current `v0.4.x` human-control work",
             "planned `v0.5.x` ZET real-use feedback",
         ):
             with self.subTest(phrase=phrase):
@@ -1606,8 +1607,9 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "writes no files, repairs no mirror, calls no providers, and reads no secrets",
             "Project WOM-kit version update",
             "project-version-update",
-            "updated_restart_required",
-            "v0.3.215 is the one-time bootstrap boundary",
+            "read-only preview in v0.4.0",
+            "compound_exact_human_approval_binding_required",
+            "write no source, pin, cache deletion, lock, or receipt",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
@@ -1616,7 +1618,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "[Version Truth Source](wom-kit/docs/version-truth-source.md)",
             "[Project Version Update](wom-kit/docs/project-version-update.md)",
             "read-only WOM-kit version truth-source checks",
-            "parent project installed-version pin discovery",
+            "parent-project installed-version pin discovery",
             "project-version-update",
         ):
             with self.subTest(phrase=phrase):
@@ -1655,7 +1657,8 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, current_release_text)
         for phrase in (
-            "Status: implemented in v0.3.215",
+            "Status: read-only preview/inspection in v0.4.0",
+            "compound_exact_human_approval_binding_required",
             "ready_to_fetch_on_approve",
             "non-force, atomic Git fetch",
             "failed_rollback_incomplete",
@@ -1886,17 +1889,17 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         for phrase in (
             "Previous checkpoint: Status: v0.3.219 approval-gated transactional abstract revision checkpoint",
             "zet abstract backfill write",
-            "approval-gated write",
-            "forced termination or machine failure",
+            "dry-run-only in v0.4.0",
+            "compound_exact_human_approval_binding_required",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for text in (readme_text, readme_ko_text, kit_readme_text, upgrade_text, upgrade_ko_text, runtime_skill_text):
             with self.subTest(document="operator-surface"):
                 self.assertIn("zet-abstract-backfill-write", text)
-        for text in (kit_readme_text, upgrade_text, upgrade_ko_text, runtime_skill_text):
-            with self.subTest(document="detailed-operator-surface"):
-                self.assertIn("--affirm-abstracts-reviewed", text)
+        for text in (kit_readme_text, upgrade_text, upgrade_ko_text):
+            with self.subTest(document="current-operator-boundary"):
+                self.assertIn("compound_exact_human_approval_binding_required", text)
         for phrase in (
             "v0.3.219 - 2026-07-11",
             "Whole-batch runtime rollback",
@@ -1918,8 +1921,8 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, decision_text)
-        self.assertIn("[zet Abstract Backfill Write](zet-abstract-backfill-write.md)", public_map_text)
-        self.assertIn("[zet 초록 승인 후 쓰기](zet-abstract-backfill-write.md)", public_map_ko_text)
+        self.assertIn("[zet Abstract Backfill Write Preview](zet-abstract-backfill-write.md)", public_map_text)
+        self.assertIn("[zet 초록 보충 쓰기 미리보기](zet-abstract-backfill-write.md)", public_map_ko_text)
 
     def test_abstract_backfill_revert_docs_expose_receipt_audit_exact_inverse_and_removal_authority(self) -> None:
         guide_text = (KIT_ROOT / "docs" / "zet-abstract-backfill-revert.md").read_text(encoding="utf-8")
@@ -1963,17 +1966,17 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         for phrase in (
             "Previous checkpoint: Status: v0.3.220 receipt-audited deterministic abstract rollback checkpoint",
             "zet abstract backfill revert",
-            "Any later canonical edit",
-            "Reapplying later requires a newly reviewed proposal byte sequence",
+            "dry-run-only in v0.4.0",
+            "compound_exact_human_approval_binding_required",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for text in (readme_text, readme_ko_text, kit_readme_text, upgrade_text, upgrade_ko_text, runtime_skill_text):
             with self.subTest(document="operator-surface"):
                 self.assertIn("zet-abstract-backfill-revert", text)
-        for text in (kit_readme_text, upgrade_text, upgrade_ko_text, runtime_skill_text):
-            with self.subTest(document="detailed-operator-surface"):
-                self.assertIn("--affirm-abstract-removal-reviewed", text)
+        for text in (kit_readme_text, upgrade_text, upgrade_ko_text):
+            with self.subTest(document="current-operator-boundary"):
+                self.assertIn("compound_exact_human_approval_binding_required", text)
         for phrase in (
             "v0.3.220 - 2026-07-11",
             "One-field inverse proof",
@@ -1995,8 +1998,8 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, decision_text)
-        self.assertIn("[zet Abstract Backfill Revert](zet-abstract-backfill-revert.md)", public_map_text)
-        self.assertIn("[zet 초록 보충 되돌리기](zet-abstract-backfill-revert.md)", public_map_ko_text)
+        self.assertIn("[zet Abstract Backfill Revert Preview](zet-abstract-backfill-revert.md)", public_map_text)
+        self.assertIn("[zet 초록 보충 되돌리기 미리보기](zet-abstract-backfill-revert.md)", public_map_ko_text)
 
     def test_abstract_receipt_lifecycle_audit_docs_expose_complete_bounded_content_free_contract(self) -> None:
         guide_text = (KIT_ROOT / "docs" / "zet-abstract-backfill-receipt-audit.md").read_text(encoding="utf-8")
@@ -2142,12 +2145,12 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         public_map_ko_text = (KIT_ROOT / "docs" / "public-documentation-map.ko.md").read_text(encoding="utf-8")
         release_text = (KIT_ROOT / "docs" / "releases" / "v0.3.143.md").read_text(encoding="utf-8")
         for phrase in (
-            "Status: v0.3.143 live Tiro REST fetch with OS credential-store read checkpoint",
+            "Status: v0.4.0 dry-run-only Tiro recovery; fetch/capture approval fixed closed",
             "archive tiro-lossless-recovery-plan <archive-root>",
             "archive tiro-lossless-recovery-fetch-run <archive-root>",
             "archive tiro-lossless-recovery-capture <archive-root>",
             "keyring:<safe-tiro-label>",
-            "credential-manager:<safe-tiro-label>",
+            "compound_exact_human_approval_binding_required",
             "Windows Credential Manager",
             "workspaces",
             "transcript paragraphs",
@@ -2158,8 +2161,8 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "600 requests per 60 seconds",
             "receipts/tiro/lossless-fetches/*.json",
             "objects/sha256/<prefix>/<sha256>",
-            "v0.3.143 implements the live credential-bounded Tiro REST fetch adapter",
-            "auto-detect exactly one Windows generic credential target",
+            "Historical v0.3 fetch evidence used this layout",
+            "writes no bundle or receipt",
             "audio_original_bytes",
         ):
             with self.subTest(phrase=phrase):
@@ -2176,14 +2179,12 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, style_text)
         for phrase in (
-            "Status: v0.3.143 Tiro OS credential-store read checkpoint",
             "Tiro lossless recovery",
-            "archive tiro-lossless-recovery-plan",
-            "archive tiro-lossless-recovery-fetch-run",
-            "archive tiro-lossless-recovery-capture",
-            "archive tiro-recovery-fetch-run",
-            "credential-manager:<safe-label>",
-            "Windows Credential Manager-backed",
+            "dry-run-only in v0.4.0",
+            "plan/fetch/capture previews write nothing",
+            "tiro-lossless-recovery-plan",
+            "compound_exact_human_approval_binding_required",
+            "calls no Tiro endpoint",
             "zet Markdown style guide",
             "archive zet-markdown-style-guide",
             "A ~ B",
@@ -2193,7 +2194,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         for phrase in (
             "[Tiro Lossless Recovery](wom-kit/docs/tiro-lossless-recovery.md)",
             "[zet Markdown Style Guide](wom-kit/docs/zet-markdown-style-guide.md)",
-            "raw Tiro recovery bundle capture",
+            "content-free fetch/capture dry-runs",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, readme_text)
@@ -2580,8 +2581,8 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         for phrase in (
             "fake-archive rehearsal",
             "Bulk Raw First, Selective Promotion Later",
-            "archive prehashed-objet-ledger --ledger ... --approve",
-            "human-guided promotion spine",
+            "archive prehashed-objet-ledger --ledger ... --dry-run",
+            "compound_exact_human_approval_binding_required",
             "archive-objets/` as a recommended local staging",
             "content-addressed store must be moved there",
             "archive project-intake-unpack-queue",
@@ -2596,8 +2597,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "archive staged-cleanup-check",
             "does not echo the answer text",
             "$unpackChoiceReceipt",
-            "$sourceIntakeReceipt",
-            "$selectionJson",
+            "historical capture chain below has no current executable",
             "Treat receipts as context, not automatic permission.",
             "WOM-kit still never deletes it for you.",
         ):
@@ -2607,7 +2607,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
     def test_human_artifact_store_contract_separates_surface_from_system_records(self) -> None:
         text = HUMAN_ARTIFACT_STORE_CONTRACT_PATH.read_text(encoding="utf-8")
         for phrase in (
-            "Status: v0.3.13 contract baseline",
+            "Status: v0.4.0 provider-neutral private registry implementation",
             "Raw data store",
             "Human artifact store",
             "System/AI artifact store",
@@ -3218,7 +3218,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertTrue(phrase in release_text or phrase in changelog_text)
 
-    def test_notion_ancestor_fetch_adapter_run_is_documented_as_approval_gated_live_structure_fetch(self) -> None:
+    def test_notion_ancestor_fetch_adapter_run_is_documented_as_v0400_fixed_closed(self) -> None:
         text = NOTION_ANCESTOR_FETCH_ADAPTER_RUN_PATH.read_text(encoding="utf-8")
         matrix_text = MATRIX_PATH.read_text(encoding="utf-8")
         readme_text = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
@@ -3230,7 +3230,9 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         release_text = (KIT_ROOT / "docs" / "releases" / "v0.3.134.md").read_text(encoding="utf-8")
         changelog_text = (REPO_ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
         for phrase in (
-            "Status: v0.3.141 approval-gated local Notion ancestor structure fetch with actionable provider failure classification",
+            "Status: v0.4.0 adapter preview; approval and provider execution are fixed closed",
+            "compound_exact_human_approval_binding_required",
+            "only its dry-run preview is executable",
             "archive notion-ancestor-fetch-adapter-run",
             "credential access approval receipt",
             "notion_ancestor_result_fixture",
@@ -3248,32 +3250,32 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
                 self.assertIn(phrase, text)
         for phrase in (
             "Notion ancestor fetch adapter run",
-            "approval-gated write",
+            "dry-run adapter preview only in v0.4.0",
             "archive notion-ancestor-fetch-adapter-run",
-            "env:WOM_NOTION_READONLY_TOKEN",
-            "receipts/notion/ancestor-fetches",
+            "compound_exact_human_approval_binding_required",
+            "writes no ancestor fixture or execution receipt",
             "does not expose an MCP live provider-call tool",
-            "page titles",
-            "media bytes",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.134 pre-release",
-            "first approval-gated local Notion ancestor structure fetch adapter",
+            "v0.4.0",
+            "notion-ancestor-fetch-adapter-run",
+            "compound_exact_human_approval_binding_required",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, readme_text)
         for phrase in (
-            "v0.3.134 pre-release",
-            "첫 local Notion ancestor structure fetch adapter",
+            "v0.4.0",
+            "notion-ancestor-fetch-adapter-run",
+            "compound_exact_human_approval_binding_required",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, readme_ko_text)
         for phrase in (
             "docs/notion-ancestor-fetch-adapter-run.md",
             "notion-ancestor-fetch-adapter-run",
-            "first approval-gated local Notion ancestor structure fetch adapter",
+            "compound_exact_human_approval_binding_required",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, kit_readme_text)
@@ -3313,12 +3315,12 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         )
         changelog_text = (REPO_ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
         for phrase in (
-            "Status: v0.3.141 beginner-friendly one-command local Notion location recovery with actionable failure classification",
+            "Status: v0.4.0 content-free recovery preview; live execution is fixed closed",
             "archive notion-recover",
             "auto-selects the reviewed Notion tree fixture",
-            "file:<path>",
-            "hidden local terminal prompt",
-            "Vault/keyring refs",
+            "compound_exact_human_approval_binding_required",
+            "reads no credential and makes no provider call",
+            "writes no approval receipt or sanitized ancestor fixture",
             "choose a page id",
             "create or name an environment variable",
             "copy an approval receipt path",
@@ -3326,25 +3328,23 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "read page titles",
             "read page bodies",
             "download media bytes",
-            "Power-user commands",
+            "Power users may still use read-only",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, text)
         for phrase in (
             "Notion recover",
-            "approval-gated write",
+            "content-free dry-run only in v0.4.0",
             "archive notion-recover",
-            "file:<path>",
-            "hidden local terminal prompt",
-            "live vault/keyring/OAuth reads are not implemented",
-            "does not require beginners to choose a page id",
-            "echo approval receipt paths",
+            "compound_exact_human_approval_binding_required",
+            "reads no credential/private target",
+            "writes no fixture or receipt",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         self.assertIn("archive notion-recover", manual_text)
-        self.assertIn("file:<path>", manual_text)
-        self.assertIn("hidden local terminal prompt", manual_text)
+        self.assertIn("content-free preview", manual_text)
+        self.assertIn("no prompt, token read, provider call, fixture, or receipt occurs", manual_text)
         self.assertIn("[Notion Recover](wom-kit/docs/notion-recover.md)", readme_text)
         self.assertIn("[Notion Recover](wom-kit/docs/notion-recover.md)", readme_ko_text)
         self.assertIn("docs/notion-recover.md", kit_readme_text)
@@ -3373,7 +3373,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         release_text = (KIT_ROOT / "docs" / "releases" / "v0.3.141.md").read_text(encoding="utf-8")
         changelog_text = (REPO_ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
         for phrase in (
-            "Status: v0.3.142 one-click Notion connection contract plus OAuth preflight checkpoint",
+            "Status: v0.4.0 read-only connection product contract; recovery is fixed closed",
             "archive notion-connection-plan <archive-root> --dry-run --format json",
             "notion-connect-plan",
             "Connect Notion -> human approves once in browser",
@@ -3388,7 +3388,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, text)
         for phrase in (
-            "Status: v0.3.141 beginner-friendly one-command local Notion location recovery with actionable failure classification",
+            "Status: v0.4.0 content-free recovery preview; live execution is fixed closed",
             "Failure Categories",
             "notion_connection_not_shared_or_permission_denied",
             "notion-connection-plan",
@@ -3396,7 +3396,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, recover_text)
         for phrase in (
-            "Status: v0.3.141 approval-gated local Notion ancestor structure fetch with actionable provider failure classification",
+            "Status: v0.4.0 adapter preview; approval and provider execution are fixed closed",
             "provider_permission_denied_connection_not_shared_raw_error_redacted",
             "provider_network_or_timeout_raw_error_redacted",
         ):
@@ -3410,7 +3410,8 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "archive notion-connect-plan",
             "archive notion-oauth-connection-preflight",
             "notion_connection_not_shared_or_permission_denied",
-            "Vault/keyring/OAuth one-click handoff remains planned",
+            "content-free dry-run only in v0.4.0",
+            "compound_exact_human_approval_binding_required",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
@@ -3801,7 +3802,6 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "Status: v0.3.108 approval-gated zettel edge write and revert checkpoint",
             "archive revert-edge <archive-root>",
             "rollback-edge",
-            "receipts/edges/reverts/*.zettel-edge-revert.json",
             "archive zettel-edge <archive-root>",
             "link-zettel-edge",
             "write-zettel-edge",
@@ -3828,7 +3828,6 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "skipped_existing_edges",
             "archive-relative",
             "receipts/edges/batches/*.zettel-edge-batch.json",
-            "receipts/edges/batches/reverts/*.zettel-edge-batch-revert.json",
             "preloads",
             "policy.auto_write_edge_types",
             "policy.minimum_confidence",
@@ -3840,30 +3839,21 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         for phrase in (
             "Status: v0.3.108 edge batch scale and rollback checkpoint",
             "Zettel edge write",
-            "archive zettel-edge --from-zettel <zet> --target <zet-or-objet> --edge-type <type> --dry-run|--approve",
-            "archive zettel-edge-batch --plan <json> --dry-run|--approve [--skip-existing]",
-            "archive revert-edge --receipt <edge-receipt> --dry-run|--approve",
-            "archive revert-batch --receipt <batch-receipt> --dry-run|--approve",
-            "receipts/edges/*.zettel-edge.json",
-            "receipts/edges/batches/*.zettel-edge-batch.json",
-            "receipts/edges/reverts/*.zettel-edge-revert.json",
-            "receipts/edges/batches/reverts/",
-            "preloads the manifest once",
-            "preserve original write receipts",
-            "human_review_queue",
-            "skipped_existing_edges",
-            "MCP exposes no write or revert tool",
-            "echo no zettel body text",
+            "exact-human single write; batch and revert dry-run only",
+            "TaskDialog -> authenticated durable `started` claim",
+            "zettel-edge-batch",
+            "revert-edge",
+            "revert-batch",
+            "compound_exact_human_approval_binding_required",
+            "before private target read or mutation",
+            "Historical v0.3 batch/revert receipts remain readable",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
-            "v0.3.109 pre-release",
             "[Zettel Edge Write](wom-kit/docs/zettel-edge-write.md)",
             "[Zettel Edge Batch](wom-kit/docs/zettel-edge-batch.md)",
-            "approval-gated single-edge zettel edge writes",
-            "approval-gated policy batch zettel edge writes",
-            "receipt-based `revert-edge` and `revert-batch`",
+            "compound_exact_human_approval_binding_required",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, readme_text)
@@ -3874,10 +3864,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "zettel-edge-batch",
             "revert-edge",
             "revert-batch",
-            "Preview or approve one typed edge",
-            "Preview or approve policy-gated typed edge batches",
-            "Preview or approve removing one previously approved edge",
-            "Preview or approve removing all edges listed",
+            "compound_exact_human_approval_binding_required",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, kit_readme_text)
@@ -4171,7 +4158,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         public_map_text = (KIT_ROOT / "docs" / "public-documentation-map.md").read_text(encoding="utf-8")
         public_map_ko_text = (KIT_ROOT / "docs" / "public-documentation-map.ko.md").read_text(encoding="utf-8")
         for phrase in (
-            "Status: v0.3.18 read-only preview",
+            "Status: v0.4.0 read-only preview; structured link apply/revert fail closed",
             "archive zettel-objet-links <archive-root>",
             "MCP:",
             "zettel_objet_links",
@@ -4189,7 +4176,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, links_text)
         for phrase in (
-            "Status: v0.3.89 read-only locator bridge",
+            "Status: v0.4.0 read-only locator bridge; conversion approval is fixed closed",
             "archive notion-objet-link-plan",
             "notion_objet_link_plan",
             "locator_fingerprint",
@@ -4198,13 +4185,14 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "page titles",
             "Redacted zettels are blocked",
             "notion-objet-manifest-locator-label",
-            "Approval-gated reviewed `embed` edge conversion now exists",
+            "compound_exact_human_approval_binding_required",
+            "writes no edge or conversion receipt",
             "Body replacement remains future work",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, notion_plan_text)
         for phrase in (
-            "Status: v0.3.96 read-only bulk locator index",
+            "Status: v0.4.0 read-only bulk locator index; conversion approval is fixed closed",
             "archive notion-objet-link-index",
             "notion_objet_link_index",
             "archive-wide counts",
@@ -4214,13 +4202,14 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "zettel body text",
             "Redacted zettels are counted",
             "notion-objet-manifest-locator-label",
-            "Approval-gated reviewed `embed` edge conversion now exists",
+            "compound_exact_human_approval_binding_required",
+            "writes no edge or conversion receipt",
             "Body replacement remains future work",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, notion_index_text)
         for phrase in (
-            "Status: v0.3.101 read-only conversion review checkpoint",
+            "Status: v0.4.0 read-only conversion review; conversion approval is fixed closed",
             "archive notion-objet-link-rewrite-plan",
             "notion_objet_link_rewrite_plan",
             "locator_fingerprint",
@@ -4231,19 +4220,19 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "page titles",
             "notion-objet-manifest-locator-label",
             "notion-objet-link-convert",
-            "target_mode=embed_edge",
-            "receipts without rewriting body text",
+            "compound_exact_human_approval_binding_required",
+            "writes no edge or receipt",
             "Body rewrite remains future work",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, notion_rewrite_text)
         for phrase in (
-            "Status: v0.3.101 approval-gated embed edge conversion checkpoint",
-            "archive notion-objet-link-convert",
+            "Status: v0.4.0 dry-run-only embed conversion planning",
+            "notion-objet-link-convert",
             "--target-mode embed_edge",
             "--expected-occurrence-count",
-            "--reviewed-by person:reviewer",
-            "receipts/objects/notion-link-conversions/",
+            "compound_exact_human_approval_binding_required",
+            "writes no edge or conversion receipt",
             "There is no MCP write tool",
             "does not rewrite zettel body text",
             "target_mode=objet_ref_rewrite",
@@ -4253,13 +4242,15 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, notion_convert_text)
         for phrase in (
-            "Status: v0.3.100 approval-gated manifest locator label write checkpoint",
+            "Status: v0.4.0 dry-run-only manifest locator label preview",
             "archive notion-objet-manifest-locator-label",
             "notion-objet-locator-label",
             "provider_locator_sha256",
             "provider_locator_sha256_values",
             "receipts/objects/notion-locator-labels",
             "MCP exposes no write tool",
+            "compound_exact_human_approval_binding_required",
+            "v0.4.0 creates neither file",
             "does not store or print the Notion URL",
             "notion-objet-link-index",
             "notion-objet-link-rewrite-plan",
@@ -4308,33 +4299,15 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "echo no zettel body text or frontmatter values",
             "block redacted zettels",
             "Notion objet locator bridge",
-            "archive notion-objet-link-plan --path <zet.md>|--zettel-id <id> --dry-run",
-            "MCP `notion_objet_link_plan`",
-            "archive notion-objet-link-index <archive-root> --dry-run",
-            "MCP `notion_objet_link_index`",
-            "Notion objet import material-clue audit",
-            "archive notion-objet-import-clue-audit <archive-root> --source-map <archive-relative-jsonl> --ledger <archive-relative-jsonl> --dry-run",
-            "MCP `notion_objet_import_clue_audit`",
-            "missing_material_clue_after_locator_omission",
-            "Notion objet source-map material bridge",
-            "archive notion-objet-source-map-link-plan <archive-root> --source-map <archive-relative-jsonl> --ledger <archive-relative-jsonl> --dry-run",
-            "MCP `notion_objet_source_map_link_plan`",
-            "preloads the manifest once",
-            "large manifests do not trigger per-object full manifest resolution",
-            "body provider locators",
-            "candidate_id",
-            "human_review_required",
-            "archive notion-objet-link-rewrite-plan --path <zet.md>|--zettel-id <id> --locator-fingerprint sha256:<hex> --object-id sha256:<hex> --dry-run",
-            "MCP `notion_objet_link_rewrite_plan`",
-            "archive notion-objet-manifest-locator-label --object-id sha256:<hex> --locator-fingerprint sha256:<hex> --dry-run|--approve",
-            "receipts/objects/notion-locator-labels/*.notion-objet-manifest-locator-label.json",
-            "archive notion-objet-link-convert --path <zet.md>|--zettel-id <id> --locator-fingerprint sha256:<hex> --object-id sha256:<hex> --target-mode embed_edge --expected-occurrence-count <n> --dry-run|--approve",
-            "receipts/objects/notion-link-conversions/*.notion-objet-link-convert.json",
-            "occurrence-count drift guard",
-            "does not rewrite zettel body text",
-            "provider URLs, provider locator text",
-            "skip or block redacted zettel content",
-            "MCP exposes no write tool for the manifest label or conversion surface",
+            "read-only in v0.4.0",
+            "index/plan/rewrite-plan, label preview, and conversion preview write nothing",
+            "notion-objet-manifest-locator-label",
+            "notion-objet-link-convert",
+            "compound_exact_human_approval_binding_required",
+            "before private manifest/zettel reads or mutation",
+            "creates no manifest row, edge, locator-label receipt, or conversion receipt",
+            "continues to omit provider locators, titles, bodies, paths, account data, and secrets",
+            "MCP exposes no writer",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
@@ -4350,8 +4323,8 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "zettel objet link previews",
             "import material-clue auditing",
             "scaled source-map/ledger based Notion material-link planning",
-            "approval-gated Notion objet manifest locator fingerprint labels",
-            "approval-gated Notion locator conversion to reviewed `embed` edges",
+            "dry-run Notion objet manifest locator fingerprint labeling",
+            "both approval branches fail before private manifest/zettel reads or mutation",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, readme_text)
@@ -4403,7 +4376,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, view_health_text)
         for phrase in (
-            "Status: v0.3.302 read-only recommendation plus separate reviewed writer",
+            "Status: v0.4.0 read-only recommendation; v0.3.302 writer evidence is historical",
             "archive view-recommendation-plan <archive-root> --dry-run",
             "view_recommendation_plan",
             "candidate single-facet saved views",
@@ -4412,6 +4385,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "write view files",
             "echo zettel titles",
             "Relationship To `view-health`",
+            "compound_exact_human_approval_binding_required",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, view_recommendation_text)
@@ -4657,7 +4631,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "archive imap-mailbox-plan --dry-run",
             "MCP `imap_mailbox_plan`",
             "`imap_mailbox` source",
-            "scan-source` fails closed",
+            "every `scan-source` approval are fixed closed",
             "reads no headers, bodies, or attachments",
         ):
             with self.subTest(phrase=phrase):
@@ -5085,14 +5059,15 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, manifest_text)
         for phrase in (
-            "Status: v0.3.55 approval-gated local manifest write baseline",
+            "Status: v0.4.0 dry-run-only local manifest preview; write fixed closed",
             "archive imap-mailbox-adapter-manifest-write <archive-root>",
             "mailbox-adapter-manifest-write",
             "There is no MCP live write tool",
             "config/imap-adapters/<adapter-id>.imap-mailbox-adapter.json",
             "receipts/imap/adapter-manifests/<case-id>.imap-mailbox-adapter-manifest-write.json",
             "imap-mailbox-adapter-manifest.schema.json",
-            "v0.3.55 can write a reviewed, non-secret local adapter manifest",
+            "compound_exact_human_approval_binding_required",
+            "v0.4.0 creates neither",
             "It still does not:",
             "open an IMAP connection",
             "read message headers",
@@ -5115,8 +5090,8 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "imap_mailbox_adapter_manifest_plan",
             "non-secret declaration",
             "imap-mailbox-adapter-manifest-write",
-            "v0.3.56 can now",
-            "write the reviewed non-secret manifest",
+            "matching v0.4.0 preview command",
+            "Approval is fixed closed before private input/archive reads",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, imap_text)
@@ -5134,12 +5109,12 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "IMAP mailbox adapter manifest plan",
             "IMAP mailbox adapter manifest write",
             "archive imap-mailbox-adapter-manifest-plan --adapter-id <id>",
-            "archive imap-mailbox-adapter-manifest-write --adapter-id <id>",
             "MCP `imap_mailbox_adapter_manifest_plan`",
-            "MCP has no live write tool",
             "imap-mailbox-adapter-manifest.schema.json",
             "write no adapter manifests",
-            "writes one schema-validated non-secret IMAP adapter manifest",
+            "dry-run-only in v0.4.0",
+            "compound_exact_human_approval_binding_required",
+            "creates no config or receipt",
             "execute no live adapters",
             "search no mailbox",
             "list no candidate messages",
@@ -5286,7 +5261,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         public_map_ko_text = (KIT_ROOT / "docs" / "public-documentation-map.ko.md").read_text(encoding="utf-8")
         release_text = (KIT_ROOT / "docs" / "releases" / "v0.3.62.md").read_text(encoding="utf-8")
         for phrase in (
-            "Status: v0.3.62 approval-gated local IMAP header metadata scan baseline",
+            "Status: v0.4.0 dry-run-only IMAP header scan preflight; live scan fixed closed",
             "archive imap-mailbox-header-metadata-scan <archive-root>",
             "imap-header-metadata-scan",
             "mailbox-header-metadata-scan",
@@ -5294,8 +5269,9 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "`env:` username and app-password refs only",
             "`header_metadata_scan` only",
             "execution contract required",
-            "open an IMAP TLS connection",
-            "fetch limited header metadata",
+            "compound_exact_human_approval_binding_required",
+            "opens no IMAP TLS connection",
+            "stops before login, mailbox selection, search, header fetch",
             "Candidate refs are opaque hashes",
             "does not implement",
             "body capture",
@@ -5305,31 +5281,29 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, scan_text)
         for phrase in (
-            "Status: v0.3.87 connection edge intelligence checkpoint",
             "IMAP mailbox header metadata scan",
-            "archive imap-mailbox-header-metadata-scan --dry-run|--approve",
-            "first narrow live IMAP adapter path",
-            "`env:` username/app-password refs",
-            "fetch limited headers",
-            "non-secret receipt with counts and opaque candidate refs",
-            "returns no username/password values",
-            "raw headers",
-            "local absolute paths",
+            "dry-run-only in v0.4.0",
+            "archive imap-mailbox-header-metadata-scan --dry-run",
+            "content-free preflight",
+            "compound_exact_human_approval_binding_required",
+            "opens no IMAP connection",
+            "reads no headers",
+            "creates no execution receipt",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
             "v0.3.87 pre-release",
             "[IMAP Mailbox Header Metadata Scan](wom-kit/docs/imap-mailbox-header-metadata-scan.md)",
-            "first approval-gated local IMAP header metadata scan",
-            "broad IMAP ingestion beyond the first approval-gated header metadata scan",
+            "content-free IMAP header metadata scan preflight",
+            "writes no execution receipt",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, readme_text)
         for phrase in (
             "docs/imap-mailbox-header-metadata-scan.md",
             "imap-mailbox-header-metadata-scan",
-            "Run the first approval-gated local IMAP header metadata scan",
+            "Preview a content-free IMAP header scan preflight",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, kit_readme_text)
@@ -5377,7 +5351,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         for phrase in (
             "v0.3.87 pre-release",
             "[IMAP Mailbox Header Scan Receipt Audit](wom-kit/docs/imap-mailbox-header-scan-receipt-audit.md)",
-            "offline audit checkpoint for those header scan execution receipts",
+            "Existing non-secret execution receipts remain offline-auditable",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, readme_text)
@@ -5699,12 +5673,12 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         public_map_ko_text = (KIT_ROOT / "docs" / "public-documentation-map.ko.md").read_text(encoding="utf-8")
         release_text = (KIT_ROOT / "docs" / "releases" / "v0.3.72.md").read_text(encoding="utf-8")
         for phrase in (
-            "Status: v0.3.72 read-only IMAP material capture approval audit checkpoint",
+            "Status: v0.4.0 read-only legacy-unbound advisory audit",
             "archive imap-mailbox-material-capture-approval-audit <archive-root>",
             "imap-material-capture-approval-audit",
             "mailbox-material-capture-approval-audit",
-            "approval_receipt_verified_for_future_material_capture",
-            "future capture is authorized",
+            "legacy_unbound",
+            "future_capture_authorized` always remains false",
             "reads message bodies",
             "reads attachment bytes",
             "creates derived text",
@@ -5715,16 +5689,14 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, audit_text)
         for phrase in (
-            "Status: v0.3.87 connection edge intelligence checkpoint",
             "IMAP material capture approval audit",
-            "archive imap-mailbox-material-capture-approval-audit --material-selection-receipt <path>",
-            "approval_receipt_verified_for_future_material_capture",
-            "reads no original execution receipt",
-            "reads no headers/bodies/attachments",
-            "creates no derived text",
-            "echoes no approval receipt path",
-            "material selection receipt path",
-            "candidate refs",
+            "archive imap-mailbox-material-capture-approval-audit ... --dry-run",
+            "legacy_unbound",
+            "future_capture_authorized` always remains false",
+            "never authorizes future message-body, attachment, or derived-text capture",
+            "opens no IMAP/credential store",
+            "reads no message material",
+            "writes nothing",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
@@ -5738,7 +5710,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         for phrase in (
             "docs/imap-mailbox-material-capture-approval-audit.md",
             "imap-mailbox-material-capture-approval-audit",
-            "Audit one non-secret material capture approval receipt",
+            "Structurally audit one legacy non-secret material-capture approval receipt",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, kit_readme_text)
@@ -5976,7 +5948,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         public_map_text = (KIT_ROOT / "docs" / "public-documentation-map.md").read_text(encoding="utf-8")
         public_map_ko_text = (KIT_ROOT / "docs" / "public-documentation-map.ko.md").read_text(encoding="utf-8")
         for phrase in (
-            "Status: v0.3.138 beginner setup manual with Notion file-ref recovery credential guidance",
+            "Status: v0.4.0 beginner setup preview; Notion recovery execution is fixed closed",
             "archive beginner-setup-manual",
             "archive notion-recover",
             "first-use-setup-manual",
@@ -6004,10 +5976,10 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "does not execute the tools",
             "folder, shelf, upper page, and item location",
             "ask Notion again for the missing location links",
-            "file:<path>",
-            "hidden local terminal prompt",
-            "live vault/keyring one-click reads are still a future",
-            "ask AI to tidy and merge the recovered locations",
+            "compound_exact_human_approval_binding_required",
+            "No process asks Notion for structure in v0.4.0.",
+            "no prompt, token read, provider call, fixture, or receipt occurs",
+            "stop with no credential/provider read or write",
             "The AI does not receive your Notion token.",
             "run Notion location fetches",
             "It is a human setup guide and command checklist",
@@ -6343,11 +6315,12 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         for phrase in (
             "Status: v0.3.87 connection edge intelligence checkpoint",
             "Object storage upload evidence",
-            "archive object-storage-upload-evidence --ledger <jsonl> --dry-run|--approve",
-            "`approval-gated write`",
-            "receipt and object-storage manifest locations",
+            "archive object-storage-upload-evidence --ledger <jsonl> --dry-run",
+            "dry-run validation only in v0.4.0",
+            "adds no receipt and object-storage manifest locations",
             "declared_uploaded",
             "provider_confirmation_by_wom_kit: false",
+            "compound_exact_human_approval_binding_required",
             "MCP exposes no write tool for this surface",
         ):
             with self.subTest(phrase=phrase):
@@ -6355,7 +6328,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         for phrase in (
             "v0.3.87 pre-release",
             "[Object Storage Upload Evidence](wom-kit/docs/object-storage-upload-evidence.md)",
-            "approval-gated external upload evidence registration",
+            "dry-run external upload evidence validation",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, readme_text)
@@ -6685,11 +6658,13 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         self.assertIn("[Credential Policy Check](credential-policy-check.md)", contract_text)
         for phrase in (
             "Credential policy check",
-            "archive credential-policy-check --action-kind <action> --approval-decision approve_once|deny|needs_review --adapter-kind <adapter> --operation <operation> --approval-receipt <path> --dry-run",
+            "archive credential-policy-check ... --approval-receipt <path> --dry-run",
             "MCP `credential_policy_check`",
-            "denied_by_policy",
-            "run no live adapters",
-            "live_execution_allowed_now` false",
+            "legacy_unbound",
+            "would_allow_future_adapter_after_receipt",
+            "live_execution_allowed_now` remain false",
+            "no receipt authorizes a future credential adapter",
+            "run no adapters",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
@@ -6772,18 +6747,18 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         public_map_text = (KIT_ROOT / "docs" / "public-documentation-map.md").read_text(encoding="utf-8")
         public_map_ko_text = (KIT_ROOT / "docs" / "public-documentation-map.ko.md").read_text(encoding="utf-8")
         for phrase in (
-            "Status: v0.3.33 CLI-only KeePassXC write adapter",
+            "Status: v0.4.0 dry-run-only KeePassXC command preview; write fixed closed",
             "credential-keepassxc-write",
             "keepassxc-write",
-            "--approve",
-            "--database-path",
+            "--dry-run",
+            "compound_exact_human_approval_binding_required",
             "keepassxc-cli add --password-prompt",
             "receipts/credentials/keepassxc-writes/",
             "There is no MCP live execution tool.",
             "mcp_live_tool_exposed: false",
             "database_path_included: false",
             "raw_adapter_output_echoed: false",
-            "replay is blocked",
+            "would_allow_future_adapter_after_receipt` remains false",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, write_text)
@@ -6791,19 +6766,20 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             self.assertIn("[Credential KeePassXC Write](credential-keepassxc-write.md)", doc_text)
         for phrase in (
             "Credential KeePassXC write",
-            "local CLI adapter write",
-            "archive credential-keepassxc-write --approval-receipt <path> --entry-label <safe-label> --database-path <local.kdbx> --approve",
-            "MCP has no live write tool",
-            "blocks replay",
-            "echoes no secret values",
-            "raw adapter output",
+            "dry-run-only in v0.4.0",
+            "archive credential-keepassxc-write --dry-run",
+            "compound_exact_human_approval_binding_required",
+            "does not invoke `keepassxc-cli`",
+            "modify a vault",
+            "publish an execution receipt",
+            "MCP has no write tool",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
         for phrase in (
             "v0.3.87 pre-release",
             "[Credential KeePassXC Write](wom-kit/docs/credential-keepassxc-write.md)",
-            "CLI-only KeePassXC write execution",
+            "CLI-only KeePassXC command-shape preview",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, readme_text)
@@ -7386,7 +7362,10 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             encoding="utf-8"
         )
 
-        self.assertIn("private hash-only transaction journal", kit_readme_text)
+        self.assertIn(
+            "compound_exact_human_approval_binding_required",
+            kit_readme_text,
+        )
         self.assertNotIn(
             "forced termination has no crash-recovery journal",
             kit_readme_text,
@@ -7395,13 +7374,18 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         self.assertIn("`.abstract-revert.transaction.json`", revert_text)
         for text in (operator_source_text, operator_resource_text):
             with self.subTest(document="runtime-operator-contract"):
+                normalized_text = " ".join(text.split())
                 self.assertIn(
-                    "Since v0.3.265, an approved apply publishes a private hash-only",
-                    text,
+                    "Historical v0.3 applies published a private hash-only",
+                    normalized_text,
                 )
                 self.assertIn(
-                    "Since v0.3.265, approved revert also",
-                    text,
+                    "the revert approval branch is also fixed fail-closed",
+                    normalized_text,
+                )
+                self.assertIn(
+                    "compound_exact_human_approval_binding_required",
+                    normalized_text,
                 )
                 self.assertNotIn(
                     "Forced termination has no automatic crash-recovery journal",
@@ -7588,14 +7572,25 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         for phrase in (
             "--expected-plan-digest",
             "--expected-action",
-            "--affirm-recovery-reviewed",
-            "--affirm-archive-quiescent",
             "manual_forensic_hold",
             "rollback_on_runtime_failure: false",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, guide_text)
                 self.assertIn(phrase, release_text)
+        for historical_flag in (
+            "--affirm-recovery-reviewed",
+            "--affirm-archive-quiescent",
+        ):
+            self.assertIn(historical_flag, release_text)
+        self.assertIn(
+            "compound_exact_human_approval_binding_required",
+            guide_text,
+        )
+        self.assertIn(
+            "compound_exact_human_approval_binding_required",
+            matrix_text,
+        )
         self.assertIn("single-case executor", plan_text)
         self.assertIn("OS advisory guard", guide_text)
         self.assertIn("new plan", guide_text)
@@ -7603,11 +7598,11 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         self.assertIn("one-way reader", upgrade_text)
         self.assertIn("단방향 reader", upgrade_ko_text)
         self.assertIn(
-            "[zet Abstract Backfill Recovery Executor]",
+            "[zet Abstract Backfill Recovery Preview]",
             public_map_text,
         )
         self.assertIn(
-            "[zet 초록 일괄 작업 승인 복구 실행기]",
+            "[zet 초록 일괄 작업 복구 미리보기]",
             public_map_ko_text,
         )
         rollback_schema = revert_schema["properties"][
@@ -7729,11 +7724,11 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         self.assertIn("does not resume", guide_text)
         self.assertIn("zet-title-remap-write", plan_text)
         self.assertIn(
-            "[Approved zet Title Remap Write]",
+            "[zet Title Remap Write Preview]",
             public_map_text,
         )
         self.assertIn(
-            "[승인된 zet 제목 리맵 쓰기]",
+            "[zet 제목 리맵 쓰기 미리보기]",
             public_map_ko_text,
         )
         self.assertEqual(
@@ -7951,7 +7946,6 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         for text in (
             guide_text,
             release_text,
-            matrix_text,
             decision_text,
         ):
             with self.subTest(document="title-remap-recover-contract"):
@@ -7974,9 +7968,15 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
                 self.assertIn("fresh", text.lower())
                 self.assertIn("revert", text.lower())
 
+        self.assertIn("zet title remap recover", matrix_text)
+        self.assertIn(
+            "compound_exact_human_approval_binding_required",
+            matrix_text,
+        )
+
         self.assertIn("zet-title-remap-recover", plan_text)
         self.assertIn(
-            "[zet Title Remap Recover]",
+            "[zet Title Remap Recovery Preview]",
             public_map_text,
         )
         self.assertIn(
@@ -8055,7 +8055,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
                 self.assertIn(phrase, guide_text)
                 self.assertIn(phrase, release_text)
         self.assertIn(
-            "the separate approval-gated revert command can execute",
+            "compound_exact_human_approval_binding_required",
             matrix_text,
         )
         self.assertIn(
@@ -8158,13 +8158,19 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "--expected-receipt-sha256",
             "--expected-plan-digest",
             "--dry-run",
-            "--approve",
-            "--reviewed-by",
-            "--affirm-title-reversions-reviewed",
-            "--affirm-archive-quiescent",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, guide_text)
+
+        self.assertIn(
+            "compound_exact_human_approval_binding_required",
+            guide_text,
+        )
+        self.assertIn(
+            "compound_exact_human_approval_binding_required",
+            matrix_text,
+        )
+        self.assertIn("v0.3.274", release_text)
 
         self.assertIn(
             "wom-kit/zet-title-remap-revert-receipt/v0.1",
@@ -8185,7 +8191,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             recovery_plan_text,
         )
         self.assertIn(
-            "[Approved zet Title Remap Revert]",
+            "[zet Title Remap Revert Preview]",
             public_map_text,
         )
         self.assertIn(
@@ -8340,13 +8346,15 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "--expected-plan-digest",
             "--expected-action",
             "--dry-run",
-            "--approve",
-            "--reviewed-by",
-            "--affirm-recovery-reviewed",
-            "--affirm-archive-quiescent",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, guide_text)
+
+        self.assertIn(
+            "compound_exact_human_approval_binding_required",
+            guide_text,
+        )
+        self.assertIn("v0.3.276", release_text)
 
         for action in (
             "cleanup_unstarted_title_revert_transaction_evidence",
@@ -8369,7 +8377,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         self.assertIn("execution_implemented: true", plan_text)
         self.assertIn("safe_to_execute_now", plan_text)
         self.assertIn(
-            "[zet Title Remap Revert Recover]",
+            "[zet Title Remap Revert Recovery Preview]",
             public_map_text,
         )
         self.assertIn(
@@ -8736,7 +8744,6 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "--expected-review-plan-sha256",
             "--affirm-memberships-reviewed",
             "activity-group-membership-recovery-plan",
-            "--expected-recovery-plan-sha256",
             "--affirm-recovery-reviewed",
             "manual_forensic_hold",
             "confirm that the interrupted writer process is no longer running",
@@ -8745,6 +8752,15 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, guide_text)
+
+        self.assertIn(
+            "compound_exact_human_approval_binding_required",
+            guide_text,
+        )
+        self.assertIn(
+            "compound_exact_human_approval_binding_required",
+            matrix_text,
+        )
 
         self.assertIn(
             "wom-kit/ai-command-path-routing/v0.5",
@@ -10929,9 +10945,10 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "--expected-request-sha256 <sha256> --approve --format json",
             "archive credential-secure-list <archive-root> --verify --format json",
             "archive credential-lifecycle <archive-root> --provider notion --workspace-fingerprint <sha256> --default-credential-id <opaque-id> --dry-run --format json",
-            "--expected-plan-sha256 <sha256> --reviewed-by <actor> --approve --format json",
+            "`credential-lifecycle --approve` is intentionally not a runnable v0.4.0 example",
             "archive notion-page-recovery-plan <archive-root> --request profiles/local/notion-page-recovery/<private>.json --max-items 5 --offset 0 --dry-run --format json",
-            "archive notion-page-recovery <archive-root> --request profiles/local/notion-page-recovery/<private>.json --max-items 5 --offset 0 --expected-plan-sha256 <sha256> --reviewed-by <actor> --approve --format json",
+            "recovery approval is fixed fail-closed",
+            "compound_exact_human_approval_binding_required",
         ):
             with self.subTest(command_shape=command_shape):
                 self.assertIn(command_shape, runtime_flat)

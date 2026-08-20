@@ -12,6 +12,11 @@ from unittest import mock
 from wom_kit import __version__, archive_cli, runtime_skill_install
 
 
+class _FalseyNonBoolean:
+    def __bool__(self) -> bool:
+        return False
+
+
 class RuntimeSkillInstallTests(unittest.TestCase):
     def make_source(self, root: Path, marker: str = "one") -> Path:
         source = root / "source"
@@ -54,13 +59,13 @@ class RuntimeSkillInstallTests(unittest.TestCase):
         version: str = "0.3.293",
     ) -> dict[str, object]:
         kwargs = self.custom_kwargs(root, source, version=version)
-        preview = runtime_skill_install.runtime_skill_install(
+        preview = runtime_skill_install._runtime_skill_install_legacy_core(
             dry_run=True,
             approve=False,
             **kwargs,
         )
         self.assertTrue(preview["ok"], preview)
-        return runtime_skill_install.runtime_skill_install(
+        return runtime_skill_install._runtime_skill_install_legacy_core(
             dry_run=False,
             approve=True,
             reviewed_by="person:test",
@@ -75,7 +80,7 @@ class RuntimeSkillInstallTests(unittest.TestCase):
         return code, output.getvalue()
 
     def test_packaged_source_contains_progressive_skill(self) -> None:
-        source = runtime_skill_install.load_source_package()
+        source = runtime_skill_install._load_source_package()
         names = {row.path for row in source.files}
 
         self.assertIn("SKILL.md", names)
@@ -89,7 +94,7 @@ class RuntimeSkillInstallTests(unittest.TestCase):
             source = self.make_source(root)
             kwargs = self.custom_kwargs(root, source)
 
-            result = runtime_skill_install.runtime_skill_install(
+            result = runtime_skill_install._runtime_skill_install_legacy_core(
                 dry_run=True,
                 approve=False,
                 **kwargs,
@@ -104,22 +109,98 @@ class RuntimeSkillInstallTests(unittest.TestCase):
         self.assertNotIn(str(root), serialized)
         self.assertIsNone(result["target"]["path"])
 
+    def test_public_lifecycle_rejects_falsey_non_boolean_before_any_io(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            skills_root = root / "skills"
+            source_root = root / "source-must-not-be-read"
+            with (
+                mock.patch.object(
+                    runtime_skill_install,
+                    "_runtime_skill_install_legacy_core",
+                    side_effect=AssertionError("private install core must not start"),
+                ) as install_core,
+                mock.patch.object(
+                    runtime_skill_install,
+                    "_runtime_skill_uninstall_legacy_core",
+                    side_effect=AssertionError("private uninstall core must not start"),
+                ) as uninstall_core,
+                mock.patch.object(
+                    runtime_skill_install,
+                    "_load_source_package",
+                    side_effect=AssertionError("source must not be read"),
+                ) as source_reader,
+                mock.patch.object(
+                    runtime_skill_install,
+                    "_resolve_target_location",
+                    side_effect=AssertionError("target must not be resolved"),
+                ) as target_resolver,
+                mock.patch.object(
+                    runtime_skill_install,
+                    "_write_staging_skill",
+                    side_effect=AssertionError("staging must not be written"),
+                ) as staging_writer,
+                mock.patch.object(
+                    runtime_skill_install,
+                    "_acquire_lock",
+                    side_effect=AssertionError("lock must not be created"),
+                ) as lock_writer,
+            ):
+                install = runtime_skill_install.runtime_skill_install(
+                    dry_run=_FalseyNonBoolean(),
+                    approve=False,
+                    host="custom",
+                    scope="custom",
+                    skills_root=skills_root,
+                    source_root=source_root,
+                )
+                uninstall = runtime_skill_install.runtime_skill_uninstall(
+                    dry_run=_FalseyNonBoolean(),
+                    approve=False,
+                    host="custom",
+                    scope="custom",
+                    skills_root=skills_root,
+                    source_root=source_root,
+                )
+
+            self.assertFalse(skills_root.exists())
+
+        for result, lifecycle in (
+            (install, "runtime_skill_install"),
+            (uninstall, "runtime_skill_uninstall"),
+        ):
+            self.assertEqual(result["status"], "blocked")
+            self.assertEqual(result["lifecycle_action"], lifecycle)
+            self.assertEqual(
+                result["reason_codes"],
+                ["compound_exact_human_approval_binding_required"],
+            )
+        for guarded in (
+            install_core,
+            uninstall_core,
+            source_reader,
+            target_resolver,
+            staging_writer,
+            lock_writer,
+        ):
+            guarded.assert_not_called()
+
     def test_install_requires_reviewer_and_exact_plan(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             source = self.make_source(root)
             kwargs = self.custom_kwargs(root, source)
-            preview = runtime_skill_install.runtime_skill_install(
+            preview = runtime_skill_install._runtime_skill_install_legacy_core(
                 dry_run=True, approve=False, **kwargs
             )
 
-            missing_reviewer = runtime_skill_install.runtime_skill_install(
+            missing_reviewer = runtime_skill_install._runtime_skill_install_legacy_core(
                 dry_run=False,
                 approve=True,
                 expected_plan_sha256=str(preview["operation_plan_sha256"]),
                 **kwargs,
             )
-            stale_digest = runtime_skill_install.runtime_skill_install(
+            stale_digest = runtime_skill_install._runtime_skill_install_legacy_core(
                 dry_run=False,
                 approve=True,
                 reviewed_by="person:test",
@@ -142,7 +223,7 @@ class RuntimeSkillInstallTests(unittest.TestCase):
 
             installed = self.install_from_preview(root, source)
             status = runtime_skill_install.runtime_skill_status(**kwargs)
-            repeat = runtime_skill_install.runtime_skill_install(
+            repeat = runtime_skill_install._runtime_skill_install_legacy_core(
                 dry_run=True, approve=False, **kwargs
             )
             target = root / "skills" / "wom-archive"
@@ -166,10 +247,10 @@ class RuntimeSkillInstallTests(unittest.TestCase):
             root = Path(tmp)
             source = self.make_source(root)
             kwargs = self.custom_kwargs(root, source)
-            preview = runtime_skill_install.runtime_skill_install(
+            preview = runtime_skill_install._runtime_skill_install_legacy_core(
                 dry_run=True, approve=False, **kwargs
             )
-            real_write_staging = runtime_skill_install.write_staging_skill
+            real_write_staging = runtime_skill_install._write_staging_skill
             staging_locations: list[Path] = []
 
             def observe_staging(staging, *args, **call_kwargs):
@@ -178,10 +259,10 @@ class RuntimeSkillInstallTests(unittest.TestCase):
 
             with mock.patch.object(
                 runtime_skill_install,
-                "write_staging_skill",
+                "_write_staging_skill",
                 side_effect=observe_staging,
             ):
-                result = runtime_skill_install.runtime_skill_install(
+                result = runtime_skill_install._runtime_skill_install_legacy_core(
                     dry_run=False,
                     approve=True,
                     reviewed_by="person:test",
@@ -208,10 +289,10 @@ class RuntimeSkillInstallTests(unittest.TestCase):
                 newline="\n",
             )
             kwargs = self.custom_kwargs(root, source, version="0.3.293")
-            preview = runtime_skill_install.runtime_skill_install(
+            preview = runtime_skill_install._runtime_skill_install_legacy_core(
                 dry_run=True, approve=False, **kwargs
             )
-            updated = runtime_skill_install.runtime_skill_install(
+            updated = runtime_skill_install._runtime_skill_install_legacy_core(
                 dry_run=False,
                 approve=True,
                 reviewed_by="person:test",
@@ -244,10 +325,10 @@ class RuntimeSkillInstallTests(unittest.TestCase):
                 newline="\n",
             )
             kwargs = self.custom_kwargs(root, source, version="0.3.293")
-            preview = runtime_skill_install.runtime_skill_install(
+            preview = runtime_skill_install._runtime_skill_install_legacy_core(
                 dry_run=True, approve=False, **kwargs
             )
-            real_inspect = runtime_skill_install.inspect_target
+            real_inspect = runtime_skill_install._inspect_target
 
             def fail_new_target_verification(*args, **call_kwargs):
                 result = real_inspect(*args, **call_kwargs)
@@ -270,10 +351,10 @@ class RuntimeSkillInstallTests(unittest.TestCase):
 
             with mock.patch.object(
                 runtime_skill_install,
-                "inspect_target",
+                "_inspect_target",
                 side_effect=fail_new_target_verification,
             ):
-                result = runtime_skill_install.runtime_skill_install(
+                result = runtime_skill_install._runtime_skill_install_legacy_core(
                     dry_run=False,
                     approve=True,
                     reviewed_by="person:test",
@@ -299,10 +380,10 @@ class RuntimeSkillInstallTests(unittest.TestCase):
             user_file.write_text("user-owned\n", encoding="utf-8")
             kwargs = self.custom_kwargs(root, source)
 
-            install = runtime_skill_install.runtime_skill_install(
+            install = runtime_skill_install._runtime_skill_install_legacy_core(
                 dry_run=True, approve=False, **kwargs
             )
-            uninstall = runtime_skill_install.runtime_skill_uninstall(
+            uninstall = runtime_skill_install._runtime_skill_uninstall_legacy_core(
                 dry_run=True, approve=False, **kwargs
             )
             preserved = user_file.read_text(encoding="utf-8")
@@ -322,10 +403,10 @@ class RuntimeSkillInstallTests(unittest.TestCase):
             target_file.write_text("human edit\n", encoding="utf-8")
             kwargs = self.custom_kwargs(root, source)
 
-            install = runtime_skill_install.runtime_skill_install(
+            install = runtime_skill_install._runtime_skill_install_legacy_core(
                 dry_run=True, approve=False, **kwargs
             )
-            uninstall = runtime_skill_install.runtime_skill_uninstall(
+            uninstall = runtime_skill_install._runtime_skill_uninstall_legacy_core(
                 dry_run=True, approve=False, **kwargs
             )
             preserved = target_file.read_text(encoding="utf-8")
@@ -353,10 +434,10 @@ class RuntimeSkillInstallTests(unittest.TestCase):
             kwargs = self.custom_kwargs(root, source)
 
             status = runtime_skill_install.runtime_skill_status(**kwargs)
-            update = runtime_skill_install.runtime_skill_install(
+            update = runtime_skill_install._runtime_skill_install_legacy_core(
                 dry_run=True, approve=False, **kwargs
             )
-            uninstall = runtime_skill_install.runtime_skill_uninstall(
+            uninstall = runtime_skill_install._runtime_skill_uninstall_legacy_core(
                 dry_run=True, approve=False, **kwargs
             )
 
@@ -389,14 +470,14 @@ class RuntimeSkillInstallTests(unittest.TestCase):
             root = Path(tmp)
             source = self.make_source(root)
             kwargs = self.custom_kwargs(root, source)
-            preview = runtime_skill_install.runtime_skill_install(
+            preview = runtime_skill_install._runtime_skill_install_legacy_core(
                 dry_run=True, approve=False, **kwargs
             )
             target = root / "skills" / "wom-archive"
             target.mkdir(parents=True)
             (target / "SKILL.md").write_text("appeared later\n", encoding="utf-8")
 
-            result = runtime_skill_install.runtime_skill_install(
+            result = runtime_skill_install._runtime_skill_install_legacy_core(
                 dry_run=False,
                 approve=True,
                 reviewed_by="person:test",
@@ -413,13 +494,13 @@ class RuntimeSkillInstallTests(unittest.TestCase):
             root = Path(tmp)
             source = self.make_source(root)
             kwargs = self.custom_kwargs(root, source)
-            preview = runtime_skill_install.runtime_skill_install(
+            preview = runtime_skill_install._runtime_skill_install_legacy_core(
                 dry_run=True, approve=False, **kwargs
             )
             with (source / "SKILL.md").open("a", encoding="utf-8", newline="\n") as handle:
                 handle.write("Changed after review.\n")
 
-            result = runtime_skill_install.runtime_skill_install(
+            result = runtime_skill_install._runtime_skill_install_legacy_core(
                 dry_run=False,
                 approve=True,
                 reviewed_by="person:test",
@@ -435,7 +516,7 @@ class RuntimeSkillInstallTests(unittest.TestCase):
             root = Path(tmp)
             source = self.make_source(root)
             kwargs = self.custom_kwargs(root, source)
-            preview = runtime_skill_install.runtime_skill_install(
+            preview = runtime_skill_install._runtime_skill_install_legacy_core(
                 dry_run=True, approve=False, **kwargs
             )
             skills_root = root / "skills"
@@ -443,7 +524,7 @@ class RuntimeSkillInstallTests(unittest.TestCase):
             lock = skills_root / runtime_skill_install.LOCK_NAME
             lock.write_text("occupied\n", encoding="utf-8")
 
-            result = runtime_skill_install.runtime_skill_install(
+            result = runtime_skill_install._runtime_skill_install_legacy_core(
                 dry_run=False,
                 approve=True,
                 reviewed_by="person:test",
@@ -486,10 +567,10 @@ class RuntimeSkillInstallTests(unittest.TestCase):
             installed = self.install_from_preview(root, source)
             self.assertTrue(installed["ok"], installed)
             kwargs = self.custom_kwargs(root, source)
-            preview = runtime_skill_install.runtime_skill_uninstall(
+            preview = runtime_skill_install._runtime_skill_uninstall_legacy_core(
                 dry_run=True, approve=False, **kwargs
             )
-            result = runtime_skill_install.runtime_skill_uninstall(
+            result = runtime_skill_install._runtime_skill_uninstall_legacy_core(
                 dry_run=False,
                 approve=True,
                 reviewed_by="person:test",
@@ -510,10 +591,10 @@ class RuntimeSkillInstallTests(unittest.TestCase):
             installed = self.install_from_preview(root, source)
             self.assertTrue(installed["ok"], installed)
             kwargs = self.custom_kwargs(root, source)
-            preview = runtime_skill_install.runtime_skill_uninstall(
+            preview = runtime_skill_install._runtime_skill_uninstall_legacy_core(
                 dry_run=True, approve=False, **kwargs
             )
-            real_inspect = runtime_skill_install.inspect_target
+            real_inspect = runtime_skill_install._inspect_target
 
             def fail_moved_target_verification(*args, **call_kwargs):
                 result = real_inspect(*args, **call_kwargs)
@@ -532,10 +613,10 @@ class RuntimeSkillInstallTests(unittest.TestCase):
 
             with mock.patch.object(
                 runtime_skill_install,
-                "inspect_target",
+                "_inspect_target",
                 side_effect=fail_moved_target_verification,
             ):
-                result = runtime_skill_install.runtime_skill_uninstall(
+                result = runtime_skill_install._runtime_skill_uninstall_legacy_core(
                     dry_run=False,
                     approve=True,
                     reviewed_by="person:test",
@@ -556,7 +637,7 @@ class RuntimeSkillInstallTests(unittest.TestCase):
             repo = Path(tmp) / "repo"
             repo.mkdir()
 
-            location = runtime_skill_install.resolve_target_location(
+            location = runtime_skill_install._resolve_target_location(
                 host="codex", scope="repo", repo_root=repo
             )
 
@@ -620,7 +701,7 @@ class RuntimeSkillInstallTests(unittest.TestCase):
     def test_source_checkout_version_is_used_for_real_package_status(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            result = runtime_skill_install.runtime_skill_install(
+            result = runtime_skill_install._runtime_skill_install_legacy_core(
                 dry_run=True,
                 approve=False,
                 host="custom",

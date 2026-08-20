@@ -6,7 +6,7 @@ Release: v0.3.186
 
 ## Context
 
-Basoon's v0.3.185 revalidation confirmed that:
+The protected pilot archive's v0.3.185 revalidation confirmed that:
 
 - `archive version` import-origin diagnostics work;
 - `object-storage-adopt-existing --progress` reports same-provider nonmatching

@@ -1,18 +1,17 @@
 # Zettel Edge Batch
 
-Status: v0.3.290 policy batch endpoint type enforcement checkpoint
+Status: v0.4.0 dry-run-only batch and rollback planning boundary
 Scale checkpoint: Status: v0.3.108 approval-gated policy batch zettel edge write scale and rollback checkpoint
 Previous checkpoint: Status: v0.3.102 approval-gated policy batch zettel edge write ergonomics checkpoint
 
-`archive zettel-edge-batch` is the policy approval companion to
-`archive zettel-edge`.
+`archive zettel-edge-batch` is the read-only policy planning companion to
+the exact single-operation `archive zettel-edge` writer.
 
 The beginner version is:
 
 ```text
-One edge writer = approve one edge.
-Batch edge writer = approve one policy, then write only the candidates that
-match that policy.
+One edge writer = review and approve one exact edge.
+Batch planner = classify a complete reviewed policy plan without writing it.
 ```
 
 Low-confidence, ambiguous, blocked, or policy-mismatched candidates are not
@@ -33,16 +32,9 @@ archive zettel-edge-batch <archive-root> `
   --format json
 ```
 
-Approve:
-
-```powershell
-archive zettel-edge-batch <archive-root> `
-  --plan workbench/zettel-edge-batch.plan.json `
-  --approve `
-  --reviewed-by person:reviewer `
-  --skip-existing `
-  --format json
-```
+Approve is intentionally unavailable in v0.4.0. This shape fails closed with
+`compound_exact_human_approval_binding_required` and writes nothing. There is
+no approved batch command to copy or run.
 
 Aliases:
 
@@ -60,15 +52,9 @@ archive revert-batch <archive-root> `
   --format json
 ```
 
-Rollback approve:
-
-```powershell
-archive revert-batch <archive-root> `
-  --receipt receipts/edges/batches/<batch>.zettel-edge-batch.json `
-  --approve `
-  --reviewed-by person:reviewer `
-  --format json
-```
+Rollback approve is also unavailable in v0.4.0. This shape fails with the same
+code and writes nothing. There is no approved revert-batch command to copy or
+run.
 
 Rollback alias:
 
@@ -141,57 +127,43 @@ edge receipt, or existing batch receipt blocks the batch.
 
 When a human explicitly passes `--skip-existing`, already-written edge rows are
 returned in `skipped_existing_edges` instead of blocking the whole batch. The
-remaining policy-writable rows still pass through the same single-edge preflight
-and approval-gated write path.
+remaining policy-writable rows still pass through the same single-edge
+preflight, but no batch mutation follows in v0.4.0.
 
 If every policy-writable row already exists and `--skip-existing` is used, the
-command writes nothing, returns `write_status: nothing_to_write`, and does not
-create a new batch receipt.
+command returns `write_status: nothing_to_write`. No v0.4.0 batch invocation
+creates a batch receipt.
 
 ## Writes
 
-With `--approve --reviewed-by <safe-id>`, the command first dry-runs every
-policy-writable item through the single-edge writer.
+There is no batch writer in the v0.4.0 authority model. Dry-run applies the
+same endpoint, duplicate, policy, and registry preflights to every candidate
+and returns the complete content-free classification. `--approve` exits before
+any zettel or receipt mutation with
+`compound_exact_human_approval_binding_required`.
 
-Only after all policy-writable items pass preflight does it write:
-
-```text
-zettels/*.md or inbox/*.md frontmatter edges +N
-receipts/edges/*.zettel-edge.json
-receipts/edges/batches/*.zettel-edge-batch.json
-```
-
-The batch receipt records the policy id, reviewer id, written edge receipts,
-skipped-existing count, and review queue count. If an approved batch write fails
-partway through, WOM-kit restores the touched zettel and receipt files from
-in-process snapshots.
+The old v0.3 batch receipt and rollback formats remain readable historical
+evidence. Their existence does not reactivate the old executor or let one
+single-target claim authorize a compound target set.
 
 Since v0.3.290, the reused single-edge preflight also enforces the selected
 active `types.yml` record's `from` and `to` entity-type lists. A row whose
 resolved `Zettel`/`OriginalObject` endpoints are incompatible, or whose
-selected registry contract is malformed, cannot become an approved write and
-is reported deterministically. The new contract field and fixed blockers copy
+selected registry contract is malformed, cannot become an eligible plan row and
+is reported deterministically. The contract field and fixed blockers copy
 no target content, registry payload, path, or exception text; existing safe
 source archive-relative paths, target refs, manifest path, and receipt paths
 remain part of the established result.
 
 ## Reverts
 
-`archive revert-batch` reads a
+`archive revert-batch --dry-run` reads a
 `receipts/edges/batches/*.zettel-edge-batch.json` receipt and plans one
 `revert-edge` operation for each listed edge receipt.
 
-With `--approve --reviewed-by <safe-id>`, it writes:
-
-```text
-zettels/*.md or inbox/*.md frontmatter edges -N
-receipts/edges/reverts/*.zettel-edge-revert.json
-receipts/edges/batches/reverts/*.zettel-edge-batch-revert.json
-```
-
-The original edge receipts and original batch receipt are preserved. If a batch
-revert fails partway through, WOM-kit restores the touched zettel and new revert
-receipt files from in-process snapshots.
+It writes nothing. `--approve` stops with
+`compound_exact_human_approval_binding_required`; original edge and batch
+receipts remain untouched, no zettel changes, and no revert receipt is created.
 
 ## What It Does Not Do
 
@@ -225,5 +197,7 @@ secret values.
 help prepare candidate rows and review queues, but it does not write durable
 edges.
 
-`archive zettel-edge-batch` is the next approval step for the subset of
-candidates that a human is willing to accept under one explicit policy.
+`archive zettel-edge-batch` is a review plan only. A human can take one selected
+candidate through the exact `archive zettel-edge --dry-run|--approve` route.
+Multi-edge approval requires a future binding that covers the complete target
+set and is not implemented in v0.4.0.

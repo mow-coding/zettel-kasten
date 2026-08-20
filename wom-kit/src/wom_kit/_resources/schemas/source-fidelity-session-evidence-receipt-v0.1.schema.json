@@ -1,0 +1,119 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "wom-kit/source-fidelity-session-evidence-receipt/v0.1",
+  "title": "WOM-kit reviewed session evidence receipt",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "action",
+    "archive_id",
+    "evidence_id",
+    "plan_sha256",
+    "source",
+    "provenance",
+    "reviewed_by",
+    "approved_at",
+    "persistence",
+    "content_contract"
+  ],
+  "properties": {
+    "schema": {"const": "wom-kit/source-fidelity-session-evidence-receipt/v0.1"},
+    "action": {"const": "approve_source_fidelity_session_evidence"},
+    "archive_id": {"type": "string", "minLength": 1},
+    "evidence_id": {
+      "type": "string",
+      "pattern": "^source-fidelity-session-evidence:[0-9a-f]{64}$"
+    },
+    "plan_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "raw_sha256",
+        "raw_size_bytes",
+        "normalized_sha256",
+        "normalized_size_bytes",
+        "comparison_basis",
+        "newline_transformation_applied"
+      ],
+      "properties": {
+        "raw_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "raw_size_bytes": {"type": "integer", "minimum": 1},
+        "normalized_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "normalized_size_bytes": {"type": "integer", "minimum": 1},
+        "comparison_basis": {"const": "utf8_newlines_lf"},
+        "newline_transformation_applied": {"type": "boolean"}
+      }
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source_role",
+        "producer_kind",
+        "produced_at",
+        "captured_at",
+        "session_ref_sha256",
+        "input_provenance_sha256",
+        "semantic_fidelity_machine_verified"
+      ],
+      "properties": {
+        "source_role": {
+          "enum": [
+            "external_primary_source",
+            "external_context",
+            "human_authored_source",
+            "reviewed_session_transcript",
+            "reviewed_multi_source_bundle",
+            "human_reviewed_summary",
+            "self_authored_candidate"
+          ]
+        },
+        "producer_kind": {"enum": ["human", "external_system", "ai_runtime", "mixed"]},
+        "produced_at": {"type": "string", "pattern": "Z$"},
+        "captured_at": {"type": "string", "pattern": "Z$"},
+        "session_ref_sha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+        "input_provenance_sha256": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+        },
+        "semantic_fidelity_machine_verified": {"const": false}
+      }
+    },
+    "reviewed_by": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9:._+-]{0,199}$"
+    },
+    "approved_at": {"type": "string", "pattern": "Z$"},
+    "persistence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "evidence_bytes_create_only",
+        "receipt_create_only",
+        "storage_content_sha256"
+      ],
+      "properties": {
+        "evidence_bytes_create_only": {"const": true},
+        "receipt_create_only": {"const": true},
+        "storage_content_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      }
+    },
+    "content_contract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source_text_stored_in_receipt",
+        "source_path_stored",
+        "raw_session_ref_stored"
+      ],
+      "properties": {
+        "source_text_stored_in_receipt": {"const": false},
+        "source_path_stored": {"const": false},
+        "raw_session_ref_stored": {"const": false}
+      }
+    }
+  }
+}

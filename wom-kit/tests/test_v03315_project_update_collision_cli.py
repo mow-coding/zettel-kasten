@@ -238,7 +238,7 @@ class ProjectUpdateCollisionCliTests(unittest.TestCase):
         self.assertNotIn(private_canary, stderr)
         self.assertIn("private argument values were not echoed", stderr)
 
-    def test_approved_relocation_requires_plan_reviewer_and_quiescence(
+    def test_approved_relocation_is_fixed_closed_before_legacy_validation(
         self,
     ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -262,18 +262,14 @@ class ProjectUpdateCollisionCliTests(unittest.TestCase):
 
         result = json.loads(stdout)
         self.assertEqual(code, 1)
+        self.assertEqual(result["state"], "blocked")
         self.assertEqual(
-            result["blocker_codes"],
-            [
-                "project_update_collision_requires_expected_plan",
-                "project_update_collision_approve_requires_reviewer",
-                "project_update_collision_approve_requires_quiescence",
-            ],
+            result["reason_codes"],
+            ["compound_exact_human_approval_binding_required"],
         )
-        self.assertFalse(result["write_boundary"]["writes"])
-        self.assertFalse(result["write_boundary"]["deletes"])
+        self.assertFalse(result["private_values_echoed"])
 
-    def test_approved_relocation_passes_exact_approval_inputs(self) -> None:
+    def test_approved_relocation_blocks_before_service(self) -> None:
         captured: dict[str, object] = {}
 
         def fake_service(root: Path, **kwargs: object) -> dict[str, object]:
@@ -326,13 +322,15 @@ class ProjectUpdateCollisionCliTests(unittest.TestCase):
                 ]
             )
 
-        self.assertEqual(code, 0, stdout)
-        self.assertTrue(captured["approve"])
-        self.assertFalse(captured["dry_run"])
-        self.assertEqual(captured["expected_plan_sha256"], PLAN_SHA256)
-        self.assertEqual(captured["reviewed_by"], "person:beta-reviewer")
-        self.assertTrue(captured["affirm_external_writers_quiescent"])
-        self.assertFalse(captured["reveal_target_relative_path"])
+        self.assertEqual(code, 1, stdout)
+        self.assertEqual(captured, {})
+        result = json.loads(stdout)
+        self.assertEqual(result["state"], "blocked")
+        self.assertEqual(
+            result["reason_codes"],
+            ["compound_exact_human_approval_binding_required"],
+        )
+        self.assertFalse(result["private_values_echoed"])
 
     def test_text_reveal_uses_only_verified_target_result(self) -> None:
         def fake_service(root: Path, **kwargs: object) -> dict[str, object]:
@@ -383,7 +381,7 @@ class ProjectUpdateCollisionCliTests(unittest.TestCase):
         self.assertIn("Verified target-relative path: public/Foo.txt", stdout)
         self.assertNotIn("PRIVATE-DECOY", stdout + stderr)
 
-    def test_service_exception_is_uncertain_only_for_approved_write_mode(self) -> None:
+    def test_service_exception_is_safe_for_preview_and_approve_never_calls_service(self) -> None:
         base = [
             "project-version-update-collision",
             "PRIVATE-ROOT",
@@ -431,34 +429,12 @@ class ProjectUpdateCollisionCliTests(unittest.TestCase):
             dry_result["write_boundary"]["relocation_may_have_been_attempted"]
         )
         self.assertEqual(approved_code, 1)
+        self.assertEqual(approved_result["state"], "blocked")
         self.assertEqual(
-            approved_result["status"],
-            "collision_outcome_unverified_recovery_required",
+            approved_result["reason_codes"],
+            ["compound_exact_human_approval_binding_required"],
         )
-        self.assertIsNone(approved_result["write_boundary"]["writes"])
-        self.assertFalse(approved_result["write_boundary"]["writes_verified"])
-        self.assertTrue(
-            approved_result["write_boundary"]["writes_may_have_occurred"]
-        )
-        self.assertIsNone(
-            approved_result["write_boundary"][
-                "preservation_relocation_attempted"
-            ]
-        )
-        self.assertIsNone(
-            approved_result["write_boundary"][
-                "preservation_relocation_succeeded"
-            ]
-        )
-        self.assertTrue(
-            approved_result["write_boundary"][
-                "relocation_may_have_been_attempted"
-            ]
-        )
-        self.assertIn(
-            "project_update_collision_outcome_unverified",
-            approved_result["blocker_codes"],
-        )
+        self.assertFalse(approved_result["private_values_echoed"])
         self.assertNotIn("PRIVATE-ROOT", approved_stdout)
 
 
@@ -481,7 +457,7 @@ class ProjectUpdateCollisionServiceTests(unittest.TestCase):
         collision_path = fixture["mirror"] / fixture["collision_name"]
         private_bytes = b"PRIVATE COLLISION BYTES MUST BE PRESERVED\n"
         collision_path.write_bytes(private_bytes)
-        failed_update = archive_services.wom_kit_project_version_update(
+        failed_update = archive_services._wom_kit_project_version_update_legacy_core(
             fixture["project_root"],
             target=fixture["target_tag"],
             approve=True,
@@ -509,7 +485,7 @@ class ProjectUpdateCollisionServiceTests(unittest.TestCase):
         approve: bool = False,
         reveal: bool = False,
     ) -> dict[str, object]:
-        return archive_services.wom_kit_project_version_update_collision(
+        return archive_services._wom_kit_project_version_update_collision_legacy_core(
             fixture["project_root"],
             target=fixture["target_tag"],
             entry_ref=entry_ref,
@@ -699,7 +675,7 @@ class ProjectUpdateCollisionServiceTests(unittest.TestCase):
             self.assertNotIn(str(fixture["project_root"]), rendered)
 
             fresh_preview_before_observation = (
-                archive_services.wom_kit_project_version_update(
+                archive_services._wom_kit_project_version_update_legacy_core(
                     fixture["project_root"],
                     target=fixture["target_tag"],
                     dry_run=True,
@@ -831,7 +807,7 @@ class ProjectUpdateCollisionServiceTests(unittest.TestCase):
             self.assertNotIn(private_content_sha256, observed_rendered)
             self.assertNotIn(str(fixture["project_root"]), observed_rendered)
 
-            fresh_preview = archive_services.wom_kit_project_version_update(
+            fresh_preview = archive_services._wom_kit_project_version_update_legacy_core(
                 fixture["project_root"],
                 target=fixture["target_tag"],
                 dry_run=True,
@@ -931,7 +907,7 @@ class ProjectUpdateCollisionServiceTests(unittest.TestCase):
             )
             completion_path.write_bytes(completion_bytes)
 
-            final_update = archive_services.wom_kit_project_version_update(
+            final_update = archive_services._wom_kit_project_version_update_legacy_core(
                 fixture["project_root"],
                 target=fixture["target_tag"],
                 approve=True,
@@ -1036,7 +1012,7 @@ class ProjectUpdateCollisionServiceTests(unittest.TestCase):
                 _,
             ) = self.collision_fixture(Path(tmp))
             collision_path.write_bytes(b"")
-            refreshed = archive_services.wom_kit_project_version_update(
+            refreshed = archive_services._wom_kit_project_version_update_legacy_core(
                 fixture["project_root"],
                 target=fixture["target_tag"],
                 dry_run=True,
@@ -1168,7 +1144,7 @@ class ProjectUpdateCollisionServiceTests(unittest.TestCase):
                 encoding="utf-8",
             ) as handle:
                 handle.write("private-hardlink-alias.bin\n")
-            refreshed = archive_services.wom_kit_project_version_update(
+            refreshed = archive_services._wom_kit_project_version_update_legacy_core(
                 fixture["project_root"],
                 target=fixture["target_tag"],
                 dry_run=True,
@@ -1311,7 +1287,7 @@ class ProjectUpdateCollisionServiceTests(unittest.TestCase):
                 plan_sha256,
             ) = self.collision_fixture(Path(tmp))
             original_acquire = (
-                archive_services.wom_kit_project_update_acquire_lock_exclusive
+                archive_services._wom_kit_project_update_acquire_lock_exclusive
             )
 
             def acquire_then_uncertain(*args: object, **kwargs: object) -> object:
@@ -1322,7 +1298,7 @@ class ProjectUpdateCollisionServiceTests(unittest.TestCase):
 
             with patch.object(
                 archive_services,
-                "wom_kit_project_update_acquire_lock_exclusive",
+                "_wom_kit_project_update_acquire_lock_exclusive",
                 side_effect=acquire_then_uncertain,
             ):
                 uncertain = self.collision_call(
@@ -1491,7 +1467,7 @@ class ProjectUpdateCollisionServiceTests(unittest.TestCase):
             ) = self.collision_fixture(Path(tmp))
             with patch.object(
                 archive_services,
-                "wom_kit_project_update_release_owned_lock",
+                "_wom_kit_project_update_release_owned_lock",
                 return_value=True,
             ):
                 result = self.collision_call(
@@ -1534,7 +1510,7 @@ class ProjectUpdateCollisionServiceTests(unittest.TestCase):
             shadow_path = fixture["mirror"] / "wom-kit" / "src" / "private-shadow.py"
             shadow_bytes = b"PRIVATE RUNTIME SHADOW\n"
             shadow_path.write_bytes(shadow_bytes)
-            failed = archive_services.wom_kit_project_version_update(
+            failed = archive_services._wom_kit_project_version_update_legacy_core(
                 fixture["project_root"],
                 target=fixture["target_tag"],
                 approve=True,

@@ -58,13 +58,13 @@ EMPTY_ALLOWLIST_SHA256 = (
     "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
 )
 
-CLI_COUNT = 553
+CLI_COUNT = 573
 CLI_CANONICAL_SHA256 = (
-    "ba70474e64b024398c27ec920c5e8c121d71acb78556e2f69fbc7d30971b76ef"
+    "0d49e9e2f9821e29ddf73a0fed651cc207f3a9f0a7bd7a18d4634eb3a17b09c4"
 )
-MCP_COUNT = 121
+MCP_COUNT = 130
 MCP_CANONICAL_SHA256 = (
-    "622e90ed08dd189d2d79a49cc352051aecd0063d1b6913ac5f1f22eec4850f96"
+    "f3f2263e28ed490efc37313036a81d9e4eb1b8da9c184fce435ded44001db1fe"
 )
 DB_SOURCE_COUNT = 3
 DB_SOURCE_CANONICAL_SHA256 = (
@@ -72,8 +72,16 @@ DB_SOURCE_CANONICAL_SHA256 = (
 )
 RESOURCE_ADDITIONS = frozenset(
     {
-        "release-notes/v0.3.320.md",
+        "release-notes/v0.4.0.md",
+        "schemas/agent-instruction-policy-v0.1.schema.json",
+        "schemas/approval-handoff-v0.1.schema.json",
+        "schemas/approval-integrity-audit-result-v0.1.schema.json",
+        "schemas/approval-integrity-overlay-entry-v0.1.schema.json",
         "schemas/credential-capability-v0.1.schema.json",
+        "schemas/duplicate-object-reconciliation-receipt-v0.1.schema.json",
+        "schemas/exact-human-approval-link-receipt-v0.1.schema.json",
+        "schemas/human-artifact-registry-v0.1.schema.json",
+        "schemas/operation-exact-human-approval-v0.1.schema.json",
         "schemas/artifact-lifecycle-inventory.schema.json",
         "schemas/authoring-conventions.schema.json",
         "schemas/draft-discard-receipt.schema.json",
@@ -106,6 +114,8 @@ RESOURCE_ADDITIONS = frozenset(
         "schemas/source-intake-batch-receipt.schema.json",
         "schemas/source-intake-batch-request.schema.json",
         "schemas/source-fidelity-draft-receipt.schema.json",
+        "schemas/source-fidelity-draft-receipt-v0.2.schema.json",
+        "schemas/source-fidelity-session-evidence-receipt-v0.1.schema.json",
         "schemas/zettel-objet-link-receipt.schema.json",
         "schemas/zettel-objet-link-revert-receipt.schema.json",
     }
@@ -141,7 +151,7 @@ from wom_kit.private_objet_metadata_index import (  # noqa: E402
     PrivateObjetIndexInspection,
 )
 from wom_kit.private_objet_metadata_index_authority import (  # noqa: E402
-    PrivateObjetIndexAuthorityCapture,
+    _PrivateObjetIndexAuthorityCapture as PrivateObjetIndexAuthorityCapture,
 )
 
 
@@ -1191,7 +1201,7 @@ class PrivateObjetMetadataIndexPrivacyGateTests(unittest.TestCase):
             manifest["schema"],
             "wom-kit/package-resource-manifest/v0.1",
         )
-        self.assertEqual(manifest["version"], "0.3.320")
+        self.assertEqual(manifest["version"], "0.4.0")
         self.assertEqual(manifest["file_count"], len(manifest["files"]))
         current_paths = {row["packaged"] for row in manifest["files"]}
         self.assertEqual(

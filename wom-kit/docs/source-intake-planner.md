@@ -3,6 +3,12 @@
 Status: v0.3.301 archive-root paths, distinct local identity, and batch recording
 Date: 2026-08-07
 
+Current v0.4.0 boundary: source-intake planning remains read-only.
+`source-intake-record` and `source-intake-batch` approval fail with
+`compound_exact_human_approval_binding_required` before private input read or
+mutation and write no item/aggregate receipt. Approval examples below are
+historical.
+
 `source-intake` is the safe dry-run step between runtime context and draft creation.
 
 It answers:
@@ -82,15 +88,9 @@ archive source-intake-record <archive-root> \
   --format json
 ```
 
-Approved mode writes one redacted source-intake plan record:
-
-```bash
-archive source-intake-record <archive-root> \
-  --source-intake-plan source-intake-plan.json \
-  --approve \
-  --reviewed-by person:me \
-  --format json
-```
+Stop after this preview. In v0.4.0 approval returns
+`compound_exact_human_approval_binding_required` before private input/archive
+reads or mutation and writes no source-intake plan record or receipt.
 
 The recorder validates the plan with the same metadata-only safety rules used
 by draft composition and blocks unredacted local paths, provider URLs, tokens,
@@ -117,17 +117,12 @@ manifest with 1-1,000 unique safe item ids:
 archive source-intake-batch <archive-root> \
   --manifest workbench/source-intake-request.json \
   --dry-run --format json
-
-archive source-intake-batch <archive-root> \
-  --manifest workbench/source-intake-request.json \
-  --approve --expected-plan-sha256 sha256:<64-hex> \
-  --reviewed-by person:me --format json
 ```
 
-Relative manifest and item paths resolve from the archive root. Approval
-writes the normal redacted per-item records plus one aggregate receipt. Replay
-is idempotent and converges per item. `all_or_nothing_claimed` stays false; the
-batch is not permission to capture, import, upload, draft, or mint.
+Relative manifest and item paths resolve from the archive root for dry-run.
+Approval returns `compound_exact_human_approval_binding_required` before
+private item reads or mutation and writes no per-item or aggregate receipt.
+The batch preview is not permission to capture, import, upload, draft, or mint.
 
 ## Draft Composition
 

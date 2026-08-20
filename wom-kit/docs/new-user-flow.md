@@ -104,8 +104,11 @@ Run a restore drill before the first real source scan:
 ```powershell
 $env:PYTHONPATH='wom-kit\src'; python -m wom_kit.archive_cli recovery-plan .\archives\personal-life --format json
 $env:PYTHONPATH='wom-kit\src'; python -m wom_kit.archive_cli restore-drill .\archives\personal-life --target C:\tmp\personal-life-restore --dry-run --format json
-$env:PYTHONPATH='wom-kit\src'; python -m wom_kit.archive_cli restore-drill .\archives\personal-life --target C:\tmp\personal-life-restore --approve --reviewed-by person:me
 ```
+
+In v0.4.0 stop after the restore preview. Approval returns
+`compound_exact_human_approval_binding_required` before source/target reads and
+copies nothing, rebuilds nothing, and writes no recovery receipt.
 
 Then preflight can require a successful restore receipt:
 
@@ -192,35 +195,11 @@ $env:PYTHONPATH='wom-kit\src'; python -m wom_kit.archive_cli onboard `
   --dry-run
 ```
 
-When the plan is correct, approve it:
+In v0.4.0 stop after the onboarding preview. Approval returns
+`compound_exact_human_approval_binding_required` before target, template,
+identity, or provider reads and creates no archive or receipt.
 
-Docker:
-
-```bash
-docker compose run --rm archive-cli onboard \
-  --target-root /archives/personal \
-  --type personal \
-  --archive-id archive:personal:me \
-  --principal-id person:me \
-  --principal-name "Me" \
-  --provider-profile local_only \
-  --approve
-```
-
-Host-native developer fallback:
-
-```powershell
-$env:PYTHONPATH='wom-kit\src'; python -m wom_kit.archive_cli onboard `
-  --target-root .\tmp-my-archive `
-  --type personal `
-  --archive-id archive:personal:me `
-  --principal-id person:me `
-  --principal-name "Me" `
-  --provider-profile local_only `
-  --approve
-```
-
-The new archive starts with:
+The dry-run previews this historical/template layout; it does not create it:
 
 ```text
 inbox/
@@ -267,19 +246,10 @@ $env:PYTHONPATH='wom-kit\src'; python -m wom_kit.archive_cli add-source .\tmp-my
   --format json
 ```
 
-When the plan looks right:
-
-```powershell
-$env:PYTHONPATH='wom-kit\src'; python -m wom_kit.archive_cli add-source .\tmp-my-archive `
-  --source-id local:desktop `
-  --type local_folder `
-  --local-root $env:ARCHIVE_SOURCE_DESKTOP_ROOT `
-  --write-local-profile `
-  --approve `
-  --reviewed-by person:me
-```
-
-The safe source record goes into `source-bindings.yml`. The real local path goes only into ignored `profiles/local/source-roots.local.yml`.
+When the plan looks right, stop. In v0.4.0 `add-source` approval returns
+`compound_exact_human_approval_binding_required` before reading the private
+source target or writing. It creates neither a `source-bindings.yml` change nor
+an ignored local-profile entry.
 
 For Docker, check how sources should be mounted read-only:
 
@@ -297,17 +267,10 @@ $env:PYTHONPATH='wom-kit\src'; python -m wom_kit.archive_cli scan-source .\tmp-m
   --format json
 ```
 
-Apply only after review:
-
-```powershell
-$env:PYTHONPATH='wom-kit\src'; python -m wom_kit.archive_cli scan-source .\tmp-my-archive `
-  --source local:personal-documents `
-  --source-root $env:ARCHIVE_SOURCE_DOCUMENTS_ROOT `
-  --approve `
-  --reviewed-by person:me
-```
-
-The scan writes `source-maps/*.jsonl` and `receipts/sources/*.source-scan.json`. It records file names, relative paths, sizes, modified times, visibility, and provenance. It does not read file bodies, summarize content with AI, call provider APIs, or calculate full hashes.
+Stop after the preview in v0.4.0. Scan approval returns
+`compound_exact_human_approval_binding_required` before source, credential,
+provider, archive, or target reads and writes no source map or receipt.
+Historical v0.3 scan receipts remain auditable but grant no current authority.
 
 ## Flow 2C: Plan A GitHub Repository For A WOM Profile
 
@@ -329,20 +292,11 @@ The default proposed repository name is:
 zettel-kasten-username
 ```
 
-Dry-run writes nothing. Approved mode writes only local `provider-bindings.yml` metadata and a setup receipt:
-
-```powershell
-$env:PYTHONPATH='wom-kit\src'; python -m wom_kit.archive_cli github-repo .\tmp-my-archive `
-  --approve `
-  --reviewed-by person:me `
-  --profile-id profile:personal:username `
-  --profile-slug username `
-  --github-owner example-user `
-  --github-account-ref github:account:username `
-  --format json
-```
-
-This flow does not create a GitHub repository, start OAuth, call GitHub APIs, run `gh`, configure git remotes, push, or sync. Those are separate manual steps.
+Dry-run writes nothing. In v0.4.0 GitHub metadata approval returns
+`compound_exact_human_approval_binding_required` before private profile/archive
+reads and writes no `provider-bindings.yml` metadata or setup receipt. This flow
+also does not create a GitHub repository, start OAuth, call GitHub APIs, run
+`gh`, configure git remotes, push, or sync.
 
 ## Flow 2D: Plan Objet Storage For A WOM Profile
 
@@ -370,18 +324,10 @@ The default proposed prefix is:
 archives/<archive_id>/objets/
 ```
 
-Dry-run writes nothing. Approved mode writes only local `provider-bindings.yml` metadata and a setup receipt:
-
-```powershell
-$env:PYTHONPATH='wom-kit\src'; python -m wom_kit.archive_cli object-storage .\tmp-my-archive `
-  --approve `
-  --reviewed-by person:me `
-  --provider cloudflare-r2 `
-  --profile-id profile:personal:username `
-  --profile-slug username `
-  --storage-account-ref storage:account:username `
-  --format json
-```
+Dry-run writes nothing. In v0.4.0 `object-storage` approval returns
+`compound_exact_human_approval_binding_required` before private target/provider
+reads or mutation and writes no `provider-bindings.yml` metadata or setup
+receipt.
 
 This flow does not create a bucket/container, start OAuth, call provider APIs, upload, sync, copy source files, calculate file hashes, or import source content. Those are separate future/manual steps.
 
@@ -422,14 +368,15 @@ $env:PYTHONPATH='wom-kit\src'; python -m wom_kit.archive_cli create-draft .\tmp-
   --format json
 ```
 
-The dry-run writes nothing. It returns the proposed `inbox/` path, frontmatter preview, body hash, blockers, warnings, and approval replay values. After human draft approval, replay with the same `draft_id`, `created_at`, expected archive id/type, profile id, and `expected_body_sha256`, plus `draft-approved-by`.
+The dry-run writes nothing. It returns the proposed `inbox/` path, frontmatter preview, body hash, blockers, warnings, and approval replay values. The only v0.4.0 write is the exact reviewed AI route with the full source-fidelity fields, unchanged digests, a concrete authenticated TaskDialog claim, and operation-context re-derivation.
 
-The older direct command remains compatible for simple local use:
+Human-declared/non-AI direct creation is preview-only in v0.4.0:
 
 ```powershell
 $env:PYTHONPATH='wom-kit\src'; python -m wom_kit.archive_cli create-draft .\tmp-my-archive `
   --title "Draft from conversation" `
-  --body "# Draft from conversation`n`nThis is a rough note. It is not canonical memory yet."
+  --body "# Draft from conversation`n`nThis is a rough note. It is not canonical memory yet." `
+  --dry-run
 ```
 
 Drafts may be rough. That is allowed.
@@ -505,24 +452,17 @@ $env:PYTHONPATH='wom-kit\src'; python -m wom_kit.archive_cli search wom-kit\exam
 
 The index is disposable. Rebuild it whenever needed. It includes zettels, object manifests, views, and source map entries.
 
-## Flow 6: Share A Slice With Workpacks
+## Flow 6: Inspect A Historical Workpack
 
-Pack from a saved view:
-
-```powershell
-$env:PYTHONPATH='wom-kit\src'; python -m wom_kit.archive_cli pack .\tmp-fake-life-archive `
-  --view view.fake.education.gilwon `
-  --purpose "Share a small education context." `
-  --mode reference
-```
-
-The workpack includes selected zettels and object manifest metadata.
+`pack`/`parcel` creation is fixed closed in v0.4.0 before saved-view, body,
+manifest, or target reads. It creates no workpack. Use an already existing
+historical workpack only for the read-only import preview below.
 
 Preview import:
 
 ```powershell
 $env:PYTHONPATH='wom-kit\src'; python -m wom_kit.archive_cli import .\tmp-my-archive `
-  .\tmp-fake-life-archive\workpacks\PUT-THE-WORKPACK-FOLDER-HERE `
+  .\EXISTING-HISTORICAL-WORKPACK `
   --dry-run `
   --format json
 ```
@@ -551,17 +491,10 @@ $env:PYTHONPATH='wom-kit\src'; python -m wom_kit.archive_cli import-external .\t
   --format json
 ```
 
-Apply only after review:
-
-```powershell
-$env:PYTHONPATH='wom-kit\src'; python -m wom_kit.archive_cli import-external .\tmp-my-archive `
-  --source notion `
-  --export .\notion-export `
-  --approve `
-  --reviewed-by person:me
-```
-
-This writes imported records as inbox drafts and records a receipt under `receipts/import/`. It does not call Notion or Google Drive APIs and it does not store OAuth tokens.
+Stop after review. In v0.4.0 `import-external` approval returns
+`compound_exact_human_approval_binding_required` before reading the private
+export/archive target or writing. It creates no inbox draft or import receipt,
+calls no Notion or Google Drive API, and stores no OAuth token.
 
 Before sharing a view with another archive, run the scope and trust dry-run:
 
@@ -579,7 +512,7 @@ This shows what would be included, what would be excluded, and whether the count
 
 `archive-identity.yml` also separates ownership from operation. A family or company can own an archive while named people or roles operate it.
 
-Ownership transfer is real CLI-only functionality now. Always preview it first:
+Ownership transfer remains a CLI-only preview in v0.4.0:
 
 ```powershell
 $env:PYTHONPATH='wom-kit\src'; python -m wom_kit.archive_cli transfer-ownership .\tmp-fake-life-archive `
@@ -594,7 +527,10 @@ $env:PYTHONPATH='wom-kit\src'; python -m wom_kit.archive_cli transfer-ownership 
   --format json
 ```
 
-The real command requires `--approve --reviewed-by <actor>` and reuses the dry-run gates. It updates only archive-internal ownership files and receipts. GitHub, Cloudflare R2, Backblaze B2, Neon, rclone, restic, KeePassXC, and other external provider changes stay manual and are listed in `provider_change_plan`.
+Approval returns `compound_exact_human_approval_binding_required` before private
+archive/target reads or mutation and writes no ownership file or receipt.
+GitHub, Cloudflare R2, Backblaze B2, Neon, rclone, restic, KeePassXC, and other
+external provider changes stay manual and are listed in `provider_change_plan`.
 
 ## Flow 7: Use MCP With An AI Client
 
@@ -639,7 +575,7 @@ ownership_transfer_check
 
 For AI clients, the first safe call should be `wom_profile_resolve` when the user names a target profile or archive. After that, call `archive_runtime_context` with the resolved archive id and type, then use `create_draft_zettel` with `dry_run: true` before any profile-bound draft write. This prevents the AI from assuming the current/default archive is the target.
 
-MCP can dry-run draft creation, create approved inbox drafts, inspect archives, search, plan onboarding, preview GitHub repository setup, preview object storage setup for WOM objets, preview shared update record review, preview external imports, list sources, preview source registration, preview source mount plans, preview source scans, preview minting, preview legacy promotion, preview archive sharing, preview delegate/attest/anchor lifecycle checks, check ownership transfer, read runtime context, and resolve profile registry entries. It cannot perform real onboarding apply, profile registration, token registration, source registration apply, source scan apply, canonical minting, real share, real delegate, real attest, real anchor, shared update write/apply/transport/import/trust/attest/sign/anchor, merge, fork, ownership transfer, runtime context apply, GitHub create/connect/push/sync, or object storage apply/create/connect/upload/sync. Use the CLI for explicit human-approved minting steps.
+MCP can dry-run draft creation, inspect archives, search, plan onboarding, preview GitHub/object-storage/source/share/lifecycle operations, read runtime context, and resolve profile registry entries. It exposes no exact-human writer: it cannot create an approved inbox draft, initialize/onboard an archive, scan/register a source, mint, delegate, transfer ownership, configure GitHub/object storage, or perform any other fixed-close write. Use the local CLI exact-human workflow only for the explicitly supported single operations.
 
 ## Flow 8: Keep Secrets Out
 

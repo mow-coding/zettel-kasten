@@ -4,6 +4,11 @@ Status: v0.3.310 implementation and operator guide. This document records the
 source contract; external CI, exact-tag, GitHub Release, wheel synchronization,
 and fresh-install evidence must be verified independently.
 
+Current v0.4.0 override: the normalization apply/revert/recovery approval
+examples below are historical evidence only. Approval returns
+`compound_exact_human_approval_binding_required` before private reads or
+mutation and writes nothing; use the read-only plan/audit surfaces only.
+
 ## Requirement map
 
 | Letter 117 gap | v0.3.310 behavior |

@@ -2,6 +2,11 @@
 
 Status: v0.2.38 compatible baseline
 
+Current v0.4.0 boundary: quarantine-decision approval fails with
+`compound_exact_human_approval_binding_required` before private decision/case
+read or mutation. It writes no decision or receipt. The v0.2 write semantics
+retained below are historical evidence, not an executable command.
+
 ## Principle
 
 ```text
@@ -24,11 +29,9 @@ Dry-run:
 archive record-quarantine-decision <archive-root> --decision-preview <json-file> --dry-run --format json
 ```
 
-Approved write:
-
-```bash
-archive record-quarantine-decision <archive-root> --decision-preview <json-file> --approve --reviewed-by person:reviewer --format json
-```
+Do not replay the dry-run with approval in v0.4.0. The approval branch returns
+`compound_exact_human_approval_binding_required` before private decision/case
+read or mutation.
 
 Optional replay guards:
 
@@ -40,9 +43,10 @@ Optional replay guards:
 
 The review note is not stored as raw body text. WOM-kit stores only summary metadata such as whether a safe note was provided and its accepted length.
 
-## Write Boundary
+## Historical v0.2 Write Boundary
 
-Approved mode writes exactly two files and refuses to overwrite either:
+The historical v0.2 approved mode wrote exactly two files and refused to
+overwrite either:
 
 ```text
 quarantine/foreign-blocks/<case-id>/quarantine-decision.json
@@ -64,7 +68,8 @@ The command requires the saved preview to be:
 - `would_change: []`,
 - one of the supported proposed decisions.
 
-Before writing, WOM-kit re-validates the current quarantine case and matching quarantine write receipt. Missing, malformed, contradictory, unsafe, stale, or already-recorded state blocks the write.
+Those validation rules remain useful for reading historical evidence. They do
+not authorize a v0.4.0 write.
 
 ## MCP
 

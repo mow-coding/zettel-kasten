@@ -191,7 +191,7 @@ As of `v0.2.14`:
 - `ZET` is uppercase when referring to the communication method/service/protocol layer.
 - `WOM` is always uppercase.
 - `promote` and `share` should remain legacy compatibility commands only.
-- `parcel` is the preferred CLI surface for creating a portable bounded unit; `pack` remains a compatibility alias.
+- `parcel` is the preferred term for a portable bounded unit; its CLI creator and the `pack` alias are fixed closed in v0.4.0.
 - `admit --dry-run` is the preferred CLI surface for previewing governed parcel/workpack admission; `import --dry-run` remains a compatibility alias.
 - `workpack` remains the v0.2 storage path/folder compatibility term until a safe migration exists.
 - `receipt` should remain implementation-compatible while product copy begins introducing `proof` and `credential`.

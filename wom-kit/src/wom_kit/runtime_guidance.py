@@ -412,7 +412,7 @@ def _inspect_agents_routing(
             body_read=False,
         )
 
-    text = archive_services.wom_kit_read_bounded_real_text(
+    text = archive_services._wom_kit_read_bounded_real_text(
         repo_root,
         agents_path,
         max_bytes=MAX_AGENTS_BYTES,
@@ -523,7 +523,7 @@ def runtime_guidance_readiness(
 
     try:
         resolved_repo = Path(os.path.abspath(os.fspath(repo_root.expanduser())))
-        runtime_skill_install.resolve_target_location(
+        runtime_skill_install._resolve_target_location(
             host=normalized_host,
             scope=normalized_scope,
             repo_root=resolved_repo,

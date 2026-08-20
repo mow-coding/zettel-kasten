@@ -5,7 +5,7 @@ Status: accepted for v0.3.255 after local engineering and release verification
 
 ## Context
 
-The basoon v0.3.254 real-use report confirmed a canonical mint, its receipts,
+The protected pilot archive's v0.3.254 real-use report confirmed a canonical mint, its receipts,
 the retired draft, and the removal of the inbox draft. The subsequent
 `archive index` and two `archive index-health` attempts each returned from the
 agent execution boundary after roughly 25 to 28 seconds without usable stdout,
@@ -127,7 +127,7 @@ mint does not authorize an unconditional full rebuild.
 6. Prove that a completed rebuild replaces all generated rows and that a fresh
    `index-health` reports the expected live/indexed equality.
 7. Run focused CLI/service tests, documentation contract tests, and the full WOM
-   suite for the v0.3.255 release. The basoon archive follow-up remains
+   suite for the v0.3.255 release. The protected pilot archive follow-up remains
    real-use validation and must not be claimed by unit tests alone.
 
 ## Primary References

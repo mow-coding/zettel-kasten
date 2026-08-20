@@ -36,26 +36,26 @@ def _require_ntfs(root: Path) -> None:
 
 def _probe_guard(
     root: Path,
-) -> win32.PrivateMetadataMutationGuard:
-    return win32.PrivateMetadataMutationGuard._for_low_level_ntfs_probe(
+) -> win32._PrivateMetadataMutationGuard:
+    return win32._PrivateMetadataMutationGuard._for_low_level_ntfs_probe(
         root
     )
 
 
 def _hold_manifests(
-    guard: win32.PrivateMetadataMutationGuard,
+    guard: win32._PrivateMetadataMutationGuard,
 ) -> None:
     guard.hold_chain(guard.archive_root / "objects" / "manifests")
 
 
 def _dispose_source(
-    guard: win32.PrivateMetadataMutationGuard,
-    source: win32.Win32BoundFile,
+    guard: win32._PrivateMetadataMutationGuard,
+    source: win32._Win32BoundFile,
     *,
-    locks: win32.PrivateMetadataLockPair,
+    locks: win32._PrivateMetadataLockPair,
 ) -> None:
-    residue = win32.handoff_to_residue_authority(guard, source)
-    win32.dispose_bound_residue(guard, residue, locks=locks)
+    residue = win32._handoff_to_residue_authority(guard, source)
+    win32._dispose_bound_residue(guard, residue, locks=locks)
 
 
 def _create_directory_reparse_link(target: Path, link: Path) -> str:
@@ -205,7 +205,7 @@ def test_non_windows_refusal_is_content_free_and_writes_nothing(
     )
     assert not missing.exists()
     with pytest.raises(win32.Win32SafetyError) as captured:
-        win32.PrivateMetadataMutationGuard(missing)
+        win32._PrivateMetadataMutationGuard(missing)
     assert captured.value.reason == (
         "private_metadata_approval_platform_not_supported"
     )
@@ -236,7 +236,7 @@ def test_current_runner_reports_ntfs_and_production_approval_is_open(
     assert status.reason is None
     assert status.filesystem_name == "NTFS"
     assert status.local_volume is True
-    with win32.PrivateMetadataMutationGuard(root) as guard:
+    with win32._PrivateMetadataMutationGuard(root) as guard:
         assert guard.archive_root == root
         assert guard.held_paths == (root,)
 
@@ -345,7 +345,7 @@ def test_object_manifest_lock_directory_bootstrap_binds_exact_chain_before_lock(
     _require_ntfs(root)
     with _probe_guard(root) as guard:
         object_identity, manifests_identity = (
-            win32.bootstrap_object_manifest_lock_directories(guard)
+            win32._bootstrap_object_manifest_lock_directories(guard)
         )
         assert guard.held_paths == (
             root,
@@ -357,7 +357,7 @@ def test_object_manifest_lock_directory_bootstrap_binds_exact_chain_before_lock(
             guard.validate_directory(root / "objects" / "manifests")
             == manifests_identity
         )
-        object_lock = win32.PersistentCoordinationLock(
+        object_lock = win32._PersistentCoordinationLock(
             guard,
             win32.CoordinationLockKind.OBJECT_MANIFEST,
         )
@@ -380,9 +380,9 @@ def test_object_manifest_bootstrap_does_not_weaken_general_directory_creator(
     root.mkdir()
     _require_ntfs(root)
     with _probe_guard(root) as guard:
-        win32.bootstrap_object_manifest_lock_directories(guard)
+        win32._bootstrap_object_manifest_lock_directories(guard)
         with pytest.raises(win32.Win32SafetyError) as captured:
-            win32.create_guarded_directory(guard, root / "receipts")
+            win32._create_guarded_directory(guard, root / "receipts")
         assert captured.value.reason == (
             "private_metadata_lock_identity_changed"
         )
@@ -417,7 +417,7 @@ def test_object_manifest_lock_directory_bootstrap_reopens_safe_race_winner(
 
     monkeypatch.setattr(api, "create_directory", race_once)
     with _probe_guard(root) as guard:
-        win32.bootstrap_object_manifest_lock_directories(guard)
+        win32._bootstrap_object_manifest_lock_directories(guard)
         assert guard.held_paths == (
             root,
             root / "objects",
@@ -451,7 +451,7 @@ def test_object_manifest_lock_directory_bootstrap_rejects_reparse_escape(
     try:
         with _probe_guard(root) as guard:
             with pytest.raises(win32.Win32SafetyError) as captured:
-                win32.bootstrap_object_manifest_lock_directories(guard)
+                win32._bootstrap_object_manifest_lock_directories(guard)
             assert captured.value.reason == (
                 "private_metadata_mutation_guard_identity_changed"
             )
@@ -474,7 +474,7 @@ def test_persistent_lock_prefix_and_pair_lifecycle(
     private_lock_path = root / win32.PRIVATE_METADATA_LOCK_RELATIVE_PATH
     with _probe_guard(root) as guard:
         _hold_manifests(guard)
-        object_lock = win32.PersistentCoordinationLock(
+        object_lock = win32._PersistentCoordinationLock(
             guard,
             win32.CoordinationLockKind.OBJECT_MANIFEST,
         )
@@ -487,7 +487,7 @@ def test_persistent_lock_prefix_and_pair_lifecycle(
         assert not private_lock_path.exists()
         object_lock.release()
 
-        with win32.PrivateMetadataLockPair(guard) as pair:
+        with win32._PrivateMetadataLockPair(guard) as pair:
             object_identity, private_identity = pair.validate()
             assert object_identity == first_identity
             assert private_identity != object_identity
@@ -518,7 +518,7 @@ def test_mutation_requires_both_locks(
     with _probe_guard(root) as guard:
         _hold_manifests(guard)
         with pytest.raises(win32.Win32SafetyError) as captured:
-            win32.materialize_owned_temp(
+            win32._materialize_owned_temp(
                 guard,
                 kind=win32.OwnedTempKind.MANIFEST,
                 authority_key_hex="b" * 64,
@@ -540,13 +540,13 @@ def test_guarded_receipt_directory_bootstrap_is_exact_and_persistent(
     _require_ntfs(root)
     with _probe_guard(root) as guard:
         _hold_manifests(guard)
-        with win32.PrivateMetadataLockPair(guard) as locks:
+        with win32._PrivateMetadataLockPair(guard) as locks:
             receipts = root / "receipts"
             objects = receipts / "objects"
             private = objects / "private-source-metadata"
-            win32.create_guarded_directory(guard, receipts)
-            win32.create_guarded_directory(guard, objects)
-            win32.create_guarded_directory(guard, private)
+            win32._create_guarded_directory(guard, receipts)
+            win32._create_guarded_directory(guard, objects)
+            win32._create_guarded_directory(guard, private)
             assert private.is_dir()
             assert list(private.iterdir()) == []
             assert guard.is_held(receipts)
@@ -577,8 +577,8 @@ def test_create_new_temp_flushes_and_denies_substitution_profiles(
     data = b'{"synthetic":true}\n'
     with _probe_guard(root) as guard:
         _hold_manifests(guard)
-        with win32.PrivateMetadataLockPair(guard) as locks:
-            source = win32.materialize_owned_temp(
+        with win32._PrivateMetadataLockPair(guard) as locks:
+            source = win32._materialize_owned_temp(
                 guard,
                 kind=win32.OwnedTempKind.MANIFEST,
                 authority_key_hex=key,
@@ -587,7 +587,7 @@ def test_create_new_temp_flushes_and_denies_substitution_profiles(
             assert source.information().link_count == 1
             assert source.read_all(max_bytes=len(data)) == data
 
-            transitional = win32.open_bound_file(
+            transitional = win32._open_bound_file(
                 guard,
                 relative,
                 profile=win32.FileHandleProfile.TRANSITIONAL_READ,
@@ -596,7 +596,7 @@ def test_create_new_temp_flushes_and_denies_substitution_profiles(
             transitional.close()
 
             with pytest.raises(win32.Win32SafetyError) as narrow_failure:
-                win32.open_bound_file(
+                win32._open_bound_file(
                     guard,
                     relative,
                     profile=win32.FileHandleProfile.NARROW_READ,
@@ -616,7 +616,7 @@ def test_create_new_temp_flushes_and_denies_substitution_profiles(
                     )
 
             with pytest.raises(win32.Win32SafetyError) as duplicate:
-                win32.materialize_owned_temp(
+                win32._materialize_owned_temp(
                     guard,
                     kind=win32.OwnedTempKind.MANIFEST,
                     authority_key_hex=key,
@@ -652,8 +652,8 @@ def test_owned_manifest_temp_accepts_one_pass_bounded_stream(
 
     with _probe_guard(root) as guard:
         _hold_manifests(guard)
-        with win32.PrivateMetadataLockPair(guard) as locks:
-            source = win32.materialize_owned_temp(
+        with win32._PrivateMetadataLockPair(guard) as locks:
+            source = win32._materialize_owned_temp(
                 guard,
                 kind=win32.OwnedTempKind.MANIFEST,
                 authority_key_hex=key,
@@ -694,15 +694,15 @@ def test_fixed_journal_hardlink_publication_is_exact_one_two_one(
     final_path = root / win32.PRIVATE_JOURNAL_RELATIVE_PATH
     with _probe_guard(root) as guard:
         _hold_manifests(guard)
-        with win32.PrivateMetadataLockPair(guard) as locks:
-            source = win32.materialize_owned_temp(
+        with win32._PrivateMetadataLockPair(guard) as locks:
+            source = win32._materialize_owned_temp(
                 guard,
                 kind=win32.OwnedTempKind.JOURNAL,
                 authority_key_hex=key,
                 data=data,
             )
             original_identity = source.identity
-            final = win32.publish_hard_link(
+            final = win32._publish_hard_link(
                 guard,
                 source,
                 destination_relative_path=(
@@ -718,7 +718,7 @@ def test_fixed_journal_hardlink_publication_is_exact_one_two_one(
             assert final.identity == original_identity
             assert final.information().link_count == 1
             assert final.read_all(max_bytes=len(data)) == data
-            win32.dispose_bound_residue(guard, final, locks=locks)
+            win32._dispose_bound_residue(guard, final, locks=locks)
             assert not final_path.exists()
 
 
@@ -734,15 +734,15 @@ def test_hardlink_publication_never_overwrites_planted_destination(
     key = "e" * 64
     with _probe_guard(root) as guard:
         _hold_manifests(guard)
-        with win32.PrivateMetadataLockPair(guard) as locks:
-            source = win32.materialize_owned_temp(
+        with win32._PrivateMetadataLockPair(guard) as locks:
+            source = win32._materialize_owned_temp(
                 guard,
                 kind=win32.OwnedTempKind.JOURNAL,
                 authority_key_hex=key,
                 data=b'{"new":"journal"}\n',
             )
             with pytest.raises(win32.Win32SafetyError) as captured:
-                win32.publish_hard_link(
+                win32._publish_hard_link(
                     guard,
                     source,
                     destination_relative_path=(
@@ -770,20 +770,20 @@ def test_receipt_hardlink_hands_to_narrow_authority(
     data = b'{"receipt":"synthetic"}\n'
     with _probe_guard(root) as guard:
         _hold_manifests(guard)
-        with win32.PrivateMetadataLockPair(guard) as locks:
+        with win32._PrivateMetadataLockPair(guard) as locks:
             receipts = root / "receipts"
             objects = receipts / "objects"
             private = objects / "private-source-metadata"
-            win32.create_guarded_directory(guard, receipts)
-            win32.create_guarded_directory(guard, objects)
-            win32.create_guarded_directory(guard, private)
-            source = win32.materialize_owned_temp(
+            win32._create_guarded_directory(guard, receipts)
+            win32._create_guarded_directory(guard, objects)
+            win32._create_guarded_directory(guard, private)
+            source = win32._materialize_owned_temp(
                 guard,
                 kind=win32.OwnedTempKind.RECEIPT,
                 authority_key_hex=key,
                 data=data,
             )
-            final = win32.publish_hard_link(
+            final = win32._publish_hard_link(
                 guard,
                 source,
                 destination_relative_path=win32.receipt_relative_path(key),
@@ -817,15 +817,15 @@ def test_disabled_manifest_replacement_gate_is_closed_before_mutation(
     )
     with _probe_guard(root) as guard:
         _hold_manifests(guard)
-        with win32.PrivateMetadataLockPair(guard) as locks:
-            source = win32.materialize_owned_temp(
+        with win32._PrivateMetadataLockPair(guard) as locks:
+            source = win32._materialize_owned_temp(
                 guard,
                 kind=win32.OwnedTempKind.MANIFEST,
                 authority_key_hex=authority_key,
                 data=after_bytes,
             )
             with pytest.raises(win32.Win32SafetyError) as captured:
-                win32.replace_private_manifest(
+                win32._replace_private_manifest(
                     guard,
                     source,
                     authority_key_hex=authority_key,
@@ -883,29 +883,29 @@ def test_manifest_replacement_rejects_other_owned_temp_families_before_api(
 
     with _probe_guard(root) as guard:
         _hold_manifests(guard)
-        with win32.PrivateMetadataLockPair(guard) as locks:
+        with win32._PrivateMetadataLockPair(guard) as locks:
             receipts = root / "receipts"
             receipt_objects = receipts / "objects"
             receipt_private = (
                 receipt_objects / "private-source-metadata"
             )
-            win32.create_guarded_directory(guard, receipts)
-            win32.create_guarded_directory(guard, receipt_objects)
-            win32.create_guarded_directory(guard, receipt_private)
+            win32._create_guarded_directory(guard, receipts)
+            win32._create_guarded_directory(guard, receipt_objects)
+            win32._create_guarded_directory(guard, receipt_private)
             candidates = (
-                win32.materialize_owned_temp(
+                win32._materialize_owned_temp(
                     guard,
                     kind=win32.OwnedTempKind.JOURNAL,
                     authority_key_hex=accepted_key,
                     data=data,
                 ),
-                win32.materialize_owned_temp(
+                win32._materialize_owned_temp(
                     guard,
                     kind=win32.OwnedTempKind.RECEIPT,
                     authority_key_hex=accepted_key,
                     data=data,
                 ),
-                win32.materialize_owned_temp(
+                win32._materialize_owned_temp(
                     guard,
                     kind=win32.OwnedTempKind.MANIFEST,
                     authority_key_hex=other_key,
@@ -914,7 +914,7 @@ def test_manifest_replacement_rejects_other_owned_temp_families_before_api(
             )
             for source in candidates:
                 with pytest.raises(win32.Win32SafetyError) as captured:
-                    win32.replace_private_manifest(
+                    win32._replace_private_manifest(
                         guard,
                         source,
                         authority_key_hex=accepted_key,
@@ -959,8 +959,8 @@ def test_production_manifest_replacement_uses_bound_source_and_logical_size(
 
     with _probe_guard(root) as guard:
         _hold_manifests(guard)
-        with win32.PrivateMetadataLockPair(guard) as locks:
-            source = win32.materialize_owned_temp(
+        with win32._PrivateMetadataLockPair(guard) as locks:
+            source = win32._materialize_owned_temp(
                 guard,
                 kind=win32.OwnedTempKind.MANIFEST,
                 authority_key_hex=authority_key,
@@ -1018,7 +1018,7 @@ def test_production_manifest_replacement_uses_bound_source_and_logical_size(
                 "set_file_information",
                 instrument_set_file_information,
             )
-            final = win32.replace_private_manifest(
+            final = win32._replace_private_manifest(
                 guard,
                 source,
                 authority_key_hex=authority_key,
@@ -1117,8 +1117,8 @@ def test_nul_guard_prevents_adjacent_duplicate_suffix_consumption(
     duplicated = Path(str(intended) + ".jsonl")
     with _probe_guard(root) as guard:
         _hold_manifests(guard)
-        with win32.PrivateMetadataLockPair(guard) as locks:
-            source = win32.materialize_owned_temp(
+        with win32._PrivateMetadataLockPair(guard) as locks:
+            source = win32._materialize_owned_temp(
                 guard,
                 kind=win32.OwnedTempKind.MANIFEST,
                 authority_key_hex="7" * 64,
@@ -1182,13 +1182,13 @@ def test_present_target_handle_blocks_ordinary_file_rename_info(
     new_bytes = b'{"new":true}\n'
     with _probe_guard(root) as guard:
         _hold_manifests(guard)
-        with win32.PrivateMetadataLockPair(guard) as locks:
-            old_transitional = win32.open_bound_file(
+        with win32._PrivateMetadataLockPair(guard) as locks:
+            old_transitional = win32._open_bound_file(
                 guard,
                 win32.PRIVATE_MANIFEST_RELATIVE_PATH,
                 profile=win32.FileHandleProfile.TRANSITIONAL_READ,
             )
-            source = win32.materialize_owned_temp(
+            source = win32._materialize_owned_temp(
                 guard,
                 kind=win32.OwnedTempKind.MANIFEST,
                 authority_key_hex="3" * 64,
@@ -1226,8 +1226,8 @@ def test_absent_no_replace_preserves_raced_in_target_with_error_183(
     new_bytes = b'{"new":"must_not_replace"}\n'
     with _probe_guard(root) as guard:
         _hold_manifests(guard)
-        with win32.PrivateMetadataLockPair(guard) as locks:
-            source = win32.materialize_owned_temp(
+        with win32._PrivateMetadataLockPair(guard) as locks:
+            source = win32._materialize_owned_temp(
                 guard,
                 kind=win32.OwnedTempKind.MANIFEST,
                 authority_key_hex="4" * 64,
@@ -1272,18 +1272,18 @@ def test_residue_disposition_deletes_only_retained_identity(
     other.write_bytes(b"preserve")
     with _probe_guard(root) as guard:
         _hold_manifests(guard)
-        with win32.PrivateMetadataLockPair(guard) as locks:
-            source = win32.materialize_owned_temp(
+        with win32._PrivateMetadataLockPair(guard) as locks:
+            source = win32._materialize_owned_temp(
                 guard,
                 kind=win32.OwnedTempKind.MANIFEST,
                 authority_key_hex=key,
                 data=b"owned",
             )
-            residue = win32.handoff_to_residue_authority(
+            residue = win32._handoff_to_residue_authority(
                 guard,
                 source,
             )
-            win32.dispose_bound_residue(guard, residue, locks=locks)
+            win32._dispose_bound_residue(guard, residue, locks=locks)
             assert not (root / Path(relative)).exists()
             assert other.read_bytes() == b"preserve"
 
@@ -1358,9 +1358,9 @@ def test_owned_temp_fault_transfers_exact_live_authority(
 
     with _probe_guard(root) as guard:
         _hold_manifests(guard)
-        with win32.PrivateMetadataLockPair(guard) as locks:
+        with win32._PrivateMetadataLockPair(guard) as locks:
             with pytest.raises(win32.Win32MutationFailure) as captured:
-                win32.materialize_owned_temp(
+                win32._materialize_owned_temp(
                     guard,
                     kind=win32.OwnedTempKind.MANIFEST,
                     authority_key_hex=key,
@@ -1381,11 +1381,11 @@ def test_owned_temp_fault_transfers_exact_live_authority(
                     "flush_file_buffers",
                     original_flush,
                 )
-            residue = win32.handoff_to_residue_authority(
+            residue = win32._handoff_to_residue_authority(
                 guard,
                 transfers[0].bound,
             )
-            win32.dispose_bound_residue(guard, residue, locks=locks)
+            win32._dispose_bound_residue(guard, residue, locks=locks)
             assert not path.exists()
 
 
@@ -1407,7 +1407,7 @@ def test_create_new_api_failure_proves_no_name_and_no_obligation(
     original_create = api.create_file
     with _probe_guard(root) as guard:
         _hold_manifests(guard)
-        with win32.PrivateMetadataLockPair(guard) as locks:
+        with win32._PrivateMetadataLockPair(guard) as locks:
 
             def fail_create(*args: object) -> object:
                 del args
@@ -1416,7 +1416,7 @@ def test_create_new_api_failure_proves_no_name_and_no_obligation(
 
             monkeypatch.setattr(api, "create_file", fail_create)
             with pytest.raises(win32.Win32MutationFailure) as captured:
-                win32.materialize_owned_temp(
+                win32._materialize_owned_temp(
                     guard,
                     kind=win32.OwnedTempKind.MANIFEST,
                     authority_key_hex=key,
@@ -1480,9 +1480,9 @@ def test_create_new_post_open_refusal_transfers_raw_handle(
     )
     with _probe_guard(root) as guard:
         _hold_manifests(guard)
-        with win32.PrivateMetadataLockPair(guard) as locks:
+        with win32._PrivateMetadataLockPair(guard) as locks:
             with pytest.raises(win32.Win32MutationFailure) as captured:
-                win32.materialize_owned_temp(
+                win32._materialize_owned_temp(
                     guard,
                     kind=win32.OwnedTempKind.MANIFEST,
                     authority_key_hex=key,
@@ -1503,11 +1503,11 @@ def test_create_new_post_open_refusal_transfers_raw_handle(
             assert transfers[0].role == "manifest_temp"
             assert isinstance(
                 transfers[0].bound,
-                win32.Win32UnverifiedCreatedFile,
+                win32._Win32UnverifiedCreatedFile,
             )
             assert transfers[0].bound.closed is False
             assert path.exists()
-            win32.dispose_unverified_created_file(
+            win32._dispose_unverified_created_file(
                 guard,
                 transfers[0].bound,
             )
@@ -1561,21 +1561,21 @@ def test_unverified_created_close_fault_requires_terminal_release(
     )
     with _probe_guard(root) as guard:
         _hold_manifests(guard)
-        with win32.PrivateMetadataLockPair(guard) as locks:
+        with win32._PrivateMetadataLockPair(guard) as locks:
             with pytest.raises(win32.Win32MutationFailure) as creation:
-                win32.materialize_owned_temp(
+                win32._materialize_owned_temp(
                     guard,
                     kind=win32.OwnedTempKind.MANIFEST,
                     authority_key_hex=key,
                     data=b"created-before-refusal",
                 )
             created = creation.value.take_authorities()[0].bound
-            assert isinstance(created, win32.Win32UnverifiedCreatedFile)
-            original_close = win32.Win32UnverifiedCreatedFile.close
+            assert isinstance(created, win32._Win32UnverifiedCreatedFile)
+            original_close = win32._Win32UnverifiedCreatedFile.close
             close_injected = False
 
             def fail_created_close(
-                bound: win32.Win32UnverifiedCreatedFile,
+                bound: win32._Win32UnverifiedCreatedFile,
                 *,
                 reason: str = win32.FINAL_VERIFICATION_FAILED,
                 operation: str = "created_handle_close",
@@ -1594,12 +1594,12 @@ def test_unverified_created_close_fault_requires_terminal_release(
                 )
 
             monkeypatch.setattr(
-                win32.Win32UnverifiedCreatedFile,
+                win32._Win32UnverifiedCreatedFile,
                 "close",
                 fail_created_close,
             )
             with pytest.raises(win32.Win32MutationFailure) as disposal:
-                win32.dispose_unverified_created_file(guard, created)
+                win32._dispose_unverified_created_file(guard, created)
             failure = disposal.value
             assert close_injected
             assert failure.reason == win32.RESIDUE_DISPOSITION_FAILED
@@ -1616,7 +1616,7 @@ def test_unverified_created_close_fault_requires_terminal_release(
             assert transfers[0].bound is created
             assert transfers[0].terminal_release_first is True
             assert transfers[0].name_state == "delete_pending"
-            win32.release_terminal_bound_authority(
+            win32._release_terminal_bound_authority(
                 created,
                 reason=failure.reason,
                 operation="unverified_created_test_terminal",
@@ -1657,7 +1657,7 @@ def test_hardlink_post_api_fault_transfers_every_live_authority(
     final_path = root / win32.PRIVATE_JOURNAL_RELATIVE_PATH
     original_open = win32._open_bound_file_absolute
     original_disposition = win32._set_disposition
-    original_close = win32.Win32BoundFile.close
+    original_close = win32._Win32BoundFile.close
     original_absent = win32.path_is_absent
     injected = False
     faulted_close_bound: object | None = None
@@ -1730,21 +1730,21 @@ def test_hardlink_post_api_fault_transfers_every_live_authority(
 
     monkeypatch.setattr(win32, "_open_bound_file_absolute", fault_open)
     monkeypatch.setattr(win32, "_set_disposition", fault_disposition)
-    monkeypatch.setattr(win32.Win32BoundFile, "close", fault_close)
+    monkeypatch.setattr(win32._Win32BoundFile, "close", fault_close)
     monkeypatch.setattr(win32, "path_is_absent", fault_absent)
 
-    transferred_bounds: list[win32.Win32BoundFile] = []
+    transferred_bounds: list[win32._Win32BoundFile] = []
     with _probe_guard(root) as guard:
         _hold_manifests(guard)
-        with win32.PrivateMetadataLockPair(guard) as locks:
-            source = win32.materialize_owned_temp(
+        with win32._PrivateMetadataLockPair(guard) as locks:
+            source = win32._materialize_owned_temp(
                 guard,
                 kind=win32.OwnedTempKind.JOURNAL,
                 authority_key_hex=key,
                 data=data,
             )
             with pytest.raises(win32.Win32MutationFailure) as captured:
-                win32.publish_hard_link(
+                win32._publish_hard_link(
                     guard,
                     source,
                     destination_relative_path=(
@@ -1789,7 +1789,7 @@ def test_hardlink_post_api_fault_transfers_every_live_authority(
                     survivors[0].expected_link_count_after_terminal_release
                     == 1
                 )
-                win32.release_terminal_bound_authority(source)
+                win32._release_terminal_bound_authority(source)
                 assert source.closed is True
                 assert not source_path.exists()
                 survivor = survivors[0].bound
@@ -1813,7 +1813,7 @@ def test_hardlink_post_api_fault_transfers_every_live_authority(
                 ]
                 assert len(survivors) == 1
                 assert survivors[0].bound is not terminal[0].bound
-                win32.release_terminal_bound_authority(
+                win32._release_terminal_bound_authority(
                     terminal[0].bound,
                     reason=failure.reason,
                     operation="hardlink_transitional_test_terminal",
@@ -1870,7 +1870,7 @@ def test_manifest_post_api_fault_transfers_final_authority(
     )
     final_path = root / win32.PRIVATE_MANIFEST_RELATIVE_PATH
     original_open = win32._open_bound_file_absolute
-    original_close = win32.Win32BoundFile.close
+    original_close = win32._Win32BoundFile.close
     original_absent = win32.path_is_absent
     injected = False
     faulted_close_bound: object | None = None
@@ -1923,21 +1923,21 @@ def test_manifest_post_api_fault_transfers_final_authority(
         )
 
     monkeypatch.setattr(win32, "_open_bound_file_absolute", fault_open)
-    monkeypatch.setattr(win32.Win32BoundFile, "close", fault_close)
+    monkeypatch.setattr(win32._Win32BoundFile, "close", fault_close)
     monkeypatch.setattr(win32, "path_is_absent", fault_absent)
 
-    transferred_bounds: list[win32.Win32BoundFile] = []
+    transferred_bounds: list[win32._Win32BoundFile] = []
     with _probe_guard(root) as guard:
         _hold_manifests(guard)
-        with win32.PrivateMetadataLockPair(guard) as locks:
-            source = win32.materialize_owned_temp(
+        with win32._PrivateMetadataLockPair(guard) as locks:
+            source = win32._materialize_owned_temp(
                 guard,
                 kind=win32.OwnedTempKind.MANIFEST,
                 authority_key_hex=key,
                 data=data,
             )
             with pytest.raises(win32.Win32MutationFailure) as captured:
-                win32.replace_private_manifest(
+                win32._replace_private_manifest(
                     guard,
                     source,
                     authority_key_hex=key,
@@ -1975,7 +1975,7 @@ def test_manifest_post_api_fault_transfers_final_authority(
                 assert terminal[0].bound is faulted_close_bound
                 assert terminal[0].name_state == "renamed_final"
                 assert len(transfers) == 2
-                win32.release_terminal_bound_authority(
+                win32._release_terminal_bound_authority(
                     terminal[0].bound,
                     reason=failure.reason,
                     operation="manifest_close_test_terminal",
@@ -2020,7 +2020,7 @@ def test_manifest_old_target_close_fault_terminalizes_before_source_cleanup(
             key,
         )
     )
-    original_close = win32.Win32BoundFile.close
+    original_close = win32._Win32BoundFile.close
     injected = False
 
     def fault_close(
@@ -2041,23 +2041,23 @@ def test_manifest_old_target_close_fault_terminalizes_before_source_cleanup(
             )
         original_close(bound, reason=reason, operation=operation)
 
-    monkeypatch.setattr(win32.Win32BoundFile, "close", fault_close)
+    monkeypatch.setattr(win32._Win32BoundFile, "close", fault_close)
     with _probe_guard(root) as guard:
         _hold_manifests(guard)
-        with win32.PrivateMetadataLockPair(guard) as locks:
-            before = win32.open_bound_file(
+        with win32._PrivateMetadataLockPair(guard) as locks:
+            before = win32._open_bound_file(
                 guard,
                 win32.PRIVATE_MANIFEST_RELATIVE_PATH,
                 profile=win32.FileHandleProfile.NARROW_READ,
             )
-            source = win32.materialize_owned_temp(
+            source = win32._materialize_owned_temp(
                 guard,
                 kind=win32.OwnedTempKind.MANIFEST,
                 authority_key_hex=key,
                 data=after_bytes,
             )
             with pytest.raises(win32.Win32MutationFailure) as captured:
-                win32.replace_private_manifest(
+                win32._replace_private_manifest(
                     guard,
                     source,
                     authority_key_hex=key,
@@ -2091,7 +2091,7 @@ def test_manifest_old_target_close_fault_terminalizes_before_source_cleanup(
             )
             assert retained_source.bound is source
             assert retained_source.role == "manifest_temp"
-            win32.release_terminal_bound_authority(
+            win32._release_terminal_bound_authority(
                 terminal[0].bound,
                 reason=failure.reason,
                 operation="manifest_old_target_test_terminal",
@@ -2130,7 +2130,7 @@ def test_residue_handoff_fault_transfers_all_live_handles(
         )
     )
     original_open = win32._open_bound_file_absolute
-    original_close = win32.Win32BoundFile.close
+    original_close = win32._Win32BoundFile.close
     injected = False
     faulted_close_bound: object | None = None
 
@@ -2161,18 +2161,18 @@ def test_residue_handoff_fault_transfers_all_live_handles(
         original_close(bound, reason=reason, operation=operation)
 
     monkeypatch.setattr(win32, "_open_bound_file_absolute", fault_open)
-    monkeypatch.setattr(win32.Win32BoundFile, "close", fault_close)
+    monkeypatch.setattr(win32._Win32BoundFile, "close", fault_close)
     with _probe_guard(root) as guard:
         _hold_manifests(guard)
-        with win32.PrivateMetadataLockPair(guard) as locks:
-            source = win32.materialize_owned_temp(
+        with win32._PrivateMetadataLockPair(guard) as locks:
+            source = win32._materialize_owned_temp(
                 guard,
                 kind=win32.OwnedTempKind.MANIFEST,
                 authority_key_hex=key,
                 data=b"handoff",
             )
             with pytest.raises(win32.Win32MutationFailure) as captured:
-                win32.handoff_to_residue_authority(guard, source)
+                win32._handoff_to_residue_authority(guard, source)
             failure = captured.value
             assert injected
             assert failure.checkpoint is win32.MutationCheckpoint.HANDOFF
@@ -2195,7 +2195,7 @@ def test_residue_handoff_fault_transfers_all_live_handles(
                 ]
                 assert len(terminal) == 1
                 assert terminal[0].bound is faulted_close_bound
-                win32.release_terminal_bound_authority(
+                win32._release_terminal_bound_authority(
                     terminal[0].bound,
                     reason=failure.reason,
                     operation="residue_handoff_test_terminal",
@@ -2230,7 +2230,7 @@ def test_narrow_handoff_fault_transfers_all_live_handles(
     path = root / relative
     path.write_bytes(b"narrow-handoff")
     original_open = win32._open_bound_file_absolute
-    original_close = win32.Win32BoundFile.close
+    original_close = win32._Win32BoundFile.close
     injected = False
     faulted_close_bound: object | None = None
 
@@ -2261,17 +2261,17 @@ def test_narrow_handoff_fault_transfers_all_live_handles(
         original_close(bound, reason=reason, operation=operation)
 
     monkeypatch.setattr(win32, "_open_bound_file_absolute", fault_open)
-    monkeypatch.setattr(win32.Win32BoundFile, "close", fault_close)
+    monkeypatch.setattr(win32._Win32BoundFile, "close", fault_close)
     with _probe_guard(root) as guard:
         _hold_manifests(guard)
-        with win32.PrivateMetadataLockPair(guard) as locks:
-            transitional = win32.open_bound_file(
+        with win32._PrivateMetadataLockPair(guard) as locks:
+            transitional = win32._open_bound_file(
                 guard,
                 relative,
                 profile=win32.FileHandleProfile.TRANSITIONAL_READ,
             )
             with pytest.raises(win32.Win32MutationFailure) as captured:
-                win32.handoff_to_narrow_authority(
+                win32._handoff_to_narrow_authority(
                     guard,
                     transitional,
                 )
@@ -2293,7 +2293,7 @@ def test_narrow_handoff_fault_transfers_all_live_handles(
                 ]
                 assert len(terminal) == 1
                 assert terminal[0].bound is faulted_close_bound
-                win32.release_terminal_bound_authority(
+                win32._release_terminal_bound_authority(
                     terminal[0].bound,
                     reason=failure.reason,
                     operation="narrow_handoff_test_terminal",
@@ -2337,7 +2337,7 @@ def test_twin_handoff_fault_transfers_all_live_handles(
     temp_path.write_bytes(data)
     os.link(temp_path, final_path)
     original_open = win32._open_bound_file_absolute
-    original_close = win32.Win32BoundFile.close
+    original_close = win32._Win32BoundFile.close
     injected = False
     faulted_close_bound: object | None = None
 
@@ -2368,24 +2368,24 @@ def test_twin_handoff_fault_transfers_all_live_handles(
         original_close(bound, reason=reason, operation=operation)
 
     monkeypatch.setattr(win32, "_open_bound_file_absolute", fault_open)
-    monkeypatch.setattr(win32.Win32BoundFile, "close", fault_close)
+    monkeypatch.setattr(win32._Win32BoundFile, "close", fault_close)
     with _probe_guard(root) as guard:
         _hold_manifests(guard)
-        with win32.PrivateMetadataLockPair(guard) as locks:
-            survivor = win32.open_bound_file(
+        with win32._PrivateMetadataLockPair(guard) as locks:
+            survivor = win32._open_bound_file(
                 guard,
                 win32.PRIVATE_JOURNAL_RELATIVE_PATH,
                 profile=win32.FileHandleProfile.NARROW_READ,
                 expected_link_count=2,
             )
-            residue_name = win32.open_bound_file(
+            residue_name = win32._open_bound_file(
                 guard,
                 temp_relative,
                 profile=win32.FileHandleProfile.NARROW_READ,
                 expected_link_count=2,
             )
             with pytest.raises(win32.Win32MutationFailure) as captured:
-                win32.handoff_same_identity_twin_to_residue(
+                win32._handoff_same_identity_twin_to_residue(
                     guard,
                     survivor,
                     residue_name,
@@ -2409,7 +2409,7 @@ def test_twin_handoff_fault_transfers_all_live_handles(
                 ]
                 assert len(terminal) == 1
                 assert terminal[0].bound is faulted_close_bound
-                win32.release_terminal_bound_authority(
+                win32._release_terminal_bound_authority(
                     terminal[0].bound,
                     reason=failure.reason,
                     operation="twin_handoff_test_terminal",
@@ -2441,14 +2441,14 @@ def test_residue_source_close_failure_restores_owned_present_authority(
     )
     with _probe_guard(root) as guard:
         _hold_manifests(guard)
-        with win32.PrivateMetadataLockPair(guard) as locks:
-            source = win32.materialize_owned_temp(
+        with win32._PrivateMetadataLockPair(guard) as locks:
+            source = win32._materialize_owned_temp(
                 guard,
                 kind=win32.OwnedTempKind.MANIFEST,
                 authority_key_hex=key,
                 data=b"delete-pending",
             )
-            residue = win32.handoff_to_residue_authority(guard, source)
+            residue = win32._handoff_to_residue_authority(guard, source)
             target_handle = residue.raw_handle
             api = win32._api()
             original_close = api.close_handle
@@ -2491,7 +2491,7 @@ def test_residue_source_close_failure_restores_owned_present_authority(
                 track_preclear_digest,
             )
             with pytest.raises(win32.Win32MutationFailure) as captured:
-                win32.dispose_bound_residue(
+                win32._dispose_bound_residue(
                     guard,
                     residue,
                     locks=locks,
@@ -2514,7 +2514,7 @@ def test_residue_source_close_failure_restores_owned_present_authority(
             assert transfers[0].name_state == "owned_present"
             assert residue.closed is False
             assert residue.read_all(max_bytes=64) == b"delete-pending"
-            win32.release_terminal_bound_authority(residue)
+            win32._release_terminal_bound_authority(residue)
             assert target_attempts == 2
             assert path.read_bytes() == b"delete-pending"
 
@@ -2536,14 +2536,14 @@ def test_residue_restore_clear_api_failure_keeps_delete_pending_authority(
     )
     with _probe_guard(root) as guard:
         _hold_manifests(guard)
-        with win32.PrivateMetadataLockPair(guard) as locks:
-            source = win32.materialize_owned_temp(
+        with win32._PrivateMetadataLockPair(guard) as locks:
+            source = win32._materialize_owned_temp(
                 guard,
                 kind=win32.OwnedTempKind.MANIFEST,
                 authority_key_hex=key,
                 data=data,
             )
-            residue = win32.handoff_to_residue_authority(guard, source)
+            residue = win32._handoff_to_residue_authority(guard, source)
             target_handle = residue.raw_handle
             api = win32._api()
             original_close = api.close_handle
@@ -2592,7 +2592,7 @@ def test_residue_restore_clear_api_failure_keeps_delete_pending_authority(
                 fail_clear_disposition,
             )
             with pytest.raises(win32.Win32MutationFailure) as captured:
-                win32.dispose_bound_residue(
+                win32._dispose_bound_residue(
                     guard,
                     residue,
                     locks=locks,
@@ -2616,7 +2616,7 @@ def test_residue_restore_clear_api_failure_keeps_delete_pending_authority(
             assert residue.closed is False
 
             # Exact terminal release is explicit and does not depend on GC.
-            win32.release_terminal_bound_authority(residue)
+            win32._release_terminal_bound_authority(residue)
             assert close_attempts == 2
             assert residue.closed is True
             assert not path.exists()
@@ -2648,14 +2648,14 @@ def test_residue_restore_revalidation_failure_is_preserved_unverified(
     )
     with _probe_guard(root) as guard:
         _hold_manifests(guard)
-        with win32.PrivateMetadataLockPair(guard) as locks:
-            source = win32.materialize_owned_temp(
+        with win32._PrivateMetadataLockPair(guard) as locks:
+            source = win32._materialize_owned_temp(
                 guard,
                 kind=win32.OwnedTempKind.MANIFEST,
                 authority_key_hex=key,
                 data=data,
             )
-            residue = win32.handoff_to_residue_authority(guard, source)
+            residue = win32._handoff_to_residue_authority(guard, source)
             target_handle = residue.raw_handle
             api = win32._api()
             original_close = api.close_handle
@@ -2786,7 +2786,7 @@ def test_residue_restore_revalidation_failure_is_preserved_unverified(
                 track_preclear_digest,
             )
             with pytest.raises(win32.Win32MutationFailure) as captured:
-                win32.dispose_bound_residue(
+                win32._dispose_bound_residue(
                     guard,
                     residue,
                     locks=locks,
@@ -2812,7 +2812,7 @@ def test_residue_restore_revalidation_failure_is_preserved_unverified(
             assert failure.terminal_release_required is True
             assert residue.closed is False
 
-            win32.release_terminal_bound_authority(residue)
+            win32._release_terminal_bound_authority(residue)
             assert close_attempts == 2
             assert path.read_bytes() == data
 
@@ -2836,14 +2836,14 @@ def test_delete_file_true_api_failure_is_no_change_only_after_exact_reproof(
     )
     with _probe_guard(root) as guard:
         _hold_manifests(guard)
-        with win32.PrivateMetadataLockPair(guard) as locks:
-            source = win32.materialize_owned_temp(
+        with win32._PrivateMetadataLockPair(guard) as locks:
+            source = win32._materialize_owned_temp(
                 guard,
                 kind=win32.OwnedTempKind.MANIFEST,
                 authority_key_hex=key,
                 data=data,
             )
-            residue = win32.handoff_to_residue_authority(guard, source)
+            residue = win32._handoff_to_residue_authority(guard, source)
             target_handle = residue.raw_handle
             api = win32._api()
             original_set = api.set_file_information
@@ -2902,7 +2902,7 @@ def test_delete_file_true_api_failure_is_no_change_only_after_exact_reproof(
                 maybe_fail_proof_digest,
             )
             with pytest.raises(win32.Win32MutationFailure) as captured:
-                win32.dispose_bound_residue(
+                win32._dispose_bound_residue(
                     guard,
                     residue,
                     locks=locks,
@@ -2922,7 +2922,7 @@ def test_delete_file_true_api_failure_is_no_change_only_after_exact_reproof(
             assert transfers[0].name_state == (
                 "state_unknown" if proof_fails else "owned_present"
             )
-            win32.release_terminal_bound_authority(residue)
+            win32._release_terminal_bound_authority(residue)
             assert path.read_bytes() == data
 
 
@@ -2943,14 +2943,14 @@ def test_delete_file_true_api_failure_no_change_postproof_order_is_exact(
     )
     with _probe_guard(root) as guard:
         _hold_manifests(guard)
-        with win32.PrivateMetadataLockPair(guard) as locks:
-            source = win32.materialize_owned_temp(
+        with win32._PrivateMetadataLockPair(guard) as locks:
+            source = win32._materialize_owned_temp(
                 guard,
                 kind=win32.OwnedTempKind.MANIFEST,
                 authority_key_hex=key,
                 data=data,
             )
-            residue = win32.handoff_to_residue_authority(guard, source)
+            residue = win32._handoff_to_residue_authority(guard, source)
             target_handle = residue.raw_handle
             api = win32._api()
             original_set = api.set_file_information
@@ -3057,7 +3057,7 @@ def test_delete_file_true_api_failure_no_change_postproof_order_is_exact(
             monkeypatch.setattr(locks, "validate", track_locks)
 
             with pytest.raises(win32.Win32MutationFailure) as captured:
-                win32.dispose_bound_residue(
+                win32._dispose_bound_residue(
                     guard,
                     residue,
                     locks=locks,
@@ -3076,7 +3076,7 @@ def test_delete_file_true_api_failure_no_change_postproof_order_is_exact(
             assert [transfer.name_state for transfer in transfers] == [
                 "owned_present"
             ]
-            win32.release_terminal_bound_authority(residue)
+            win32._release_terminal_bound_authority(residue)
             assert path.read_bytes() == data
 
 
@@ -3111,14 +3111,14 @@ def test_delete_file_true_api_failure_each_unproved_seam_is_state_unknown(
     )
     with _probe_guard(root) as guard:
         _hold_manifests(guard)
-        with win32.PrivateMetadataLockPair(guard) as locks:
-            source = win32.materialize_owned_temp(
+        with win32._PrivateMetadataLockPair(guard) as locks:
+            source = win32._materialize_owned_temp(
                 guard,
                 kind=win32.OwnedTempKind.MANIFEST,
                 authority_key_hex=key,
                 data=data,
             )
-            residue = win32.handoff_to_residue_authority(guard, source)
+            residue = win32._handoff_to_residue_authority(guard, source)
             target_handle = residue.raw_handle
             api = win32._api()
             original_set = api.set_file_information
@@ -3276,7 +3276,7 @@ def test_delete_file_true_api_failure_each_unproved_seam_is_state_unknown(
             monkeypatch.setattr(win32, "_clear_disposition", count_clear)
 
             with pytest.raises(win32.Win32MutationFailure) as captured:
-                win32.dispose_bound_residue(
+                win32._dispose_bound_residue(
                     guard,
                     residue,
                     locks=locks,
@@ -3299,7 +3299,7 @@ def test_delete_file_true_api_failure_each_unproved_seam_is_state_unknown(
             assert [transfer.name_state for transfer in transfers] == [
                 "state_unknown"
             ]
-            win32.release_terminal_bound_authority(residue)
+            win32._release_terminal_bound_authority(residue)
             assert path.read_bytes() == data
 
 
@@ -3320,14 +3320,14 @@ def test_delete_file_true_changed_state_but_returned_false_never_opens_name(
     )
     with _probe_guard(root) as guard:
         _hold_manifests(guard)
-        with win32.PrivateMetadataLockPair(guard) as locks:
-            source = win32.materialize_owned_temp(
+        with win32._PrivateMetadataLockPair(guard) as locks:
+            source = win32._materialize_owned_temp(
                 guard,
                 kind=win32.OwnedTempKind.MANIFEST,
                 authority_key_hex=key,
                 data=data,
             )
-            residue = win32.handoff_to_residue_authority(guard, source)
+            residue = win32._handoff_to_residue_authority(guard, source)
             target_handle = residue.raw_handle
             api = win32._api()
             original_set = api.set_file_information
@@ -3384,7 +3384,7 @@ def test_delete_file_true_changed_state_but_returned_false_never_opens_name(
             monkeypatch.setattr(win32, "_clear_disposition", count_clear)
 
             with pytest.raises(win32.Win32MutationFailure) as captured:
-                win32.dispose_bound_residue(
+                win32._dispose_bound_residue(
                     guard,
                     residue,
                     locks=locks,
@@ -3401,7 +3401,7 @@ def test_delete_file_true_changed_state_but_returned_false_never_opens_name(
             assert [transfer.name_state for transfer in transfers] == [
                 "state_unknown"
             ]
-            win32.release_terminal_bound_authority(residue)
+            win32._release_terminal_bound_authority(residue)
             assert not path.exists()
 
 
@@ -3424,8 +3424,8 @@ def test_publication_twin_never_enters_single_link_disposition_compensation(
 
     with _probe_guard(root) as guard:
         _hold_manifests(guard)
-        with win32.PrivateMetadataLockPair(guard) as locks:
-            source = win32.materialize_owned_temp(
+        with win32._PrivateMetadataLockPair(guard) as locks:
+            source = win32._materialize_owned_temp(
                 guard,
                 kind=win32.OwnedTempKind.MANIFEST,
                 authority_key_hex=key,
@@ -3437,7 +3437,7 @@ def test_publication_twin_never_enters_single_link_disposition_compensation(
                 None,
             )
             source.expected_link_count = 2
-            residue = win32.handoff_to_residue_authority(guard, source)
+            residue = win32._handoff_to_residue_authority(guard, source)
             target_handle = residue.raw_handle
             original_close = api.close_handle
             original_clear = win32._clear_disposition
@@ -3461,7 +3461,7 @@ def test_publication_twin_never_enters_single_link_disposition_compensation(
             monkeypatch.setattr(api, "close_handle", fail_raw_close_once)
             monkeypatch.setattr(win32, "_clear_disposition", count_clear)
             with pytest.raises(win32.Win32MutationFailure) as captured:
-                win32.dispose_bound_residue(
+                win32._dispose_bound_residue(
                     guard,
                     residue,
                     locks=locks,
@@ -3476,7 +3476,7 @@ def test_publication_twin_never_enters_single_link_disposition_compensation(
             transfers = failure.take_authorities()
             assert len(transfers) == 1
             assert transfers[0].name_state == "delete_pending"
-            win32.release_terminal_bound_authority(residue)
+            win32._release_terminal_bound_authority(residue)
             assert close_attempts == 2
             assert not source_path.exists()
             assert survivor_path.read_bytes() == data
@@ -3503,14 +3503,14 @@ def test_disposition_compensation_requires_exact_planned_content_binding(
     )
     with _probe_guard(root) as guard:
         _hold_manifests(guard)
-        with win32.PrivateMetadataLockPair(guard) as locks:
-            source = win32.materialize_owned_temp(
+        with win32._PrivateMetadataLockPair(guard) as locks:
+            source = win32._materialize_owned_temp(
                 guard,
                 kind=win32.OwnedTempKind.MANIFEST,
                 authority_key_hex=key,
                 data=data,
             )
-            residue = win32.handoff_to_residue_authority(guard, source)
+            residue = win32._handoff_to_residue_authority(guard, source)
             if binding_fault == "byte_count":
                 residue.expected_byte_count = len(data) + 1
             else:
@@ -3539,7 +3539,7 @@ def test_disposition_compensation_requires_exact_planned_content_binding(
             monkeypatch.setattr(api, "close_handle", fail_raw_close_once)
             monkeypatch.setattr(win32, "_clear_disposition", count_clear)
             with pytest.raises(win32.Win32MutationFailure) as captured:
-                win32.dispose_bound_residue(
+                win32._dispose_bound_residue(
                     guard,
                     residue,
                     locks=locks,
@@ -3551,7 +3551,7 @@ def test_disposition_compensation_requires_exact_planned_content_binding(
             transfers = failure.take_authorities()
             assert len(transfers) == 1
             assert transfers[0].name_state == "delete_pending"
-            win32.release_terminal_bound_authority(residue)
+            win32._release_terminal_bound_authority(residue)
             assert close_attempts == 2
             assert not path.exists()
 
@@ -3573,14 +3573,14 @@ def test_disposition_compensation_postcheck_order_is_exact(
     )
     with _probe_guard(root) as guard:
         _hold_manifests(guard)
-        with win32.PrivateMetadataLockPair(guard) as locks:
-            source = win32.materialize_owned_temp(
+        with win32._PrivateMetadataLockPair(guard) as locks:
+            source = win32._materialize_owned_temp(
                 guard,
                 kind=win32.OwnedTempKind.MANIFEST,
                 authority_key_hex=key,
                 data=data,
             )
-            residue = win32.handoff_to_residue_authority(guard, source)
+            residue = win32._handoff_to_residue_authority(guard, source)
             target_handle = residue.raw_handle
             api = win32._api()
             original_close = api.close_handle
@@ -3686,7 +3686,7 @@ def test_disposition_compensation_postcheck_order_is_exact(
             monkeypatch.setattr(guard, "validate_all", track_guard)
             monkeypatch.setattr(locks, "validate", track_locks)
             with pytest.raises(win32.Win32MutationFailure) as captured:
-                win32.dispose_bound_residue(
+                win32._dispose_bound_residue(
                     guard,
                     residue,
                     locks=locks,
@@ -3706,7 +3706,7 @@ def test_disposition_compensation_postcheck_order_is_exact(
                 failure.effect is win32.MutationEffect.NO_CHANGE_PROVED
             )
             failure.take_authorities()
-            win32.release_terminal_bound_authority(residue)
+            win32._release_terminal_bound_authority(residue)
             assert path.read_bytes() == data
 
 
@@ -3725,11 +3725,11 @@ def test_delete_pending_close_fault_requires_immediate_terminal_release(
             key,
         )
     )
-    original_close = win32.Win32BoundFile.close
+    original_close = win32._Win32BoundFile.close
     injected = False
 
     def fail_delete_pending_close(
-        bound: win32.Win32BoundFile,
+        bound: win32._Win32BoundFile,
         *,
         reason: str = win32.FINAL_VERIFICATION_FAILED,
         operation: str = "bound_handle_close",
@@ -3744,27 +3744,27 @@ def test_delete_pending_close_fault_requires_immediate_terminal_release(
         original_close(bound, reason=reason, operation=operation)
 
     monkeypatch.setattr(
-        win32.Win32BoundFile,
+        win32._Win32BoundFile,
         "close",
         fail_delete_pending_close,
     )
     with _probe_guard(root) as guard:
         _hold_manifests(guard)
-        with win32.PrivateMetadataLockPair(guard) as locks:
-            source = win32.materialize_owned_temp(
+        with win32._PrivateMetadataLockPair(guard) as locks:
+            source = win32._materialize_owned_temp(
                 guard,
                 kind=win32.OwnedTempKind.MANIFEST,
                 authority_key_hex=key,
                 data=data,
             )
-            residue = win32.handoff_to_residue_authority(guard, source)
+            residue = win32._handoff_to_residue_authority(guard, source)
             win32._set_disposition(
                 residue,
                 reason=win32.RESIDUE_DISPOSITION_FAILED,
                 operation="delete_pending_test_disposition",
             )
             with pytest.raises(win32.Win32MutationFailure) as captured:
-                win32.complete_delete_pending_residue(guard, residue)
+                win32._complete_delete_pending_residue(guard, residue)
             failure = captured.value
             assert injected
             assert failure.reason == win32.RESIDUE_DISPOSITION_FAILED
@@ -3778,7 +3778,7 @@ def test_delete_pending_close_fault_requires_immediate_terminal_release(
             assert transfers[0].bound is residue
             assert transfers[0].terminal_release_first is True
             assert transfers[0].name_state == "delete_pending"
-            win32.release_terminal_bound_authority(
+            win32._release_terminal_bound_authority(
                 residue,
                 reason=failure.reason,
                 operation="delete_pending_test_terminal",
@@ -3803,7 +3803,7 @@ def test_lock_release_fault_is_retryable_without_split_unlock(
     _require_ntfs(root)
     api = win32._api()
     original_unlock = api.unlock_file
-    original_close = win32.Win32BoundFile.close
+    original_close = win32._Win32BoundFile.close
     injected = False
 
     def fail_unlock(*args: object) -> object:
@@ -3835,13 +3835,13 @@ def test_lock_release_fault_is_retryable_without_split_unlock(
 
     monkeypatch.setattr(api, "unlock_file", fail_unlock)
     monkeypatch.setattr(
-        win32.Win32BoundFile,
+        win32._Win32BoundFile,
         "close",
         fail_lock_close,
     )
     with _probe_guard(root) as guard:
         _hold_manifests(guard)
-        pair = win32.PrivateMetadataLockPair(guard)
+        pair = win32._PrivateMetadataLockPair(guard)
         pair.acquire()
         with pytest.raises(win32.Win32SafetyError) as captured:
             pair.release()
@@ -3852,7 +3852,7 @@ def test_lock_release_fault_is_retryable_without_split_unlock(
             monkeypatch.setattr(api, "unlock_file", original_unlock)
         else:
             monkeypatch.setattr(
-                win32.Win32BoundFile,
+                win32._Win32BoundFile,
                 "close",
                 original_close,
             )
@@ -3877,11 +3877,11 @@ def test_lock_pair_partial_acquire_unwinds_inner_then_outer(
 ) -> None:
     root = _archive_root(tmp_path)
     _require_ntfs(root)
-    original_close = win32.Win32BoundFile.close
+    original_close = win32._Win32BoundFile.close
     close_order: list[str] = []
 
     def record_lock_close(
-        bound: win32.Win32BoundFile,
+        bound: win32._Win32BoundFile,
         *,
         reason: str = win32.FINAL_VERIFICATION_FAILED,
         operation: str = "bound_handle_close",
@@ -3891,13 +3891,13 @@ def test_lock_pair_partial_acquire_unwinds_inner_then_outer(
         original_close(bound, reason=reason, operation=operation)
 
     monkeypatch.setattr(
-        win32.Win32BoundFile,
+        win32._Win32BoundFile,
         "close",
         record_lock_close,
     )
     with _probe_guard(root) as guard:
         _hold_manifests(guard)
-        pair = win32.PrivateMetadataLockPair(guard)
+        pair = win32._PrivateMetadataLockPair(guard)
         failing = getattr(pair, failing_lock)
         original_validate = failing.validate
         validate_calls = 0
@@ -3949,13 +3949,13 @@ def test_lock_pair_partial_acquire_inner_close_fault_terminalizes_first(
 ) -> None:
     root = _archive_root(tmp_path)
     _require_ntfs(root)
-    original_close = win32.Win32BoundFile.close
-    original_terminal_release = win32.release_terminal_bound_authority
+    original_close = win32._Win32BoundFile.close
+    original_terminal_release = win32._release_terminal_bound_authority
     events: list[str] = []
     close_injected = False
 
     def fault_inner_lock_close(
-        bound: win32.Win32BoundFile,
+        bound: win32._Win32BoundFile,
         *,
         reason: str = win32.FINAL_VERIFICATION_FAILED,
         operation: str = "bound_handle_close",
@@ -3982,7 +3982,7 @@ def test_lock_pair_partial_acquire_inner_close_fault_terminalizes_first(
         original_close(bound, reason=reason, operation=operation)
 
     def record_terminal_release(
-        bound: win32.Win32BoundFile,
+        bound: win32._Win32BoundFile,
         *,
         reason: str = win32.RESIDUE_DISPOSITION_FAILED,
         operation: str = "residue_terminal_authority_release",
@@ -3999,18 +3999,18 @@ def test_lock_pair_partial_acquire_inner_close_fault_terminalizes_first(
         )
 
     monkeypatch.setattr(
-        win32.Win32BoundFile,
+        win32._Win32BoundFile,
         "close",
         fault_inner_lock_close,
     )
     monkeypatch.setattr(
         win32,
-        "release_terminal_bound_authority",
+        "_release_terminal_bound_authority",
         record_terminal_release,
     )
     with _probe_guard(root) as guard:
         _hold_manifests(guard)
-        pair = win32.PrivateMetadataLockPair(guard)
+        pair = win32._PrivateMetadataLockPair(guard)
         original_validate = pair.object_manifest.validate
         validate_calls = 0
 
@@ -4046,7 +4046,7 @@ def test_lock_pair_partial_acquire_inner_close_fault_terminalizes_first(
         assert pair.object_manifest._locked is False
         assert guard._active_lock_kinds == set()
 
-        retry = win32.PrivateMetadataLockPair(
+        retry = win32._PrivateMetadataLockPair(
             guard,
             fail_immediately=True,
         )

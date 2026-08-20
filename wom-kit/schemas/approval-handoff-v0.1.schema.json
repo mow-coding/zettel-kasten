@@ -1,0 +1,88 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "wom-kit/approval-handoff/v0.1",
+  "title": "WOM-kit approval replay handoff",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "stage",
+    "next_command",
+    "ready",
+    "exact_replay_required",
+    "replay_scope",
+    "arguments",
+    "required_review_bindings",
+    "receipt_ref",
+    "command_rendered",
+    "command_executed"
+  ],
+  "properties": {
+    "schema": {"const": "wom-kit/approval-handoff/v0.1"},
+    "stage": {"type": "string", "minLength": 1},
+    "next_command": {"type": ["string", "null"]},
+    "ready": {"type": "boolean"},
+    "exact_replay_required": {"type": "boolean"},
+    "replay_scope": {"type": "string", "minLength": 1},
+    "arguments": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "option",
+          "required",
+          "value_source",
+          "json_pointer",
+          "value",
+          "sensitive",
+          "echoed"
+        ],
+        "properties": {
+          "option": {"type": "string", "pattern": "^--[a-z0-9-]+$"},
+          "required": {"type": "boolean"},
+          "value_source": {
+            "enum": ["json_pointer", "reuse_input", "operator_input"]
+          },
+          "json_pointer": {"type": ["string", "null"]},
+          "value": {},
+          "sensitive": {"type": "boolean"},
+          "echoed": {"type": "boolean"}
+        }
+      }
+    },
+    "required_review_bindings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["binding", "required", "value_json_pointer", "one_use"],
+        "properties": {
+          "binding": {"type": "string", "minLength": 1},
+          "required": {"type": "boolean"},
+          "value_json_pointer": {"type": ["string", "null"]},
+          "one_use": {"type": "boolean"}
+        }
+      }
+    },
+    "receipt_ref": {
+      "oneOf": [
+        {"type": "null"},
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["schema", "receipt_id", "receipt_sha256", "one_use", "consumed"],
+          "properties": {
+            "schema": {"type": "string", "minLength": 1},
+            "receipt_id": {"type": "string", "minLength": 1},
+            "receipt_sha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+            "one_use": {"const": true},
+            "consumed": {"type": "boolean"}
+          }
+        }
+      ]
+    },
+    "command_rendered": {"const": false},
+    "command_executed": {"const": false}
+  }
+}

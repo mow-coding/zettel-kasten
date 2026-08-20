@@ -1,16 +1,16 @@
 # Notion Connection Plan
 
-Status: v0.3.142 one-click Notion connection contract plus OAuth preflight checkpoint
+Status: v0.4.0 read-only connection product contract; recovery is fixed closed
 Date: 2026-06-22
 
 `archive notion-connection-plan` is a read-only product-contract command for
 the Notion connection experience.
 
-It exists because the live recovery capability can be technically correct while
-the human experience still fails. A beginner should not have to create an
-internal integration token, remember where the token file is, assemble terminal
-commands, manually share pages with the connection, and then debug a wall of
-failed provider checks.
+It preserves the target connection experience without claiming that live
+recovery exists in v0.4.0. A beginner should not have to create an internal
+integration token, remember a token file, assemble terminal commands, or debug
+a wall of provider checks; the current product stops before all credential and
+provider access.
 
 ## Command
 
@@ -27,8 +27,8 @@ notion-one-click-connection-plan
 
 ## Product Diagnosis
 
-The current env/file token path remains useful for power users and local
-testing, but it is not the right default experience for the target user.
+Historical env/file token paths are not executable recovery authority in
+v0.4.0. Do not supply one to the current dry-run preview.
 
 The target product experience is:
 
@@ -133,7 +133,7 @@ starts no OAuth, reads no credential value, and echoes no credential refs,
 tokens, provider URLs, local paths, raw provider responses, page titles, page
 bodies, account ids, or emails.
 
-`notion-recover` still keeps raw Notion errors redacted. It now preserves the
-safe classification layer so a human can tell whether the next action is token
-repair, page-share/permission repair, waiting for rate limits, checking the
-network, or retrying after provider downtime.
+`notion-recover --dry-run` preserves the historical safe failure taxonomy for
+planning only. Its implicit executor and approval return
+`compound_exact_human_approval_binding_required` before credential/private
+target reads or provider calls and create no fixture or receipt.

@@ -1,6 +1,6 @@
 # Canonical zet Revision Plan
 
-Status: read-only single-zet planning plus a separate approved CLI writer in v0.3.235
+Status: v0.4.0 read-only single-zet planning; v0.3.235 writer evidence is historical
 
 `zet-revision-plan` is the first half of WOM's ordinary canonical correction
 workflow. It compares one complete private revision proposal with the current
@@ -87,10 +87,10 @@ title, abstract, body, custom frontmatter value, reviewer id, provider URL,
 absolute path, or secret value. It calls no model, provider, credential store,
 object store, or database.
 
-## Approved Writer Handoff
+## Writer Preview And Current Stop
 
-Since v0.3.235, a green plan can be handed to CLI `zet-revision-write`. Keep
-these exact values:
+A green plan can be handed to CLI `zet-revision-write --dry-run`. Keep these
+exact values:
 
 ```text
 canonical.sha256
@@ -99,10 +99,11 @@ proposal.semantic_sha256
 plan_digest
 ```
 
-The writer first creates a second no-write preview that binds `revision_at` and
-the exact writer-produced candidate. Approval must reuse that preview's
-`write_plan.actual_digest`, a safe reviewer id, and explicit review
-affirmations. See [Canonical zet Revision Write](zet-revision-write.md).
+The writer creates a second no-write preview that binds `revision_at` and the
+exact writer-produced candidate. In v0.4.0 approval returns
+`compound_exact_human_approval_binding_required` before private target reads or
+mutation and writes no canonical byte, lock, snapshot, or receipt. See
+[Canonical zet Revision Write](zet-revision-write.md).
 
 MCP remains read-only and exposes no revision writer.
 
@@ -112,5 +113,5 @@ A green plan means only that the private proposal is structurally safe and
 bound to the current canonical bytes for human review. It does not mean the
 correction is true, approved, applied, understood by a model, or safe to copy
 into the canonical file by hand. Machine output reports
-`approval_contract.approved_write_implemented: true`, but actual authority
-still requires the separate writer dry-run and explicit CLI approval.
+the historical field `approval_contract.approved_write_implemented: true`, but
+v0.4.0 fixed-close policy overrides it; only writer dry-run is current.

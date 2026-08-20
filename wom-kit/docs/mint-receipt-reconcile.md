@@ -1,19 +1,27 @@
 # Mint-Receipt Reconcile
 
-`archive remint-reconcile` honestly reconciles a canonical zet with its mint
-receipt after the canonical file drifts on disk — a CRLF/BOM re-checkout under
-`core.autocrlf`, or a human content edit — by re-issuing the receipt's recorded
-sha256 values. It exists because a mint receipt records the sha256 of the
-canonical zet at mint time; if the bytes later change, `doctor` and `retire-draft`
-correctly report a sha mismatch, and there was previously no honest, audited way
-to update that record.
+Current v0.4.0 boundary: `archive remint-reconcile` and
+`archive retire-draft-reconcile` classify drift and preview exact effects only.
+Approval returns `compound_exact_human_approval_binding_required` before
+private target read or mutation. It rewrites no receipt or canonical byte and
+creates no audit receipt. Historical reconcile receipts remain readable.
 
-## Governing doctrine (R0)
+## Current Command
+
+```text
+archive remint-reconcile <archive-root> (--zettel-id <id> | --path <rel>) --dry-run [--strip-bom] [--diagnostic-only] [--format text|json]
+archive retire-draft-reconcile <archive-root> --zettel-id <id> --dry-run [--strip-bom] [--format text|json]
+```
+
+Dry-run preserves strict drift classification, diagnostics, and the content-
+free human-review plan. Those results grant no mutation authority.
+
+## Historical v0.3 Governing Doctrine (R0)
 
 Reconcile NEVER masks corruption, and classification NEVER waives human review.
 
-- Every `--approve` shows you the current on-disk canonical content and requires
-  `--reviewed-by`. No computed drift class unlocks a human-skipped path.
+- Historical approval showed the current on-disk canonical content and required
+  a reviewer. No computed drift class replaced human review.
 - Classification only DECORATES your decision (it names which fields changed and
   which acknowledgment is required). It never replaces it.
 - The default class is the stricter `content_change`. `format_drift` is granted
@@ -21,7 +29,7 @@ Reconcile NEVER masks corruption, and classification NEVER waives human review.
 - Hard refusals run before any classification. A state that cannot be honestly
   reconciled is refused; it is never fixed.
 
-### The trust limit (read this before you `--approve` a `content_change`)
+### Historical trust limit for a v0.3 `content_change`
 
 A reconciled receipt is only as trustworthy as the reviewer who ran it. When you
 approve a `content_change` with `--content-changed-ack`, reconcile recomputes
@@ -41,11 +49,11 @@ machine-checkable claim (bytes differ only by newline/BOM); a `content_change`
 reconcile does not. Treat the reviewer and reviewed-plan digest together as the
 actual warrant.
 
-## Command
+## Historical v0.3 Command Shape
 
 ```
 archive remint-reconcile <archive-root> (--zettel-id <id> | --path <rel>)
-        [--dry-run | --approve]
+        --dry-run
         [--reviewed-by <actor>]
         [--content-changed-ack]
         [--reviewed-plan-sha256 <sha256>]
@@ -54,11 +62,10 @@ archive remint-reconcile <archive-root> (--zettel-id <id> | --path <rel>)
         [--format text|json]
 ```
 
-- `--dry-run` (the default) classifies and previews with zero writes.
-- `--approve` re-issues the receipt after review; it requires `--reviewed-by`.
-- `--content-changed-ack` is required to approve a `content_change`.
-- `--reviewed-plan-sha256` is also required for `content_change`; copy it from
-  the reviewed dry-run so approval is bound to exactly that evidence state.
+- `--dry-run` classifies and previews with zero writes.
+- In v0.4.0, reviewer, acknowledgment, and reviewed-plan values do not grant
+  authority; approval fails with
+  `compound_exact_human_approval_binding_required`.
 - `--strip-bom` (opt-in) removes a single leading UTF-8 BOM; see below.
 - `--diagnostic-only` is dry-run JSON only. It omits canonical body text and
   frontmatter values while keeping drift and body-diff diagnostics; see below.
@@ -219,17 +226,16 @@ dirty. The `drift_class` enum is unchanged: `format_drift` or `content_change`.
 
 ## Retire-draft reconcile (sibling command)
 
-`archive retire-draft-reconcile <archive-root> --zettel-id <id> [--dry-run |
---approve] [--reviewed-by <actor>] [--content-changed-ack]
-[--reviewed-plan-sha256 <sha256>] [--strip-bom]` is the
+`archive retire-draft-reconcile <archive-root> --zettel-id <id> --dry-run
+[--strip-bom]` is the
 sibling for a **retire-draft** receipt, which binds four raw-byte refs
 (`source` / `target` / `mint_receipt` / `snapshot`) rather than the mint receipt's
 three-sha shape. It is a separate command (not a flag on `remint-reconcile`) so the
 safety-critical mint classifier stays single-purpose.
 
-Honesty model (identical to mint reconcile): it recomputes the four refs from
-current on-disk bytes, shows the on-disk content, is approval-gated, and requires
-`--content-changed-ack` when ANY ref is `content_change`. Per-ref classification:
+Honesty model (identical to mint reconcile): dry-run recomputes the four refs
+from current on-disk bytes and shows the on-disk content. In v0.4.0 it grants
+no write authority. Per-ref classification:
 
 - `target` / `snapshot` (text refs): inherit the Item 1 discipline. A ref is
   `format_drift` only when the shared mint-reconcile classifier proves the
@@ -279,8 +285,8 @@ already strips a leading BOM), so `doctor`'s format-drift branch still matches.
 
 ### `--strip-bom` dry-run parity (v0.3.172)
 
-`--strip-bom` on a **dry-run** now previews the same strip-intent metadata an `--approve`
-run records, so an operator can see the outcome before approving. When a leading BOM is
+`--strip-bom` on a **dry-run** previews the historical strip-intent metadata, so
+an operator can inspect the outcome without approving. When a leading BOM is
 present the preview reports `bom_stripped: true` and `bom_strip_note: "would strip one
 leading UTF-8 BOM from canonical"`; with no BOM it reports `bom_stripped: false` and
 `"no leading BOM present; nothing stripped"` — a documented no-op that never previews a
@@ -313,15 +319,15 @@ It omits `current_canonical_text` and the full `frontmatter_field_changes` value
 lets an operator inspect which residual body-diff category they have without copying the
 canonical body into a JSON transcript.
 
-`--diagnostic-only` is refused with `--approve`. Approval must remain review-visible: the
-operator has to see the current on-disk content before recomputing receipt hashes.
+`--diagnostic-only` remains a redacted dry-run only. No v0.4.0 path recomputes
+receipt hashes.
 
 For a BOM finding, use the diagnostic-only command first. If it reports
 `format_drift`, `bom_stripped: true`, no blockers, `body_changed: false`, and no
 content-change acknowledgment requirement, repeat the dry-run without
-`--diagnostic-only` and review its current content/frontmatter before approving.
-Stop on `content_change`, a body change, any blocker, or an acknowledgment
-requirement. A separate retired-draft mismatch has its own dry-run and decision;
+`--diagnostic-only` and review its current content/frontmatter, then stop.
+Never treat the result as approval authority. A separate retired-draft mismatch
+has its own dry-run and decision;
 one reconcile result never authorizes the other.
 
 ## Scope note: contract-preview vs run-outcome (adapter honesty)

@@ -5,6 +5,13 @@ This document is not proof of a live credential intake, provider recovery,
 pull-request review, CI, tag, GitHub Release, wheel, fresh install, or human
 acceptance.
 
+Current v0.4.0 override: `notion-page-recovery` and `notion-recover` are
+content-free preview/audit routes only. Approval returns
+`compound_exact_human_approval_binding_required` before credential, private
+request, provider, or target reads; it starts no provider recovery and writes
+no recovery result. The v0.3.311 execution details below are historical
+evidence, not current run instructions.
+
 ## Current state, without shortcuts
 
 | Layer | Current checkpoint |
@@ -191,9 +198,9 @@ real OS call.
 
 | Capability surface | Intended role | Current source status |
 | --- | --- | --- |
-| Human-only adoption | `credential-adopt --interactive --dry-run` reviews safe helper task/reason copy plus fixed WOM security copy; `--interactive --approve --expected-request-sha256 ...` opens the separate echo-disabled Windows console only for first enrollment or explicit `--replace-existing`. A matching registration skips the prompt only after exact store, secret-fingerprint, and current-anchor revalidation. Metadata alone can never set `persisted: true`. | Parser, spawned worker, Unicode visible-console input, authenticated receipt composition, idempotent no-prompt reuse gate, and fixed privacy projection are implemented and tested with injected dependencies. |
+| Human-only adoption | `credential-adopt --interactive --dry-run` reviews safe helper task/reason copy plus fixed WOM security copy; `--interactive --approve --expected-request-sha256 ...` opens the separate echo-disabled Windows console only for first enrollment or explicit `--replace-existing`. In v0.4.0 a matching existing registration fixed-closes before saved-secret read, provider validation, or registry evolution; caller approval cannot silently reuse it. Metadata alone can never set `persisted: true`. | Parser, spawned worker, Unicode visible-console input, authenticated receipt composition, fixed existing-registration boundary, and privacy projection are implemented and tested with injected dependencies. |
 | Authenticated listing | `credential-secure-list` lists unauthenticated local metadata without an OS read; `--verify` reads only the exact archive authentication-key target and verifies receipt/lifecycle MACs. It never enumerates vault entries or reads a provider credential. | Parser, registry, and exact-key verification are implemented. |
-| Default lifecycle selection | `credential-lifecycle --dry-run` returns an authenticated plan; `--approve --expected-plan-sha256 ... --reviewed-by ...` records one human-selected current/default credential. Other valid credentials become `legacy_valid` or `revocation_pending`; WOM never deletes or revokes them automatically. | Parser and digest-bound lifecycle write are implemented. |
+| Default lifecycle selection | `credential-lifecycle --dry-run` returns an authenticated plan. In v0.4.0 the legacy `--approve --expected-plan-sha256 ... --reviewed-by ...` writer is fixed closed before archive-key or credential access because a digest and reviewer label are not exact-human write authority. Historical v0.3 receipts remain auditable; WOM still never deletes or revokes credentials automatically. | Read-only planning remains implemented; the approval branch returns `compound_exact_human_approval_binding_required` and writes nothing. |
 
 The exact released artifact remains the final parser authority. No operator
 should paste a PAT into any command or AI chat: the approved path accepts it

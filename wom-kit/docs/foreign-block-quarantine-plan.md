@@ -64,14 +64,15 @@ Those paths are not created by `foreign-block-quarantine`.
 
 ## Approved Quarantine Write
 
-v0.2.32 adds the next CLI-only step:
+The historical v0.2.32 writer is preview-only in v0.4.0:
 
 ```bash
 archive quarantine-foreign-block <archive-root> --plan <json-file> --dry-run --format json
-archive quarantine-foreign-block <archive-root> --plan <json-file> --approve --reviewed-by <actor-id> --format json
 ```
 
-Approved mode writes only:
+Approval returns `compound_exact_human_approval_binding_required` before private
+plan/target reads or mutation and writes none of the following historical
+artifacts:
 
 ```text
 quarantine/foreign-blocks/<case-id>/quarantine-case.json

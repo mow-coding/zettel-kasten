@@ -53,11 +53,10 @@ archive zet-abstract-backfill-plan <archive-root> --proposal .wom-scratch/abstra
 archive zet-abstract-backfill-write <archive-root> --proposal .wom-scratch/abstract-backfill/<private-name>.jsonl --expected-proposal-sha256 <sha256> --dry-run --progress --format json
 ```
 
-사람 검토가 끝난 뒤에만 다음 승인을 실행할 수 있습니다.
-
-```text
-archive zet-abstract-backfill-write <archive-root> --proposal .wom-scratch/abstract-backfill/<private-name>.jsonl --expected-proposal-sha256 <sha256> --approve --reviewed-by person:<reviewer> --affirm-abstracts-reviewed --progress --format json
-```
+미리보기에서 멈춥니다. v0.4.0 writer에는 여러 대상과 효과 전체를 묶는
+exact-human binding이 없습니다. 승인 요청은 비공개 대상을 읽거나 canonical
+byte, journal, snapshot, lock, receipt를 쓰기 전에
+`compound_exact_human_approval_binding_required`로 실패합니다.
 
 ## 4. 검증하고 멈추기
 
@@ -67,10 +66,10 @@ archive abstract-freshness <archive-root> --dry-run --max-items 3 --progress --f
 archive zet-abstract-backfill-receipt-audit <archive-root> --dry-run --max-receipts 5000 --max-locks 5000 --max-problems 20 --progress --format json
 ```
 
-누락 초록 데이터가 정확히 3건 줄었는지, 세 초록 데이터/본문 짝이 `fresh`인지,
-보완 영수증 이력이 정상인지 확인합니다. 여기서 멈추고 비공개 결과 해시,
-실행 시간, 사람 검토 노력, 이해하기 어려운 표현, 차단 항목을 보고합니다.
-이 표본을 곧바로 대량 작업으로 확대하지 않습니다.
+검토한 세 후보가 여전히 누락 상태이고 새 보완 영수증이 생기지 않았는지
+확인합니다. 여기서 멈추고 비공개 계획 해시, 실행 시간, 사람 검토 노력,
+이해하기 어려운 표현, 차단 항목을 보고합니다. 이 검토 전용 표본을 곧바로
+대량 작업으로 확대하지 않습니다.
 
 ## 안전 경계
 

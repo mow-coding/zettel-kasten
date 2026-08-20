@@ -783,8 +783,8 @@ def _close_raw_handle_with_terminal_fallback(
         raise
 
 
-def release_terminal_bound_authority(
-    bound: Win32BoundFile,
+def _release_terminal_bound_authority(
+    bound: _Win32BoundFile,
     *,
     reason: str = RESIDUE_DISPOSITION_FAILED,
     operation: str = "residue_terminal_authority_release",
@@ -1042,7 +1042,7 @@ def approval_support_status(
     return environment
 
 
-class Win32UnverifiedCreatedFile:
+class _Win32UnverifiedCreatedFile:
     """Exact CREATE_NEW handle retained when post-create proof fails."""
 
     def __init__(self, *, path: Path, handle: int) -> None:
@@ -1094,7 +1094,7 @@ class Win32UnverifiedCreatedFile:
             self._handle = None
 
 
-class Win32BoundFile:
+class _Win32BoundFile:
     """One retained file handle bound to an immutable file identity."""
 
     def __init__(
@@ -1143,7 +1143,7 @@ class Win32BoundFile:
 
     def inherit_proved_content(
         self,
-        source: "Win32BoundFile",
+        source: "_Win32BoundFile",
         *,
         reason: str,
     ) -> None:
@@ -1427,7 +1427,7 @@ class Win32BoundFile:
         )
         self._handle = None
 
-    def __enter__(self) -> "Win32BoundFile":
+    def __enter__(self) -> "_Win32BoundFile":
         return self
 
     def __exit__(self, *exc_info: object) -> bool:
@@ -1443,7 +1443,7 @@ class Win32BoundFile:
             self._handle = None
 
 
-class PrivateMetadataMutationGuard:
+class _PrivateMetadataMutationGuard:
     """Retain exact non-reparse directory identities for one approval."""
 
     def __init__(self, archive_root: Path | str) -> None:
@@ -1456,7 +1456,7 @@ class PrivateMetadataMutationGuard:
     def _for_low_level_ntfs_probe(
         cls,
         archive_root: Path | str,
-    ) -> "PrivateMetadataMutationGuard":
+    ) -> "_PrivateMetadataMutationGuard":
         """Construct a guard without applying the full support decision."""
 
         instance = cls.__new__(cls)
@@ -1736,7 +1736,7 @@ class PrivateMetadataMutationGuard:
             self._order.remove(key)
         self._closed = True
 
-    def __enter__(self) -> "PrivateMetadataMutationGuard":
+    def __enter__(self) -> "_PrivateMetadataMutationGuard":
         return self
 
     def __exit__(self, *exc_info: object) -> bool:
@@ -1754,7 +1754,7 @@ class PrivateMetadataMutationGuard:
 
 
 def _open_bound_file_absolute(
-    guard: PrivateMetadataMutationGuard,
+    guard: _PrivateMetadataMutationGuard,
     path: Path,
     *,
     profile: FileHandleProfile,
@@ -1762,7 +1762,7 @@ def _open_bound_file_absolute(
     expected_link_count: int | None,
     reason: str,
     operation: str,
-) -> Win32BoundFile:
+) -> _Win32BoundFile:
     candidate = guard.require_parent_held(path)
     guard.validate_all()
     handle = _open_raw(
@@ -1794,7 +1794,7 @@ def _open_bound_file_absolute(
         except Win32SafetyError:
             pass
         raise
-    return Win32BoundFile(
+    return _Win32BoundFile(
         path=candidate,
         handle=handle,
         profile=profile,
@@ -1803,14 +1803,14 @@ def _open_bound_file_absolute(
     )
 
 
-def open_bound_file(
-    guard: PrivateMetadataMutationGuard,
+def _open_bound_file(
+    guard: _PrivateMetadataMutationGuard,
     relative_path: str,
     *,
     profile: FileHandleProfile = FileHandleProfile.AUTHORITY_READ,
     expected_link_count: int | None = 1,
     reason: str = AUTHORITY_PATH_UNSAFE,
-) -> Win32BoundFile:
+) -> _Win32BoundFile:
     """Open one existing archive-relative regular file through the guard."""
 
     path = _archive_path(guard.archive_root, relative_path)
@@ -1826,14 +1826,14 @@ def open_bound_file(
 
 
 def _reopen_and_compare(
-    guard: PrivateMetadataMutationGuard,
-    bound: Win32BoundFile,
+    guard: _PrivateMetadataMutationGuard,
+    bound: _Win32BoundFile,
     *,
     profile: FileHandleProfile,
     expected_link_count: int | None,
     reason: str,
     operation: str,
-) -> Win32BoundFile:
+) -> _Win32BoundFile:
     current = bound.information(
         reason=reason,
         operation=f"{operation}_held",
@@ -1865,7 +1865,7 @@ def _reopen_and_compare(
                 operation=f"{operation}_reopen_refusal_close",
             )
         except Win32SafetyError:
-            release_terminal_bound_authority(
+            _release_terminal_bound_authority(
                 verification,
                 reason=reason,
                 operation=f"{operation}_reopen_refusal_terminal",
@@ -1875,8 +1875,8 @@ def _reopen_and_compare(
 
 
 def validate_bound_path(
-    guard: PrivateMetadataMutationGuard,
-    bound: Win32BoundFile,
+    guard: _PrivateMetadataMutationGuard,
+    bound: _Win32BoundFile,
     *,
     expected_link_count: int | None = None,
     reason: str = FINAL_VERIFICATION_FAILED,
@@ -1908,7 +1908,7 @@ def validate_bound_path(
                 operation="validate_bound_path_verifier_close",
             )
         except Win32SafetyError:
-            release_terminal_bound_authority(
+            _release_terminal_bound_authority(
                 verification,
                 reason=reason,
                 operation="validate_bound_path_verifier_terminal",
@@ -1917,8 +1917,8 @@ def validate_bound_path(
 
 
 def _prove_exact_bound_name(
-    guard: PrivateMetadataMutationGuard,
-    bound: Win32BoundFile,
+    guard: _PrivateMetadataMutationGuard,
+    bound: _Win32BoundFile,
     *,
     reason: str,
     operation_prefix: str,
@@ -1958,8 +1958,8 @@ def _prove_exact_bound_name(
 
 
 def _prove_exact_bound_name_after_cancellation(
-    guard: PrivateMetadataMutationGuard,
-    bound: Win32BoundFile,
+    guard: _PrivateMetadataMutationGuard,
+    bound: _Win32BoundFile,
     *,
     reason: str,
 ) -> None:
@@ -1974,7 +1974,7 @@ def _prove_exact_bound_name_after_cancellation(
 
 
 def _prove_failed_disposition_same_handle_no_change(
-    bound: Win32BoundFile,
+    bound: _Win32BoundFile,
     *,
     reason: str,
 ) -> None:
@@ -2014,8 +2014,8 @@ def _prove_failed_disposition_same_handle_no_change(
 
 
 def _prove_failed_disposition_name_guard_locks(
-    guard: PrivateMetadataMutationGuard,
-    bound: Win32BoundFile,
+    guard: _PrivateMetadataMutationGuard,
+    bound: _Win32BoundFile,
     *,
     locks: Any,
     reason: str,
@@ -2037,7 +2037,7 @@ def _prove_failed_disposition_name_guard_locks(
 
 
 def path_is_absent(
-    guard: PrivateMetadataMutationGuard,
+    guard: _PrivateMetadataMutationGuard,
     path: Path | str,
     *,
     reason: str,
@@ -2074,8 +2074,8 @@ def path_is_absent(
     return False
 
 
-def create_guarded_directory(
-    guard: PrivateMetadataMutationGuard,
+def _create_guarded_directory(
+    guard: _PrivateMetadataMutationGuard,
     path: Path | str,
 ) -> Win32FileIdentity:
     """Create one expected missing child and immediately extend the guard."""
@@ -2118,8 +2118,8 @@ def create_guarded_directory(
     return identity
 
 
-def bootstrap_object_manifest_lock_directories(
-    guard: PrivateMetadataMutationGuard,
+def _bootstrap_object_manifest_lock_directories(
+    guard: _PrivateMetadataMutationGuard,
 ) -> tuple[Win32FileIdentity, Win32FileIdentity]:
     """Bind or safely create the object-manifest lock's exact parent chain.
 
@@ -2171,11 +2171,11 @@ def _owned_temp_checkpoint(operation: str) -> MutationCheckpoint:
 
 
 def _create_owned_temp_authority(
-    guard: PrivateMetadataMutationGuard,
+    guard: _PrivateMetadataMutationGuard,
     *,
     path: Path,
     role: str,
-) -> Win32BoundFile:
+) -> _Win32BoundFile:
     """CREATE_NEW while preserving the exact raw handle on later refusal."""
 
     try:
@@ -2206,7 +2206,7 @@ def _create_owned_temp_authority(
             winerror=exc.winerror,
         ) from exc
 
-    created = Win32UnverifiedCreatedFile(
+    created = _Win32UnverifiedCreatedFile(
         path=candidate,
         handle=handle,
     )
@@ -2242,7 +2242,7 @@ def _create_owned_temp_authority(
             ),
             winerror=exc.winerror,
         ) from exc
-    return Win32BoundFile(
+    return _Win32BoundFile(
         path=candidate,
         handle=created.detach(),
         profile=FileHandleProfile.MUTATION_SOURCE,
@@ -2251,15 +2251,15 @@ def _create_owned_temp_authority(
     )
 
 
-def materialize_owned_temp(
-    guard: PrivateMetadataMutationGuard,
+def _materialize_owned_temp(
+    guard: _PrivateMetadataMutationGuard,
     *,
     kind: OwnedTempKind,
     authority_key_hex: str,
     data: bytes | Iterable[bytes],
     expected_byte_count: int | None = None,
     expected_sha256: str | None = None,
-) -> Win32BoundFile:
+) -> _Win32BoundFile:
     """Exclusive-create, stream, flush, and verify one allow-listed temp.
 
     A bytes input derives its expected length and digest directly.  A streaming
@@ -2355,9 +2355,9 @@ def materialize_owned_temp(
 
 
 def _lock_create_or_open(
-    guard: PrivateMetadataMutationGuard,
+    guard: _PrivateMetadataMutationGuard,
     kind: CoordinationLockKind,
-) -> tuple[Win32BoundFile, bool]:
+) -> tuple[_Win32BoundFile, bool]:
     path = _archive_path(guard.archive_root, kind.value)
     try:
         return (
@@ -2410,12 +2410,12 @@ def _lock_create_or_open(
     )
 
 
-class PersistentCoordinationLock:
+class _PersistentCoordinationLock:
     """One zero-byte, identity-bound persistent ``LockFileEx`` lock."""
 
     def __init__(
         self,
-        guard: PrivateMetadataMutationGuard,
+        guard: _PrivateMetadataMutationGuard,
         kind: CoordinationLockKind,
         *,
         fail_immediately: bool = False,
@@ -2423,7 +2423,7 @@ class PersistentCoordinationLock:
         self.guard = guard
         self.kind = kind
         self.fail_immediately = fail_immediately
-        self.bound: Win32BoundFile | None = None
+        self.bound: _Win32BoundFile | None = None
         self.created = False
         self._overlapped: Any = None
         self._locked = False
@@ -2437,7 +2437,7 @@ class PersistentCoordinationLock:
             )
         return self.bound.identity
 
-    def acquire(self) -> "PersistentCoordinationLock":
+    def acquire(self) -> "_PersistentCoordinationLock":
         if self.bound is not None:
             raise _closed_error(
                 LOCK_IDENTITY_CHANGED,
@@ -2498,7 +2498,7 @@ class PersistentCoordinationLock:
                     operation="coordination_lock_failed_acquire_close",
                 )
             except Win32SafetyError:
-                release_terminal_bound_authority(
+                _release_terminal_bound_authority(
                     bound,
                     reason=LOCK_IDENTITY_CHANGED,
                     operation="coordination_lock_failed_acquire_terminal",
@@ -2569,7 +2569,7 @@ class PersistentCoordinationLock:
 
         bound = self.bound
         if bound is not None:
-            release_terminal_bound_authority(
+            _release_terminal_bound_authority(
                 bound,
                 reason=LOCK_IDENTITY_CHANGED,
                 operation="coordination_lock_terminal_release",
@@ -2582,7 +2582,7 @@ class PersistentCoordinationLock:
         self._overlapped = None
         self._locked = False
 
-    def __enter__(self) -> "PersistentCoordinationLock":
+    def __enter__(self) -> "_PersistentCoordinationLock":
         return self.acquire()
 
     def __exit__(self, *exc_info: object) -> bool:
@@ -2590,29 +2590,29 @@ class PersistentCoordinationLock:
         return False
 
 
-class PrivateMetadataLockPair:
+class _PrivateMetadataLockPair:
     """Acquire object-manifest then private-manifest locks, release reverse."""
 
     def __init__(
         self,
-        guard: PrivateMetadataMutationGuard,
+        guard: _PrivateMetadataMutationGuard,
         *,
         fail_immediately: bool = False,
     ) -> None:
         self.guard = guard
-        self.object_manifest = PersistentCoordinationLock(
+        self.object_manifest = _PersistentCoordinationLock(
             guard,
             CoordinationLockKind.OBJECT_MANIFEST,
             fail_immediately=fail_immediately,
         )
-        self.private_metadata = PersistentCoordinationLock(
+        self.private_metadata = _PersistentCoordinationLock(
             guard,
             CoordinationLockKind.PRIVATE_METADATA,
             fail_immediately=fail_immediately,
         )
         self._acquired = False
 
-    def acquire(self) -> "PrivateMetadataLockPair":
+    def acquire(self) -> "_PrivateMetadataLockPair":
         if self._acquired:
             raise _closed_error(
                 LOCK_IDENTITY_CHANGED,
@@ -2674,7 +2674,7 @@ class PrivateMetadataLockPair:
         self.object_manifest.terminal_release_after_failure()
         self._acquired = False
 
-    def __enter__(self) -> "PrivateMetadataLockPair":
+    def __enter__(self) -> "_PrivateMetadataLockPair":
         return self.acquire()
 
     def __exit__(self, *exc_info: object) -> bool:
@@ -2683,7 +2683,7 @@ class PrivateMetadataLockPair:
 
 
 def _set_disposition(
-    bound: Win32BoundFile,
+    bound: _Win32BoundFile,
     *,
     reason: str,
     operation: str,
@@ -2704,7 +2704,7 @@ def _set_disposition(
 
 
 def _clear_disposition(
-    bound: Win32BoundFile,
+    bound: _Win32BoundFile,
     *,
     reason: str,
     operation: str,
@@ -2724,7 +2724,7 @@ def _clear_disposition(
 
 
 def _authority_role_for_path(
-    guard: PrivateMetadataMutationGuard,
+    guard: _PrivateMetadataMutationGuard,
     path: Path,
 ) -> str:
     try:
@@ -2761,16 +2761,16 @@ def _authority_role_for_path(
     return "unclassified"
 
 
-def handoff_to_residue_authority(
-    guard: PrivateMetadataMutationGuard,
-    current: Win32BoundFile,
+def _handoff_to_residue_authority(
+    guard: _PrivateMetadataMutationGuard,
+    current: _Win32BoundFile,
     *,
     reason: str = FINAL_VERIFICATION_FAILED,
-) -> Win32BoundFile:
+) -> _Win32BoundFile:
     """Bridge narrow/transitional authority to DELETE/share-read authority."""
 
-    transitional: Win32BoundFile | None = None
-    residue: Win32BoundFile | None = None
+    transitional: _Win32BoundFile | None = None
+    residue: _Win32BoundFile | None = None
     role = _authority_role_for_path(guard, current.path)
     try:
         guard.require_lock_pair()
@@ -2848,7 +2848,7 @@ def handoff_to_residue_authority(
         raise
     except Win32SafetyError as exc:
         authorities: list[RetainedAuthorityTransfer] = []
-        retained: list[Win32BoundFile] = []
+        retained: list[_Win32BoundFile] = []
         for candidate in (current, transitional, residue):
             if (
                 candidate is not None
@@ -2876,13 +2876,13 @@ def handoff_to_residue_authority(
     return residue
 
 
-def handoff_to_narrow_authority(
-    guard: PrivateMetadataMutationGuard,
-    transitional: Win32BoundFile,
+def _handoff_to_narrow_authority(
+    guard: _PrivateMetadataMutationGuard,
+    transitional: _Win32BoundFile,
     *,
     reason: str = FINAL_VERIFICATION_FAILED,
-) -> Win32BoundFile:
-    narrow: Win32BoundFile | None = None
+) -> _Win32BoundFile:
+    narrow: _Win32BoundFile | None = None
     role = _authority_role_for_path(guard, transitional.path)
     try:
         guard.require_lock_pair()
@@ -2950,18 +2950,18 @@ def handoff_to_narrow_authority(
     return narrow
 
 
-def handoff_same_identity_twin_to_residue(
-    guard: PrivateMetadataMutationGuard,
-    survivor: Win32BoundFile,
-    residue_name: Win32BoundFile,
+def _handoff_same_identity_twin_to_residue(
+    guard: _PrivateMetadataMutationGuard,
+    survivor: _Win32BoundFile,
+    residue_name: _Win32BoundFile,
     *,
     expected_bytes: bytes,
     reason: str = FINAL_VERIFICATION_FAILED,
-) -> tuple[Win32BoundFile, Win32BoundFile]:
+) -> tuple[_Win32BoundFile, _Win32BoundFile]:
     """Bridge two narrow link-count-two names to survivor+DELETE authority."""
 
-    transitional: Win32BoundFile | None = None
-    residue: Win32BoundFile | None = None
+    transitional: _Win32BoundFile | None = None
+    residue: _Win32BoundFile | None = None
     survivor_role = _authority_role_for_path(guard, survivor.path)
     residue_role = _authority_role_for_path(guard, residue_name.path)
     try:
@@ -3119,9 +3119,9 @@ def handoff_same_identity_twin_to_residue(
     return transitional, residue
 
 
-def dispose_bound_residue(
-    guard: PrivateMetadataMutationGuard,
-    residue: Win32BoundFile,
+def _dispose_bound_residue(
+    guard: _PrivateMetadataMutationGuard,
+    residue: _Win32BoundFile,
     *,
     locks: Any,
 ) -> None:
@@ -3394,9 +3394,9 @@ def dispose_bound_residue(
         ) from exc
 
 
-def complete_delete_pending_residue(
-    guard: PrivateMetadataMutationGuard,
-    residue: Win32BoundFile,
+def _complete_delete_pending_residue(
+    guard: _PrivateMetadataMutationGuard,
+    residue: _Win32BoundFile,
 ) -> None:
     """Close an exact retained handle already marked delete-pending."""
 
@@ -3479,9 +3479,9 @@ def complete_delete_pending_residue(
         ) from exc
 
 
-def dispose_unverified_created_file(
-    guard: PrivateMetadataMutationGuard,
-    created: Win32UnverifiedCreatedFile,
+def _dispose_unverified_created_file(
+    guard: _PrivateMetadataMutationGuard,
+    created: _Win32UnverifiedCreatedFile,
 ) -> None:
     """Dispose only the exact CREATE_NEW handle after proof failure."""
 
@@ -3572,8 +3572,8 @@ def dispose_unverified_created_file(
 
 
 def _assert_hardlink_family(
-    guard: PrivateMetadataMutationGuard,
-    source: Win32BoundFile,
+    guard: _PrivateMetadataMutationGuard,
+    source: _Win32BoundFile,
     destination: Path,
 ) -> None:
     root = guard.archive_root
@@ -3606,19 +3606,19 @@ def _assert_hardlink_family(
     )
 
 
-def publish_hard_link(
-    guard: PrivateMetadataMutationGuard,
-    source: Win32BoundFile,
+def _publish_hard_link(
+    guard: _PrivateMetadataMutationGuard,
+    source: _Win32BoundFile,
     *,
     destination_relative_path: str,
     survivor_profile: FileHandleProfile,
     expected_bytes: bytes,
-) -> Win32BoundFile:
+) -> _Win32BoundFile:
     """Publish a fixed journal or final receipt with exact ``1 -> 2 -> 1``."""
 
     published = False
-    transitional: Win32BoundFile | None = None
-    survivor: Win32BoundFile | None = None
+    transitional: _Win32BoundFile | None = None
+    survivor: _Win32BoundFile | None = None
     source_role = (
         "journal_temp"
         if destination_relative_path == PRIVATE_JOURNAL_RELATIVE_PATH
@@ -3947,7 +3947,7 @@ def file_rename_info_buffer(
 
 
 def _assert_private_manifest_destination(
-    guard: PrivateMetadataMutationGuard,
+    guard: _PrivateMetadataMutationGuard,
     destination: Path,
 ) -> None:
     expected = _archive_path(
@@ -3961,21 +3961,21 @@ def _assert_private_manifest_destination(
         )
 
 
-def replace_private_manifest(
-    guard: PrivateMetadataMutationGuard,
-    source: Win32BoundFile,
+def _replace_private_manifest(
+    guard: _PrivateMetadataMutationGuard,
+    source: _Win32BoundFile,
     *,
     authority_key_hex: str,
     replace_if_exists: bool,
-    before_authority: Win32BoundFile | None,
+    before_authority: _Win32BoundFile | None,
     expected_bytes: bytes,
-) -> Win32BoundFile:
+) -> _Win32BoundFile:
     """Rename the retained manifest temp to the exact canonical target."""
 
     renamed = False
-    transitional: Win32BoundFile | None = None
-    narrow: Win32BoundFile | None = None
-    restored_before: Win32BoundFile | None = None
+    transitional: _Win32BoundFile | None = None
+    narrow: _Win32BoundFile | None = None
+    restored_before: _Win32BoundFile | None = None
     try:
         if not _MINIMAL_RENAME_PROFILE_APPROVAL_ENABLED:
             raise _closed_error(
@@ -4276,7 +4276,7 @@ def replace_private_manifest(
     except Win32SafetyError as exc:
         authorities: list[RetainedAuthorityTransfer] = []
         if renamed:
-            retained_after: list[Win32BoundFile] = []
+            retained_after: list[_Win32BoundFile] = []
             for candidate in (source, transitional, narrow):
                 if (
                     candidate is not None
@@ -4363,36 +4363,18 @@ __all__ = [
     "PRIVATE_MANIFEST_RELATIVE_PATH",
     "PRIVATE_METADATA_LOCK_RELATIVE_PATH",
     "PRIVATE_RECEIPT_DIRECTORY_RELATIVE_PATH",
-    "PrivateMetadataLockPair",
-    "PrivateMetadataMutationGuard",
-    "PersistentCoordinationLock",
     "REQUIRED_PRIMITIVE_UNAVAILABLE",
     "RetainedAuthorityTransfer",
     "WINDOWS_NTFS_MUTATION_PROFILE",
-    "Win32BoundFile",
     "Win32FileIdentity",
     "Win32FileInformation",
     "Win32SafetyError",
     "Win32MutationFailure",
-    "Win32UnverifiedCreatedFile",
     "approval_support_status",
-    "bootstrap_object_manifest_lock_directories",
-    "complete_delete_pending_residue",
-    "create_guarded_directory",
-    "dispose_bound_residue",
-    "dispose_unverified_created_file",
     "file_rename_info_buffer",
-    "handoff_to_narrow_authority",
-    "handoff_to_residue_authority",
-    "handoff_same_identity_twin_to_residue",
-    "materialize_owned_temp",
-    "open_bound_file",
     "owned_temp_relative_path",
     "path_is_absent",
-    "publish_hard_link",
     "receipt_relative_path",
-    "release_terminal_bound_authority",
-    "replace_private_manifest",
     "validate_bound_path",
     "win32_error_constants",
 ]

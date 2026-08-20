@@ -35,7 +35,7 @@ RESOURCE_MANIFEST_KEYS = frozenset(
 RESOURCE_ROW_KEYS = frozenset({"source", "packaged", "bytes", "sha256"})
 SHA256_RE = re.compile(r"[0-9a-f]{64}\Z")
 RESOURCE_READ_CHUNK_SIZE = 64 * 1024
-WHEEL_INSTALL_CHECK_SCHEMA = "wom-kit/wheel-install-check/v0.2"
+WHEEL_INSTALL_CHECK_SCHEMA = "wom-kit/wheel-install-check/v0.3"
 EXPECTED_UNICODEDATA2_DISTRIBUTION_VERSION = "17.0.1"
 EXPECTED_UNICODEDATA_VERSION = "17.0.0"
 MCP_PROTOCOL_VERSION = "2025-03-26"
@@ -74,9 +74,16 @@ def run(
     cwd: Path,
     label: str,
     parse_json: bool = False,
+    expected_returncode: int = 0,
+    require_empty_stderr: bool = False,
 ) -> subprocess.CompletedProcess[str] | dict[str, Any]:
     environment = dict(os.environ)
     environment["PIP_DISABLE_PIP_VERSION_CHECK"] = "1"
+    environment.pop("PYTHONHOME", None)
+    environment.pop("PYTHONPATH", None)
+    environment["PYTHONNOUSERSITE"] = "1"
+    environment["PYTHONIOENCODING"] = "utf-8:strict"
+    environment["PYTHONUTF8"] = "1"
     completed = subprocess.run(
         command,
         cwd=cwd,
@@ -87,9 +94,14 @@ def run(
         env=environment,
         check=False,
     )
-    if completed.returncode != 0:
+    if completed.returncode != expected_returncode:
         detail = completed.stderr.strip() or completed.stdout.strip()
-        raise WheelCheckError(f"{label} failed with exit {completed.returncode}: {detail}")
+        raise WheelCheckError(
+            f"{label} returned exit {completed.returncode}; "
+            f"expected {expected_returncode}: {detail}"
+        )
+    if require_empty_stderr and completed.stderr:
+        raise WheelCheckError(f"{label} wrote to stderr.")
     if not parse_json:
         return completed
     try:
@@ -1106,7 +1118,7 @@ def _mcp_request_text() -> str:
                 "capabilities": {},
                 "clientInfo": {
                     "name": "wom-wheel-install-check",
-                    "version": "0.2",
+                    "version": "0.3",
                 },
             },
         },
@@ -1397,8 +1409,11 @@ def _wheel_install_success_result(
         "entrypoint_evidence": entrypoint_evidence,
         "runtime_skill_lifecycle": "passed",
         "onboarding_preview": "passed",
-        "onboarding_write": "passed",
-        "strict_doctor": "passed",
+        "onboarding_write": "fixed_closed",
+        "onboarding_write_reason_code": (
+            "compound_exact_human_approval_binding_required"
+        ),
+        "strict_doctor": "passed_on_checked_in_fake_archive",
         "wheel_filename": wheel_filename,
         "wheel_sha256": wheel_sha256,
         "wheel_artifact_preserved": artifact_preserved,
@@ -1479,6 +1494,7 @@ def check_wheel(output_dir: Path | None = None) -> dict[str, Any]:
             cwd=temp_root,
             label="installed runtime skill preview",
             parse_json=True,
+            require_empty_stderr=True,
         )
         skill_plan_sha256 = skill_preview.get("operation_plan_sha256")
         skill_preview_target = (
@@ -1494,7 +1510,7 @@ def check_wheel(output_dir: Path | None = None) -> dict[str, Any]:
             or str(temp_root) in json.dumps(skill_preview)
         ):
             raise WheelCheckError("Installed runtime skill preview was not safely ready.")
-        skill_applied = run(
+        blocked_skill_install = run(
             [
                 str(archive),
                 "runtime-skill-install",
@@ -1508,17 +1524,31 @@ def check_wheel(output_dir: Path | None = None) -> dict[str, Any]:
             cwd=temp_root,
             label="installed runtime skill write",
             parse_json=True,
+            expected_returncode=1,
+            require_empty_stderr=True,
         )
-        if not skill_applied.get("ok") or skill_applied.get("status") != "installed":
-            raise WheelCheckError("Installed runtime skill write was not successful.")
+        if blocked_skill_install != {
+            "ok": False,
+            "state": "blocked",
+            "lifecycle_action": "runtime_skill_install",
+            "reason_codes": [
+                "compound_exact_human_approval_binding_required"
+            ],
+            "files_written": [],
+            "private_values_echoed": False,
+        } or skills_root.exists() or skill_target.exists():
+            raise WheelCheckError(
+                "Installed runtime skill write was not fixed-closed without effects."
+            )
         skill_status = run(
             [str(archive), "runtime-skill-status", *common_skill_target[1:]],
             cwd=temp_root,
             label="installed runtime skill status",
             parse_json=True,
+            require_empty_stderr=True,
         )
-        if skill_status.get("status") != "managed_current":
-            raise WheelCheckError("Installed runtime skill did not verify as managed_current.")
+        if skill_status.get("status") != "absent":
+            raise WheelCheckError("Installed runtime skill did not remain absent.")
         uninstall_preview = run(
             [
                 str(archive),
@@ -1529,14 +1559,18 @@ def check_wheel(output_dir: Path | None = None) -> dict[str, Any]:
             cwd=temp_root,
             label="installed runtime skill uninstall preview",
             parse_json=True,
+            require_empty_stderr=True,
         )
         uninstall_plan_sha256 = uninstall_preview.get("operation_plan_sha256")
         if (
-            uninstall_preview.get("status") != "ready_to_uninstall"
+            uninstall_preview.get("status") != "already_absent"
             or not isinstance(uninstall_plan_sha256, str)
+            or SHA256_RE.fullmatch(uninstall_plan_sha256) is None
         ):
-            raise WheelCheckError("Installed runtime skill uninstall preview was not ready.")
-        uninstalled = run(
+            raise WheelCheckError(
+                "Installed runtime skill uninstall preview was not safely already absent."
+            )
+        blocked_skill_uninstall = run(
             [
                 str(archive),
                 "runtime-skill-uninstall",
@@ -1550,11 +1584,22 @@ def check_wheel(output_dir: Path | None = None) -> dict[str, Any]:
             cwd=temp_root,
             label="installed runtime skill uninstall",
             parse_json=True,
+            expected_returncode=1,
+            require_empty_stderr=True,
         )
-        if not uninstalled.get("ok") or uninstalled.get("status") != "uninstalled":
-            raise WheelCheckError("Installed runtime skill uninstall was not successful.")
-        if skill_target.exists():
-            raise WheelCheckError("Installed runtime skill target remained after uninstall.")
+        if blocked_skill_uninstall != {
+            "ok": False,
+            "state": "blocked",
+            "lifecycle_action": "runtime_skill_uninstall",
+            "reason_codes": [
+                "compound_exact_human_approval_binding_required"
+            ],
+            "files_written": [],
+            "private_values_echoed": False,
+        } or skills_root.exists() or skill_target.exists():
+            raise WheelCheckError(
+                "Installed runtime skill uninstall was not fixed-closed without effects."
+            )
 
         target = temp_root / "archive"
         common_onboard = [
@@ -1576,38 +1621,43 @@ def check_wheel(output_dir: Path | None = None) -> dict[str, Any]:
             cwd=temp_root,
             label="installed onboarding preview",
             parse_json=True,
+            require_empty_stderr=True,
         )
         if not preview.get("ok") or not preview.get("dry_run"):
             raise WheelCheckError("Installed onboarding preview was not ready.")
-        applied = run(
+        blocked_write = run(
             [*common_onboard, "--approve"],
             cwd=temp_root,
-            label="installed onboarding write",
+            label="installed onboarding fixed-close probe",
             parse_json=True,
+            expected_returncode=1,
+            require_empty_stderr=True,
         )
-        if not applied.get("ok"):
-            raise WheelCheckError("Installed onboarding write was not successful.")
-
-        required_archive_files = [
-            "archive.yml",
-            "archive-identity.yml",
-            "AGENTS.md",
-            "zettel-kasten/types.yml",
-            "zettel-kasten/zettel-rules.yml",
-        ]
-        missing_archive_files = [
-            relative for relative in required_archive_files if not (target / relative).is_file()
-        ]
-        if missing_archive_files:
+        if blocked_write != {
+            "ok": False,
+            "state": "blocked",
+            "lifecycle_action": "onboard",
+            "reason_codes": [
+                "compound_exact_human_approval_binding_required"
+            ],
+            "files_written": [],
+            "private_values_echoed": False,
+        } or target.exists():
             raise WheelCheckError(
-                "Installed onboarding omitted required files: " + ", ".join(missing_archive_files)
+                "Installed onboarding write was not fixed-closed without effects."
             )
+
+        doctor_fixture = temp_root / "checked-in-fake-archive"
+        shutil.copytree(
+            source_copy / "examples" / "fake-life-archive",
+            doctor_fixture,
+        )
 
         doctor = run(
             [
                 str(archive),
                 "doctor",
-                str(target),
+                str(doctor_fixture),
                 "--strict",
                 "--summary",
                 "--format",
@@ -1616,9 +1666,12 @@ def check_wheel(output_dir: Path | None = None) -> dict[str, Any]:
             cwd=temp_root,
             label="installed strict doctor",
             parse_json=True,
+            require_empty_stderr=True,
         )
         if not doctor.get("ok"):
-            raise WheelCheckError("Installed strict Doctor did not pass on the new archive.")
+            raise WheelCheckError(
+                "Installed strict Doctor did not pass on the checked-in fake archive."
+            )
 
         wheel_sha256 = hashlib.sha256(wheel.read_bytes()).hexdigest()
         artifact_preserved = False
@@ -1685,7 +1738,8 @@ def main() -> int:
             f"verified_resource_count={result['verified_resource_count']}, "
             f"verified_resource_bytes={result['verified_resource_bytes']}, "
             f"wheel_file_count={result['wheel_file_count']}, "
-            f"runtime skill lifecycle, onboarding, and strict Doctor green, "
+            f"runtime skill lifecycle, onboarding preview/fixed-close, "
+            f"and strict Doctor fixture green, "
             f"sha256={result['wheel_sha256']}."
         )
     return 0

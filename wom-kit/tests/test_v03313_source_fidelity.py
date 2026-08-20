@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import shutil
 import shlex
 import tempfile
 import unittest
@@ -13,6 +14,17 @@ from unittest.mock import patch
 from jsonschema import Draft202012Validator
 
 from wom_kit import archive_cli, archive_services
+from wom_kit.exact_human_approval import (
+    _claim_exact_human_approval_core as claim_exact_human_approval,
+    exact_human_approval_archive_identity_sha256,
+)
+from wom_kit.exact_human_approval_windows import (
+    ExactHumanApprovalContext,
+    _ExactHumanApprovalDecision as ExactHumanApprovalDecision,
+    ExactHumanApprovalOperation,
+    exact_human_approval_warning_codes,
+)
+from wom_kit.operation_approval_binding import mint_zet_approval_binding
 
 
 class SourceFidelityV03313Tests(unittest.TestCase):
@@ -20,25 +32,117 @@ class SourceFidelityV03313Tests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name) / "archive"
-        output = io.StringIO()
-        with redirect_stdout(output), redirect_stderr(output):
-            code = archive_cli.main(
-                [
-                    "init",
-                    str(self.root),
-                    "--type",
-                    "personal",
-                    "--archive-id",
-                    "archive:personal:fidelity-test",
-                    "--principal-id",
-                    "person:fidelity-test",
-                    "--principal-name",
-                    "Fidelity Test",
-                    "--name",
-                    "Fidelity Test Archive",
-                ]
+        kit_root = Path(__file__).resolve().parents[1]
+        template_root = (kit_root / "templates" / "personal").resolve()
+        zettel_kasten_root = (kit_root / "zettel-kasten").resolve()
+        fixture_root = self.root.resolve()
+
+        self.assertEqual(template_root.parent, (kit_root / "templates").resolve())
+        self.assertTrue(template_root.is_dir())
+        self.assertEqual(zettel_kasten_root, (kit_root / "zettel-kasten").resolve())
+        self.assertTrue(zettel_kasten_root.is_dir())
+        self.assertFalse(fixture_root.exists())
+
+        shutil.copytree(template_root, fixture_root)
+        shutil.copytree(
+            zettel_kasten_root,
+            fixture_root / "zettel-kasten",
+            dirs_exist_ok=True,
+        )
+        for relative in (
+            "inbox",
+            "zettels",
+            "views",
+            "source-maps",
+            "objects/manifests",
+            "objects/derived-text/sha256",
+            "db",
+            "workbench",
+            "receipts",
+            "receipts/derived-text-capture",
+            "receipts/delegate",
+            "receipts/edges",
+            "receipts/import",
+            "receipts/lineage",
+            "receipts/mint",
+            "receipts/mint/drafts",
+            "receipts/recovery",
+            "receipts/share",
+            "receipts/sources",
+        ):
+            destination = (fixture_root / relative).resolve()
+            self.assertTrue(destination.is_relative_to(fixture_root))
+            destination.mkdir(parents=True, exist_ok=True)
+
+        archive_path = fixture_root / "archive.yml"
+        archive_doc = archive_cli.load_yaml(archive_path.read_text(encoding="utf-8"))
+        archive_doc["archive_id"] = "archive:personal:fidelity-test"
+        archive_doc["name"] = "Fidelity Test Archive"
+        archive_doc["type"] = "personal"
+        archive_doc["principal"] = {
+            "principal_id": "person:fidelity-test",
+            "display_name": "Fidelity Test",
+            "kind": "person",
+        }
+        archive_path.write_text(archive_cli.dump_yaml(archive_doc), encoding="utf-8")
+
+        identity_path = fixture_root / "archive-identity.yml"
+        identity_doc = archive_cli.load_yaml(identity_path.read_text(encoding="utf-8"))
+        identity_doc["identity"].update(
+            {
+                "archive_id": "archive:personal:fidelity-test",
+                "identity_id": "identity:archive:personal:fidelity-test",
+                "scope": "personal",
+                "principal_id": "person:fidelity-test",
+                "display_name": "Fidelity Test",
+            }
+        )
+        identity_doc["ownership"].update(
+            {
+                "owner_id": "person:fidelity-test",
+                "owner_kind": "person",
+                "owner_display_name": "Fidelity Test",
+                "owner_archive_id": "archive:personal:fidelity-test",
+                "operators": [
+                    {
+                        "operator_id": "person:fidelity-test",
+                        "role": "owner_operator",
+                        "permissions": [
+                            "capture",
+                            "curate",
+                            "approve",
+                            "transfer_request",
+                        ],
+                    }
+                ],
+            }
+        )
+        identity_path.write_text(
+            archive_cli.dump_yaml(identity_doc),
+            encoding="utf-8",
+        )
+
+        for filename in ("provider-bindings.yml", "source-bindings.yml"):
+            binding_path = fixture_root / filename
+            binding_doc = archive_cli.load_yaml(
+                binding_path.read_text(encoding="utf-8")
             )
-        self.assertEqual(code, 0, output.getvalue())
+            binding_doc["archive_id"] = "archive:personal:fidelity-test"
+            binding_path.write_text(
+                archive_cli.dump_yaml(binding_doc),
+                encoding="utf-8",
+            )
+
+        (fixture_root / ".gitignore").write_text(
+            "# Bounded historical pre-v0.4 fixture defaults\n"
+            + "\n".join(archive_cli.RECOMMENDED_GITIGNORE_PATTERNS)
+            + "\n",
+            encoding="utf-8",
+        )
+        self.assertEqual(
+            archive_services.read_archive_id(fixture_root),
+            "archive:personal:fidelity-test",
+        )
 
     def manifested_source(self, raw: bytes) -> str:
         digest = hashlib.sha256(raw).hexdigest()
@@ -77,6 +181,66 @@ class SourceFidelityV03313Tests(unittest.TestCase):
             if path.is_file()
         }
 
+    def write_historical_human_draft(
+        self,
+        *,
+        draft_id: str,
+        title: str,
+        body: str,
+        abstract: str,
+        facets: dict[str, object],
+        created_at: str,
+        created_by: str = "person:legacy-fixture",
+    ) -> dict[str, str]:
+        """Write one bounded pre-v0.4 human draft fixture without a writer."""
+
+        self.assertRegex(draft_id, r"^zet_[A-Za-z0-9_]+$")
+        relative_path = f"inbox/{draft_id}.md"
+        path = (self.root / relative_path).resolve()
+        self.assertTrue(path.is_relative_to(self.root.resolve()))
+        self.assertFalse(path.exists())
+        frontmatter = {
+            "id": draft_id,
+            "title": title,
+            "abstract": abstract,
+            "created_at": created_at,
+            "updated_at": created_at,
+            "archive_id": "archive:personal:fidelity-test",
+            "status": "draft",
+            "kind": "fleeting_capture",
+            "facets": facets,
+            "assets": [],
+            "edges": [],
+            "provenance": {
+                "created_by": created_by,
+                "created_in": "archive:personal:fidelity-test",
+                "source": "test_fixture",
+                "derived_from": [],
+                "creation_mode": "human_written",
+            },
+            "visibility": {
+                "scope": "private",
+                "allowed_archives": [],
+                "source_visibility": "private",
+            },
+            "promotion": {
+                "stage": "captured",
+                "ready_for_promotion": False,
+            },
+        }
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            "---\n"
+            + archive_services.dump_yaml(frontmatter)
+            + "---\n\n"
+            + body.rstrip()
+            + "\n",
+            encoding="utf-8",
+            newline="\n",
+        )
+        self.assertEqual(path.read_bytes().count(b"\r"), 0)
+        return {"path": relative_path}
+
     def ai_kwargs(
         self,
         object_id: str,
@@ -104,13 +268,35 @@ class SourceFidelityV03313Tests(unittest.TestCase):
             "fidelity_source_object_id": object_id,
         }
 
-    def create_approved(self, kwargs: dict[str, object]) -> dict[str, object]:
-        preview = archive_services.create_draft_zettel(
+    def exact_claim(self, context: ExactHumanApprovalContext):
+        claim = claim_exact_human_approval(
+            self.root,
+            context,
+            ExactHumanApprovalDecision(
+                approved=True,
+                synthetic_acknowledged=False,
+                reason_code="exact_human_approval_approved",
+                plan_sha256=context.plan_sha256,
+                target_binding_sha256=context.target_binding_sha256,
+            ),
+            bytearray(b"f" * 32),
+        )
+        self.addCleanup(claim.close)
+        return claim
+
+    def create_approved(
+        self,
+        kwargs: dict[str, object],
+        *,
+        preview: dict[str, object] | None = None,
+    ) -> dict[str, object]:
+        preview = preview or archive_services.create_draft_zettel(
             self.root, dry_run=True, **kwargs
         )
         self.assertTrue(preview["ok"], preview)
-        return archive_services.create_draft_zettel(
+        bound_preview = archive_services.create_draft_zettel(
             self.root,
+            dry_run=True,
             approved=True,
             draft_approved_by="person:fidelity-test",
             expected_body_sha256=preview["body_sha256"],
@@ -119,6 +305,45 @@ class SourceFidelityV03313Tests(unittest.TestCase):
             ],
             **kwargs,
         )
+        self.assertTrue(bound_preview["ok"], bound_preview)
+        context = ExactHumanApprovalContext(
+            operation=ExactHumanApprovalOperation.create_draft,
+            archive_identity_sha256=exact_human_approval_archive_identity_sha256(
+                "archive:personal:fidelity-test"
+            ),
+            plan_sha256=(
+                "sha256:"
+                + str(bound_preview["source_fidelity_plan_sha256"])
+            ),
+            target_binding_sha256=(
+                "sha256:" + str(bound_preview["body_sha256"])
+            ),
+            reviewer_claim="person:fidelity-test",
+            review_binding_codes=(
+                "body_digest_reviewed",
+                "draft_identity_reviewed",
+                "source_fidelity_reviewed",
+            ),
+            warning_codes=exact_human_approval_warning_codes(
+                bound_preview.get("warnings")
+                if isinstance(bound_preview.get("warnings"), list)
+                else []
+            ),
+        )
+        claim = self.exact_claim(context)
+        result = archive_services.create_draft_zettel(
+            self.root,
+            approved=True,
+            draft_approved_by="person:fidelity-test",
+            expected_body_sha256=preview["body_sha256"],
+            expected_source_fidelity_plan_sha256=preview[
+                "source_fidelity_plan_sha256"
+            ],
+            exact_human_approval_claim=claim,
+            **kwargs,
+        )
+        claim.finalize_succeeded()
+        return result
 
     def test_verbatim_preserves_unicode_whitespace_order_and_only_normalizes_newlines(self) -> None:
         source_text = (
@@ -159,16 +384,7 @@ class SourceFidelityV03313Tests(unittest.TestCase):
         self.assertEqual(snapshot["body_bytes"], expected.encode("utf-8"))
         self.assertTrue(result["source_fidelity"]["mechanically_verified"])
 
-        replay = archive_services.create_draft_zettel(
-            self.root,
-            approved=True,
-            draft_approved_by="person:fidelity-test",
-            expected_body_sha256=preview["body_sha256"],
-            expected_source_fidelity_plan_sha256=preview[
-                "source_fidelity_plan_sha256"
-            ],
-            **kwargs,
-        )
+        replay = self.create_approved(kwargs, preview=preview)
         self.assertTrue(replay["idempotent_replay"], replay)
         self.assertEqual(replay["created_paths"], [])
 
@@ -218,9 +434,17 @@ class SourceFidelityV03313Tests(unittest.TestCase):
             draft_id="zet_20260810_121_unapproved",
             title="Unapproved fidelity record",
         )
-        with self.assertRaises(archive_services.ArchiveServiceError) as raised:
-            archive_services.create_draft_zettel(self.root, **kwargs)
-        self.assertIn("ai_draft_write_requires_approved", str(raised.exception))
+        before = self.archive_file_snapshot()
+        blocked_write = archive_services.create_draft_zettel(self.root, **kwargs)
+        self.assertFalse(blocked_write["ok"])
+        self.assertEqual(
+            blocked_write["reason_codes"],
+            ["compound_exact_human_approval_binding_required"],
+        )
+        self.assertEqual(blocked_write["files_written"], [])
+        self.assertFalse(blocked_write["private_values_echoed"])
+        self.assertNotIn(ordinary_id, json.dumps(blocked_write, ensure_ascii=False))
+        self.assertEqual(self.archive_file_snapshot(), before)
         self.assertFalse(
             (self.root / "inbox" / "zet_20260810_121_unapproved.md").exists()
         )
@@ -305,17 +529,29 @@ class SourceFidelityV03313Tests(unittest.TestCase):
                     "ai_provenance_requires_ai_creation_mode",
                     preview["blockers"],
                 )
-                with self.assertRaises(archive_services.ArchiveServiceError):
-                    archive_services.create_draft_zettel(
-                        self.root,
-                        title=f"AI provenance route {index}",
-                        body="A body that must not be written through the human route.",
-                        abstract="A reviewed abstract for the provenance route test.",
-                        facets={"record_type": "source_fidelity"},
-                        draft_id=draft_id,
-                        created_at="2026-08-10T12:15:00+09:00",
-                        **evidence,
-                    )
+                before = self.archive_file_snapshot()
+                blocked_write = archive_services.create_draft_zettel(
+                    self.root,
+                    title=f"AI provenance route {index}",
+                    body="A body that must not be written through the human route.",
+                    abstract="A reviewed abstract for the provenance route test.",
+                    facets={"record_type": "source_fidelity"},
+                    draft_id=draft_id,
+                    created_at="2026-08-10T12:15:00+09:00",
+                    **evidence,
+                )
+                self.assertFalse(blocked_write["ok"])
+                self.assertEqual(
+                    blocked_write["reason_codes"],
+                    ["compound_exact_human_approval_binding_required"],
+                )
+                self.assertEqual(blocked_write["files_written"], [])
+                self.assertFalse(blocked_write["private_values_echoed"])
+                self.assertNotIn(
+                    draft_id,
+                    json.dumps(blocked_write, ensure_ascii=False),
+                )
+                self.assertEqual(self.archive_file_snapshot(), before)
                 self.assertFalse((self.root / "inbox" / f"{draft_id}.md").exists())
 
     def test_ai_approval_plan_binds_full_frontmatter_authority(self) -> None:
@@ -347,23 +583,23 @@ class SourceFidelityV03313Tests(unittest.TestCase):
         for index, mutation in enumerate(mutations):
             with self.subTest(index=index):
                 changed = {**kwargs, **mutation}
-                with self.assertRaises(
-                    archive_services.ArchiveServiceError
-                ) as raised:
-                    archive_services.create_draft_zettel(
-                        self.root,
-                        approved=True,
-                        draft_approved_by="person:fidelity-test",
-                        expected_body_sha256=preview["body_sha256"],
-                        expected_source_fidelity_plan_sha256=preview[
-                            "source_fidelity_plan_sha256"
-                        ],
-                        **changed,
-                    )
-                self.assertIn(
-                    "expected_source_fidelity_plan_sha256_mismatch",
-                    str(raised.exception),
+                blocked_write = archive_services.create_draft_zettel(
+                    self.root,
+                    approved=True,
+                    draft_approved_by="person:fidelity-test",
+                    expected_body_sha256=preview["body_sha256"],
+                    expected_source_fidelity_plan_sha256=preview[
+                        "source_fidelity_plan_sha256"
+                    ],
+                    **changed,
                 )
+                self.assertFalse(blocked_write["ok"])
+                self.assertEqual(
+                    blocked_write["reason_codes"],
+                    ["compound_exact_human_approval_binding_required"],
+                )
+                self.assertEqual(blocked_write["files_written"], [])
+                self.assertFalse(blocked_write["private_values_echoed"])
                 self.assertEqual(self.archive_file_snapshot(), before)
 
     def test_post_create_metadata_edit_gets_a_new_mint_plan(self) -> None:
@@ -627,13 +863,11 @@ class SourceFidelityV03313Tests(unittest.TestCase):
         )
 
     def test_legacy_crlf_ai_requires_attributed_affirmation(self) -> None:
-        result = archive_services.create_draft_zettel(
-            self.root,
+        result = self.write_historical_human_draft(
             title="Legacy CRLF AI draft",
             body="Legacy AI body with enough context for a human fidelity review.",
             abstract="A legacy AI draft requiring attributed review.",
             facets={"record_type": "legacy_ai"},
-            creation_mode="human_written",
             draft_id="zet_20260810_121_legacy_crlf",
             created_at="2026-08-10T12:20:00+09:00",
         )
@@ -679,13 +913,11 @@ class SourceFidelityV03313Tests(unittest.TestCase):
         for index, indicator in enumerate(indicators):
             with self.subTest(index=index):
                 draft_id = f"zet_20260810_121_legacy_indicator_{index}"
-                result = archive_services.create_draft_zettel(
-                    self.root,
+                result = self.write_historical_human_draft(
                     title=f"Legacy AI indicator {index}",
                     body="Legacy AI body requiring an attributed fidelity review.",
                     abstract="A bounded legacy AI review fixture.",
                     facets={"record_type": "legacy_ai"},
-                    creation_mode="human_written",
                     created_by="person:legacy-fixture",
                     draft_id=draft_id,
                     created_at=f"2026-08-10T12:2{index}:00+09:00",
@@ -1044,13 +1276,11 @@ class SourceFidelityV03313Tests(unittest.TestCase):
     def test_legacy_ai_credentials_block_even_with_attributed_affirmation(self) -> None:
         for index, location in enumerate(("body", "frontmatter")):
             with self.subTest(location=location):
-                result = archive_services.create_draft_zettel(
-                    self.root,
+                result = self.write_historical_human_draft(
                     title=f"Legacy credential blocker {index}",
                     body="Safe initial legacy draft body.",
                     abstract="A bounded legacy review fixture.",
                     facets={"record_type": "legacy_ai"},
-                    creation_mode="human_written",
                     created_by="person:legacy-fixture",
                     draft_id=f"zet_20260810_121_legacy_secret_{index}",
                     created_at=f"2026-08-10T12:4{index}:00+09:00",
@@ -1127,6 +1357,7 @@ class SourceFidelityV03313Tests(unittest.TestCase):
                 allow_warnings=True,
                 affirmations=affirmations,
             )
+        mint_binding = mint_zet_approval_binding(dry)
         minted = archive_services.mint_zettel(
             self.root,
             relative_path=result["path"],
@@ -1134,6 +1365,16 @@ class SourceFidelityV03313Tests(unittest.TestCase):
             allow_warnings=True,
             affirmations=affirmations,
             expected_source_fidelity_plan_sha256=current_plan,
+            expected_exact_approval_plan_sha256=mint_binding.plan_sha256,
+            expected_exact_approval_target_binding_sha256=(
+                mint_binding.target_binding_sha256
+            ),
+            exact_human_approval_claim=self.exact_claim(
+                mint_binding.context(
+                    archive_id="archive:personal:fidelity-test",
+                    reviewer_claim="person:fidelity-test",
+                )
+            ),
         )
         self.assertTrue(minted["ok"], minted)
         canonical = self.root / minted["canonical_path"]

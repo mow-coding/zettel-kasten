@@ -54,11 +54,14 @@ archive imap-mailbox-adapter-manifest-plan <archive-root> --dry-run
 MCP: imap_mailbox_adapter_manifest_plan
 ```
 
-Related local adapter manifest write:
+Related local adapter manifest preview:
 
 ```text
-archive imap-mailbox-adapter-manifest-write <archive-root> --dry-run|--approve
+archive imap-mailbox-adapter-manifest-write <archive-root> --dry-run
 ```
+
+In v0.4.0 approval is fixed closed before private input/archive target reads
+and writes no manifest or receipt.
 
 Related mailbox selection plan:
 

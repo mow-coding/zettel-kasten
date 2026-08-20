@@ -11,7 +11,7 @@ keeps two different kinds of lookup separate:
 Receipts and duplicate-lifecycle decisions are authenticated with a stable,
 archive-specific key.  Public projections never contain the authentication
 key, receipt MAC, encrypted backend id, raw credential, account identity, or
-reviewed anchor id.  Plain ``AtomicJsonReceiptCommitter`` receipts remain
+reviewed anchor id.  Plain ``_AtomicJsonReceiptCommitter`` receipts remain
 discoverable as unauthenticated history, but are never broker-authoritative.
 """
 
@@ -35,7 +35,7 @@ from typing import Any, Protocol, TypeVar
 import yaml
 
 from .credential_secure_intake import (
-    AtomicJsonReceiptCommitter,
+    _AtomicJsonReceiptCommitter,
     LEGACY_RECEIPT_SCHEMA_VERSION,
     NOTION_PAT_SCOPE_FINGERPRINT_DOMAIN,
     NOTION_PAT_WORKSPACE_IDENTITY_BASIS,
@@ -49,12 +49,12 @@ from .credential_capability import (
     CREDENTIAL_CAPABILITY_OPERATION,
     CREDENTIAL_CAPABILITY_PROVIDER,
     CREDENTIAL_CAPABILITY_REQUIRED_REGISTERED_CAPABILITIES,
-    CredentialCapability,
+    _CredentialCapability,
     CredentialCapabilityError,
-    CredentialCapabilityLease,
+    _CredentialCapabilityLease,
     CredentialCapabilityScope,
 )
-from .notion_http_adapter import NotionBearerSecret
+from .notion_http_adapter import _NotionBearerSecret
 from .notion_page_recovery import ScopeBinding
 
 
@@ -813,7 +813,7 @@ def _atomic_create_json(
 
 
 @dataclass(repr=False)
-class AuthenticatedArchiveReceiptCommitter:
+class _AuthenticatedArchiveReceiptCommitter:
     """Atomic intake committer fixed to one archive's ignored-local path."""
 
     archive_root: Path
@@ -821,7 +821,7 @@ class AuthenticatedArchiveReceiptCommitter:
     _authentication_key: bytes | bytearray = field(repr=False)
 
     def __repr__(self) -> str:
-        return "<AuthenticatedArchiveReceiptCommitter path=fixed key=redacted>"
+        return "<_AuthenticatedArchiveReceiptCommitter path=fixed key=redacted>"
 
     def commit_atomic(self, receipt: Mapping[str, Any]) -> str:
         root, archive_id = _validate_archive(self.archive_root)
@@ -842,10 +842,12 @@ class AuthenticatedArchiveReceiptCommitter:
         with _archive_lock(root):
             _ensure_safe_parent_chain(root, receipts_root)
             try:
-                reference = AtomicJsonReceiptCommitter(receipts_root).commit_atomic(authenticated)
+                reference = _AtomicJsonReceiptCommitter(receipts_root).commit_atomic(
+                    authenticated
+                )
             except Exception:
                 raise _fail("credential_registry_receipt_commit_failed") from None
-            # AtomicJsonReceiptCommitter returns only after file fsync and the
+            # _AtomicJsonReceiptCommitter returns only after file fsync and the
             # create-if-absent hard-link publication. Never introduce a new
             # failure after that commit point: the intake worker would
             # otherwise delete the encrypted entry while a valid persisted
@@ -853,13 +855,13 @@ class AuthenticatedArchiveReceiptCommitter:
             return reference
 
 
-def create_archive_atomic_json_receipt_committer(
+def _create_archive_atomic_json_receipt_committer(
     archive_root: Path | str,
     *,
     expected_archive_id: str,
     receipt_authentication_key: bytes | bytearray | memoryview,
-) -> AuthenticatedArchiveReceiptCommitter:
-    """Create an authenticated ``AtomicJsonReceiptCommitter``-compatible adapter."""
+) -> _AuthenticatedArchiveReceiptCommitter:
+    """Create an authenticated ``_AtomicJsonReceiptCommitter``-compatible adapter."""
 
     root, archive_id = _validate_archive(archive_root)
     if not (
@@ -871,11 +873,11 @@ def create_archive_atomic_json_receipt_committer(
     key = _validate_authentication_key(receipt_authentication_key)
     receipts_root = _archive_path(root, RECEIPTS_RELATIVE)
     _ensure_safe_parent_chain(root, receipts_root)
-    return AuthenticatedArchiveReceiptCommitter(root, archive_id, key)
+    return _AuthenticatedArchiveReceiptCommitter(root, archive_id, key)
 
 
 @dataclass(repr=False)
-class StableArchiveFingerprintKeyProvider:
+class _StableArchiveFingerprintKeyProvider:
     """Create once and reuse one exact archive-specific Windows key.
 
     The only API is callback-based.  The mutable key buffer is wiped after the
@@ -887,7 +889,7 @@ class StableArchiveFingerprintKeyProvider:
     random_bytes: Callable[[int], bytes] = field(default=secrets.token_bytes, repr=False)
 
     def __repr__(self) -> str:
-        return "<StableArchiveFingerprintKeyProvider native=exact key=redacted>"
+        return "<_StableArchiveFingerprintKeyProvider native=exact key=redacted>"
 
     def _target(self, archive_id: str) -> str:
         digest = hashlib.sha256(
@@ -991,7 +993,7 @@ def _read_receipt_records(
                 raise _fail("credential_registry_receipt_entry_invalid") from None
             if _is_reparse(info) or not stat.S_ISREG(info.st_mode):
                 raise _fail("credential_registry_receipt_entry_invalid")
-            # AtomicJsonReceiptCommitter may leave this exact, non-authority
+            # _AtomicJsonReceiptCommitter may leave this exact, non-authority
             # temporary after its durable hard-link publication.  It is safe
             # to ignore under the registry lock; arbitrary names still fail.
             continue
@@ -1596,7 +1598,7 @@ def _authenticated_credential_reuse_authority(
         )
 
 
-def use_authenticated_secure_credential_for_revalidation(
+def _use_authenticated_secure_credential_for_revalidation(
     archive_root: Path | str,
     credential_id: str,
     *,
@@ -1793,7 +1795,7 @@ def _singleton_lifecycle_transition(
     }
 
 
-def evolve_legacy_authenticated_workspace_scope(
+def _evolve_legacy_authenticated_workspace_scope(
     archive_root: Path | str,
     credential_id: str,
     *,
@@ -2115,7 +2117,7 @@ def lookup_secure_credential(
     return matches[0]
 
 
-def persist_duplicate_lifecycle_decision(
+def _persist_duplicate_lifecycle_decision(
     archive_root: Path | str,
     *,
     provider: str,
@@ -2492,7 +2494,7 @@ def _read_authenticated_capability_claim(
     path: Path,
     archive_id: str,
     key: bytes | bytearray,
-    capability: CredentialCapability,
+    capability: _CredentialCapability,
 ) -> dict[str, Any]:
     _ensure_safe_parent_chain(root, path)
     raw = _read_exact_bytes(
@@ -2551,7 +2553,7 @@ def _capability_scope_from_binding(scope_binding: ScopeBinding) -> CredentialCap
 _CLAIMED_CAPABILITY_FACTORY_TOKEN = object()
 
 
-class ClaimedCredentialCapabilityUse:
+class _ClaimedCredentialCapabilityUse:
     """One durable, authenticated claim plus its in-memory request budget."""
 
     __slots__ = (
@@ -2575,8 +2577,8 @@ class ClaimedCredentialCapabilityUse:
         archive_id: str,
         claim_path: Path,
         authentication_key: bytes | bytearray,
-        capability: CredentialCapability,
-        lease: CredentialCapabilityLease,
+        capability: _CredentialCapability,
+        lease: _CredentialCapabilityLease,
         started_at: str,
         clock: Callable[[], datetime],
     ) -> None:
@@ -2594,10 +2596,10 @@ class ClaimedCredentialCapabilityUse:
         self._status = "started"
 
     def __repr__(self) -> str:
-        return "<ClaimedCredentialCapabilityUse claim=authenticated bindings=redacted>"
+        return "<_ClaimedCredentialCapabilityUse claim=authenticated bindings=redacted>"
 
     @property
-    def capability(self) -> CredentialCapability:
+    def capability(self) -> _CredentialCapability:
         return self._capability
 
     @property
@@ -2737,16 +2739,16 @@ class ClaimedCredentialCapabilityUse:
         self._finalize(status="failed", failure_code=failure_code)
 
 
-def claim_credential_capability_use(
+def _claim_credential_capability_use(
     archive_root: Path | str,
-    capability: CredentialCapability,
+    capability: _CredentialCapability,
     receipt_authentication_key: bytes | bytearray | memoryview,
     *,
     clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
-) -> ClaimedCredentialCapabilityUse:
+) -> _ClaimedCredentialCapabilityUse:
     """Exclusively claim one capability before any native secret read."""
 
-    if type(capability) is not CredentialCapability:
+    if type(capability) is not _CredentialCapability:
         raise _fail("credential_capability_invalid")
     root, archive_id = _validate_archive(archive_root)
     key = _validate_authentication_key(receipt_authentication_key)
@@ -2797,7 +2799,7 @@ def claim_credential_capability_use(
         }
         _validate_capability_claim_document(document, archive_id=archive_id)
         _exclusive_create_capability_claim(root, claim_path, document)
-    return ClaimedCredentialCapabilityUse(
+    return _ClaimedCredentialCapabilityUse(
         factory_token=_CLAIMED_CAPABILITY_FACTORY_TOKEN,
         archive_root=root,
         archive_id=archive_id,
@@ -2811,7 +2813,7 @@ def claim_credential_capability_use(
 
 
 @dataclass(repr=False)
-class ReceiptBackedNotionCredentialBroker:
+class _ReceiptBackedNotionCredentialBroker:
     """Resolve one approved Notion scope through one exact native read."""
 
     archive_root: Path | str
@@ -2820,12 +2822,12 @@ class ReceiptBackedNotionCredentialBroker:
     secret_fingerprint_key: bytes | bytearray | memoryview | None = field(
         default=None, repr=False
     )
-    claimed_use: ClaimedCredentialCapabilityUse | None = field(
+    claimed_use: _ClaimedCredentialCapabilityUse | None = field(
         default=None, repr=False
     )
 
     def __repr__(self) -> str:
-        return "<ReceiptBackedNotionCredentialBroker provider=notion native=exact secret=redacted>"
+        return "<_ReceiptBackedNotionCredentialBroker provider=notion native=exact secret=redacted>"
 
     @staticmethod
     def _assert_authority(
@@ -2939,11 +2941,11 @@ class ReceiptBackedNotionCredentialBroker:
 
         self._assert_current_authority(scope_binding)
 
-    def resolve(self, scope_binding: ScopeBinding) -> NotionBearerSecret:
+    def resolve(self, scope_binding: ScopeBinding) -> _NotionBearerSecret:
         claimed_use = self.claimed_use
         if claimed_use is None:
             raise _fail("credential_capability_required")
-        if type(claimed_use) is not ClaimedCredentialCapabilityUse:
+        if type(claimed_use) is not _ClaimedCredentialCapabilityUse:
             raise _fail("credential_capability_claim_invalid")
         target, expected_fingerprint = self._assert_current_authority(scope_binding)
         claimed_use.assert_ready_for_scope(scope_binding)
@@ -2968,7 +2970,7 @@ class ReceiptBackedNotionCredentialBroker:
             if not hmac.compare_digest(current_fingerprint, expected_fingerprint):
                 raise _fail("credential_registry_secret_fingerprint_mismatch")
             try:
-                wrapped = NotionBearerSecret._from_owned_mutable(secret_buffer)
+                wrapped = _NotionBearerSecret._from_owned_mutable(secret_buffer)
             except Exception:
                 raise _fail("credential_registry_secret_invalid") from None
             # The wrapper now owns the exact mutable native buffer. Recovery
@@ -2981,7 +2983,7 @@ class ReceiptBackedNotionCredentialBroker:
             authority_key = self.receipt_authentication_key
             try:
                 wrapped._bind_authority_revalidator(
-                    lambda: ReceiptBackedNotionCredentialBroker._assert_authority(
+                    lambda: _ReceiptBackedNotionCredentialBroker._assert_authority(
                         authority_root,
                         authority_key,
                         scope_binding,
@@ -3010,22 +3012,13 @@ class ReceiptBackedNotionCredentialBroker:
 
 
 __all__ = [
-    "AuthenticatedArchiveReceiptCommitter",
     "AuthenticatedCredentialReuseEvidence",
     "CAPABILITY_CLAIMS_RELATIVE",
     "CAPABILITY_USE_CLAIM_AUTHENTICATION_SCHEMA",
     "CAPABILITY_USE_CLAIM_SCHEMA_VERSION",
     "CAPABILITY_USE_SUMMARY_SCHEMA_VERSION",
-    "ClaimedCredentialCapabilityUse",
     "ExactWindowsCredentialNative",
-    "ReceiptBackedNotionCredentialBroker",
     "SecureCredentialRegistryError",
-    "StableArchiveFingerprintKeyProvider",
-    "create_archive_atomic_json_receipt_committer",
-    "claim_credential_capability_use",
-    "evolve_legacy_authenticated_workspace_scope",
     "list_secure_credentials",
     "lookup_secure_credential",
-    "use_authenticated_secure_credential_for_revalidation",
-    "persist_duplicate_lifecycle_decision",
 ]

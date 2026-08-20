@@ -84,7 +84,9 @@ Use this order:
    `source_map_join_available`.
 5. `notion-objet-link-index` and `notion-objet-link-plan` when body locators
    still exist.
-6. Approval-gated `zettel-edge` or `zettel-edge-batch` only after human review.
+6. Operation-specific exact-human `zettel-edge` only after human review.
+   `zettel-edge-batch` remains dry-run-only in v0.4.0; approval returns
+   `compound_exact_human_approval_binding_required` and writes nothing.
 
 ## Import-Time Contract
 

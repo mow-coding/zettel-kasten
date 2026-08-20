@@ -7,8 +7,12 @@ v0.3.30 added the first concrete credential policy gate. v0.3.31 lets the gate
 verify a written credential access approval receipt.
 v0.3.32 adds a KeePassXC command preflight that must pass this gate first.
 
-This is still read-only, but it is not only a planner. It evaluates a proposed
-credential use request and returns a policy result:
+This is read-only. v0.4.0 may structurally verify legacy approval metadata, but
+the result is `legacy_unbound` and advisory. It never makes a future adapter
+ready. In particular, `would_allow_future_adapter_after_receipt` and
+`live_execution_allowed_now` remain `false`.
+
+Historical status labels may still be parsed for audit:
 
 - `ready_after_approval_receipt`,
 - `needs_human_review`,
@@ -16,7 +20,7 @@ credential use request and returns a policy result:
 - `denied_by_policy`,
 - `blocked`.
 
-The policy gate is the layer a future live adapter must pass before it can run.
+Those labels are not current execution authority.
 
 ## Command
 
@@ -67,7 +71,8 @@ The output includes a `credential_access_policy` preview with rules such as:
 
 ## What Passes
 
-A request can return `ready_after_approval_receipt` only when:
+A legacy request may be structurally classified `ready_after_approval_receipt`
+only when:
 
 - the command is `--dry-run`,
 - the credential id is a safe label,
@@ -79,13 +84,13 @@ A request can return `ready_after_approval_receipt` only when:
   consumer, decision, and archive,
 - no secret value or exact credential ref is echoed.
 
-Even then, `live_execution_allowed_now` is still `false` in this read-only
-policy command.
+Even then, both future-adapter and live-execution booleans remain false. The
+classification is advisory evidence only.
 
 The result means:
 
 ```text
-policy is ready after a written approval receipt
+legacy metadata is structurally consistent
 ```
 
 It does not mean:
@@ -148,11 +153,10 @@ credential-store-recommendation
 -> credential-ref-plan
 -> credential-ref-inventory
 -> credential-access-broker-plan
--> credential-access-approval-plan / credential-access-approval --approve
+-> legacy credential-access approval metadata
 -> credential-policy-check --approval-receipt <path>
 -> credential-keepassxc-command-plan --approval-receipt <path>
--> credential-keepassxc-write --approval-receipt <path> --approve
--> non-secret KeePassXC write execution receipt
+-> stop; no credential adapter authority in v0.4.0
 ```
 
 v0.3.31 connects the written approval receipt to the gate that future adapter
@@ -162,6 +166,6 @@ v0.3.32 adds [Credential KeePassXC Command Plan](credential-keepassxc-command-pl
 which reuses this policy gate before previewing a safe `keepassxc-cli add`
 command shape. It still does not run KeePassXC.
 
-v0.3.33 adds [Credential KeePassXC Write](credential-keepassxc-write.md), a
-separate CLI-only adapter that reuses this policy gate before local execution.
-MCP still cannot execute the adapter.
+The historical v0.3.33 [Credential KeePassXC Write](credential-keepassxc-write.md)
+remains documented for audit. In v0.4.0 its approval is fixed closed before
+credential/database reads; MCP and CLI cannot execute it.

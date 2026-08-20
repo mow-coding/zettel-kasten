@@ -105,4 +105,4 @@ grounded fact that drove it.
 ## Definition of done
 
 Full `pytest`, `check_public_privacy`, and `check_release_readiness` all green, working
-tree only, no real archive or basoon path touched, no real socket in any test.
+tree only, no real archive or protected pilot path touched, no real socket in any test.

@@ -6,7 +6,7 @@ no-clobber"). Merges the base design + Critique A (safety/honesty) + Critique B
 (operator-surface consistency).
 Anchor tree at spec authoring: HEAD `d44157c1` (v0.3.172 intake label), tree clean.
 Release action: working tree only — no git commit/tag/push. Never touches a real archive
-or `zettel-kasten-basoon`; all test archives live in temp dirs.
+or a named real archive; all test archives live in temp dirs.
 
 This log records the decisions per the Critique A/B ledger and the AGENTS.md decision-log
 mandate.

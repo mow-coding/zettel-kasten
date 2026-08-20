@@ -2,9 +2,22 @@
 
 상태: 공개 navigation baseline
 날짜: 2026-05-27
-갱신: 2026-08-15
+갱신: 2026-08-20
 철학 갱신: 2026-07-15
 하네스 호환 경계 갱신: 2026-07-16
+
+현재 v0.4.0 쓰기 경계: compound, batch, revert, archive-authority, durable,
+external 범주의 canonical top-level 명령 79개는 각 명령의 plan/dry-run/audit 동작만
+유지합니다. 승인 branch는 비공개 target, project, input, credential, provider를
+읽기 전에 `compound_exact_human_approval_binding_required`로 실패하며 아무것도
+쓰지 않습니다. 제목에 “write”, “revert”, “recovery”가 남은 링크는 미리보기
+형태와 과거 receipt를 설명할 뿐, 실행 가능한 승인 지시가 아닙니다.
+중첩 derive capture, exact AI 경로가 아닌 draft 생성, 실제 init,
+parcel/pack 생성은 별도로 고정 차단됩니다.
+
+Letter 138은 v0.4.0 기능이 아닌 긴급 후속 범위입니다. 현재 Notion recovery는
+page body 또는 location만 다루며 완전한 source mirror가 아니고, 과거
+typed-property 유실을 탐지하거나 복구하지 않습니다.
 
 이 저장소는 공개 프로젝트 기록을 의도적으로 네 종류로 나눕니다.
 
@@ -62,6 +75,9 @@
 - [v0.3.319 Letter 132 자격증명 입력 근거 결정 기록](archive-infra-decision-log-2026-08-14-v03319-letter132-credential-input-evidence.md)
 - [v0.3.320 자격증명 capability broker 결정 기록](archive-infra-decision-log-2026-08-15-v03320-credential-capability-broker.md)
 - [Credential Capability Contract](credential-capability-contract.md)
+- [정확한 사람 승인 계약](exact-human-approval-contract.md)
+- [v0.4.0 정확한 사람 제어와 운영 마찰 개선 결정](archive-infra-decision-log-2026-08-20-v0400-letter136-operator-friction.md)
+- [Human Artifact Store와 비공개 registry 계약](human-artifact-store-contract.md)
 - [프로젝트 버전 업데이트](project-version-update.md)
 - [Derived Text Capture와 paired batch 복구](derived-text.md)
 - [Letter 120·123 인덱스 수명주기와 피드백 본문](letter120-123-index-lifecycle-and-feedback-body.md)
@@ -75,7 +91,7 @@
 - [Local Sovereignty And Backup Authority](local-sovereignty-and-backup-authority.md)
 - [로컬 백업 근거 상태](backup-evidence-status.md)
 - [AI 스타팅 메뉴얼 빠른 안내와 전체 검진](ai-start-here.md)
-- [아카이브 신원 일치 점검과 검토 후 수정](archive-identity-reconcile.md)
+- [아카이브 신원 일치 dry-run 점검과 v0.4.0 고정 차단](archive-identity-reconcile.md)
 - [빠른 인수인계 문서와 전체 검진](runtime-context-quick-and-full-inspection.md)
 - [장시간 명령 진행 표시와 제한된 결과 저장](large-command-progress-and-output.md)
 - [AI Response Contract](ai-response-contract.md)
@@ -89,20 +105,20 @@
 - [zet Catalog Compact Continuation](zet-catalog-compact-continuations.md)
 - [zet Catalog Pass 임시 파일 수명주기](zet-catalog-pass-artifact-lifecycle.md)
 - [zet 초록 보충 계획](zet-abstract-backfill-plan.md)
-- [zet 초록 승인 후 쓰기](zet-abstract-backfill-write.md)
-- [zet 초록 보충 되돌리기](zet-abstract-backfill-revert.md)
+- [zet 초록 보충 쓰기 미리보기](zet-abstract-backfill-write.md)
+- [zet 초록 보충 되돌리기 미리보기](zet-abstract-backfill-revert.md)
 - [zet 초록 수정 영수증 전체 검진](zet-abstract-backfill-receipt-audit.md)
 - [zet 초록 일괄 작업 읽기 전용 복구 계획](zet-abstract-backfill-recovery-plan.md)
-- [zet 초록 일괄 작업 승인 복구 실행기](zet-abstract-backfill-recover.md)
+- [zet 초록 일괄 작업 복구 미리보기](zet-abstract-backfill-recover.md)
 - [검토된 zet 제목 리맵 계획](zet-title-remap-plan.md)
-- [승인된 zet 제목 리맵 쓰기](zet-title-remap-write.md)
+- [zet 제목 리맵 쓰기 미리보기](zet-title-remap-write.md)
 - [zet 제목 리맵 영수증·중단 감사](zet-title-remap-receipt-audit.md)
 - [zet 제목 리맵 읽기 전용 복구 판단](zet-title-remap-recovery-plan.md)
-- [zet 제목 리맵 승인형 단일 사건 복구](zet-title-remap-recover.md)
+- [zet 제목 리맵 단일 사건 복구 미리보기](zet-title-remap-recover.md)
 - [zet 제목 리맵 완료 영수증 되돌리기 계획](zet-title-remap-revert-plan.md)
-- [zet 제목 리맵 승인형 완료 영수증 되돌리기](zet-title-remap-revert.md)
+- [zet 제목 리맵 완료 영수증 되돌리기 미리보기](zet-title-remap-revert.md)
 - [zet 제목 리맵 되돌리기 중단 복구 계획](zet-title-remap-revert-recovery-plan.md)
-- [zet 제목 리맵 되돌리기 중단 복구 실행기](zet-title-remap-revert-recover.md)
+- [zet 제목 리맵 되돌리기 중단 복구 미리보기](zet-title-remap-revert-recover.md)
 - [연속 Node 읽기](zet-catalog-contiguous-reading.md)
 - [Seed 기반 연결 읽기 순서](seeded-connection-reading-order.md)
 - [Seed 기반 읽기 경로 근거](seeded-reading-route-evidence.md)
@@ -422,6 +438,7 @@ local archive
 - [v0.2.11 Delegate Capability Contract Work Log](../plans/work-log-2026-05-23-delegate-capability-contract.md)
 - [Changelog](../../CHANGELOG.md)
 - [Release Notes](releases/)
+- [v0.4.0 릴리스 노트](releases/v0.4.0.md)
 - [v0.3.320 릴리스 노트](releases/v0.3.320.md)
 - [v0.3.308 릴리스 노트](releases/v0.3.308.md)
 - [v0.3.309 릴리스 노트](releases/v0.3.309.md)

@@ -1,7 +1,7 @@
 # Objet Storage Strategy
 
-Status: active baseline
-Date: 2026-05-25
+Status: v0.4.0 read-only planning baseline; setup approval fixed closed
+Date: 2026-08-20
 
 This document explains where WOM source/original objets should live when they are too large, private, or binary-heavy for Git.
 
@@ -22,10 +22,11 @@ Remote object storage remains a deferred manual external step unless the user
 explicitly chooses to plan R2, B2, S3, or another provider.
 
 Layout ruling (D2, 2026-07-03): the sibling local objet store is for bulk
-external originals under never-touch protection (represented through
-`prehashed-objet-ledger` plus `object-storage-upload-evidence` evidence).
-Capture intake stages INSIDE the archive root under `staging/incoming/` and
-lands originals in the content-addressed `objects/sha256/` store. A raw
+external originals under never-touch protection. In v0.4.0
+`prehashed-objet-ledger` and `object-storage-upload-evidence` provide dry-run
+review only; approval writes no manifest evidence. Capture review intake stages
+INSIDE the archive root under `staging/incoming/`, but capture approval is fixed
+closed and moves no original into `objects/sha256/`. A raw
 in-root `objets/` folder is discouraged; the migration guide lives in
 [artifact-hygiene.md](artifact-hygiene.md) section 5.
 
@@ -63,25 +64,11 @@ archive object-storage <archive-root> --dry-run \
 
 Dry-run returns provider binding metadata, local profile preview, provider setup receipt preview, objet storage policy preview, manual steps, blockers, warnings, and would-change paths. It writes nothing.
 
-Approved local metadata write:
-
-```bash
-archive object-storage <archive-root> --approve \
-  --reviewed-by person:me \
-  --provider cloudflare-r2 \
-  --profile-id profile:personal:username \
-  --profile-slug username \
-  --storage-account-ref storage:account:username \
-  --format json
-```
-
-Approved mode writes only:
-
-- `provider-bindings.yml`,
-- `receipts/providers/*.object-storage-setup.json`,
-- optional ignored `profiles/local/object-storage-accounts.local.yml` when `--write-local-profile` is supplied.
-
-Approved writes are rollback-safe: WOM-kit should not leave `provider-bindings.yml` modified without its matching setup receipt.
+Stop after the dry-run in v0.4.0. Object-storage setup approval returns
+`compound_exact_human_approval_binding_required` before private archive or
+provider target read and writes no provider binding, local profile hint, or
+setup receipt. Historical v0.2 setup records remain readable but do not grant
+current write authority.
 
 ## Non-Goals
 

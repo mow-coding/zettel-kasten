@@ -1,8 +1,13 @@
 # Runbook — `object-storage-adopt-existing --key-map`
 
-Status: active
+Status: historical v0.3 runbook; dry-run/plan only in v0.4.0
 Date: 2026-07-05
 Applies to: `wom-kit` v0.3.171+ (tiny-first gate decoupled from the upload 5 GiB proof since v0.3.174; large plan resolution indexed since v0.3.180)
+
+Current v0.4.0 boundary: adopt/upload approval fails with
+`compound_exact_human_approval_binding_required` before credential, provider,
+object-byte, manifest, or target access. No HEAD/GET/PUT or receipt/manifest
+write occurs. Do not run the historical approval examples below.
 
 Use `--key-map` when objects already sit in your bucket under your own key layout and
 the content-addressed template cannot rebuild the exact key — most importantly when
@@ -59,12 +64,12 @@ format WOM parses and NOT a file WOM reads. WOM never reads your uploader's log 
 reads only the JSONL in section 1.
 
 Reported scheme: objects stored at `archives/<archive_id>/objets/<sha>.<ext>`, e.g.
-`archives/archive:personal:basoon/objets/<sha256>.png`. If a client's own upload
+`archives/archive:personal:example/objets/<sha256>.png`. If a client's own upload
 record listed each object's sha and that exact key, the JSONL WOM consumes would be:
 
 ```json
-{"sha256":"<sha256-of-object-1>","remote_key":"archives/archive:personal:basoon/objets/<sha256-of-object-1>.png"}
-{"sha256":"<sha256-of-object-2>","remote_key":"archives/archive:personal:basoon/objets/<sha256-of-object-2>.pdf"}
+{"sha256":"<sha256-of-object-1>","remote_key":"archives/archive:personal:example/objets/<sha256-of-object-1>.png"}
+{"sha256":"<sha256-of-object-2>","remote_key":"archives/archive:personal:example/objets/<sha256-of-object-2>.pdf"}
 ```
 
 Treat this only as a shape illustration. Your actual keys, extensions, and prefix
@@ -84,8 +89,10 @@ archive object-storage-adopt-existing <archive-root> \
   --dry-run --format json
 ```
 
-Then a verified adopt. This is a two-step run — **tiny-first before a batch is
-mandatory**, and it is the only thing that unblocks a large `--key-map` handover.
+The remaining two-step notes describe historical v0.3 execution evidence.
+They are retained to interpret old receipts and must not be run in v0.4.0;
+approval now stops before credential, provider, object, manifest, or target
+access with `compound_exact_human_approval_binding_required`.
 
 **Step A — one verified tiny-first adopt (unlocks the batch).** Pick any single object
 and adopt it with `--only <one-sha>`:
@@ -101,7 +108,7 @@ archive object-storage-adopt-existing <archive-root> \
   --key-map ./key-map.jsonl \
   --only sha256:<one-sha> \
   --reviewed-by person:me \
-  --approve --format json
+  <v0.3 execution flags intentionally omitted in v0.4.0>
 ```
 
 **Step B — the full batch.** Once Step A has adopted one object, re-run WITHOUT
@@ -119,7 +126,7 @@ archive object-storage-adopt-existing <archive-root> \
   --bucket <bucket> \
   --key-map ./key-map.jsonl \
   --reviewed-by person:me \
-  --approve --progress --format json
+  <v0.3 execution flags intentionally omitted in v0.4.0>
 ```
 
 **Resume an interrupted batch (v0.3.182+).** If a prior verified batch was stopped
@@ -136,7 +143,7 @@ archive object-storage-adopt-existing <archive-root> \
   --bucket <bucket> \
   --key-map ./key-map.jsonl \
   --reviewed-by person:me \
-  --approve --skip-existing-wom-uploaded --progress --format json
+  <v0.3 execution flags intentionally omitted in v0.4.0>
 ```
 
 The default remains conservative: without `--skip-existing-wom-uploaded`, verified
@@ -182,7 +189,7 @@ archive object-storage-adopt-existing <archive-root> \
   --bucket <bucket> \
   --key-map ./key-map.jsonl \
   --reviewed-by person:me \
-  --approve --skip-existing-wom-uploaded --stop-after-plan --progress --format json
+  <v0.3 execution flags intentionally omitted in v0.4.0>
 ```
 
 This resolves the same key-map/resume plan and then stops after `adopt-plan`.

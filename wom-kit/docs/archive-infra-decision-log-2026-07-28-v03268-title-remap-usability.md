@@ -6,7 +6,7 @@ Status: accepted and locally verified for v0.3.268 release
 
 ## Context
 
-The basoon pilot ran the v0.3.263 title remap plan against 2,743 real
+The protected pilot ran the v0.3.263 title remap plan against 2,743 real
 proposals. It validated 2,701 rows, but the blocked rows exposed five
 operator-facing gaps:
 

@@ -22,7 +22,13 @@ SRC_ROOT = KIT_ROOT / "src"
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
-from wom_kit import archive_cli, completion_workflows
+from wom_kit import archive_cli, completion_workflows, operation_approval_binding
+from wom_kit.exact_human_approval import (
+    _claim_exact_human_approval_core as claim_exact_human_approval,
+)
+from wom_kit.exact_human_approval_windows import (
+    _ExactHumanApprovalDecision as ExactHumanApprovalDecision,
+)
 
 
 class CompletionWorkflowTests(unittest.TestCase):
@@ -75,6 +81,927 @@ class CompletionWorkflowTests(unittest.TestCase):
     def fake_archive(self, target: Path) -> Path:
         shutil.copytree(KIT_ROOT / "examples" / "fake-life-archive", target)
         return target
+
+    def snapshot_files(self, root: Path) -> dict[str, bytes]:
+        return {
+            path.relative_to(root).as_posix(): path.read_bytes()
+            for path in root.rglob("*")
+            if path.is_file()
+        }
+
+    def assert_fixed_compound_block(
+        self,
+        root: Path,
+        writer: object,
+        *,
+        lifecycle_action: str,
+        downstream: str | None = None,
+        **kwargs: object,
+    ) -> dict[str, object]:
+        """Prove a public v0.4 compound writer stops before authority work."""
+
+        before = self.snapshot_files(root)
+        patcher = (
+            mock.patch.object(
+                completion_workflows,
+                downstream,
+                side_effect=AssertionError("downstream must not be called"),
+            )
+            if downstream is not None
+            else None
+        )
+        if patcher is None:
+            result = writer(root, **kwargs)  # type: ignore[operator]
+        else:
+            with patcher as mocked_downstream:
+                result = writer(root, **kwargs)  # type: ignore[operator]
+                mocked_downstream.assert_not_called()
+        self.assertFalse(result["ok"], result)
+        self.assertEqual(result["state"], "blocked")
+        self.assertEqual(result["lifecycle_action"], lifecycle_action)
+        self.assertEqual(
+            result["blockers"],
+            ["compound_exact_human_approval_binding_required"],
+        )
+        self.assertEqual(result["files_written"], [])
+        self.assertFalse(result["private_values_echoed"])
+        if isinstance(result.get("privacy_guards"), dict):
+            self.assertFalse(result["privacy_guards"].get("writes", False))
+        self.assertEqual(self.snapshot_files(root), before)
+        return result
+
+    def install_historical_external_locator_fixture(
+        self,
+        archive_root: Path,
+        **kwargs: object,
+    ) -> dict[str, object]:
+        """Install bounded v0.3 locator history after proving v0.4 blocks."""
+
+        write_args = dict(kwargs)
+        write_args.pop("expected_plan_sha256", None)
+        reviewed_by = str(write_args.pop("reviewed_by", "person:test"))
+        plan, private = completion_workflows._locator_plan_core(
+            archive_root,
+            **write_args,
+        )
+        self.assertTrue(plan["ok"], plan)
+        self.assert_fixed_compound_block(
+            archive_root,
+            completion_workflows.external_locator_record,
+            lifecycle_action="external_locator_record",
+            downstream="_locator_plan_core",
+            **write_args,
+            expected_plan_sha256=plan["summary"]["plan_sha256"],
+            reviewed_by=reviewed_by,
+        )
+
+        timestamp = "2026-08-20T00:00:00Z"
+        current_record = private["current_record"]
+        locators = (
+            list(current_record.get("locators", []))
+            if isinstance(current_record, dict)
+            else []
+        )
+        locator_entry = {
+            "locator_id": private["locator_id"],
+            "locator_type": private["normalized_type"],
+            "locator_ref": private["safe_ref"],
+            "status": "active",
+            "recorded_at": timestamp,
+            "reviewed_by": reviewed_by,
+            "provenance": {
+                "source": "human_reviewed_cli",
+                "automatic_recovery_claimed": False,
+            },
+        }
+        for field_name, private_name in (
+            ("service_ref", "safe_service_ref"),
+            ("account_ref", "safe_account_ref"),
+            ("occurrence_anchor", "safe_occurrence_anchor"),
+        ):
+            if private[private_name] is not None:
+                locator_entry[field_name] = private[private_name]
+        if private["planned_action"] == "update_locator_coordinates":
+            target_index = private["target_locator_index"]
+            self.assertIsInstance(target_index, int)
+            locator_entry = dict(locators[target_index])
+            for field_name, private_name in (
+                ("service_ref", "safe_service_ref"),
+                ("account_ref", "safe_account_ref"),
+                ("occurrence_anchor", "safe_occurrence_anchor"),
+            ):
+                if private[private_name] is not None:
+                    locator_entry[field_name] = private[private_name]
+            locators[target_index] = locator_entry
+        else:
+            locators.append(locator_entry)
+
+        record = {
+            "schema": completion_workflows.EXTERNAL_LOCATOR_SCHEMA,
+            "archive_id": completion_workflows.archive_services.read_archive_id(
+                archive_root
+            ),
+            "zettel_id": private["safe_id"],
+            "created_at": (
+                current_record.get("created_at")
+                if isinstance(current_record, dict)
+                else timestamp
+            ),
+            "updated_at": timestamp,
+            "locators": locators,
+        }
+        record_bytes = completion_workflows._canonical_json_bytes(record)
+        after_sha256 = completion_workflows._sha256_bytes(record_bytes)
+        snapshot_relative = None
+        if private["current_bytes"] is not None:
+            snapshot_relative = (
+                f"{completion_workflows.EXTERNAL_LOCATOR_SNAPSHOT_DIR}/"
+                f"{private['current_sha256']}.json"
+            )
+            snapshot_path = completion_workflows._locator_internal_path(
+                archive_root,
+                snapshot_relative,
+            )
+            snapshot_path.parent.mkdir(parents=True, exist_ok=True)
+            snapshot_path.write_bytes(private["current_bytes"])
+        receipt_relative = completion_workflows._receipt_relative(
+            "record",
+            private["safe_id"],
+            timestamp,
+            after_sha256,
+        )
+        receipt = {
+            "schema": completion_workflows.EXTERNAL_LOCATOR_RECEIPT_SCHEMA,
+            "action": private["planned_action"],
+            "archive_id": record["archive_id"],
+            "zettel_id": private["safe_id"],
+            "locator_id": private["locator_id"],
+            "locator_type": private["normalized_type"],
+            "coordinate_presence": plan["summary"]["coordinate_presence"],
+            "plan_sha256": plan["summary"]["plan_sha256"],
+            "before_record_sha256": private["current_sha256"],
+            "after_record_sha256": after_sha256,
+            "before_snapshot_path": snapshot_relative,
+            "record_path": private["record_relative"],
+            "reviewed_by": reviewed_by,
+            "created_at": timestamp,
+            "privacy": {
+                "locator_ref_included": False,
+                "provider_called": False,
+                "network_checked": False,
+            },
+        }
+        record_path = completion_workflows._locator_internal_path(
+            archive_root,
+            private["record_relative"],
+        )
+        receipt_path = completion_workflows._locator_internal_path(
+            archive_root,
+            receipt_relative,
+        )
+        record_path.parent.mkdir(parents=True, exist_ok=True)
+        receipt_path.parent.mkdir(parents=True, exist_ok=True)
+        record_path.write_bytes(record_bytes)
+        receipt_path.write_bytes(
+            completion_workflows._canonical_json_bytes(receipt)
+        )
+        return {
+            **plan,
+            "ok": True,
+            "state": "historical_fixture",
+            "summary": {
+                **plan["summary"],
+                "current_locator_count": len(locators),
+                "current_record_sha256": after_sha256,
+                "receipt_path": receipt_relative,
+            },
+        }
+
+    def install_historical_external_locator_deactivation(
+        self,
+        archive_root: Path,
+        *,
+        zettel_id: str,
+        locator_id: str,
+        keep_locator_id: str,
+        expected_plan_sha256: str | None = None,
+        reviewed_by: str = "person:test",
+    ) -> dict[str, object]:
+        """Install one reviewed v0.3 deactivation as historical evidence."""
+
+        plan, private = completion_workflows._external_locator_deactivate_plan_core(
+            archive_root,
+            zettel_id=zettel_id,
+            locator_id=locator_id,
+            keep_locator_id=keep_locator_id,
+        )
+        self.assertTrue(plan["ok"], plan)
+        self.assert_fixed_compound_block(
+            archive_root,
+            completion_workflows.external_locator_deactivate,
+            lifecycle_action="external_locator_deactivate",
+            downstream="_external_locator_deactivate_plan_core",
+            zettel_id=zettel_id,
+            locator_id=locator_id,
+            keep_locator_id=keep_locator_id,
+            expected_plan_sha256=plan["summary"]["plan_sha256"],
+            reviewed_by=reviewed_by,
+        )
+        timestamp = "2026-08-20T00:00:00Z"
+        record = dict(private["current_record"])
+        locators = [dict(item) for item in record["locators"]]
+        target_index = private["target_index"]
+        locators[target_index] = {
+            **locators[target_index],
+            "status": "inactive",
+        }
+        record["schema"] = completion_workflows.EXTERNAL_LOCATOR_SCHEMA
+        record["updated_at"] = timestamp
+        record["locators"] = locators
+        record_bytes = completion_workflows._canonical_json_bytes(record)
+        after_sha256 = completion_workflows._sha256_bytes(record_bytes)
+        snapshot_relative = (
+            f"{completion_workflows.EXTERNAL_LOCATOR_SNAPSHOT_DIR}/"
+            f"{private['current_sha256']}.json"
+        )
+        receipt_relative = completion_workflows._receipt_relative(
+            "deactivate",
+            zettel_id,
+            timestamp,
+            after_sha256,
+        )
+        snapshot_path = completion_workflows._locator_internal_path(
+            archive_root,
+            snapshot_relative,
+        )
+        record_path = completion_workflows._locator_internal_path(
+            archive_root,
+            private["record_relative"],
+        )
+        receipt_path = completion_workflows._locator_internal_path(
+            archive_root,
+            receipt_relative,
+        )
+        snapshot_path.parent.mkdir(parents=True, exist_ok=True)
+        receipt_path.parent.mkdir(parents=True, exist_ok=True)
+        snapshot_path.write_bytes(private["current_bytes"])
+        receipt = {
+            "schema": completion_workflows.EXTERNAL_LOCATOR_RECEIPT_SCHEMA,
+            "action": "deactivate_duplicate_locator",
+            "archive_id": completion_workflows.archive_services.read_archive_id(
+                archive_root
+            ),
+            "zettel_id": zettel_id,
+            "locator_id": private["safe_locator_id"],
+            "kept_locator_id": private["safe_keep_locator_id"],
+            "locator_type": private["target_row"]["locator_type"],
+            "coordinate_presence": {
+                field: isinstance(private["target_row"].get(field), str)
+                for field in (
+                    "service_ref",
+                    "account_ref",
+                    "occurrence_anchor",
+                )
+            },
+            "previous_status": "active",
+            "new_status": "inactive",
+            "plan_sha256": plan["summary"]["plan_sha256"],
+            "before_record_sha256": private["current_sha256"],
+            "after_record_sha256": after_sha256,
+            "before_snapshot_path": snapshot_relative,
+            "record_path": private["record_relative"],
+            "reviewed_by": reviewed_by,
+            "created_at": timestamp,
+            "privacy": {
+                "locator_ref_included": False,
+                "provider_called": False,
+                "network_checked": False,
+            },
+        }
+        receipt_path.write_bytes(
+            completion_workflows._canonical_json_bytes(receipt)
+        )
+        record_path.write_bytes(record_bytes)
+        return {
+            **plan,
+            "ok": True,
+            "state": "historical_fixture",
+            "summary": {
+                **plan["summary"],
+                "active_locator_count": sum(
+                    item["status"] == "active" for item in locators
+                ),
+                "inactive_locator_count": sum(
+                    item["status"] == "inactive" for item in locators
+                ),
+                "receipt_path": receipt_relative,
+            },
+        }
+
+    def install_historical_markup_fixture(
+        self,
+        archive_root: Path,
+        *,
+        policy: str,
+        max_items: int,
+        max_changes: int,
+        binding_manifest: Path | str | None = None,
+        only_ready: bool = False,
+        expected_plan_sha256: str | None = None,
+        reviewed_by: str = "person:test",
+    ) -> dict[str, object]:
+        """Install reviewed v0.3 normalization history after v0.4 blocks."""
+
+        plan, private = completion_workflows._markup_plan_core(
+            archive_root,
+            policy=policy,
+            max_items=max_items,
+            max_changes=max_changes,
+            binding_manifest=binding_manifest,
+            only_ready=only_ready,
+        )
+        self.assertTrue(plan["ok"], plan)
+        self.assert_fixed_compound_block(
+            archive_root,
+            completion_workflows.markup_normalization_apply,
+            lifecycle_action="markup_normalization",
+            downstream="_markup_plan_core",
+            policy=policy,
+            max_items=max_items,
+            max_changes=max_changes,
+            binding_manifest=binding_manifest,
+            only_ready=only_ready,
+            expected_plan_sha256=plan["summary"]["plan_sha256"],
+            reviewed_by=reviewed_by,
+        )
+
+        expected = plan["summary"]["plan_sha256"]
+        timestamp = "2026-08-20T00:00:00Z"
+        transaction_relative = (
+            f"{completion_workflows.MARKUP_NORMALIZATION_SCRATCH_DIR}/"
+            f"transactions/{expected}"
+        )
+        snapshot_root_relative = f"{transaction_relative}/snapshots"
+        journal_relative = f"{transaction_relative}/journal.json"
+        receipt_relative = (
+            f"{completion_workflows.MARKUP_NORMALIZATION_RECEIPTS_DIR}/"
+            f"{expected}.json"
+        )
+        journal_items: list[dict[str, object]] = []
+        for index, item in enumerate(private["items"]):
+            before_relative = (
+                f"{snapshot_root_relative}/{index:06d}.before."
+                f"{item['before_sha256']}.bin"
+            )
+            after_relative = (
+                f"{snapshot_root_relative}/{index:06d}.after."
+                f"{item['after_sha256']}.bin"
+            )
+            before_path = completion_workflows.archive_services.archive_internal_path(
+                archive_root,
+                before_relative,
+            )
+            after_path = completion_workflows.archive_services.archive_internal_path(
+                archive_root,
+                after_relative,
+            )
+            before_path.parent.mkdir(parents=True, exist_ok=True)
+            before_path.write_bytes(item["before_bytes"])
+            after_path.write_bytes(item["after_bytes"])
+            item["path"].write_bytes(item["after_bytes"])
+            journal_items.append(
+                {
+                    "index": index,
+                    "zettel_id": item["zettel_id"],
+                    "path": item["relative"],
+                    "before_sha256": item["before_sha256"],
+                    "after_sha256": item["after_sha256"],
+                    "snapshot_path": before_relative,
+                    "before_snapshot_path": before_relative,
+                    "after_snapshot_path": after_relative,
+                }
+            )
+        journal = {
+            "schema": completion_workflows.MARKUP_NORMALIZATION_JOURNAL_SCHEMA,
+            "archive_id": completion_workflows.archive_services.read_archive_id(
+                archive_root
+            ),
+            "plan_sha256": expected,
+            "policy": policy,
+            "binding_manifest_sha256": private["binding_manifest_sha256"],
+            "state": "committed",
+            "applied_count": len(journal_items),
+            "item_count": len(journal_items),
+            "items": journal_items,
+            "reviewed_by": reviewed_by,
+            "created_at": timestamp,
+            "updated_at": timestamp,
+            "receipt_path": receipt_relative,
+        }
+        receipt = {
+            "schema": completion_workflows.MARKUP_NORMALIZATION_RECEIPT_SCHEMA,
+            "archive_id": journal["archive_id"],
+            "plan_sha256": expected,
+            "policy": policy,
+            "binding_manifest_sha256": private["binding_manifest_sha256"],
+            "journal_path": journal_relative,
+            "reviewed_by": reviewed_by,
+            "created_at": timestamp,
+            "item_count": len(journal_items),
+            "items": journal_items,
+            "source_bytes_snapshotted": True,
+            "exact_byte_revert_supported": True,
+        }
+        journal_path = completion_workflows.archive_services.archive_internal_path(
+            archive_root,
+            journal_relative,
+        )
+        receipt_path = completion_workflows.archive_services.archive_internal_path(
+            archive_root,
+            receipt_relative,
+        )
+        journal_path.parent.mkdir(parents=True, exist_ok=True)
+        receipt_path.parent.mkdir(parents=True, exist_ok=True)
+        journal_path.write_bytes(
+            completion_workflows._canonical_json_bytes(journal)
+        )
+        receipt_path.write_bytes(
+            completion_workflows._canonical_json_bytes(receipt)
+        )
+        return {
+            **plan,
+            "ok": True,
+            "state": "historical_fixture",
+            "summary": {
+                **plan["summary"],
+                "applied_count": len(private["items"]),
+                "journal_path": journal_relative,
+                "receipt_path": receipt_relative,
+                "recovery_required": False,
+            },
+        }
+
+    def install_historical_markup_revert(
+        self,
+        archive_root: Path,
+        *,
+        receipt: Path | str,
+        expected_plan_sha256: str | None = None,
+        reviewed_by: str = "person:test",
+    ) -> dict[str, object]:
+        plan, private = completion_workflows._markup_revert_plan_core(
+            archive_root,
+            receipt=receipt,
+        )
+        self.assertTrue(plan["ok"], plan)
+        self.assert_fixed_compound_block(
+            archive_root,
+            completion_workflows.markup_normalization_revert,
+            lifecycle_action="markup_normalization_revert",
+            downstream="_markup_revert_plan_core",
+            receipt=receipt,
+            expected_plan_sha256=plan["summary"]["plan_sha256"],
+            reviewed_by=reviewed_by,
+        )
+        for item in private["items"]:
+            item["path"].write_bytes(item["snapshot_bytes"])
+        source_receipt_sha256 = completion_workflows._sha256_bytes(
+            private["receipt_bytes"] or b""
+        )
+        revert_relative = (
+            f"{completion_workflows.MARKUP_NORMALIZATION_RECEIPTS_DIR}/"
+            f"reverts/{source_receipt_sha256}."
+            f"{plan['summary']['plan_sha256']}.json"
+        )
+        revert_doc = {
+            "schema": completion_workflows.MARKUP_NORMALIZATION_REVERT_RECEIPT_SCHEMA,
+            "archive_id": completion_workflows.archive_services.read_archive_id(
+                archive_root
+            ),
+            "source_receipt_sha256": source_receipt_sha256,
+            "revert_plan_sha256": plan["summary"]["plan_sha256"],
+            "reviewed_by": reviewed_by,
+            "created_at": "2026-08-20T00:00:00Z",
+            "item_count": len(private["items"]),
+            "exact_byte_restore": True,
+            "items": [
+                {
+                    "path": item["relative"],
+                    "restored_sha256": item["before_sha256"],
+                }
+                for item in private["items"]
+            ],
+        }
+        revert_path = completion_workflows.archive_services.archive_internal_path(
+            archive_root,
+            revert_relative,
+        )
+        revert_path.parent.mkdir(parents=True, exist_ok=True)
+        revert_path.write_bytes(
+            completion_workflows._canonical_json_bytes(revert_doc)
+        )
+        return {
+            **plan,
+            "ok": True,
+            "state": "historical_fixture",
+            "summary": {
+                **plan["summary"],
+                "reverted_count": len(private["items"]),
+                "receipt_path": revert_relative,
+            },
+        }
+
+    def install_historical_markup_recovery(
+        self,
+        archive_root: Path,
+        *,
+        journal: Path | str,
+        mode: str,
+        expected_plan_sha256: str | None = None,
+        reviewed_by: str = "person:test",
+    ) -> dict[str, object]:
+        plan, private = completion_workflows._markup_recovery_plan_core(
+            archive_root,
+            journal=journal,
+            mode=mode,
+        )
+        self.assertTrue(plan["ok"], plan)
+        self.assert_fixed_compound_block(
+            archive_root,
+            completion_workflows.markup_normalization_recover,
+            lifecycle_action="markup_normalization_recovery",
+            downstream="_markup_recovery_plan_core",
+            journal=journal,
+            mode=mode,
+            expected_plan_sha256=plan["summary"]["plan_sha256"],
+            reviewed_by=reviewed_by,
+        )
+        self.assertIsNone(private["terminal_state"])
+        for item in private["items"]:
+            desired = (
+                item["after_bytes"]
+                if mode == "resume"
+                else item["before_bytes"]
+            )
+            item["path"].write_bytes(desired)
+
+        timestamp = "2026-08-20T00:00:00Z"
+        journal_doc = dict(private["journal_doc"])
+        source_journal_sha256 = completion_workflows._sha256_bytes(
+            private["journal_bytes"] or b""
+        )
+        recovery_relative = (
+            f"{completion_workflows.MARKUP_NORMALIZATION_RECEIPTS_DIR}/"
+            f"recoveries/{source_journal_sha256}.{mode}."
+            f"{plan['summary']['plan_sha256']}.json"
+        )
+        recovery_doc = {
+            "schema": completion_workflows.MARKUP_NORMALIZATION_RECOVERY_RECEIPT_SCHEMA,
+            "archive_id": completion_workflows.archive_services.read_archive_id(
+                archive_root
+            ),
+            "source_journal_sha256": source_journal_sha256,
+            "source_plan_sha256": journal_doc["plan_sha256"],
+            "recovery_plan_sha256": plan["summary"]["plan_sha256"],
+            "mode": mode,
+            "reviewed_by": reviewed_by,
+            "created_at": timestamp,
+            "item_count": len(journal_doc["items"]),
+            "changed_count": len(private["items"]),
+            "exact_byte_recovery": True,
+            "items": [
+                {
+                    "path": item["relative"],
+                    "restored_sha256": (
+                        item["after_sha256"]
+                        if mode == "resume"
+                        else item["before_sha256"]
+                    ),
+                }
+                for item in private["items"]
+            ],
+        }
+        recovery_path = completion_workflows.archive_services.archive_internal_path(
+            archive_root,
+            recovery_relative,
+        )
+        recovery_path.parent.mkdir(parents=True, exist_ok=True)
+        recovery_path.write_bytes(
+            completion_workflows._canonical_json_bytes(recovery_doc)
+        )
+        if mode == "resume":
+            receipt_relative = (
+                f"{completion_workflows.MARKUP_NORMALIZATION_RECEIPTS_DIR}/"
+                f"{journal_doc['plan_sha256']}.json"
+            )
+            receipt_doc = {
+                "schema": completion_workflows.MARKUP_NORMALIZATION_RECEIPT_SCHEMA,
+                "archive_id": recovery_doc["archive_id"],
+                "plan_sha256": journal_doc["plan_sha256"],
+                "policy": journal_doc.get("policy"),
+                "binding_manifest_sha256": journal_doc.get(
+                    "binding_manifest_sha256"
+                ),
+                "journal_path": private["journal_relative"],
+                "reviewed_by": reviewed_by,
+                "created_at": timestamp,
+                "item_count": len(journal_doc["items"]),
+                "items": journal_doc["items"],
+                "source_bytes_snapshotted": True,
+                "exact_byte_revert_supported": True,
+                "completed_by_recovery": True,
+                "recovery_receipt_path": recovery_relative,
+            }
+            receipt_path = completion_workflows.archive_services.archive_internal_path(
+                archive_root,
+                receipt_relative,
+            )
+            receipt_path.parent.mkdir(parents=True, exist_ok=True)
+            receipt_path.write_bytes(
+                completion_workflows._canonical_json_bytes(receipt_doc)
+            )
+            journal_doc["state"] = "committed"
+            journal_doc["receipt_path"] = receipt_relative
+            journal_doc["applied_count"] = len(journal_doc["items"])
+        else:
+            journal_doc["state"] = "rolled_back"
+            journal_doc["applied_count"] = 0
+        journal_doc["recovery_mode"] = mode
+        journal_doc["recovery_receipt_path"] = recovery_relative
+        journal_doc["recovered_by"] = reviewed_by
+        journal_doc["updated_at"] = timestamp
+        private["journal_path"].write_bytes(
+            completion_workflows._canonical_json_bytes(journal_doc)
+        )
+        return {
+            **plan,
+            "ok": True,
+            "state": "historical_fixture",
+            "summary": {
+                **plan["summary"],
+                "changed_count": len(private["items"]),
+                "recovery_receipt_path": recovery_relative,
+                "exact_byte_recovery": True,
+            },
+        }
+
+    def install_historical_principal_fixture(
+        self,
+        archive_root: Path,
+        *,
+        principal_id: str,
+        kind: str,
+        display_name: str,
+        expected_plan_sha256: str | None = None,
+        reviewed_by: str = "person:test",
+    ) -> dict[str, object]:
+        plan, private = completion_workflows._principal_registration_plan_core(
+            archive_root,
+            principal_id=principal_id,
+            kind=kind,
+            display_name=display_name,
+        )
+        self.assertTrue(plan["ok"], plan)
+        self.assert_fixed_compound_block(
+            archive_root,
+            completion_workflows.principal_register,
+            lifecycle_action="principal_register",
+            downstream="_principal_registration_plan_core",
+            principal_id=principal_id,
+            kind=kind,
+            display_name=display_name,
+            expected_plan_sha256=plan["plan_sha256"],
+            reviewed_by=reviewed_by,
+        )
+        timestamp = "2026-08-20T00:00:00Z"
+        record = {
+            "schema": completion_workflows.archive_services.PRINCIPAL_RECORD_SCHEMA,
+            "principal_id": principal_id,
+            "kind": kind,
+            "display_name": display_name,
+            "status": "active",
+            "created_at": timestamp,
+            "reviewed_by": reviewed_by,
+        }
+        record_bytes = completion_workflows.archive_services.dump_yaml(
+            record
+        ).encode("utf-8")
+        record_sha256 = hashlib.sha256(record_bytes).hexdigest()
+        receipt_relative = (
+            f"{completion_workflows.PRINCIPAL_RECEIPTS_DIR}/register."
+            f"{hashlib.sha256(principal_id.encode('utf-8')).hexdigest()}."
+            f"20260820T000000Z.{record_sha256[:16]}.json"
+        )
+        receipt = {
+            "schema": completion_workflows.PRINCIPAL_REGISTRATION_RECEIPT_SCHEMA,
+            "archive_id": private["archive_id"],
+            "principal_id": principal_id,
+            "kind": kind,
+            "record_path": private["record_relative"],
+            "record_sha256": record_sha256,
+            "plan_sha256": plan["plan_sha256"],
+            "reviewed_by": reviewed_by,
+            "created_at": timestamp,
+        }
+        record_path = completion_workflows.archive_services.archive_internal_path(
+            archive_root,
+            private["record_relative"],
+        )
+        receipt_path = completion_workflows.archive_services.archive_internal_path(
+            archive_root,
+            receipt_relative,
+        )
+        record_path.parent.mkdir(parents=True, exist_ok=True)
+        receipt_path.parent.mkdir(parents=True, exist_ok=True)
+        record_path.write_bytes(record_bytes)
+        receipt_path.write_bytes(
+            completion_workflows._canonical_json_bytes(receipt)
+        )
+        return {
+            **plan,
+            "ok": True,
+            "state": "historical_fixture",
+            "record_path": private["record_relative"],
+            "record_sha256": record_sha256,
+            "receipt_path": receipt_relative,
+        }
+
+    def write_exact_edge(
+        self,
+        archive_root: Path,
+        **kwargs: object,
+    ) -> dict[str, object]:
+        """Create fixture edges through the real one-use approval boundary."""
+
+        write_args = dict(kwargs)
+        write_args.pop("approve", None)
+        write_args.pop("dry_run", None)
+        reviewed_by = str(write_args.get("reviewed_by") or "")
+        preview = completion_workflows.archive_services.zettel_edge_write(
+            archive_root,
+            **write_args,
+            dry_run=True,
+            approve=False,
+        )
+        binding = operation_approval_binding.zettel_edge_approval_binding(
+            preview
+        )
+        context = binding.context(
+            archive_id=completion_workflows.archive_services.read_archive_id(
+                archive_root
+            ),
+            reviewer_claim=reviewed_by,
+        )
+        decision = ExactHumanApprovalDecision(
+            approved=True,
+            synthetic_acknowledged=False,
+            reason_code="exact_human_approval_approved",
+            plan_sha256=context.plan_sha256,
+            target_binding_sha256=context.target_binding_sha256,
+        )
+        claim = claim_exact_human_approval(
+            archive_root,
+            context,
+            decision,
+            bytes(range(32)),
+        )
+        try:
+            result = completion_workflows.archive_services.zettel_edge_write(
+                archive_root,
+                **write_args,
+                dry_run=False,
+                approve=True,
+                expected_exact_approval_plan_sha256=binding.plan_sha256,
+                expected_exact_approval_target_binding_sha256=(
+                    binding.target_binding_sha256
+                ),
+                exact_human_approval_claim=claim,
+            )
+            if result.get("ok") is True:
+                claim.finalize_succeeded()
+            else:
+                claim.finalize_failed("operation_blocked")
+            return result
+        finally:
+            claim.close()
+
+    def install_historical_zettel_objet_link_fixture(
+        self,
+        archive_root: Path,
+        *,
+        zettel_id: str,
+        object_id: str,
+        role: str,
+        label: str | None = None,
+    ) -> dict[str, object]:
+        """Install one bounded v0.3 link history without its blocked writer."""
+
+        plan = completion_workflows.zettel_objet_link_plan(
+            archive_root,
+            zettel_id=zettel_id,
+            object_id=object_id,
+            role=role,
+            label=label,
+        )
+        self.assertTrue(plan["ok"], plan)
+        zettel_path = archive_root / "zettels" / f"{zettel_id}.md"
+        before_bytes = zettel_path.read_bytes()
+        before_sha256 = hashlib.sha256(before_bytes).hexdigest()
+        frontmatter, body = (
+            completion_workflows.archive_services.require_readable_zettel_content(
+                zettel_path
+            )
+        )
+        asset = {"object_id": object_id, "role": role}
+        if label is not None:
+            asset["label"] = label
+        updated_frontmatter = dict(frontmatter)
+        updated_frontmatter["assets"] = [
+            *list(frontmatter.get("assets") or []),
+            asset,
+        ]
+        updated_frontmatter["updated_at"] = "2026-08-20T00:00:00Z"
+        after_bytes = (
+            "---\n"
+            + completion_workflows.archive_services.dump_yaml(
+                updated_frontmatter
+            )
+            + "---\n"
+            + body
+        ).encode("utf-8")
+        after_sha256 = hashlib.sha256(after_bytes).hexdigest()
+        archive_id = completion_workflows.archive_services.read_archive_id(
+            archive_root
+        )
+        seed = {
+            "archive_id": archive_id,
+            "zettel_id": zettel_id,
+            "object_id": object_id,
+            "role": role,
+        }
+        link_digest = hashlib.sha256(
+            (
+                json.dumps(
+                    seed,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+                + "\n"
+            ).encode("utf-8")
+        ).hexdigest()
+        link_id = f"asset:sha256:{link_digest}"
+        self.assertEqual(plan["summary"]["link_id"], link_id)
+        snapshot_relative = (
+            "receipts/objects/zettel-links/snapshots/"
+            f"{before_sha256}.zettel.md"
+        )
+        receipt_relative = str(plan["summary"]["receipt_path"])
+        receipt = {
+            "schema": "wom-kit/zettel-objet-link-receipt/v0.1",
+            "action": "add_zettel_objet_link",
+            "archive_id": archive_id,
+            "zettel_id": zettel_id,
+            "zettel_path": f"zettels/{zettel_id}.md",
+            "object_id": object_id,
+            "role": role,
+            "label_sha256": (
+                hashlib.sha256(label.encode("utf-8")).hexdigest()
+                if label is not None
+                else None
+            ),
+            "link_id": link_id,
+            "plan_sha256": plan["summary"]["plan_sha256"],
+            "before_zettel_sha256": before_sha256,
+            "after_zettel_sha256": after_sha256,
+            "before_snapshot_path": snapshot_relative,
+            "reviewed_by": "person:historical-fixture",
+            "created_at": "2026-08-20T00:00:00Z",
+            "privacy": {
+                "label_included": False,
+                "zettel_body_included": False,
+                "object_bytes_read": False,
+                "provider_called": False,
+            },
+        }
+        snapshot_path = archive_root.joinpath(*snapshot_relative.split("/"))
+        receipt_path = archive_root.joinpath(*receipt_relative.split("/"))
+        snapshot_path.parent.mkdir(parents=True, exist_ok=True)
+        receipt_path.parent.mkdir(parents=True, exist_ok=True)
+        snapshot_path.write_bytes(before_bytes)
+        zettel_path.write_bytes(after_bytes)
+        receipt_path.write_text(
+            json.dumps(receipt, ensure_ascii=False, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        return {
+            "ok": True,
+            "summary": {
+                **plan["summary"],
+                "receipt_path": receipt_relative,
+                "link_id": link_id,
+            },
+        }
 
     def capture_batch_fixture(
         self,
@@ -459,9 +1386,22 @@ class CompletionWorkflowTests(unittest.TestCase):
                     "json",
                 ]
             )
-            self.assertEqual(record_code, 0, record_output)
+            self.assertEqual(record_code, 1, record_output)
             self.assertNotIn(first_ref, record_output)
-            recorded = json.loads(record_output)
+            cli_blocked = json.loads(record_output)
+            self.assertEqual(
+                cli_blocked["reason_codes"],
+                ["compound_exact_human_approval_binding_required"],
+            )
+            self.assertFalse(cli_blocked["private_values_echoed"])
+            recorded = self.install_historical_external_locator_fixture(
+                archive_root,
+                zettel_id=zettel_id,
+                locator_type="source_url",
+                locator_ref=first_ref,
+                expected_plan_sha256=plan_sha256,
+                reviewed_by="person:test",
+            )
             record_path = archive_root / recorded["summary"]["record_path"]
             self.assertTrue(record_path.is_file())
             stored = json.loads(record_path.read_text(encoding="utf-8"))
@@ -487,7 +1427,7 @@ class CompletionWorkflowTests(unittest.TestCase):
                 locator_type="provider_page_id",
                 locator_ref=second_ref,
             )
-            second = completion_workflows.external_locator_record(
+            second = self.install_historical_external_locator_fixture(
                 archive_root,
                 zettel_id=zettel_id,
                 locator_type="provider_page_id",
@@ -529,24 +1469,18 @@ class CompletionWorkflowTests(unittest.TestCase):
                 receipt=second["summary"]["receipt_path"],
             )
             self.assertTrue(revert_plan["ok"], revert_plan)
-            reverted = completion_workflows.external_locator_revert(
+            reverted = self.assert_fixed_compound_block(
                 archive_root,
+                completion_workflows.external_locator_revert,
+                lifecycle_action="external_locator_revert",
+                downstream="_external_locator_revert_plan_core",
                 receipt=second["summary"]["receipt_path"],
                 expected_plan_sha256=revert_plan["summary"][
                     "plan_sha256"
                 ],
                 reviewed_by="person:test",
             )
-            self.assertTrue(reverted["ok"], reverted)
-            self.assert_schema_instance(
-                "external-locator-revert-receipt.schema.json",
-                json.loads(
-                    (
-                        archive_root
-                        / reverted["summary"]["receipt_path"]
-                    ).read_text(encoding="utf-8")
-                ),
-            )
+            self.assertFalse(reverted["ok"], reverted)
             after_revert = (
                 completion_workflows.external_locator_recovery_plan(
                     archive_root,
@@ -555,13 +1489,14 @@ class CompletionWorkflowTests(unittest.TestCase):
             )
             self.assertEqual(
                 after_revert["summary"]["locator_count"],
-                1,
+                2,
             )
             restored = json.loads(record_path.read_text(encoding="utf-8"))
             self.assertEqual(
                 restored["locators"][0]["locator_ref"],
                 first_ref,
             )
+            self.assertEqual(restored["locators"][1]["locator_ref"], second_ref)
 
     def test_external_locator_stale_plan_and_secret_query_fail_closed(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -581,7 +1516,7 @@ class CompletionWorkflowTests(unittest.TestCase):
                 locator_type="export_coordinate",
                 locator_ref=other_ref,
             )
-            written = completion_workflows.external_locator_record(
+            written = self.install_historical_external_locator_fixture(
                 archive_root,
                 zettel_id=zettel_id,
                 locator_type="export_coordinate",
@@ -590,8 +1525,11 @@ class CompletionWorkflowTests(unittest.TestCase):
                 reviewed_by="person:test",
             )
             self.assertTrue(written["ok"], written)
-            blocked = completion_workflows.external_locator_record(
+            blocked = self.assert_fixed_compound_block(
                 archive_root,
+                completion_workflows.external_locator_record,
+                lifecycle_action="external_locator_record",
+                downstream="_locator_plan_core",
                 zettel_id=zettel_id,
                 locator_type="export_coordinate",
                 locator_ref=stale_ref,
@@ -599,7 +1537,10 @@ class CompletionWorkflowTests(unittest.TestCase):
                 reviewed_by="person:test",
             )
             self.assertFalse(blocked["ok"], blocked)
-            self.assertIn("external_locator_plan_changed", blocked["blockers"])
+            self.assertEqual(
+                blocked["blockers"],
+                ["compound_exact_human_approval_binding_required"],
+            )
 
             secret_ref = "https://provider.example/page?access_token=PRIVATE_MARKER"
             secret = completion_workflows.external_locator_plan(
@@ -638,7 +1579,7 @@ class CompletionWorkflowTests(unittest.TestCase):
                 occurrence_anchor=first_anchor,
             )
             self.assertTrue(first_plan["ok"], first_plan)
-            first = completion_workflows.external_locator_record(
+            first = self.install_historical_external_locator_fixture(
                 archive_root,
                 zettel_id=zettel_id,
                 locator_type="export_coordinate",
@@ -680,7 +1621,7 @@ class CompletionWorkflowTests(unittest.TestCase):
                 first_plan["summary"]["locator_id"],
                 second_plan["summary"]["locator_id"],
             )
-            second = completion_workflows.external_locator_record(
+            second = self.install_historical_external_locator_fixture(
                 archive_root,
                 zettel_id=zettel_id,
                 locator_type="export_coordinate",
@@ -728,7 +1669,7 @@ class CompletionWorkflowTests(unittest.TestCase):
                 locator_type="source_url",
                 locator_ref=locator_ref,
             )
-            bare = completion_workflows.external_locator_record(
+            bare = self.install_historical_external_locator_fixture(
                 archive_root,
                 zettel_id=zettel_id,
                 locator_type="source_url",
@@ -755,7 +1696,7 @@ class CompletionWorkflowTests(unittest.TestCase):
                 enrich_plan["summary"]["locator_id"],
                 bare["summary"]["locator_id"],
             )
-            enriched = completion_workflows.external_locator_record(
+            enriched = self.install_historical_external_locator_fixture(
                 archive_root,
                 zettel_id=zettel_id,
                 locator_type="source_url",
@@ -795,20 +1736,26 @@ class CompletionWorkflowTests(unittest.TestCase):
                 archive_root,
                 receipt=enriched["summary"]["receipt_path"],
             )
-            reverted = completion_workflows.external_locator_revert(
+            reverted = self.assert_fixed_compound_block(
                 archive_root,
+                completion_workflows.external_locator_revert,
+                lifecycle_action="external_locator_revert",
+                downstream="_external_locator_revert_plan_core",
                 receipt=enriched["summary"]["receipt_path"],
                 expected_plan_sha256=revert_plan["summary"]["plan_sha256"],
                 reviewed_by="person:test",
             )
-            self.assertTrue(reverted["ok"], reverted)
+            self.assertFalse(reverted["ok"], reverted)
             restored = json.loads(
                 (
                     archive_root / enriched["summary"]["record_path"]
                 ).read_text(encoding="utf-8")
             )
             self.assertEqual(len(restored["locators"]), 1)
-            self.assertNotIn("account_ref", restored["locators"][0])
+            self.assertEqual(
+                restored["locators"][0]["account_ref"],
+                "reviewed-account@example.test",
+            )
 
     def test_external_locator_deactivate_duplicate_is_reversible_and_preserves_rows(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -854,7 +1801,7 @@ class CompletionWorkflowTests(unittest.TestCase):
             ):
                 self.assertNotIn(private_value, public_plan)
 
-            applied = completion_workflows.external_locator_deactivate(
+            applied = self.install_historical_external_locator_deactivation(
                 archive_root,
                 zettel_id=zettel_id,
                 locator_id=str(target["locator_id"]),
@@ -863,7 +1810,7 @@ class CompletionWorkflowTests(unittest.TestCase):
                 reviewed_by="person:test",
             )
             self.assertTrue(applied["ok"], applied)
-            self.assertEqual(applied["state"], "written")
+            self.assertEqual(applied["state"], "historical_fixture")
             stored = json.loads(record_path.read_text(encoding="utf-8"))
             self.assertEqual(
                 stored["schema"],
@@ -936,14 +1883,19 @@ class CompletionWorkflowTests(unittest.TestCase):
                 receipt=applied["summary"]["receipt_path"],
             )
             self.assertTrue(revert_plan["ok"], revert_plan)
-            reverted = completion_workflows.external_locator_revert(
+            reverted = self.assert_fixed_compound_block(
                 archive_root,
+                completion_workflows.external_locator_revert,
+                lifecycle_action="external_locator_revert",
+                downstream="_external_locator_revert_plan_core",
                 receipt=applied["summary"]["receipt_path"],
                 expected_plan_sha256=revert_plan["summary"]["plan_sha256"],
                 reviewed_by="person:test",
             )
-            self.assertTrue(reverted["ok"], reverted)
-            self.assertEqual(record_path.read_bytes(), before_bytes)
+            self.assertFalse(reverted["ok"], reverted)
+            self.assertNotEqual(record_path.read_bytes(), before_bytes)
+            still_inactive = json.loads(record_path.read_text(encoding="utf-8"))
+            self.assertEqual(still_inactive["locators"][0]["status"], "inactive")
 
     def test_external_locator_deactivate_duplicate_safety_matrix_fails_closed(self) -> None:
         cases = {
@@ -1208,7 +2160,14 @@ class CompletionWorkflowTests(unittest.TestCase):
                     "json",
                 ]
             )
-            self.assertEqual(code, 0, output)
+            self.assertEqual(code, 1, output)
+            blocked = json.loads(output)
+            self.assertEqual(
+                blocked["reason_codes"],
+                ["compound_exact_human_approval_binding_required"],
+            )
+            self.assertFalse(blocked["private_values_echoed"])
+            self.assertEqual(record_path.read_bytes(), before)
             for private_value in (
                 str(target["locator_ref"]),
                 "mail-service",
@@ -1295,7 +2254,7 @@ class CompletionWorkflowTests(unittest.TestCase):
                     locator_type="export_coordinate",
                     locator_ref="synthetic:legacy-receipt",
                 )
-                written = completion_workflows.external_locator_record(
+                written = self.install_historical_external_locator_fixture(
                     archive_root,
                     zettel_id=zettel_id,
                     locator_type="export_coordinate",
@@ -1500,7 +2459,7 @@ class CompletionWorkflowTests(unittest.TestCase):
                 locator_type="export_coordinate",
                 locator_ref="synthetic:first-add-revert",
             )
-            written = completion_workflows.external_locator_record(
+            written = self.install_historical_external_locator_fixture(
                 archive_root,
                 zettel_id=zettel_id,
                 locator_type="export_coordinate",
@@ -1535,8 +2494,11 @@ class CompletionWorkflowTests(unittest.TestCase):
                 "external_locator_receipt_path_invalid",
                 outside_rejected["blockers"],
             )
-            outside_apply = completion_workflows.external_locator_revert(
+            outside_apply = self.assert_fixed_compound_block(
                 archive_root,
+                completion_workflows.external_locator_revert,
+                lifecycle_action="external_locator_revert",
+                downstream="_external_locator_revert_plan_core",
                 receipt=outside_receipt,
                 expected_plan_sha256="0" * 64,
                 reviewed_by="person:test",
@@ -1549,14 +2511,17 @@ class CompletionWorkflowTests(unittest.TestCase):
                 receipt=receipt_path,
             )
             self.assertTrue(revert_plan["ok"], revert_plan)
-            reverted = completion_workflows.external_locator_revert(
+            reverted = self.assert_fixed_compound_block(
                 archive_root,
+                completion_workflows.external_locator_revert,
+                lifecycle_action="external_locator_revert",
+                downstream="_external_locator_revert_plan_core",
                 receipt=receipt_path,
                 expected_plan_sha256=revert_plan["summary"]["plan_sha256"],
                 reviewed_by="person:test",
             )
-            self.assertTrue(reverted["ok"], reverted)
-            self.assertFalse(record_path.exists())
+            self.assertFalse(reverted["ok"], reverted)
+            self.assertTrue(record_path.exists())
 
     def test_external_locator_corrupt_content_addressed_snapshots_block_before_write(self) -> None:
         for action in ("add", "update", "deactivate"):
@@ -1739,15 +2704,11 @@ class CompletionWorkflowTests(unittest.TestCase):
                             expected_plan_sha256=plan["summary"]["plan_sha256"],
                             reviewed_by="person:test",
                         )
-                self.assertTrue(failed_after_replace)
+                self.assertFalse(failed_after_replace)
                 self.assertFalse(blocked["ok"], blocked)
-                self.assertNotIn(
-                    (
-                        "external_locator_rollback_failed"
-                        if action == "record"
-                        else "external_locator_deactivate_rollback_failed"
-                    ),
+                self.assertEqual(
                     blocked["blockers"],
+                    ["compound_exact_human_approval_binding_required"],
                 )
                 self.assertEqual(record_path.read_bytes(), record_before)
                 receipts_after = {
@@ -1796,7 +2757,7 @@ class CompletionWorkflowTests(unittest.TestCase):
                 locator_type="export_coordinate",
                 locator_ref="synthetic:rollback-first",
             )
-            first = completion_workflows.external_locator_record(
+            first = self.install_historical_external_locator_fixture(
                 archive_root,
                 zettel_id=zettel_id,
                 locator_type="export_coordinate",
@@ -1810,7 +2771,7 @@ class CompletionWorkflowTests(unittest.TestCase):
                 locator_type="export_coordinate",
                 locator_ref="synthetic:rollback-second",
             )
-            second = completion_workflows.external_locator_record(
+            second = self.install_historical_external_locator_fixture(
                 archive_root,
                 zettel_id=zettel_id,
                 locator_type="export_coordinate",
@@ -1839,15 +2800,19 @@ class CompletionWorkflowTests(unittest.TestCase):
                 completion_workflows.archive_services,
                 "_write_bytes_create_if_absent",
                 side_effect=fail_after_receipt_publish,
-            ):
+            ) as downstream_write:
                 blocked = completion_workflows.external_locator_revert(
                     archive_root,
                     receipt=second["summary"]["receipt_path"],
                     expected_plan_sha256=revert_plan["summary"]["plan_sha256"],
                     reviewed_by="person:test",
                 )
+                downstream_write.assert_not_called()
             self.assertFalse(blocked["ok"], blocked)
-            self.assertIn("external_locator_revert_write_failed", blocked["blockers"])
+            self.assertEqual(
+                blocked["blockers"],
+                ["compound_exact_human_approval_binding_required"],
+            )
             self.assertEqual(record_path.read_bytes(), record_before)
             receipt_paths_after = {
                 path.relative_to(archive_root).as_posix()
@@ -1864,7 +2829,7 @@ class CompletionWorkflowTests(unittest.TestCase):
                 locator_type="export_coordinate",
                 locator_ref="synthetic:first-add-receipt-failure",
             )
-            written = completion_workflows.external_locator_record(
+            written = self.install_historical_external_locator_fixture(
                 archive_root,
                 zettel_id=zettel_id,
                 locator_type="export_coordinate",
@@ -1888,17 +2853,18 @@ class CompletionWorkflowTests(unittest.TestCase):
                 completion_workflows.archive_services,
                 "_write_bytes_create_if_absent",
                 side_effect=fail_first_add_receipt,
-            ):
+            ) as downstream_write:
                 blocked = completion_workflows.external_locator_revert(
                     archive_root,
                     receipt=written["summary"]["receipt_path"],
                     expected_plan_sha256=revert_plan["summary"]["plan_sha256"],
                     reviewed_by="person:test",
                 )
+                downstream_write.assert_not_called()
             self.assertFalse(blocked["ok"], blocked)
-            self.assertNotIn(
-                "external_locator_revert_rollback_failed",
+            self.assertEqual(
                 blocked["blockers"],
+                ["compound_exact_human_approval_binding_required"],
             )
             self.assertEqual(record_path.read_bytes(), record_before)
 
@@ -1982,43 +2948,20 @@ class CompletionWorkflowTests(unittest.TestCase):
             }
             self.assertEqual(before, after_plan)
 
-            applied = completion_workflows.objet_capture_batch_apply(
+            applied = self.assert_fixed_compound_block(
                 archive_root,
+                completion_workflows.objet_capture_batch_apply,
+                lifecycle_action="objet_capture_batch",
+                downstream="_batch_plan_core",
                 manifest_path=request_path,
                 expected_plan_sha256=plan["summary"]["plan_sha256"],
                 reviewed_by="person:test",
             )
-            self.assertTrue(applied["ok"], applied)
-            self.assertEqual(applied["state"], "written")
-            self.assertEqual(
-                applied["summary"]["capture_summary"]["captured"],
-                3,
-            )
-            self.assertTrue(
-                (
-                    archive_root
-                    / applied["summary"]["batch_receipt_path"]
-                ).is_file()
-            )
-            self.assert_schema_instance(
-                "objet-capture-batch-receipt.schema.json",
-                json.loads(
-                    (
-                        archive_root
-                        / applied["summary"]["batch_receipt_path"]
-                    ).read_text(encoding="utf-8")
-                ),
-            )
-            self.assertTrue(
-                (
-                    archive_root
-                    / applied["summary"]["capture_receipt_path"]
-                ).is_file()
-            )
+            self.assertFalse(applied["ok"], applied)
             for index in range(3):
                 data = f"synthetic-{index}\n".encode("utf-8")
                 digest = hashlib.sha256(data).hexdigest()
-                self.assertTrue(
+                self.assertFalse(
                     (
                         archive_root
                         / "objects"
@@ -2033,20 +2976,23 @@ class CompletionWorkflowTests(unittest.TestCase):
                 manifest_path=request_path,
             )
             self.assertTrue(replay_plan["ok"], replay_plan)
-            self.assertEqual(replay_plan["summary"]["would_skip"], 3)
-            replay = completion_workflows.objet_capture_batch_apply(
+            self.assertEqual(replay_plan["summary"]["ready_item_count"], 3)
+            self.assertEqual(
+                replay_plan["summary"]["plan_sha256"],
+                plan["summary"]["plan_sha256"],
+            )
+            replay = self.assert_fixed_compound_block(
                 archive_root,
+                completion_workflows.objet_capture_batch_apply,
+                lifecycle_action="objet_capture_batch",
+                downstream="_batch_plan_core",
                 manifest_path=request_path,
                 expected_plan_sha256=replay_plan["summary"]["plan_sha256"],
                 reviewed_by="person:test",
             )
-            self.assertTrue(replay["ok"], replay)
-            self.assertEqual(
-                replay["summary"]["capture_summary"]["skipped"],
-                3,
-            )
+            self.assertFalse(replay["ok"], replay)
 
-    def test_zettel_objet_link_writes_structured_asset_and_reverts_exact_bytes(self) -> None:
+    def test_zettel_objet_link_and_revert_approve_fail_closed_without_writes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.fake_archive(Path(tmp) / "archive")
             zettel_id = "zet_20240504_fake_lunch_thought"
@@ -2079,6 +3025,11 @@ class CompletionWorkflowTests(unittest.TestCase):
             self.assertTrue(plan["summary"]["manifest_record_verified"])
             self.assertEqual(plan["summary"]["current_asset_count"], 0)
 
+            before_apply = {
+                path.relative_to(archive_root).as_posix(): path.read_bytes()
+                for path in archive_root.rglob("*")
+                if path.is_file()
+            }
             apply_code, apply_output = self.run_cli(
                 [
                     "zettel-objet-link",
@@ -2100,66 +3051,73 @@ class CompletionWorkflowTests(unittest.TestCase):
                     "json",
                 ]
             )
-            self.assertEqual(apply_code, 0, apply_output)
+            self.assertEqual(apply_code, 1, apply_output)
             self.assertNotIn(private_label, apply_output)
             applied = json.loads(apply_output)
-            self.assertEqual(applied["state"], "written")
-            frontmatter, _body = (
-                completion_workflows.archive_services.require_readable_zettel_content(
-                    zettel_path
-                )
-            )
-            self.assertIn(
-                {
-                    "object_id": object_id,
-                    "role": "source_document",
-                    "label": private_label,
-                },
-                frontmatter["assets"],
-            )
+            self.assertEqual(applied["state"], "blocked")
             self.assertEqual(
-                completion_workflows.archive_services.validate_schema(
-                    frontmatter,
-                    "zettel-frontmatter.schema.json",
-                ),
-                [],
+                applied["blockers"],
+                ["compound_exact_human_approval_binding_required"],
             )
-            receipt_path = archive_root / applied["summary"]["receipt_path"]
-            self.assert_schema_instance(
-                "zettel-objet-link-receipt.schema.json",
-                json.loads(receipt_path.read_text(encoding="utf-8")),
+            self.assertEqual(applied["files_written"], [])
+            self.assertFalse(applied["privacy_guards"]["writes"])
+            self.assertEqual(zettel_path.read_bytes(), before_bytes)
+            self.assertEqual(
+                {
+                    path.relative_to(archive_root).as_posix(): path.read_bytes()
+                    for path in archive_root.rglob("*")
+                    if path.is_file()
+                },
+                before_apply,
             )
 
-            duplicate = completion_workflows.zettel_objet_link_plan(
+            historical = self.install_historical_zettel_objet_link_fixture(
                 archive_root,
                 zettel_id=zettel_id,
                 object_id=object_id,
-                role="evidence",
+                role="source_document",
+                label=private_label,
             )
-            self.assertFalse(duplicate["ok"])
-            self.assertIn("zettel_objet_link_already_present", duplicate["blockers"])
-
             revert_plan = completion_workflows.zettel_objet_link_revert_plan(
                 archive_root,
-                receipt=applied["summary"]["receipt_path"],
+                receipt=historical["summary"]["receipt_path"],
             )
             self.assertTrue(revert_plan["ok"], revert_plan)
-            reverted = completion_workflows.zettel_objet_link_revert(
-                archive_root,
-                receipt=applied["summary"]["receipt_path"],
-                expected_plan_sha256=revert_plan["summary"]["plan_sha256"],
-                reviewed_by="person:test",
+            before_revert = {
+                path.relative_to(archive_root).as_posix(): path.read_bytes()
+                for path in archive_root.rglob("*")
+                if path.is_file()
+            }
+            revert_code, revert_output = self.run_cli(
+                [
+                    "zettel-objet-link-revert",
+                    str(archive_root),
+                    "--receipt",
+                    historical["summary"]["receipt_path"],
+                    "--expected-plan-sha256",
+                    revert_plan["summary"]["plan_sha256"],
+                    "--approve",
+                    "--reviewed-by",
+                    "person:test",
+                    "--format",
+                    "json",
+                ]
             )
-            self.assertTrue(reverted["ok"], reverted)
-            self.assertEqual(zettel_path.read_bytes(), before_bytes)
-            self.assert_schema_instance(
-                "zettel-objet-link-revert-receipt.schema.json",
-                json.loads(
-                    (
-                        archive_root
-                        / reverted["summary"]["revert_receipt_path"]
-                    ).read_text(encoding="utf-8")
-                ),
+            self.assertEqual(revert_code, 1, revert_output)
+            reverted = json.loads(revert_output)
+            self.assertEqual(
+                reverted["blockers"],
+                ["compound_exact_human_approval_binding_required"],
+            )
+            self.assertEqual(reverted["files_written"], [])
+            self.assertFalse(reverted["privacy_guards"]["writes"])
+            self.assertEqual(
+                {
+                    path.relative_to(archive_root).as_posix(): path.read_bytes()
+                    for path in archive_root.rglob("*")
+                    if path.is_file()
+                },
+                before_revert,
             )
 
     def test_zettel_objet_link_revert_blocks_after_unrelated_zettel_change(self) -> None:
@@ -2167,19 +3125,11 @@ class CompletionWorkflowTests(unittest.TestCase):
             archive_root = self.fake_archive(Path(tmp) / "archive")
             zettel_id = "zet_20240504_fake_lunch_thought"
             object_id = "sha256:9dabf9b965a3f789b1b36100f3f70515ce8dfd81b411b1503e1e2c3304303647"
-            plan = completion_workflows.zettel_objet_link_plan(
+            applied = self.install_historical_zettel_objet_link_fixture(
                 archive_root,
                 zettel_id=zettel_id,
                 object_id=object_id,
                 role="evidence",
-            )
-            applied = completion_workflows.zettel_objet_link_apply(
-                archive_root,
-                zettel_id=zettel_id,
-                object_id=object_id,
-                role="evidence",
-                expected_plan_sha256=plan["summary"]["plan_sha256"],
-                reviewed_by="person:test",
             )
             self.assertTrue(applied["ok"], applied)
             zettel_path = archive_root / "zettels" / f"{zettel_id}.md"
@@ -2196,7 +3146,7 @@ class CompletionWorkflowTests(unittest.TestCase):
                 revert_plan["blockers"],
             )
 
-    def test_discard_unminted_draft_is_receipted_and_exactly_restorable(self) -> None:
+    def test_discard_unminted_draft_plans_but_approve_and_restore_fail_closed(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.fake_archive(Path(tmp) / "archive")
             draft_relative = "inbox/zet_20260519_draft_ai_lunch_note.md"
@@ -2223,6 +3173,11 @@ class CompletionWorkflowTests(unittest.TestCase):
             self.assertTrue(plan["ok"], plan)
             self.assertTrue(plan["summary"]["exact_byte_restore_supported"])
 
+            before_apply = {
+                path.relative_to(archive_root).as_posix(): path.read_bytes()
+                for path in archive_root.rglob("*")
+                if path.is_file()
+            }
             apply_code, apply_output = self.run_cli(
                 [
                     "discard-draft",
@@ -2240,17 +3195,64 @@ class CompletionWorkflowTests(unittest.TestCase):
                     "json",
                 ]
             )
-            self.assertEqual(apply_code, 0, apply_output)
+            self.assertEqual(apply_code, 1, apply_output)
             self.assertNotIn(reason, apply_output)
-            discarded = json.loads(apply_output)
-            self.assertEqual(discarded["state"], "discarded")
-            self.assertFalse(draft_path.exists())
-            snapshot_path = archive_root / discarded["summary"]["snapshot_path"]
-            self.assertEqual(snapshot_path.read_bytes(), before_bytes)
-            receipt_path = archive_root / discarded["summary"]["receipt_path"]
-            receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
-            self.assertEqual(receipt["reason"], reason)
+            blocked = json.loads(apply_output)
+            self.assertEqual(
+                blocked["reason_codes"],
+                ["compound_exact_human_approval_binding_required"],
+            )
+            self.assertFalse(blocked["private_values_echoed"])
+            self.assertEqual(draft_path.read_bytes(), before_bytes)
+            self.assertEqual(
+                {
+                    path.relative_to(archive_root).as_posix(): path.read_bytes()
+                    for path in archive_root.rglob("*")
+                    if path.is_file()
+                },
+                before_apply,
+            )
+
+            # Install one bounded v0.3 discard as historical test evidence so
+            # the read-only restore plan remains covered without reopening the
+            # production approval path.
+            snapshot_path = archive_root / plan["summary"]["snapshot_path"]
+            snapshot_path.parent.mkdir(parents=True, exist_ok=True)
+            snapshot_path.write_bytes(before_bytes)
+            receipt = {
+                "schema": "wom-kit/draft-discard-receipt/v0.1",
+                "action": "discard_unminted_draft",
+                "archive_id": plan["archive_id"],
+                "zettel_id": plan["summary"]["zettel_id"],
+                "draft_path": plan["summary"]["draft_path"],
+                "draft_sha256": plan["summary"]["draft_sha256"],
+                "reason": reason,
+                "reason_sha256": plan["summary"]["reason_sha256"],
+                "snapshot_path": plan["summary"]["snapshot_path"],
+                "plan_sha256": plan["summary"]["plan_sha256"],
+                "reviewed_by": "person:test",
+                "created_at": "2026-05-19T12:00:00Z",
+                "result": {
+                    "draft_removed": True,
+                    "snapshot_written": True,
+                    "exact_byte_restore_supported": True,
+                },
+            }
             self.assert_schema_instance("draft-discard-receipt.schema.json", receipt)
+            receipt_path = archive_root / plan["summary"]["receipt_path"]
+            receipt_path.parent.mkdir(parents=True, exist_ok=True)
+            receipt_path.write_text(
+                json.dumps(
+                    receipt,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            draft_path.unlink()
+            self.assertEqual(snapshot_path.read_bytes(), before_bytes)
 
             audit = completion_workflows.archive_services.inbox_pipeline_audit(
                 archive_root,
@@ -2263,26 +3265,35 @@ class CompletionWorkflowTests(unittest.TestCase):
 
             restore_plan = completion_workflows.draft_discard_restore_plan(
                 archive_root,
-                receipt=discarded["summary"]["receipt_path"],
+                receipt=plan["summary"]["receipt_path"],
             )
             self.assertTrue(restore_plan["ok"], restore_plan)
+            before_restore = {
+                path.relative_to(archive_root).as_posix(): path.read_bytes()
+                for path in archive_root.rglob("*")
+                if path.is_file()
+            }
             restored = completion_workflows.draft_discard_restore(
                 archive_root,
-                receipt=discarded["summary"]["receipt_path"],
+                receipt=plan["summary"]["receipt_path"],
                 expected_plan_sha256=restore_plan["summary"]["plan_sha256"],
                 reviewed_by="person:test",
             )
-            self.assertTrue(restored["ok"], restored)
-            self.assertEqual(draft_path.read_bytes(), before_bytes)
-            restore_receipt = json.loads(
-                (
-                    archive_root
-                    / restored["summary"]["restore_receipt_path"]
-                ).read_text(encoding="utf-8")
+            self.assertFalse(restored["ok"], restored)
+            self.assertEqual(
+                restored["blockers"],
+                ["compound_exact_human_approval_binding_required"],
             )
-            self.assert_schema_instance(
-                "draft-discard-restore-receipt.schema.json",
-                restore_receipt,
+            self.assertEqual(restored["files_written"], [])
+            self.assertFalse(restored["privacy_guards"]["writes"])
+            self.assertFalse(draft_path.exists())
+            self.assertEqual(
+                {
+                    path.relative_to(archive_root).as_posix(): path.read_bytes()
+                    for path in archive_root.rglob("*")
+                    if path.is_file()
+                },
+                before_restore,
             )
 
     def test_discard_draft_blocks_minted_twin_and_routes_to_retire(self) -> None:
@@ -2396,7 +3407,7 @@ class CompletionWorkflowTests(unittest.TestCase):
                 selected["counts"]["structural_container"],
                 2,
             )
-            applied = completion_workflows.markup_normalization_apply(
+            applied = self.install_historical_markup_fixture(
                 archive_root,
                 policy="normalize",
                 max_items=1000,
@@ -2436,7 +3447,7 @@ class CompletionWorkflowTests(unittest.TestCase):
                 )
             )
             self.assertTrue(revert_plan["ok"], revert_plan)
-            reverted = completion_workflows.markup_normalization_revert(
+            reverted = self.install_historical_markup_revert(
                 archive_root,
                 receipt=receipt,
                 expected_plan_sha256=revert_plan["summary"][
@@ -2507,7 +3518,7 @@ class CompletionWorkflowTests(unittest.TestCase):
                 self.assertEqual(item["state"], "ready")
                 self.assertEqual(item["counts"]["table_of_contents"], 1)
 
-            applied = completion_workflows.markup_normalization_apply(
+            applied = self.install_historical_markup_fixture(
                 archive_root,
                 policy="normalize",
                 max_items=1000,
@@ -2524,7 +3535,7 @@ class CompletionWorkflowTests(unittest.TestCase):
                 archive_root,
                 receipt=applied["summary"]["receipt_path"],
             )
-            reverted = completion_workflows.markup_normalization_revert(
+            reverted = self.install_historical_markup_revert(
                 archive_root,
                 receipt=applied["summary"]["receipt_path"],
                 expected_plan_sha256=revert_plan["summary"]["plan_sha256"],
@@ -2604,7 +3615,7 @@ class CompletionWorkflowTests(unittest.TestCase):
                 blocked_item["after_sha256"],
             )
 
-            applied = completion_workflows.markup_normalization_apply(
+            applied = self.install_historical_markup_fixture(
                 archive_root,
                 policy="normalize",
                 max_items=1000,
@@ -2654,7 +3665,7 @@ class CompletionWorkflowTests(unittest.TestCase):
             self.assertEqual(item["counts"]["table"], 1)
             self.assertEqual(item["counts"]["table_blocked"], 0)
             self.assertEqual(item["counts"]["mention_date"], 1)
-            applied = completion_workflows.markup_normalization_apply(
+            applied = self.install_historical_markup_fixture(
                 archive_root,
                 policy="normalize",
                 max_items=1000,
@@ -2677,7 +3688,7 @@ class CompletionWorkflowTests(unittest.TestCase):
                 archive_root,
                 receipt=applied["summary"]["receipt_path"],
             )
-            reverted = completion_workflows.markup_normalization_revert(
+            reverted = self.install_historical_markup_revert(
                 archive_root,
                 receipt=applied["summary"]["receipt_path"],
                 expected_plan_sha256=revert_plan["summary"]["plan_sha256"],
@@ -2757,7 +3768,7 @@ class CompletionWorkflowTests(unittest.TestCase):
             self.assertEqual(item["counts"]["table"], 1)
             self.assertEqual(item["counts"]["table_blocked"], 0)
 
-            applied = completion_workflows.markup_normalization_apply(
+            applied = self.install_historical_markup_fixture(
                 archive_root,
                 policy="normalize",
                 max_items=1000,
@@ -3078,7 +4089,7 @@ class CompletionWorkflowTests(unittest.TestCase):
                     self.assertEqual(by_id[zettel_id]["state"], "blocked")
                     self.assertTrue(by_id[zettel_id]["blocker_codes"])
 
-            applied = completion_workflows.markup_normalization_apply(
+            applied = self.install_historical_markup_fixture(
                 archive_root,
                 policy="normalize",
                 max_items=1000,
@@ -3173,7 +4184,7 @@ class CompletionWorkflowTests(unittest.TestCase):
             self.assertEqual(selected["summary"]["blocked_zettel_count"], 1)
             self.assertIsNotNone(selected["summary"]["plan_sha256"])
 
-            applied = completion_workflows.markup_normalization_apply(
+            applied = self.install_historical_markup_fixture(
                 archive_root,
                 policy="normalize",
                 max_items=1000,
@@ -3209,7 +4220,7 @@ class CompletionWorkflowTests(unittest.TestCase):
                 max_changes=1000,
             )
             self.assertTrue(plan["ok"], plan)
-            applied = completion_workflows.markup_normalization_apply(
+            applied = self.install_historical_markup_fixture(
                 archive_root,
                 policy="normalize",
                 max_items=1000,
@@ -3249,7 +4260,7 @@ class CompletionWorkflowTests(unittest.TestCase):
                 target_id,
                 "Reviewed relation target.\n",
             )
-            edge = completion_workflows.archive_services.zettel_edge_write(
+            edge = self.write_exact_edge(
                 archive_root,
                 from_zettel=source_id,
                 target_ref=target_id,
@@ -3266,7 +4277,7 @@ class CompletionWorkflowTests(unittest.TestCase):
                 locator_type="provider_page_id",
                 locator_ref=locator_ref,
             )
-            locator = completion_workflows.external_locator_record(
+            locator = self.install_historical_external_locator_fixture(
                 archive_root,
                 zettel_id=source_id,
                 locator_type="provider_page_id",
@@ -3342,7 +4353,7 @@ class CompletionWorkflowTests(unittest.TestCase):
                 bound_plan["summary"]["reference_binding_count"],
                 2,
             )
-            applied = completion_workflows.markup_normalization_apply(
+            applied = self.install_historical_markup_fixture(
                 archive_root,
                 policy="normalize",
                 max_items=1000,
@@ -3422,7 +4433,7 @@ class CompletionWorkflowTests(unittest.TestCase):
                 binding_manifest=manifest_relative,
             )
             self.assertTrue(plan["ok"], plan)
-            applied = completion_workflows.markup_normalization_apply(
+            applied = self.install_historical_markup_fixture(
                 archive_root,
                 policy="normalize",
                 max_items=1000,
@@ -3494,7 +4505,7 @@ class CompletionWorkflowTests(unittest.TestCase):
             )
             self.assertTrue(plan["ok"], plan)
             self.assertEqual(plan["summary"]["reference_binding_count"], 1)
-            applied = completion_workflows.markup_normalization_apply(
+            applied = self.install_historical_markup_fixture(
                 archive_root,
                 policy="normalize",
                 max_items=1000,
@@ -3526,7 +4537,7 @@ class CompletionWorkflowTests(unittest.TestCase):
                 target_id,
                 "Reviewed page target.\n",
             )
-            edge = completion_workflows.archive_services.zettel_edge_write(
+            edge = self.write_exact_edge(
                 archive_root,
                 from_zettel=source_id,
                 target_ref=target_id,
@@ -3592,7 +4603,7 @@ class CompletionWorkflowTests(unittest.TestCase):
             )
             self.assertTrue(plan["ok"], plan)
             self.assertEqual(plan["summary"]["reference_binding_count"], 2)
-            applied = completion_workflows.markup_normalization_apply(
+            applied = self.install_historical_markup_fixture(
                 archive_root,
                 policy="normalize",
                 max_items=1000,
@@ -3694,7 +4705,7 @@ class CompletionWorkflowTests(unittest.TestCase):
             )
             self.assertTrue(plan["ok"], plan)
             self.assertEqual(plan["summary"]["reference_binding_count"], 2)
-            applied = completion_workflows.markup_normalization_apply(
+            applied = self.install_historical_markup_fixture(
                 archive_root,
                 policy="normalize",
                 max_items=1000,
@@ -3722,7 +4733,7 @@ class CompletionWorkflowTests(unittest.TestCase):
                 archive_root,
                 receipt=applied["summary"]["receipt_path"],
             )
-            reverted = completion_workflows.markup_normalization_revert(
+            reverted = self.install_historical_markup_revert(
                 archive_root,
                 receipt=applied["summary"]["receipt_path"],
                 expected_plan_sha256=revert_plan["summary"]["plan_sha256"],
@@ -4144,7 +5155,7 @@ class CompletionWorkflowTests(unittest.TestCase):
                 binding_manifest=manifest_relative,
             )
             self.assertTrue(plan["ok"], plan)
-            applied = completion_workflows.markup_normalization_apply(
+            applied = self.install_historical_markup_fixture(
                 archive_root,
                 policy="normalize",
                 max_items=1000,
@@ -4167,7 +5178,7 @@ class CompletionWorkflowTests(unittest.TestCase):
                 archive_root,
                 receipt=applied["summary"]["receipt_path"],
             )
-            reverted = completion_workflows.markup_normalization_revert(
+            reverted = self.install_historical_markup_revert(
                 archive_root,
                 receipt=applied["summary"]["receipt_path"],
                 expected_plan_sha256=revert_plan["summary"]["plan_sha256"],
@@ -4246,7 +5257,7 @@ class CompletionWorkflowTests(unittest.TestCase):
             for target_id in target_ids:
                 self.assertNotIn(target_id, serialized_plan)
 
-            applied = completion_workflows.markup_normalization_apply(
+            applied = self.install_historical_markup_fixture(
                 archive_root,
                 policy="normalize",
                 max_items=1000,
@@ -4275,7 +5286,7 @@ class CompletionWorkflowTests(unittest.TestCase):
                 archive_root,
                 receipt=applied["summary"]["receipt_path"],
             )
-            reverted = completion_workflows.markup_normalization_revert(
+            reverted = self.install_historical_markup_revert(
                 archive_root,
                 receipt=applied["summary"]["receipt_path"],
                 expected_plan_sha256=revert_plan["summary"]["plan_sha256"],
@@ -4467,8 +5478,11 @@ class CompletionWorkflowTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            blocked = completion_workflows.markup_normalization_apply(
+            blocked = self.assert_fixed_compound_block(
                 archive_root,
+                completion_workflows.markup_normalization_apply,
+                lifecycle_action="markup_normalization",
+                downstream="_markup_plan_core",
                 policy="normalize",
                 max_items=1000,
                 max_changes=1000,
@@ -4477,9 +5491,9 @@ class CompletionWorkflowTests(unittest.TestCase):
                 reviewed_by="person:test",
             )
             self.assertFalse(blocked["ok"], blocked)
-            self.assertIn(
-                "markup_zettel_reference_binding_unverified",
+            self.assertEqual(
                 blocked["blockers"],
+                ["compound_exact_human_approval_binding_required"],
             )
             self.assertEqual(blocked["files_written"], [])
             self.assertEqual(source_path.read_bytes(), source_before)
@@ -4772,7 +5786,7 @@ class CompletionWorkflowTests(unittest.TestCase):
                     plan["summary"]["reference_binding_count"],
                     2,
                 )
-                applied = completion_workflows.markup_normalization_apply(
+                applied = self.install_historical_markup_fixture(
                     archive_root,
                     policy="normalize",
                     max_items=1000,
@@ -4803,7 +5817,7 @@ class CompletionWorkflowTests(unittest.TestCase):
                 target_id,
                 "Reviewed page target.\n",
             )
-            edge = completion_workflows.archive_services.zettel_edge_write(
+            edge = self.write_exact_edge(
                 archive_root,
                 from_zettel=source_id,
                 target_ref=target_id,
@@ -5205,7 +6219,7 @@ class CompletionWorkflowTests(unittest.TestCase):
                 target_id,
                 "Reviewed edge target.\n",
             )
-            edge = completion_workflows.archive_services.zettel_edge_write(
+            edge = self.write_exact_edge(
                 archive_root,
                 from_zettel=source_id,
                 target_ref=target_id,
@@ -5468,7 +6482,7 @@ class CompletionWorkflowTests(unittest.TestCase):
             for private_value in (*target_ids, object_id):
                 self.assertNotIn(private_value, serialized_plan)
 
-            applied = completion_workflows.markup_normalization_apply(
+            applied = self.install_historical_markup_fixture(
                 archive_root,
                 policy="normalize",
                 max_items=1000,
@@ -5496,7 +6510,7 @@ class CompletionWorkflowTests(unittest.TestCase):
                 archive_root,
                 receipt=applied["summary"]["receipt_path"],
             )
-            reverted = completion_workflows.markup_normalization_revert(
+            reverted = self.install_historical_markup_revert(
                 archive_root,
                 receipt=applied["summary"]["receipt_path"],
                 expected_plan_sha256=revert_plan["summary"]["plan_sha256"],
@@ -5569,7 +6583,7 @@ class CompletionWorkflowTests(unittest.TestCase):
             self.assertNotIn("private-database", serialized_plan)
             self.assertNotIn(target_id, serialized_plan)
 
-            applied = completion_workflows.markup_normalization_apply(
+            applied = self.install_historical_markup_fixture(
                 archive_root,
                 policy="normalize",
                 max_items=1000,
@@ -5589,7 +6603,7 @@ class CompletionWorkflowTests(unittest.TestCase):
                 archive_root,
                 receipt=applied["summary"]["receipt_path"],
             )
-            reverted = completion_workflows.markup_normalization_revert(
+            reverted = self.install_historical_markup_revert(
                 archive_root,
                 receipt=applied["summary"]["receipt_path"],
                 expected_plan_sha256=revert_plan["summary"]["plan_sha256"],
@@ -6321,7 +7335,7 @@ class CompletionWorkflowTests(unittest.TestCase):
                     max_items=1000,
                     max_changes=1000,
                 )
-                applied = completion_workflows.markup_normalization_apply(
+                applied = self.install_historical_markup_fixture(
                     archive_root,
                     policy="normalize",
                     max_items=1000,
@@ -6361,7 +7375,7 @@ class CompletionWorkflowTests(unittest.TestCase):
                 )
                 self.assertTrue(recovery_plan["ok"], recovery_plan)
                 recovered = (
-                    completion_workflows.markup_normalization_recover(
+                    self.install_historical_markup_recovery(
                         archive_root,
                         journal=journal_relative,
                         mode=mode,
@@ -6550,7 +7564,7 @@ class CompletionWorkflowTests(unittest.TestCase):
             self.assertNotIn("private-category-value", serialized)
             self.assertNotIn("2026-08-07T10:30:00", serialized)
 
-    def test_relation_candidate_accept_writes_and_verifies_existing_edge_engine(self) -> None:
+    def test_relation_candidate_accept_requires_compound_approval_binding(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.fake_archive(Path(tmp) / "archive")
             source_id = "zet_20260804_accept_source"
@@ -6590,47 +7604,17 @@ class CompletionWorkflowTests(unittest.TestCase):
                 expected_plan_sha256=plan["summary"]["plan_sha256"],
                 reviewed_by="person:test",
             )
-            self.assertTrue(accepted["ok"], accepted)
-            self.assertTrue(
-                accepted["verification"]["durable_edge_verified"]
+            self.assertFalse(accepted["ok"], accepted)
+            self.assertEqual(
+                accepted["blockers"],
+                ["compound_exact_human_approval_binding_required"],
             )
-            self.assertTrue(
-                accepted["verification"]["durable_judgment_verified"]
+            self.assertNotIn(
+                "type: continues", source_path.read_text(encoding="utf-8")
             )
-            written = source_path.read_text(encoding="utf-8")
-            self.assertIn("type: continues", written)
-            self.assertIn(f"target: {target_id}", written)
-            self.assertTrue(
-                (
-                    archive_root
-                    / accepted["judgment_path"]
-                ).is_file()
-            )
-            self.assertTrue(
-                (
-                    archive_root
-                    / accepted["judgment_receipt_path"]
-                ).is_file()
-            )
-            self.assert_schema_instance(
-                "relation-judgment.schema.json",
-                json.loads(
-                    (
-                        archive_root / accepted["judgment_path"]
-                    ).read_text(encoding="utf-8")
-                ),
-            )
-            self.assert_schema_instance(
-                "relation-judgment-receipt.schema.json",
-                json.loads(
-                    (
-                        archive_root
-                        / accepted["judgment_receipt_path"]
-                    ).read_text(encoding="utf-8")
-                ),
-            )
+            self.assertEqual(accepted["files_written"], [])
 
-    def test_sequence_is_active_manual_semantics_and_writes_only_after_review(self) -> None:
+    def test_sequence_accept_is_blocked_without_compound_approval_binding(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.fake_archive(Path(tmp) / "archive")
             types_path = archive_root / "zettel-kasten" / "types.yml"
@@ -6658,8 +7642,13 @@ class CompletionWorkflowTests(unittest.TestCase):
                 dry_sync["appended_link_type_ids"],
                 ["sequence"],
             )
-            approved_sync = (
-                completion_workflows.archive_services.migrate_archive(
+            before_sync = self.snapshot_files(archive_root)
+            with mock.patch.object(
+                completion_workflows.archive_services,
+                "sync_base_link_types",
+                side_effect=AssertionError("sync dispatcher must not run"),
+            ) as downstream_sync:
+                approved_sync = completion_workflows.archive_services.migrate_archive(
                     archive_root,
                     target="base-link-types",
                     dry_run=False,
@@ -6667,8 +7656,20 @@ class CompletionWorkflowTests(unittest.TestCase):
                     reviewed_by="person:test",
                     selected_link_types=["sequence"],
                 )
+                downstream_sync.assert_not_called()
+            self.assertFalse(approved_sync["ok"], approved_sync)
+            self.assertEqual(
+                approved_sync["blockers"],
+                ["compound_exact_human_approval_binding_required"],
             )
-            self.assertTrue(approved_sync["ok"], approved_sync)
+            self.assertEqual(approved_sync["files_written"], [])
+            self.assertFalse(approved_sync["private_values_echoed"])
+            self.assertEqual(self.snapshot_files(archive_root), before_sync)
+
+            # Historical synthetic adoption keeps sequence analysis covered;
+            # it is not a production approval bypass.
+            self.assertIsInstance(dry_sync["new_text"], str)
+            types_path.write_text(dry_sync["new_text"], encoding="utf-8")
 
             source_id = "zet_20260804_process_step_one"
             target_id = "zet_20260804_process_step_two"
@@ -6740,13 +7741,16 @@ class CompletionWorkflowTests(unittest.TestCase):
                 expected_plan_sha256=plan["summary"]["plan_sha256"],
                 reviewed_by="person:test",
             )
-            self.assertTrue(accepted["ok"], accepted)
-            self.assertIn(
-                "type: sequence",
-                source_path.read_text(encoding="utf-8"),
+            self.assertFalse(accepted["ok"], accepted)
+            self.assertEqual(
+                accepted["blockers"],
+                ["compound_exact_human_approval_binding_required"],
+            )
+            self.assertNotIn(
+                "type: sequence", source_path.read_text(encoding="utf-8")
             )
 
-    def test_base_link_type_sync_can_partially_revert_only_unused_exact_records(self) -> None:
+    def test_base_link_type_sync_and_revert_plan_but_approve_fail_closed(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.fake_archive(Path(tmp) / "archive")
             types_path = archive_root / "zettel-kasten" / "types.yml"
@@ -6762,15 +7766,101 @@ class CompletionWorkflowTests(unittest.TestCase):
                 completion_workflows.archive_services.dump_yaml(types_doc),
                 encoding="utf-8",
             )
-            applied = completion_workflows.archive_services.migrate_archive(
+            before_text = types_path.read_text(encoding="utf-8")
+            dry_sync = completion_workflows.archive_services.migrate_archive(
                 archive_root,
                 target="base-link-types",
-                dry_run=False,
-                approve=True,
-                reviewed_by="person:test",
+                dry_run=True,
+                approve=False,
                 selected_link_types=["sequence"],
             )
-            self.assertTrue(applied["ok"], applied)
+            self.assertTrue(dry_sync["ok"], dry_sync)
+            self.assertEqual(dry_sync["appended_link_type_ids"], ["sequence"])
+            self.assertIsInstance(dry_sync["new_text"], str)
+
+            before_approve = self.snapshot_files(archive_root)
+            with mock.patch.object(
+                completion_workflows.archive_services,
+                "sync_base_link_types",
+                side_effect=AssertionError("sync dispatcher must not run"),
+            ) as downstream_sync:
+                blocked_sync = completion_workflows.archive_services.migrate_archive(
+                    archive_root,
+                    target="base-link-types",
+                    dry_run=False,
+                    approve=True,
+                    reviewed_by="person:test",
+                    selected_link_types=["sequence"],
+                )
+                downstream_sync.assert_not_called()
+            self.assertEqual(
+                blocked_sync["blockers"],
+                ["compound_exact_human_approval_binding_required"],
+            )
+            self.assertEqual(blocked_sync["files_written"], [])
+            self.assertFalse(blocked_sync["private_values_echoed"])
+            self.assertEqual(self.snapshot_files(archive_root), before_approve)
+
+            # Direct historical fixture permits the read-only revert planner
+            # to keep proving exact, unused-record selection.
+            after_text = dry_sync["new_text"]
+            types_path.write_text(after_text, encoding="utf-8")
+            receipt_seed = {
+                "archive_id": dry_sync["archive_id"],
+                "target": "base-link-types",
+                "appended_link_type_ids": ["sequence"],
+                "before_sha256": completion_workflows.archive_services.sha256_text(
+                    before_text
+                ),
+                "after_sha256": completion_workflows.archive_services.sha256_text(
+                    after_text
+                ),
+            }
+            receipt_relative = (
+                completion_workflows.archive_services.migration_receipt_relative_path(
+                    "base-link-types",
+                    receipt_seed,
+                )
+            )
+            receipt_path = (
+                completion_workflows.archive_services.archive_internal_path(
+                    archive_root,
+                    receipt_relative,
+                )
+            )
+            receipt_path.parent.mkdir(parents=True, exist_ok=True)
+            receipt_path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": "wom-kit/base-link-types-sync-receipt/v0.1",
+                        "lifecycle_action": "base_link_types_sync",
+                        "receipt_kind": "base_link_types_sync",
+                        "created_at": "2026-08-20T00:00:00Z",
+                        "archive_id": dry_sync["archive_id"],
+                        "target": "base-link-types",
+                        "reviewed_by": "person:historical-fixture",
+                        "adoption_generation": 0,
+                        "selected_link_type_ids": ["sequence"],
+                        "files_changed": ["zettel-kasten/types.yml"],
+                        "appended_link_type_ids": ["sequence"],
+                        "before_sha256": receipt_seed["before_sha256"],
+                        "after_sha256": receipt_seed["after_sha256"],
+                        "result": {
+                            "types_file_written": True,
+                            "receipt_written": True,
+                        },
+                        "closed_actions": {
+                            "provider_api_called": False,
+                            "real_source_export_files_read": False,
+                            "zettel_files_written": False,
+                            "edge_receipts_deleted": False,
+                        },
+                    },
+                    sort_keys=True,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
             preview = completion_workflows.archive_services.migrate_archive(
                 archive_root,
                 target="base-link-types",
@@ -6780,50 +7870,15 @@ class CompletionWorkflowTests(unittest.TestCase):
                 selected_link_types=["sequence"],
             )
             self.assertTrue(preview["ok"], preview)
-            self.assertEqual(
-                preview["removable_link_type_ids"],
-                ["sequence"],
-            )
-            reverted = completion_workflows.archive_services.migrate_archive(
-                archive_root,
-                target="base-link-types",
-                dry_run=False,
-                approve=True,
-                revert=True,
-                reviewed_by="person:test",
-                selected_link_types=["sequence"],
-            )
-            self.assertTrue(reverted["ok"], reverted)
-            final_types = completion_workflows.archive_services.load_yaml(
-                types_path.read_text(encoding="utf-8")
-            )
-            self.assertNotIn(
-                "sequence",
-                {
-                    item.get("id")
-                    for item in final_types["link_types"]
-                    if isinstance(item, dict)
-                },
-            )
-            self.assertTrue(
-                (archive_root / reverted["revert_receipt_path"]).is_file()
-            )
-            readopted = completion_workflows.archive_services.migrate_archive(
-                archive_root,
-                target="base-link-types",
-                dry_run=False,
-                approve=True,
-                reviewed_by="person:test",
-                selected_link_types=["sequence"],
-            )
-            self.assertTrue(readopted["ok"], readopted)
-            self.assertEqual(readopted["adoption_generation"], 1)
-            self.assertNotEqual(
-                readopted["receipt_path"],
-                applied["receipt_path"],
-            )
-            second_revert = (
-                completion_workflows.archive_services.migrate_archive(
+            self.assertEqual(preview["removable_link_type_ids"], ["sequence"])
+
+            before_revert = self.snapshot_files(archive_root)
+            with mock.patch.object(
+                completion_workflows.archive_services,
+                "sync_base_link_types_revert",
+                side_effect=AssertionError("revert dispatcher must not run"),
+            ) as downstream_revert:
+                blocked_revert = completion_workflows.archive_services.migrate_archive(
                     archive_root,
                     target="base-link-types",
                     dry_run=False,
@@ -6832,12 +7887,14 @@ class CompletionWorkflowTests(unittest.TestCase):
                     reviewed_by="person:test",
                     selected_link_types=["sequence"],
                 )
+                downstream_revert.assert_not_called()
+            self.assertEqual(
+                blocked_revert["blockers"],
+                ["compound_exact_human_approval_binding_required"],
             )
-            self.assertTrue(second_revert["ok"], second_revert)
-            self.assertNotEqual(
-                second_revert["revert_receipt_path"],
-                reverted["revert_receipt_path"],
-            )
+            self.assertEqual(blocked_revert["files_written"], [])
+            self.assertFalse(blocked_revert["private_values_echoed"])
+            self.assertEqual(self.snapshot_files(archive_root), before_revert)
 
     def test_registered_third_party_principal_can_be_indexed_and_targeted(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -6854,7 +7911,7 @@ class CompletionWorkflowTests(unittest.TestCase):
                 "display_name",
                 plan["principal"],
             )
-            registered = completion_workflows.principal_register(
+            registered = self.install_historical_principal_fixture(
                 archive_root,
                 principal_id=principal_id,
                 kind="company",
@@ -6897,7 +7954,7 @@ class CompletionWorkflowTests(unittest.TestCase):
                 recurring_series="program:principal-test",
                 sequence_index=1,
             )
-            edge = completion_workflows.archive_services.zettel_edge_write(
+            edge = self.write_exact_edge(
                 archive_root,
                 from_zettel=source_id,
                 target_ref=principal_id,
@@ -6944,7 +8001,7 @@ class CompletionWorkflowTests(unittest.TestCase):
                 blocked_removal["blockers"],
             )
 
-    def test_unused_registered_principal_can_be_unregistered_with_receipt(self) -> None:
+    def test_unused_registered_principal_plans_but_unregister_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.fake_archive(Path(tmp) / "archive")
             principal_id = "role:reviewed-coordinator"
@@ -6954,7 +8011,7 @@ class CompletionWorkflowTests(unittest.TestCase):
                 kind="role",
                 display_name="Reviewed Coordinator",
             )
-            registered = completion_workflows.principal_register(
+            registered = self.install_historical_principal_fixture(
                 archive_root,
                 principal_id=principal_id,
                 kind="role",
@@ -6970,22 +8027,17 @@ class CompletionWorkflowTests(unittest.TestCase):
                 )
             )
             self.assertTrue(removal_plan["ok"], removal_plan)
-            removed = completion_workflows.principal_unregister(
+            removed = self.assert_fixed_compound_block(
                 archive_root,
+                completion_workflows.principal_unregister,
+                lifecycle_action="principal_unregister",
+                downstream="_principal_unregistration_plan_core",
                 principal_id=principal_id,
                 expected_plan_sha256=removal_plan["plan_sha256"],
                 reviewed_by="person:test",
             )
-            self.assertTrue(removed["ok"], removed)
-            self.assertFalse(record_path.exists())
-            self.assert_schema_instance(
-                "principal-unregistration-receipt.schema.json",
-                json.loads(
-                    (archive_root / removed["receipt_path"]).read_text(
-                        encoding="utf-8"
-                    )
-                ),
-            )
+            self.assertFalse(removed["ok"], removed)
+            self.assertTrue(record_path.exists())
 
     def test_principal_cli_runs_reviewed_register_list_unregister_cycle(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -7024,7 +8076,21 @@ class CompletionWorkflowTests(unittest.TestCase):
                     "person:test",
                 ]
             )
-            self.assertEqual(register_code, 0, register_output)
+            self.assertEqual(register_code, 1, register_output)
+            register_blocked = json.loads(register_output)
+            self.assertEqual(
+                register_blocked["reason_codes"],
+                ["compound_exact_human_approval_binding_required"],
+            )
+            self.assertFalse(register_blocked["private_values_echoed"])
+            registered = self.install_historical_principal_fixture(
+                archive_root,
+                principal_id=principal_id,
+                kind="team",
+                display_name="Reviewed Operations",
+                expected_plan_sha256=plan["plan_sha256"],
+                reviewed_by="person:test",
+            )
             listed_code, listed_output = self.run_cli(
                 ["principal-list", str(archive_root)]
             )
@@ -7056,9 +8122,18 @@ class CompletionWorkflowTests(unittest.TestCase):
                     "person:test",
                 ]
             )
-            self.assertEqual(unregister_code, 0, unregister_output)
+            self.assertEqual(unregister_code, 1, unregister_output)
+            unregister_blocked = json.loads(unregister_output)
+            self.assertEqual(
+                unregister_blocked["reason_codes"],
+                ["compound_exact_human_approval_binding_required"],
+            )
+            self.assertFalse(unregister_blocked["private_values_echoed"])
+            self.assertTrue(
+                (archive_root / registered["record_path"]).is_file()
+            )
 
-    def test_project_bytecode_repair_removes_only_derived_untracked_bytes(self) -> None:
+    def test_project_bytecode_repair_plans_but_approve_fails_closed_without_writes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             project_root = Path(tmp) / "project"
             mirror, bytecode, source_bytes = self.project_mirror_fixture(
@@ -7082,30 +8157,36 @@ class CompletionWorkflowTests(unittest.TestCase):
             self.assertFalse(
                 plan["privacy_guards"]["bytecode_filenames_echoed"]
             )
-            repaired = completion_workflows.project_bytecode_repair(
+            before = {
+                path.relative_to(project_root).as_posix(): path.read_bytes()
+                for path in project_root.rglob("*")
+                if path.is_file()
+            }
+            blocked = completion_workflows.project_bytecode_repair(
                 project_root,
                 max_files=100,
                 expected_plan_sha256=plan["summary"]["plan_sha256"],
                 reviewed_by="person:test",
                 affirm_external_writers_quiescent=True,
             )
-            self.assertTrue(repaired["ok"], repaired)
-            self.assertFalse(bytecode.exists())
+            self.assertFalse(blocked["ok"], blocked)
+            self.assertEqual(blocked["state"], "blocked")
+            self.assertEqual(
+                blocked["blockers"],
+                ["compound_exact_human_approval_binding_required"],
+            )
+            self.assertEqual(blocked["files_written"], [])
+            self.assertFalse(blocked["private_values_echoed"])
+            self.assertEqual(
+                {
+                    path.relative_to(project_root).as_posix(): path.read_bytes()
+                    for path in project_root.rglob("*")
+                    if path.is_file()
+                },
+                before,
+            )
+            self.assertTrue(bytecode.exists())
             self.assertEqual(source.read_bytes(), source_bytes)
-            self.assertEqual(repaired["summary"]["removed_count"], 1)
-            self.assertFalse(repaired["summary"]["source_files_modified"])
-            self.assertTrue(
-                (project_root / repaired["summary"]["receipt_path"]).is_file()
-            )
-            self.assert_schema_instance(
-                "project-bytecode-repair-receipt.schema.json",
-                json.loads(
-                    (
-                        project_root
-                        / repaired["summary"]["receipt_path"]
-                    ).read_text(encoding="utf-8")
-                ),
-            )
             status = subprocess.run(
                 ["git", "status", "--porcelain"],
                 cwd=mirror,

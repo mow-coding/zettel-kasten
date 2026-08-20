@@ -1,6 +1,6 @@
 # Beginner Setup Manual
 
-Status: v0.3.138 beginner setup manual with Notion file-ref recovery credential guidance
+Status: v0.4.0 beginner setup preview; Notion recovery execution is fixed closed
 Date: 2026-06-22
 
 This document is the beginner-facing bridge between recommendations and actual
@@ -60,8 +60,8 @@ The manual explains:
   but not on `PATH`,
 - how to walk through Cloudflare R2 bucket and API token setup fields without
   inventing bucket names, token permissions, or public-access choices,
-- how to run the Notion nested recovery human steps in plain language before
-  the approval-gated live structure fetch,
+- how to preview the Notion nested recovery scope in plain language without a
+  credential read, provider call, fixture, or receipt,
 - which dry-run commands to run next.
 
 ## Beginner Rules
@@ -335,33 +335,17 @@ archive beginner-setup-manual <archive-root> \
   --format json
 ```
 
-This topic exists because the live Notion structure fetch adapter is useful only
-when the human can understand and approve the human-operated step. v0.3.136 adds
-the beginner-facing wrapper for that step, and v0.3.138 adds a local
-`file:<path>` credential fallback so a user with an existing token file does not
-need to paste a token or build an environment-variable command:
-
-```bash
-archive notion-recover <archive-root>
-```
-
-If the token is already in a local text file, a short fallback is:
-
-```bash
-archive notion-recover <archive-root> --credential-ref file:<local-token-file>
-```
-
-Use that file ref as a local bridge only. The recommended long-term home for
-the token is a password vault or OS keyring entry with a safe label such as
-`Notion API - backup workspace`. Current WOM output does not echo the file path,
-file name, or token value; live vault/keyring one-click reads are still a future
-adapter boundary, not an implemented provider call.
-
-For a no-write preview:
+This topic preserves the historical v0.3 Notion structure-fetch explanation.
+In v0.4.0 the beginner wrapper is preview-only:
 
 ```bash
 archive notion-recover <archive-root> --dry-run --format json
 ```
+
+Do not supply a token or credential ref. The implicit executor and every
+approval request return `compound_exact_human_approval_binding_required`
+before credential/private target reads or provider calls and write no fixture
+or receipt.
 
 The guide uses plain user language before internal terms:
 
@@ -376,26 +360,23 @@ untraceable                -> items whose old location is still unknown
 The beginner explanation is:
 
 ```text
-We are checking where the last missing Notion items belonged.
-Your local computer asks Notion for structure only: upper page and location links.
+We are previewing which missing Notion locations would need review.
+No process asks Notion for structure in v0.4.0.
 The AI does not receive your Notion token.
 The AI does not read page bodies or media in this flow.
-You approve one local run, then the AI can review the sanitized result list.
+Stop after the content-free preview.
 ```
 
 The guided flow is:
 
 ```text
-preview archive notion-recover
--> run archive notion-recover
--> confirm the local prompt
--> use a local file:<path> ref or existing local process value if available
--> paste the token only into the hidden local terminal prompt if no safer local handoff exists
--> let WOM chain approval, fetch, and sanitized merge preview internally
--> ask AI to tidy and merge the recovered locations
+run archive notion-recover --dry-run
+-> review the content-free scope and blockers
+-> stop; no prompt, token read, provider call, fixture, or receipt occurs
 ```
 
-The guide still keeps the v0.3.134 actor boundary:
+Historical v0.3.134 evidence used the following actor boundary; v0.4.0 does not
+execute it:
 
 - the human approves one local run,
 - the local CLI reads the approved local token value during the approved run,
@@ -422,7 +403,8 @@ credential-store-recommendation
 -> credential-ref-plan
 -> credential-access-approval-plan
 -> credential-keepassxc-command-plan
--> credential-keepassxc-write
+-> credential-keepassxc-write --dry-run
+-> stop; no vault write in v0.4.0
 ```
 
 Derived-text setup:
@@ -432,7 +414,8 @@ beginner-setup-manual
 -> derive-text-doctor
 -> derive-text-coverage
 -> derive-text toolchain
--> derive-text capture
+-> derive-text capture --dry-run
+-> stop; no derived-text write in v0.4.0
 ```
 
 Object-storage setup:
@@ -450,12 +433,11 @@ Notion nested recovery:
 ```text
 beginner-setup-manual --topic notion_nested_recovery
 -> notion-recover --dry-run
--> notion-recover
--> ask AI to tidy and merge the recovered locations
+-> stop with no credential/provider read or write
 ```
 
-Power users can still use the lower-level crawl, credential approval, live fetch,
-and merge-plan commands when automation needs explicit pieces.
+Power users may use lower-level read-only crawl and merge plans. Live fetch
+approval is fixed fail-closed in v0.4.0.
 
 ## Closed Actions
 

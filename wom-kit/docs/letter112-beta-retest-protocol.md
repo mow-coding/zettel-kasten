@@ -3,6 +3,11 @@
 Status: prepared for the v0.3.301 public artifact
 Date: 2026-08-07
 
+Current v0.4.0 override: this historical retest must not be used to exercise
+zettel-objet link/revert or never-minted draft discard/restore writes. Their
+dry-runs remain available, but approval fails before private target read or
+mutation with `compound_exact_human_approval_binding_required`.
+
 This is the consolidated human-run retest for the v0.3.300 observations in
 Letter 112. It does not authorize WOM developers or an AI agent to open or
 change the beta tester's private archive. The archive owner chooses the test
@@ -132,14 +137,12 @@ copy of a zet first:
 
 ```text
 archive zettel-objet-link <archive-root> --zettel-id <id> --object-id <full-object-id> --role source_document --dry-run --format json
-archive zettel-objet-link <archive-root> --zettel-id <id> --object-id <full-object-id> --role source_document --expected-plan-sha256 <plan-sha256> --approve --reviewed-by <reviewer> --format json
 ```
 
-Expected: the strict `assets` entry contains only `object_id`, `role`, and an
-optional `label`; the objet must already be manifested; the command reads no
-objet bytes. A truncated hash, stale plan, missing object, or unrelated later
-zettel edit blocks. Preview and exercise `zettel-objet-link-revert` with the
-written receipt; it must restore only unchanged post-write bytes.
+Expected in v0.4.0: preview validates the strict `assets` candidate and existing
+manifest without reading objet bytes. Link/revert approval returns
+`compound_exact_human_approval_binding_required` and writes no zettel or
+receipt.
 
 ## 8. AI Human-Record Integrity
 
@@ -162,19 +165,16 @@ require human judgment; they are not semantic proof.
 
 ## 9. Intentional Draft Discard And Restore
 
-Use a never-minted inbox draft whose removal has been approved:
+Use a never-minted inbox draft for preview only:
 
 ```text
 archive discard-draft <archive-root> --zettel-id <id> --reason <private-safe-reason> --dry-run --format json
-archive discard-draft <archive-root> --zettel-id <id> --reason <same-reason> --expected-plan-sha256 <plan-sha256> --approve --reviewed-by <reviewer> --format json
 archive discard-draft-restore <archive-root> --receipt <receipt-path> --dry-run --format json
-archive discard-draft-restore <archive-root> --receipt <receipt-path> --expected-plan-sha256 <restore-plan-sha256> --approve --reviewed-by <reviewer> --format json
 ```
 
-Expected: discard stores an exact private snapshot and immutable receipt but
-does not echo the reason or body. Minted or canonical material blocks. Restore
-is collision-safe and byte-exact. The inbox audit counts the receipt as an
-intentional discard rather than unexplained loss.
+Expected in v0.4.0: both previews write nothing and expose neither reason nor
+body. Approval returns `compound_exact_human_approval_binding_required` before
+private target read or mutation and creates no snapshot or receipt.
 
 ## 10. JSON Failure Contract
 

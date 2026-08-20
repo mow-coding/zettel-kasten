@@ -67,6 +67,10 @@ ZETTEL_OBJET_LINK_SNAPSHOT_DIR = (
     "receipts/objects/zettel-links/snapshots"
 )
 ZETTEL_OBJET_ROLE_RE = re.compile(r"^[a-z][a-z0-9_]{0,79}$")
+ZETTEL_OBJET_LINK_RECEIPT_LOOKUP_MAX = 500
+ZETTEL_OBJET_LINK_RECEIPT_NAME_RE = re.compile(
+    r"^link\.(?P<prefix>[0-9a-f]{24})\.g(?P<generation>[0-9]{4})\.json$"
+)
 DRAFT_DISCARD_RECEIPT_SCHEMA = "wom-kit/draft-discard-receipt/v0.1"
 DRAFT_DISCARD_RESTORE_RECEIPT_SCHEMA = (
     "wom-kit/draft-discard-restore-receipt/v0.1"
@@ -1055,6 +1059,12 @@ def external_locator_record(
     expected_plan_sha256: str | None,
     reviewed_by: str | None,
 ) -> dict[str, Any]:
+    return archive_services._compound_exact_human_approval_blocked(
+        lifecycle_action="external_locator_record",
+    )
+
+    # Dormant legacy implementation retained for compatibility analysis.
+    # It is not an approval authority.
     result, private = _locator_plan_core(
         archive_root,
         zettel_id=zettel_id,
@@ -1666,6 +1676,12 @@ def external_locator_deactivate(
     expected_plan_sha256: str | None,
     reviewed_by: str | None,
 ) -> dict[str, Any]:
+    return archive_services._compound_exact_human_approval_blocked(
+        lifecycle_action="external_locator_deactivate",
+    )
+
+    # Dormant legacy implementation retained for compatibility analysis.
+    # It is not an approval authority.
     result, private = _external_locator_deactivate_plan_core(
         archive_root,
         zettel_id=zettel_id,
@@ -2363,6 +2379,12 @@ def external_locator_revert(
     expected_plan_sha256: str | None,
     reviewed_by: str | None,
 ) -> dict[str, Any]:
+    return archive_services._compound_exact_human_approval_blocked(
+        lifecycle_action="external_locator_revert",
+    )
+
+    # Dormant legacy implementation retained for compatibility analysis.
+    # It is not an approval authority.
     result, private = _external_locator_revert_plan_core(
         archive_root,
         receipt=receipt,
@@ -2787,6 +2809,38 @@ def zettel_objet_link_plan(
     return result
 
 
+def _compound_exact_human_approval_binding_blocked(
+    lifecycle_action: str,
+) -> dict[str, Any]:
+    """Block legacy compound writers before any archive read or mutation."""
+
+    reason = "compound_exact_human_approval_binding_required"
+    return {
+        "ok": False,
+        "state": "blocked",
+        "dry_run": False,
+        "approved": False,
+        "lifecycle_action": lifecycle_action,
+        "summary": {},
+        "blockers": [reason],
+        "reason_codes": [reason],
+        "warnings": [],
+        "would_change": [],
+        "files_written": [],
+        "private_values_echoed": False,
+        "privacy_guards": {
+            "label_echoed": False,
+            "zettel_body_echoed": False,
+            "snapshot_bytes_echoed": False,
+            "object_bytes_read": False,
+            "provider_called": False,
+            "network_checked": False,
+            "local_absolute_path_echoed": False,
+            "writes": False,
+        },
+    }
+
+
 def zettel_objet_link_apply(
     archive_root: Path | str,
     *,
@@ -2798,6 +2852,15 @@ def zettel_objet_link_apply(
     expected_plan_sha256: str | None,
     reviewed_by: str | None,
 ) -> dict[str, Any]:
+    # This legacy writer changes one canonical zettel plus snapshot/receipt
+    # state as a compound operation.  Until one exact-human context binds the
+    # full set, fail before even planning/reading the requested target.
+    return _compound_exact_human_approval_binding_blocked(
+        "zettel_objet_link_apply"
+    )
+
+    # Retained unreachable implementation documents the exact legacy effect
+    # set that a future compound binding must cover.
     result, private = _zettel_objet_link_plan_core(
         archive_root,
         zettel_id=zettel_id,
@@ -2966,6 +3029,436 @@ def zettel_objet_link_apply(
             fresh_private["receipt_relative"],
         ],
         "privacy_guards": {**fresh["privacy_guards"], "writes": True},
+    }
+
+
+def _read_validated_zettel_objet_link_json(
+    path: Path,
+    *,
+    schema_name: str,
+    schema_id: str,
+    max_bytes: int = 64 * 1024,
+) -> tuple[dict[str, Any] | None, bytes | None]:
+    raw, reason = archive_services._bounded_stable_regular_file_read(
+        path,
+        max_bytes=max_bytes,
+    )
+    if reason is not None or raw is None:
+        return None, None
+    try:
+        document = json.loads(
+            raw.decode("utf-8"),
+            object_pairs_hook=_reject_duplicate_json_members,
+        )
+    except (UnicodeDecodeError, json.JSONDecodeError, ValueError):
+        return None, None
+    if (
+        not isinstance(document, dict)
+        or document.get("schema") != schema_id
+        or archive_services.validate_schema(document, schema_name)
+    ):
+        return None, None
+    return document, raw
+
+
+def _zettel_objet_link_revert_receipt_state(
+    root: Path,
+    *,
+    archive_id: str,
+    zettel_id: str,
+    source_receipt_raw: bytes,
+    expected_restored_sha256: str,
+) -> tuple[str, str | None]:
+    source_receipt_sha256 = _sha256_bytes(source_receipt_raw)
+    revert_relative = (
+        f"{ZETTEL_OBJET_LINK_RECEIPTS_DIR}/reverts/"
+        f"{source_receipt_sha256[:24]}.json"
+    )
+    revert_path = archive_services.archive_internal_path(root, revert_relative)
+    if not revert_path.exists() and not revert_path.is_symlink():
+        return "not_reverted", None
+    document, _raw = _read_validated_zettel_objet_link_json(
+        revert_path,
+        schema_name="zettel-objet-link-revert-receipt.schema.json",
+        schema_id=ZETTEL_OBJET_LINK_REVERT_RECEIPT_SCHEMA,
+    )
+    if (
+        document is None
+        or document.get("archive_id") != archive_id
+        or document.get("zettel_id") != zettel_id
+        or document.get("source_receipt_sha256") != source_receipt_sha256
+        or document.get("restored_zettel_sha256") != expected_restored_sha256
+    ):
+        return "invalid", None
+    return "reverted", revert_relative
+
+
+def zettel_objet_link_receipts(
+    archive_root: Path | str,
+    *,
+    zettel_id: str | None = None,
+    relative_path: str | None = None,
+    object_id: str | None = None,
+    role: str | None = None,
+    dry_run: bool = True,
+    max_receipts: int = 100,
+) -> dict[str, Any]:
+    """Find internally validated link receipts for current structured assets.
+
+    The lookup is target-first: it reads one selected zettel, derives the
+    receipt filename prefixes from its strict ``assets`` entries, and opens
+    only matching generations.  It never scans receipt JSON bodies globally
+    and never returns labels or zettel content.
+    """
+
+    root = archive_services.require_existing_archive_root(archive_root)
+    archive_id = archive_services.read_archive_id(root)
+    blockers: list[str] = []
+    warnings: list[str] = []
+    if not dry_run:
+        blockers.append("zettel_objet_link_receipts_dry_run_required")
+    if bool(zettel_id) == bool(relative_path):
+        blockers.append("zettel_objet_link_receipts_target_required")
+    try:
+        bounded_max = 0 if isinstance(max_receipts, bool) else int(max_receipts)
+    except (TypeError, ValueError):
+        bounded_max = 0
+    if not 1 <= bounded_max <= ZETTEL_OBJET_LINK_RECEIPT_LOOKUP_MAX:
+        blockers.append("zettel_objet_link_receipts_limit_invalid")
+
+    normalized_object_id: str | None = None
+    if object_id is not None:
+        candidate_object_id = str(object_id).strip().lower()
+        if archive_services.OBJECT_ID_RE.fullmatch(candidate_object_id) is None:
+            blockers.append("zettel_objet_link_receipts_object_id_invalid")
+        else:
+            normalized_object_id = candidate_object_id
+    normalized_role: str | None = None
+    if role is not None:
+        candidate_role = str(role).strip().lower().replace("-", "_")
+        if ZETTEL_OBJET_ROLE_RE.fullmatch(candidate_role) is None:
+            blockers.append("zettel_objet_link_receipts_role_invalid")
+        else:
+            normalized_role = candidate_role
+
+    zettel_path: Path | None = None
+    safe_zettel_id: str | None = None
+    zettel_relative: str | None = None
+    current_bytes: bytes | None = None
+    current_sha256: str | None = None
+    assets: list[Any] = []
+    if bool(zettel_id) != bool(relative_path):
+        try:
+            zettel_path = archive_services.resolve_zettel_path(
+                root,
+                zettel_id=zettel_id,
+                relative_path=relative_path,
+            )
+            zettel_relative = archive_services.archive_relative_path(
+                zettel_path,
+                root,
+            )
+            current_bytes, current_reason = (
+                archive_services._bounded_stable_regular_file_read(
+                    zettel_path,
+                    max_bytes=16 * 1024 * 1024,
+                )
+            )
+            if current_reason is not None or current_bytes is None:
+                blockers.append("zettel_objet_link_receipts_zettel_unavailable")
+            else:
+                current_sha256 = _sha256_bytes(current_bytes)
+                frontmatter, _body = archive_services.require_readable_zettel_text(
+                    current_bytes.decode("utf-8")
+                )
+                safe_zettel_id = _safe_zettel_id(frontmatter.get("id"))
+                if (
+                    safe_zettel_id is None
+                    or frontmatter.get("status")
+                    not in archive_services.ZETTEL_QUERYABLE_STATUSES
+                ):
+                    blockers.append("zettel_objet_link_receipts_zettel_unavailable")
+                raw_assets = frontmatter.get("assets")
+                if not isinstance(raw_assets, list):
+                    blockers.append("zettel_objet_link_receipts_assets_not_array")
+                else:
+                    assets = raw_assets
+        except (archive_services.ArchiveServiceError, OSError, UnicodeError):
+            blockers.append("zettel_objet_link_receipts_zettel_unavailable")
+
+    selected_assets: list[dict[str, Any]] = []
+    if safe_zettel_id is not None:
+        for item in assets:
+            if not isinstance(item, dict):
+                blockers.append("zettel_objet_link_receipts_asset_invalid")
+                continue
+            asset_object_id = str(item.get("object_id") or "").strip().lower()
+            asset_role = str(item.get("role") or "").strip().lower()
+            if (
+                archive_services.OBJECT_ID_RE.fullmatch(asset_object_id) is None
+                or ZETTEL_OBJET_ROLE_RE.fullmatch(asset_role) is None
+            ):
+                blockers.append("zettel_objet_link_receipts_asset_invalid")
+                continue
+            label_value = item.get("label")
+            safe_label = _safe_zettel_objet_label(label_value)
+            if label_value is not None and safe_label is None:
+                blockers.append("zettel_objet_link_receipts_asset_invalid")
+                continue
+            if normalized_object_id and asset_object_id != normalized_object_id:
+                continue
+            if normalized_role and asset_role != normalized_role:
+                continue
+            selected_assets.append(
+                {
+                    "object_id": asset_object_id,
+                    "role": asset_role,
+                    "label_sha256": (
+                        _sha256_bytes(safe_label.encode("utf-8"))
+                        if safe_label is not None
+                        else None
+                    ),
+                }
+            )
+    if (
+        not blockers
+        and (normalized_object_id is not None or normalized_role is not None)
+        and not selected_assets
+    ):
+        warnings.append("zettel_objet_link_receipts_target_asset_not_found")
+
+    receipt_root = archive_services.archive_internal_path(
+        root,
+        ZETTEL_OBJET_LINK_RECEIPTS_DIR,
+    )
+    prefixes: dict[str, dict[str, Any]] = {}
+    if safe_zettel_id is not None:
+        for asset in selected_assets:
+            link_seed = {
+                "archive_id": archive_id,
+                "zettel_id": safe_zettel_id,
+                "object_id": asset["object_id"],
+                "role": asset["role"],
+            }
+            link_digest = _sha256_bytes(_canonical_json_bytes(link_seed))
+            if link_digest[:24] in prefixes:
+                blockers.append(
+                    "zettel_objet_link_receipts_target_asset_ambiguous"
+                )
+                continue
+            prefixes[link_digest[:24]] = {
+                **asset,
+                "link_id": f"asset:sha256:{link_digest}",
+            }
+
+    candidates: list[tuple[Path, str, int, dict[str, Any]]] = []
+    if prefixes and receipt_root.is_dir() and not blockers:
+        try:
+            with os.scandir(receipt_root) as entries:
+                for entry in entries:
+                    match = ZETTEL_OBJET_LINK_RECEIPT_NAME_RE.fullmatch(entry.name)
+                    if match is None or match.group("prefix") not in prefixes:
+                        continue
+                    candidates.append(
+                        (
+                            Path(entry.path),
+                            entry.name,
+                            int(match.group("generation")),
+                            prefixes[match.group("prefix")],
+                        )
+                    )
+        except OSError:
+            blockers.append("zettel_objet_link_receipts_directory_unavailable")
+    candidates.sort(key=lambda item: (item[3]["object_id"], item[3]["role"], item[2]))
+    if len(candidates) > bounded_max > 0:
+        blockers.append("zettel_objet_link_receipts_limit_exceeded")
+
+    receipts: list[dict[str, Any]] = []
+    invalid_candidate_count = 0
+    if not blockers:
+        for candidate_path, candidate_name, generation, target in candidates:
+            document, raw = _read_validated_zettel_objet_link_json(
+                candidate_path,
+                schema_name="zettel-objet-link-receipt.schema.json",
+                schema_id=ZETTEL_OBJET_LINK_RECEIPT_SCHEMA,
+            )
+            try:
+                candidate_relative = archive_services.archive_relative_path(
+                    candidate_path,
+                    root,
+                )
+            except Exception:
+                candidate_relative = ""
+            expected_prefix = target["link_id"].rsplit(":", 1)[-1][:24]
+            expected_name = f"link.{expected_prefix}.g{generation:04d}.json"
+            if (
+                document is None
+                or raw is None
+                or candidate_name != expected_name
+                or candidate_relative
+                != f"{ZETTEL_OBJET_LINK_RECEIPTS_DIR}/{expected_name}"
+                or document.get("archive_id") != archive_id
+                or document.get("zettel_id") != safe_zettel_id
+                or document.get("zettel_path") != zettel_relative
+                or document.get("object_id") != target["object_id"]
+                or document.get("role") != target["role"]
+                or document.get("link_id") != target["link_id"]
+                or document.get("before_snapshot_path")
+                != (
+                    f"{ZETTEL_OBJET_LINK_SNAPSHOT_DIR}/"
+                    f"{document.get('before_zettel_sha256')}.zettel.md"
+                )
+            ):
+                invalid_candidate_count += 1
+                continue
+
+            snapshot_path = archive_services.archive_internal_path(
+                root,
+                str(document["before_snapshot_path"]),
+            )
+            snapshot_raw, snapshot_reason = (
+                archive_services._bounded_stable_regular_file_read(
+                    snapshot_path,
+                    max_bytes=16 * 1024 * 1024,
+                )
+            )
+            if (
+                snapshot_reason is not None
+                or snapshot_raw is None
+                or _sha256_bytes(snapshot_raw)
+                != document.get("before_zettel_sha256")
+            ):
+                invalid_candidate_count += 1
+                continue
+
+            revert_state, revert_relative = _zettel_objet_link_revert_receipt_state(
+                root,
+                archive_id=archive_id,
+                zettel_id=safe_zettel_id,
+                source_receipt_raw=raw,
+                expected_restored_sha256=str(document["before_zettel_sha256"]),
+            )
+            if revert_state == "invalid":
+                invalid_candidate_count += 1
+                continue
+            if revert_state == "reverted":
+                lifecycle_state = "reverted"
+            elif current_sha256 == document.get("after_zettel_sha256"):
+                if document.get("label_sha256") != target["label_sha256"]:
+                    invalid_candidate_count += 1
+                    continue
+                lifecycle_state = "revert_ready"
+            else:
+                lifecycle_state = "historical_current_zettel_changed"
+            receipts.append(
+                {
+                    "receipt_path": candidate_relative,
+                    "receipt_sha256": _sha256_bytes(raw),
+                    "zettel_id": safe_zettel_id,
+                    "object_id": target["object_id"],
+                    "role": target["role"],
+                    "link_id": target["link_id"],
+                    "generation": generation,
+                    "lifecycle_state": lifecycle_state,
+                    "revert_receipt_path": revert_relative,
+                }
+            )
+    if invalid_candidate_count:
+        blockers.append("zettel_objet_link_receipts_validation_failed")
+        receipts = []
+    if not blockers and zettel_path is not None and current_sha256 is not None:
+        final_current_bytes, final_current_reason = (
+            archive_services._bounded_stable_regular_file_read(
+                zettel_path,
+                max_bytes=16 * 1024 * 1024,
+            )
+        )
+        if (
+            final_current_reason is not None
+            or final_current_bytes is None
+            or _sha256_bytes(final_current_bytes) != current_sha256
+        ):
+            blockers.append("zettel_objet_link_receipts_zettel_changed_during_lookup")
+            receipts = []
+
+    revert_ready = [
+        item for item in receipts if item["lifecycle_state"] == "revert_ready"
+    ]
+    if len(revert_ready) > 1:
+        blockers.append("zettel_objet_link_receipts_active_history_ambiguous")
+        receipts = []
+        revert_ready = []
+    blockers = archive_services.unique_preserve_order(blockers)
+    warnings = archive_services.unique_preserve_order(warnings)
+    selected_receipt_path = (
+        revert_ready[0]["receipt_path"] if len(revert_ready) == 1 else None
+    )
+    next_safe_actions: list[str] = []
+    if selected_receipt_path:
+        next_safe_actions = [
+            (
+                "Preview zettel-objet-link-revert with the selected receipt for "
+                "audit only. In v0.4.0 both revert and relink approval are fixed "
+                "closed; preserve the current zettel and hand off a separately "
+                "reviewed conservative correction until an exact compound binding exists."
+            )
+        ]
+    elif receipts and not blockers:
+        next_safe_actions = [
+            (
+                "Do not revert from historical receipts after a later zettel change; "
+                "use a separately reviewed correction design that preserves those changes."
+            )
+        ]
+
+    state = (
+        "blocked"
+        if blockers
+        else ("revert_ready" if selected_receipt_path else ("found" if receipts else "not_found"))
+    )
+    return {
+        "ok": not blockers,
+        "state": state,
+        "dry_run": True,
+        "lifecycle_action": "zettel_objet_link_receipts",
+        "archive_id": archive_id,
+        "summary": {
+            "zettel_id": safe_zettel_id,
+            "object_id": normalized_object_id,
+            "role": normalized_role,
+            "selected_asset_count": len(selected_assets),
+            "candidate_receipt_count": len(candidates),
+            "validated_receipt_count": len(receipts),
+            "revert_ready_count": len(revert_ready),
+            "selected_receipt_path": selected_receipt_path,
+            "matching_candidate_set_validated": not blockers,
+            "history_completeness_proven": False,
+        },
+        "data": {
+            "receipts": receipts,
+            "lookup_strategy": "current_structured_asset_digest_prefix",
+            "receipt_validation": (
+                "schema_archive_target_snapshot_and_current_state_internal_consistency; "
+                "no_mac_or_signature"
+            ),
+            "mac_or_signature_verified": False,
+            "direct_correction_supported": False,
+            "correction_route": "receipt_lookup_preview_then_conservative_correction_handoff",
+        },
+        "blockers": blockers,
+        "warnings": warnings,
+        "next_safe_actions": next_safe_actions,
+        "would_change": [],
+        "privacy_guards": {
+            "label_echoed": False,
+            "zettel_body_echoed": False,
+            "zettel_path_echoed": False,
+            "object_bytes_read": False,
+            "provider_called": False,
+            "network_checked": False,
+            "local_absolute_path_echoed": False,
+            "writes": False,
+        },
     }
 
 
@@ -3145,6 +3638,14 @@ def zettel_objet_link_revert(
     expected_plan_sha256: str | None,
     reviewed_by: str | None,
 ) -> dict[str, Any]:
+    # Revert reads a historical receipt, snapshot, and canonical zettel before
+    # replacing bytes and writing another receipt.  Block the whole compound
+    # effect before any of those reads until its exact binding exists.
+    return _compound_exact_human_approval_binding_blocked(
+        "zettel_objet_link_revert"
+    )
+
+    # Retained unreachable implementation documents the legacy effect set.
     result, private = _zettel_objet_link_revert_plan_core(
         archive_root,
         receipt=receipt,
@@ -3463,6 +3964,10 @@ def draft_discard_apply(
     expected_plan_sha256: str | None,
     reviewed_by: str | None,
 ) -> dict[str, Any]:
+    return _compound_exact_human_approval_binding_blocked(
+        "discard_draft_apply"
+    )
+
     result, private = _draft_discard_plan_core(
         archive_root,
         zettel_id=zettel_id,
@@ -3747,6 +4252,10 @@ def draft_discard_restore(
     expected_plan_sha256: str | None,
     reviewed_by: str | None,
 ) -> dict[str, Any]:
+    return _compound_exact_human_approval_binding_blocked(
+        "discard_draft_restore"
+    )
+
     result, private = _draft_discard_restore_plan_core(
         archive_root,
         receipt=receipt,
@@ -4961,6 +5470,25 @@ def objet_capture_batch_apply(
     expected_plan_sha256: str | None,
     reviewed_by: str | None,
 ) -> dict[str, Any]:
+    return archive_services._compound_exact_human_approval_blocked(
+        lifecycle_action="objet_capture_batch",
+    )
+
+
+def _objet_capture_batch_apply_legacy_core(
+    archive_root: Path | str,
+    *,
+    manifest_path: Path | str,
+    expected_plan_sha256: str | None,
+    reviewed_by: str | None,
+) -> dict[str, Any]:
+    """Exercise the pre-v0.4 writer only for bounded historical fixtures.
+
+    This private helper is intentionally absent from package exports, CLI, and
+    MCP dispatch.  The public writer above remains fail-closed until a compound
+    exact-human approval binding exists.
+    """
+
     result, private = _batch_plan_core(
         archive_root,
         manifest_path=manifest_path,
@@ -5031,12 +5559,14 @@ def objet_capture_batch_apply(
         }
 
     try:
-        capture = archive_services.objet_capture_apply(
+        capture = archive_services._objet_capture_run(
             root,
             private["selection_relative"],
+            approve=True,
             reviewed_by=reviewer,
             project_intake_receipt=private["project_receipt"],
             selection_document=private["selection"],
+            selection_document_path=private["selection_relative"],
         )
     except Exception:
         # Lower apply can raise after durable original/derived writes but before
@@ -7980,6 +8510,12 @@ def markup_normalization_apply(
     expected_plan_sha256: str | None,
     reviewed_by: str | None,
 ) -> dict[str, Any]:
+    return archive_services._compound_exact_human_approval_blocked(
+        lifecycle_action="markup_normalization",
+    )
+
+    # Dormant legacy implementation retained for compatibility analysis.
+    # It is not an approval authority.
     result, private = _markup_plan_core(
         archive_root,
         policy=policy,
@@ -8400,6 +8936,12 @@ def markup_normalization_revert(
     expected_plan_sha256: str | None,
     reviewed_by: str | None,
 ) -> dict[str, Any]:
+    return archive_services._compound_exact_human_approval_blocked(
+        lifecycle_action="markup_normalization_revert",
+    )
+
+    # Dormant legacy implementation retained for compatibility analysis.
+    # It is not an approval authority.
     result, private = _markup_revert_plan_core(
         archive_root,
         receipt=receipt,
@@ -8787,6 +9329,12 @@ def markup_normalization_recover(
     expected_plan_sha256: str | None,
     reviewed_by: str | None,
 ) -> dict[str, Any]:
+    return archive_services._compound_exact_human_approval_blocked(
+        lifecycle_action="markup_normalization_recovery",
+    )
+
+    # Dormant legacy implementation retained for compatibility analysis.
+    # It is not an approval authority.
     result, private = _markup_recovery_plan_core(
         archive_root,
         journal=journal,
@@ -9533,6 +10081,20 @@ def relation_candidate_decide(
     max_candidates: int = 50,
     include_rejected: bool = False,
 ) -> dict[str, Any]:
+    if str(decision or "").strip().lower() == "accept":
+        return {
+            "ok": False,
+            "state": "blocked",
+            "write_status": "blocked",
+            "lifecycle_action": "relation_candidate_accept",
+            "blockers": [
+                "compound_exact_human_approval_binding_required"
+            ],
+            "warnings": [],
+            "would_change": [],
+            "files_written": [],
+            "private_values_echoed": False,
+        }
     plan, private = _relation_candidate_plan_core(
         archive_root,
         from_zettel=from_zettel,
@@ -10101,6 +10663,12 @@ def principal_register(
     expected_plan_sha256: str | None,
     reviewed_by: str | None,
 ) -> dict[str, Any]:
+    return archive_services._compound_exact_human_approval_blocked(
+        lifecycle_action="principal_register",
+    )
+
+    # Dormant legacy implementation retained for compatibility analysis.
+    # It is not an approval authority.
     plan, private = _principal_registration_plan_core(
         archive_root,
         principal_id=principal_id,
@@ -10441,6 +11009,12 @@ def principal_unregister(
     expected_plan_sha256: str | None,
     reviewed_by: str | None,
 ) -> dict[str, Any]:
+    return archive_services._compound_exact_human_approval_blocked(
+        lifecycle_action="principal_unregister",
+    )
+
+    # Dormant legacy implementation retained for compatibility analysis.
+    # It is not an approval authority.
     plan, private = _principal_unregistration_plan_core(
         archive_root,
         principal_id=principal_id,
@@ -10669,7 +11243,7 @@ def _project_bytecode_plan_core(
                         continue
                     relative = path.relative_to(mirror).as_posix()
                     tracked, _output = (
-                        archive_services.wom_kit_project_update_git(
+                        archive_services._wom_kit_project_update_git(
                             mirror,
                             [
                                 "ls-files",
@@ -10685,7 +11259,7 @@ def _project_bytecode_plan_core(
                         )
                         continue
                     ignored, _output = (
-                        archive_services.wom_kit_project_update_git(
+                        archive_services._wom_kit_project_update_git(
                             mirror,
                             [
                                 "check-ignore",
@@ -10850,7 +11424,7 @@ def _project_bytecode_plan_core(
             ):
                 blockers.append("project_bytecode_path_unsafe")
                 break
-            tracked, _output = archive_services.wom_kit_project_update_git(
+            tracked, _output = archive_services._wom_kit_project_update_git(
                 mirror,
                 [
                     "ls-files",
@@ -10859,7 +11433,7 @@ def _project_bytecode_plan_core(
                     directory_relative,
                 ],
             )
-            ignored, _output = archive_services.wom_kit_project_update_git(
+            ignored, _output = archive_services._wom_kit_project_update_git(
                 mirror,
                 [
                     "check-ignore",
@@ -10984,7 +11558,7 @@ def _project_bytecode_plan_core(
         ),
     }
     if mirror is not None:
-        head_ok, head_value = archive_services.wom_kit_project_update_git(
+        head_ok, head_value = archive_services._wom_kit_project_update_git(
             mirror,
             ["rev-parse", "HEAD"],
         )
@@ -11392,7 +11966,7 @@ def _project_bytecode_repair_under_lock(
             identity = item.get("identity")
             if not isinstance(identity, dict):
                 raise OSError("project_bytecode_identity_missing")
-            archive_services.delete_activity_group_evidence_exact(
+            archive_services._delete_activity_group_evidence_exact(
                 root,
                 item["path"],
                 expected_sha256=f"sha256:{item['sha256']}",
@@ -11586,6 +12160,27 @@ def project_bytecode_repair(
     target: str | None = None,
     expected_materialization_plan_sha256: str | None = None,
 ) -> dict[str, Any]:
+    return archive_services._compound_exact_human_approval_blocked(
+        lifecycle_action="project_bytecode_repair",
+    )
+
+
+def _project_bytecode_repair_legacy_core(
+    inspection_root: Path | str,
+    *,
+    max_files: int,
+    expected_plan_sha256: str | None,
+    reviewed_by: str | None,
+    affirm_external_writers_quiescent: bool = False,
+    target: str | None = None,
+    expected_materialization_plan_sha256: str | None = None,
+) -> dict[str, Any]:
+    """Exercise the pre-v0.4 repair only in bounded historical fixtures.
+
+    The public writer above remains fail-closed and this private helper is not
+    exported through the package, CLI, or MCP.
+    """
+
     result, private = _project_bytecode_plan_core(
         inspection_root,
         max_files=max_files,
@@ -11626,7 +12221,7 @@ def project_bytecode_repair(
     lock_identity: tuple[int, int] | None = None
     lock_kind = archive_services.wom_kit_real_path_kind(root, lock_path)
     if lock_kind != "missing":
-        lock_bytes = archive_services.wom_kit_read_bounded_real_bytes(
+        lock_bytes = archive_services._wom_kit_read_bounded_real_bytes(
             root,
             lock_path,
             max_bytes=len(
@@ -11658,7 +12253,7 @@ def project_bytecode_repair(
         }
     try:
         lock_identity = (
-            archive_services.wom_kit_project_update_acquire_lock_exclusive(
+            archive_services._wom_kit_project_update_acquire_lock_exclusive(
                 root,
                 metadata_root,
                 lock_path,
@@ -11709,7 +12304,7 @@ def project_bytecode_repair(
         operation_error = error
     try:
         lock_released = (
-            archive_services.wom_kit_project_update_release_owned_lock(
+            archive_services._wom_kit_project_update_release_owned_lock(
                 root,
                 lock_path,
                 lock_identity,

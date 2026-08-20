@@ -139,7 +139,8 @@ credential-semantic-extraction-recipe
 -> credential-access-approval-plan
 -> credential-policy-check
 -> credential-keepassxc-command-plan
--> credential-keepassxc-write
+-> credential-keepassxc-write --dry-run
+-> stop; no credential adapter authority in v0.4.0
 -> credential-adapter-readiness-plan
 -> credential-adapter-manifest-plan
 -> credential-adapter-audit-plan
@@ -157,7 +158,7 @@ credential-store-recommendation
 -> credential-access-approval-plan
 -> credential-policy-check
 -> credential-keepassxc-command-plan
--> credential-keepassxc-write
+-> historical credential-keepassxc-write
 -> credential-adapter-readiness-plan
 -> credential-adapter-manifest-plan
 -> credential-adapter-audit-plan
@@ -177,8 +178,9 @@ before any future migration adapter runs. See
 v0.3.32 adds a KeePassXC command preflight after receipt verification. See
 [Credential KeePassXC Command Plan](credential-keepassxc-command-plan.md).
 
-v0.3.33 adds a minimal CLI-only KeePassXC write adapter after the same approval
-and policy gates. See [Credential KeePassXC Write](credential-keepassxc-write.md).
+v0.3.33 historically added a minimal CLI-only KeePassXC writer. In v0.4.0 its
+approval is fixed closed before receipt, credential, database, or target reads.
+See [Credential KeePassXC Write](credential-keepassxc-write.md).
 
 v0.3.60 adds a semantic extraction recipe before plaintext migration. See
 [Credential Semantic Extraction Recipe](credential-semantic-extraction-recipe.md).

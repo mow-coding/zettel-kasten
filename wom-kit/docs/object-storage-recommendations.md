@@ -194,5 +194,9 @@ object-storage-recommendation
 -> object-storage --dry-run
 -> provider-status
 -> human provider signup / bucket review outside WOM
--> approved local metadata write only when reviewed
+-> stop; v0.4.0 object-storage approval is fixed closed
 ```
+
+An approval request returns `compound_exact_human_approval_binding_required`
+before private archive/credential/target reads, provider calls, or mutation and
+writes no manifest location or receipt.

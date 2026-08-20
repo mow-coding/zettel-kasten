@@ -1,5 +1,9 @@
 # Reviewed zet Title Remap Plan
 
+Current v0.4.0 boundary: this plan remains read-only. It grants no title-write
+authority; `zet-title-remap-write` approval fails before private target read or
+mutation with `compound_exact_human_approval_binding_required`.
+
 Status: v0.3.276 read-only title proposal validation before approved write, evidence audit, interrupted-case recovery, approved compensation, and revert recovery
 
 Use this command after `zet-title-readiness` finds a canonical zet whose title
@@ -34,9 +38,10 @@ Each line follows `zet-title-remap-proposal.schema.json`:
 
 Neither basis is automatic approval. The command binds the private proposal to
 the exact current canonical file bytes and reports `ready_for_review` or fixed
-blocker codes. The plan command never writes a zet. v0.3.269 provides the
-separate approval-gated `zet-title-remap-write` command only after this plan
-and its proposal remain unchanged.
+blocker codes. The plan command never writes a zet. In v0.4.0
+`zet-title-remap-write` approval returns
+`compound_exact_human_approval_binding_required` before private target reads or
+mutation and writes nothing.
 
 The default `--max-items` is the implemented 5,000-row ceiling. A smaller value
 is an explicit operator bound, not a batching recommendation.
@@ -129,21 +134,20 @@ their underlying exception may contain a local absolute path.
 The command does not read the source export, invent a title, normalize private
 text, call a provider or model, modify canonical zets, write receipts, or grant
 approval. After every ready row has been reviewed, follow
-[Approved zet Title Remap Write](zet-title-remap-write.md) to obtain a
-write-plan digest in dry-run mode and then supply the separate explicit
-approval.
+[zet Title Remap Write Preview](zet-title-remap-write.md) only to obtain its
+dry-run plan, then stop.
 
 The v0.3.269 writer adds exact prior-byte snapshots, a private receipt,
 ordinary-failure rollback, and hard-exit evidence. After a completed or
 interrupted write, use the separate read-only
 [zet Title Remap Receipt And Interruption Audit](zet-title-remap-receipt-audit.md).
 Use [zet Title Remap Recovery Plan](zet-title-remap-recovery-plan.md) and the
-separate approval-gated [zet Title Remap Recover](zet-title-remap-recover.md)
-for a retained interrupted transaction. Approved completed-title revert
+dry-run-only [zet Title Remap Recover](zet-title-remap-recover.md) for a
+retained interrupted transaction. Historical completed-title revert
 starts with the separate read-only
 [zet Title Remap Completed-Receipt Revert Plan](zet-title-remap-revert-plan.md);
-v0.3.274 adds the separate
-[Approved zet Title Remap Revert](zet-title-remap-revert.md). A revert
+v0.3.274 added the historical [zet Title Remap Revert
+Preview](zet-title-remap-revert.md). A revert
 transaction left by a hard exit can be reviewed with the v0.3.275
 [zet Title Remap Revert Recovery Plan](zet-title-remap-revert-recovery-plan.md);
 since v0.3.276 its non-forensic fixed actions can be handed to the separate

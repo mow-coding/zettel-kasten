@@ -99,14 +99,17 @@ archive foreign-block-quarantine <archive-root> --stdin --dry-run --format json
 
 The result can return `blocked`, `hold_for_human_review`, or `ready_for_future_quarantine_write`, but it never creates quarantine files, trust, imports, attestations, receipts, mint outputs, or anchors.
 
-v0.2.32 adds a CLI-only quarantine write after that plan:
+The quarantine writer remains preview-only in v0.4.0:
 
 ```bash
 archive quarantine-foreign-block <archive-root> --plan <json-file> --dry-run --format json
-archive quarantine-foreign-block <archive-root> --plan <json-file> --approve --reviewed-by <actor-id> --format json
 ```
 
-This writes an untrusted quarantine review case and quarantine receipt only. It does not trust, import, attest, mint, anchor, delegate, sign, execute, or accept the foreign block.
+An approval request returns `compound_exact_human_approval_binding_required`
+before private plan/target reads or mutation. It writes no quarantine case or
+receipt and does not trust, import, attest, mint, anchor, delegate, sign,
+execute, or accept the foreign block. Historical v0.2.32 receipts remain
+readable but grant no current write authority.
 
 v0.2.33 adds a read-only quarantine review index:
 

@@ -136,7 +136,7 @@ class PrivateObjetMetadataIndexContractTests(unittest.TestCase):
         }
         for state, evidence in expected.items():
             with self.subTest(state=state):
-                projection = contract.compile_private_objet_index_projection(
+                projection = contract._compile_private_objet_index_projection(
                     contract.empty_private_objet_authority(state)
                 )
                 metadata_bytes = contract.canonical_json_bytes(
@@ -155,7 +155,7 @@ class PrivateObjetMetadataIndexContractTests(unittest.TestCase):
 
     def test_n1_n2_reproduce_all_eleven_literal_rows(self) -> None:
         authority, vector = _nonempty_authority()
-        projection = contract.compile_private_objet_index_projection(authority)
+        projection = contract._compile_private_objet_index_projection(authority)
         self.assertEqual(
             tuple(tuple(row) for row in vector["observation_rows"]),
             projection.observation_rows,
@@ -219,11 +219,11 @@ class PrivateObjetMetadataIndexContractTests(unittest.TestCase):
                     contract.PrivateObjetIndexContractError,
                     "^private_objet_metadata_authority_invalid$",
                 ):
-                    contract.compile_private_objet_index_projection(candidate)
+                    contract._compile_private_objet_index_projection(candidate)
 
     def test_schema_rows_then_singleton_last_and_final_inspection(self) -> None:
         authority, _ = _nonempty_authority()
-        projection = contract.compile_private_objet_index_projection(authority)
+        projection = contract._compile_private_objet_index_projection(authority)
         conn = sqlite3.connect(":memory:")
         self.addCleanup(conn.close)
         conn.execute("PRAGMA foreign_keys=ON")
@@ -252,7 +252,7 @@ class PrivateObjetMetadataIndexContractTests(unittest.TestCase):
         )
 
     def test_partial_schema_and_foreign_keys_off_fail_before_install(self) -> None:
-        projection = contract.compile_private_objet_index_projection(
+        projection = contract._compile_private_objet_index_projection(
             contract.empty_private_objet_authority()
         )
         conn = sqlite3.connect(":memory:")
@@ -277,7 +277,7 @@ class PrivateObjetMetadataIndexContractTests(unittest.TestCase):
     def test_install_requires_caller_transaction_and_rejects_private_view(
         self,
     ) -> None:
-        projection = contract.compile_private_objet_index_projection(
+        projection = contract._compile_private_objet_index_projection(
             contract.empty_private_objet_authority()
         )
         conn = sqlite3.connect(":memory:")
@@ -329,7 +329,7 @@ class PrivateObjetMetadataIndexContractTests(unittest.TestCase):
 
     def test_metadata_digest_tamper_is_detected(self) -> None:
         authority, _ = _nonempty_authority()
-        projection = contract.compile_private_objet_index_projection(authority)
+        projection = contract._compile_private_objet_index_projection(authority)
         conn = sqlite3.connect(":memory:")
         self.addCleanup(conn.close)
         conn.execute("PRAGMA foreign_keys=ON")
@@ -350,7 +350,7 @@ class PrivateObjetMetadataIndexContractTests(unittest.TestCase):
         self,
     ) -> None:
         authority, _ = _nonempty_authority()
-        projection = contract.compile_private_objet_index_projection(authority)
+        projection = contract._compile_private_objet_index_projection(authority)
         conn = sqlite3.connect(":memory:")
         self.addCleanup(conn.close)
         conn.execute("PRAGMA foreign_keys=ON")

@@ -3758,7 +3758,7 @@ def plan_private_objet_metadata_write(
     )
 
 
-def private_objet_metadata_write(
+def _private_objet_metadata_write(
     archive_root: Path,
     *,
     archive_id: Any,
@@ -3987,12 +3987,12 @@ def _approve_private_objet_metadata_write(
                 dry_run=False,
             )
         state.stage = "guard_or_lock"
-        guard = win32.PrivateMetadataMutationGuard(root)
+        guard = win32._PrivateMetadataMutationGuard(root)
         guard.hold_chain(intake_path.parent)
         guard.hold_chain(root / "objects" / "manifests")
         guard.validate_all()
 
-        intake_authority = win32.open_bound_file(
+        intake_authority = win32._open_bound_file(
             guard,
             intake_path.relative_to(root).as_posix(),
             profile=win32.FileHandleProfile.AUTHORITY_READ,
@@ -4035,7 +4035,7 @@ def _approve_private_objet_metadata_write(
             )
             raise _ApprovalStop
 
-        locks = win32.PrivateMetadataLockPair(guard)
+        locks = win32._PrivateMetadataLockPair(guard)
         locks.acquire()
         locks.validate()
         guard.validate_all()
@@ -4739,7 +4739,7 @@ def _open_optional_locked_authority(
         operation="locked_authority_absence",
     ):
         return None, None
-    bound = win32.open_bound_file(
+    bound = win32._open_bound_file(
         guard,
         relative_path,
         profile=win32.FileHandleProfile.NARROW_READ,
@@ -4780,7 +4780,7 @@ def _acquire_locked_authorities(
 ) -> _LockedAuthoritySet:
     """Acquire all current transaction authorities under the lock pair."""
 
-    object_manifest = win32.open_bound_file(
+    object_manifest = win32._open_bound_file(
         guard,
         contract.OBJECT_MANIFEST_PATH,
         profile=win32.FileHandleProfile.AUTHORITY_READ,
@@ -5170,7 +5170,10 @@ def _bootstrap_receipt_directories(
     for key, relative in paths:
         before = plan["receipt_directory_chain_before"][key]["state"]
         if before == "absent":
-            win32.create_guarded_directory(guard, root / PurePosixPath(relative))
+            win32._create_guarded_directory(
+                guard,
+                root / PurePosixPath(relative),
+            )
             created.append(relative)
         elif not guard.is_held(root / PurePosixPath(relative)):
             raise _ApprovalFailure(
@@ -5236,7 +5239,7 @@ def _open_exact_bound(
     reason: str,
     state: _ApprovalExecutionState,
 ) -> Any:
-    bound = win32.open_bound_file(
+    bound = win32._open_bound_file(
         guard,
         relative_path,
         profile=profile,
@@ -5471,7 +5474,7 @@ def _execute_append_approval(
 
     authority_key_hex = plan["authority_key_sha256"][7:]
     state.stage = "owned_temp_materialization"
-    journal_source = win32.materialize_owned_temp(
+    journal_source = win32._materialize_owned_temp(
         guard,
         kind=win32.OwnedTempKind.JOURNAL,
         authority_key_hex=authority_key_hex,
@@ -5480,7 +5483,7 @@ def _execute_append_approval(
     _record_residue_authority(state, "journal_temp", journal_source)
 
     state.stage = "hardlink_publication"
-    journal_residue = win32.publish_hard_link(
+    journal_residue = win32._publish_hard_link(
         guard,
         journal_source,
         destination_relative_path=contract.JOURNAL_PATH,
@@ -5504,7 +5507,7 @@ def _execute_append_approval(
         )
 
     state.stage = "owned_temp_materialization"
-    manifest_source = win32.materialize_owned_temp(
+    manifest_source = win32._materialize_owned_temp(
         guard,
         kind=win32.OwnedTempKind.MANIFEST,
         authority_key_hex=authority_key_hex,
@@ -5534,7 +5537,7 @@ def _execute_append_approval(
         plan=plan,
         win32=win32,
     )
-    manifest_final = win32.replace_private_manifest(
+    manifest_final = win32._replace_private_manifest(
         guard,
         manifest_source,
         authority_key_hex=bound_authority_key_hex,
@@ -5550,7 +5553,7 @@ def _execute_append_approval(
     state.cleanup_authority_state = "after"
 
     state.stage = "owned_temp_materialization"
-    receipt_source = win32.materialize_owned_temp(
+    receipt_source = win32._materialize_owned_temp(
         guard,
         kind=win32.OwnedTempKind.RECEIPT,
         authority_key_hex=authority_key_hex,
@@ -5558,7 +5561,7 @@ def _execute_append_approval(
     )
     _record_residue_authority(state, "receipt_temp", receipt_source)
     state.stage = "hardlink_publication"
-    receipt_final = win32.publish_hard_link(
+    receipt_final = win32._publish_hard_link(
         guard,
         receipt_source,
         destination_relative_path=context.receipt_relative_path,
@@ -5589,7 +5592,7 @@ def _execute_append_approval(
     state.cleanup_authority_state = "applied"
 
     state.stage = "residue_disposition"
-    win32.dispose_bound_residue(guard, journal_residue, locks=locks)
+    win32._dispose_bound_residue(guard, journal_residue, locks=locks)
     _record_residue_absent(state, "fixed_journal")
     state.cleanup_state = "completed"
 
@@ -5650,7 +5653,7 @@ def _execute_recovery_approval(
         state=state,
         context=context,
     )
-    journal_residue = win32.handoff_to_residue_authority(
+    journal_residue = win32._handoff_to_residue_authority(
         guard,
         journal_narrow,
         reason="private_metadata_final_verification_failed",
@@ -5670,7 +5673,7 @@ def _execute_recovery_approval(
             context=context,
         )
         _record_residue_authority(state, "receipt_temp", residue)
-        win32.dispose_bound_residue(guard, residue, locks=locks)
+        win32._dispose_bound_residue(guard, residue, locks=locks)
         _record_residue_absent(state, "receipt_temp")
 
     _verify_object_authority(
@@ -5692,7 +5695,7 @@ def _execute_recovery_approval(
 
     authority_key_hex = plan["authority_key_sha256"][7:]
     state.stage = "owned_temp_materialization"
-    receipt_source = win32.materialize_owned_temp(
+    receipt_source = win32._materialize_owned_temp(
         guard,
         kind=win32.OwnedTempKind.RECEIPT,
         authority_key_hex=authority_key_hex,
@@ -5700,7 +5703,7 @@ def _execute_recovery_approval(
     )
     _record_residue_authority(state, "receipt_temp", receipt_source)
     state.stage = "hardlink_publication"
-    receipt_final = win32.publish_hard_link(
+    receipt_final = win32._publish_hard_link(
         guard,
         receipt_source,
         destination_relative_path=context.receipt_relative_path,
@@ -5731,7 +5734,7 @@ def _execute_recovery_approval(
     state.cleanup_authority_state = "applied"
 
     state.stage = "residue_disposition"
-    win32.dispose_bound_residue(guard, journal_residue, locks=locks)
+    win32._dispose_bound_residue(guard, journal_residue, locks=locks)
     _record_residue_absent(state, "fixed_journal")
     state.cleanup_state = "completed"
 
@@ -5891,7 +5894,7 @@ def _execute_rollback_approval(
             context=context,
         )
         _record_residue_authority(state, "manifest_temp", residue)
-        win32.dispose_bound_residue(guard, residue, locks=locks)
+        win32._dispose_bound_residue(guard, residue, locks=locks)
         _record_residue_absent(state, "manifest_temp")
 
     fixed = context.journal
@@ -5924,7 +5927,7 @@ def _execute_rollback_approval(
             state=state,
             context=context,
         )
-        surviving_journal = win32.handoff_to_residue_authority(
+        surviving_journal = win32._handoff_to_residue_authority(
             guard,
             fixed_narrow,
             reason="private_metadata_final_verification_failed",
@@ -5946,7 +5949,7 @@ def _execute_rollback_approval(
             state=state,
             context=context,
         )
-        surviving_journal = win32.handoff_to_residue_authority(
+        surviving_journal = win32._handoff_to_residue_authority(
             guard,
             temp_narrow,
             reason="private_metadata_final_verification_failed",
@@ -5977,7 +5980,7 @@ def _execute_rollback_approval(
         win32=win32,
     )
     state.stage = "residue_disposition"
-    win32.dispose_bound_residue(
+    win32._dispose_bound_residue(
         guard,
         surviving_journal,
         locks=locks,
@@ -6122,7 +6125,7 @@ def _execute_already_applied_approval(
             state=state,
             context=context,
         )
-        journal_residue = win32.handoff_to_residue_authority(
+        journal_residue = win32._handoff_to_residue_authority(
             guard,
             journal_narrow,
             reason="private_metadata_final_verification_failed",
@@ -6154,7 +6157,7 @@ def _execute_already_applied_approval(
     state.cleanup_authority_state = "applied"
     if journal_residue is not None:
         state.stage = "residue_disposition"
-        win32.dispose_bound_residue(
+        win32._dispose_bound_residue(
             guard,
             journal_residue,
             locks=locks,
@@ -6264,7 +6267,7 @@ def _open_owned_prefix_residue(
         ),
         reason="private_metadata_owned_temp_substituted",
     )
-    residue = win32.handoff_to_residue_authority(
+    residue = win32._handoff_to_residue_authority(
         guard,
         narrow,
         reason="private_metadata_owned_temp_substituted",
@@ -6311,7 +6314,7 @@ def _dispose_same_identity_twin_keep_residue(
             authority_state=state.last_verified_authority_state,
         )
     survivor_transition, residue_authority = (
-        win32.handoff_same_identity_twin_to_residue(
+        win32._handoff_same_identity_twin_to_residue(
         guard,
         survivor,
         residue,
@@ -6327,7 +6330,7 @@ def _dispose_same_identity_twin_keep_residue(
         residue_authority,
         name_state="twin_published",
     )
-    win32.dispose_bound_residue(
+    win32._dispose_bound_residue(
         guard,
         residue_authority,
         locks=locks,
@@ -6342,7 +6345,7 @@ def _dispose_same_identity_twin_keep_residue(
         reason="private_metadata_final_verification_failed",
         expected_link_count=1,
     )
-    retained = win32.handoff_to_residue_authority(
+    retained = win32._handoff_to_residue_authority(
         guard,
         survivor_transition,
         reason="private_metadata_final_verification_failed",
@@ -6389,7 +6392,7 @@ def _dispose_same_identity_twin_keep_narrow(
             authority_state="unknown",
         )
     survivor_transition, residue_authority = (
-        win32.handoff_same_identity_twin_to_residue(
+        win32._handoff_same_identity_twin_to_residue(
         guard,
         survivor,
         residue,
@@ -6403,7 +6406,7 @@ def _dispose_same_identity_twin_keep_narrow(
         residue_authority,
         name_state="twin_published",
     )
-    win32.dispose_bound_residue(
+    win32._dispose_bound_residue(
         guard,
         residue_authority,
         locks=locks,
@@ -6418,7 +6421,7 @@ def _dispose_same_identity_twin_keep_narrow(
         reason="private_metadata_final_verification_failed",
         expected_link_count=1,
     )
-    narrow = win32.handoff_to_narrow_authority(
+    narrow = win32._handoff_to_narrow_authority(
         guard,
         survivor_transition,
         reason="private_metadata_final_verification_failed",
@@ -6848,7 +6851,7 @@ def _close_tracked_handles(
             # The first ordinary CloseHandle failure does not surrender the
             # exact raw authority.  Finish its bounded no-path terminal release
             # before moving to any other handle, lock, or guard.
-            win32.release_terminal_bound_authority(
+            win32._release_terminal_bound_authority(
                 bound,
                 reason=reason,
                 operation="approval_tracked_handle_terminal_release",
@@ -7027,7 +7030,7 @@ def _handle_terminal_release_failure(
     # This exact residue release precedes every other handle/lock/guard close.
     # For a still-delete-pending handle it is the directive's explicit final
     # filesystem mutation-effect boundary.
-    win32.release_terminal_bound_authority(bound)
+    win32._release_terminal_bound_authority(bound)
     if not getattr(bound, "closed", False):
         os._exit(74)
     _forget_terminal_authority(state, bound)
@@ -7145,29 +7148,29 @@ def _attempt_failure_cleanup(
             locks.validate()
             guard.validate_all()
             if entry.state == "delete_pending":
-                win32.complete_delete_pending_residue(guard, bound)
+                win32._complete_delete_pending_residue(guard, bound)
                 _record_residue_absent(state, entry.role)
                 locks.validate()
                 guard.validate_all()
                 continue
             if isinstance(
                 bound,
-                getattr(win32, "Win32UnverifiedCreatedFile", ()),
+                getattr(win32, "_Win32UnverifiedCreatedFile", ()),
             ):
-                win32.dispose_unverified_created_file(guard, bound)
+                win32._dispose_unverified_created_file(guard, bound)
                 _record_residue_absent(state, entry.role)
                 locks.validate()
                 guard.validate_all()
                 continue
             if bound.profile is not win32.FileHandleProfile.RESIDUE_DISPOSITION:
-                bound = win32.handoff_to_residue_authority(
+                bound = win32._handoff_to_residue_authority(
                     guard,
                     bound,
                     reason="private_metadata_residue_disposition_failed",
                 )
                 _track_handle(state, bound)
                 entry.bound = bound
-            win32.dispose_bound_residue(
+            win32._dispose_bound_residue(
                 guard,
                 bound,
                 locks=locks,

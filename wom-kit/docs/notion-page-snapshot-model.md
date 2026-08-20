@@ -80,31 +80,20 @@ archive prehashed-objet-ledger <archive-root> \
   --format json
 ```
 
-After review:
-
-```bash
-archive prehashed-objet-ledger <archive-root> \
-  --ledger notion-page-snapshots.jsonl \
-  --store-kind notion_source_export \
-  --store-ref notion-export-20260614 \
-  --mime-field mime \
-  --approve \
-  --reviewed-by person:me \
-  --format json
-```
-
-This appends manifest records for externally verified object ids. It does not
-read the JSON bytes, copy files, call Notion, upload, draft, mint, or clean.
+After review, stop. In v0.4.0 approval returns
+`compound_exact_human_approval_binding_required` before reading the private
+ledger/archive target or writing. It appends no manifest record or receipt and
+does not read the JSON bytes, copy files, call Notion, upload, draft, mint, or
+clean.
 If the ledger has MIME values, `--mime-field mime` keeps page snapshots and
 textual export rows classifiable for later derived-text coverage.
 
 ### WOM-Verified Staged File
 
-If the JSON file is staged under an archive-controlled staging area and WOM-kit
-is allowed to hash and copy it, use the local `objet-capture` path instead.
-
-That path verifies bytes from the staged file before writing a local content
-addressed copy and manifest record.
+If the JSON file is staged under an archive-controlled staging area,
+`objet-capture --dry-run` can preview the request. Its v0.4.0 approval branch
+is also fixed fail-closed before private staged-byte reads or mutation and
+writes no content-addressed copy, manifest record, or receipt.
 
 ## Derived Text From Page Snapshots
 

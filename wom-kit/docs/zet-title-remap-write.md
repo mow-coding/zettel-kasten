@@ -1,6 +1,12 @@
-# Approved zet Title Remap Write
+# zet Title Remap Write
 
-Status: v0.3.276 approval-gated title-only write and recovery boundary
+Historical status: v0.3.276 approval-gated title-only write and recovery boundary
+
+Current v0.4.0 boundary: the exact writer dry-run remains available, but
+approval returns `compound_exact_human_approval_binding_required` before
+private target read or mutation. It creates no canonical change, snapshot,
+manifest row, journal, lock, or receipt. Historical v0.3 evidence remains
+readable; the sections below do not grant current write authority.
 
 Use this command only after `zet-title-remap-plan` reports every row as ready
 and a human has compared every proposed title with its source record.
@@ -22,26 +28,16 @@ archive zet-title-remap-write <archive-root> `
   --format json
 ```
 
-Review the result. If it says `ready_to_apply`, run the unchanged proposal
-again with the returned `write_plan_digest`:
+Review the result, then stop. In v0.4.0 the returned `write_plan_digest`, a
+reviewer label, and the historical `--affirm-titles-reviewed` flag do not grant
+authority. Approval fails with
+`compound_exact_human_approval_binding_required` before private target read or
+mutation.
 
-```powershell
-archive zet-title-remap-write <archive-root> `
-  --proposal .wom-scratch/title-remap/<private>.jsonl `
-  --expected-proposal-sha256 sha256:<proposal-digest> `
-  --expected-plan-digest sha256:<plan-digest> `
-  --expected-write-plan-digest sha256:<write-plan-digest> `
-  --max-items 5000 `
-  --approve `
-  --reviewed-by person:<reviewer-id> `
-  --affirm-titles-reviewed `
-  --format json
-```
+## Historical v0.3.276 Transaction Semantics
 
-`--approve` is rejected unless all three digests still match, the reviewer id
-is safe, and the explicit affirmation is present. The command reruns the full
-plan and rereads every canonical file after taking its write lock. If the
-proposal or any canonical byte changed, it writes no canonical zet.
+The historical executor reran the full plan and reread every canonical file
+after taking its write lock. Changed proposal or canonical bytes blocked it.
 
 ## Exact Mutation Boundary
 

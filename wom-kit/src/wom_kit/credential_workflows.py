@@ -37,26 +37,26 @@ import time
 from typing import Any, Protocol
 
 from .credential_capability import (
-    CredentialCapability,
+    _CredentialCapability,
     CredentialCapabilityError,
     CredentialCapabilityScope,
 )
 from .credential_secure_intake import (
-    FileOneTimeRequestClaims,
+    _FileOneTimeRequestClaims,
     SecureIntakePlan,
-    SecureIntakeWorker,
+    _SecureIntakeWorker,
     LEGACY_RECEIPT_SCHEMA_VERSION,
     NOTION_PAT_SCOPE_FINGERPRINT_DOMAIN,
     NOTION_PAT_WORKSPACE_IDENTITY_BASIS,
     NOTION_WORKSPACE_IDENTITY_BASIS,
     NOTION_WORKSPACE_IDENTITY_BASES,
-    WindowsCredentialManagerExactStore,
+    _WindowsCredentialManagerExactStore,
     create_secure_intake_plan,
 )
 from .credential_secure_intake_windows import (
-    CtypesWindowsNativeFacade,
+    _CtypesWindowsNativeFacade,
     CredentialPopupPromptContext,
-    WindowsCredentialPopupSecretUI,
+    _WindowsCredentialPopupSecretUI,
     WindowsSecureIntakeError,
     WindowsSecureIntakeNative,
     current_windows_owner_binding,
@@ -65,29 +65,29 @@ from .credential_secure_intake_windows import (
 )
 from .credential_secure_registry import (
     AuthenticatedCredentialReuseEvidence,
-    ClaimedCredentialCapabilityUse,
+    _ClaimedCredentialCapabilityUse,
     LEGACY_WORKSPACE_IDENTITY_BASIS,
-    ReceiptBackedNotionCredentialBroker,
+    _ReceiptBackedNotionCredentialBroker,
     SecureCredentialRegistryError,
-    StableArchiveFingerprintKeyProvider,
-    claim_credential_capability_use,
-    create_archive_atomic_json_receipt_committer,
-    evolve_legacy_authenticated_workspace_scope,
+    _StableArchiveFingerprintKeyProvider,
+    _claim_credential_capability_use,
+    _create_archive_atomic_json_receipt_committer,
+    _evolve_legacy_authenticated_workspace_scope,
     list_secure_credentials,
-    persist_duplicate_lifecycle_decision,
-    use_authenticated_secure_credential_for_revalidation,
+    _persist_duplicate_lifecycle_decision,
+    _use_authenticated_secure_credential_for_revalidation,
 )
-from .notion_http_adapter import NotionHttpAdapter, NotionHttpAdapterError
+from .notion_http_adapter import _NotionHttpAdapter, NotionHttpAdapterError
 from .notion_page_recovery import (
     ArchiveInterprocessRequestPacer,
     CREDENTIAL_CAPABILITY_REFERENCE_SCHEMA,
     DEFAULT_MAX_ATTEMPTS,
     DEFAULT_MAX_RETRY_DELAY_SECONDS,
-    FilesystemRecoveryStorage,
+    _FilesystemRecoveryStorage,
     MAX_UNKNOWN_BLOCK_IDS,
     ProviderRequestPacer,
     build_plan,
-    execute_recovery,
+    _execute_recovery,
     parse_manifest,
     plan_recovery,
 )
@@ -192,7 +192,7 @@ def _authenticated_key_operation_boundary(
 ) -> dict[str, Any]:
     """Describe work honestly once authenticated archive-key access begins.
 
-    ``StableArchiveFingerprintKeyProvider`` intentionally keeps native key
+    ``_StableArchiveFingerprintKeyProvider`` intentionally keeps native key
     telemetry inside its callback boundary.  A presence probe or exact key
     read may therefore have happened before either the callback or registry
     operation fails.  Counts at this public boundary are unknown, never zero.
@@ -503,9 +503,13 @@ def _parse_public_time(value: Any) -> datetime:
 
 def _key_provider(
     native: WindowsSecureIntakeNative,
-    selected: StableArchiveFingerprintKeyProvider | None,
-) -> StableArchiveFingerprintKeyProvider:
-    return selected if selected is not None else StableArchiveFingerprintKeyProvider(native)
+    selected: _StableArchiveFingerprintKeyProvider | None,
+) -> _StableArchiveFingerprintKeyProvider:
+    return (
+        selected
+        if selected is not None
+        else _StableArchiveFingerprintKeyProvider(native)
+    )
 
 
 def _validated_interaction_text(value: Any) -> str:
@@ -723,7 +727,7 @@ def _rebuild_approved_planning_contract(
 
 
 @dataclass(frozen=True)
-class CredentialAdoptionWorkerInvocation:
+class _CredentialAdoptionWorkerInvocation:
     """Pickle-safe, secret-free input sent to the live child process."""
 
     archive_root: str = field(repr=False)
@@ -758,22 +762,23 @@ class _CredentialAdoptionWorkerRunOutcome:
     result: Mapping[str, Any] | None = field(default=None, repr=False)
 
 
-class CredentialAdoptionWorkerSpawner(Protocol):
+class _CredentialAdoptionWorkerSpawner(Protocol):
     def run_worker(
         self,
-        invocation: CredentialAdoptionWorkerInvocation,
+        invocation: _CredentialAdoptionWorkerInvocation,
     ) -> Mapping[str, Any] | _CredentialAdoptionWorkerRunOutcome: ...
 
 
 def _execute_adoption_inside_worker(
-    invocation: CredentialAdoptionWorkerInvocation,
+    invocation: _CredentialAdoptionWorkerInvocation,
     *,
     native: WindowsSecureIntakeNative,
-    notion_adapter: NotionHttpAdapter,
-    key_provider: StableArchiveFingerprintKeyProvider | None = None,
+    notion_adapter: _NotionHttpAdapter,
+    key_provider: _StableArchiveFingerprintKeyProvider | None = None,
     now_factory: Callable[[], datetime] | None = None,
     credential_id_factory: Callable[[], str] | None = None,
     backend_id_factory: Callable[[], str] | None = None,
+    _allow_legacy_existing_registration: bool = False,
 ) -> dict[str, Any]:
     """Secret-bearing worker body; never call this from a production parent."""
 
@@ -802,6 +807,20 @@ def _execute_adoption_inside_worker(
             return _approved_adoption_worker_failure(
                 "credential_adoption_archive_identity_mismatch"
             )
+        if (
+            _allow_legacy_existing_registration is not True
+            and invocation.replacement_approved is not True
+        ):
+            projected_rows = archive_projection.get("credentials")
+            # The unauthenticated projection intentionally withholds provider
+            # and purpose until the archive key has been read.  Production
+            # adoption therefore treats *any* existing receipt as no longer a
+            # first-enrollment operation and requires the explicit replacement
+            # path before key, secret, or provider access.
+            if isinstance(projected_rows, list) and projected_rows:
+                return _approved_adoption_worker_failure(
+                    "credential_adoption_existing_registration_exact_human_approval_required"
+                )
         owner_binding = current_windows_owner_binding(native)
         selected_key_provider = _key_provider(native, key_provider)
         actual_plan = create_secure_intake_plan(
@@ -849,6 +868,18 @@ def _execute_adoption_inside_worker(
             return _approved_adoption_worker_failure(
                 "credential_adoption_existing_registry_untrusted"
             )
+        if (
+            _allow_legacy_existing_registration is not True
+            and invocation.replacement_approved is not True
+            and existing_rows
+        ):
+            # Re-enforce the first-enrollment-only production policy after
+            # authenticated rediscovery.  A receipt may appear after the
+            # unauthenticated preflight but before the key callback; no such
+            # concurrent registration may be treated as a new enrollment.
+            return _approved_adoption_worker_failure(
+                "credential_adoption_existing_registration_exact_human_approval_required"
+            )
         matching_existing = [
             row
             for row in existing_rows
@@ -856,6 +887,10 @@ def _execute_adoption_inside_worker(
             and row.get("purpose") == actual_plan.purpose
         ]
         if matching_existing and invocation.replacement_approved is not True:
+            if _allow_legacy_existing_registration is not True:
+                return _approved_adoption_worker_failure(
+                    "credential_adoption_existing_registration_exact_human_approval_required"
+                )
             if len(matching_existing) != 1:
                 return _approved_adoption_worker_failure(
                     "credential_adoption_existing_registrations_require_lifecycle_review"
@@ -886,7 +921,7 @@ def _execute_adoption_inside_worker(
                     owner_binding,
                 )
                 verifier = notion_adapter.secure_intake_verifier()
-                scope_revalidation = use_authenticated_secure_credential_for_revalidation(
+                scope_revalidation = _use_authenticated_secure_credential_for_revalidation(
                     archive_path,
                     credential_id,
                     receipt_authentication_key=key_view,
@@ -967,7 +1002,7 @@ def _execute_adoption_inside_worker(
                         key_view,
                         owner_binding,
                     )
-                    migration = evolve_legacy_authenticated_workspace_scope(
+                    migration = _evolve_legacy_authenticated_workspace_scope(
                         archive_path,
                         credential_id,
                         evolved_workspace_fingerprint=(
@@ -1084,23 +1119,23 @@ def _execute_adoption_inside_worker(
                 **existing_stage_evidence(),
             }
         worker_kwargs: dict[str, Any] = {
-            "claims": FileOneTimeRequestClaims(
+            "claims": _FileOneTimeRequestClaims(
                 archive_path / "profiles" / "local" / "credential-intake" / "claims",
                 archive_root=archive_path,
                 expected_relative_directory=(
                     Path("profiles") / "local" / "credential-intake" / "claims"
                 ),
             ),
-            "ui": WindowsCredentialPopupSecretUI(
+            "ui": _WindowsCredentialPopupSecretUI(
                 native,
                 prompt_context,
             ),
-            "store": WindowsCredentialManagerExactStore(
+            "store": _WindowsCredentialManagerExactStore(
                 native=native,
                 target_prefix=windows_credential_target_prefix(str(archive_id)),
             ),
             "verifier": notion_adapter.secure_intake_verifier(),
-            "receipt_committer": create_archive_atomic_json_receipt_committer(
+            "receipt_committer": _create_archive_atomic_json_receipt_committer(
                 archive_path,
                 expected_archive_id=invocation.expected_archive_id,
                 receipt_authentication_key=key_view,
@@ -1115,7 +1150,7 @@ def _execute_adoption_inside_worker(
             worker_kwargs["credential_id_factory"] = credential_id_factory
         if backend_id_factory is not None:
             worker_kwargs["backend_id_factory"] = backend_id_factory
-        worker = SecureIntakeWorker(**worker_kwargs)
+        worker = _SecureIntakeWorker(**worker_kwargs)
         raw_result = worker.execute(
             actual_plan,
             expected_plan_digest=actual_plan.plan_digest,
@@ -1208,26 +1243,27 @@ def _execute_adoption_inside_worker(
 
 
 @dataclass(repr=False)
-class InjectedCredentialAdoptionWorkerSpawner:
+class _InjectedCredentialAdoptionWorkerSpawner:
     """Test/embedding seam whose caller supplies an already isolated worker.
 
-    Production callers must use :class:`SpawnCredentialAdoptionWorkerSpawner`.
+    Production callers must use the non-injectable public workflow wrapper.
     This adapter exists so unit tests can prove the complete transaction using
     synthetic native/provider objects without touching Windows or the network.
     """
 
     native: WindowsSecureIntakeNative = field(repr=False)
-    notion_adapter: NotionHttpAdapter = field(repr=False)
-    key_provider: StableArchiveFingerprintKeyProvider | None = field(
+    notion_adapter: _NotionHttpAdapter = field(repr=False)
+    key_provider: _StableArchiveFingerprintKeyProvider | None = field(
         default=None, repr=False
     )
     now_factory: Callable[[], datetime] | None = field(default=None, repr=False)
     credential_id_factory: Callable[[], str] | None = field(default=None, repr=False)
     backend_id_factory: Callable[[], str] | None = field(default=None, repr=False)
+    _allow_legacy_existing_registration: bool = field(default=True, repr=False)
 
     def run_worker(
         self,
-        invocation: CredentialAdoptionWorkerInvocation,
+        invocation: _CredentialAdoptionWorkerInvocation,
     ) -> _CredentialAdoptionWorkerRunOutcome:
         return _CredentialAdoptionWorkerRunOutcome(
             worker_started=True,
@@ -1239,6 +1275,9 @@ class InjectedCredentialAdoptionWorkerSpawner:
                 now_factory=self.now_factory,
                 credential_id_factory=self.credential_id_factory,
                 backend_id_factory=self.backend_id_factory,
+                _allow_legacy_existing_registration=(
+                    self._allow_legacy_existing_registration
+                ),
             ),
         )
 
@@ -1308,7 +1347,7 @@ def _detach_spawned_popup_child_console(
 
 def _spawned_adoption_entry(
     send_connection: Any,
-    invocation: CredentialAdoptionWorkerInvocation,
+    invocation: _CredentialAdoptionWorkerInvocation,
 ) -> None:
     """Top-level Windows-spawn entry; sends only a sanitized status mapping."""
 
@@ -1325,17 +1364,17 @@ def _spawned_adoption_entry(
             # can prove this exact detached-child ACK.
             return
         try:
-            native = CtypesWindowsNativeFacade(cli_live_approved=True)
+            native = _CtypesWindowsNativeFacade(cli_live_approved=True)
             result = _execute_adoption_inside_worker(
                 invocation,
                 native=native,
-                notion_adapter=NotionHttpAdapter(
+                notion_adapter=_NotionHttpAdapter(
                     request_pacer=ArchiveInterprocessRequestPacer(
                         invocation.archive_root
                     ),
                     max_attempts=5,
                 ),
-                key_provider=StableArchiveFingerprintKeyProvider(native),
+                key_provider=_StableArchiveFingerprintKeyProvider(native),
             )
         except BaseException:
             result = _adoption_worker_transport_marker()
@@ -1554,7 +1593,7 @@ def _drain_credential_worker_pipe(
 
 
 @dataclass(repr=False)
-class SpawnCredentialAdoptionWorkerSpawner:
+class _SpawnCredentialAdoptionWorkerSpawner:
     """Concrete production seam using a fresh ``multiprocessing.spawn`` child.
 
     The parent deliberately has no timeout/terminate path.  Python documents
@@ -1580,7 +1619,7 @@ class SpawnCredentialAdoptionWorkerSpawner:
 
     def run_worker(
         self,
-        invocation: CredentialAdoptionWorkerInvocation,
+        invocation: _CredentialAdoptionWorkerInvocation,
     ) -> _CredentialAdoptionWorkerRunOutcome:
         process: Any = None
         receive_connection: Any = None
@@ -1774,6 +1813,7 @@ _ADOPTION_WORKER_FAILURE_REASONS = {
     "credential_adoption_rediscovery_verification_failed",
     "credential_adoption_existing_registry_untrusted",
     "credential_adoption_existing_registrations_require_lifecycle_review",
+    "credential_adoption_existing_registration_exact_human_approval_required",
     "credential_adoption_existing_store_missing",
     "credential_adoption_existing_store_probe_failed",
     "credential_adoption_existing_store_fingerprint_mismatch",
@@ -1840,6 +1880,7 @@ _ADOPTION_PRE_EXECUTION_REASONS = {
     "credential_adoption_existing_registry_untrusted",
 }
 _ADOPTION_EXISTING_OPTIONAL_REVALIDATION_REASONS = {
+    "credential_adoption_existing_registration_exact_human_approval_required",
     "credential_adoption_existing_registrations_require_lifecycle_review",
     "credential_adoption_existing_store_missing",
     "credential_adoption_existing_store_probe_failed",
@@ -2071,7 +2112,7 @@ def _project_adoption_worker_result(result: Mapping[str, Any]) -> dict[str, Any]
         return _uncertain_adoption_worker_result()
 
 
-def execute_windows_notion_credential_adoption(
+def _execute_windows_notion_credential_adoption_core(
     archive_root: Path | str,
     approval_plan: Mapping[str, Any],
     *,
@@ -2080,7 +2121,7 @@ def execute_windows_notion_credential_adoption(
     reviewed_anchor_uuid: str,
     requested_capabilities: Sequence[str],
     approved: bool,
-    worker_spawner: CredentialAdoptionWorkerSpawner | None = None,
+    worker_spawner: _CredentialAdoptionWorkerSpawner | None = None,
 ) -> dict[str, Any]:
     """Launch the Windows UI -> store -> Notion -> receipt child transaction.
 
@@ -2108,7 +2149,7 @@ def execute_windows_notion_credential_adoption(
         return _workflow_failure(action, "credential_adoption_plan_digest_mismatch")
 
     try:
-        invocation = CredentialAdoptionWorkerInvocation(
+        invocation = _CredentialAdoptionWorkerInvocation(
             archive_root=str(Path(archive_root).resolve()),
             approval_plan=dict(approval_plan),
             expected_plan_digest=expected_plan_digest,
@@ -2120,7 +2161,7 @@ def execute_windows_notion_credential_adoption(
         )
     except Exception:
         return _workflow_failure(action, "credential_adoption_archive_root_invalid")
-    selected_spawner = worker_spawner or SpawnCredentialAdoptionWorkerSpawner()
+    selected_spawner = worker_spawner or _SpawnCredentialAdoptionWorkerSpawner()
     try:
         run_outcome = selected_spawner.run_worker(invocation)
     except Exception:
@@ -2143,11 +2184,35 @@ def execute_windows_notion_credential_adoption(
     return _project_adoption_worker_result(result)
 
 
+def execute_windows_notion_credential_adoption(
+    archive_root: Path | str,
+    approval_plan: Mapping[str, Any],
+    *,
+    expected_plan_digest: str,
+    expected_archive_id: str,
+    reviewed_anchor_uuid: str,
+    requested_capabilities: Sequence[str],
+    approved: bool,
+) -> dict[str, Any]:
+    """Run credential adoption without a caller-injectable worker boundary."""
+
+    return _execute_windows_notion_credential_adoption_core(
+        archive_root,
+        approval_plan,
+        expected_plan_digest=expected_plan_digest,
+        expected_archive_id=expected_archive_id,
+        reviewed_anchor_uuid=reviewed_anchor_uuid,
+        requested_capabilities=requested_capabilities,
+        approved=approved,
+        worker_spawner=None,
+    )
+
+
 def list_authenticated_secure_credentials(
     archive_root: Path | str,
     *,
     native: WindowsSecureIntakeNative,
-    key_provider: StableArchiveFingerprintKeyProvider | None = None,
+    key_provider: _StableArchiveFingerprintKeyProvider | None = None,
 ) -> dict[str, Any]:
     """Rediscover authenticated credentials without creating missing state."""
 
@@ -2184,7 +2249,7 @@ def list_authenticated_secure_credentials(
         )
 
 
-def decide_authenticated_credential_lifecycle(
+def _decide_authenticated_credential_lifecycle_core(
     archive_root: Path | str,
     *,
     provider: str,
@@ -2195,7 +2260,7 @@ def decide_authenticated_credential_lifecycle(
     expected_plan_sha256: str | None = None,
     reviewed_by: str | None = None,
     native: WindowsSecureIntakeNative,
-    key_provider: StableArchiveFingerprintKeyProvider | None = None,
+    key_provider: _StableArchiveFingerprintKeyProvider | None = None,
 ) -> dict[str, Any]:
     """Plan or persist the authenticated default/legacy lifecycle decision."""
 
@@ -2206,7 +2271,7 @@ def decide_authenticated_credential_lifecycle(
     )
 
     def decide(key_view: memoryview) -> dict[str, Any]:
-        return persist_duplicate_lifecycle_decision(
+        return _persist_duplicate_lifecycle_decision(
             archive_root,
             provider=provider,
             workspace_fingerprint=workspace_fingerprint,
@@ -2252,11 +2317,11 @@ def plan_authenticated_credential_lifecycle(
     selected_default_credential_id: str | None,
     revocation_pending_credential_ids: Sequence[str] = (),
     native: WindowsSecureIntakeNative,
-    key_provider: StableArchiveFingerprintKeyProvider | None = None,
+    key_provider: _StableArchiveFingerprintKeyProvider | None = None,
 ) -> dict[str, Any]:
     """Convenience wrapper that can never persist a lifecycle decision."""
 
-    return decide_authenticated_credential_lifecycle(
+    return _decide_authenticated_credential_lifecycle_core(
         archive_root,
         provider=provider,
         workspace_fingerprint=workspace_fingerprint,
@@ -2265,6 +2330,68 @@ def plan_authenticated_credential_lifecycle(
         approved=False,
         expected_plan_sha256=None,
         reviewed_by=None,
+        native=native,
+        key_provider=key_provider,
+    )
+
+
+def _approve_authenticated_credential_lifecycle_core(
+    archive_root: Path | str,
+    *,
+    provider: str,
+    workspace_fingerprint: str,
+    selected_default_credential_id: str,
+    expected_plan_sha256: str,
+    reviewed_by: str,
+    revocation_pending_credential_ids: Sequence[str] = (),
+    native: WindowsSecureIntakeNative,
+    key_provider: _StableArchiveFingerprintKeyProvider | None = None,
+) -> dict[str, Any]:
+    """Convenience wrapper for one explicitly approved unchanged decision."""
+
+    return _decide_authenticated_credential_lifecycle_core(
+        archive_root,
+        provider=provider,
+        workspace_fingerprint=workspace_fingerprint,
+        selected_default_credential_id=selected_default_credential_id,
+        revocation_pending_credential_ids=revocation_pending_credential_ids,
+        approved=True,
+        expected_plan_sha256=expected_plan_sha256,
+        reviewed_by=reviewed_by,
+        native=native,
+        key_provider=key_provider,
+    )
+
+
+def decide_authenticated_credential_lifecycle(
+    archive_root: Path | str,
+    *,
+    provider: str,
+    workspace_fingerprint: str,
+    selected_default_credential_id: str | None,
+    revocation_pending_credential_ids: Sequence[str] = (),
+    approved: bool,
+    expected_plan_sha256: str | None = None,
+    reviewed_by: str | None = None,
+    native: WindowsSecureIntakeNative,
+    key_provider: _StableArchiveFingerprintKeyProvider | None = None,
+) -> dict[str, Any]:
+    """Expose read-only planning; public approval is fixed closed in v0.4.0."""
+
+    if type(approved) is not bool or approved:
+        return _workflow_failure(
+            "authenticated_credential_lifecycle_decision",
+            "compound_exact_human_approval_binding_required",
+        )
+    return _decide_authenticated_credential_lifecycle_core(
+        archive_root,
+        provider=provider,
+        workspace_fingerprint=workspace_fingerprint,
+        selected_default_credential_id=selected_default_credential_id,
+        revocation_pending_credential_ids=revocation_pending_credential_ids,
+        approved=False,
+        expected_plan_sha256=expected_plan_sha256,
+        reviewed_by=reviewed_by,
         native=native,
         key_provider=key_provider,
     )
@@ -2280,21 +2407,13 @@ def approve_authenticated_credential_lifecycle(
     reviewed_by: str,
     revocation_pending_credential_ids: Sequence[str] = (),
     native: WindowsSecureIntakeNative,
-    key_provider: StableArchiveFingerprintKeyProvider | None = None,
+    key_provider: _StableArchiveFingerprintKeyProvider | None = None,
 ) -> dict[str, Any]:
-    """Convenience wrapper for one explicitly approved unchanged decision."""
+    """Fixed-close the legacy label-only lifecycle writer before key access."""
 
-    return decide_authenticated_credential_lifecycle(
-        archive_root,
-        provider=provider,
-        workspace_fingerprint=workspace_fingerprint,
-        selected_default_credential_id=selected_default_credential_id,
-        revocation_pending_credential_ids=revocation_pending_credential_ids,
-        approved=True,
-        expected_plan_sha256=expected_plan_sha256,
-        reviewed_by=reviewed_by,
-        native=native,
-        key_provider=key_provider,
+    return _workflow_failure(
+        "authenticated_credential_lifecycle_decision",
+        "compound_exact_human_approval_binding_required",
     )
 
 
@@ -2381,7 +2500,7 @@ def _credential_capability_request_budget(selected_item_count: int) -> int:
 
 
 def _capability_use_summary(
-    capability: CredentialCapability | None,
+    capability: _CredentialCapability | None,
     *,
     claim_created: bool | None,
     provider_request_authorizations: int | None,
@@ -2481,8 +2600,8 @@ def _credential_capability_blocker(code: object) -> str:
 
 def _mark_capability_finalization_failed(
     result: Mapping[str, Any],
-    capability: CredentialCapability,
-    claimed_use: ClaimedCredentialCapabilityUse,
+    capability: _CredentialCapability,
+    claimed_use: _ClaimedCredentialCapabilityUse,
 ) -> dict[str, Any]:
     updated = dict(result)
     counts = result.get("counts")
@@ -2537,10 +2656,10 @@ def execute_authenticated_notion_page_recovery(
     approved: bool,
     native: WindowsSecureIntakeNative,
     credential_capability: Mapping[str, Any] | None = None,
-    notion_adapter: NotionHttpAdapter | None = None,
-    key_provider: StableArchiveFingerprintKeyProvider | None = None,
+    notion_adapter: _NotionHttpAdapter | None = None,
+    key_provider: _StableArchiveFingerprintKeyProvider | None = None,
     offset: int = 0,
-    storage: FilesystemRecoveryStorage | None = None,
+    storage: _FilesystemRecoveryStorage | None = None,
     request_pacer: ProviderRequestPacer | Callable[[], None] | None = None,
     sleep: Callable[[float], None] | None = None,
     jitter: Callable[[], float] | None = None,
@@ -2549,7 +2668,38 @@ def execute_authenticated_notion_page_recovery(
     max_attempts: int = 5,
     max_retry_delay_seconds: float = 60.0,
 ) -> dict[str, Any]:
-    """Execute one exact authenticated recovery request inside the key scope."""
+    """Fail closed until this public service accepts an exact-human claim."""
+
+    from . import archive_services
+
+    return archive_services._compound_exact_human_approval_blocked(
+        lifecycle_action="authenticated_notion_page_recovery_execute",
+    )
+
+
+def _execute_authenticated_notion_page_recovery_core(
+    archive_root: Path | str,
+    manifest: Mapping[str, Any],
+    *,
+    expected_plan_sha256: str,
+    reviewed_by: str,
+    max_items: int,
+    approved: bool,
+    native: WindowsSecureIntakeNative,
+    credential_capability: Mapping[str, Any] | None = None,
+    notion_adapter: _NotionHttpAdapter | None = None,
+    key_provider: _StableArchiveFingerprintKeyProvider | None = None,
+    offset: int = 0,
+    storage: _FilesystemRecoveryStorage | None = None,
+    request_pacer: ProviderRequestPacer | Callable[[], None] | None = None,
+    sleep: Callable[[float], None] | None = None,
+    jitter: Callable[[], float] | None = None,
+    clock: Callable[[], datetime] | None = None,
+    capability_clock: Callable[[], datetime] | None = None,
+    max_attempts: int = 5,
+    max_retry_delay_seconds: float = 60.0,
+) -> dict[str, Any]:
+    """Internal injected engine composition kept for invariant testing."""
 
     action = "authenticated_notion_page_recovery_execute"
     if approved is not True:
@@ -2608,7 +2758,7 @@ def execute_authenticated_notion_page_recovery(
         # Replayed objects are already content-hash verified by plan_recovery.
         # A never-provider/never-broker closes the TOCTOU boundary: if that
         # state changes, execution blocks instead of silently becoming live.
-        replayed = execute_recovery(
+        replayed = _execute_recovery(
             archive_root,
             manifest,
             provider=_NeverNotionProvider(),
@@ -2625,11 +2775,11 @@ def execute_authenticated_notion_page_recovery(
             ),
         )
 
-    capability: CredentialCapability | None = None
+    capability: _CredentialCapability | None = None
     try:
         if type(credential_capability) is not dict:
             raise CredentialCapabilityError("credential_capability_required")
-        capability = CredentialCapability.from_document(credential_capability)
+        capability = _CredentialCapability.from_document(credential_capability)
         scopes = _credential_capability_scopes(
             manifest,
             max_items=max_items,
@@ -2659,9 +2809,11 @@ def execute_authenticated_notion_page_recovery(
             ),
         )
 
-    provider = notion_adapter if notion_adapter is not None else NotionHttpAdapter()
+    provider = (
+        notion_adapter if notion_adapter is not None else _NotionHttpAdapter()
+    )
     if not (
-        type(provider) is NotionHttpAdapter
+        type(provider) is _NotionHttpAdapter
         and type(provider.capability_transport_attempts_per_call) is int
         and provider.capability_transport_attempts_per_call == 1
     ):
@@ -2680,7 +2832,7 @@ def execute_authenticated_notion_page_recovery(
     def recover_with_archive_key(key_view: memoryview) -> dict[str, Any]:
         claim_clock = capability_clock or (lambda: datetime.now(timezone.utc))
         try:
-            claimed_use = claim_credential_capability_use(
+            claimed_use = _claim_credential_capability_use(
                 archive_root,
                 capability,
                 key_view,
@@ -2715,14 +2867,14 @@ def execute_authenticated_notion_page_recovery(
                 key_view,
                 owner_binding,
             )
-            broker = ReceiptBackedNotionCredentialBroker(
+            broker = _ReceiptBackedNotionCredentialBroker(
                 archive_root=archive_root,
                 native=native,
                 receipt_authentication_key=key_view,
                 secret_fingerprint_key=fingerprint_key,
                 claimed_use=claimed_use,
             )
-            result = execute_recovery(
+            result = _execute_recovery(
                 archive_root,
                 manifest,
                 provider=provider,
@@ -2794,7 +2946,7 @@ def execute_authenticated_notion_page_recovery(
 
 
 @dataclass(frozen=True)
-class NotionRecoveryWorkerInvocation:
+class _NotionRecoveryWorkerInvocation:
     """Pickle-safe, secret-free request sent to a recovery child process."""
 
     archive_root: str = field(repr=False)
@@ -2806,10 +2958,10 @@ class NotionRecoveryWorkerInvocation:
     offset: int
 
 
-class NotionRecoveryWorkerSpawner(Protocol):
+class _NotionRecoveryWorkerSpawner(Protocol):
     def run_worker(
         self,
-        invocation: NotionRecoveryWorkerInvocation,
+        invocation: _NotionRecoveryWorkerInvocation,
     ) -> Mapping[str, Any] | _NotionRecoveryWorkerRunOutcome: ...
 
 
@@ -2822,15 +2974,15 @@ class _NotionRecoveryWorkerRunOutcome:
 
 
 @dataclass(repr=False)
-class InjectedNotionRecoveryWorkerSpawner:
+class _InjectedNotionRecoveryWorkerSpawner:
     """Synthetic-only seam for exercising the child composition in tests."""
 
     native: WindowsSecureIntakeNative = field(repr=False)
-    notion_adapter: NotionHttpAdapter = field(repr=False)
-    key_provider: StableArchiveFingerprintKeyProvider | None = field(
+    notion_adapter: _NotionHttpAdapter = field(repr=False)
+    key_provider: _StableArchiveFingerprintKeyProvider | None = field(
         default=None, repr=False
     )
-    storage: FilesystemRecoveryStorage | None = field(default=None, repr=False)
+    storage: _FilesystemRecoveryStorage | None = field(default=None, repr=False)
     request_pacer: ProviderRequestPacer | Callable[[], None] | None = field(
         default=None, repr=False
     )
@@ -2844,11 +2996,11 @@ class InjectedNotionRecoveryWorkerSpawner:
 
     def run_worker(
         self,
-        invocation: NotionRecoveryWorkerInvocation,
+        invocation: _NotionRecoveryWorkerInvocation,
     ) -> _NotionRecoveryWorkerRunOutcome:
         return _NotionRecoveryWorkerRunOutcome(
             worker_started=True,
-            result=execute_authenticated_notion_page_recovery(
+            result=_execute_authenticated_notion_page_recovery_core(
                 invocation.archive_root,
                 invocation.manifest,
                 expected_plan_sha256=invocation.expected_plan_sha256,
@@ -2878,13 +3030,13 @@ def _recovery_worker_transport_marker() -> dict[str, str]:
 
 def _spawned_recovery_entry(
     send_connection: Any,
-    invocation: NotionRecoveryWorkerInvocation,
+    invocation: _NotionRecoveryWorkerInvocation,
 ) -> None:
     """Top-level spawn entry; the live bearer exists only in this process."""
 
     try:
-        native = CtypesWindowsNativeFacade(cli_live_approved=True)
-        result = execute_authenticated_notion_page_recovery(
+        native = _CtypesWindowsNativeFacade(cli_live_approved=True)
+        result = _execute_authenticated_notion_page_recovery_core(
             invocation.archive_root,
             invocation.manifest,
             expected_plan_sha256=invocation.expected_plan_sha256,
@@ -2894,8 +3046,8 @@ def _spawned_recovery_entry(
             approved=True,
             native=native,
             credential_capability=invocation.credential_capability,
-            notion_adapter=NotionHttpAdapter(),
-            key_provider=StableArchiveFingerprintKeyProvider(native),
+            notion_adapter=_NotionHttpAdapter(),
+            key_provider=_StableArchiveFingerprintKeyProvider(native),
         )
     except Exception:
         result = _recovery_worker_transport_marker()
@@ -2911,12 +3063,12 @@ def _spawned_recovery_entry(
 
 
 @dataclass(repr=False)
-class SpawnNotionRecoveryWorkerSpawner:
+class _SpawnNotionRecoveryWorkerSpawner:
     """Production recovery boundary using a fresh Windows spawn child."""
 
     def run_worker(
         self,
-        invocation: NotionRecoveryWorkerInvocation,
+        invocation: _NotionRecoveryWorkerInvocation,
     ) -> _NotionRecoveryWorkerRunOutcome:
         process: Any = None
         receive_connection: Any = None
@@ -3075,7 +3227,7 @@ class _RecoveryProjectionContract:
     unselected_item_count: int
     recovered_verified_count: int
     provider_pending_count: int
-    credential_capability: CredentialCapability | None = field(
+    credential_capability: _CredentialCapability | None = field(
         default=None,
         repr=False,
     )
@@ -3085,7 +3237,7 @@ def _build_recovery_projection_contract(
     preview: Mapping[str, Any],
     *,
     expected_plan_sha256: str,
-    credential_capability: CredentialCapability | None = None,
+    credential_capability: _CredentialCapability | None = None,
 ) -> _RecoveryProjectionContract:
     if (
         preview.get("ok") is not True
@@ -3569,10 +3721,31 @@ def execute_spawned_authenticated_notion_page_recovery(
     max_items: int,
     offset: int = 0,
     approved: bool = True,
-    worker_spawner: NotionRecoveryWorkerSpawner | None = None,
+    worker_spawner: _NotionRecoveryWorkerSpawner | None = None,
     capability_clock: Callable[[], datetime] | None = None,
 ) -> dict[str, Any]:
-    """Run live recovery in a child; verified replay stays zero-live in parent."""
+    """Fail closed before spawning until an exact-human claim is available."""
+
+    from . import archive_services
+
+    return archive_services._compound_exact_human_approval_blocked(
+        lifecycle_action="authenticated_notion_page_recovery_execute",
+    )
+
+
+def _execute_spawned_authenticated_notion_page_recovery_core(
+    archive_root: Path | str,
+    manifest: Mapping[str, Any],
+    *,
+    expected_plan_sha256: str,
+    reviewed_by: str,
+    max_items: int,
+    offset: int = 0,
+    approved: bool = True,
+    worker_spawner: _NotionRecoveryWorkerSpawner | None = None,
+    capability_clock: Callable[[], datetime] | None = None,
+) -> dict[str, Any]:
+    """Internal spawned composition kept for transport invariant testing."""
 
     action = "authenticated_notion_page_recovery_execute"
     if approved is not True:
@@ -3604,7 +3777,7 @@ def execute_spawned_authenticated_notion_page_recovery(
     ):
         return _workflow_failure(action, "expected_plan_sha256_mismatch")
     if preview.get("counts", {}).get("provider_pending_count") == 0:
-        return execute_authenticated_notion_page_recovery(
+        return _execute_authenticated_notion_page_recovery_core(
             archive_root,
             manifest,
             expected_plan_sha256=expected_plan_sha256,
@@ -3615,7 +3788,7 @@ def execute_spawned_authenticated_notion_page_recovery(
             native=_NeverWindowsNative(),
         )
 
-    capability: CredentialCapability | None = None
+    capability: _CredentialCapability | None = None
     try:
         scopes = _credential_capability_scopes(
             manifest,
@@ -3625,7 +3798,7 @@ def execute_spawned_authenticated_notion_page_recovery(
         issue_kwargs: dict[str, Any] = {}
         if capability_clock is not None:
             issue_kwargs["issued_at"] = capability_clock()
-        capability = CredentialCapability.issue(
+        capability = _CredentialCapability.issue(
             request_sha256=str(preview["request_sha256"]),
             plan_sha256=str(preview["plan_sha256"]),
             scopes=scopes,
@@ -3652,7 +3825,7 @@ def execute_spawned_authenticated_notion_page_recovery(
             ),
         )
     try:
-        invocation = NotionRecoveryWorkerInvocation(
+        invocation = _NotionRecoveryWorkerInvocation(
             archive_root=str(Path(archive_root).resolve()),
             manifest=dict(manifest),
             credential_capability=capability.canonical_document(),
@@ -3664,7 +3837,7 @@ def execute_spawned_authenticated_notion_page_recovery(
     except Exception:
         return _workflow_failure(action, "notion_page_recovery_worker_launch_failed")
 
-    selected = worker_spawner or SpawnNotionRecoveryWorkerSpawner()
+    selected = worker_spawner or _SpawnNotionRecoveryWorkerSpawner()
     try:
         run_outcome = selected.run_worker(invocation)
     except Exception:
@@ -3691,14 +3864,6 @@ def execute_spawned_authenticated_notion_page_recovery(
 
 
 __all__ = [
-    "CredentialAdoptionWorkerInvocation",
-    "CredentialAdoptionWorkerSpawner",
-    "InjectedCredentialAdoptionWorkerSpawner",
-    "InjectedNotionRecoveryWorkerSpawner",
-    "NotionRecoveryWorkerInvocation",
-    "NotionRecoveryWorkerSpawner",
-    "SpawnNotionRecoveryWorkerSpawner",
-    "SpawnCredentialAdoptionWorkerSpawner",
     "WORKFLOW_PLAN_SCHEMA_VERSION",
     "WORKFLOW_RESULT_SCHEMA_VERSION",
     "approve_authenticated_credential_lifecycle",

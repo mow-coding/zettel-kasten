@@ -56,11 +56,10 @@ Preview the separate writer with the exact proposal SHA-256:
 archive zet-abstract-backfill-write <archive-root> --proposal .wom-scratch/abstract-backfill/<private-name>.jsonl --expected-proposal-sha256 <sha256> --dry-run --progress --format json
 ```
 
-Only after that review may the human authorize:
-
-```text
-archive zet-abstract-backfill-write <archive-root> --proposal .wom-scratch/abstract-backfill/<private-name>.jsonl --expected-proposal-sha256 <sha256> --approve --reviewed-by person:<reviewer> --affirm-abstracts-reviewed --progress --format json
-```
+Stop after the preview. In v0.4.0 the writer has no complete exact-human
+binding for its compound target/effect set. Every approval attempt returns
+`compound_exact_human_approval_binding_required` before reading a private
+target or writing canonical bytes, journals, snapshots, locks, or receipts.
 
 ## 4. Verify And Stop
 
@@ -72,10 +71,10 @@ archive abstract-freshness <archive-root> --dry-run --max-items 3 --progress --f
 archive zet-abstract-backfill-receipt-audit <archive-root> --dry-run --max-receipts 5000 --max-locks 5000 --max-problems 20 --progress --format json
 ```
 
-Confirm that exactly three missing abstracts became explicit, the three current
-abstract/body pairs are `fresh`, and the backfill receipt lifecycle is healthy.
-Then stop. Preserve the private result hashes and report timings, review effort,
-confusing language, and any blocker. Do not start a bulk batch from this pilot.
+Confirm that the three reviewed candidates remain missing and that no new
+backfill receipt exists. Preserve the private plan hashes and report timings,
+review effort, confusing language, and any blocker. Do not start a bulk batch
+from this review-only pilot.
 
 ## Safety Boundary
 

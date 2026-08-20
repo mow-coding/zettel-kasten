@@ -24,6 +24,86 @@ Before upgrading a real archive:
 
 The archive should never silently rewrite memory.
 
+## v0.4.0 Exact Human Control And Operator Friction
+
+Install only after the exact v0.4.0 GitHub Release lists the verified wheel.
+Start a new process, confirm `archive --version`, and discard every old dry-run
+digest before reviewing a v0.4.0 write.
+
+### What changed
+
+Supported high-impact single operations now use a native Windows TaskDialog.
+The dialog binds safe operation, plan, target set, warnings, checklist, archive
+identity, and reviewer. Confirmation immediately creates one authenticated
+durable `started` claim before the writer runs. The writer re-derives the
+binding immediately before mutation, and the workflow alone finalizes the
+claim. There is no issued approval token or expiry window.
+
+Human-artifact root and lifecycle registration, byte-identical duplicate
+reconciliation, approval-integrity overlays, source-fidelity session evidence,
+AI draft creation, mint, promotion, one-edge writes, and draft retirement use
+this boundary. Exact historical approval links require an authenticated
+`succeeded` claim and upgrade the original effect only when `effect=created`.
+
+For human artifacts, register an exact root with `root_kind=external_project`
+to scan only `<root>/.wom-scratch`, or `root_kind=external_delivery` to scan the
+reviewed root itself. `--project-root` and `--external-root` are aliases for the
+selected root. WOM never auto-scans Downloads or a home directory, and only an
+exact-human-approved registration contributes scan/closeout authority.
+
+### What to do
+
+Always preview first, review the content-free digests and warning codes, then
+approve the unchanged plan from a local interactive Windows CLI. MCP remains
+plan/audit only for these writes.
+
+Do not approve unbound compound commands in v0.4.0. `mint-zet-batch`,
+`retire-draft-batch`, `zettel-edge-batch`, `revert-edge`, `revert-batch`,
+`zet-revision-write`, `zet-revision-restore-write`, `zettel-objet-link`,
+`zettel-objet-link-revert`, and `notion-objet-link-convert` support preview but
+not mutation. Activity-group membership add/removal and their recovery
+executors, abstract-backfill write/revert/recovery, title-remap
+write/revert/apply-recovery/revert-recovery, never-minted draft discard/restore,
+and mint/retired-draft receipt reconciliation are likewise plan/audit or
+preview-only. Relation-candidate acceptance is also closed. Every affected
+approve attempt fails before private target read or mutation with
+`compound_exact_human_approval_binding_required`.
+
+The CLI now enforces one canonical fixed-close inventory of exactly 79 top-level
+command names. Each affected `--approve` help entry says approval is unavailable in
+v0.4.0 and points to the command-specific dry-run, plan, preview, or audit
+surface. Use the exact list in the v0.4.0 release note; do not infer write
+authority from an older command example or receipt. Nested derive capture,
+non-exact/non-AI draft creation, real init, and parcel/pack creation are
+separately fixed closed.
+
+Letter 138 is an urgent follow-on, not part of v0.4.0. This release does not
+detect or repair historical Notion typed-property loss. Its current Notion
+recovery surfaces recover page bodies or locations only and are not a complete
+source mirror. Do not treat a successful v0.4.0 recovery preview as property-
+preservation evidence; wait for the separate read-only loss audit and
+exact-approved backfill workflow.
+
+The same v0.4.0 fixed blocker covers project update/collision mutation,
+bytecode repair, saved-view write/revert, private objet metadata write,
+identity reconciliation, legacy-coordination cleanup, archive migration,
+markup normalization apply/revert/recovery, Principal register/unregister,
+objet-capture enable/selection/single/batch, external import, source
+registration, ownership transfer, object-storage mutation, Notion recovery,
+external-locator mutation, source-intake recording/batches, quarantine
+decisions, delegation, Tiro fetch/capture, Notion manifest labeling, GitHub
+metadata setup, KeePassXC write, IMAP manifest/header execution, source scan,
+onboarding, restore drill, standalone AI scratch cleanup, gitignore repair,
+runtime-skill install/uninstall, and catalog-pass cleanup. Their read-only plans, previews, and audits remain
+available where documented. Historical receipts and the older command examples
+below are compatibility evidence only; they are not current v0.4.0 run
+instructions and do not grant write authority.
+
+A claim left in `started` means the outcome is unknown and requires
+reconciliation. Never retry it automatically. See the
+[v0.4.0 release note](wom-kit/docs/releases/v0.4.0.md) and
+[Exact Human Approval Contract](wom-kit/docs/exact-human-approval-contract.md).
+
 ## v0.3.320 One-Use Credential Capability Broker
 
 Install only after the exact v0.3.320 GitHub Release lists the verified wheel.
@@ -53,17 +133,18 @@ failure cannot be reported as success.
 
 ### What to do
 
-Discard recovery plan digests made by an older runtime. Create a fresh bounded
-preview and approve only its unchanged digest:
+This subsection records the historical v0.3.320 contract. Under v0.4.0 create a
+fresh bounded preview only; the recovery approval branch is fixed fail-closed
+before credential read, provider call, or archive mutation with
+`compound_exact_human_approval_binding_required`:
 
 ```powershell
 archive notion-page-recovery-plan <archive-root> --request <archive-relative-reviewed-recovery-request.json> --max-items 5 --offset 0 --dry-run --format json
-archive notion-page-recovery <archive-root> --request <archive-relative-reviewed-recovery-request.json> --max-items 5 --offset 0 --expected-plan-sha256 <fresh-plan-sha256> --reviewed-by <actor> --approve --format json
 ```
 
 Do not retry automatically after an expired, replayed, changed, unknown, or
 finalization-failed capability result. Review the content-free result and make a
-new plan/approval if a retry is appropriate. A fully hash-verified local replay
+new plan for diagnosis if a retry would otherwise be appropriate. A fully hash-verified local replay
 creates no claim, reads no credential, and calls no provider.
 
 An existing registered credential does not need to be entered again when its
@@ -529,20 +610,19 @@ exact returned request digest. Approval opens a native masked dialog in a
 spawned child. Never paste a PAT into a command argument, environment variable,
 normal stdin, file, or chat. WOM and the helper AI never read the clipboard
 directly; a deliberate human paste into the separate masked console is handled
-only as console input. After authenticated listing, use the
-separate `credential-lifecycle` dry-run/approval pair to choose one current
-credential for an exact workspace. WOM does not delete or revoke the other
-valid entries.
+only as console input. After authenticated listing, v0.4.0 supports only the
+separate `credential-lifecycle --dry-run` plan. Its legacy reviewer-label
+approval path is fixed closed before archive-key or credential access until an
+exact-human binding exists. WOM does not delete or revoke the other valid
+entries.
 
 The reviewed Notion recovery request must stay under the ignored local profile
 and contain the complete Letter 118 set: `zet_notion_db3` with 577 items and
 `zet_notion_db1` with 43 items. Run `notion-page-recovery-plan --dry-run` for a
-small `--max-items` slice, review the fixed capabilities and exact plan digest,
-then approve only that unchanged slice with `notion-page-recovery`. A local
-verified replay may avoid live calls, but approval still authorizes credential
-reads, read-only provider GETs, and archive evidence writes for every selected
-item. Recovered bytes become objets and itemized evidence; canonical zets are
-not changed.
+small `--max-items` slice and review the fixed capabilities and exact plan
+digest. The v0.4.0 `notion-page-recovery` approval path is fixed closed before
+credential reads, provider calls, or archive writes. Historical v0.3 recovery
+receipts remain auditable, but do not authorize a new run.
 
 This release does not mean a real PAT has been adopted or that all 620 pages
 have been recovered. Those remain operator execution and human acceptance
@@ -2788,8 +2868,9 @@ environment. Do not run `pip install wom-kit`: WOM-kit has not been published
 to PyPI yet. See `wom-kit/docs/python-tool-install.md` for the full beginner
 path and safety boundary.
 
-Package installation alone creates no archive and reads no user data. Archive
-onboarding remains a separate `--dry-run` then `--approve` workflow.
+Package installation alone creates no archive and reads no user data. In
+v0.4.0 archive onboarding is preview-only: use `--dry-run`; the approval branch
+is fixed closed before target/template/provider reads and creates nothing.
 
 ## v0.3.241 Selective Freshness Body Reads
 
@@ -4303,7 +4384,7 @@ Operator-visible notes:
 
 ## From `v0.3.181` To `v0.3.182`
 
-One additive basoon revalidation follow-up. No migration is required.
+One additive protected-pilot revalidation follow-up. No migration is required.
 
 Operator-visible notes:
 
@@ -4997,7 +5078,7 @@ registration and local archive hygiene.
 
 What changed:
 
-- added CLI `archive derive-text capture <archive-root> --from-manifest <jsonl> --dry-run|--approve --reviewed-by <actor>` for batch registration of already extracted UTF-8 derived text,
+- v0.3 historically added batch registration of already extracted UTF-8 derived text; in v0.4.0 use `archive derive-text capture <archive-root> --from-manifest <jsonl> --dry-run` only, and approval is fixed closed before private reads,
 - batch manifests are JSONL: each line uses `source_object_id`, `text_file`, `derivation_kind`, `tool_name`, `tool_version`, and `review_status`, with optional `item_id`, `model_name`, `model_version`, `confidence`, `language`, and `born_digital`,
 - relative `text_file` values resolve from the JSONL manifest location, and archive records do not store the local text file path,
 - added CLI `archive repair-gitignore <archive-root> --dry-run|--approve --reviewed-by <actor>` to append missing WOM-kit safe `.gitignore` patterns while preserving existing entries,
@@ -5017,7 +5098,7 @@ This release adds the first derived text capture layer.
 
 What changed:
 
-- added CLI `archive derive-text capture <archive-root> --text-file <file> --source-object-id <object-id> --derivation-kind <kind> --tool-name <name> --tool-version <version> --review-status <status> --dry-run|--approve`,
+- v0.3 historically added single-file derived-text registration; in v0.4.0 use `archive derive-text capture <archive-root> --text-file <file> --source-object-id <object-id> --derivation-kind <kind> --tool-name <name> --tool-version <version> --review-status <status> --dry-run` only, and approval is fixed closed before private reads,
 - added `objects/manifests/derived-text.jsonl` for provenance-aware derived text records,
 - approved capture stores UTF-8 text bodies under `objects/derived-text/sha256/` and writes `receipts/derived-text-capture/*.json`,
 - `archive index` ingests derived text records and `archive search` can return `type: derived_text`,
@@ -5844,7 +5925,7 @@ What changed:
 - added safe default bucket/container naming as `zettel-kasten-<normalized-profile-slug>-objets`,
 - added default objet prefix planning as `archives/<archive_id>/objets/`,
 - added strict safety gates for provider kind, profile slug, bucket/container name, region, endpoint reference, and storage account reference,
-- added `--approve --reviewed-by` for local-only provider metadata and setup receipt writes,
+- v0.2 historically allowed reviewed local provider-metadata and setup-receipt writes; in v0.4.0 GitHub setup approval is fixed closed before private profile/archive reads and writes nothing,
 - added optional ignored local object storage account hints with `--write-local-profile`,
 - added read-only MCP `object_storage_setup_plan`.
 
@@ -6020,8 +6101,8 @@ What changed:
 - documented `WOM` as the umbrella name and `Widesider of Modernity` as its expansion,
 - added `archive mint-zet` as the preferred command name for minting a zet,
 - kept `archive mint-zettel` as a compatibility alias,
-- added `archive parcel` as the preferred command name for creating a bounded portable unit,
-- kept `archive pack` as a compatibility alias,
+- v0.2 historically added `archive parcel` as the preferred command name for a bounded portable unit; in v0.4.0 the command is fixed closed before private view/body/manifest reads and creates no workpack,
+- kept `archive pack` as a compatibility alias with the same v0.4.0 fixed-close boundary,
 - added `archive admit --dry-run` as the preferred command name for previewing parcel/workpack admission,
 - kept `archive import --dry-run` as a compatibility alias.
 

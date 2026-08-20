@@ -76,13 +76,13 @@ class RuntimeGuidanceReadinessTests(unittest.TestCase):
             "scope": "repo",
             "repo_root": repo,
         }
-        preview = runtime_skill_install.runtime_skill_install(
+        preview = runtime_skill_install._runtime_skill_install_legacy_core(
             dry_run=True,
             approve=False,
             **kwargs,
         )
         self.assertTrue(preview["ok"], preview)
-        installed = runtime_skill_install.runtime_skill_install(
+        installed = runtime_skill_install._runtime_skill_install_legacy_core(
             dry_run=False,
             approve=True,
             reviewed_by="person:test",
@@ -452,7 +452,7 @@ class RuntimeGuidanceReadinessTests(unittest.TestCase):
                     with (
                         mock.patch.object(
                             runtime_skill_install,
-                            "resolve_target_location",
+                            "_resolve_target_location",
                             side_effect=AssertionError(
                                 "invalid archive entered host target resolution"
                             ),
@@ -541,7 +541,7 @@ class RuntimeGuidanceReadinessTests(unittest.TestCase):
                 ),
                 mock.patch.object(
                     runtime_skill_install,
-                    "resolve_target_location",
+                    "_resolve_target_location",
                     side_effect=AssertionError(
                         "unreadable archive entered host target resolution"
                     ),
@@ -628,7 +628,7 @@ class RuntimeGuidanceReadinessTests(unittest.TestCase):
                         ) as read_archive_id,
                         mock.patch.object(
                             runtime_skill_install,
-                            "resolve_target_location",
+                            "_resolve_target_location",
                             side_effect=AssertionError(
                                 "unsafe identity entered host target resolution"
                             ),
@@ -1146,6 +1146,9 @@ class RuntimeGuidanceReadinessTests(unittest.TestCase):
     def test_start_surfaces_do_not_run_host_inspection_and_return_not_checked(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             _repo, archive_root = self.make_repo(Path(tmp))
+            archive_agents = archive_root / "AGENTS.md"
+            self.assertTrue(archive_agents.is_file())
+            archive_agents.unlink()
             with mock.patch.object(
                 runtime_guidance,
                 "runtime_guidance_readiness",

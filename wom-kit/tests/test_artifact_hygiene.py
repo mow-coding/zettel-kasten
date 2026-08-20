@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import io
+import shutil
 import sys
 import tempfile
 import unittest
@@ -149,23 +150,24 @@ class ArtifactHygieneTests(unittest.TestCase):
     def test_throwaway_archive_init_gitignore_passes_artifact_hygiene(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = Path(tmp) / "throwaway-personal-archive"
-            code, output = self.run_archive_cli(
-                [
-                    "init",
-                    str(archive_root),
-                    "--type",
-                    "personal",
-                    "--archive-id",
-                    "archive:personal:artifact-hygiene",
-                    "--principal-id",
-                    "person:test",
-                    "--principal-name",
-                    "Test Person",
-                    "--name",
-                    "Test Personal Archive",
-                ]
+            template_root = (KIT_ROOT / "templates" / "personal").resolve()
+            zettel_kasten_root = (KIT_ROOT / "zettel-kasten").resolve()
+            self.assertEqual(template_root.parent, (KIT_ROOT / "templates").resolve())
+            self.assertTrue(template_root.is_dir())
+            self.assertEqual(zettel_kasten_root, (KIT_ROOT / "zettel-kasten").resolve())
+            self.assertTrue(zettel_kasten_root.is_dir())
+            shutil.copytree(template_root, archive_root)
+            shutil.copytree(
+                zettel_kasten_root,
+                archive_root / "zettel-kasten",
+                dirs_exist_ok=True,
             )
-            self.assertEqual(code, 0, output)
+            (archive_root / ".gitignore").write_text(
+                "# Bounded historical pre-v0.4 fixture defaults\n"
+                + "\n".join(archive_cli.RECOMMENDED_GITIGNORE_PATTERNS)
+                + "\n",
+                encoding="utf-8",
+            )
 
             report = check_artifact_hygiene.check_artifact_hygiene(archive_root)
 

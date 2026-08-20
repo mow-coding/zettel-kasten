@@ -5,7 +5,7 @@ Batch: v0.3.168 (implements the LOCKED spec: "Draft-time identity hygiene + hone
 human affirmation + continuation edges").
 Anchor tree at spec authoring: HEAD `522bd4a5` (v0.3.167), tree clean.
 Release action: working tree only — no git commit/tag/push. Never touches a real
-archive or `zettel-kasten-basoon`; all archive fixtures live in temp dirs.
+archive or a named real archive; all archive fixtures live in temp dirs.
 
 This log records the five design decisions with one-line rationales, plus the two
 corrected critique facts, per the AGENTS.md decision-log mandate.

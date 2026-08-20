@@ -58,7 +58,8 @@ AI runtimes drafting or reviewing zets should follow this contract:
 - After revising, read the complete zet again and resolve stale contradictions.
 - Cite only files backed by openable archive-relative references.
 - Revise an unminted draft in place. A title change is not a reason to delete
-  and recreate it; intentional removal uses `discard-draft`.
+  and recreate it. `discard-draft` may be previewed, but v0.4.0 approval is
+  fixed closed before private target read or mutation and deletes nothing.
 
 `archive ai-response-concept-guide --topic all --dry-run` now includes the same
 rule so the AI runtime can discover it during normal WOM concept handoff.

@@ -24,7 +24,7 @@ from wom_kit.credential_secure_intake_windows import (  # noqa: E402
 )
 from wom_kit.credential_popup_windows import (  # noqa: E402
     CredentialPopupInputIntent,
-    prompt_secret_in_native_popup,
+    _prompt_secret_in_native_popup as prompt_secret_in_native_popup,
 )
 from wom_kit.credential_workflows import (  # noqa: E402
     _capture_credential_worker_start_signal_lease,

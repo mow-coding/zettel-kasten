@@ -7,7 +7,7 @@ Release action: main session release after gates. No real archive write and no r
 
 ## Problem
 
-The basoon v0.3.176 verification letter showed `object-storage-upload --force-reupload` returning
+The protected pilot archive's v0.3.176 verification letter showed `object-storage-upload --force-reupload` returning
 `skipped_already_present` with `put_calls:0`, `part_count:0`, and no execution receipt. That means
 the reviewed force run did not exercise a live provider PUT.
 

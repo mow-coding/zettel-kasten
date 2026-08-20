@@ -1,4 +1,4 @@
-﻿# WOM-kit v0.3 Draft
+﻿# WOM-kit v0.4 Draft
 
 WOM-kit is the current implementation toolkit for WOM.
 
@@ -10,14 +10,75 @@ It is not a website, SaaS app, dashboard, or visual note-taking product. The int
 
 ## Install The Command-Line Tool
 
-The exact v0.3.320 GitHub Release, when present, uses the self-contained wheel
+The exact v0.4.0 GitHub Release, when present, uses the self-contained wheel
 below. Confirm that the release exists and lists the wheel before installing
 it. The versioned URL alone is not proof that the asset is available.
 
 ```powershell
-uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.320/wom_kit-0.3.320-py3-none-any.whl"
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.0/wom_kit-0.4.0-py3-none-any.whl"
 archive --version
 ```
+
+v0.4.0 adds an exact-human boundary for supported high-impact single writes.
+A native Windows TaskDialog binds content-free operation, plan, target,
+warning, and checklist evidence. Confirmation immediately creates one
+authenticated durable `started` claim before the writer; the writer rechecks
+the binding directly before mutation and the workflow alone finalizes it.
+There is no issued approval receipt with an expiry window. Authenticated
+approval links require a matching `succeeded` claim and upgrade historical
+evidence only when the original effect was `created`.
+
+Private human-artifact registry transitions, duplicate reconciliation,
+approval-integrity overlays, source-fidelity session evidence, AI draft
+creation, mint, promotion, one-edge writes, and draft retirement use this
+boundary. Human-artifact registration uses `external_project` for only
+`<root>/.wom-scratch` or `external_delivery` for the exact reviewed root; it
+never auto-scans Downloads/home. MCP exposes only the related read-only plans,
+scans, and audits.
+Compound/batch writes, edge rollback, canonical revision write/restore,
+zettel-objet link apply/revert, Notion link conversion, and relation-candidate
+acceptance remain preview-only or non-accept review. Activity-group membership
+add/removal/recovery, abstract-backfill write/revert/recovery, title-remap
+write/revert/recovery, never-minted draft discard/restore, and mint/retired-
+draft receipt reconciliation are also plan/audit or preview-only. Affected
+approve requests fail before private target read or mutation with
+`compound_exact_human_approval_binding_required`. See the
+[`v0.4.0 release note`](docs/releases/v0.4.0.md) and
+[`Exact Human Approval Contract`](docs/exact-human-approval-contract.md).
+
+The same fixed blocker covers the v0.4.0 approval branches for project update
+and collision repair, bytecode repair, saved-view write/revert, private objet
+metadata write, identity reconciliation, legacy-coordination cleanup, archive
+migration, markup normalization apply/revert/recovery, Principal
+register/unregister, objet-capture enable/selection/single/batch, external
+import, source registration, and ownership transfer. Read-only plans, previews,
+and audits remain available where documented; historical receipts do not grant
+current write authority. The CLI's canonical fixed-close inventory contains
+exactly 79 top-level commands, and every affected `--approve` help entry says approval is
+unavailable in v0.4.0. The exact names are published in the v0.4.0 release
+note.
+
+The 79-command inventory also includes standalone AI scratch cleanup and credential lifecycle selection,
+object-storage setup, prehashed-ledger
+registration, upload evidence, upload/adopt/reconcile execution, Notion
+ancestor/recovery execution, source-intake record/batch, external-locator
+mutation, quarantine case/decision writes, and delegation. Their read-only
+plans, dry-runs, and audits remain available where implemented; approval stops
+before private/provider reads, credential access, provider calls, mutation, or
+receipt publication.
+
+It now also includes Tiro fetch/capture, Notion manifest locator labeling,
+GitHub metadata setup, KeePassXC write, IMAP manifest write/header scan, source
+scan, onboarding, restore drill, gitignore repair, runtime-skill
+install/uninstall, and catalog-pass cleanup. Four fixed-close surfaces are counted
+separately: nested `derive-text capture`; non-exact/non-AI `create-draft`;
+non-dry-run CLI/MCP `init`; and `parcel`/`pack`. The existing exact reviewed AI
+draft route and command-specific previews remain available.
+
+Letter 138 is an urgent follow-on rather than v0.4.0 scope. This release does
+not detect or repair historical Notion typed-property loss. Current Notion
+recovery covers page bodies or locations only and is not a complete source
+mirror; a read-only loss audit and exact-approved backfill remain pending.
 
 v0.3.320 keeps the v0.3.319 intent-labeled native Windows registration popup
 unchanged and hardens later approved Notion recovery. After exact plan approval,
@@ -125,8 +186,11 @@ relation signals, and content-free JSON argument failures. See
 [`docs/letter112-completion.md`](docs/letter112-completion.md) and
 [`docs/releases/v0.3.301.md`](docs/releases/v0.3.301.md).
 
-v0.3.302 adds the missing review-gated persistent saved-view writer, exact
-revert, interruption convergence, and strict fail-closed saved-view authority.
+Historically, v0.3.302 added a review-gated persistent saved-view writer,
+exact revert, interruption convergence, and strict fail-closed authority.
+In v0.4.0 both writer approvals are fixed closed before private request/target
+reads or mutation with `compound_exact_human_approval_binding_required`; they
+write no view, journal, or receipt. Dry-run planning and historical audit remain.
 See [`docs/saved-view-write.md`](docs/saved-view-write.md) and
 [`docs/releases/v0.3.302.md`](docs/releases/v0.3.302.md).
 
@@ -159,14 +223,14 @@ fail-closed local-state quarantine paths excluded from default archive-root
 discovery, restore copying, and public Git surfaces. See
 [`docs/releases/v0.3.306.md`](docs/releases/v0.3.306.md).
 
-v0.3.307 adds the separate CLI-only `archive legacy-coordination-cleanup`
-boundary for one exact absolute workspace root. Its content-free dry-run is
-cross-platform. Approved mutation is Windows-only: it retains every workspace
+v0.3.307 historically added the separate CLI-only `archive legacy-coordination-cleanup`
+boundary for one exact absolute workspace root. Its content-free dry-run remains
+cross-platform. The historical Windows mutation retained every workspace
 ancestor/root handle and uses exact file/empty-directory handles for in-place
 disposal, checks every
 ancestor Git index, rejects nested `.git` without traversal, and blocks Windows
 reparse points/ADS plus Linux `mnt_id` cross-mount evidence. POSIX reports
-`approval_platform_supported: false` and `safe_to_cleanup: false`, then blocks
+`approval_platform_supported: false` and `safe_to_cleanup: false`, then blocked
 approval before lock or mutation because standard POSIX lacks atomic
 expected-inode delete. Windows approval requires the unchanged plan, reviewer,
 owner authority, quiescent external writers, and explicit retired-state
@@ -295,8 +359,8 @@ approval writes the draft and private receipt. Personal `private_self`
 verbatim preserves private source data while credential secrets block.
 Declared AI provenance cannot downgrade to the human route, and mint rechecks
 the private source/body authority. Audience metadata does not share, export, or
-publish anything. Existing human-written routes remain compatible; older AI
-automation must adopt the new approval evidence. See
+publish anything. In v0.4.0 human-declared/non-AI non-dry-run creation is fixed
+closed; older AI automation must adopt the exact approval evidence. See
 [`docs/source-fidelity-and-private-verbatim.md`](docs/source-fidelity-and-private-verbatim.md)
 and [`docs/releases/v0.3.313.md`](docs/releases/v0.3.313.md). Focused source
 tests do not prove merge, tag, Release, wheel, fresh install, real-archive use,
@@ -533,18 +597,16 @@ version
   Print the running WOM-kit CLI version and optional project pin/source mirror status. When an archive root is inspected, the command can also find a parent project installed-version pin and .zettel-kasten/source mirror, including source version and latest fetched tag drift when available. JSON output is available for AI/runtime checks and redacts local paths by default.
 
 project-version-update --dry-run --target vX.Y.Z
-project-version-update --approve --target vX.Y.Z --reviewed-by <actor> --affirm-external-writers-quiescent
-  Preview locally, then on Windows approval-gate one configured-origin fetch, exact annotated-tag/main-ancestry/version verification, manual complete commit-tree materialization, recognized pin alignment, and an O_EXCL v0.2 project receipt. Windows holds every source/.git/pin/lock/receipt directory path without FILE_SHARE_DELETE; missing receipt parents are created and held in order. Raw worktree/index/flag snapshots avoid git status and filters, but they are checkpointed detection rather than atomic file CAS. After dry-run, keep external editors, sync/backup clients, and other Git writers quiescent for the whole transaction and pass `--affirm-external-writers-quiescent` with the reviewer on every approval. Results say `external_writer_quiescence_required: true`, `external_writer_quiescence_affirmed: true`, `atomic_file_compare_and_swap: false`, and `checkpointed_change_detection: true`; the v0.2 receipt records `external_writer_quiescence: {affirmed: true, scope: complete_project_version_update_transaction}`. The config digest binds effective Git config plus exactly GIT_ASKPASS/GIT_PROXY_COMMAND/GIT_SSH/GIT_SSH_COMMAND; the selected Git executable, PATH, HTTP_PROXY, HTTPS_PROXY, SSL_CERT_FILE, CURL_CA_BUNDLE, SSH_AUTH_SOCK, HOME, and other non-GIT toolchain/transport environment are unbound trusted-stable prerequisites. Config drift immediately before rollback skips restore and preserves the lock. POSIX dry-run remains preview-only and POSIX approval blocks. Runtime scans stream under caps, and ignored `wom-kit/src` shadows block before mutation. v0.3.215 is the bootstrap boundary.
+  Preview one configured-origin fetch, exact annotated-tag/main-ancestry/version verification, manual complete commit-tree materialization, and recognized pin alignment. In v0.4.0 the former approval branch is fixed fail-closed before private project reads or mutation with `compound_exact_human_approval_binding_required`; the dry-run does not grant update authority. Historical v0.3 receipts remain readable.
 
 project-version-update-collision --action inspect|inspect-all|preserve-relocate --dry-run
-  Inspect one bound collision or classify the complete collision set from one exact materialization plan. `inspect-all` accepts no entry ref and offers `project_bytecode_repair` only for an exact complete supported ignored Python-cache set. Repair planning and approval are separate, exact-set-bound commands; afterward run a fresh updater dry-run and approve the new updater plan separately. WOM never guesses private paths or retries the updater automatically.
+  Inspect one bound collision or classify the complete collision set from one exact materialization plan. `inspect-all` accepts no entry ref and offers `project_bytecode_repair` only for an exact complete supported ignored Python-cache set. In v0.4.0 preserve-relocate and repair approval are fixed fail-closed with `compound_exact_human_approval_binding_required`; afterward only a fresh updater dry-run is permitted. WOM never guesses private paths or retries the updater automatically.
 
 project-bytecode-repair-plan --target vX.Y.Z --expected-materialization-plan-sha256 sha256:<digest> --dry-run
-project-bytecode-repair --target vX.Y.Z --expected-materialization-plan-sha256 sha256:<digest> --expected-plan-sha256 <repair-plan-sha256> --approve --reviewed-by <actor> --affirm-external-writers-quiescent
-  Preview and separately approve removal of only the exact supported ignored Python bytecode/cache set bound by inspect-all. These commands share the project-version-update lock; they do not fetch, change `HEAD` or a pin, retry the updater, or approve an update.
+  Preview only the exact supported ignored Python bytecode/cache set bound by `inspect-all`. In v0.4.0 `project-bytecode-repair` approval is fixed fail-closed with `compound_exact_human_approval_binding_required`; no cache entry is removed and the updater is not retried.
 
 onboard
-  Plan or apply first archive setup. Dry-run writes nothing; --approve creates the archive, provider-bindings.yml, and runs strict doctor.
+  Plan first archive setup with --dry-run. In v0.4.0 approval is fixed closed before target/template/provider reads and creates nothing.
 
 doctor
   Inspect an archive for missing files, invalid frontmatter, schema problems, manifest problems, unsafe zettel references, and minting-rule warnings. Use `--progress` for long real-archive checks. Compact edge-receipt progress now keeps index lifecycle plus aggregate source/candidate/cache-hit heartbeats and one final summary; use `--progress-detail verbose` or `--progress-log` for each source candidate batch.
@@ -564,8 +626,8 @@ runtime-context
 ai-start-here --dry-run
   Print one compact first-read map for an entering AI operator without scanning every canonical zet or receipt. It includes a bounded frontmatter-only `inbox_attention` summary with unpublished count, oldest age, pipeline-shape concerns, and publication-metadata gaps without echoing draft identities or bodies. The result marks runtime-context already included, surfaces identity consistency, routes a mismatch to the read-only identity-reconcile preview, and separates `completed_commands` from executable `next_commands` so an AI does not repeat the handoff. Add `--full-doctor` only when a complete archive health check is needed. Optional `--progress` reports de-duplicated counts, work units, stage elapsed time, rate, ETA, and count-bearing heartbeats on stderr; a long mint receipt heartbeat also uses a fixed safe phase such as `file_hash` or `edge_receipt_index`, while edge source-load progress is aggregated into content-free source/candidate/cache-hit counts. Optional `--output .wom-scratch/diagnostics/<name>.json` stores the full result as private local scratch and leaves a compact stdout summary.
 
-identity-reconcile --dry-run|--approve
-  Compare the principal declaration in `archive.yml` with the identity and ownership core in `archive-identity.yml`. Dry-run returns only field names and current/proposed SHA-256 digests. Same-principal display metadata and a missing or template-like identity id can be repaired only through a reviewed, three-digest-bound approval; principal conflicts fail closed. Approval edits only `archive-identity.yml`, writes a value-free receipt, and restores exact prior bytes on handled receipt failure.
+identity-reconcile --dry-run
+  Compare the principal declaration in `archive.yml` with the identity and ownership core in `archive-identity.yml`. Dry-run returns only field names and current/proposed SHA-256 digests. In v0.4.0 the approval branch is fixed fail-closed before private target read or mutation with `compound_exact_human_approval_binding_required`; it does not edit `archive-identity.yml` or write a receipt.
 
 local-sovereignty --dry-run
   Report the machine-readable authority model: local WOM is canonical, GitHub backs up metadata/version history, object storage backs up objet bytes, and external databases hold regenerable map backups or replicas. It performs no live audit, provider/network call, secret read, or write.
@@ -577,10 +639,10 @@ prompt-boundary
   Check untrusted text for obvious prompt-injection and unsafe-agent strings. Dry-run only; never calls LLMs, executes inspected text, approves, mints, or writes files.
 
 github-repo
-  Plan GitHub repository setup for a resolved WOM profile. Dry-run writes nothing. Approved mode writes only local provider metadata and a setup receipt; it does not create GitHub repositories, configure remotes, push, or sync.
+  Plan GitHub repository setup for a resolved WOM profile. In v0.4.0 approval is fixed closed before private profile/target reads and writes no provider metadata or receipt.
 
 object-storage
-  Plan object storage setup for WOM objets. Dry-run writes nothing. Approved mode writes only local provider metadata and a setup receipt; it does not create buckets, upload, sync, copy, hash, or import source files.
+  Plan object storage setup for WOM objets. Dry-run writes nothing. In v0.4.0 approval is fixed fail-closed with `compound_exact_human_approval_binding_required` before private target/provider reads or mutation; it writes no provider metadata or setup receipt and does not create buckets, upload, sync, copy, hash, or import source files.
 
 object-storage-recommendation
   Recommend an object storage provider path before setup planning. Dry-run only; writes nothing, calls no providers, performs no live price lookup, checks no bucket availability, uploads nothing, creates no presigned URLs, and returns the proposed bucket name, setup manual command, and next object-storage dry-run command shape.
@@ -592,13 +654,13 @@ object-storage-adapter-execution-contract
   Preview the future object-storage upload adapter execution contract. Dry-run only; defines sha256 content-addressed keys, approval re-verification, local SHA-256 verification, provider HEAD/idempotency checks, bounded retry/resume ledger, non-secret receipts, and manifest update rules without calling providers, reading object bytes, uploading, writing ledgers or receipts, or updating manifests.
 
 object-storage-upload-evidence
-  Preview or approve-register reviewed external object-storage upload evidence for existing manifest objects. Dry-run reads UTF-8 JSONL upload evidence ledgers, matches successful sha256 rows against objects/manifests/files.jsonl, and previews object_storage locations without echoing ledger paths or row values. Approved mode requires --reviewed-by and --store-ref, writes one non-secret receipt, and updates manifest locations while still calling no providers, reading no object bytes, checking no remote availability, uploading nothing, downloading nothing, syncing nothing, and reading no secrets.
+  Preview reviewed external object-storage upload evidence for existing manifest objects. Dry-run reads UTF-8 JSONL upload evidence ledgers, matches successful sha256 rows against objects/manifests/files.jsonl, and previews object_storage locations without echoing ledger paths or row values. In v0.4.0 approval is fixed fail-closed with `compound_exact_human_approval_binding_required` before private ledger/archive read or mutation; it writes no receipt or manifest location.
 
 object-storage-upload-evidence-audit
   Audit one upload evidence receipt against objects/manifests/files.jsonl. Dry-run only; validates receipt schema, non-secret privacy guards, no-provider closed actions, linked object_storage locations, declared_uploaded availability, sha256 key hints, and receipt/location count consistency without writing files, calling providers, reading object bytes, checking remote availability, uploading, downloading, syncing, creating provider URLs, or retrieving secrets.
 
 object-storage-adopt-existing
-  Adopt objects already stored under your own key layout so a later upload does not re-PUT them (the false-skip fix). Takes the explicit key strategy (--key-strategy prefix --key-prefix <literal> [--key-append-extension]). A verified adopt (--approve + live credentials) HEADs each computed remote_key and adopts ONLY on presence + Content-Length size-match (--content-hash-verify opts one in to a full re-hash per object); a 404 or size-mismatch is not adopted, so a wrong prefix/extension simply re-uploads. A declared adopt (--accept-unverified-adopt, distinct from --approve) records a NON-gating declared_uploaded location that never skips a PUT. It reports adopted-vs-total, echoes no bucket names, prefixes, provider URLs, local paths, exact credential refs, tokens, or secret values, and the companion object-storage-upload/-plan/-verify commands accept the same --key-strategy family (default sha256_content_addressed, unchanged) and record the actual remote_key next to the content-addressed key_hint.
+  Preview how objects already stored under an operator key layout would be checked and adopted. The explicit key strategy and bounded verification plan remain available without provider mutation. In v0.4.0 both verified and declared adoption requests are fixed fail-closed with `compound_exact_human_approval_binding_required` before private/provider reads, credential access, provider calls, manifest mutation, or receipt publication.
 
 external-export-plan
   Plan a text-first Notion, Google Drive, or generic workspace export before large media downloads. Dry-run only; detects the broad workspace/database export trap, returns safe text-only and targeted first-pass command shapes, starts no export, calls no providers, reads no files, downloads no attachments, writes nothing, and echoes no provider URLs or local paths.
@@ -643,16 +705,16 @@ notion-client-fixture-request-plan
   Package the sanitized fixture request contract for client Notion issue verification. Dry-run only; lists accepted fixture kinds, required safe fields, redaction rules, and next verification commands without sending messages, calling providers, reading page titles or bodies, writing fixtures, writing zets, writing edges, or writing receipts.
 
 zettel-edge
-  Preview or approve one typed edge from a source zet to one verified target zet or manifested objet. Dry-run previews first; approve requires --reviewed-by and writes only one source zettel frontmatter edge plus one receipts/edges/*.zettel-edge.json receipt. Since v0.3.290 the gate also requires the resolved `Zettel`/`OriginalObject` endpoints to satisfy the selected active `types.yml` record's non-empty `from` and `to` entity-type lists; malformed or incompatible contracts fail before any write. Since v0.3.286 this existing gate accepts `format_variant` when a human explicitly reviews an alternate rendition of the same intellectual content; its source is a review anchor only, and the writer creates no reciprocal edge. `revert-edge` can later remove that exact edge from the receipt and write receipts/edges/reverts/*.zettel-edge-revert.json while preserving the original write receipt. It is not a bulk connection importer, exposes no MCP write tool, calls no providers, reads no real exports, writes no candidate records, updates no object manifests, and echoes no zettel body text, zettel titles, provider URLs, local paths, page titles, comment bodies, account ids, emails, tokens, or secret values.
+  Preview or exact-human approve one typed edge from a source zet to one verified target zet or manifested objet. The supported single-write path uses the native TaskDialog -> authenticated `started` claim -> writer revalidation -> workflow finalization sequence; `--approve` alone is not authority. Since v0.3.290 the gate also requires the resolved `Zettel`/`OriginalObject` endpoints to satisfy the selected active `types.yml` record's non-empty `from` and `to` entity-type lists. The separate `revert-edge` approval branch is fixed fail-closed in v0.4.0 and cannot remove this edge. This is not a bulk connection importer and echoes no private body, title, provider, path, account, token, or secret value.
 
 zettel-edge-batch
-  Preview or approve policy-gated typed edge batches from a reviewed JSON plan. Dry-run validates policy-writable rows through the single-edge gate without writing and therefore also inherits the v0.3.290 endpoint-type contract; incompatible or malformed registry rows cannot be written. It preloads the object manifest once when batch rows target manifested objets. --plan resolves archive-relative first, then CWD-relative for compatibility. Approve requires --reviewed-by, writes only policy-matching new edges, writes receipts/edges/*.zettel-edge.json plus one receipts/edges/batches/*.zettel-edge-batch.json receipt when new rows are written, returns low-confidence or policy-mismatched rows in human_review_queue, and --skip-existing can separate already-written rows into skipped_existing_edges. `format_variant` is a deliberate exception: every such row is returned with `manual_single_edge_review_required`, even if the policy lists it as auto-writable, and the batch path never writes it. `revert-batch` can later replay the batch receipt in reverse, remove all listed edges, write per-edge revert receipts plus one receipts/edges/batches/reverts/*.zettel-edge-batch-revert.json receipt, and preserve the original write receipts. It is not a real export parser, exposes no MCP write tool, calls no providers, reads no real exports, writes no candidate records, updates no object manifests, and echoes no zettel body text, zettel titles, provider URLs, local paths, page titles, comment bodies, account ids, emails, tokens, or secret values.
+  Preview policy-gated typed edge batches from a reviewed JSON plan. Dry-run validates policy-writable rows through the single-edge gate without writing and inherits the v0.3.290 endpoint-type contract. In v0.4.0 batch approval is fixed fail-closed before private target read or mutation with `compound_exact_human_approval_binding_required`; it writes no edge or receipt. Historical batch receipts remain readable.
 
 revert-edge
-  Preview or approve removing one previously approved edge using receipts/edges/*.zettel-edge.json. Approve requires --reviewed-by, removes the matching edge_id from source zettel frontmatter, updates updated_at, writes receipts/edges/reverts/*.zettel-edge-revert.json, preserves the original edge receipt, exposes no MCP write tool, calls no providers, reads no real exports or zettel bodies, and echoes no zettel body text, zettel titles, provider URLs, local paths, page titles, comment bodies, account ids, emails, tokens, or secret values.
+  Preview removal of one edge named by a historical receipt. In v0.4.0 approval is fixed fail-closed before private target read or mutation with `compound_exact_human_approval_binding_required`; it removes no edge and writes no revert receipt.
 
 revert-batch
-  Preview or approve removing all edges listed in receipts/edges/batches/*.zettel-edge-batch.json. Approve requires --reviewed-by, routes each item through the single edge revert gate, writes per-edge revert receipts and one batch revert receipt, preserves original write receipts, restores touched files if a batch revert fails partway through, exposes no MCP write tool, calls no providers, reads no real exports or zettel bodies, and echoes no zettel body text, zettel titles, provider URLs, local paths, page titles, comment bodies, account ids, emails, tokens, or secret values.
+  Preview removal of edges listed by a historical batch receipt. In v0.4.0 approval is fixed fail-closed before private target read or mutation with `compound_exact_human_approval_binding_required`; it removes no edge and writes no per-edge or batch revert receipt.
 
 imap-mailbox-plan
   Plan a Gmail, Naver, or generic IMAP mailbox source with safe account, username, mailbox, and credential refs. Dry-run only; opens no connection, logs into nothing, reads no headers/bodies/attachments, sends no mail, changes no flags, stores no secrets, and writes no files.
@@ -670,7 +732,7 @@ imap-mailbox-adapter-manifest-plan
   Preview and schema-check a non-secret future IMAP adapter manifest. Dry-run only; writes no manifests and does not connect, log in, select/search a mailbox, list message ids, read headers/bodies/attachments, retrieve secrets, start OAuth, or call providers.
 
 imap-mailbox-adapter-manifest-write
-  Preview or approve writing a schema-checked, non-secret IMAP adapter manifest plus a write receipt. CLI-only; MCP exposes no live write tool. Does not connect, log in, select/search a mailbox, list message ids, read headers/bodies/attachments, retrieve secrets, start OAuth, or call providers.
+  Preview a schema-checked, non-secret IMAP adapter manifest. In v0.4.0 approval is fixed closed before private input/archive reads and writes no config or receipt; it opens no mailbox and calls no provider.
 
 imap-mailbox-adapter-audit-plan
   Preview a non-secret future IMAP adapter audit receipt. Dry-run only; combines the mailbox selection plan with safe receipt metadata without connecting, logging in, selecting/searching a mailbox, listing message ids, reading headers/bodies/attachments, retrieving secrets, starting OAuth, or writing files.
@@ -685,7 +747,7 @@ imap-mailbox-adapter-execution-contract
   Print the read-only future execution contract for a local IMAP adapter. Dry-run only; wraps preflight, defines future inputs/output/receipt rules, writes nothing, connects to no mailbox, reads no mail, retrieves no secrets, starts no OAuth, and calls no providers.
 
 imap-mailbox-header-metadata-scan
-  Run the first approval-gated local IMAP header metadata scan. Dry-run previews without reading secrets; approved mode requires the manifest, approval receipt, execution contract, env username/app-password refs, and writes only a non-secret execution receipt. It reads no bodies or attachments and echoes no usernames, passwords, env var names, raw UIDs, subjects, senders, headers, local paths, or IMAP host values.
+  Preview a content-free IMAP header scan preflight. In v0.4.0 approval is fixed closed before manifest, receipt, credential, provider, mailbox, or target reads; it opens no IMAP connection, reads no headers, and writes no execution receipt.
 
 imap-mailbox-header-scan-receipt-audit
   Audit one IMAP header metadata scan execution receipt. Dry-run validates the receipt without writing; approved mode writes a non-secret audit receipt under receipts/imap/adapter-execution-audits/. It opens no IMAP connection, reads no environment variables, opens no keyring/password manager, reads no headers/bodies/attachments, and echoes no execution receipt path or candidate refs.
@@ -706,7 +768,7 @@ imap-mailbox-material-capture-approval-plan
   Preview or approve writing one non-secret material capture approval receipt. CLI-only; writes under receipts/imap/material-capture-approvals/ on approve, records no material selection receipt path, candidate refs, execution receipt path, or message material, opens no IMAP connection, reads no environment variables, opens no keyring/password manager, reads no headers/bodies/attachments, and creates no derived text.
 
 imap-mailbox-material-capture-approval-audit
-  Audit one non-secret material capture approval receipt against its material selection receipt. Dry-run only; writes nothing, reads no original execution receipt, opens no IMAP connection, reads no environment variables, opens no keyring/password manager, reads no headers/bodies/attachments, creates no derived text, and echoes no approval receipt path, material selection receipt path, execution receipt path, or candidate refs.
+  Structurally audit one legacy non-secret material-capture approval receipt. The result is `legacy_unbound`/advisory and `future_capture_authorized` remains false; it writes nothing, opens no IMAP/credential store, and reads no message material.
 
 human-artifact-store
   Plan a user-facing note/workspace/publication surface such as WordPress, Joplin, Notion, Obsidian, Evernote, or generic Markdown. Dry-run only; writes nothing, calls no providers, creates no notes, publishes no posts, and keeps system/AI artifacts separate from human-readable artifacts.
@@ -715,10 +777,10 @@ zet-surface-prototype
   Preview a user-selected ZET surface prototype for WordPress, Joplin, Notion, or Obsidian. Dry-run only; writes nothing, calls no providers, requests no tokens, creates no notes, publishes no posts, writes no vault files, mints no zets, and runs no ZET transport.
 
 prehashed-objet-ledger
-  Preview or approve-register one or more already-hashed external content-addressed object/objet ledgers. Dry-run counts sha256/byte-size rows, optional safe MIME values through --mime-field, skipped null-sha rows, cross-ledger duplicates, and planned manifest writes without reading blob bytes. Approved mode appends external manifest records and writes a receipt. MCP exposes only the read-only preview as prehashed_objet_ledger_preview.
+  Preview one or more already-hashed external content-addressed object/objet ledgers. Dry-run counts sha256/byte-size rows, optional safe MIME values through --mime-field, skipped null-sha rows, cross-ledger duplicates, and planned manifest writes without reading blob bytes. In v0.4.0 approval returns `compound_exact_human_approval_binding_required` before private ledger/archive reads or mutation and appends no manifest record or receipt. MCP exposes only the read-only preview as prehashed_objet_ledger_preview.
 
 object-storage-upload-evidence
-  Preview or approve-register reviewed external object-storage upload evidence for existing manifest objects. Approved mode writes one receipt under receipts/providers/object-storage-upload-evidence/ and appends object_storage locations with declared_uploaded availability. It does not prove remote availability by itself and does not call providers, read object bytes, compute local hashes, upload, download, sync, create provider URLs, or retrieve secrets. MCP exposes no write tool for this surface.
+  Preview reviewed external object-storage upload evidence for existing manifest objects. In v0.4.0 approval returns `compound_exact_human_approval_binding_required` before private ledger/archive reads or mutation and writes no receipt or object_storage location. The preview does not prove remote availability and does not call providers, read object bytes, compute local hashes, upload, download, sync, create provider URLs, or retrieve secrets. MCP exposes no write tool for this surface.
 
 object-storage-upload-evidence-audit
   Check a reviewed upload evidence receipt against local manifest locations. Dry-run only; it writes no audit receipt, performs no remote availability check, and echoes no receipt path, manifest path, object ids, location records, provider URLs, bucket names, account ids, emails, tokens, or secret values. MCP exposes no tool for this surface.
@@ -742,13 +804,13 @@ notion-objet-source-map-link-plan
   Plan zettel-to-objet material-link candidates from source maps and optional download/retrieval ledgers when imported zettel bodies no longer contain provider locators. Dry-run only; writes nothing, rewrites no body text, writes no edges or receipts, reads no object bytes, calls no providers, and echoes no provider URLs, provider locator text, page titles, zettel body text, frontmatter values, absolute local paths, account ids, emails, tokens, or secret values.
 
 notion-objet-link-rewrite-plan
-  Validate one reviewed locator_fingerprint and object_id pair before an approved conversion. Dry-run only; writes nothing, rewrites no body text, writes no edges, echoes no provider URLs, zettel body text, frontmatter values, page titles, absolute local paths, or object bytes, and calls no providers.
+  Validate one reviewed locator_fingerprint and object_id pair for a conversion preview. Dry-run only; writes nothing, rewrites no body text, writes no edges, echoes no provider URLs, zettel body text, frontmatter values, page titles, absolute local paths, or object bytes, and calls no providers.
 
 notion-objet-link-convert
-  Preview or approve converting one reviewed locator/object match into an embed edge. Approve requires --reviewed-by and --expected-occurrence-count, re-runs the rewrite plan, writes through the zettel-edge gate, and creates a conversion receipt. It does not rewrite body text, replace provider locator text, expose an MCP write tool, call providers, read object bytes, or echo provider URLs, body text, titles, frontmatter values, account ids, emails, tokens, or secret values.
+  Preview one reviewed locator/object match as an embed conversion. In v0.4.0 approval is fixed fail-closed before private target read or mutation with `compound_exact_human_approval_binding_required`; it writes no edge or conversion receipt.
 
 notion-objet-manifest-locator-label
-  Preview or approve adding one reviewed non-secret Notion locator fingerprint to one object manifest record. Approve requires --reviewed-by and writes only objects/manifests/files.jsonl plus a receipt under receipts/objects/notion-locator-labels/. It stores no raw provider locator text, exposes no MCP write tool, reads no zettel bodies or object bytes, rewrites no zettels, writes no edges, calls no providers, and echoes no provider URLs, zettel body text, zettel titles, page titles, account ids, emails, tokens, or secret values.
+  Preview one reviewed non-secret Notion locator fingerprint for an object manifest record. In v0.4.0 approval is fixed closed before private manifest/target reads and writes no row or receipt; MCP exposes no writer.
 
 view-health
   Diagnose saved view hit counts and facet distributions against the generated local index. Dry-run only; writes nothing, rebuilds no index, rewrites no views or facets, reads no zettel bodies or object bytes, echoes no zettel titles, absolute local paths, or provider URLs, and calls no providers.
@@ -760,10 +822,10 @@ credential-keepassxc-command-plan
   Verify a credential access approval receipt through the policy gate, then preview a safe KeePassXC CLI add command shape. Dry-run only; runs no keepassxc-cli, opens no vault, stores no .kdbx path, passes no secret through argv or stdin, writes no vault entry, and echoes no exact credential ref.
 
 credential-keepassxc-write
-  Execute a minimal KeePassXC CLI add after verifying a credential access approval receipt. Dry-run previews first; approved mode is CLI-only, requires a local .kdbx path, invokes keepassxc-cli add --password-prompt, writes a non-secret execution receipt, blocks replay with the same approval receipt, and echoes no secret value, exact credential ref, database path, username, email, token, provider URL, or raw adapter output.
+  Preview a content-free KeePassXC command shape. In v0.4.0 approval is fixed closed before receipt, credential, database, provider, or target reads; it invokes no `keepassxc-cli`, changes no vault, and writes no execution receipt.
 
 beginner-setup-manual
-  Print beginner-friendly secret vault, KeePassXC CSV bulk migration, Cloudflare R2 object-storage setup, Notion nested recovery, and derived-text tool setup steps. Dry-run only; explains what to do in external UIs and local terminals, including R2 Korean/English label hints, the Access Key ID plus Secret Access Key pair used by S3-compatible clients, and a plain-language Notion location-recovery flow before one-time approval and live structure fetch handoff. It shows safe non-secret labels and dry-run commands, writes nothing, opens no vault/provider dashboard, reads no CSV, imports or merges no database, creates no bucket/API token, writes no approval receipt, runs no Notion location fetch, installs no tools, runs no extraction, deletes no temporary files, and echoes no secret values or local paths.
+  Print beginner-friendly secret vault, KeePassXC CSV bulk migration, Cloudflare R2 object-storage setup, Notion nested recovery, and derived-text tool setup steps. Dry-run only; the Notion topic ends at a content-free preview. In v0.4.0 `notion-recover` execution/approval returns `compound_exact_human_approval_binding_required` before credential/private target reads or provider calls and writes no fixture or receipt. The manual writes nothing, opens no vault/provider dashboard, reads no CSV, imports or merges no database, creates no bucket/API token, installs no tools, runs no extraction, deletes no temporary files, and echoes no secret values or local paths.
 
 ai-response-concept-guide
   Print beginner-facing AI explanation cards for sha256 object identity vs location, manifests vs zets, and the objet -> derived text -> zet layer split. Dry-run only; returns safe scripts, analogies, routing hints, and overclaim guardrails without reading source bytes or derived-text bodies, writing manifests or receipts, drafting or minting zets, uploading objects, calling providers, or echoing source filenames, local paths, provider URLs, account ids, emails, tokens, or secret values.
@@ -793,13 +855,13 @@ tiro-import-plan
   Plan Tiro meeting transcript and audio-objet import from an archive-internal manifest. Dry-run only; preserves meeting metadata, speaker turns, timestamps, confidence, and optional audio objet refs as structure, but echoes no transcript text, participant names, source URLs, audio filenames, local paths, account ids, emails, tokens, or secrets. It calls no Tiro API, reads no audio bytes, writes no derived text, drafts no zets, and mints nothing.
 
 source-intake-record
-  Validate and record a reviewed source-intake dry-run JSON plan under receipts/sources/. Dry-run previews first; approved mode writes one redacted plan record only.
+  Validate a reviewed source-intake dry-run JSON plan. In v0.4.0 approval returns `compound_exact_human_approval_binding_required` before private input/archive reads or mutation and writes no plan record or receipt.
 
 objet-capture-selection
-  Build a reviewed selection manifest for one staged file after source-intake recording. Dry-run hashes the staged file and previews the manifest; approved mode writes only the selection JSON for a later, separate objet-capture dry-run/approve step.
+  Build a reviewed selection-manifest preview for one staged file after source-intake recording. In v0.4.0 approval is fixed fail-closed before private staged-file or receipt reads and writes no selection JSON.
 
 derive-text capture
-  Register an already extracted UTF-8 text file as a provenance-aware derived text record for one existing object_id. Dry-run previews first; approved mode stores the text body, appends objects/manifests/derived-text.jsonl, and writes a receipt. Batch manifest rows require source_object_id, text_file, derivation_kind, tool_name, tool_version, and review_status; the item schema lives at schemas/derived-text-capture-manifest-item.schema.json. It does not run OCR, ASR, parser, LLM vision, provider APIs, drafting, or minting.
+  Preview an already extracted text file for one existing object_id. In v0.4.0 single and batch approval are fixed closed before private reads and write no body, manifest row, index update, or receipt. It does not run OCR, ASR, parser, LLM vision, provider APIs, drafting, or minting.
 
 project-intake-plan
   Plan one staged project folder intake session. Dry-run only; reports top-level counts, next session questions, staging-convention status, and would_change: [] without reading file bodies, exposing child names, hashing, copying, uploading, drafting, minting, or deleting.
@@ -853,7 +915,7 @@ foreign-block-quarantine
   Plan future isolated holding for a foreign block from an attestation packet preview. Dry-run only; writes no quarantine files, receipts, attestations, trust, or imports.
 
 quarantine-foreign-block
-  Preview or approve a sanitized local quarantine case write from a foreign-block quarantine plan. Approved mode writes only the quarantine case JSON and quarantine write receipt; it never trusts, imports, mints, attests, anchors, delegates, signs, executes, or accepts the foreign block.
+  Preview a sanitized local quarantine case from a foreign-block quarantine plan. In v0.4.0 approval returns `compound_exact_human_approval_binding_required` before private plan/target reads or mutation and writes no quarantine case or receipt; it never trusts, imports, mints, attests, anchors, delegates, signs, executes, or accepts the foreign block.
 
 quarantine-review
   List and validate existing foreign block quarantine review cases. Read-only; it writes nothing and does not trust, import, mint, attest, anchor, delegate, sign, execute, accept, or apply the foreign block.
@@ -862,7 +924,7 @@ quarantine-decision
   Preview a future decision path for one existing foreign block quarantine case. Dry-run only; it writes no decision and does not trust, import, mint, attest, anchor, delegate, sign, execute, accept, or apply the foreign block.
 
 record-quarantine-decision
-  Preview or approve recording a local quarantine decision from a saved decision preview. Approved mode writes only the decision JSON and decision receipt; it never trusts, imports, mints, attests, anchors, delegates, signs, executes, accepts, applies, shares, or calls providers.
+  Preview recording a local quarantine decision from a saved decision preview. In v0.4.0 approval returns `compound_exact_human_approval_binding_required` before private decision/case reads or mutation and writes no decision JSON or receipt; it never trusts, imports, mints, attests, anchors, delegates, signs, executes, accepts, applies, shares, or calls providers.
 
 quarantine-decision-review
   List and validate recorded foreign block quarantine decisions. Read-only; it writes nothing and does not trust, import, mint, attest, anchor, delegate, sign, execute, accept, apply, share, or call providers.
@@ -891,8 +953,8 @@ attestation-statement-draft-review
 attestation-statement-draft-decision
   Preview one safe next human-review route for a recorded statement draft. Dry-run only; it writes nothing and never records acceptance, trust, import, attestation, signature, mint, sharing, WordPress publishing, provider calls, or ZET transport.
 
-init
-  Initialize a personal, company, or family archive from a safe template.
+init --dry-run
+  Preview personal, company, or family archive initialization without creating a target. In v0.4.0 real CLI/MCP initialization returns `compound_exact_human_approval_binding_required` before target or template reads and writes no folder, archive file, identity, provider/source binding, or receipt; MCP `archive_init` defaults to dry-run.
 
 validate
   Run strict archive validation.
@@ -921,8 +983,8 @@ zet-catalog-pass-cleanup --input <scratch.jsonl> --expected-sha256 <sha256> --dr
 zet-revision-plan --zettel-id <safe-id> --proposal .wom-scratch/revisions/<private>.md --dry-run
   Validate one complete private correction proposal against the exact current canonical zet before any canonical write. It freezes identity, creation, lifecycle, and original creator metadata; checks explicit abstract, body locator, edges, provenance, visibility, quality blockers, and semantic change; and returns hashes plus fixed change categories without echoing the actual id, path, filename, title, abstract, body, custom frontmatter value, or secret. A green plan grants no write authority; hand its four hashes to a separate writer dry-run.
 
-zet-revision-write --zettel-id <safe-id> --proposal .wom-scratch/revisions/<private>.md --expected-canonical-sha256 <sha256> --expected-proposal-sha256 <sha256> --expected-proposal-semantic-sha256 <sha256> --expected-plan-digest <sha256> --dry-run|--approve
-  Preview the exact writer-produced candidate first. Approval must reuse the returned `revision_at` and `write_plan.actual_digest`, provide a safe reviewer, affirm the complete revision and abstract/body pair, and separately affirm edge changes when present. It atomically replaces one canonical zet, verifies it, and creates one immutable text-free receipt; runtime failures restore exact prior bytes, and a text-free private lock can finish a missing receipt after process interruption. MCP exposes no revision writer.
+zet-revision-write --zettel-id <safe-id> --proposal .wom-scratch/revisions/<private>.md --expected-canonical-sha256 <sha256> --expected-proposal-sha256 <sha256> --expected-proposal-semantic-sha256 <sha256> --expected-plan-digest <sha256> --dry-run
+  Preview the exact writer-produced candidate without mutation. In v0.4.0, `--approve` fails before private target read or write with `compound_exact_human_approval_binding_required`; the historical multi-effect writer has no complete exact-human target-set binding. MCP exposes no revision writer.
 
 zet-revision-receipt-audit --dry-run --max-receipts 5000 --max-locks 5000 --max-problems 100
   Audit every bounded canonical revision receipt as one chronological event chain to the current zet and classify recognized text-free transaction locks. Exact repeated states are allowed only when adjacent before/after evidence and unique event times remain continuous. It reports only counts, fixed codes, SHA-only handles, and one audit digest; it writes or deletes nothing, never auto-cleans a lock, and has no duplicate MCP tool.
@@ -930,17 +992,17 @@ zet-revision-receipt-audit --dry-run --max-receipts 5000 --max-locks 5000 --max-
 zet-revision-restore-plan --receipt receipts/revisions/canonical/<digest>.zet-revision.json --expected-receipt-sha256 <sha256> --restore-proposal .wom-scratch/revisions/restores/<private>.md --dry-run
   Validate separately recovered complete old zet bytes against the actual latest receipt only after the archive-wide revision history is healthy. The current canonical must match that receipt's `after` state, the private proposal must match all `before` hashes, and the old bytes must pass current publication/quality policy. It writes nothing, echoes no private identity/path/text, and grants no write authority by itself.
 
-zet-revision-restore-write --receipt receipts/revisions/canonical/<digest>.zet-revision.json --expected-receipt-sha256 <sha256> --restore-proposal .wom-scratch/revisions/restores/<private>.md --expected-current-sha256 <sha256> --expected-restore-proposal-sha256 <sha256> --expected-restore-proposal-semantic-sha256 <sha256> --expected-restore-plan-digest <sha256> --revision-at <time> --dry-run|--approve
-  Preview an exact restore write first, then approve only the unchanged event time and `write_plan.actual_digest` with a safe reviewer, restore review, abstract/body-pair review, and changed-edge review when required. It shares the ordinary revision lock, atomically writes the recovered proposal bytes without changing YAML/BOM/newlines/frontmatter/body or historical `updated_at`, and appends one immutable text-free restore receipt to the same event chain. Handled failures restore exact prior bytes; the same approved command resumes interrupted prewrite, missing-receipt, and completed-lock states. It has no MCP writer and calls no provider or network.
+zet-revision-restore-write --receipt receipts/revisions/canonical/<digest>.zet-revision.json --expected-receipt-sha256 <sha256> --restore-proposal .wom-scratch/revisions/restores/<private>.md --expected-current-sha256 <sha256> --expected-restore-proposal-sha256 <sha256> --expected-restore-proposal-semantic-sha256 <sha256> --expected-restore-plan-digest <sha256> --revision-at <time> --dry-run
+  Preview the exact restore effect without mutation. In v0.4.0, `--approve` fails before private target read or write with `compound_exact_human_approval_binding_required`; the historical restore executor has no complete exact-human effect-set binding. It has no MCP writer and calls no provider or network.
 
 zet-abstract-backfill-plan --proposal .wom-scratch/abstract-backfill/<private>.jsonl --dry-run
   Validate bounded missing-abstract proposals against exact current canonical file bytes. It checks the shipped row schema, identity/status, hash, first-read absence, safe abstract shape, and a byte-preserving one-field insertion. It returns only row indexes, counts, and hashes; writes nothing and echoes no ids, paths, bodies, abstracts, or proposal filename.
 
-zet-abstract-backfill-write --proposal .wom-scratch/abstract-backfill/<private>.jsonl --expected-proposal-sha256 <sha256> --dry-run|--approve
-  Preview first. A new approved write also requires `--reviewed-by` and `--affirm-abstracts-reviewed`. It reruns the plan, revalidates every exact canonical hash, adds only `frontmatter.abstract`, and writes one hash-evidence receipt. Any runtime item/receipt failure restores all attempted canonical bytes. A matching receipt makes retries no-write `already_applied`. Per-file and batch byte limits bound rollback memory. Since v0.3.265, approve writes a private hash-only transaction journal before the first canonical change; forced termination retains the journal and lock for audit and the separate v0.3.267 single-case executor can recover only after a new plan, approval, and archive-quiescence affirmation.
+zet-abstract-backfill-write --proposal .wom-scratch/abstract-backfill/<private>.jsonl --expected-proposal-sha256 <sha256> --dry-run
+  Preview the exact multi-file effect without mutation. In v0.4.0, `--approve` fails before private target read or write with `compound_exact_human_approval_binding_required`; it creates no canonical change, journal, lock, snapshot, or receipt. Historical v0.3 apply evidence remains readable.
 
-zet-abstract-backfill-revert --receipt receipts/revisions/abstract-backfill/<digest>.zet-abstract-backfill.json --expected-receipt-sha256 <sha256> --dry-run|--approve
-  Dry-run audits the immutable applied receipt, every current after/body/abstract hash, and deterministic removal back to the exact recorded before hash. A new approved revert also requires `--reviewed-by` and `--affirm-abstract-removal-reviewed`. It preserves the source receipt, writes one text-free revert receipt last, restores the applied state on runtime failure, and returns no-write `already_reverted` on a matching retry. Any later canonical edit blocks. Since v0.3.265, approve writes the same kind of private pre-mutation journal; forced termination remains outside the in-process rollback guarantee but retains journal plus lock for audit and the v0.3.267 executor can resume the reconstructible revert direction after fresh review.
+zet-abstract-backfill-revert --receipt receipts/revisions/abstract-backfill/<digest>.zet-abstract-backfill.json --expected-receipt-sha256 <sha256> --dry-run
+  Audit the immutable applied receipt, current hashes, and exact inverse without mutation. In v0.4.0, `--approve` fails before private target read or write with `compound_exact_human_approval_binding_required`; it writes no canonical byte, journal, lock, or revert receipt.
 
 zet-abstract-backfill-receipt-audit --dry-run --max-receipts 5000 --max-locks 5000 --max-problems 100
   Audit every bounded apply/revert receipt lifecycle, recognized leftover transaction lock, and private v0.3.265 transaction journal. Healthy applied/reverted lifecycles become counts plus one audit digest; only bounded hash/index problem records are returned. Completed lock/journal residue is a warning only when its final receipt fully verifies; prepared, partial, complete-without-receipt, divergent, invalid, or unverified evidence blocks. `--max-locks` independently bounds both locks and journals. The command reads lock names but never lock content; it may read private journal ids, canonical paths, and reviewer metadata plus canonical bytes for hash validation, but echoes no private receipt/zet/text/reviewer/path value and writes or deletes nothing.
@@ -948,8 +1010,8 @@ zet-abstract-backfill-receipt-audit --dry-run --max-receipts 5000 --max-locks 50
 zet-abstract-backfill-recovery-plan --dry-run --max-receipts 5000 --max-locks 5000 --max-cases 100
   Turn each retained v0.3.265 transaction journal into one fixed, privacy-safe recovery recommendation without executing it. Prepared and verified-completed evidence plans cleanup; interrupted apply plans exact rollback; interrupted revert plans forward completion/finalization because removed private abstract text is not stored; divergent, invalid, or present-but-unverified final receipts force manual forensic hold. Every case requires fresh recovery approval and current-state revalidation. Since v0.3.267 non-forensic cases point to the separate executor, but the plan itself writes or deletes no canonical file, receipt, journal, lock, or guard.
 
-zet-abstract-backfill-recover --operation <apply|revert> --basis-sha256 <sha256> --expected-plan-digest <sha256> --expected-action <fixed-action> --dry-run|--approve
-  Bind and execute at most one non-forensic retained-journal case. Approval additionally requires a safe `--reviewed-by`, `--affirm-recovery-reviewed`, and `--affirm-archive-quiescent`. The executor reruns the complete bounded plan under a recovery-only OS advisory guard, immediately revalidates every participant hash, reacquires a missing basis lock, and moves only in the fixed safe direction. Interrupted apply restores exact before hashes; interrupted revert completes exact after hashes and create-new writes a verified text-free revert receipt; prepared or verified-completed evidence only cleans its matching lock and journal. Failure or hard exit retains evidence and requires a fresh plan and approval. It never executes manual hold and does not lock external editors, older WOM versions, or ordinary different-basis writers.
+zet-abstract-backfill-recover --operation <apply|revert> --basis-sha256 <sha256> --expected-plan-digest <sha256> --expected-action <fixed-action> --dry-run
+  Bind one non-forensic retained-journal case without executing it. In v0.4.0, `--approve` fails before private target read or mutation with `compound_exact_human_approval_binding_required`; it changes no canonical, receipt, journal, lock, or recovery guard. Manual forensic holds remain non-executable.
 
 read-zettel
   Read one zettel by id or archive-relative path. Use `--section overview` for the compact first read; MCP `read_zettel` accepts the same section values while keeping `body` as its compatibility default. Non-redacted results include exact canonical file SHA-256 and decoded returned-body SHA-256 so a private revision proposal can bind to the version actually read; redacted hashes are suppressed.
@@ -969,9 +1031,6 @@ mint-zet --approve --reviewed-by
 mint-zet-batch --plan --dry-run
   Preview minting many reviewed draft zets from one JSON plan in one WOM-kit process. Aliases include bulk-mint and bulk-mint-zet.
 
-mint-zet-batch --plan --approve --reviewed-by
-  Mint plan-approved draft zets, keep per-item mint receipts, and write one batch receipt without per-item shell process loops.
-
 retire-draft --dry-run
   Verify that an inbox draft is already backed by canonical mint artifacts before cleanup. Writes nothing and deletes nothing.
 
@@ -980,9 +1039,6 @@ retire-draft --approve --reviewed-by
 
 retire-draft-batch --plan --dry-run
   Preview retiring many already minted inbox drafts from one JSON plan in one WOM-kit process. Aliases include bulk-retire and bulk-retire-draft.
-
-retire-draft-batch --plan --approve --reviewed-by
-  Remove verified plan-approved inbox drafts, keep per-item retire receipts, and write one batch receipt without per-item shell process loops.
 
 mint-zettel
   Transitional compatibility alias for mint-zet.
@@ -1000,10 +1056,10 @@ search
   Search zettels, object manifest entries, derived text records, views, and source map entries through the generated index.
 
 parcel
-  Create a portable parcel from a saved view. The v0.2 compatibility path still writes under workpacks/.
+  Fixed closed in v0.4.0 before saved-view/body/manifest/target reads; creates no workpack.
 
 pack
-  Transitional compatibility alias for parcel.
+  Transitional compatibility alias with the same fixed-close boundary as parcel.
 
 admit --dry-run
   Preview admitting a parcel/workpack without mutating the target archive.
@@ -1012,10 +1068,9 @@ import --dry-run
   Transitional compatibility alias for admit.
 
 import-external --dry-run
-  Preview a Notion or Google Drive export import without mutating the target archive. Manifest items that contain safe object refs, source refs, facets, or zettel id overrides report counts and routing metadata without echoing private values. For a new Notion JSON/YAML manifest item only, an identifier-shaped primary title can fall back to the same item's exact lowercase top-level string `index` after the existing title and privacy checks; a normal human title always wins.
+  Preview a Notion or Google Drive export import without mutating the target archive. Manifest items that contain explicit safe object refs, source refs, facets, or zettel id overrides report counts and routing metadata without echoing private values. For a new Notion JSON/YAML manifest item only, an identifier-shaped primary title can fall back to the same item's exact lowercase top-level string `index` after the existing title and privacy checks; a normal human title always wins.
 
-import-external --approve --reviewed-by
-  Import Notion or Google Drive export items as inbox drafts and write an import receipt. Explicit safe metadata from the manifest is preserved in draft source_refs and facets; use --provider-locator-policy object-ref to convert supported Notion body locators to a reviewed objet ref when exactly one object source ref is present. Within one approved call, discovery is frozen before planning and writes; this is not cross-invocation dry-run digest binding.
+  In v0.4.0 import approval is fixed fail-closed before archive/export reads or mutation with `compound_exact_human_approval_binding_required`; no inbox draft or import receipt is written.
 
 share --dry-run
   Legacy-compatible dry-run for the older share language. Product language should prefer delegate.
@@ -1023,8 +1078,7 @@ share --dry-run
 delegate-zet --dry-run
   Preview scoped zet delegation from a saved view and return a delegate capability receipt preview.
 
-delegate-zet --approve --reviewed-by
-  Write a local delegate receipt after the same dry-run gates pass.
+  In v0.4.0 delegation approval is fixed fail-closed before private target read or mutation with `compound_exact_human_approval_binding_required`; it writes no delegate receipt.
 
 attest-zet --dry-run
   Preview attestation of a delegated foreign zet receipt without writing files.
@@ -1044,8 +1098,7 @@ sources
 add-source --dry-run
   Preview registering a new source without hand-editing source-bindings.yml.
 
-add-source --approve --reviewed-by
-  Register a new source. Actual local roots may be written only to ignored local profiles.
+  In v0.4.0 source-registration approval is fixed fail-closed before archive/input read or mutation with `compound_exact_human_approval_binding_required`; it writes no source binding or receipt.
 
 source-mounts
   Show host-native and Docker read-only mount guidance for registered sources.
@@ -1057,7 +1110,7 @@ upgrade-check --dry-run
   Check Doctor, recovery, restore-drill, and manual-upgrade readiness. Optional `--progress` emits content-free liveness to stderr; optional scratch-scoped `--output` stores the full JSON and prints a compact stdout summary.
 
 restore-drill
-  Plan or run a local restore drill before connecting real sources.
+  Preview a local restore drill. In v0.4.0 approval is fixed closed before source/target reads and creates no restored tree or receipt.
 
 pilot-plan
   Plan a safe first real personal/team archive pilot without writing files.
@@ -1068,14 +1121,14 @@ preflight
 scan-source --dry-run
   Preview a metadata-only scan from a registered source without writing files or reading file bodies.
 
-scan-source --approve --reviewed-by
-  Write source-maps/*.jsonl plus a source scan receipt after the metadata-only dry-run passes.
+  In v0.4.0 every scan approval is fixed fail-closed before source/provider/
+  credential/archive reads with `compound_exact_human_approval_binding_required`;
+  it writes no source map or receipt.
 
 transfer-ownership --dry-run
   Preview archive ownership transfer with scope, trust, ownership gates, provider change plan, and a receipt draft.
 
-transfer-ownership --approve --reviewed-by
-  Apply archive-internal ownership transfer after dry-run gates pass. External provider account changes remain manual.
+  In v0.4.0 ownership-transfer approval is fixed fail-closed before archive/input read or mutation with `compound_exact_human_approval_binding_required`; it changes no identity, lineage, or receipt.
 ```
 
 One-command setup from inside `wom-kit/`:
@@ -1090,7 +1143,7 @@ macOS/Linux:
 sh scripts/setup-unix.sh --dry-run
 ```
 
-These setup scripts check Docker, optionally install or guide Docker with user approval, start Docker when possible, prepare `.env`, run a container doctor smoke test, and start archive onboarding.
+These setup scripts check Docker, optionally install or guide Docker with user approval, start Docker when possible, prepare `.env`, run a container doctor smoke test, and start the archive onboarding preview. v0.4.0 does not create an archive through onboard.
 
 The Docker runtime is hardened by default: non-root user, read-only root filesystem, dropped Linux capabilities, no-new-privileges, no runtime network, and `/archives` as the only writable mount.
 
@@ -1192,13 +1245,13 @@ This file is a rebuildable map, not the archive itself. The durable archive stil
 
 `archive retire-draft --dry-run|--approve` closes the lifecycle gap after a draft has already been minted. Dry-run verifies that the inbox draft, canonical zet, mint receipt, draft snapshot, archive-relative paths, and SHA-256 evidence all agree. It can also accept a mint target SHA that changed only through approved post-receipt zettel-edge writes. Approved mode requires `--reviewed-by`, removes only that verified inbox draft, writes `receipts/mint/retired-drafts/*.retire-draft.json`, and preserves the canonical zet, original mint receipt, and draft snapshot.
 
-`archive mint-zet-batch --plan <json> --dry-run|--approve` and `archive retire-draft-batch --plan <json> --dry-run|--approve` are the batch-safe forms for large WOM real-use runs. They consume archive-relative JSON plans, run inside one WOM-kit process, keep the same single-item gates for each item, support `--skip-existing` and `--max-items`, return `failed_items` for partial failures, and write one batch receipt under `receipts/mint/batches/` or `receipts/mint/retired-drafts/batches/`. For post-edge canonical zets, retired-draft batch validation builds one edge receipt index for the batch and approved writes reuse the verified plan with current-file SHA replay checks. They do not spawn one shell process per item, rescan edge receipts once per item, call providers, read unrelated source files, or echo zettel body text.
+`archive mint-zet-batch --plan <json> --dry-run` and `archive retire-draft-batch --plan <json> --dry-run` remain bounded, content-free batch planners for large WOM review sets. They support `--skip-existing` and `--max-items` and reuse the established validation indexes, but v0.4.0 does not authorize a compound mutation. `--approve` fails before private target read or write with `compound_exact_human_approval_binding_required`; it writes no item or batch receipt.
 
 `archive source-intake --dry-run` is the safe classification step before drafting from a source/objet. It accepts exactly one locator, returns `source_refs_for_draft`, reports object storage context, and writes nothing. It does not read file bodies, hash, copy, upload, import, OCR, transcribe, extract, call provider APIs, create drafts, or mint.
 
 `archive tiro-import-plan --manifest workbench/tiro-meeting.sample.json --dry-run` is the meeting-specific planning step before derived-text capture or drafting from a Tiro transcript. It reads only a reviewed archive-internal JSON manifest, checks meeting metadata, speaker turns, timestamps, transcript segment shape, confidence fields, and optional audio objet refs, then returns counts and safe source refs without echoing meeting titles, participant display names, transcript text, source URLs, audio filenames, local paths, account ids, emails, tokens, or secrets. It writes nothing and calls no Tiro API.
 
-`archive derive-text capture` is the safe registration step after an external parser, OCR tool, ASR tool, or vision model has already produced a UTF-8 text file. The source object must already exist in `objects/manifests/files.jsonl`. Dry-run writes nothing; approved mode stores the text body under `objects/derived-text/sha256/`, appends `objects/manifests/derived-text.jsonl`, and writes `receipts/derived-text-capture/*.json`.
+`archive derive-text capture --dry-run` previews registration after an external parser, OCR tool, ASR tool, or vision model has already produced a text file. In v0.4.0 both single and `--from-manifest` approval branches are fixed fail-closed before private text/source/manifest reads with `compound_exact_human_approval_binding_required`; they store no text, append no manifest row, and write no receipt.
 
 For `derive-text capture --from-manifest`, each JSONL row must include
 `source_object_id`, `text_file`, `derivation_kind`, `tool_name`,
@@ -1244,12 +1297,11 @@ The first implemented vocabulary is deliberately small: `derivation_kind` is one
 
 `archive source-intake --project-intake-receipt <receipt> --dry-run` can carry that reviewed session receipt into a one-locator metadata plan. The receipt must pass the same status check, and the resulting `project_intake_context` includes only receipt path, session id, reviewer metadata, decision hash, checklist coverage, and readiness. It does not include answer values and does not approve source capture, draft creation, minting, provider calls, or cleanup.
 
-`archive source-intake-record --source-intake-plan <json-file> --dry-run|--approve` validates a reviewed `source-intake --dry-run` JSON file and, with approval, stores the redacted plan under `receipts/sources/` for later capture evidence. It blocks unredacted local paths, provider URLs, tokens, and secrets. It does not read file bodies, calculate content hashes, capture objets, create drafts, mint zets, call providers, upload, or clean.
+`archive source-intake-record --source-intake-plan <json-file> --dry-run` validates a reviewed `source-intake --dry-run` JSON file without storing it. It blocks unredacted local paths, provider URLs, tokens, and secrets. In v0.4.0 approval returns `compound_exact_human_approval_binding_required` before private plan/archive read or mutation, so it writes no source receipt. It does not read file bodies, calculate content hashes, capture objets, create drafts, mint zets, call providers, upload, or clean.
 
-`archive objet-capture --project-intake-receipt <receipt> --dry-run|--approve` can carry the same reviewed session receipt into an explicit capture selection. A selection manifest may also include `project_intake_receipt_path`; if both are present they must match. Invalid or tampered intake receipts block before staged bytes are read. The context is recorded in the capture result and approved capture receipt, but it still does not approve drafting, minting, provider calls, or cleanup.
+`archive objet-capture --project-intake-receipt <receipt> --dry-run` can preview carrying the same reviewed session receipt into an explicit capture selection. A selection manifest may also include `project_intake_receipt_path`; if both are present they must match. In v0.4.0 approval returns `compound_exact_human_approval_binding_required` before private receipt/selection/staged-byte reads or mutation, so it writes no object, manifest row, derived text, or capture receipt.
 
-For external project migrations, the intended manual spine is:
-`project-intake-plan -> project-intake-next-question -> project-intake-decision-template -> project-intake-record-answer -> project-intake-status -> project-intake-unpack-queue -> project-intake-unpack-choice -> source-intake --project-intake-receipt -> source-intake-record -> objet-capture-selection -> objet-capture --project-intake-receipt -> derive-text capture when text already exists -> create-draft --source-intake-plan -> mint-zet after approval -> staged-cleanup-check`. This is not one automatic bulk importer; every arrow is still a review boundary.
+For external project migrations, v0.4.0 supports the review spine through the read-only source-intake and capture previews. `source-intake-record`, `objet-capture-selection`, and `objet-capture` approval are fixed closed, so there is no executable migration chain from those previews into a draft. `create-draft` and `mint-zet` remain separately bound operations for already reviewed, manifested source authority; a preview never authorizes either.
 
 `archive human-artifact-store --surface-kind <kind> --dry-run` previews the contract for a user-facing human artifact app or surface. Supported kinds are `wordpress`, `joplin`, `notion`, `obsidian`, `evernote`, `generic_markdown`, and `generic_workspace`. The command keeps three roles separate: raw/original data, human-readable artifacts, and system/AI artifacts such as manifests, source maps, receipts, indexes, hashes, and version history. It writes nothing, calls no providers, starts no OAuth, creates or updates no notes, publishes no posts, uploads no files, mints no zets, and runs no ZET transport.
 
@@ -1257,7 +1309,7 @@ MCP exposes the same read-only preview as `human_artifact_store_plan`.
 
 `archive zet-surface-prototype --surface-kind <kind> --surface-ref <safe-ref> --dry-run` previews a ZET surface prototype for `wordpress`, `joplin`, `notion`, or `obsidian`. It reports the surface role, integration family, safe settings schema preview, risks, receipt requirements, and next future adapter steps. It is still only a planning surface: it writes nothing, calls no provider, starts no OAuth, asks for no token, creates no note, publishes no post, writes no vault file, creates no projection receipt, mints no zet, and runs no ZET transport. MCP exposes the same read-only preview as `zet_surface_prototype_plan`.
 
-`archive prehashed-objet-ledger --ledger <jsonl> --dry-run` previews one or more already-hashed external content-addressed store ledgers, including Notion source-export ledgers. `--ledger` may be repeated so retrieval, deep, and workspace download ledgers can be deduped in one run. By default it expects `sha256`, `bytes`, and optional `mime` fields; use `--mime-field <field>` if the ledger uses another safe MIME field name. It counts valid, skipped, invalid, duplicate, MIME-present, and total declared bytes, and echoes no row values, filenames, URLs, or local paths. Rows with null or empty `sha256` are skipped for aid-dedup style ledgers; malformed sha strings remain invalid. `--approve --reviewed-by <actor> --store-ref <safe-label>` appends external manifest records to `objects/manifests/files.jsonl` and writes a receipt under `receipts/prehashed-objet-ledger/` without reading blob bytes, copying objects, uploading, drafting, minting, or cleaning. MCP exposes only the read-only preview as `prehashed_objet_ledger_preview`. `objet-capture` still verifies bytes itself from staged files; this is a separate manifest-registration path for externally verified stores.
+`archive prehashed-objet-ledger --ledger <jsonl> --dry-run` previews one or more already-hashed external content-addressed store ledgers, including Notion source-export ledgers. `--ledger` may be repeated so retrieval, deep, and workspace download ledgers can be deduped in one run. It reports content-free counts and echoes no row values, filenames, URLs, or local paths. In v0.4.0 approval returns `compound_exact_human_approval_binding_required` before private ledger/archive read or mutation; it appends no manifest row and writes no receipt. MCP exposes only the read-only preview as `prehashed_objet_ledger_preview`.
 
 For Notion page/block exports, `recordMap` or `blocks` JSON is treated as a provider page snapshot source objet. Extracted readable block text is a derived text record, and a human conclusion is a later draft or minted zet. See `docs/notion-page-snapshot-model.md`. In prehashed ledgers, `object_id` identifies the bytes, `store_kind` names the storage family, and `store_ref` is only a reviewed safe external-store label. It is not a raw path, URL, token, or proof of byte availability.
 
@@ -1267,17 +1319,17 @@ For Notion page/block exports, `recordMap` or `blocks` JSON is treated as a prov
 
 `archive notion-objet-link-plan --path <zet.md>|--zettel-id <id> --dry-run` scans one non-redacted zettel for Notion provider locator fingerprints and matches them against reviewed metadata in `objects/manifests/files.jsonl`. It is the bridge for imported Notion zets that still contain provider locators instead of stable `objet:sha256:<hex>` refs. It writes nothing, rewrites no body text, echoes no provider URLs, page titles, zettel body text, frontmatter values, absolute local paths, account ids, emails, tokens, or secret values, reads no object bytes, calls no providers, creates no presigned URLs, and blocks redacted zettels. MCP exposes the same read-only flow as `notion_objet_link_plan`.
 
-`archive notion-objet-link-index <archive-root> --dry-run` scans non-redacted zettels across the archive for Notion provider locator fingerprints and reports safe counts for locator rows with or without manifested objet candidates. `archive notion-objet-link-rewrite-plan --path <zet.md>|--zettel-id <id> --locator-fingerprint sha256:<hex> --object-id sha256:<hex> --dry-run` validates one reviewed locator/object pair, target mode, and optional occurrence-count drift guard. They write nothing, rewrite no body text, write no edges, echo no provider URLs, page titles, zettel body text, frontmatter values, absolute local paths, account ids, emails, tokens, or secret values, read no object bytes, call no providers, and create no presigned URLs. MCP exposes the same read-only flows as `notion_objet_link_index` and `notion_objet_link_rewrite_plan`. `archive notion-objet-manifest-locator-label --object-id sha256:<hex> --locator-fingerprint sha256:<hex> --dry-run|--approve` is the separate CLI-only write path for adding a reviewed non-secret locator fingerprint to one manifest record, so later index/plan runs can match without storing provider locator text. `archive notion-objet-link-convert --path <zet.md>|--zettel-id <id> --locator-fingerprint sha256:<hex> --object-id sha256:<hex> --target-mode embed_edge --expected-occurrence-count <n> --dry-run|--approve` is the CLI-only approved conversion path for one reviewed `embed` edge. It re-runs the rewrite plan, uses the existing `zettel-edge` gate, writes edge and conversion receipts on approval, and still keeps body replacement future work.
+`archive notion-objet-link-index <archive-root> --dry-run` scans non-redacted zettels across the archive for Notion provider locator fingerprints and reports safe counts for locator rows with or without manifested objet candidates. `archive notion-objet-link-rewrite-plan --path <zet.md>|--zettel-id <id> --locator-fingerprint sha256:<hex> --object-id sha256:<hex> --dry-run` validates one reviewed locator/object pair, target mode, and optional occurrence-count drift guard. They write nothing, rewrite no body text, write no edges, echo no provider URLs, page titles, zettel body text, frontmatter values, absolute local paths, account ids, emails, tokens, or secret values, read no object bytes, call no providers, and create no presigned URLs. MCP exposes the same read-only flows as `notion_objet_link_index` and `notion_objet_link_rewrite_plan`. `archive notion-objet-manifest-locator-label ... --dry-run` and `archive notion-objet-link-convert ... --dry-run` remain previews; in v0.4.0 both approval branches fail before private target read or mutation with `compound_exact_human_approval_binding_required` and write no manifest label, edge, or receipt.
 
 `archive view-health --dry-run` diagnoses saved view drift against the generated local SQLite index. It reports active, empty, and blocked saved views, per-filter facet match counts, and observed facet value samples for the keys used by saved views. It writes nothing, rebuilds no index, rewrites no `views/*.yml` files or zettel facets, reads no zettel bodies or object bytes, echoes no zettel titles, absolute local paths, provider URLs, account ids, emails, tokens, or secret values, and calls no providers. MCP exposes the same read-only flow as `view_health`.
 
 `archive index-health --dry-run` checks whether `db/archive-index.sqlite` matches live zettel paths and basic frontmatter metadata before index-backed navigation. It reports missing live zets, extra indexed paths, changed `id`/`status`/`kind`, and zettel files modified after the index. It writes nothing, rebuilds no index, edits no zettels, reads no object bytes, echoes no zettel body text, zettel titles, absolute local paths, provider URLs, account ids, emails, tokens, or secret values, and calls no providers. MCP exposes the same read-only flow as `index_health`.
 
-`archive objet-capture-selection --staged-path <archive-relative-file> --source-intake-receipt <receipt> --dry-run` bridges a recorded source-intake plan to B4 local objet capture. It hashes one staged file to produce `approved_object_id`, validates the source-intake receipt, and previews a selection manifest. `--approve --reviewed-by <actor>` writes only `receipts/objet-capture-selections/*.selection.json`; it does not run `objet-capture`, copy object bytes, append `objects/manifests/files.jsonl`, draft, mint, upload, or clean.
+`archive objet-capture-selection --staged-path <archive-relative-file> --source-intake-receipt <receipt> --dry-run` previews the historical bridge from a recorded source-intake plan to B4 local objet capture. In v0.4.0 approval is fixed fail-closed before private staged-file or receipt reads with `compound_exact_human_approval_binding_required`; it writes no selection manifest and does not run capture.
 
 `archive create-draft --source-intake-plan <json-file>` consumes a successful source-intake dry-run JSON file, validates that it is metadata-only and blocker-free, then merges safe `source_refs_for_draft` into draft `source_refs`. If the source-intake plan carries a valid `project_intake_context`, the draft `source_intake.project_intake_context` preserves that receipt evidence through mint preview/receipts without copying decision answer values. The plan file path is not stored in frontmatter, and WOM-kit does not follow local paths inside the plan.
 
-`archive create-draft --dry-run` is the safe preview step after profile resolution, runtime context, and source capture. It returns `lifecycle_action: create_draft`, the target archive summary, proposed `inbox/` path, safe frontmatter projection, body hash, content-free title and fidelity evidence, blockers, warnings, and approval replay values. It writes nothing. AI-assisted/generated routes require an explicit safe abstract, stable facet, `--source-fidelity`, `--fidelity-audience`, and a manifested `--fidelity-source-object-id`; declared AI provenance cannot be downgraded to a human creation mode. The unchanged approved replay requires `--draft-approved-by`, `--expected-body-sha256`, and `--expected-source-fidelity-plan-sha256`, and creates only the inbox draft plus one private create-only receipt. Source object authority and private digests remain out of frontmatter and ordinary results, while human reviewer attribution remains explicit. A publication request must continue into `mint-zet`, which re-verifies the source and raw body and requires the current fidelity-plan hash. Audience metadata never authorizes sharing or transport.
+`archive create-draft --dry-run` is the safe preview step after profile resolution, runtime context, and source capture. It returns `lifecycle_action: create_draft`, the target archive summary, proposed `inbox/` path, safe frontmatter projection, body hash, content-free title and fidelity evidence, blockers, warnings, and approval replay values. It writes nothing. AI-assisted/generated routes require an explicit safe abstract, stable facet, `--source-fidelity`, `--fidelity-audience`, and a manifested `--fidelity-source-object-id`; declared AI provenance cannot be downgraded to a human creation mode. The only v0.4.0 write path is the unchanged exact reviewed AI replay with `--draft-approved-by`, `--expected-body-sha256`, `--expected-source-fidelity-plan-sha256`, and a concrete authenticated TaskDialog claim followed by operation-context re-derivation. Human-declared and every other non-exact non-dry-run route returns `compound_exact_human_approval_binding_required` before private reads and writes nothing. Source object authority and private digests remain out of frontmatter and ordinary results, while human reviewer attribution remains explicit. A publication request must continue into `mint-zet`, which re-verifies the source and raw body and requires the current fidelity-plan hash. Audience metadata never authorizes sharing or transport.
 
 `archive block-header --dry-run` previews the header for one existing draft or canonical zet. The model is `block = zet + header`: the zet remains the minimum human-supervised text information unit, and the header is derived from refs, hashes, provenance, policy, source refs, objet refs, and receipts. ZET is the later sharing layer for delegate, attest, and anchor flows; it is not the block itself.
 
@@ -1289,7 +1341,7 @@ For Notion page/block exports, `recordMap` or `blocks` JSON is treated as a prov
 
 `archive foreign-block-quarantine --dry-run` consumes a saved foreign-block attestation packet preview and plans future isolated holding paths under `quarantine/foreign-blocks/<case-id>/...`. It preserves `trust_state: untrusted_foreign`, `quarantine_plan.would_quarantine: false`, `quarantine_write_status: not_created`, and `would_change: []`. It never creates quarantine files, trust, imports, attestations, receipts, mints, anchors, delegates, signs, calls providers, executes foreign text, or reads the original foreign artifact again.
 
-`archive quarantine-foreign-block --dry-run` consumes a saved foreign-block quarantine plan and previews the first approved isolation write. `archive quarantine-foreign-block --approve --reviewed-by <actor-id>` writes only `quarantine/foreign-blocks/<case-id>/quarantine-case.json` and `receipts/quarantine/<case-id>.foreign-block-quarantine.json`. It keeps `trust_state: untrusted_foreign` and does not create trust, imports, attestations, canonical zets, mints, anchors, delegates, signatures, provider calls, or executable actions.
+`archive quarantine-foreign-block --dry-run` consumes a saved foreign-block quarantine plan and previews a possible isolation record. In v0.4.0 approval returns `compound_exact_human_approval_binding_required` before private plan/archive read or mutation; it writes no quarantine case or receipt. Existing records remain reviewable and do not authorize replay.
 
 `archive quarantine-review --format json` reads existing `quarantine/foreign-blocks/<case-id>/quarantine-case.json` files and matching quarantine receipts as a review index. Use `--case-id <safe-id>` for one case and `--include-receipts` for sanitized receipt summaries. The index is read-only and does not import, trust, accept, attest, mint, anchor, delegate, sign, execute, or apply the foreign block.
 
@@ -1304,17 +1356,10 @@ $env:PYTHONPATH='wom-kit\src'; python -m wom_kit.archive_cli quarantine-decision
 
 The preview can propose `keep_quarantined`, `reject_and_keep_record`, `eligible_for_attestation_review`, or `needs_more_review`. It is a decision aid only. It writes no decision and does not import, trust, attest, mint, anchor, delegate, sign, execute, accept, or apply the foreign block.
 
-Record an approved local quarantine decision after reviewing a saved decision preview:
-
-```powershell
-$env:PYTHONPATH='wom-kit\src'; python -m wom_kit.archive_cli record-quarantine-decision wom-kit\examples\fake-life-archive `
-  --decision-preview workbench\foreign-block-quarantine-decision.json `
-  --approve `
-  --reviewed-by person:me `
-  --format json
-```
-
-Approved mode writes exactly `quarantine/foreign-blocks/<case-id>/quarantine-decision.json` and `receipts/quarantine/<case-id>.foreign-block-quarantine-decision.json`. The command re-validates the current quarantine case and receipt before writing, stores only review-note summary metadata, and keeps the foreign block untrusted and unimported.
+`record-quarantine-decision` remains a dry-run preview only in v0.4.0. An
+approval request returns `compound_exact_human_approval_binding_required`
+before reading the private case or writing a decision or receipt. Existing
+decision records remain available to the read-only review and outcome planners.
 
 Review recorded quarantine decisions:
 
@@ -1431,29 +1476,29 @@ $env:PYTHONPATH='wom-kit\src'; python -m wom_kit.archive_cli mint-zet wom-kit\ex
 
 Real minting reuses the dry-run checks as a gate. Blockers always stop the command. Warnings require `--allow-warnings`. The original inbox draft is preserved. The command writes the canonical zettel under `zettels/`, a mint receipt under `receipts/mint/`, and the exact mint-time draft snapshot under `receipts/mint/drafts/`. The older `archive promote` command remains available for compatibility.
 
-`archive parcel` creates a portable slice under `workpacks/` using a saved view. The first implementation copies selected zettel files and writes object manifest metadata, but it does not copy original object files by default. `archive pack` remains a v0.2 compatibility alias.
+`archive parcel` and its compatibility alias `archive pack` are fixed closed in v0.4.0 before saved-view, zettel-body, manifest, or target reads. They return `compound_exact_human_approval_binding_required` and create no workpack; there is no live parcel command in this release.
 
 `archive admit --dry-run` previews target inbox writes, object manifest merges, conflicts, and an admit/import receipt. Real parcel/workpack admit remains unavailable until the dry-run path is proven safer. `archive import --dry-run` remains a v0.2 compatibility alias.
 
-`archive import-external --source notion --export <folder> --dry-run` previews a Notion Markdown export import. `archive import-external --source google_drive --export <manifest.json> --dry-run` does the same for Google Drive exports. Approved imports write inbox drafts and `receipts/import/*.external-import.json`; when manifest metadata includes explicit safe object refs, safe non-object source refs, safe facets, or a safe zettel id override, those values are preserved in the imported draft frontmatter. For a new Notion JSON/YAML manifest item only, v0.3.285 keeps a normal human title authoritative but can replace an identifier-shaped primary title with the same item's exact lowercase top-level string `index` after the normal title and privacy checks. It ignores differently cased or nested fields, rich-text arrays, Google Drive items, and directory-only Markdown imports; reads no `pages.index.jsonl` or provider mirror; creates no `facets.index`; changes no existing zet; and does not claim that a later approval is digest-bound to an earlier dry-run. An approved call freezes one discovery projection for its own plan and writes. Imported bodies that still contain provider URLs or local absolute paths block before approval. `--provider-locator-policy object-ref` can convert supported Notion body locators to one reviewed `objet:<object_id>` reference when exactly one object source ref is present. The command does not call Notion or Google Drive APIs, read object bytes, or store OAuth secrets.
+`archive import-external --source notion --export <folder> --dry-run` previews a Notion Markdown export import. `archive import-external --source google_drive --export <manifest.json> --dry-run` does the same for Google Drive exports. In v0.4.0 the approval branch is fixed fail-closed before archive/export reads or mutation with `compound_exact_human_approval_binding_required`; it writes no inbox draft or import receipt. Historical v0.3 import receipts remain readable.
 
 `archive share --dry-run` is the legacy dry-run for the older share language. It previews a GitHub-like archive share from a saved view, shows which zettels are included or excluded, blocks sensitive categories by default, verifies the target counterparty fingerprint against `archive-identity.yml`, and writes nothing. Product design should prefer `delegate-zet`.
 
-`archive delegate-zet --dry-run` previews scoped zet delegation from a saved view. `archive delegate-zet --approve --reviewed-by <actor>` writes a `dry_run:false` delegate receipt under `receipts/delegate/` after the same gates pass. It does not send data, write attestations, write anchors, or create claim/spent registries.
+`archive delegate-zet --dry-run` previews scoped zet delegation from a saved view. In v0.4.0 approval is fixed fail-closed before private target read or mutation with `compound_exact_human_approval_binding_required`; it writes no delegate receipt and sends no data.
 
 `archive onboard --dry-run` previews first setup for a new personal, family, or company archive. It shows the folder to create, selected provider profile, keyring guidance, and doctor plan. It writes nothing.
 
-`archive onboard --approve` creates the archive, writes or adjusts `provider-bindings.yml` from the selected provider profile, and runs strict doctor. This is the beginner-friendly setup path used by the Docker-first flow.
+`archive onboard --approve` is unavailable in v0.4.0. It returns `compound_exact_human_approval_binding_required` before target/template/provider reads and creates no folder, archive file, provider binding, identity record, or receipt. Use the dry-run only as a setup plan.
 
 `archive pilot-plan` is the bridge from fake examples to real use. It plans a private personal life archive and a separate team/company archive, checks that their roots and ids do not overlap, and suggests first sources for local folders, SSDs, Notion exports, Google Drive exports, and object manifests. It writes nothing.
 
 `archive preflight` is the real-data safety check. It runs doctor diagnostics, checks local profile/source-root risk, catches too-broad source roots such as drive roots or home folders, can compare personal/team archive separation with `--peer-archive`, and can check Docker readiness with `--check-docker`.
 
-`archive recovery-plan` explains what the archive can restore locally and what remains external. `archive restore-drill --approve --reviewed-by <actor>` copies the archive control plane to a clean target, runs strict doctor, rebuilds the SQLite index, performs a basic search smoke test, and writes `receipts/recovery/*.restore-drill.json`. It does not copy PC/SSD/SaaS/object-storage originals.
+`archive recovery-plan` explains what the archive can restore locally and what remains external. `archive restore-drill --dry-run` remains a content-free rehearsal plan. In v0.4.0 approval returns `compound_exact_human_approval_binding_required` before source/target reads and copies nothing, rebuilds nothing, and writes no recovery receipt.
 
 `archive transfer-ownership --dry-run` previews a family-to-child, company-to-spinout, or similar archive ownership transfer. It verifies the proposed new owner through the trust gate, checks the current owner/operator approval actors through the ownership gate, previews the receipt path under `receipts/lineage/`, includes a `provider_change_plan`, and writes nothing.
 
-`archive transfer-ownership --approve --reviewed-by <actor>` applies the archive-internal ownership transfer after the same gates pass. It updates `archive-identity.yml`, appends compact lineage metadata, and writes a `dry_run:false` receipt. It does not call GitHub, Cloudflare R2, Backblaze B2, Neon, rclone, restic, or KeePassXC APIs; those external account changes remain manual and are listed in the provider change plan.
+In v0.4.0 `archive transfer-ownership` approval is fixed fail-closed before archive/input read or mutation with `compound_exact_human_approval_binding_required`. It changes no `archive-identity.yml`, lineage metadata, provider account, or receipt. Historical transfer receipts remain schema-checkable.
 
 `archive providers` reads `provider-bindings.yml` and summarizes the external services attached to an archive. Provider bindings store env var names and keyring references only, never token or password values.
 
@@ -1746,23 +1791,19 @@ untraceable leaf recovery should be scoped by leaf/root/ancestor refs rather
 than generation id. It still calls no providers, retrieves no secrets, starts no
 OAuth, reads no titles or bodies, writes no fixture files, mints no zets, writes
 no edges, and writes no receipts.
-v0.3.134 adds the first approval-gated local Notion ancestor structure fetch adapter.
-`archive notion-ancestor-fetch-adapter-run --dry-run|--approve`
-verifies a credential access approval receipt, supports `env:` token refs in
-the local CLI process, fetches only parent-chain structure metadata from Notion,
-and writes a sanitized `notion_ancestor_result_fixture` plus a non-secret
-execution receipt. It still does not read page titles, page bodies, comments,
-media bytes, file URLs, or raw provider responses, and it does not mint zets,
-write edges, or expose a live MCP provider-call tool.
-v0.3.135 adds a read-only beginner guide for that human-operated recovery step:
+Historically, v0.3.134 added a local Notion ancestor structure fetch adapter.
+In v0.4.0 `archive notion-ancestor-fetch-adapter-run --dry-run` remains a
+preview, while approval returns `compound_exact_human_approval_binding_required`
+before credential/private target reads, provider calls, or writes. It creates
+no ancestor fixture or execution receipt and exposes no live MCP provider-call
+tool.
+Historically, v0.3.135 added a read-only beginner guide for that recovery step:
 `archive beginner-setup-manual --topic notion_nested_recovery --dry-run`
 translates the low-level ancestor/fetch/fixture/merge vocabulary into
-folder/shelf/location language, explains why the human approves the local
-Notion run, and shows the scoped review -> one-time approval -> live structure
-fetch preview/run -> merge-plan handoff chain without reading secrets, calling
-providers, writing approval receipts, running the fetch, or echoing exact env
-var names.
-v0.3.136 adds the beginner-facing wrapper for the same recovery path:
+folder/shelf/location language and preserves the v0.3 scoped review ->
+one-time approval -> live structure fetch -> merge-plan explanation as
+historical evidence. The v0.4.0 guide stops at a content-free preview.
+Historically, v0.3.136 added the beginner-facing wrapper for the same recovery path:
 `archive notion-recover`.
 It auto-selects the reviewed missing-location queue, asks for local
 confirmation, accepts the token only through a hidden local terminal prompt or
@@ -1772,26 +1813,28 @@ result fixture, and returns the AI handoff sentence for tidying and merging.
 It still does not read page titles, page bodies, comments, media bytes, signed
 file URLs, raw provider responses, or expose exact credential refs, env var
 names, approval receipt paths, tokens, provider URLs, account ids, or emails.
-v0.3.138 adds a CLI-only `file:<path>` fallback to that wrapper for users who
+Historically, v0.3.138 added a CLI-only `file:<path>` fallback to that wrapper for users who
 already have the Notion token in a local text file. The wrapper extracts the
 token locally, passes it through the same approval-gated adapter chain, and
 does not echo the token file path, file name, token value, transient env ref, or
 receipt path. Vault/keyring one-click handoff remains the right long-term
 credential-broker direction, but live vault/keyring reads are still closed until
 a dedicated local adapter exists.
-v0.3.139 adds Tiro lossless recovery planning plus approval-gated raw recovery
+In v0.4.0, `archive notion-recover --dry-run` is the only executable wrapper
+path. Its implicit executor and every approval request return
+`compound_exact_human_approval_binding_required` before credential/private
+target reads or provider calls and write no fixture or receipt. Do not supply a
+token file, credential ref, or terminal input for this preview.
+v0.3.139 historically added Tiro lossless recovery planning and raw recovery
 bundle capture. `archive tiro-lossless-recovery-plan --dry-run` records the
-official Tiro data surfaces and bundle contract, while
-`archive tiro-lossless-recovery-capture --dry-run|--approve` preserves a
-reviewed raw Tiro recovery JSON bundle as a content-addressed WOM objet with a
-non-secret receipt. It also adds `archive zet-markdown-style-guide --dry-run`
+official Tiro data surfaces and bundle contract. The v0.4.0 capture path is
+dry-run-only and approval writes no objet or receipt. This checkpoint also
+added `archive zet-markdown-style-guide --dry-run`
 and wires the `A ~ B` range-tilde rule into `ai-response-concept-guide`. The
 live credential-bounded Tiro fetch adapter lands in v0.3.140.
-v0.3.140 adds `archive tiro-lossless-recovery-fetch-run --dry-run|--approve`.
-The command reads an approved local `env:` Tiro credential only on approve,
-calls the official Tiro REST API, writes the private raw bundle under
-`workbench/`, and records a non-secret fetch receipt under
-`receipts/tiro/lossless-fetches/`. Command output and receipts do not echo the
+v0.3.140 historically added the Tiro fetch adapter. In v0.4.0 its dry-run
+remains, but approval stops before credential/provider reads and writes no raw
+bundle or receipt. Historical command output and receipts did not echo the
 credential ref, environment variable name, token, meeting titles, transcript
 text, participant names, provider URLs, or raw provider responses. At the
 v0.3.140 checkpoint, keyring/vault credential reads, original audio byte

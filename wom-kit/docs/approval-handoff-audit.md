@@ -1,13 +1,14 @@
 # Approval Handoff Audit
 
-Status: v0.3.153 approval handoff audit checkpoint
+Status: v0.4.0 read-only legacy-unbound advisory audit
 
 WOM now has a read-only audit command for approval handoff records.
 
-This lets a future operation check whether a previously written handoff record
-is still the right kind of approval before the operation proceeds. The audit
-does not consume the approval, execute the operation, read private material, or
-call any provider.
+This structurally checks a previously written legacy handoff record. A match is
+classified `legacy_unbound` and advisory only. It always returns
+`future_operation_authorized: false` and cannot authorize a future operation.
+The audit does not consume the record, execute an operation, read private
+material, or call any provider.
 
 ## Command
 
@@ -46,7 +47,8 @@ The audit may report safe metadata such as:
 - status,
 - operation kind,
 - whether target/action fields are present,
-- whether the future operation is authorized.
+- `future_operation_authorized: false`, with the legacy-unbound/advisory
+  classification.
 
 It deliberately does not echo target ref values or requested action values.
 
@@ -63,6 +65,9 @@ The command:
 - echoes no requested action values,
 - echoes no local absolute paths, tokens, or secret values,
 - writes nothing.
+
+Even an `approved_once` record with matching metadata grants no current write,
+credential, provider, publication, or private-read authority.
 
 ## Still Future
 

@@ -163,7 +163,13 @@ doctor errors and optional Docker runtime failure
 missing restore drill receipt when --require-restore-drill is used
 ```
 
-Restore drill copies the archive control plane to a clean target, runs strict doctor, rebuilds the SQLite index, performs a basic search smoke test, and writes a recovery receipt. It does not copy external originals from PC folders, SSDs, SaaS providers, or object storage.
+Historically in v0.3, restore drill could copy the archive control plane to a
+clean target, run strict doctor, rebuild the SQLite index, perform a basic
+search smoke test, and write a recovery receipt without copying external
+originals from PC folders, SSDs, SaaS providers, or object storage. In v0.4.0
+only the dry-run plan remains available. Non-dry-run execution returns
+`compound_exact_human_approval_binding_required` before source or target reads
+and writes no restored tree, index, or receipt.
 
 ## Remaining Risks
 
@@ -177,7 +183,10 @@ Known remaining risks:
 - Docker Scout still reports residual Debian base-image CVEs with no fixed package version available in the current 3.12 slim image: 1 medium and 22 low at the time of the 2026-05-21 scan.
 - Future provider API mutation will need a separate opt-in network-enabled service/profile.
 - OS keychain and KeePassXC integration is still not implemented.
-- Restore drill verifies the archive control plane, not full recovery of every external original object.
+- Historical v0.3 restore execution verified only the copied archive control
+  plane, not full recovery of every external original object. The v0.4.0
+  dry-run only plans that check, copies nothing, and proves neither a restore
+  nor full recovery.
 
 ## Deep Audit Follow-Up
 

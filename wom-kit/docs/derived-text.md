@@ -26,7 +26,9 @@ $env:PYTHONPATH='wom-kit\src'; python -m wom_kit.archive_cli derive-text capture
   --format json
 ```
 
-Use `--approve --reviewed-by <actor>` only after reviewing the dry-run.
+In v0.4.0 stop after the dry-run. Single-item approval is fixed closed before
+private text, source-object, manifest, or target reads with
+`compound_exact_human_approval_binding_required` and writes nothing.
 
 Before claiming extraction is complete, run the read-only coverage gate:
 
@@ -70,7 +72,8 @@ $env:PYTHONPATH='wom-kit\src'; python -m wom_kit.archive_cli derive-text capture
   --format json
 ```
 
-Use `--approve --reviewed-by <actor>` only after reviewing the batch dry-run.
+In v0.4.0 stop after the batch dry-run. `--from-manifest` approval has the same
+fixed-close boundary and writes nothing.
 
 Each non-empty JSONL line is one capture item:
 
@@ -118,17 +121,17 @@ entry per non-empty JSONL line with `manifest_line`, `item_id`, `ok`,
 
 Read `item_status` as:
 
-- `ready`: the item is valid and would write or repair local derived-text
-  records if approved.
+- `ready`: the item is structurally valid for review; it grants no v0.4 write
+  authority.
 - `skipped`: the item is already represented by the current batch or archive.
 - `blocked`: the item cannot proceed; inspect that item's `blockers`.
 
 The top-level `summary` counts the same item states, and top-level `blockers`
 deduplicates all item blockers so automation can fail the whole batch safely.
 
-## What It Writes
+## Historical Write Layout
 
-Approved capture writes:
+v0.3 approved capture used this layout. v0.4.0 creates none of these files:
 
 ```text
 objects/derived-text/sha256/<2>/<text-sha256>.txt
@@ -136,11 +139,10 @@ objects/manifests/derived-text.jsonl
 receipts/derived-text-capture/<timestamp-random>.json
 ```
 
-It does not modify the original object, create drafts, mint zets, call provider
-APIs, run OCR, run ASR, run parsers, or run LLM vision.
-
-Batch mode reuses the same write path for each item. Approved batch runs may
-write item-level receipts under `receipts/derived-text-capture/`.
+The v0.4 dry-run does not modify the original object, create drafts, mint zets,
+call provider APIs, run OCR, run ASR, run parsers, or run LLM vision. Approval
+does not reuse the historical single or batch writer and creates no item-level
+receipt.
 
 ## Paired Multi-Item Objet Capture (v0.3.315)
 
@@ -164,19 +166,13 @@ reducing the row to an original-only item.
 archive objet-capture-batch <archive-root> `
   --manifest <archive-relative-request.json> `
   --dry-run --format json
-
-archive objet-capture-batch <archive-root> `
-  --manifest <same-request.json> `
-  --expected-plan-sha256 <exact-plan-sha256> `
-  --approve --reviewed-by <actor> --format json
 ```
 
-The plan binds both `request_sha256` and `selection_sha256`. Apply accepts the
-lower result only when it still matches the reviewed archive, selection id and
-digest, exact item set, item shapes, receipt route, and exact `files_written`
-delta. Request and staged text reads use stable, regular-file, no-follow reads
-with a 64 MiB ceiling. A changed identity, size, or exact selection fails
-closed.
+The plan binds both `request_sha256` and `selection_sha256`. In v0.4.0 every
+approval request returns `compound_exact_human_approval_binding_required`
+before reading private staged content or writing any object, manifest row,
+item receipt, or batch receipt. Historical v0.3 apply/recovery evidence remains
+readable but is not replay authority.
 
 Read the original and derived completion partitions separately:
 
@@ -202,22 +198,20 @@ happened. It returns fixed `next_safe_actions` such as
 `inspect_selection_collision_then_fresh_dry_run`, or
 `fresh_batch_dry_run_then_reconcile`, and never automatically replays.
 
-### Reconcile an interrupted v0.3.314 pair
+### Audit an interrupted v0.3.314 pair
 
-Keep the original reviewed request unchanged. Run a fresh v0.3.315 dry-run and
-approve its exact new plan. Existing exact originals converge as skipped while
-missing derived halves can be completed. If the original staging bytes are no
-longer available, read the durable original capture receipts for their source
-object IDs and create a separately reviewed `derive-text capture
---from-manifest` request. Do not copy originals again merely to obtain those
-IDs. `partial`, `evidence_incomplete`, and `recovery_required` remain review
-states; follow only the safe actions returned for that state.
+Keep the original reviewed request unchanged and run a fresh dry-run. Do not
+approve or replay it in v0.4.0. Existing receipts may be audited to identify
+the original source object IDs; any separately supported exact single-write
+route requires its own operation-specific approval. Do not copy originals
+again merely to obtain those IDs. `partial`, `evidence_incomplete`, and
+`recovery_required` remain review states.
 
 ## Paired Transcript Intake (v0.3.159)
 
 When a vendor tool exports an original plus its transcript side by side (for
-example Samsung Voice Recorder's `.m4a` + UTF-16 `.txt`), ONE reviewed
-selection manifest can approve both halves:
+example Samsung Voice Recorder's `.m4a` + UTF-16 `.txt`), one reviewed
+selection manifest can preview both halves:
 
 ```powershell
 $env:PYTHONPATH='wom-kit\src'; python -m wom_kit.archive_cli objet-capture-selection <archive-root> `
@@ -228,7 +222,7 @@ $env:PYTHONPATH='wom-kit\src'; python -m wom_kit.archive_cli objet-capture-selec
   --tool-name samsung-voice-recorder `
   --tool-version <version> `
   --review-status unreviewed `
-  --approve --reviewed-by <actor> --format json
+  --dry-run --format json
 ```
 
 The generated manifest item carries a `derived_text` sub-object inside the
@@ -242,18 +236,13 @@ Paired manifests use `action: local_objet_capture_with_derived_text_approved`
 and `schema: wom-kit/b4-selection/v0.3`; pre-0.3.159 kits refuse them with
 `selection_action_invalid` (fail-closed) instead of dropping the derived half.
 
-`objet-capture --selection <path> --dry-run|--approve` then processes both
-halves in one run: phase 1 publishes the original and fsyncs its manifest
-line; phase 2 registers the derived text bound to the minted `object_id`. A
-blocked original never reads its transcript (`blocked_by_original`). If the
-original lands but the derived half blocks, the item and run report the
-additive `status_class: partial` with `ok: false`; re-running the SAME
-selection repairs it (the original half skips, the derived half retries), or
-finish with standalone `derive-text capture --source-object-id <minted id>`.
-The objet receipt (schema v0.3) item carries the full `derived_text`
-sub-result including the derived receipt path; the derived receipt (schema
-v0.2) carries `paired_with: {selection_manifest_id, selection_manifest_sha256,
-item_id}`.
+`objet-capture --selection <path> --dry-run` validates the paired shape. In
+v0.4.0, approval for `objet-capture-selection`, `objet-capture`, and
+`objet-capture-batch` stops with
+`compound_exact_human_approval_binding_required` before private staged input
+reads or mutation. It publishes neither half and creates no selection,
+manifest row, object, derived text, or receipt. Historical paired receipts
+remain audit evidence only.
 
 `staged_text_path` confinement has full parity with `staged_path` (containment,
 internal-prefix block, reserved device names, never-touch, per-component

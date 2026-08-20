@@ -40,6 +40,32 @@ REMOVAL_JOURNAL_SUFFIX = (
 )
 
 
+def _historical_activity_group_membership_write(
+    archive_root: Path | str,
+    **kwargs: Any,
+) -> dict[str, Any]:
+    """Exercise the frozen add transaction core, not the public v0.4 gate."""
+
+    return archive_services._activity_group_membership_write(
+        archive_root,
+        operation_contract=archive_services.ACTIVITY_GROUP_MEMBERSHIP_ADD,
+        **kwargs,
+    )
+
+
+def _historical_activity_group_membership_recover(
+    archive_root: Path | str,
+    **kwargs: Any,
+) -> dict[str, Any]:
+    """Exercise the frozen add recovery core, not the public v0.4 gate."""
+
+    return archive_services._activity_group_membership_recover(
+        archive_root,
+        operation_contract=archive_services.ACTIVITY_GROUP_MEMBERSHIP_ADD,
+        **kwargs,
+    )
+
+
 class ActivityGroupTransactionSafetyTests(unittest.TestCase):
     """Fail-first safety contracts shared by add and future removal writers."""
 
@@ -138,7 +164,7 @@ class ActivityGroupTransactionSafetyTests(unittest.TestCase):
         archive_root: Path,
         fixture: dict[str, Any],
     ) -> dict[str, Any]:
-        return archive_services.activity_group_membership_write(
+        return _historical_activity_group_membership_write(
             archive_root,
             request_path=fixture["request_relative"],
             expected_request_sha256=fixture["request_sha256"],
@@ -176,7 +202,7 @@ if mode == "writer_before_snapshots":
     archive_services.preserve_activity_group_membership_before_snapshots = (
         exit_before_snapshots
     )
-    archive_services.activity_group_membership_write(
+    archive_services._activity_group_membership_write(
         root,
         request_path=os.environ["WOM_TEST_REQUEST_RELATIVE"],
         expected_request_sha256=request_sha256,
@@ -186,10 +212,11 @@ if mode == "writer_before_snapshots":
         approve=True,
         reviewed_by="person:activity-group-hard-exit-reviewer",
         affirm_memberships_reviewed=True,
+        operation_contract=archive_services.ACTIVITY_GROUP_MEMBERSHIP_ADD,
     )
 elif mode == "recovery_after_delete":
     target_path = Path(os.environ["WOM_TEST_TARGET_PATH"])
-    original_delete = archive_services.delete_activity_group_evidence_exact
+    original_delete = archive_services._delete_activity_group_evidence_exact
 
     def exit_after_target_delete(root_arg, path, *args, **kwargs):
         candidate = Path(path)
@@ -209,10 +236,10 @@ elif mode == "recovery_after_delete":
         if matched:
             os._exit(exit_code)
 
-    archive_services.delete_activity_group_evidence_exact = (
+    archive_services._delete_activity_group_evidence_exact = (
         exit_after_target_delete
     )
-    archive_services.activity_group_membership_recover(
+    archive_services._activity_group_membership_recover(
         root,
         expected_request_sha256=request_sha256,
         expected_recovery_plan_sha256=os.environ[
@@ -221,6 +248,7 @@ elif mode == "recovery_after_delete":
         approve=True,
         reviewed_by="person:activity-group-hard-exit-reviewer",
         affirm_recovery_reviewed=True,
+        operation_contract=archive_services.ACTIVITY_GROUP_MEMBERSHIP_ADD,
     )
 else:
     raise SystemExit(71)
@@ -263,7 +291,7 @@ raise SystemExit(70)
         fixture: dict[str, Any],
         recovery_plan: dict[str, Any],
     ) -> dict[str, Any]:
-        return archive_services.activity_group_membership_recover(
+        return _historical_activity_group_membership_recover(
             archive_root,
             expected_request_sha256=fixture["request_sha256"],
             expected_recovery_plan_sha256=recovery_plan[
@@ -285,7 +313,7 @@ raise SystemExit(70)
         ]
         original_compare_and_swap = (
             archive_services
-            .replace_activity_group_canonical_bytes_compare_and_swap
+            ._replace_activity_group_canonical_bytes_compare_and_swap
         )
         forward_attempts = 0
 
@@ -310,7 +338,7 @@ raise SystemExit(70)
         with patch.object(
             archive_services,
             (
-                "replace_activity_group_canonical_bytes_"
+                "_replace_activity_group_canonical_bytes_"
                 "compare_and_swap"
             ),
             new=interrupt_second_forward,
@@ -842,7 +870,7 @@ raise SystemExit(70)
             write_lock_path = self.writer_lock_path(archive_root)
             before = self.mutation_inventory(archive_root)
             real_bound_write = (
-                archive_services.write_activity_group_bytes_new_file_bound
+                archive_services._write_activity_group_bytes_new_file_bound
             )
             evidence_injected = False
             observed_bound_write_paths: list[str] = []
@@ -877,7 +905,7 @@ raise SystemExit(70)
                 ),
                 patch.object(
                     archive_services,
-                    "write_activity_group_bytes_new_file_bound",
+                    "_write_activity_group_bytes_new_file_bound",
                     new=inject_after_writer_lock_create,
                 ),
             ):
@@ -1003,7 +1031,7 @@ raise SystemExit(70)
                 new=self.guarded_path_open({journal_path}),
             ):
                 recover = (
-                    archive_services.activity_group_membership_recover(
+                    _historical_activity_group_membership_recover(
                         archive_root,
                         expected_request_sha256=fixture[
                             "request_sha256"
@@ -1536,7 +1564,7 @@ raise SystemExit(70)
                         injected = True
 
             result = (
-                archive_services.activity_group_membership_write(
+                _historical_activity_group_membership_write(
                     archive_root,
                     request_path=fixture["request_relative"],
                     expected_request_sha256=fixture[
@@ -1594,7 +1622,7 @@ raise SystemExit(70)
             )
             receipt_parent = receipt_path.parent
             real_bound_directory_chain = (
-                archive_services.activity_group_bound_directory_chain
+                archive_services._activity_group_bound_directory_chain
             )
             real_cleanup_empty_archive_dirs = (
                 archive_services.cleanup_empty_archive_dirs
@@ -1655,7 +1683,7 @@ raise SystemExit(70)
             with (
                 patch.object(
                     archive_services,
-                    "activity_group_bound_directory_chain",
+                    "_activity_group_bound_directory_chain",
                     new=tracked_bound_directory_chain,
                 ),
                 patch.object(
@@ -1665,7 +1693,7 @@ raise SystemExit(70)
                 ),
             ):
                 result = (
-                    archive_services.activity_group_membership_write(
+                    _historical_activity_group_membership_write(
                         archive_root,
                         request_path=fixture["request_relative"],
                         expected_request_sha256=fixture[
@@ -1740,7 +1768,7 @@ raise SystemExit(70)
                 with self.assertRaises(OSError):
                     (
                         archive_services
-                        .replace_activity_group_canonical_bytes_compare_and_swap(
+                        ._replace_activity_group_canonical_bytes_compare_and_swap(
                             archive_root.resolve(),
                             canonical_path,
                             expected_bytes=expected_bytes,
@@ -1797,7 +1825,7 @@ raise SystemExit(70)
                 with self.assertRaises(OSError):
                     (
                         archive_services
-                        .replace_activity_group_canonical_bytes_compare_and_swap(
+                        ._replace_activity_group_canonical_bytes_compare_and_swap(
                             archive_root.resolve(),
                             canonical_path,
                             expected_bytes=expected_bytes,
@@ -1884,7 +1912,7 @@ raise SystemExit(70)
                 with self.assertRaises(OSError):
                     (
                         archive_services
-                        .replace_activity_group_canonical_bytes_compare_and_swap(
+                        ._replace_activity_group_canonical_bytes_compare_and_swap(
                             archive_root.resolve(),
                             canonical_path,
                             expected_bytes=expected_bytes,
@@ -1914,7 +1942,7 @@ raise SystemExit(70)
             )
             original_compare_and_swap = (
                 archive_services
-                .replace_activity_group_canonical_bytes_compare_and_swap
+                ._replace_activity_group_canonical_bytes_compare_and_swap
             )
             forward_attempts = 0
 
@@ -1940,7 +1968,7 @@ raise SystemExit(70)
             with patch.object(
                 archive_services,
                 (
-                    "replace_activity_group_canonical_bytes_"
+                    "_replace_activity_group_canonical_bytes_"
                     "compare_and_swap"
                 ),
                 new=drift_then_fail_second_forward,
@@ -1986,7 +2014,7 @@ raise SystemExit(70)
                 suffix=REMOVAL_JOURNAL_SUFFIX,
             )
             original_delete = (
-                archive_services.delete_activity_group_evidence_exact
+                archive_services._delete_activity_group_evidence_exact
             )
             injected = False
 
@@ -2007,7 +2035,7 @@ raise SystemExit(70)
 
             with patch.object(
                 archive_services,
-                "delete_activity_group_evidence_exact",
+                "_delete_activity_group_evidence_exact",
                 new=inject_foreign_after_own_journal_delete,
             ):
                 result = self.call_writer(archive_root, fixture)
@@ -2161,7 +2189,7 @@ raise SystemExit(70)
                 "rollback_uncommitted_memberships_to_before",
             )
             recovered = (
-                archive_services.activity_group_membership_recover(
+                _historical_activity_group_membership_recover(
                     archive_root,
                     expected_request_sha256=fixture["request_sha256"],
                     expected_recovery_plan_sha256=(
@@ -2236,7 +2264,7 @@ raise SystemExit(70)
                     )
                     original_delete = (
                         archive_services
-                        .delete_activity_group_evidence_exact
+                        ._delete_activity_group_evidence_exact
                     )
                     guard_delete_attempts = 0
 
@@ -2264,7 +2292,7 @@ raise SystemExit(70)
 
                     with patch.object(
                         archive_services,
-                        "delete_activity_group_evidence_exact",
+                        "_delete_activity_group_evidence_exact",
                         new=fail_exact_guard_delete,
                     ):
                         result = self.call_recovery(
@@ -2295,7 +2323,7 @@ raise SystemExit(70)
                     )
                     original_delete = (
                         archive_services
-                        .delete_activity_group_evidence_exact
+                        ._delete_activity_group_evidence_exact
                     )
                     guard_delete_calls = 0
                     replacement_guard_bytes: bytes | None = None
@@ -2331,7 +2359,7 @@ raise SystemExit(70)
 
                     with patch.object(
                         archive_services,
-                        "delete_activity_group_evidence_exact",
+                        "_delete_activity_group_evidence_exact",
                         new=replace_guard_after_exact_delete,
                     ):
                         result = self.call_recovery(
@@ -2444,7 +2472,7 @@ raise SystemExit(70)
             )
             original_compare_and_swap = (
                 archive_services
-                .replace_activity_group_canonical_bytes_compare_and_swap
+                ._replace_activity_group_canonical_bytes_compare_and_swap
             )
             forward_attempts = 0
 
@@ -2469,7 +2497,7 @@ raise SystemExit(70)
             with patch.object(
                 archive_services,
                 (
-                    "replace_activity_group_canonical_bytes_"
+                    "_replace_activity_group_canonical_bytes_"
                     "compare_and_swap"
                 ),
                 new=interrupt_second_forward,
@@ -2514,13 +2542,13 @@ raise SystemExit(70)
             with patch.object(
                 archive_services,
                 (
-                    "replace_activity_group_canonical_bytes_"
+                    "_replace_activity_group_canonical_bytes_"
                     "compare_and_swap"
                 ),
                 new=inject_drift_inside_recovery_cas,
             ):
                 recovered = (
-                    archive_services.activity_group_membership_recover(
+                    _historical_activity_group_membership_recover(
                         archive_root,
                         expected_request_sha256=fixture[
                             "request_sha256"
@@ -2563,7 +2591,7 @@ raise SystemExit(70)
             )
             original_compare_and_swap = (
                 archive_services
-                .replace_activity_group_canonical_bytes_compare_and_swap
+                ._replace_activity_group_canonical_bytes_compare_and_swap
             )
             attempts = 0
 
@@ -2587,7 +2615,7 @@ raise SystemExit(70)
             with patch.object(
                 archive_services,
                 (
-                    "replace_activity_group_canonical_bytes_"
+                    "_replace_activity_group_canonical_bytes_"
                     "compare_and_swap"
                 ),
                 new=interrupt_second_forward,
@@ -2607,7 +2635,7 @@ raise SystemExit(70)
             )
             self.assertTrue(plan["ok"], plan)
             original_bound_write = (
-                archive_services.write_activity_group_bytes_new_file_bound
+                archive_services._write_activity_group_bytes_new_file_bound
             )
             replacement_raw = b""
             injected = False
@@ -2639,12 +2667,11 @@ raise SystemExit(70)
 
             with patch.object(
                 archive_services,
-                "write_activity_group_bytes_new_file_bound",
+                "_write_activity_group_bytes_new_file_bound",
                 new=replace_claim_after_exclusive_create,
             ):
                 recovered = (
-                    archive_services
-                    .activity_group_membership_recover(
+                    _historical_activity_group_membership_recover(
                         archive_root,
                         expected_request_sha256=fixture[
                             "request_sha256"
@@ -2726,7 +2753,7 @@ raise SystemExit(70)
                 new=replace_immediately_before_capture,
             ):
                 with self.assertRaises(OSError):
-                    archive_services.delete_activity_group_evidence_exact(
+                    archive_services._delete_activity_group_evidence_exact(
                         archive_root,
                         evidence_path,
                         expected_sha256=(
@@ -2785,7 +2812,7 @@ raise SystemExit(70)
                     with self.assertRaises(OSError):
                         (
                             archive_services
-                            .delete_activity_group_evidence_exact(
+                            ._delete_activity_group_evidence_exact(
                                 archive_root,
                                 evidence_path,
                                 expected_sha256=(
@@ -2837,7 +2864,7 @@ def exit_after_capture(*args, **kwargs):
     os._exit(91)
 
 archive_services.os.rename = exit_after_capture
-archive_services.delete_activity_group_evidence_exact(
+archive_services._delete_activity_group_evidence_exact(
     root,
     path,
     expected_sha256=expected,
@@ -2897,7 +2924,7 @@ archive_services.delete_activity_group_evidence_exact(
             )
             original_compare_and_swap = (
                 archive_services
-                .replace_activity_group_canonical_bytes_compare_and_swap
+                ._replace_activity_group_canonical_bytes_compare_and_swap
             )
             attempts = 0
 
@@ -2921,7 +2948,7 @@ archive_services.delete_activity_group_evidence_exact(
             with patch.object(
                 archive_services,
                 (
-                    "replace_activity_group_canonical_bytes_"
+                    "_replace_activity_group_canonical_bytes_"
                     "compare_and_swap"
                 ),
                 new=interrupt_second_forward,
@@ -2946,7 +2973,7 @@ archive_services.delete_activity_group_evidence_exact(
             external_root = tmp_root / "external-private-root"
             external_root.mkdir()
             original_bound_write = (
-                archive_services.write_activity_group_bytes_new_file_bound
+                archive_services._write_activity_group_bytes_new_file_bound
             )
             swap_attempted = False
             swap_blocked = False
@@ -2977,11 +3004,11 @@ archive_services.delete_activity_group_evidence_exact(
 
             with patch.object(
                 archive_services,
-                "write_activity_group_bytes_new_file_bound",
+                "_write_activity_group_bytes_new_file_bound",
                 new=attempt_private_root_swap_before_claim,
             ):
                 recovered = (
-                    archive_services.activity_group_membership_recover(
+                    _historical_activity_group_membership_recover(
                         archive_root,
                         expected_request_sha256=fixture[
                             "request_sha256"

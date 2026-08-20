@@ -6,7 +6,7 @@ Anchor: v0.3.179 public release.
 
 ## Problem
 
-The basoon v0.3.179 revalidation confirmed that the new progress output exposed real bottlenecks:
+The protected pilot archive's v0.3.179 revalidation confirmed that the new progress output exposed real bottlenecks:
 
 - `object-storage-adopt-existing --key-map` was slow in `adopt-plan`, before provider HEADs.
 - `doctor --strict --progress` was slow in `mint-receipts`.
@@ -29,7 +29,7 @@ The basoon v0.3.179 revalidation confirmed that the new progress output exposed 
 
 ## Consequences
 
-The next basoon revalidation should rerun:
+The next protected-pilot revalidation should rerun:
 
 ```bash
 archive object-storage-adopt-existing <archive-root> ... --key-map <map.jsonl> --approve --progress --format json

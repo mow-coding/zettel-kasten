@@ -553,6 +553,12 @@ def saved_view_write(
     reviewed_by: str | None,
     affirm_view_reviewed: bool,
 ) -> dict[str, Any]:
+    return archive_services._compound_exact_human_approval_blocked(
+        lifecycle_action="saved_view_write",
+    )
+
+    # Dormant legacy implementation retained for compatibility analysis.
+    # It is not an approval authority.
     root = archive_services.require_existing_archive_root(archive_root)
     reviewer = _safe_actor(reviewed_by)
     initial, _private = _write_plan_core(root, request_path)
@@ -965,6 +971,12 @@ def saved_view_revert(
     expected_plan_sha256: str,
     reviewed_by: str | None,
 ) -> dict[str, Any]:
+    return archive_services._compound_exact_human_approval_blocked(
+        lifecycle_action="saved_view_revert",
+    )
+
+    # Dormant legacy implementation retained for compatibility analysis.
+    # It is not an approval authority.
     root = archive_services.require_existing_archive_root(archive_root)
     reviewer = _safe_actor(reviewed_by)
     initial, _private = _revert_plan_core(root, receipt_path)

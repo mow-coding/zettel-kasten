@@ -276,11 +276,17 @@ class LegacyCoordinationQuarantineTests(unittest.TestCase):
                 restore_candidates,
             )
             ordered_target = Path(tmp) / "ordered-restore-copy"
-            ordered_changed_paths = archive_services.copy_restore_drill_tree(
+            blocked_copy = archive_services.copy_restore_drill_tree(
                 archive_root,
                 ordered_target,
             )
-            self.assertEqual(ordered_changed_paths, sorted(ordered_changed_paths))
+            self.assertFalse(blocked_copy["ok"])
+            self.assertEqual(
+                blocked_copy["reason_codes"],
+                ["compound_exact_human_approval_binding_required"],
+            )
+            self.assertEqual(blocked_copy["files_written"], [])
+            self.assertFalse(ordered_target.exists())
 
             code, output = self.run_archive_cli(
                 [
@@ -295,16 +301,23 @@ class LegacyCoordinationQuarantineTests(unittest.TestCase):
                     "json",
                 ]
             )
-            self.assertEqual(code, 0, output)
+            self.assertEqual(code, 1, output)
+            self.assertEqual(
+                json.loads(output),
+                {
+                    "ok": False,
+                    "state": "blocked",
+                    "lifecycle_action": "restore_drill",
+                    "reason_codes": [
+                        "compound_exact_human_approval_binding_required"
+                    ],
+                    "files_written": [],
+                    "private_values_echoed": False,
+                },
+            )
             self.assertNotIn("private-state.txt", output)
             self.assertNotIn("private_sentinel", output)
-            target_root_names = {path.name.casefold() for path in target.iterdir()}
-            self.assertNotIn("collab", target_root_names)
-            self.assertNotIn(".mow-harness", target_root_names)
-            self.assertEqual(
-                (target / nested_coordination_path.relative_to(archive_root)).read_bytes(),
-                nested_coordination_path.read_bytes(),
-            )
+            self.assertFalse(target.exists())
             for path, content in quarantined_files.items():
                 self.assertEqual(path.read_bytes(), content)
 

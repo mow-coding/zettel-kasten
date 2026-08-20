@@ -2,6 +2,80 @@
 
 [English Upgrade Guide](UPGRADE.md)
 
+## v0.4.0 정확한 사람 제어와 운영 마찰 개선
+
+정확한 v0.4.0 GitHub Release에 검증된 wheel이 있는 것을 확인한
+뒤 설치하세요. 새 프로세스에서 `archive --version`을 확인하고,
+이전 runtime이 만든 dry-run digest는 버린 뒤 새로 미리보기하세요.
+
+### 무엇이 바뀌었나
+
+지원하는 고위험 단일 작업은 Windows native TaskDialog에서 안전한
+operation·plan·target set·warning·checklist·archive identity·reviewer를
+확인합니다. 사람이 확인하면 writer보다 먼저 인증된 내구성
+`started` claim을 하나 만들고, writer는 변경 직전에 같은 binding을
+다시 계산합니다. workflow만 claim을 마무리하며, 별도로 발급하는
+만료형 승인 token은 없습니다.
+
+human-artifact root/lifecycle registry, byte-identical duplicate reconciliation,
+approval-integrity overlay, source-fidelity session evidence, AI 초안, mint,
+promotion, 단일 edge, draft retire가 이 경계를 사용합니다. 과거 근거와
+연결하는 인증된 approval link는 일치하는 claim이 `succeeded`이고
+원래 effect가 `created`일 때만 근거를 보강합니다.
+
+human artifact는 `root_kind=external_project`로 정확한 root 아래
+`.wom-scratch`만 등록하거나, `root_kind=external_delivery`로 사람이 검토한
+root 자체를 등록합니다. `--project-root`와 `--external-root`는 선택한 root의
+별칭입니다. Downloads나 home을 자동 스캔하지 않으며, exact-human 승인을
+마친 등록만 scan/closeout 권한에 포함됩니다.
+
+### 무엇을 해야 하나
+
+항상 dry-run을 먼저 실행하고, 본문을 노출하지 않는 digest와 warning
+code를 검토한 뒤 local interactive Windows CLI에서 바뀌지 않은 plan만
+승인하세요. MCP는 이 변경에 대해 plan/audit만 제공합니다.
+
+v0.4.0에서 아직 완전한 target-set binding이 없는 변경을 승인하지 마세요.
+`mint-zet-batch`, `retire-draft-batch`, `zettel-edge-batch`, `revert-edge`,
+`revert-batch`, `zet-revision-write`, `zet-revision-restore-write`,
+`zettel-objet-link`, `zettel-objet-link-revert`, `notion-objet-link-convert`는
+preview만 가능합니다. activity-group membership 추가·제거와 양쪽 복구 실행기,
+abstract-backfill write·revert·recover, title-remap write·revert·apply/revert
+recover, never-minted draft discard·restore, mint/retired-draft receipt
+reconcile도 plan·audit·preview만 남습니다. relation-candidate accept도 닫혀
+있습니다. 해당 approve는 비공개 target을 읽거나 변경하기 전에
+`compound_exact_human_approval_binding_required`로 차단됩니다.
+
+CLI는 fixed-close 대상 canonical top-level command 이름을 정확히 79개로 한 곳에서
+관리합니다. 이 명령들의 `--approve` 도움말은 v0.4.0에서 승인을 사용할 수
+없고 각 명령의 dry-run·plan·preview·audit만 쓸 수 있다고 표시합니다. 정확한
+목록은 v0.4.0 릴리스 노트를 기준으로 삼고, 과거 명령 예시나 receipt를 현재
+쓰기 권한으로 해석하지 마세요. 중첩 derive capture, exact AI 경로가 아닌
+draft 생성, 실제 init, parcel/pack 생성은 별도로 고정 차단됩니다.
+
+Letter 138은 v0.4.0에 포함하지 않는 긴급 후속 범위입니다. 이 릴리스는 과거
+Notion typed-property 유실을 탐지하거나 복구하지 않습니다. 현재 Notion
+recovery는 page body 또는 location만 다루며 완전한 source mirror가 아닙니다.
+따라서 v0.4.0 recovery preview 성공을 property 보존 근거로 해석하지 말고,
+별도의 read-only 유실 audit와 exact-approved backfill workflow를 기다리세요.
+
+같은 v0.4.0 fixed blocker는 project update/collision 변경, bytecode repair,
+saved-view write/revert, private objet metadata write, identity reconcile,
+legacy cleanup, archive migration, markup normalization apply/revert/recovery,
+Principal register/unregister, objet-capture enable/selection/single/batch,
+external import, source 등록, ownership transfer, object-storage 변경, Notion
+recovery, external-locator 변경, source-intake 기록/batch, quarantine decision,
+delegate 승인, Tiro fetch/capture, Notion manifest label, GitHub metadata,
+KeePassXC write, IMAP manifest/header, source scan, onboarding, restore drill에도
+적용됩니다. gitignore repair, runtime-skill install/uninstall, catalog-pass
+cleanup도 같은 inventory에 포함됩니다. read-only plan·preview·audit는 문서에 적힌 범위로
+남습니다. 아래의 과거 명령 예시는 호환성 근거일 뿐 v0.4.0 실행 지침이나 쓰기
+권한이 아닙니다.
+
+claim이 `started`에 남아 있으면 결과를 알 수 없으므로 조사가 필요합니다.
+자동 재시도하지 마세요. [v0.4.0 릴리스 노트](wom-kit/docs/releases/v0.4.0.md)와
+[Exact Human Approval Contract](wom-kit/docs/exact-human-approval-contract.md)를 보세요.
+
 ## v0.3.320 1회용 자격증명 capability broker
 
 정확한 v0.3.320 GitHub Release에 검증된 wheel이 실제로 올라온 뒤에만
@@ -32,16 +106,16 @@ secret-free use summary를 반환합니다. claim finalization이 실패하면 �
 
 ### 무엇을 해야 하나
 
-예전 runtime이 만든 recovery plan digest는 버리고, 새 제한형 preview를 만든 뒤
-바뀌지 않은 digest만 승인하세요.
+이 절은 과거 v0.3.320 계약을 기록합니다. v0.4.0에서는 새 제한형 preview만
+만드세요. recovery 승인은 credential read·provider call·archive 변경 전에
+`compound_exact_human_approval_binding_required`로 닫힙니다.
 
 ```powershell
 archive notion-page-recovery-plan <archive-root> --request <archive-relative-reviewed-recovery-request.json> --max-items 5 --offset 0 --dry-run --format json
-archive notion-page-recovery <archive-root> --request <archive-relative-reviewed-recovery-request.json> --max-items 5 --offset 0 --expected-plan-sha256 <fresh-plan-sha256> --reviewed-by <actor> --approve --format json
 ```
 
 expired, replayed, changed, unknown, finalization-failed capability 결과를 자동으로
-재시도하지 마세요. 내용 없는 결과를 검토하고 적절할 때만 새 plan과 승인을
+재시도하지 마세요. 내용 없는 결과를 검토하고 진단이 필요할 때만 새 plan을
 만드세요. 모든 local objet의 hash가 검증된 replay는 claim을 만들지 않고,
 credential을 읽거나 provider를 호출하지 않습니다.
 
@@ -489,19 +563,18 @@ Windows에서는 먼저 `credential-adopt --dry-run`으로 요청을 검토하�
 요청 digest만 승인하세요. 승인하면 별도 자식 프로세스 안에서 Windows 기본
 마스킹 창이 열립니다. PAT를 명령 인자, 환경 변수, 일반 stdin, 파일, 채팅에
 붙여 넣지 마세요. WOM과 도우미 AI는 클립보드를 직접 읽지 않으며, 사람이 별도
-마스킹 창에 의도적으로 붙여 넣은 값만 콘솔 입력으로 처리합니다. 인증된 목록을 확인한 다음 별도
-`credential-lifecycle` 미리보기와 승인을 통해 정확한 workspace에 쓸 현재
-자격증명 하나를 사람이 선택합니다. WOM은 다른 유효 자격증명을 자동 삭제하거나
-폐기하지 않습니다.
+마스킹 창에 의도적으로 붙여 넣은 값만 콘솔 입력으로 처리합니다. 인증된 목록을
+확인한 다음 v0.4.0에서는 별도 `credential-lifecycle --dry-run` 계획만 사용합니다.
+기존 reviewer label 기반 승인 경로는 exact-human binding이 생길 때까지 archive
+key나 자격증명을 읽기 전에 고정 차단됩니다. WOM은 다른 유효 자격증명을 자동
+삭제하거나 폐기하지 않습니다.
 
 검토된 Notion 복구 요청은 무시되는 local profile 아래에 두고 Letter 118의 전체
 목록, 즉 `zet_notion_db3` 577건과 `zet_notion_db1` 43건을 모두 포함해야 합니다.
-작은 `--max-items` 범위로 `notion-page-recovery-plan --dry-run`을 실행하여 고정된
-권한 범위와 plan digest를 검토한 뒤, 바뀌지 않은 범위만
-`notion-page-recovery`로 승인하세요. 로컬 replay 증거가 온전하면 실제 호출을
-생략할 수 있지만, 승인은 선택 항목의 자격증명 읽기, 읽기 전용 provider GET,
-아카이브 증거 쓰기를 항상 포함합니다. 회수한 바이트는 objet와 항목별 증거로
-보존되며 canonical zet은 바뀌지 않습니다.
+작은 `--max-items` 범위로 `notion-page-recovery-plan --dry-run`을 실행해 고정된
+권한 범위와 plan digest를 검토하세요. v0.4.0의 `notion-page-recovery` 승인 경로는
+자격증명 읽기, provider 호출, 아카이브 쓰기 전에 고정 차단됩니다. 과거 v0.3
+복구 영수증은 감사할 수 있지만 새 실행 권한이 되지 않습니다.
 
 이 릴리스가 실제 PAT 수령이나 620건 복구 완료를 뜻하지는 않습니다. 그것은 별도
 운영 실행과 사람의 확인 단계입니다. 자세한 내용은
@@ -4195,7 +4268,7 @@ resume 진단과 progress를 보강한 additive patch입니다. 마이그레이�
 
 ## From `v0.3.181` To `v0.3.182`
 
-basoon 재검증 후속 additive patch입니다. 마이그레이션은 필요 없습니다.
+보호된 파일럿 아카이브 재검증 후속 additive patch입니다. 마이그레이션은 필요 없습니다.
 
 운영자가 볼 변화:
 
@@ -4816,7 +4889,7 @@ This release adds the first derived text capture layer.
 
 What changed:
 
-- added CLI `archive derive-text capture <archive-root> --text-file <file> --source-object-id <object-id> --derivation-kind <kind> --tool-name <name> --tool-version <version> --review-status <status> --dry-run|--approve`,
+- v0.3에서는 단일 derived-text 등록 쓰기가 있었지만, v0.4.0에서는 `archive derive-text capture <archive-root> --text-file <file> --source-object-id <object-id> --derivation-kind <kind> --tool-name <name> --tool-version <version> --review-status <status> --dry-run` 미리보기만 사용하며 승인은 비공개 입력을 읽기 전에 고정 차단됩니다.
 - added `objects/manifests/derived-text.jsonl` for provenance-aware derived text records,
 - approved capture stores UTF-8 text bodies under `objects/derived-text/sha256/` and writes `receipts/derived-text-capture/*.json`,
 - `archive index` ingests derived text records and `archive search` can return `type: derived_text`,
@@ -5618,7 +5691,7 @@ archive object-storage <archive-root> --dry-run \
 - `archive github-repo <archive-root> --dry-run --format json` 명령이 추가되었습니다.
 - 기본 repository 이름은 `zettel-kasten-<profile_slug>`입니다.
 - profile slug, repository name, GitHub owner, account ref에 대해 path/URL/token/email처럼 위험한 값을 막습니다.
-- `--approve --reviewed-by`는 GitHub를 건드리지 않고 local `provider-bindings.yml`과 setup receipt만 씁니다.
+- v0.2에서는 사람이 검토한 로컬 provider metadata와 setup receipt 쓰기가 있었지만, v0.4.0 GitHub setup 승인은 비공개 profile/archive를 읽기 전에 고정 차단되며 아무것도 쓰지 않습니다.
 - `--write-local-profile`을 쓰면 ignored local account hint를 `profiles/local/` 아래에 씁니다.
 - MCP에는 읽기 전용 `github_repository_setup_plan`만 추가되었습니다.
 
@@ -5768,8 +5841,8 @@ git checkout v0.2.14
 - `WOM`을 전체 umbrella name으로, `Widesider of Modernity`를 그 확장명으로 기록했습니다.
 - zet를 민팅하는 선호 명령으로 `archive mint-zet`을 추가했습니다.
 - 기존 `archive mint-zettel`은 compatibility alias로 유지했습니다.
-- 범위가 정해진 portable unit을 만드는 선호 명령으로 `archive parcel`을 추가했습니다.
-- 기존 `archive pack`은 compatibility alias로 유지했습니다.
+- v0.2에서는 범위가 정해진 portable unit을 만드는 선호 명령으로 `archive parcel`을 추가했지만, v0.4.0에서는 비공개 view/body/manifest를 읽기 전에 고정 차단되며 workpack을 만들지 않습니다.
+- 기존 `archive pack`은 같은 v0.4.0 고정 차단 경계의 compatibility alias로 유지했습니다.
 - parcel/workpack을 들여오는 과정을 미리 검토하는 선호 명령으로 `archive admit --dry-run`을 추가했습니다.
 - 기존 `archive import --dry-run`은 compatibility alias로 유지했습니다.
 

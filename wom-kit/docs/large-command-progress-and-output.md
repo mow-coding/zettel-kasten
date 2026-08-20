@@ -276,7 +276,7 @@ row insertion, and index metadata update run inside one explicit SQLite
 transaction. The transaction begins inside the `executescript()` statement with
 `BEGIN IMMEDIATE`; the existing final connection commit publishes the rebuild.
 
-The basoon v0.3.254 incident exposed both boundaries. Three post-mint commands
+The protected pilot's v0.3.254 incident exposed both boundaries. Three post-mint commands
 lost their operator-visible final output. A later official read-only health run
 completed after roughly 90 seconds with exit code 1 and reported 8,586 live
 zettels, zero indexed zettels, and 8,586 missing rows. The first observation did

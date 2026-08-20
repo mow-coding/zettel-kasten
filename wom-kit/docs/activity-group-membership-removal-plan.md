@@ -1,12 +1,16 @@
 # Activity-Group Membership Removal Plan
 
-Status: v0.3.284 read-only planning for the separate approval-gated removal writer
+Current v0.4.0 boundary: this plan remains read-only. It grants no removal-
+writer or recovery authority; affected approvals fail before private target
+read or mutation with `compound_exact_human_approval_binding_required`.
+
+Status: v0.4.0 read-only planning; v0.3.284 removal writer evidence is historical
 
 `activity-group-membership-removal-plan` lets an archive owner review removing
 one named event anchor from an explicit ordered set of canonical zets.
 
-This command still writes nothing. v0.3.284 implements the separate
-approval-gated removal writer and interruption recovery documented in
+This command writes nothing. Historical v0.3.284 writer and interruption
+recovery evidence is documented in
 [Activity-Group Membership Removal Write And Recovery](activity-group-membership-removal-write.md).
 
 ## Why This Is Separate

@@ -1,0 +1,554 @@
+"""Deterministic, content-free exact-human bindings for legacy writers.
+
+The affected writers already construct comprehensive dry-run plans.  This
+module turns those plans into one stable plan digest and one target-set digest
+without reflecting their private values into the dialog, result, or log.  The
+same derivation is run once before the dialog and again inside each writer
+immediately before mutation; any drift fails closed.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import hmac
+import json
+import re
+from dataclasses import dataclass
+from typing import Any, Mapping
+
+from .exact_human_approval import (
+    REFERENCE_SCHEMA_VERSION,
+    exact_human_approval_archive_identity_sha256,
+    exact_human_approval_context_sha256,
+)
+from .exact_human_approval_windows import (
+    ExactHumanApprovalContext,
+    ExactHumanApprovalOperation,
+    exact_human_approval_warning_codes,
+)
+
+
+BINDING_SCHEMA_VERSION = "wom-kit/operation-exact-human-approval-plan/v0.1"
+_SHA256_RE = re.compile(r"^(?:sha256:)?[0-9a-f]{64}$")
+_WARNING_CODE_RE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
+_APPROVAL_ID_RE = re.compile(r"^approval_[0-9a-f]{32}$")
+_MAX_CANONICAL_BYTES = 16 * 1024 * 1024
+OPERATION_RECEIPT_SCHEMA_VERSION = "wom-kit/operation-exact-human-approval/v0.1"
+
+
+class OperationApprovalBindingError(RuntimeError):
+    _CODES = {
+        "operation_approval_plan_invalid",
+        "operation_approval_plan_blocked",
+        "operation_approval_binding_mismatch",
+    }
+
+    def __init__(self, code: str) -> None:
+        self.code = code if code in self._CODES else "operation_approval_plan_invalid"
+        super().__init__(self.code)
+
+    def __repr__(self) -> str:
+        return f"OperationApprovalBindingError({self.code!r})"
+
+
+def _fail(code: str) -> OperationApprovalBindingError:
+    return OperationApprovalBindingError(code)
+
+
+def _canonical(value: Any) -> bytes:
+    try:
+        raw = json.dumps(
+            value,
+            ensure_ascii=True,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode("ascii")
+    except (TypeError, ValueError, UnicodeError):
+        raise _fail("operation_approval_plan_invalid") from None
+    if len(raw) > _MAX_CANONICAL_BYTES:
+        raise _fail("operation_approval_plan_invalid")
+    return raw
+
+
+def _sha256(value: Any) -> str:
+    return "sha256:" + hashlib.sha256(_canonical(value)).hexdigest()
+
+
+def _plain_mapping(value: Any) -> dict[str, Any]:
+    if not isinstance(value, Mapping):
+        raise _fail("operation_approval_plan_invalid")
+    return dict(value)
+
+
+def _sha_ref(value: Any) -> str:
+    text = str(value or "").strip().lower()
+    if _SHA256_RE.fullmatch(text) is None:
+        raise _fail("operation_approval_plan_invalid")
+    return text if text.startswith("sha256:") else "sha256:" + text
+
+
+def _warning_codes(value: Any) -> tuple[str, ...]:
+    if not isinstance(value, list):
+        return ()
+    safe = {
+        item
+        for item in value
+        if type(item) is str and _WARNING_CODE_RE.fullmatch(item) is not None
+    }
+    if any(type(item) is not str or item not in safe for item in value):
+        safe.add("non_code_warning_present")
+    return tuple(sorted(safe))[:32]
+
+
+@dataclass(frozen=True)
+class ExactOperationApprovalBinding:
+    operation: ExactHumanApprovalOperation
+    plan_sha256: str
+    target_binding_sha256: str
+    warning_codes: tuple[str, ...]
+    review_binding_codes: tuple[str, ...]
+
+    def context(
+        self,
+        *,
+        archive_id: str,
+        reviewer_claim: str,
+    ) -> ExactHumanApprovalContext:
+        return ExactHumanApprovalContext(
+            operation=self.operation,
+            archive_identity_sha256=exact_human_approval_archive_identity_sha256(
+                archive_id
+            ),
+            plan_sha256=self.plan_sha256,
+            target_binding_sha256=self.target_binding_sha256,
+            reviewer_claim=reviewer_claim,
+            review_binding_codes=self.review_binding_codes,
+            warning_codes=self.warning_codes,
+        )
+
+    def public_document(self) -> dict[str, Any]:
+        return {
+            "schema_version": BINDING_SCHEMA_VERSION,
+            "operation": self.operation.value,
+            "plan_sha256": self.plan_sha256,
+            "target_binding_sha256": self.target_binding_sha256,
+            "warning_codes": list(self.warning_codes),
+            "review_binding_codes": list(self.review_binding_codes),
+            "private_values_echoed": False,
+            "paths_echoed": False,
+        }
+
+
+def mint_zet_approval_binding(
+    dry_run: Mapping[str, Any],
+) -> ExactOperationApprovalBinding:
+    plan = _plain_mapping(dry_run)
+    if plan.get("ok") is not True or plan.get("dry_run") is not True:
+        raise _fail("operation_approval_plan_blocked")
+    receipt = _plain_mapping(plan.get("receipt_preview"))
+    source = _plain_mapping(receipt.get("source"))
+    source_sha = _sha_ref(source.get("sha256"))
+    checklist = plan.get("checklist")
+    if not isinstance(checklist, list):
+        raise _fail("operation_approval_plan_invalid")
+    checklist_projection: list[dict[str, Any]] = []
+    for item in checklist:
+        row = _plain_mapping(item)
+        item_id = row.get("id")
+        status = row.get("status")
+        if type(item_id) is not str or type(status) is not str:
+            raise _fail("operation_approval_plan_invalid")
+        checklist_projection.append({"id": item_id, "status": status})
+    scratch_cleanup = _plain_mapping(plan.get("scratch_cleanup"))
+    scratch_receipt_path = scratch_cleanup.get("receipt_path")
+    volatile_scratch_receipt_write = (
+        f"write {scratch_receipt_path}"
+        if type(scratch_receipt_path) is str and scratch_receipt_path
+        else None
+    )
+
+    def _without_volatile_scratch_receipt_locator(value: Any) -> Any:
+        if not isinstance(value, list) or volatile_scratch_receipt_write is None:
+            return value
+        return [item for item in value if item != volatile_scratch_receipt_write]
+
+    scratch_cleanup_projection = {
+        key: scratch_cleanup.get(key)
+        for key in (
+            "blockers",
+            "candidate_count",
+            "candidates",
+            "missing",
+            "safe_to_cleanup",
+            "scratch_reference_count",
+            "would_change",
+            "zettel_id",
+            "zettel_path",
+        )
+    }
+    scratch_cleanup_projection["would_change"] = (
+        _without_volatile_scratch_receipt_locator(
+            scratch_cleanup_projection.get("would_change")
+        )
+    )
+    target = {
+        "source_sha256": source_sha,
+        "zettel_id_digest": _sha256(plan.get("zettel_id")),
+        "proposed_paths_digest": _sha256(
+            [
+                plan.get("proposed_canonical_path"),
+                plan.get("proposed_mint_receipt_path"),
+                plan.get("proposed_draft_snapshot_path"),
+            ]
+        ),
+    }
+    basis = {
+        "schema_version": BINDING_SCHEMA_VERSION,
+        "operation": "mint_zet",
+        "source_sha256": source_sha,
+        "target": target,
+        "warnings": plan.get("warnings"),
+        "checklist": checklist_projection,
+        "near_duplicates_digest": _sha256(plan.get("near_duplicates")),
+        "duplicate_check_digest": _sha256(plan.get("duplicate_check")),
+        "first_read_check_digest": _sha256(plan.get("first_read_check")),
+        "quality_check_digest": _sha256(plan.get("quality_check")),
+        "self_contained_check_digest": _sha256(plan.get("self_contained_check")),
+        "source_fidelity_digest": _sha256(plan.get("source_fidelity")),
+        # The eventual cleanup receipt filename contains a fresh timestamp and
+        # cannot be predicted across the approval dialog.  Bind every cleanup
+        # candidate and policy fact, but not that post-mint receipt locator.
+        "scratch_cleanup_digest": _sha256(scratch_cleanup_projection),
+        "receipt_preview_digest": _sha256(receipt),
+        "would_change_digest": _sha256(
+            _without_volatile_scratch_receipt_locator(
+                plan.get("would_change")
+            )
+        ),
+    }
+    return ExactOperationApprovalBinding(
+        operation=ExactHumanApprovalOperation.mint_zet,
+        plan_sha256=_sha256(basis),
+        target_binding_sha256=_sha256(target),
+        warning_codes=_warning_codes(plan.get("warnings")),
+        review_binding_codes=(
+            "checklist_codes",
+            "draft_bytes_digest",
+            "mint_target_set",
+            "near_duplicate_evidence",
+            "warning_codes",
+        ),
+    )
+
+
+def _promotion_approval_binding(
+    dry_run: Mapping[str, Any],
+    *,
+    operation: ExactHumanApprovalOperation,
+    require_warnings: bool,
+) -> ExactOperationApprovalBinding:
+    """Bind one legacy promotion without exposing its private plan values."""
+
+    plan = _plain_mapping(dry_run)
+    if plan.get("ok") is not True or plan.get("dry_run") is not True:
+        raise _fail("operation_approval_plan_blocked")
+
+    warnings = plan.get("warnings")
+    if (
+        not isinstance(warnings, list)
+        or any(type(item) is not str for item in warnings)
+        or (require_warnings and not warnings)
+    ):
+        raise _fail("operation_approval_plan_invalid")
+
+    receipt = _plain_mapping(plan.get("receipt_preview"))
+    receipt_source = _plain_mapping(receipt.get("source"))
+    receipt_target = _plain_mapping(receipt.get("target"))
+    source_sha = _sha_ref(plan.get("source_sha256"))
+
+    required_text = {
+        "draft_path": plan.get("draft_path"),
+        "proposed_canonical_path": plan.get("proposed_canonical_path"),
+        "proposed_receipt_path": plan.get("proposed_receipt_path"),
+        "zettel_id": plan.get("zettel_id"),
+    }
+    if any(
+        type(value) is not str or not value.strip()
+        for value in required_text.values()
+    ):
+        raise _fail("operation_approval_plan_invalid")
+    if (
+        receipt.get("action") != "promote_zettel"
+        or receipt.get("dry_run") is not True
+        or receipt.get("receipt_path") != required_text["proposed_receipt_path"]
+        or receipt_source.get("path") != required_text["draft_path"]
+        or _sha_ref(receipt_source.get("sha256")) != source_sha
+        or receipt_target.get("path")
+        != required_text["proposed_canonical_path"]
+        or receipt.get("warnings") != warnings
+        or receipt.get("blockers") != plan.get("blockers")
+        or receipt.get("checklist") != plan.get("checklist")
+        or receipt.get("near_duplicates") != plan.get("near_duplicates")
+        or receipt.get("first_read_check") != plan.get("first_read_check")
+        or receipt.get("abstract_review_basis")
+        != plan.get("abstract_review_basis")
+    ):
+        raise _fail("operation_approval_plan_invalid")
+
+    for field in ("checklist", "near_duplicates", "would_change"):
+        if not isinstance(plan.get(field), list):
+            raise _fail("operation_approval_plan_invalid")
+    for field in ("duplicate_check", "first_read_check"):
+        if not isinstance(plan.get(field), Mapping):
+            raise _fail("operation_approval_plan_invalid")
+    if plan.get("abstract_review_basis") is not None and not isinstance(
+        plan.get("abstract_review_basis"), Mapping
+    ):
+        raise _fail("operation_approval_plan_invalid")
+
+    target = {
+        "source_sha256": source_sha,
+        "draft_path_digest": _sha256(required_text["draft_path"]),
+        "canonical_path_digest": _sha256(
+            required_text["proposed_canonical_path"]
+        ),
+        "receipt_path_digest": _sha256(
+            required_text["proposed_receipt_path"]
+        ),
+        "zettel_id_digest": _sha256(required_text["zettel_id"]),
+    }
+    basis = {
+        "schema_version": BINDING_SCHEMA_VERSION,
+        "operation": operation.value,
+        "target": target,
+        "warning_set_digest": _sha256(warnings),
+        "checklist_digest": _sha256(plan.get("checklist")),
+        "near_duplicates_digest": _sha256(plan.get("near_duplicates")),
+        "duplicate_check_digest": _sha256(plan.get("duplicate_check")),
+        "first_read_check_digest": _sha256(plan.get("first_read_check")),
+        "abstract_review_basis_digest": _sha256(
+            plan.get("abstract_review_basis")
+        ),
+        "receipt_preview_digest": _sha256(receipt),
+        "would_change_digest": _sha256(plan.get("would_change")),
+    }
+    return ExactOperationApprovalBinding(
+        operation=operation,
+        plan_sha256=_sha256(basis),
+        target_binding_sha256=_sha256(target),
+        warning_codes=exact_human_approval_warning_codes(warnings),
+        review_binding_codes=(
+            (
+                "canonical_target_set",
+                "draft_bytes_digest",
+                "duplicate_evidence",
+                "promotion_plan",
+                "warning_set",
+            )
+            if warnings
+            else (
+                "canonical_target_set",
+                "draft_bytes_digest",
+                "duplicate_evidence",
+                "promotion_plan",
+            )
+        ),
+    )
+
+
+def promote_zet_approval_binding(
+    dry_run: Mapping[str, Any],
+) -> ExactOperationApprovalBinding:
+    return _promotion_approval_binding(
+        dry_run,
+        operation=ExactHumanApprovalOperation.promote_zet,
+        require_warnings=False,
+    )
+
+
+def warning_override_approval_binding(
+    dry_run: Mapping[str, Any],
+) -> ExactOperationApprovalBinding:
+    return _promotion_approval_binding(
+        dry_run,
+        operation=ExactHumanApprovalOperation.warning_override,
+        require_warnings=True,
+    )
+
+
+def zettel_edge_approval_binding(
+    dry_run: Mapping[str, Any],
+) -> ExactOperationApprovalBinding:
+    plan = _plain_mapping(dry_run)
+    if plan.get("ok") is not True or plan.get("dry_run") is not True:
+        raise _fail("operation_approval_plan_blocked")
+    source = _plain_mapping(plan.get("source"))
+    target = _plain_mapping(plan.get("target"))
+    source_sha = _sha_ref(source.get("current_sha256"))
+    if target.get("verified") is not True:
+        raise _fail("operation_approval_plan_invalid")
+    proposed_edge = _plain_mapping(plan.get("proposed_edge"))
+    proposed_edge_projection = {
+        key: proposed_edge.get(key)
+        for key in ("type", "target", "visibility", "edge_id", "receipt")
+    }
+    target_projection = {
+        "source_current_sha256": source_sha,
+        "source_identity_digest": _sha256(source),
+        "target_identity_digest": _sha256(target),
+        "edge_id_digest": _sha256(plan.get("edge_id")),
+        "receipt_target_digest": _sha256(plan.get("receipt_path")),
+    }
+    basis = {
+        "schema_version": BINDING_SCHEMA_VERSION,
+        "operation": "zettel_edge",
+        "target": target_projection,
+        # Reviewer and timestamp provenance are written only after approval;
+        # the dialog binds their authority through reviewer_claim instead of
+        # trying to predict a clock value during dry-run.
+        "proposed_edge_digest": _sha256(proposed_edge_projection),
+        "entity_type_contract_digest": _sha256(plan.get("entity_type_contract")),
+        "warnings": plan.get("warnings"),
+        "would_change_digest": _sha256(plan.get("would_change")),
+    }
+    return ExactOperationApprovalBinding(
+        operation=ExactHumanApprovalOperation.zettel_edge,
+        plan_sha256=_sha256(basis),
+        target_binding_sha256=_sha256(target_projection),
+        warning_codes=_warning_codes(plan.get("warnings")),
+        review_binding_codes=(
+            "edge_contract",
+            "edge_target_digest",
+            "source_current_digest",
+            "warning_codes",
+        ),
+    )
+
+
+def retire_draft_approval_binding(
+    dry_run: Mapping[str, Any],
+) -> ExactOperationApprovalBinding:
+    plan = _plain_mapping(dry_run)
+    if plan.get("ok") is not True or plan.get("dry_run") is not True:
+        raise _fail("operation_approval_plan_blocked")
+    receipt = _plain_mapping(plan.get("receipt_preview"))
+    refs: dict[str, str] = {}
+    for name in ("source", "target", "mint_receipt", "snapshot"):
+        refs[name] = _sha_ref(_plain_mapping(receipt.get(name)).get("sha256"))
+    target = {
+        "reference_sha256": refs,
+        "retire_receipt_digest": _sha256(plan.get("retire_receipt_path")),
+        "zettel_id_digest": _sha256(plan.get("zettel_id")),
+    }
+    basis = {
+        "schema_version": BINDING_SCHEMA_VERSION,
+        "operation": "retire_draft",
+        "target": target,
+        "warnings": plan.get("warnings"),
+        "receipt_preview_digest": _sha256(receipt),
+        "would_change_digest": _sha256(plan.get("would_change")),
+    }
+    return ExactOperationApprovalBinding(
+        operation=ExactHumanApprovalOperation.retire_draft,
+        plan_sha256=_sha256(basis),
+        target_binding_sha256=_sha256(target),
+        warning_codes=_warning_codes(plan.get("warnings")),
+        review_binding_codes=(
+            "canonical_digest",
+            "draft_digest",
+            "mint_receipt_digest",
+            "snapshot_digest",
+            "warning_codes",
+        ),
+    )
+
+
+def assert_same_binding(
+    current: ExactOperationApprovalBinding,
+    *,
+    expected_plan_sha256: str,
+    expected_target_binding_sha256: str,
+) -> None:
+    if type(current) is not ExactOperationApprovalBinding:
+        raise _fail("operation_approval_binding_mismatch")
+    expected_plan = _sha_ref(expected_plan_sha256)
+    expected_target = _sha_ref(expected_target_binding_sha256)
+    if not (
+        hmac.compare_digest(current.plan_sha256, expected_plan)
+        and hmac.compare_digest(current.target_binding_sha256, expected_target)
+    ):
+        raise _fail("operation_approval_binding_mismatch")
+
+
+def build_operation_exact_human_approval_receipt(
+    binding: ExactOperationApprovalBinding,
+    *,
+    archive_id: str,
+    reviewer_claim: str,
+    exact_human_approval_reference: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Validate the content-free claim reference against this exact binding.
+
+    Claim authentication remains the responsibility of the one-use approval
+    workflow.  The writer independently re-derives the approved plan and
+    target binding, then this helper proves that the supplied reference names
+    the same context before the operation receipt is written.
+    """
+
+    if type(binding) is not ExactOperationApprovalBinding or not isinstance(
+        exact_human_approval_reference, Mapping
+    ):
+        raise _fail("operation_approval_binding_mismatch")
+    reference = dict(exact_human_approval_reference)
+    if set(reference) != {
+        "schema_version",
+        "approval_id",
+        "context_sha256",
+        "approval_authority_sha256",
+        "one_use",
+    }:
+        raise _fail("operation_approval_binding_mismatch")
+    if (
+        reference.get("schema_version") != REFERENCE_SCHEMA_VERSION
+        or _APPROVAL_ID_RE.fullmatch(str(reference.get("approval_id") or ""))
+        is None
+        or reference.get("one_use") is not True
+    ):
+        raise _fail("operation_approval_binding_mismatch")
+    context_sha256 = _sha_ref(reference.get("context_sha256"))
+    authority_sha256 = _sha_ref(reference.get("approval_authority_sha256"))
+    expected_context_sha256 = exact_human_approval_context_sha256(
+        binding.context(archive_id=archive_id, reviewer_claim=reviewer_claim)
+    )
+    if not hmac.compare_digest(context_sha256, expected_context_sha256):
+        raise _fail("operation_approval_binding_mismatch")
+    validated_reference = {
+        "schema_version": REFERENCE_SCHEMA_VERSION,
+        "approval_id": reference["approval_id"],
+        "context_sha256": context_sha256,
+        "approval_authority_sha256": authority_sha256,
+        "one_use": True,
+    }
+    return {
+        "schema_version": OPERATION_RECEIPT_SCHEMA_VERSION,
+        "operation": binding.operation.value,
+        "plan_sha256": binding.plan_sha256,
+        "target_binding_sha256": binding.target_binding_sha256,
+        "exact_human_approval": validated_reference,
+    }
+
+
+__all__ = [
+    "BINDING_SCHEMA_VERSION",
+    "OPERATION_RECEIPT_SCHEMA_VERSION",
+    "ExactOperationApprovalBinding",
+    "OperationApprovalBindingError",
+    "assert_same_binding",
+    "build_operation_exact_human_approval_receipt",
+    "mint_zet_approval_binding",
+    "promote_zet_approval_binding",
+    "retire_draft_approval_binding",
+    "warning_override_approval_binding",
+    "zettel_edge_approval_binding",
+]

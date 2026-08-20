@@ -1,6 +1,6 @@
 # ZET Sharing Lifecycle Terminology
 
-Status: public terminology candidate
+Status: public terminology candidate; v0.4.0 delegate writes are preview-only
 Date: 2026-05-23
 
 This document records the product-language direction for the future `ZET` communication layer.
@@ -159,12 +159,15 @@ anchor proof / anchor mark
 
 Current v0.2 implementation still uses `receipt` in file paths and schemas for compatibility.
 
-As of `v0.2.14`, the lifecycle is still early, but minting and delegation have real local write paths, and the `WOM`/`zet`/`ZET` naming boundary is now documented:
+The v0.2.14 checkpoint introduced local mint and delegate evidence. In the
+current v0.4.0 boundary, minting keeps its exact-human single-write path while
+delegation is preview-only because its approval lacks a complete exact-human
+effect binding:
 
 - `mint-zet --dry-run` previews private archive minting. `mint-zettel` remains a compatibility alias.
 - `mint-zet --approve --reviewed-by <actor>` writes canonical private archive memory, a mint receipt, and a draft snapshot.
 - `delegate-zet --dry-run` returns a delegate receipt preview.
-- `delegate-zet --approve --reviewed-by <actor>` writes a local delegate receipt.
+- `delegate-zet --approve --reviewed-by <actor>` returns `compound_exact_human_approval_binding_required` before private target reads or mutation and writes no delegate receipt.
 - `attest-zet --dry-run` returns an attestation receipt preview.
 - `anchor-zet --dry-run` returns anchor metadata preview.
 - `ZET` names the future communication layer, while `zet` remains the minted unit document.
@@ -172,7 +175,9 @@ As of `v0.2.14`, the lifecycle is still early, but minting and delegation have r
 
 `delegate-zet --target-policy claimable_once --dry-run` can preview a one-time claimable capability without naming the recipient archive yet. The later `attest-zet --dry-run` preview binds that capability to the attesting archive through `claim_binding`.
 
-Delegate receipt write is real local evidence, but it is not transport or import. Attestation and anchor are still preview-only.
+Historical delegate receipts remain local evidence, but they grant no current
+write authority and are not transport or import. Delegation, attestation, and
+anchor are preview-only in v0.4.0.
 
 They should be designed later so that:
 

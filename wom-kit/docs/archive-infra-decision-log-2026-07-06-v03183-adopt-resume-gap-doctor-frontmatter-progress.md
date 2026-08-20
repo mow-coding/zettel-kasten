@@ -6,7 +6,7 @@ Anchor: v0.3.182 public release.
 
 ## Problem
 
-The basoon v0.3.182 revalidation confirmed that `--skip-existing-wom-uploaded` works, but the
+The protected pilot archive's v0.3.182 revalidation confirmed that `--skip-existing-wom-uploaded` works, but the
 archive had a different partial state than expected:
 
 - many rows had matching Cloudflare/R2 provider-store-key locations;
@@ -33,7 +33,7 @@ message was still too coarse: `loading target frontmatter`.
 
 ## Consequences
 
-For basoon, the next adopt retry should first inspect:
+For the protected pilot, the next adopt retry should first inspect:
 
 ```text
 adopt-plan: resume summary matching_locations=... wom_uploaded=... declared_uploaded=... other=... skip_existing_wom_uploaded=on

@@ -86,9 +86,11 @@ the base once a local file exists. So base link types added after the archive ve
 its file — for example `continues` (added to the base in v0.3.168) — become invisible in
 that archive and their edges fail the `allowed_edges` check.
 
-Since v0.3.173, `archive migrate --target base-link-types (--dry-run | --approve)
-[--reviewed-by <actor>] [--format json]` pulls the missing base link types into the
-archive-local `types.yml`. It is append-only and no-clobber:
+The `archive migrate --target base-link-types --dry-run [--format json]`
+preview reports missing base link types. In v0.4.0 its approval branch is
+fixed fail-closed with `compound_exact_human_approval_binding_required` before
+private archive reads or mutation. The following bullets describe the
+historical v0.3 receipt semantics only:
 
 - It appends every base id missing from the archive (a strict superset of the
   recommended-9 connection-edge set above — it also covers `continues` and any other
@@ -96,9 +98,8 @@ archive-local `types.yml`. It is append-only and no-clobber:
   prior `link-types-v0.3` migrate, sync adds only the non-recommended remainder.
 - It never removes, renames, reorders, or overwrites an existing entry. An archive that
   customized a base id keeps its own entry (reported under `present_not_overwritten`).
-- `--reviewed-by` is required with `--approve`. It writes a receipt
-  (`receipt_kind: base_link_types_sync`) under `receipts/migrations/`, is atomic with
-  rollback, and is idempotent (a second run with nothing missing is a clean no-op).
+- Historical approved runs wrote a `receipt_kind: base_link_types_sync` receipt
+  under `receipts/migrations/`. v0.4.0 writes no type entry or receipt.
 - There is **no `--revert`**: it is forward-only append.
 
 Honesty boundary: if the archive has NO local `types.yml`, sync writes nothing — the

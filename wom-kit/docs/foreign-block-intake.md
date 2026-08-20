@@ -124,10 +124,14 @@ foreign block artifact
 -> foreign-block-trust preview
 -> foreign-block-attestation packet preview
 -> foreign-block-quarantine plan
--> quarantine-foreign-block approved isolation write
+-> quarantine-foreign-block dry-run isolation preview (approval fixed-close in v0.4.0)
 ```
 
-`quarantine-foreign-block --approve --reviewed-by` writes only a sanitized untrusted quarantine case and quarantine receipt. It does not trust, import, mint, attest, anchor, delegate, sign, execute, or accept the foreign block.
+`quarantine-foreign-block --dry-run` remains a sanitized preview. In v0.4.0,
+approval returns `compound_exact_human_approval_binding_required` before private
+plan/target reads or mutation and writes no case or receipt. It does not trust,
+import, mint, attest, anchor, delegate, sign, execute, or accept the foreign
+block.
 
 ## Quarantine Review Index
 
@@ -139,7 +143,7 @@ foreign block artifact
 -> foreign-block-trust preview
 -> foreign-block-attestation packet preview
 -> foreign-block-quarantine plan
--> quarantine-foreign-block approved isolation write
+-> quarantine-foreign-block dry-run isolation preview (approval fixed-close in v0.4.0)
 -> quarantine-review index
 ```
 
@@ -155,7 +159,7 @@ foreign block artifact
 -> foreign-block-trust preview
 -> foreign-block-attestation packet preview
 -> foreign-block-quarantine plan
--> quarantine-foreign-block approved isolation write
+-> quarantine-foreign-block dry-run isolation preview (approval fixed-close in v0.4.0)
 -> quarantine-review index
 -> quarantine-decision preview
 ```

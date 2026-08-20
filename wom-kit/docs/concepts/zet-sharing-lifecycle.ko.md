@@ -1,6 +1,6 @@
 # ZET 공유 Lifecycle 용어
 
-상태: 공개 용어 후보
+상태: 공개 용어 후보. v0.4.0에서 delegate 쓰기는 preview-only
 날짜: 2026-05-23
 
 이 문서는 미래의 `ZET` 통신 계층에서 사용할 제품 언어 방향을 기록합니다.
@@ -155,12 +155,14 @@ anchor proof / anchor mark
 
 현재 v0.2 구현은 compatibility를 위해 file path와 schema에서 아직 `receipt`를 사용합니다.
 
-`v0.2.14` 기준으로 lifecycle은 아직 초기 단계이지만, mint와 delegate에는 실제 local write path가 생겼고 `WOM`/`zet`/`ZET` naming boundary도 문서화되었습니다.
+`v0.2.14`에서는 mint와 delegate의 local evidence가 추가되었습니다. 현재
+v0.4.0에서는 mint의 exact-human 단일 쓰기만 유지되고, delegate 승인은 전체
+효과를 묶는 exact-human binding이 없어서 preview-only입니다.
 
 - `mint-zet --dry-run`은 private archive minting을 preview합니다. `mint-zettel`은 compatibility alias로 남습니다.
 - `mint-zet --approve --reviewed-by <actor>`는 canonical private archive memory, mint receipt, draft snapshot을 기록합니다.
 - `delegate-zet --dry-run`은 delegate receipt preview를 반환합니다.
-- `delegate-zet --approve --reviewed-by <actor>`는 local delegate receipt를 기록합니다.
+- `delegate-zet --approve --reviewed-by <actor>`는 private target을 읽거나 바꾸기 전에 `compound_exact_human_approval_binding_required`를 반환하며 delegate receipt를 기록하지 않습니다.
 - `attest-zet --dry-run`은 attestation receipt preview를 반환합니다.
 - `anchor-zet --dry-run`은 anchor metadata preview를 반환합니다.
 - `ZET`는 미래 통신 계층이고, `zet`는 민팅된 단위 문서입니다.
@@ -168,7 +170,9 @@ anchor proof / anchor mark
 
 `delegate-zet --target-policy claimable_once --dry-run`은 아직 recipient archive를 정하지 않은 1회용 claimable capability를 preview할 수 있습니다. 이후 `attest-zet --dry-run` preview가 `claim_binding`을 통해 그 capability를 attesting archive에 묶습니다.
 
-delegate receipt write는 실제 local evidence이지만 transport나 import는 아닙니다. attestation과 anchor는 아직 preview-only입니다.
+과거 delegate receipt는 local evidence로 남지만 현재 쓰기 권한을 주지 않으며
+transport나 import도 아닙니다. v0.4.0에서는 delegate, attestation, anchor가
+모두 preview-only입니다.
 
 나중에 설계할 때는 다음을 만족해야 합니다.
 

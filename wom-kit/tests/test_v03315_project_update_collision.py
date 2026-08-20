@@ -47,7 +47,7 @@ class ProjectUpdateCollisionParityTests(unittest.TestCase):
 
     @staticmethod
     def preview(fixture: dict[str, object]) -> dict[str, object]:
-        return archive_services.wom_kit_project_version_update(
+        return archive_services._wom_kit_project_version_update_legacy_core(
             fixture["project_root"],
             target=fixture["target_tag"],
             dry_run=True,
@@ -55,7 +55,7 @@ class ProjectUpdateCollisionParityTests(unittest.TestCase):
 
     @staticmethod
     def approve(fixture: dict[str, object]) -> dict[str, object]:
-        return archive_services.wom_kit_project_version_update(
+        return archive_services._wom_kit_project_version_update_legacy_core(
             fixture["project_root"],
             target=fixture["target_tag"],
             approve=True,
@@ -621,7 +621,7 @@ class ProjectUpdateCollisionParityTests(unittest.TestCase):
             )
             pin_path = fixture["metadata_root"] / "installed-version.txt"
             pin_before = pin_path.read_bytes()
-            snapshot_before = archive_services.wom_kit_project_update_git_snapshot(
+            snapshot_before = archive_services._wom_kit_project_update_git_snapshot(
                 fixture["mirror"]
             )
 
@@ -642,7 +642,7 @@ class ProjectUpdateCollisionParityTests(unittest.TestCase):
                 head_before,
             )
             self.assertEqual(
-                archive_services.wom_kit_project_update_git_snapshot(
+                archive_services._wom_kit_project_update_git_snapshot(
                     fixture["mirror"]
                 ),
                 snapshot_before,
@@ -680,7 +680,7 @@ class ProjectUpdateCollisionParityTests(unittest.TestCase):
                     callback_fired = True
                     tracked_path.write_bytes(external_bytes)
 
-            result = archive_services.wom_kit_project_version_update(
+            result = archive_services._wom_kit_project_version_update_legacy_core(
                 fixture["project_root"],
                 target=fixture["target_tag"],
                 approve=True,
@@ -733,7 +733,7 @@ class ProjectUpdateCollisionParityTests(unittest.TestCase):
             head_before = self.fixture_case.git_fixture_command(
                 fixture["mirror"], "rev-parse", "HEAD"
             )
-            snapshot_before = archive_services.wom_kit_project_update_git_snapshot(
+            snapshot_before = archive_services._wom_kit_project_update_git_snapshot(
                 fixture["mirror"]
             )
 
@@ -764,7 +764,7 @@ class ProjectUpdateCollisionParityTests(unittest.TestCase):
                 head_before,
             )
             self.assertNotEqual(
-                archive_services.wom_kit_project_update_git_snapshot(
+                archive_services._wom_kit_project_update_git_snapshot(
                     fixture["mirror"]
                 ),
                 snapshot_before,
