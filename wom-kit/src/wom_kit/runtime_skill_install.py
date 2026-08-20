@@ -40,10 +40,33 @@ WINDOWS_RESERVED_NAMES = {
 MAX_SOURCE_FILE_BYTES = 2 * 1024 * 1024
 MAX_SOURCE_PACKAGE_BYTES = 8 * 1024 * 1024
 MAX_MANIFEST_BYTES = 512 * 1024
+COMPOUND_EXACT_HUMAN_APPROVAL_REQUIRED = (
+    "compound_exact_human_approval_binding_required"
+)
+
+
+def _compound_approval_blocked(*, schema: str, lifecycle_action: str) -> dict[str, object]:
+    """Return a content-free blocker before source or host-target inspection."""
+
+    return {
+        "ok": False,
+        "schema": schema,
+        "dry_run": False,
+        "state": "blocked",
+        "status": "blocked",
+        "write_status": "blocked",
+        "lifecycle_action": lifecycle_action,
+        "blockers": [COMPOUND_EXACT_HUMAN_APPROVAL_REQUIRED],
+        "reason_codes": [COMPOUND_EXACT_HUMAN_APPROVAL_REQUIRED],
+        "warnings": [],
+        "would_change": [],
+        "files_written": [],
+        "private_values_echoed": False,
+    }
 
 
 @dataclass(frozen=True)
-class SourceFile:
+class _SourceFile:
     path: str
     bytes: int
     sha256: str
@@ -54,15 +77,15 @@ class SourceFile:
 
 
 @dataclass(frozen=True)
-class SourcePackage:
+class _SourcePackage:
     root: Path
-    files: tuple[SourceFile, ...]
+    files: tuple[_SourceFile, ...]
     total_bytes: int
     sha256: str
 
 
 @dataclass(frozen=True)
-class TargetLocation:
+class _TargetLocation:
     host: str
     scope: str
     skills_root: Path
@@ -124,12 +147,12 @@ def is_link_like(path: Path) -> bool:
     return bool(is_junction is not None and is_junction(path))
 
 
-def load_source_package(source_root: Path | None = None) -> SourcePackage:
+def _load_source_package(source_root: Path | None = None) -> _SourcePackage:
     root = Path(os.path.abspath(os.fspath((source_root or default_source_root()).expanduser())))
     if not root.is_dir() or has_symlink_component(root):
         raise ValueError("Packaged runtime skill source is missing or unsafe.")
 
-    files: list[SourceFile] = []
+    files: list[_SourceFile] = []
     total_bytes = 0
     for path in sorted(root.rglob("*")):
         if is_link_like(path):
@@ -147,7 +170,7 @@ def load_source_package(source_root: Path | None = None) -> SourcePackage:
         total_bytes += len(data)
         if total_bytes > MAX_SOURCE_PACKAGE_BYTES:
             raise ValueError("Packaged runtime skill source exceeds the bounded package size.")
-        files.append(SourceFile(relative, len(data), sha256_bytes(data), path))
+        files.append(_SourceFile(relative, len(data), sha256_bytes(data), path))
 
     if not files or not any(row.path == "SKILL.md" for row in files):
         raise ValueError("Packaged runtime skill source is missing SKILL.md.")
@@ -156,7 +179,7 @@ def load_source_package(source_root: Path | None = None) -> SourcePackage:
         "skill_name": SKILL_NAME,
         "files": [row.public_row() for row in files],
     }
-    return SourcePackage(root, tuple(files), total_bytes, canonical_sha256(digest_input))
+    return _SourcePackage(root, tuple(files), total_bytes, canonical_sha256(digest_input))
 
 
 def has_symlink_component(path: Path) -> bool:
@@ -169,13 +192,13 @@ def has_symlink_component(path: Path) -> bool:
         current = current.parent
 
 
-def resolve_target_location(
+def _resolve_target_location(
     *,
     host: str,
     scope: str,
     repo_root: Path | None = None,
     skills_root: Path | None = None,
-) -> TargetLocation:
+) -> _TargetLocation:
     normalized_host = host.strip().lower()
     normalized_scope = scope.strip().lower()
     if normalized_host not in {"codex", "custom"}:
@@ -215,7 +238,7 @@ def resolve_target_location(
     target = Path(os.path.abspath(os.fspath(resolved_skills_root / SKILL_NAME)))
     if target.parent != resolved_skills_root or target.name != SKILL_NAME:
         raise ValueError("resolved skill target is outside the skills root")
-    return TargetLocation(
+    return _TargetLocation(
         host=normalized_host,
         scope=normalized_scope,
         skills_root=resolved_skills_root,
@@ -253,9 +276,9 @@ def validate_manifest_files(value: object) -> tuple[dict[str, object], ...] | No
     return tuple(rows)
 
 
-def inspect_target(
-    location: TargetLocation,
-    source: SourcePackage,
+def _inspect_target(
+    location: _TargetLocation,
+    source: _SourcePackage,
     *,
     package_version: str = __version__,
 ) -> TargetInspection:
@@ -428,8 +451,8 @@ def inspect_target(
     )
 
 
-def transaction_target_location(location: TargetLocation, target: Path) -> TargetLocation:
-    return TargetLocation(
+def transaction_target_location(location: _TargetLocation, target: Path) -> _TargetLocation:
+    return _TargetLocation(
         host=location.host,
         scope=location.scope,
         skills_root=target.parent,
@@ -439,7 +462,7 @@ def transaction_target_location(location: TargetLocation, target: Path) -> Targe
     )
 
 
-def target_projection(location: TargetLocation, *, redact_local_paths: bool) -> dict[str, object]:
+def target_projection(location: _TargetLocation, *, redact_local_paths: bool) -> dict[str, object]:
     return {
         "host": location.host,
         "scope": location.scope,
@@ -451,7 +474,7 @@ def target_projection(location: TargetLocation, *, redact_local_paths: bool) -> 
     }
 
 
-def source_projection(source: SourcePackage, package_version: str) -> dict[str, object]:
+def source_projection(source: _SourcePackage, package_version: str) -> dict[str, object]:
     return {
         "package_version": package_version,
         "skill_name": SKILL_NAME,
@@ -486,8 +509,8 @@ def inspection_projection(inspection: TargetInspection) -> dict[str, object]:
 
 def operation_plan_sha256(
     operation: str,
-    location: TargetLocation,
-    source: SourcePackage,
+    location: _TargetLocation,
+    source: _SourcePackage,
     inspection: TargetInspection,
     package_version: str,
 ) -> str:
@@ -553,8 +576,8 @@ def blocked_result(
 def build_operation_result(
     *,
     operation: str,
-    location: TargetLocation,
-    source: SourcePackage,
+    location: _TargetLocation,
+    source: _SourcePackage,
     inspection: TargetInspection,
     package_version: str,
     redact_local_paths: bool,
@@ -654,11 +677,11 @@ def runtime_skill_status(
     package_version: str = __version__,
 ) -> dict[str, object]:
     try:
-        source = load_source_package(source_root)
-        location = resolve_target_location(
+        source = _load_source_package(source_root)
+        location = _resolve_target_location(
             host=host, scope=scope, repo_root=repo_root, skills_root=skills_root
         )
-        inspection = inspect_target(location, source, package_version=package_version)
+        inspection = _inspect_target(location, source, package_version=package_version)
     except (OSError, ValueError):
         return blocked_result(
             schema=STATUS_SCHEMA,
@@ -678,8 +701,8 @@ def runtime_skill_status(
 
 
 def build_install_manifest(
-    source: SourcePackage,
-    location: TargetLocation,
+    source: _SourcePackage,
+    location: _TargetLocation,
     *,
     package_version: str,
     reviewed_by: str,
@@ -698,9 +721,9 @@ def build_install_manifest(
     return {**payload, "manifest_payload_sha256": canonical_sha256(payload)}
 
 
-def write_staging_skill(
+def _write_staging_skill(
     staging: Path,
-    source: SourcePackage,
+    source: _SourcePackage,
     manifest: dict[str, object],
 ) -> None:
     staging.mkdir(parents=False, exist_ok=False)
@@ -717,7 +740,7 @@ def write_staging_skill(
     (staging / INSTALL_MANIFEST_NAME).write_bytes(manifest_bytes)
 
 
-def acquire_lock(skills_root: Path) -> Path:
+def _acquire_lock(skills_root: Path) -> Path:
     skills_root.mkdir(parents=True, exist_ok=True)
     if has_symlink_component(skills_root):
         raise RuntimeError("Skills root became unsafe before write.")
@@ -754,6 +777,48 @@ def runtime_skill_install(
     source_root: Path | None = None,
     package_version: str = __version__,
 ) -> dict[str, object]:
+    if type(dry_run) is not bool or type(approve) is not bool or approve:
+        return _compound_approval_blocked(
+            schema=INSTALL_SCHEMA,
+            lifecycle_action="runtime_skill_install",
+        )
+    if not dry_run:
+        return blocked_result(
+            schema=INSTALL_SCHEMA,
+            operation="runtime_skill_install",
+            host=host,
+            scope=scope,
+            blocker="Choose exactly one of dry_run or approve.",
+        )
+    return _runtime_skill_install_legacy_core(
+        dry_run=dry_run,
+        approve=approve,
+        reviewed_by=reviewed_by,
+        expected_plan_sha256=expected_plan_sha256,
+        host=host,
+        scope=scope,
+        repo_root=repo_root,
+        skills_root=skills_root,
+        redact_local_paths=redact_local_paths,
+        source_root=source_root,
+        package_version=package_version,
+    )
+
+
+def _runtime_skill_install_legacy_core(
+    *,
+    dry_run: bool,
+    approve: bool,
+    reviewed_by: str | None = None,
+    expected_plan_sha256: str | None = None,
+    host: str = "codex",
+    scope: str = "user",
+    repo_root: Path | None = None,
+    skills_root: Path | None = None,
+    redact_local_paths: bool = True,
+    source_root: Path | None = None,
+    package_version: str = __version__,
+) -> dict[str, object]:
     if dry_run == approve:
         return blocked_result(
             schema=INSTALL_SCHEMA,
@@ -763,11 +828,11 @@ def runtime_skill_install(
             blocker="Choose exactly one of dry_run or approve.",
         )
     try:
-        source = load_source_package(source_root)
-        location = resolve_target_location(
+        source = _load_source_package(source_root)
+        location = _resolve_target_location(
             host=host, scope=scope, repo_root=repo_root, skills_root=skills_root
         )
-        inspection = inspect_target(location, source, package_version=package_version)
+        inspection = _inspect_target(location, source, package_version=package_version)
     except (OSError, ValueError):
         return blocked_result(
             schema=INSTALL_SCHEMA,
@@ -812,9 +877,9 @@ def runtime_skill_install(
     warnings: list[str] = []
     prior_state = inspection.state
     try:
-        lock_path = acquire_lock(location.skills_root)
-        source = load_source_package(source_root)
-        inspection = inspect_target(location, source, package_version=package_version)
+        lock_path = _acquire_lock(location.skills_root)
+        source = _load_source_package(source_root)
+        inspection = _inspect_target(location, source, package_version=package_version)
         current_plan = operation_plan_sha256("install", location, source, inspection, package_version)
         if current_plan != expected_plan_sha256:
             raise RuntimeError("Runtime skill install plan changed before write.")
@@ -829,14 +894,14 @@ def runtime_skill_install(
         manifest = build_install_manifest(
             source, location, package_version=package_version, reviewed_by=reviewer
         )
-        write_staging_skill(staging, source, manifest)
-        source_after_staging = load_source_package(source_root)
+        _write_staging_skill(staging, source, manifest)
+        source_after_staging = _load_source_package(source_root)
         if source_after_staging.sha256 != source.sha256:
             raise RuntimeError("Runtime skill source changed while staging approved files.")
 
         if inspection.state == "managed_outdated":
             location.target.rename(backup)
-            backup_inspection = inspect_target(
+            backup_inspection = _inspect_target(
                 transaction_target_location(location, backup),
                 source,
                 package_version=package_version,
@@ -855,12 +920,12 @@ def runtime_skill_install(
                 backup = None
             raise
 
-        installed = inspect_target(location, source, package_version=package_version)
+        installed = _inspect_target(location, source, package_version=package_version)
         if installed.state != "managed_current":
             raise RuntimeError("Installed runtime skill did not pass manifest verification.")
 
         if backup is not None and backup.exists():
-            backup_inspection = inspect_target(
+            backup_inspection = _inspect_target(
                 transaction_target_location(location, backup),
                 source,
                 package_version=package_version,
@@ -903,7 +968,7 @@ def runtime_skill_install(
             operation="install",
             location=location,
             source=source,
-            inspection=inspect_target(location, source, package_version=package_version),
+            inspection=_inspect_target(location, source, package_version=package_version),
             package_version=package_version,
             redact_local_paths=redact_local_paths,
         )
@@ -966,6 +1031,48 @@ def runtime_skill_uninstall(
     source_root: Path | None = None,
     package_version: str = __version__,
 ) -> dict[str, object]:
+    if type(dry_run) is not bool or type(approve) is not bool or approve:
+        return _compound_approval_blocked(
+            schema=UNINSTALL_SCHEMA,
+            lifecycle_action="runtime_skill_uninstall",
+        )
+    if not dry_run:
+        return blocked_result(
+            schema=UNINSTALL_SCHEMA,
+            operation="runtime_skill_uninstall",
+            host=host,
+            scope=scope,
+            blocker="Choose exactly one of dry_run or approve.",
+        )
+    return _runtime_skill_uninstall_legacy_core(
+        dry_run=dry_run,
+        approve=approve,
+        reviewed_by=reviewed_by,
+        expected_plan_sha256=expected_plan_sha256,
+        host=host,
+        scope=scope,
+        repo_root=repo_root,
+        skills_root=skills_root,
+        redact_local_paths=redact_local_paths,
+        source_root=source_root,
+        package_version=package_version,
+    )
+
+
+def _runtime_skill_uninstall_legacy_core(
+    *,
+    dry_run: bool,
+    approve: bool,
+    reviewed_by: str | None = None,
+    expected_plan_sha256: str | None = None,
+    host: str = "codex",
+    scope: str = "user",
+    repo_root: Path | None = None,
+    skills_root: Path | None = None,
+    redact_local_paths: bool = True,
+    source_root: Path | None = None,
+    package_version: str = __version__,
+) -> dict[str, object]:
     if dry_run == approve:
         return blocked_result(
             schema=UNINSTALL_SCHEMA,
@@ -975,11 +1082,11 @@ def runtime_skill_uninstall(
             blocker="Choose exactly one of dry_run or approve.",
         )
     try:
-        source = load_source_package(source_root)
-        location = resolve_target_location(
+        source = _load_source_package(source_root)
+        location = _resolve_target_location(
             host=host, scope=scope, repo_root=repo_root, skills_root=skills_root
         )
-        inspection = inspect_target(location, source, package_version=package_version)
+        inspection = _inspect_target(location, source, package_version=package_version)
     except (OSError, ValueError):
         return blocked_result(
             schema=UNINSTALL_SCHEMA,
@@ -1022,9 +1129,9 @@ def runtime_skill_uninstall(
     cleanup_pending = False
     warnings: list[str] = []
     try:
-        lock_path = acquire_lock(location.skills_root)
-        source = load_source_package(source_root)
-        inspection = inspect_target(location, source, package_version=package_version)
+        lock_path = _acquire_lock(location.skills_root)
+        source = _load_source_package(source_root)
+        inspection = _inspect_target(location, source, package_version=package_version)
         current_plan = operation_plan_sha256("uninstall", location, source, inspection, package_version)
         if current_plan != expected_plan_sha256:
             raise RuntimeError("Runtime skill uninstall plan changed before write.")
@@ -1035,7 +1142,7 @@ def runtime_skill_uninstall(
         if tombstone.exists():
             raise RuntimeError("Runtime skill uninstall transaction path collision.")
         location.target.rename(tombstone)
-        moved_inspection = inspect_target(
+        moved_inspection = _inspect_target(
             transaction_target_location(location, tombstone),
             source,
             package_version=package_version,
@@ -1056,7 +1163,7 @@ def runtime_skill_uninstall(
                 tombstone = None
             except OSError:
                 pass
-        failed_inspection = inspect_target(location, source, package_version=package_version)
+        failed_inspection = _inspect_target(location, source, package_version=package_version)
         failed = build_operation_result(
             operation="uninstall",
             location=location,
@@ -1083,7 +1190,7 @@ def runtime_skill_uninstall(
         operation="uninstall",
         location=location,
         source=source,
-        inspection=inspect_target(location, source, package_version=package_version),
+        inspection=_inspect_target(location, source, package_version=package_version),
         package_version=package_version,
         redact_local_paths=redact_local_paths,
     )

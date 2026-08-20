@@ -58,12 +58,48 @@ from .version_policy import (
 )
 from .private_objet_metadata_index_rebuild import (
     PrivateObjetIndexRebuildError,
-    private_objet_index_rebuild_session,
+    _private_objet_index_rebuild_session,
 )
 from .private_objet_metadata_index_health import (
     compose_private_objet_metadata_index_health,
     evaluate_private_objet_metadata_index_health,
     unavailable_private_objet_metadata_index_health,
+)
+from .approval_handoff import (
+    argument as approval_handoff_argument,
+    build as build_approval_replay_handoff,
+    review_binding as approval_handoff_review_binding,
+)
+from .source_fidelity_session_evidence import (
+    PRODUCER_KINDS as SOURCE_FIDELITY_SESSION_PRODUCER_KINDS,
+    SOURCE_ROLES as SOURCE_FIDELITY_SESSION_SOURCE_ROLES,
+    _read_verified_session_evidence,
+)
+from .agent_instruction_policy import (
+    AgentInstructionPolicyError,
+    inspect_agent_instruction_policies,
+)
+from .exact_human_approval import (
+    _ClaimedExactHumanApproval,
+    ExactHumanApprovalError,
+    exact_human_approval_archive_identity_sha256,
+)
+from .exact_human_approval_link import write_exact_human_approval_link
+from .exact_human_approval_windows import (
+    ExactHumanApprovalContext,
+    ExactHumanApprovalOperation,
+    exact_human_approval_warning_codes,
+)
+from .operation_approval_binding import (
+    ExactOperationApprovalBinding,
+    OperationApprovalBindingError,
+    assert_same_binding,
+    build_operation_exact_human_approval_receipt,
+    mint_zet_approval_binding,
+    promote_zet_approval_binding,
+    retire_draft_approval_binding,
+    warning_override_approval_binding,
+    zettel_edge_approval_binding,
 )
 
 try:
@@ -82,6 +118,41 @@ INDEX_METADATA_SCHEMA = "wom-kit/archive-index-metadata/v0.3"
 INDEX_STATE_CURRENT = "current"
 INDEX_STATE_DIRTY = "dirty"
 INDEX_REBUILD_REQUIRED = "archive_index_rebuild_required"
+INDEX_REBUILD_NEXT_SAFE_ACTIONS = (
+    "archive index <archive-root> --progress --format json",
+    "archive index-health <archive-root> --dry-run --progress --format json",
+)
+COMPOUND_EXACT_HUMAN_APPROVAL_REQUIRED = (
+    "compound_exact_human_approval_binding_required"
+)
+
+
+def _compound_exact_human_approval_blocked(
+    *,
+    archive_id: str | None = None,
+    lifecycle_action: str,
+) -> dict[str, Any]:
+    """Return a content-free blocker for legacy compound approval writers."""
+
+    result: dict[str, Any] = {
+        "ok": False,
+        "dry_run": False,
+        "state": "blocked",
+        "status": "blocked",
+        "write_status": "blocked",
+        "lifecycle_action": lifecycle_action,
+        "blockers": [COMPOUND_EXACT_HUMAN_APPROVAL_REQUIRED],
+        "reason_codes": [COMPOUND_EXACT_HUMAN_APPROVAL_REQUIRED],
+        "warnings": [],
+        "would_change": [],
+        "files_written": [],
+        "private_values_echoed": False,
+    }
+    if archive_id is not None:
+        result["archive_id"] = archive_id
+    return result
+
+
 INDEX_GENERATION_RE = re.compile(r"^gen:[0-9a-f]{32}$")
 INDEX_SNAPSHOT_SHA256_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 ZETTEL_ORIGIN_CLASSES = frozenset({"wom_native", "notion_import", "other_import"})
@@ -1269,10 +1340,16 @@ PRINCIPAL_KINDS = frozenset(
     }
 )
 DRAFT_CREATION_MODES = {"human_written", "ai_assisted", "ai_generated", "imported", "derived"}
-SOURCE_FIDELITY_SCHEMA = "wom-kit/source-fidelity/v0.1"
-SOURCE_FIDELITY_DRAFT_RECEIPT_SCHEMA = (
+SOURCE_FIDELITY_SCHEMA_V1 = "wom-kit/source-fidelity/v0.1"
+SOURCE_FIDELITY_SCHEMA_V2 = "wom-kit/source-fidelity/v0.2"
+SOURCE_FIDELITY_SCHEMA = SOURCE_FIDELITY_SCHEMA_V2
+SOURCE_FIDELITY_DRAFT_RECEIPT_SCHEMA_V1 = (
     "wom-kit/source-fidelity-draft-receipt/v0.1"
 )
+SOURCE_FIDELITY_DRAFT_RECEIPT_SCHEMA_V2 = (
+    "wom-kit/source-fidelity-draft-receipt/v0.2"
+)
+SOURCE_FIDELITY_DRAFT_RECEIPT_SCHEMA = SOURCE_FIDELITY_DRAFT_RECEIPT_SCHEMA_V2
 SOURCE_FIDELITY_REVIEW_BINDING_SCHEMA = (
     "wom-kit/source-fidelity-review-binding/v0.1"
 )
@@ -2820,7 +2897,7 @@ CREDENTIAL_ACCESS_APPROVAL_DECISIONS = {"needs_review", "approve_once", "deny"}
 CREDENTIAL_ACCESS_APPROVAL_RECEIPTS_DIR = "receipts/credentials/access-approvals"
 CREDENTIAL_KEEPASSXC_WRITE_RECEIPTS_DIR = "receipts/credentials/keepassxc-writes"
 CREDENTIAL_POLICY_RESULTS = {
-    "ready_after_approval_receipt",
+    "legacy_unbound",
     "needs_human_review",
     "denied_by_human_decision",
     "denied_by_policy",
@@ -3346,6 +3423,13 @@ AI_SCRATCH_REFERENCE_RE = re.compile(
     r"(?<![A-Za-z0-9_./-])(?P<path>(?:\.wom-scratch|workbench/ai-scratch)/[A-Za-z0-9._/@+=,-]+)"
 )
 AI_SCRATCH_GC_RECEIPTS_DIR = "receipts/scratch-gc"
+AI_SCRATCH_GC_APPROVAL_BINDING_CHANGED = (
+    "scratch_cleanup_approval_binding_changed"
+)
+AI_SCRATCH_GC_FAILED_AFTER_MINT = "scratch_cleanup_failed_after_mint"
+MINT_SCRATCH_CLEANUP_RECONCILIATION_REQUIRED = (
+    "scratch_cleanup_reconciliation_required"
+)
 AI_ARTIFACT_INVENTORY_ALLOWED_ROOT_PREFIXES = (
     ".wom-scratch/",
     "workbench/ai-scratch/",
@@ -3357,6 +3441,13 @@ AI_ARTIFACT_INVENTORY_DEFAULT_ROOTS = (
     "workbench/ai-scratch/",
     "staging/ai/inbox/",
     "staging/ai/reviewed/",
+)
+AI_ARTIFACT_UNMANAGED_PROJECT_SCRATCH = ".wom-scratch"
+AI_ARTIFACT_UNMANAGED_PROJECT_SCAN_LIMIT = 10_000
+AI_ARTIFACT_UNMANAGED_PROJECT_NEXT_SAFE_ACTIONS = (
+    "Keep external project-root files outside WOM lifecycle and GC authority until an explicit reviewed root-registration contract exists.",
+    "Review long-lived external work through the human-artifact or source-intake preservation path before any cleanup.",
+    "Do not close the operation until every reviewed external artifact has durable preserve, defer, or discard evidence.",
 )
 ZET_QUALITY_RULES_FILENAME = "zet-quality-rules.yml"
 ZET_QUALITY_DOCUMENT_TYPES = {
@@ -5014,6 +5105,19 @@ def operator_feedback_plan(archive_root: Path | str, *, dry_run: bool = True) ->
                 "archive operator-feedback-body-check <archive-root> "
                 "--feedback-id <safe-id> --dry-run --format json"
             ),
+            "recommended_managed_body_first_sequence": [
+                "preview and human-review operator-feedback-compose",
+                "approve the unchanged compose plan so the body and receipt exist",
+                "create metadata with the exact feedback-body-sha256 digest",
+                "run operator-feedback-body-check after creation to verify the binding",
+            ],
+            "wrong_draft_withdrawal": {
+                "status": "archived",
+                "intent": "update",
+                "requires_fresh_current_record_sha256": True,
+                "preserves_feedback_ref": True,
+                "corrected_record_requires_new_feedback_id": True,
+            },
             "lifecycle": [
                 {"status": "draft", "meaning": "feedback exists but has not been sent or recorded as delivered"},
                 {"status": "delivered", "meaning": "feedback was delivered to the project team or relay channel"},
@@ -5063,12 +5167,24 @@ def operator_feedback_record(
     blockers: list[str] = []
     blocker_codes: list[str] = []
     warnings: list[str] = []
+    warning_codes: list[str] = []
+    feedback_body_reference_kind = "unclassified"
+    feedback_body_preflight_performed = False
+    feedback_body_authority_verified = False
+    feedback_body_receipt_path: str | None = None
+    feedback_body_receipt_sha256: str | None = None
 
     def block(code: str, message: str) -> None:
         if code not in blocker_codes:
             blocker_codes.append(code)
         if message not in blockers:
             blockers.append(message)
+
+    def warn(code: str, message: str) -> None:
+        if code not in warning_codes:
+            warning_codes.append(code)
+        if message not in warnings:
+            warnings.append(message)
 
     if dry_run == approve:
         block(
@@ -5171,6 +5287,150 @@ def operator_feedback_record(
     current_record_sha256: str | None = None
     current_record: dict[str, Any] | None = None
 
+    def inspect_feedback_body_authority() -> None:
+        nonlocal feedback_body_reference_kind
+        nonlocal feedback_body_preflight_performed
+        nonlocal feedback_body_authority_verified
+        nonlocal feedback_body_receipt_path
+        nonlocal feedback_body_receipt_sha256
+
+        if (
+            normalized_intent != "create"
+            or safe_id is None
+            or safe_ref is None
+        ):
+            return
+        if not safe_ref.startswith("feedback-body-sha256:"):
+            feedback_body_reference_kind = "legacy_or_external"
+            warn(
+                "feedback_body_reference_unverified",
+                (
+                    "create uses a legacy or external feedback_ref that is not "
+                    "verified by the managed feedback-body receipt; compose and "
+                    "approve the body first when this record represents a managed "
+                    "WOM feedback letter."
+                ),
+            )
+            return
+        if re.fullmatch(r"feedback-body-sha256:[0-9a-f]{64}", safe_ref) is None:
+            feedback_body_reference_kind = "managed_body_digest_invalid"
+            block(
+                "feedback_body_reference_invalid",
+                (
+                    "a managed feedback-body reference must be "
+                    "feedback-body-sha256 followed by exactly 64 lowercase "
+                    "hexadecimal characters."
+                ),
+            )
+            return
+
+        feedback_body_reference_kind = "managed_body_digest"
+        feedback_body_preflight_performed = True
+        try:
+            from . import operator_feedback_body
+
+            inspection = operator_feedback_body.check_operator_feedback_body(
+                root,
+                safe_id,
+            )
+        except Exception:
+            inspection = {}
+
+        def inspection_verifies_managed_body(value: Any) -> bool:
+            if not isinstance(value, dict):
+                return False
+            body_check = (
+                value.get("body_check")
+                if isinstance(value.get("body_check"), dict)
+                else {}
+            )
+            record_binding = (
+                value.get("record_binding")
+                if isinstance(value.get("record_binding"), dict)
+                else {}
+            )
+            inspection_blockers = (
+                value.get("blockers")
+                if isinstance(value.get("blockers"), list)
+                else []
+            )
+            record_binding_valid_for_preflight = bool(
+                (
+                    record_binding.get("record_present") is False
+                    and inspection_blockers == ["feedback_record_binding_missing"]
+                )
+                or (
+                    record_binding.get("record_present") is True
+                    and record_binding.get("feedback_ref_bound") is True
+                    and inspection_blockers == []
+                )
+            )
+            return bool(
+                value.get("feedback_ref") == safe_ref
+                and value.get("body_persisted") is True
+                and value.get("receipt_persisted") is True
+                and body_check.get("structure_valid") is True
+                and body_check.get("privacy_valid") is True
+                and body_check.get("exact_hash_bound_by_receipt") is True
+                and record_binding_valid_for_preflight
+            )
+
+        verified = inspection_verifies_managed_body(inspection)
+        receipt_relative = inspection.get("proposed_receipt_relative_path")
+        if verified and isinstance(receipt_relative, str):
+            try:
+                receipt_path = archive_internal_path(root, receipt_relative)
+                receipt_raw_before, receipt_reason_before = (
+                    _bounded_stable_regular_file_read(
+                        receipt_path,
+                        max_bytes=64 * 1024,
+                    )
+                )
+                confirmation = operator_feedback_body.check_operator_feedback_body(
+                    root,
+                    safe_id,
+                )
+                receipt_raw_after, receipt_reason_after = (
+                    _bounded_stable_regular_file_read(
+                        receipt_path,
+                        max_bytes=64 * 1024,
+                    )
+                )
+            except Exception:
+                receipt_raw_before = None
+                receipt_raw_after = None
+                receipt_reason_before = "unavailable"
+                receipt_reason_after = "unavailable"
+                confirmation = {}
+            if (
+                receipt_reason_before is None
+                and receipt_reason_after is None
+                and receipt_raw_before is not None
+                and receipt_raw_after is not None
+                and receipt_raw_after == receipt_raw_before
+                and inspection_verifies_managed_body(confirmation)
+                and confirmation.get("proposed_receipt_relative_path")
+                == receipt_relative
+            ):
+                feedback_body_receipt_path = receipt_relative
+                feedback_body_receipt_sha256 = hashlib.sha256(
+                    receipt_raw_after
+                ).hexdigest()
+            else:
+                verified = False
+        feedback_body_authority_verified = verified
+        if not verified:
+            feedback_body_receipt_path = None
+            feedback_body_receipt_sha256 = None
+            block(
+                "feedback_body_authority_unverified",
+                (
+                    "the managed feedback body and its approval receipt must be "
+                    "present, structurally valid, privacy-checked, and exactly "
+                    "digest-bound before the metadata record is created."
+                ),
+            )
+
     def inspect_current_record() -> None:
         nonlocal current_record, current_record_sha256
         current_record = None
@@ -5235,6 +5495,7 @@ def operator_feedback_record(
             )
 
     if safe_id and safe_ref and normalized_intent in OPERATOR_FEEDBACK_RECORD_INTENTS:
+        inspect_feedback_body_authority()
         inspect_current_record()
 
     updating = normalized_intent == "update" and current_record is not None
@@ -5307,6 +5568,7 @@ def operator_feedback_record(
             # Re-evaluate the create/update precondition while holding the same
             # cross-process lock used by every sanctioned writer.
             before_commit_blocker_count = len(blockers)
+            inspect_feedback_body_authority()
             inspect_current_record()
             if len(blockers) == before_commit_blocker_count:
                 try:
@@ -5330,6 +5592,31 @@ def operator_feedback_record(
                     )
 
     state = "blocked" if blockers else ("written" if approve else "preview")
+    next_safe_actions: list[str] = []
+    if "feedback_body_reference_unverified" in warning_codes:
+        next_safe_actions.append(
+            (
+                "Before approving a managed WOM feedback letter, run "
+                "operator-feedback-compose dry-run and approval, then create the "
+                "metadata record with its feedback-body-sha256 digest."
+            )
+        )
+    if "feedback_body_authority_unverified" in blocker_codes:
+        next_safe_actions.append(
+            (
+                "Repair or recreate the unchanged reviewed feedback body and "
+                "approval receipt, then run a fresh metadata-record dry-run."
+            )
+        )
+    if normalized_status == "draft" or normalized_intent == "create":
+        next_safe_actions.append(
+            (
+                "If a created draft record is wrong, preserve its feedback_ref, "
+                "preview an update to status archived with the current record "
+                "SHA-256, and approve only that fresh withdrawal before creating "
+                "a corrected record under a new id."
+            )
+        )
     return {
         "ok": not blockers,
         "state": state,
@@ -5349,6 +5636,10 @@ def operator_feedback_record(
             "feedback_ref_present": bool(safe_ref),
             "related_release_count": len(releases),
             "resolved_in_present": bool(safe_resolved_in),
+            "feedback_body_reference_kind": feedback_body_reference_kind,
+            "feedback_body_authority_verified": feedback_body_authority_verified,
+            "feedback_body_receipt_path": feedback_body_receipt_path,
+            "feedback_body_receipt_sha256": feedback_body_receipt_sha256,
         },
         "data": {
             "record_schema": OPERATOR_FEEDBACK_SCHEMA,
@@ -5370,14 +5661,39 @@ def operator_feedback_record(
             "title_normalized": title_normalized,
             "body_managed_by_this_command": False,
             "external_submission_performed": False,
+            "feedback_body_preflight": {
+                "performed": feedback_body_preflight_performed,
+                "authority_verified": feedback_body_authority_verified,
+                "approval_receipt_ref_available": bool(
+                    feedback_body_receipt_path
+                    and feedback_body_receipt_sha256
+                ),
+                "feedback_ref_value_echoed": False,
+            },
+            "safe_withdrawal": {
+                "supported": True,
+                "target_status": "archived",
+                "intent": "update",
+                "requires_fresh_current_record_sha256": True,
+                "preserves_feedback_ref": True,
+                "feedback_ref_rebinding_allowed": False,
+                "command_template": (
+                    "archive operator-feedback-record <archive-root> "
+                    "--feedback-id <same-id> --feedback-ref <same-ref> "
+                    "--status archived --intent update --dry-run --format json"
+                ),
+            },
         },
         "blocker_codes": blocker_codes,
+        "warning_codes": warning_codes,
         "blockers": blockers,
         "warnings": warnings,
+        "next_safe_actions": next_safe_actions,
         "would_change": [] if approve and not blockers else ([record_relative, receipt_relative] if not blockers else []),
         "files_written": [record_relative, receipt_relative] if approve and not blockers else [],
         "privacy_guards": {
-            "feedback_body_read": False,
+            "feedback_body_read": feedback_body_preflight_performed,
+            "feedback_body_value_echoed": False,
             "feedback_ref_value_echoed": False,
             "title_value_echoed": False,
             "provider_called": False,
@@ -6103,7 +6419,7 @@ def approval_handoff_audit(
         if record.get("external_provider_called_by_this_record") is not False:
             blockers.append("approval handoff record must not report provider calls.")
 
-    future_operation_authorized = not blockers and status == "approved_once"
+    future_operation_authorized = False
     if status == "needs_review":
         warnings.append("The handoff still needs human review before any future operation proceeds.")
     if status == "denied":
@@ -6115,9 +6431,12 @@ def approval_handoff_audit(
 
     return {
         "ok": not blockers,
-        "state": "authorized" if future_operation_authorized else ("blocked" if blockers else "not_authorized"),
+        "state": "blocked" if blockers else "not_authorized",
         "dry_run": True,
         "lifecycle_action": "approval_handoff_audit",
+        "binding_state": "legacy_unbound",
+        "authority_classification": "advisory",
+        "future_operation_authorized": False,
         "archive_id": read_archive_id(root),
         "summary": {
             "handoff_id": handoff_id,
@@ -6130,6 +6449,8 @@ def approval_handoff_audit(
             "requested_action_present": requested_action_present,
             "reviewed_by_present": reviewed_by_present,
             "future_operation_authorized": future_operation_authorized,
+            "binding_state": "legacy_unbound",
+            "authority_classification": "advisory",
         },
         "data": {
             "record_schema": APPROVAL_HANDOFF_SCHEMA,
@@ -10154,7 +10475,7 @@ def zet_title_remap_transaction_journal_document_valid(journal: Any) -> bool:
     )
 
 
-def append_zet_title_remap_snapshot_manifest_records_atomic(
+def _append_zet_title_remap_snapshot_manifest_records_atomic(
     manifest_path: Path,
     records: list[dict[str, Any]],
 ) -> None:
@@ -10216,7 +10537,7 @@ def append_zet_title_remap_snapshot_manifest_records_atomic(
             temporary_path.unlink(missing_ok=True)
 
 
-def write_or_verify_zet_title_remap_snapshot_bytes(
+def _write_or_verify_zet_title_remap_snapshot_bytes(
     root: Path,
     *,
     canonical_bytes: bytes,
@@ -10305,7 +10626,7 @@ def write_or_verify_zet_title_remap_snapshot_bytes(
     return bytes_written
 
 
-def preserve_zet_title_remap_before_snapshots(
+def _preserve_zet_title_remap_before_snapshots(
     root: Path,
     *,
     candidates: list[dict[str, Any]],
@@ -10324,7 +10645,7 @@ def preserve_zet_title_remap_before_snapshots(
         pending_records: list[dict[str, Any]] = []
         for item in candidates:
             snapshot = item["before_snapshot"]
-            if write_or_verify_zet_title_remap_snapshot_bytes(
+            if _write_or_verify_zet_title_remap_snapshot_bytes(
                 root,
                 canonical_bytes=item["before_bytes"],
                 snapshot=snapshot,
@@ -10383,7 +10704,7 @@ def preserve_zet_title_remap_before_snapshots(
                 raise ArchiveServiceError("title_before_snapshot_manifest_record_invalid")
             pending_records.append(record)
             manifest_index.setdefault(object_id, []).append(record)
-        append_zet_title_remap_snapshot_manifest_records_atomic(
+        _append_zet_title_remap_snapshot_manifest_records_atomic(
             manifest_path,
             pending_records,
         )
@@ -10539,6 +10860,10 @@ def zet_title_remap_write(
     ]
     | None = None,
 ) -> dict[str, Any]:
+    if type(dry_run) is not bool or type(approve) is not bool or approve:
+        return _compound_exact_human_approval_blocked(
+            lifecycle_action="zet_title_remap_write",
+        )
     root = require_existing_archive_root(archive_root)
     archive_id = read_archive_id(root)
     requested_max_items = int(max_items)
@@ -11116,7 +11441,7 @@ def zet_title_remap_write(
         ):
             raise ArchiveServiceError("title_write_candidate_changed_under_lock")
         candidates = locked_candidates
-        snapshot_result = preserve_zet_title_remap_before_snapshots(
+        snapshot_result = _preserve_zet_title_remap_before_snapshots(
             root,
             candidates=candidates,
             archive_id=archive_id,
@@ -13927,6 +14252,10 @@ def zet_title_remap_revert(
     ]
     | None = None,
 ) -> dict[str, Any]:
+    if type(dry_run) is not bool or type(approve) is not bool or approve:
+        return _compound_exact_human_approval_blocked(
+            lifecycle_action="zet_title_remap_revert",
+        )
     root = require_existing_archive_root(archive_root)
     archive_id = read_archive_id(root)
     requested_max_items = int(max_items)
@@ -15620,7 +15949,7 @@ def zet_title_remap_revert_recovery_plan(
 
 
 @contextmanager
-def zet_title_remap_recovery_guard(
+def _zet_title_remap_recovery_guard(
     root: Path,
 ) -> Iterable[dict[str, bool]]:
     guard_root = archive_internal_path(
@@ -15748,7 +16077,7 @@ def zet_title_remap_write_lock_document(
     }
 
 
-def ensure_zet_title_remap_recovery_write_lock(
+def _ensure_zet_title_remap_recovery_write_lock(
     root: Path,
     *,
     lock_path: Path,
@@ -15864,7 +16193,7 @@ def read_zet_title_remap_recovery_snapshot_bytes(
     return snapshot_bytes
 
 
-def materialize_zet_title_remap_recovery_writes(
+def _materialize_zet_title_remap_recovery_writes(
     root: Path,
     journal: dict[str, Any],
     *,
@@ -15928,7 +16257,7 @@ def materialize_zet_title_remap_recovery_writes(
     return writes
 
 
-def remove_zet_title_remap_recovery_evidence(path: Path) -> bool:
+def _remove_zet_title_remap_recovery_evidence(path: Path) -> bool:
     path.unlink()
     fsync_directory(path.parent)
     return not path.exists()
@@ -15954,6 +16283,10 @@ def zet_title_remap_recover(
     ]
     | None = None,
 ) -> dict[str, Any]:
+    if type(dry_run) is not bool or type(approve) is not bool or approve:
+        return _compound_exact_human_approval_blocked(
+            lifecycle_action="zet_title_remap_recover",
+        )
     root = require_existing_archive_root(archive_root)
     archive_id = read_archive_id(root)
     case_sha256 = str(case_sha256 or "").strip()
@@ -16232,7 +16565,7 @@ def zet_title_remap_recover(
 
     assert reviewer is not None
     try:
-        with zet_title_remap_recovery_guard(root) as guard:
+        with _zet_title_remap_recovery_guard(root) as guard:
             recovery_guard_acquired = bool(guard.get("acquired"))
             recovery_guard_file_created = bool(
                 guard.get("guard_file_created_this_run")
@@ -16356,7 +16689,7 @@ def zet_title_remap_recover(
                 return result_payload("blocked")
 
             write_lock_reacquired = (
-                ensure_zet_title_remap_recovery_write_lock(
+                _ensure_zet_title_remap_recovery_write_lock(
                     root,
                     lock_path=lock_path,
                     journal_path=journal_path,
@@ -16380,7 +16713,7 @@ def zet_title_remap_recover(
                 return result_payload("blocked")
 
             participant_writes = (
-                materialize_zet_title_remap_recovery_writes(
+                _materialize_zet_title_remap_recovery_writes(
                     root,
                     journal,
                     rollback_to_before=(
@@ -16502,7 +16835,7 @@ def zet_title_remap_recover(
             cleanup_attempted = True
             try:
                 write_lock_removed = (
-                    remove_zet_title_remap_recovery_evidence(
+                    _remove_zet_title_remap_recovery_evidence(
                         lock_path
                     )
                 )
@@ -16532,7 +16865,7 @@ def zet_title_remap_recover(
                 )
             try:
                 transaction_journal_removed = (
-                    remove_zet_title_remap_recovery_evidence(
+                    _remove_zet_title_remap_recovery_evidence(
                         journal_path
                     )
                 )
@@ -16655,7 +16988,7 @@ def zet_title_remap_revert_write_lock_document(
     }
 
 
-def ensure_zet_title_remap_revert_recovery_write_lock(
+def _ensure_zet_title_remap_revert_recovery_write_lock(
     root: Path,
     *,
     lock_path: Path,
@@ -16819,6 +17152,10 @@ def zet_title_remap_revert_recover(
     ]
     | None = None,
 ) -> dict[str, Any]:
+    if type(dry_run) is not bool or type(approve) is not bool or approve:
+        return _compound_exact_human_approval_blocked(
+            lifecycle_action="zet_title_remap_revert_recover",
+        )
     root = require_existing_archive_root(archive_root)
     archive_id = read_archive_id(root)
     case_sha256 = str(case_sha256 or "").strip()
@@ -17138,7 +17475,7 @@ def zet_title_remap_revert_recover(
 
     assert reviewer is not None
     try:
-        with zet_title_remap_recovery_guard(root) as guard:
+        with _zet_title_remap_recovery_guard(root) as guard:
             recovery_guard_acquired = bool(guard.get("acquired"))
             recovery_guard_file_created = bool(
                 guard.get("guard_file_created_this_run")
@@ -17342,7 +17679,7 @@ def zet_title_remap_revert_recover(
                 return result_payload("blocked")
 
             write_lock_reacquired = (
-                ensure_zet_title_remap_revert_recovery_write_lock(
+                _ensure_zet_title_remap_revert_recovery_write_lock(
                     root,
                     lock_path=lock_path,
                     journal_path=journal_path,
@@ -17375,7 +17712,7 @@ def zet_title_remap_revert_recover(
             execution_started = True
 
             safe_direction_candidates = (
-                materialize_zet_title_remap_recovery_writes(
+                _materialize_zet_title_remap_recovery_writes(
                     root,
                     journal,
                     rollback_to_before=True,
@@ -17554,7 +17891,7 @@ def zet_title_remap_revert_recover(
             cleanup_attempted = True
             try:
                 write_lock_removed = (
-                    remove_zet_title_remap_recovery_evidence(
+                    _remove_zet_title_remap_recovery_evidence(
                         lock_path
                     )
                 )
@@ -17584,7 +17921,7 @@ def zet_title_remap_revert_recover(
                 )
             try:
                 transaction_journal_removed = (
-                    remove_zet_title_remap_recovery_evidence(
+                    _remove_zet_title_remap_recovery_evidence(
                         journal_path
                     )
                 )
@@ -18609,6 +18946,14 @@ def blocked_zet_revision_plan_payload(
             "path_echoed": False,
             "tracking_policy": "private_ai_working_file_do_not_commit",
         },
+        "proposal_document_contract": {
+            "format": "complete_zettel_markdown_document",
+            "yaml_frontmatter_required": True,
+            "frontmatter_delimiters_required": True,
+            "body_required": True,
+            "partial_body_or_patch_accepted": False,
+            "must_preserve_system_managed_fields": True,
+        },
         "plan_digest": None,
         "change_summary": {},
         "first_read_check": {},
@@ -18638,6 +18983,13 @@ def blocked_zet_revision_plan_payload(
             "future_write_must_record_reviewed_abstract_body_pair": True,
             "manual_canonical_edit_recommended": False,
         },
+        "approval_handoff": _zet_revision_plan_approval_handoff(
+            ready=False,
+            canonical_sha256=None,
+            proposal_sha256=None,
+            semantic_sha256=None,
+            plan_digest=None,
+        ),
         "write_boundary": {
             "files_written": False,
             "canonical_zets_changed": False,
@@ -19016,6 +19368,14 @@ def zet_revision_plan(
             "path_echoed": False,
             "tracking_policy": "private_ai_working_file_do_not_commit",
         },
+        "proposal_document_contract": {
+            "format": "complete_zettel_markdown_document",
+            "yaml_frontmatter_required": True,
+            "frontmatter_delimiters_required": True,
+            "body_required": True,
+            "partial_body_or_patch_accepted": False,
+            "must_preserve_system_managed_fields": True,
+        },
         "plan_digest": plan_digest,
         "change_summary": change_summary,
         "first_read_check": first_read_check,
@@ -19045,6 +19405,13 @@ def zet_revision_plan(
             "future_write_must_record_reviewed_abstract_body_pair": True,
             "manual_canonical_edit_recommended": False,
         },
+        "approval_handoff": _zet_revision_plan_approval_handoff(
+            ready=ok,
+            canonical_sha256=canonical_sha256,
+            proposal_sha256=proposal_sha256,
+            semantic_sha256=proposal_semantic_sha256,
+            plan_digest=plan_digest,
+        ),
         "write_boundary": {
             "files_written": False,
             "canonical_zets_changed": False,
@@ -19359,7 +19726,7 @@ def verify_zet_revision_before_snapshot(
     return [] if manifest_match else ["before_snapshot_manifest_record_missing_or_invalid"]
 
 
-def append_zet_revision_snapshot_manifest_record_atomic(
+def _append_zet_revision_snapshot_manifest_record_atomic(
     manifest_path: Path, record: dict[str, Any]
 ) -> None:
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
@@ -19417,7 +19784,7 @@ def append_zet_revision_snapshot_manifest_record_atomic(
             temporary_path.unlink(missing_ok=True)
 
 
-def preserve_zet_revision_before_snapshot(
+def _preserve_zet_revision_before_snapshot(
     root: Path,
     *,
     canonical_bytes: bytes,
@@ -19580,7 +19947,7 @@ def preserve_zet_revision_before_snapshot(
             if validate_schema(record, "object-manifest-entry.schema.json"):
                 raise ArchiveServiceError("before_snapshot_manifest_record_invalid")
             manifest_path = archive_internal_path(root, "objects/manifests/files.jsonl")
-            append_zet_revision_snapshot_manifest_record_atomic(
+            _append_zet_revision_snapshot_manifest_record_atomic(
                 manifest_path, record
             )
             manifest_appended = True
@@ -19857,6 +20224,10 @@ def zet_revision_write(
     affirm_abstract_body_pair_reviewed: bool = False,
     affirm_edge_changes_reviewed: bool = False,
 ) -> dict[str, Any]:
+    if type(dry_run) is not bool or type(approve) is not bool or approve:
+        return _compound_exact_human_approval_blocked(
+            lifecycle_action="zet_revision_write",
+        )
     root = require_existing_archive_root(archive_root)
     archive_id = read_archive_id(root)
     reviewer = safe_foreign_quarantine_actor_id(reviewed_by)
@@ -19956,6 +20327,15 @@ def zet_revision_write(
                 ),
                 "change_summary": change_summary,
             },
+            "approval_handoff": _zet_revision_write_approval_handoff(
+                status=status,
+                revision_at=normalized_revision_at,
+                canonical_sha256=expected_canonical or None,
+                proposal_sha256=expected_proposal or None,
+                semantic_sha256=expected_semantic or None,
+                plan_digest=expected_plan or None,
+                write_plan_digest=actual_write_plan,
+            ),
             "receipt": {
                 "path": receipt_relative,
                 "path_contains_only_write_plan_digest": bool(receipt_relative),
@@ -20752,7 +21132,7 @@ def zet_revision_write(
     receipt_parent_existed = receipt_path.parent.exists()
     try:
         if before_snapshot is not None:
-            snapshot_result = preserve_zet_revision_before_snapshot(
+            snapshot_result = _preserve_zet_revision_before_snapshot(
                 root,
                 canonical_bytes=canonical_bytes,
                 snapshot=before_snapshot,
@@ -22037,7 +22417,7 @@ def latest_zet_revision_event_for_target(
     return ordered[-1]
 
 
-def write_zet_revision_restore_proposal_copy_new(
+def _write_zet_revision_restore_proposal_copy_new(
     destination: Path, source_bytes: bytes
 ) -> None:
     """Publish an independent private proposal without replacing any file."""
@@ -22109,6 +22489,31 @@ def write_zet_revision_restore_proposal_copy_new(
 
 
 def zet_revision_restore_proposal_from_snapshot(
+    archive_root: Path | str,
+    *,
+    receipt_path: str,
+    expected_receipt_sha256: str,
+    expected_plan_digest: str | None = None,
+    dry_run: bool = False,
+    approve: bool = False,
+) -> dict[str, Any]:
+    """Preview snapshot restoration; legacy direct approval is fixed closed."""
+
+    if type(dry_run) is not bool or type(approve) is not bool or approve:
+        return _compound_exact_human_approval_blocked(
+            lifecycle_action="zet_revision_restore_proposal_from_snapshot",
+        )
+    return _zet_revision_restore_proposal_from_snapshot_core(
+        archive_root,
+        receipt_path=receipt_path,
+        expected_receipt_sha256=expected_receipt_sha256,
+        expected_plan_digest=expected_plan_digest,
+        dry_run=dry_run,
+        approve=False,
+    )
+
+
+def _zet_revision_restore_proposal_from_snapshot_core(
     archive_root: Path | str,
     *,
     receipt_path: str,
@@ -22384,7 +22789,7 @@ def zet_revision_restore_proposal_from_snapshot(
         else:
             source_bytes = latest_snapshot["bytes"]
             try:
-                write_zet_revision_restore_proposal_copy_new(
+                _write_zet_revision_restore_proposal_copy_new(
                     destination, source_bytes
                 )
                 proposal_written = True
@@ -23416,6 +23821,10 @@ def zet_revision_restore_write(
     affirm_abstract_body_pair_reviewed: bool = False,
     affirm_edge_changes_reviewed: bool = False,
 ) -> dict[str, Any]:
+    if type(dry_run) is not bool or type(approve) is not bool or approve:
+        return _compound_exact_human_approval_blocked(
+            lifecycle_action="zet_revision_restore_write",
+        )
     root = require_existing_archive_root(archive_root)
     archive_id = read_archive_id(root)
     reviewer = safe_foreign_quarantine_actor_id(reviewed_by)
@@ -25393,6 +25802,10 @@ def zet_abstract_backfill_write(
     affirm_abstracts_reviewed: bool = False,
     progress_callback: Callable[[str, str, int | None, int | None], None] | None = None,
 ) -> dict[str, Any]:
+    if type(dry_run) is not bool or type(approve) is not bool or approve:
+        return _compound_exact_human_approval_blocked(
+            lifecycle_action="zet_abstract_backfill_write",
+        )
     root = require_existing_archive_root(archive_root)
     archive_id = read_archive_id(root)
     requested_max_items = int(max_items)
@@ -26215,6 +26628,10 @@ def zet_abstract_backfill_revert(
     affirm_abstract_removal_reviewed: bool = False,
     progress_callback: Callable[[str, str, int | None, int | None], None] | None = None,
 ) -> dict[str, Any]:
+    if type(dry_run) is not bool or type(approve) is not bool or approve:
+        return _compound_exact_human_approval_blocked(
+            lifecycle_action="zet_abstract_backfill_revert",
+        )
     root = require_existing_archive_root(archive_root)
     archive_id = read_archive_id(root)
     requested_max_items = int(max_items)
@@ -27853,7 +28270,7 @@ def zet_abstract_backfill_recovery_paths(
 
 
 @contextmanager
-def zet_abstract_backfill_recovery_guard(
+def _zet_abstract_backfill_recovery_guard(
     root: Path,
 ) -> Iterable[dict[str, bool]]:
     guard_root = archive_internal_path(
@@ -27914,7 +28331,7 @@ def zet_abstract_backfill_recovery_guard(
         handle.close()
 
 
-def reacquire_zet_abstract_backfill_basis_lock(
+def _reacquire_zet_abstract_backfill_basis_lock(
     lock_path: Path,
     *,
     basis_sha256: str,
@@ -27960,7 +28377,7 @@ def reacquire_zet_abstract_backfill_basis_lock(
         ) from exc
 
 
-def materialize_zet_abstract_backfill_recovery_writes(
+def _materialize_zet_abstract_backfill_recovery_writes(
     root: Path,
     journal: dict[str, Any],
     *,
@@ -28191,6 +28608,10 @@ def zet_abstract_backfill_recover(
     ]
     | None = None,
 ) -> dict[str, Any]:
+    if type(dry_run) is not bool or type(approve) is not bool or approve:
+        return _compound_exact_human_approval_blocked(
+            lifecycle_action="zet_abstract_backfill_recover",
+        )
     root = require_existing_archive_root(archive_root)
     archive_id = read_archive_id(root)
     operation = str(operation or "").strip()
@@ -28461,7 +28882,7 @@ def zet_abstract_backfill_recover(
 
     assert reviewer is not None
     try:
-        with zet_abstract_backfill_recovery_guard(root) as guard:
+        with _zet_abstract_backfill_recovery_guard(root) as guard:
             recovery_guard_acquired = bool(guard.get("acquired"))
             recovery_guard_file_created = bool(
                 guard.get("guard_file_created_this_run")
@@ -28570,7 +28991,7 @@ def zet_abstract_backfill_recover(
             participant_writes: list[dict[str, Any]] = []
             if expected_action == "rollback_uncommitted_apply_to_before":
                 participant_writes = (
-                    materialize_zet_abstract_backfill_recovery_writes(
+                    _materialize_zet_abstract_backfill_recovery_writes(
                         root,
                         journal,
                         operation="apply",
@@ -28590,7 +29011,7 @@ def zet_abstract_backfill_recover(
                     )
                 )
                 participant_writes = (
-                    materialize_zet_abstract_backfill_recovery_writes(
+                    _materialize_zet_abstract_backfill_recovery_writes(
                         root,
                         journal,
                         operation="revert",
@@ -28629,7 +29050,7 @@ def zet_abstract_backfill_recover(
                 return result_payload("blocked")
 
             basis_lock_reacquired = (
-                reacquire_zet_abstract_backfill_basis_lock(
+                _reacquire_zet_abstract_backfill_basis_lock(
                     lock_path,
                     basis_sha256=basis_sha256,
                 )
@@ -32610,7 +33031,7 @@ def add_notion_locator_label_to_manifest_record(record: dict[str, Any], locator_
     return "provenance.provider_locator_sha256_values"
 
 
-def update_manifest_with_notion_locator_label(
+def _update_manifest_with_notion_locator_label(
     manifest_path: Path,
     *,
     object_id: str,
@@ -32652,6 +33073,10 @@ def notion_objet_manifest_locator_label(
     approve: bool = False,
     reviewed_by: str | None = None,
 ) -> dict[str, Any]:
+    if type(dry_run) is not bool or type(approve) is not bool or approve:
+        return _compound_exact_human_approval_blocked(
+            lifecycle_action="notion_objet_manifest_locator_label",
+        )
     root = require_existing_archive_root(archive_root)
     archive_id = read_archive_id(root)
     blockers: list[str] = []
@@ -32788,7 +33213,7 @@ def notion_objet_manifest_locator_label(
         return base_result
 
     assert receipt_path is not None and receipt_relative is not None
-    changed_count, written_label_field = update_manifest_with_notion_locator_label(
+    changed_count, written_label_field = _update_manifest_with_notion_locator_label(
         manifest_path,
         object_id=normalized_object_id,
         locator_fingerprint=selected_fingerprint,
@@ -32990,6 +33415,10 @@ def notion_objet_link_convert(
     approve: bool = False,
     reviewed_by: str | None = None,
 ) -> dict[str, Any]:
+    if type(dry_run) is not bool or type(approve) is not bool or approve:
+        return _compound_exact_human_approval_blocked(
+            lifecycle_action="notion_objet_link_convert",
+        )
     root = require_existing_archive_root(archive_root)
     archive_id = read_archive_id(root)
     blockers: list[str] = []
@@ -33863,6 +34292,11 @@ def source_fidelity_policy() -> dict[str, Any]:
         "schema": SOURCE_FIDELITY_SCHEMA,
         "modes": sorted(SOURCE_FIDELITY_MODES),
         "comparison_basis": SOURCE_FIDELITY_COMPARISON_BASIS,
+        "authority_kinds": [
+            "manifested_object",
+            "reviewed_session_evidence",
+        ],
+        "authority_union_version": "v0.2",
         "data_classes": [
             "credential_secret",
             "private_source_personal_data",
@@ -33871,6 +34305,9 @@ def source_fidelity_policy() -> dict[str, Any]:
         "explicit_private_verbatim_no_silent_redaction": True,
         "summary_semantic_fidelity_machine_verified": False,
         "sanitized_derivative_semantic_fidelity_machine_verified": False,
+        "reviewed_multi_source_bundle_semantic_fidelity_machine_verified": False,
+        "human_reviewed_summary_semantic_fidelity_machine_verified": False,
+        "circular_self_source_blocked": True,
         "repeated_information_loss_or_user_request_routes_to_feedback": True,
         "source_text_echoed": False,
         "source_locator_echoed": False,
@@ -33915,7 +34352,7 @@ def _source_fidelity_manifest_records_strict(
         bound_root, bound_path = _source_fidelity_bound_root_and_path(
             root, path
         )
-        with hold_activity_group_evidence_file(
+        with _hold_activity_group_evidence_file(
             bound_root,
             bound_path,
             max_bytes=64 * 1024 * 1024,
@@ -33959,6 +34396,118 @@ def _source_fidelity_manifest_records_strict(
     return records, unique_preserve_order(blockers)
 
 
+def _source_fidelity_manifest_object_provenance(
+    root: Path,
+    record: dict[str, Any],
+) -> dict[str, Any]:
+    """Project only positive, content-free provenance evidence for v0.2."""
+
+    manifest_provenance = (
+        record.get("provenance")
+        if isinstance(record.get("provenance"), dict)
+        else {}
+    )
+    captured_at = normalize_zet_revision_timestamp(
+        manifest_provenance.get("captured_at")
+        if isinstance(manifest_provenance.get("captured_at"), str)
+        else None,
+        default_now=False,
+    )
+    plan_sha256 = str(
+        manifest_provenance.get("source_intake_plan_sha256") or ""
+    ).strip()
+    receipt_relative = str(
+        manifest_provenance.get("source_intake_receipt_path") or ""
+    ).strip()
+    source_role: str | None = None
+    input_kind: str | None = None
+    intake_receipt_verified = False
+    if (
+        re.fullmatch(r"sha256:[0-9a-f]{64}", plan_sha256)
+        and receipt_relative.startswith("receipts/sources/")
+    ):
+        try:
+            normalized_receipt = normalize_archive_relative_path(
+                receipt_relative
+            )
+            receipt_path = resolve_archive_relative_path(
+                root, normalized_receipt
+            )
+            with _hold_activity_group_evidence_file(
+                root,
+                receipt_path,
+                max_bytes=1024 * 1024,
+            ) as snapshot:
+                plan = json.loads(snapshot["raw"].decode("utf-8"))
+            if (
+                isinstance(plan, dict)
+                and sha256_json_value(plan) == plan_sha256
+            ):
+                role_value = plan.get("source_role")
+                kind_value = plan.get("input_kind")
+                source_role = (
+                    role_value
+                    if isinstance(role_value, str)
+                    and role_value in SOURCE_INTAKE_ROLES
+                    else None
+                )
+                input_kind = (
+                    kind_value
+                    if isinstance(kind_value, str) and kind_value
+                    else None
+                )
+                intake_receipt_verified = bool(source_role and input_kind)
+        except (
+            ArchivePathError,
+            OSError,
+            UnicodeError,
+            json.JSONDecodeError,
+            ValueError,
+        ):
+            pass
+
+    staged_source_class = "unclassified_local_source"
+    staged_value = manifest_provenance.get("source_staged_path")
+    if isinstance(staged_value, str):
+        try:
+            staged_normalized = normalize_archive_relative_path(staged_value)
+            if staged_normalized.startswith(".wom-scratch/"):
+                staged_source_class = "archive_ai_scratch"
+            else:
+                staged_source_class = "other_archive_relative_source"
+        except ArchivePathError:
+            staged_source_class = "unsafe_or_external_locator"
+
+    binding_state = (
+        "manifest_intake_bound"
+        if captured_at and intake_receipt_verified
+        else "legacy_unbound"
+    )
+    return {
+        "binding_state": binding_state,
+        "captured_at": captured_at,
+        "source_role": source_role,
+        "input_kind": input_kind,
+        "source_intake_plan_sha256": (
+            plan_sha256 if intake_receipt_verified else None
+        ),
+        "staged_source_class": staged_source_class,
+        "independent_external_provenance": bool(
+            intake_receipt_verified
+            and input_kind
+            in {
+                "source_map_item",
+                "source_map_relative_path",
+                "provider_object",
+                "objet_ref",
+                "object_id",
+            }
+        ),
+        "raw_source_locator_stored": False,
+        "raw_source_locator_echoed": False,
+    }
+
+
 def _source_fidelity_read_manifested_object(
     root: Path,
     object_id_value: Any,
@@ -33992,7 +34541,7 @@ def _source_fidelity_read_manifested_object(
         bound_root, bound_path = _source_fidelity_bound_root_and_path(
             root, object_path
         )
-        with hold_activity_group_evidence_file(
+        with _hold_activity_group_evidence_file(
             bound_root,
             bound_path,
             max_bytes=SOURCE_FIDELITY_MAX_SOURCE_BYTES,
@@ -34023,6 +34572,7 @@ def _source_fidelity_read_manifested_object(
     normalized_text = source_text.replace("\r\n", "\n").replace("\r", "\n")
     normalized = normalized_text.encode("utf-8")
     evidence = {
+        "authority_kind": "manifested_object",
         "object_id": object_id,
         "raw_sha256": digest,
         "raw_size_bytes": len(raw),
@@ -34032,6 +34582,9 @@ def _source_fidelity_read_manifested_object(
         "newline_transformation_applied": raw != normalized,
         "source_text_stored": False,
         "source_locator_stored": False,
+        "provenance": _source_fidelity_manifest_object_provenance(
+            root, record
+        ),
     }
     return evidence, normalized, unique_preserve_order(blockers)
 
@@ -34050,6 +34603,23 @@ def _source_fidelity_ai_provenance_declared(
         or str(created_by or "") == "mcp:zettel-kasten-archive-mcp"
         or assisted_by
         or local_ai_sessions
+    )
+
+
+def source_fidelity_ai_provenance_declared(
+    *,
+    creation_mode: Any = None,
+    created_by: Any = None,
+    assisted_by: Any = None,
+    local_ai_sessions: Any = None,
+) -> bool:
+    """Expose the service-owned AI classification to trusted front ends."""
+
+    return _source_fidelity_ai_provenance_declared(
+        creation_mode=creation_mode,
+        created_by=created_by,
+        assisted_by=assisted_by,
+        local_ai_sessions=local_ai_sessions,
     )
 
 
@@ -34123,7 +34693,13 @@ def _source_fidelity_private_authority_values(
     values = {
         str(source.get("raw_sha256") or ""),
         str(source.get("normalized_sha256") or ""),
+        str(source.get("evidence_id") or ""),
+        str(source.get("session_ref_sha256") or ""),
+        str(source.get("receipt_sha256") or ""),
     }
+    input_provenance = source.get("input_provenance_sha256")
+    if isinstance(input_provenance, list):
+        values.update(str(item or "") for item in input_provenance)
     if isinstance(object_id, str) and OBJECT_ID_RE.fullmatch(object_id):
         values.update(
             {
@@ -34135,11 +34711,372 @@ def _source_fidelity_private_authority_values(
     return {value for value in values if value}
 
 
+def _create_draft_approval_handoff(
+    *,
+    ready: bool,
+    approval_replay: dict[str, Any],
+    completed: bool = False,
+    receipt_ref: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    return build_approval_replay_handoff(
+        stage=(
+            "completed"
+            if completed
+            else "approval_required"
+            if ready
+            else "blocked"
+        ),
+        next_command=None if completed else "archive create-draft",
+        ready=ready,
+        exact_replay_required=True,
+        replay_scope="one_exact_ai_draft_candidate",
+        arguments=[
+            approval_handoff_argument(
+                "--title",
+                required=True,
+                value_source="reuse_input",
+                sensitive=True,
+                echoed=False,
+            ),
+            approval_handoff_argument(
+                "--body-file",
+                required=False,
+                value_source="reuse_input",
+                sensitive=True,
+                echoed=False,
+            ),
+            approval_handoff_argument(
+                "--draft-id",
+                required=True,
+                value_source="json_pointer",
+                json_pointer="/approval_replay/draft_id",
+                value=approval_replay.get("draft_id"),
+            ),
+            approval_handoff_argument(
+                "--created-at",
+                required=True,
+                value_source="json_pointer",
+                json_pointer="/approval_replay/created_at",
+                value=approval_replay.get("created_at"),
+            ),
+            approval_handoff_argument(
+                "--expected-body-sha256",
+                required=True,
+                value_source="json_pointer",
+                json_pointer="/approval_replay/expected_body_sha256",
+                value=approval_replay.get("expected_body_sha256"),
+            ),
+            approval_handoff_argument(
+                "--expected-source-fidelity-plan-sha256",
+                required=True,
+                value_source="json_pointer",
+                json_pointer=(
+                    "/approval_replay/"
+                    "expected_source_fidelity_plan_sha256"
+                ),
+                value=approval_replay.get(
+                    "expected_source_fidelity_plan_sha256"
+                ),
+            ),
+            approval_handoff_argument(
+                "--expected-archive-id",
+                required=True,
+                value_source="json_pointer",
+                json_pointer="/approval_replay/expected_archive_id",
+                value=approval_replay.get("expected_archive_id"),
+            ),
+            approval_handoff_argument(
+                "--expected-type",
+                required=True,
+                value_source="json_pointer",
+                json_pointer="/approval_replay/expected_type",
+                value=approval_replay.get("expected_type"),
+            ),
+            approval_handoff_argument(
+                "--draft-approved-by",
+                required=True,
+                value_source="operator_input",
+                sensitive=True,
+                echoed=False,
+            ),
+        ],
+        required_review_bindings=[
+            approval_handoff_review_binding(
+                "exact_body_sha256",
+                required=True,
+                value_json_pointer="/approval_replay/expected_body_sha256",
+            ),
+            approval_handoff_review_binding(
+                "source_fidelity_plan_sha256",
+                required=True,
+                value_json_pointer=(
+                    "/approval_replay/"
+                    "expected_source_fidelity_plan_sha256"
+                ),
+            ),
+            approval_handoff_review_binding(
+                "draft_identity",
+                required=True,
+                value_json_pointer="/approval_replay/draft_id",
+            ),
+            approval_handoff_review_binding(
+                "candidate_created_at",
+                required=True,
+                value_json_pointer="/approval_replay/created_at",
+            ),
+            approval_handoff_review_binding(
+                "exact_frontmatter_authority_sha256",
+                required=True,
+                value_json_pointer=None,
+            ),
+            approval_handoff_review_binding(
+                "warnings_and_checklist",
+                required=True,
+                value_json_pointer="/warnings",
+            ),
+        ],
+        receipt_ref=receipt_ref,
+    )
+
+
+def _zet_revision_plan_approval_handoff(
+    *,
+    ready: bool,
+    canonical_sha256: str | None,
+    proposal_sha256: str | None,
+    semantic_sha256: str | None,
+    plan_digest: str | None,
+) -> dict[str, Any]:
+    return build_approval_replay_handoff(
+        stage="write_preview_required" if ready else "blocked",
+        next_command="archive zet-revision-write",
+        ready=ready,
+        exact_replay_required=True,
+        replay_scope="one_complete_canonical_zet_revision_proposal",
+        arguments=[
+            approval_handoff_argument(
+                "--zettel-id",
+                required=True,
+                value_source="reuse_input",
+                sensitive=True,
+                echoed=False,
+            ),
+            approval_handoff_argument(
+                "--proposal",
+                required=True,
+                value_source="reuse_input",
+                sensitive=True,
+                echoed=False,
+            ),
+            approval_handoff_argument(
+                "--expected-canonical-sha256",
+                required=True,
+                value_source="json_pointer",
+                json_pointer="/canonical/sha256",
+                value=canonical_sha256,
+            ),
+            approval_handoff_argument(
+                "--expected-proposal-sha256",
+                required=True,
+                value_source="json_pointer",
+                json_pointer="/proposal/sha256",
+                value=proposal_sha256,
+            ),
+            approval_handoff_argument(
+                "--expected-proposal-semantic-sha256",
+                required=True,
+                value_source="json_pointer",
+                json_pointer="/proposal/semantic_sha256",
+                value=semantic_sha256,
+            ),
+            approval_handoff_argument(
+                "--expected-plan-digest",
+                required=True,
+                value_source="json_pointer",
+                json_pointer="/plan_digest",
+                value=plan_digest,
+            ),
+            approval_handoff_argument(
+                "--revision-at",
+                required=False,
+                value_source="operator_input",
+                sensitive=False,
+            ),
+        ],
+        required_review_bindings=[
+            approval_handoff_review_binding(
+                "complete_proposal_document_sha256",
+                required=True,
+                value_json_pointer="/proposal/sha256",
+            ),
+            approval_handoff_review_binding(
+                "proposal_semantic_sha256",
+                required=True,
+                value_json_pointer="/proposal/semantic_sha256",
+            ),
+            approval_handoff_review_binding(
+                "canonical_before_sha256",
+                required=True,
+                value_json_pointer="/canonical/sha256",
+            ),
+            approval_handoff_review_binding(
+                "revision_plan_digest",
+                required=True,
+                value_json_pointer="/plan_digest",
+            ),
+        ],
+        receipt_ref=None,
+    )
+
+
+def _zet_revision_write_approval_handoff(
+    *,
+    status: str,
+    revision_at: str | None,
+    canonical_sha256: str | None,
+    proposal_sha256: str | None,
+    semantic_sha256: str | None,
+    plan_digest: str | None,
+    write_plan_digest: str | None,
+) -> dict[str, Any]:
+    ready = status == "ready_to_apply" and bool(
+        revision_at and write_plan_digest
+    )
+    completed = status in {"applied", "already_applied"}
+    return build_approval_replay_handoff(
+        stage=(
+            "completed"
+            if completed
+            else "approval_required"
+            if ready
+            else "blocked"
+        ),
+        next_command=None if completed else "archive zet-revision-write",
+        ready=ready,
+        exact_replay_required=True,
+        replay_scope="one_exact_canonical_revision_write_plan",
+        arguments=[
+            approval_handoff_argument(
+                "--zettel-id",
+                required=True,
+                value_source="reuse_input",
+                sensitive=True,
+                echoed=False,
+            ),
+            approval_handoff_argument(
+                "--proposal",
+                required=True,
+                value_source="reuse_input",
+                sensitive=True,
+                echoed=False,
+            ),
+            approval_handoff_argument(
+                "--expected-canonical-sha256",
+                required=True,
+                value_source="json_pointer",
+                json_pointer="/canonical/expected_sha256",
+                value=canonical_sha256,
+            ),
+            approval_handoff_argument(
+                "--expected-proposal-sha256",
+                required=True,
+                value_source="json_pointer",
+                json_pointer="/proposal/expected_sha256",
+                value=proposal_sha256,
+            ),
+            approval_handoff_argument(
+                "--expected-proposal-semantic-sha256",
+                required=True,
+                value_source="json_pointer",
+                json_pointer="/proposal/expected_semantic_sha256",
+                value=semantic_sha256,
+            ),
+            approval_handoff_argument(
+                "--expected-plan-digest",
+                required=True,
+                value_source="json_pointer",
+                json_pointer="/revision_plan/expected_digest",
+                value=plan_digest,
+            ),
+            approval_handoff_argument(
+                "--revision-at",
+                required=True,
+                value_source="json_pointer",
+                json_pointer="/revision_at",
+                value=revision_at,
+            ),
+            approval_handoff_argument(
+                "--expected-write-plan-digest",
+                required=True,
+                value_source="json_pointer",
+                json_pointer="/write_plan/actual_digest",
+                value=write_plan_digest,
+            ),
+            approval_handoff_argument(
+                "--reviewed-by",
+                required=True,
+                value_source="operator_input",
+                sensitive=True,
+                echoed=False,
+            ),
+            approval_handoff_argument(
+                "--affirm-revision-reviewed",
+                required=True,
+                value_source="operator_input",
+                sensitive=False,
+            ),
+            approval_handoff_argument(
+                "--affirm-abstract-body-pair-reviewed",
+                required=True,
+                value_source="operator_input",
+                sensitive=False,
+            ),
+        ],
+        required_review_bindings=[
+            approval_handoff_review_binding(
+                "complete_proposal_document_sha256",
+                required=True,
+                value_json_pointer="/proposal/expected_sha256",
+            ),
+            approval_handoff_review_binding(
+                "canonical_before_sha256",
+                required=True,
+                value_json_pointer="/canonical/expected_sha256",
+            ),
+            approval_handoff_review_binding(
+                "revision_at",
+                required=True,
+                value_json_pointer="/revision_at",
+            ),
+            approval_handoff_review_binding(
+                "write_plan_digest",
+                required=True,
+                value_json_pointer="/write_plan/actual_digest",
+            ),
+            approval_handoff_review_binding(
+                "review_affirmations",
+                required=True,
+                value_json_pointer="/human_review",
+            ),
+        ],
+        receipt_ref=None,
+    )
+
+
 def _source_fidelity_content_free_blocked_preview(
     reason_codes: list[str],
 ) -> dict[str, Any]:
     """Return the stable AI-draft failure envelope with no caller value."""
 
+    approval_replay = {
+        "draft_id": None,
+        "created_at": None,
+        "expected_body_sha256": None,
+        "expected_source_fidelity_plan_sha256": None,
+        "expected_archive_id": None,
+        "expected_type": None,
+        "profile_id": None,
+    }
     return {
         "ok": False,
         "dry_run": True,
@@ -34180,15 +35117,11 @@ def _source_fidelity_content_free_blocked_preview(
         "blockers": unique_preserve_order(reason_codes),
         "warnings": [],
         "would_change": [],
-        "approval_replay": {
-            "draft_id": None,
-            "created_at": None,
-            "expected_body_sha256": None,
-            "expected_source_fidelity_plan_sha256": None,
-            "expected_archive_id": None,
-            "expected_type": None,
-            "profile_id": None,
-        },
+        "approval_replay": approval_replay,
+        "approval_handoff": _create_draft_approval_handoff(
+            ready=False,
+            approval_replay=approval_replay,
+        ),
     }
 
 
@@ -34303,8 +35236,14 @@ def _source_fidelity_plan_sha256(
         for key, value in fidelity.items()
         if key != "creation_plan_sha256"
     }
+    fidelity_schema = fidelity.get("schema")
+    if fidelity_schema not in {
+        SOURCE_FIDELITY_SCHEMA_V1,
+        SOURCE_FIDELITY_SCHEMA_V2,
+    }:
+        fidelity_schema = SOURCE_FIDELITY_SCHEMA
     authority = {
-        "schema": SOURCE_FIDELITY_SCHEMA,
+        "schema": fidelity_schema,
         "archive_id": archive_id,
         "archive_type": archive_type,
         "draft_id": draft_id,
@@ -34358,8 +35297,22 @@ def _source_fidelity_safe_projection(
 
     if not isinstance(fidelity, dict):
         return None
+    fidelity_schema = fidelity.get("schema")
+    if fidelity_schema not in {
+        SOURCE_FIDELITY_SCHEMA_V1,
+        SOURCE_FIDELITY_SCHEMA_V2,
+    }:
+        fidelity_schema = SOURCE_FIDELITY_SCHEMA
+    source = fidelity.get("source") if isinstance(fidelity.get("source"), dict) else {}
+    authority_kind = source.get("authority_kind") or "manifested_object"
+    provenance = source.get("provenance") if isinstance(source.get("provenance"), dict) else {}
+    authority_binding_state = (
+        "reviewed_session_evidence"
+        if authority_kind == "reviewed_session_evidence"
+        else provenance.get("binding_state") or "legacy_unbound"
+    )
     projection: dict[str, Any] = {
-        "schema": SOURCE_FIDELITY_SCHEMA,
+        "schema": fidelity_schema,
         "mode": fidelity.get("mode"),
         "audience": fidelity.get("audience"),
         "comparison_basis": SOURCE_FIDELITY_COMPARISON_BASIS,
@@ -34375,6 +35328,18 @@ def _source_fidelity_safe_projection(
         "source_text_stored": False,
         "source_locator_stored": False,
     }
+    if fidelity_schema == SOURCE_FIDELITY_SCHEMA_V2:
+        projection.update(
+            {
+                "authority_kind": authority_kind,
+                "authority_binding_state": authority_binding_state,
+                "source_role": (
+                    source.get("source_role")
+                    if authority_kind == "reviewed_session_evidence"
+                    else provenance.get("source_role")
+                ),
+            }
+        )
     if review_state:
         projection["review_state"] = review_state
     if publication_plan_sha256:
@@ -34404,6 +35369,9 @@ def _source_fidelity_prepare_candidate(
     mode_value: Any,
     audience_value: Any,
     object_id_value: Any,
+    session_evidence_id_value: Any,
+    candidate_created_at: str,
+    local_ai_sessions: Any,
 ) -> tuple[bytes, dict[str, Any] | None, list[str]]:
     blockers: list[str] = []
     mode = str(mode_value or "").strip()
@@ -34417,9 +35385,27 @@ def _source_fidelity_prepare_candidate(
     ):
         blockers.append("verbatim_requires_personal_private_self")
 
-    source, normalized_source, source_blockers = (
-        _source_fidelity_read_manifested_object(root, object_id_value)
+    object_authority_supplied = bool(str(object_id_value or "").strip())
+    session_authority_supplied = bool(
+        str(session_evidence_id_value or "").strip()
     )
+    source: dict[str, Any] | None = None
+    normalized_source: bytes | None = None
+    source_blockers: list[str] = []
+    if object_authority_supplied == session_authority_supplied:
+        source_blockers.append(
+            "source_fidelity_exactly_one_authority_required"
+        )
+    elif object_authority_supplied:
+        source, normalized_source, source_blockers = (
+            _source_fidelity_read_manifested_object(root, object_id_value)
+        )
+    else:
+        source, normalized_source, source_blockers = (
+            _read_verified_session_evidence(
+                root, session_evidence_id_value
+            )
+        )
     blockers.extend(source_blockers)
     source_has_reviewable_text = bool(
         normalized_source is not None
@@ -34443,6 +35429,83 @@ def _source_fidelity_prepare_candidate(
             "sha256": _source_fidelity_digest_bytes(normalized_source),
         }
         candidate = context + normalized_source
+    if isinstance(source, dict) and normalized_source is not None:
+        exact_full_candidate = hmac.compare_digest(
+            candidate, normalized_source
+        )
+        authority_kind = source.get("authority_kind")
+        if authority_kind == "reviewed_session_evidence":
+            source_role = source.get("source_role")
+            producer_kind = source.get("producer_kind")
+            local_session_hashes = {
+                "sha256:"
+                + _source_fidelity_digest_bytes(
+                    str(item.get("session_ref") or "").encode("utf-8")
+                )
+                for item in (
+                    local_ai_sessions
+                    if isinstance(local_ai_sessions, list)
+                    else []
+                )
+                if isinstance(item, dict)
+                and isinstance(item.get("session_ref"), str)
+                and item.get("session_ref")
+            }
+            same_session = source.get("session_ref_sha256") in local_session_hashes
+            produced_at = normalize_zet_revision_timestamp(
+                source.get("produced_at")
+                if isinstance(source.get("produced_at"), str)
+                else None,
+                default_now=False,
+            )
+            created_at_normalized = normalize_zet_revision_timestamp(
+                candidate_created_at, default_now=False
+            )
+            produced_after_candidate = bool(
+                produced_at
+                and created_at_normalized
+                and produced_at >= created_at_normalized
+            )
+            if source_role == "self_authored_candidate" or (
+                exact_full_candidate
+                and producer_kind == "ai_runtime"
+                and (same_session or produced_after_candidate)
+            ):
+                blockers.append("circular_self_source")
+        elif authority_kind == "manifested_object":
+            provenance = (
+                source.get("provenance")
+                if isinstance(source.get("provenance"), dict)
+                else {}
+            )
+            captured_at = normalize_zet_revision_timestamp(
+                provenance.get("captured_at")
+                if isinstance(provenance.get("captured_at"), str)
+                else None,
+                default_now=False,
+            )
+            created_at_normalized = normalize_zet_revision_timestamp(
+                candidate_created_at, default_now=False
+            )
+            if (
+                captured_at
+                and created_at_normalized
+                and captured_at > created_at_normalized
+            ):
+                blockers.append(
+                    "source_fidelity_object_temporal_order_invalid"
+                )
+            circular_positive_evidence = bool(
+                exact_full_candidate
+                and not provenance.get("independent_external_provenance")
+                and (
+                    provenance.get("source_role") == "derived_context"
+                    or provenance.get("staged_source_class")
+                    == "archive_ai_scratch"
+                )
+            )
+            if circular_positive_evidence:
+                blockers.append("circular_self_source")
     if "credential_secret_present" in (
         _source_fidelity_request_metadata_blockers(
             candidate.decode("utf-8", errors="ignore")
@@ -34456,13 +35519,29 @@ def _source_fidelity_prepare_candidate(
         mode == "verbatim"
         and not source_blockers
         and source_has_reviewable_text
+        and "circular_self_source" not in blockers
+    )
+    authority_kind = source.get("authority_kind")
+    fidelity_schema = (
+        SOURCE_FIDELITY_SCHEMA_V2
+        if authority_kind == "reviewed_session_evidence"
+        else SOURCE_FIDELITY_SCHEMA_V1
+    )
+    receipt_source = (
+        source
+        if fidelity_schema == SOURCE_FIDELITY_SCHEMA_V2
+        else {
+            key: value
+            for key, value in source.items()
+            if key not in {"authority_kind", "provenance"}
+        }
     )
     fidelity = {
-        "schema": SOURCE_FIDELITY_SCHEMA,
+        "schema": fidelity_schema,
         "mode": mode,
         "audience": audience,
         "comparison_basis": SOURCE_FIDELITY_COMPARISON_BASIS,
-        "source": source,
+        "source": receipt_source,
         "region": region,
         "byte_exact": False,
         "mechanically_verified": mechanically_verified,
@@ -34477,7 +35556,7 @@ def _source_fidelity_prepare_candidate(
         "source-fidelity-evidence:"
         + _source_fidelity_digest_json(
             {
-                "source": source,
+                "source": receipt_source,
                 "region": region,
                 "mode": mode,
                 "audience": audience,
@@ -34503,8 +35582,13 @@ def _source_fidelity_draft_receipt(
     fidelity: dict[str, Any],
     plan_sha256: str,
 ) -> dict[str, Any]:
+    receipt_schema = (
+        SOURCE_FIDELITY_DRAFT_RECEIPT_SCHEMA_V2
+        if fidelity.get("schema") == SOURCE_FIDELITY_SCHEMA_V2
+        else SOURCE_FIDELITY_DRAFT_RECEIPT_SCHEMA_V1
+    )
     return {
-        "schema": SOURCE_FIDELITY_DRAFT_RECEIPT_SCHEMA,
+        "schema": receipt_schema,
         "action": "create_source_fidelity_draft",
         "archive_id": archive_id,
         "archive_type": archive_type,
@@ -34541,7 +35625,7 @@ def _source_fidelity_existing_state(
         bound_root, bound_path = _source_fidelity_bound_root_and_path(
             root, path
         )
-        with hold_activity_group_evidence_file(
+        with _hold_activity_group_evidence_file(
             bound_root,
             bound_path,
             max_bytes=max(len(expected), 1),
@@ -34573,7 +35657,7 @@ def _source_fidelity_publish_create_only(
         bound_root, bound_path = _source_fidelity_bound_root_and_path(
             root, path
         )
-        with activity_group_bound_directory_chain(
+        with _activity_group_bound_directory_chain(
             bound_root,
             bound_path.parent,
             create=True,
@@ -34644,8 +35728,24 @@ def create_draft_zettel(
     source_fidelity_mode: str | None = None,
     source_fidelity_audience: str | None = None,
     fidelity_source_object_id: str | None = None,
+    fidelity_session_evidence_id: str | None = None,
     expected_source_fidelity_plan_sha256: str | None = None,
+    exact_human_approval_claim: _ClaimedExactHumanApproval | None = None,
 ) -> dict[str, Any]:
+    ai_request_declared = _source_fidelity_ai_provenance_declared(
+        creation_mode=creation_mode,
+        created_by=created_by,
+        assisted_by=assisted_by,
+        local_ai_sessions=local_ai_sessions,
+    )
+    if not dry_run and not (
+        approved
+        and ai_request_declared
+        and type(exact_human_approval_claim) is _ClaimedExactHumanApproval
+    ):
+        return _compound_exact_human_approval_blocked(
+            lifecycle_action="create_draft",
+        )
     require_yaml()
     root = require_existing_archive_root(archive_root)
     archive_config = read_archive_config(root)
@@ -34655,12 +35755,8 @@ def create_draft_zettel(
         body = ""
     blockers: list[str] = []
     warnings: list[str] = []
-    ai_request_declared = _source_fidelity_ai_provenance_declared(
-        creation_mode=creation_mode,
-        created_by=created_by,
-        assisted_by=assisted_by,
-        local_ai_sessions=local_ai_sessions,
-    )
+    if approved and not ai_request_declared:
+        blockers.append("create_draft_non_ai_approve_forbidden")
     request_metadata_blockers = (
         _source_fidelity_request_metadata_blockers(
             {
@@ -34693,6 +35789,9 @@ def create_draft_zettel(
                 "source_fidelity_mode": source_fidelity_mode,
                 "source_fidelity_audience": source_fidelity_audience,
                 "fidelity_source_object_id": fidelity_source_object_id,
+                "fidelity_session_evidence_id": (
+                    fidelity_session_evidence_id
+                ),
                 "expected_source_fidelity_plan_sha256": (
                     expected_source_fidelity_plan_sha256
                 ),
@@ -34744,6 +35843,14 @@ def create_draft_zettel(
             else f"Expected archive type mismatch: expected {expected_type}, found {archive_type or 'unknown'}."
         )
 
+    if ai_request_declared and approved and not dry_run and (
+        not isinstance(draft_id, str)
+        or not draft_id.strip()
+        or not isinstance(created_at, str)
+        or not created_at.strip()
+    ):
+        blockers.append("create_draft_ai_replay_identity_required")
+
     now = (created_at or datetime.now().astimezone().replace(microsecond=0).isoformat()).strip()
     if not now:
         blockers.append("created_at must not be empty.")
@@ -34785,6 +35892,9 @@ def create_draft_zettel(
                 mode_value=source_fidelity_mode,
                 audience_value=source_fidelity_audience,
                 object_id_value=fidelity_source_object_id,
+                session_evidence_id_value=fidelity_session_evidence_id,
+                candidate_created_at=now,
+                local_ai_sessions=local_ai_sessions,
             )
         )
         blockers.extend(fidelity_blockers)
@@ -34804,6 +35914,7 @@ def create_draft_zettel(
                 source_fidelity_mode,
                 source_fidelity_audience,
                 fidelity_source_object_id,
+                fidelity_session_evidence_id,
                 expected_source_fidelity_plan_sha256,
             )
         ):
@@ -34837,6 +35948,20 @@ def create_draft_zettel(
                 + ". The draft was created; mint will warn on this kind too."
             )
 
+    if isinstance(facets, dict) and facets:
+        vocabulary_result = facet_vocabulary(root, dry_run=True)
+        known_facet_keys = {
+            str(item.get("key"))
+            for item in vocabulary_result.get("keys", [])
+            if isinstance(item, dict) and isinstance(item.get("key"), str)
+        }
+        if any(
+            str(key or "").strip().lower().replace("-", "_")
+            not in known_facet_keys
+            for key in facets
+        ):
+            warnings.append("unknown_facet_key_requires_human_review")
+
     supervised = clean_optional_string_list(supervised_by)
     explicit_derived = clean_optional_string_list(derived_from)
     source_intake = prepare_source_intake_plan_for_draft(source_intake_plan, blockers)
@@ -34849,6 +35974,7 @@ def create_draft_zettel(
     refs = [*explicit_refs, *source_intake.get("source_refs", [])]
     sessions = normalize_local_ai_sessions(local_ai_sessions or [], blockers)
     fidelity_source_object_id = None
+    resolved_fidelity_session_evidence_id: str | None = None
     fidelity_private_authority_values: set[str] = set()
     if is_ai_draft and isinstance(source_fidelity, dict):
         fidelity_source = source_fidelity.get("source")
@@ -34859,10 +35985,25 @@ def create_draft_zettel(
             fidelity_source.get("object_id"), str
         ):
             fidelity_source_object_id = fidelity_source["object_id"]
-    if fidelity_source_object_id:
+        if isinstance(fidelity_source, dict) and isinstance(
+            fidelity_source.get("evidence_id"), str
+        ):
+            resolved_fidelity_session_evidence_id = fidelity_source[
+                "evidence_id"
+            ]
+    if fidelity_source_object_id or resolved_fidelity_session_evidence_id:
         private_authority_refs = {
-            fidelity_source_object_id,
-            f"objet:{fidelity_source_object_id}",
+            value
+            for value in {
+                fidelity_source_object_id,
+                (
+                    f"objet:{fidelity_source_object_id}"
+                    if fidelity_source_object_id
+                    else None
+                ),
+                resolved_fidelity_session_evidence_id,
+            }
+            if isinstance(value, str) and value
         }
         refs = [
             ref
@@ -35280,11 +36421,46 @@ def create_draft_zettel(
             [] if blockers else [f"write {item}" for item in planned_writes]
         ),
         "approval_replay": approval_replay,
+        "approval_handoff": _create_draft_approval_handoff(
+            ready=not blockers,
+            approval_replay=approval_replay,
+        ),
     }
     if dry_run:
         return preview
     if blockers:
         raise ArchiveServiceError("Draft creation blocked: " + "; ".join(unique_preserve_order(blockers)))
+
+    exact_approval_reference: dict[str, Any] | None = None
+    exact_approval_context: ExactHumanApprovalContext | None = None
+    if is_ai_draft and approved:
+        if (
+            type(exact_human_approval_claim) is not _ClaimedExactHumanApproval
+            or not isinstance(source_fidelity_plan_sha256, str)
+        ):
+            raise ArchiveServiceError("exact_human_approval_required")
+        context = ExactHumanApprovalContext(
+            operation=ExactHumanApprovalOperation.create_draft,
+            archive_identity_sha256=exact_human_approval_archive_identity_sha256(
+                resolved_archive_id
+            ),
+            plan_sha256="sha256:" + source_fidelity_plan_sha256,
+            target_binding_sha256="sha256:" + body_sha256,
+            reviewer_claim=str(draft_approved_by or "").strip(),
+            review_binding_codes=(
+                "body_digest_reviewed",
+                "draft_identity_reviewed",
+                "source_fidelity_reviewed",
+            ),
+            warning_codes=exact_human_approval_warning_codes(warnings),
+        )
+        try:
+            exact_approval_reference = (
+                exact_human_approval_claim.assert_ready_for_context(context)
+            )
+        except ExactHumanApprovalError:
+            raise ArchiveServiceError("exact_human_approval_invalid") from None
+        exact_approval_context = context
 
     inbox.mkdir(parents=True, exist_ok=True)
     created_paths: list[str] = []
@@ -35313,7 +36489,35 @@ def create_draft_zettel(
                 "draft_create_only_conflict"
             ) from exc
         created_paths.append(proposed_path)
-    return {
+    exact_approval_link: dict[str, Any] | None = None
+    if exact_approval_reference is not None:
+        if (
+            type(exact_human_approval_claim) is not _ClaimedExactHumanApproval
+            or type(exact_approval_context) is not ExactHumanApprovalContext
+            or not isinstance(fidelity_receipt_relative, str)
+            or not isinstance(fidelity_receipt_bytes, bytes)
+        ):
+            raise ArchiveServiceError("exact_human_approval_link_required")
+        exact_approval_link = write_exact_human_approval_link(
+            root,
+            approval_claim=exact_human_approval_claim,
+            approval_context=exact_approval_context,
+            operation=ExactHumanApprovalOperation.create_draft,
+            plan_sha256=exact_approval_context.plan_sha256,
+            target_binding_sha256=(
+                exact_approval_context.target_binding_sha256
+            ),
+            source_operation_receipt=fidelity_receipt_relative,
+            expected_source_operation_receipt_sha256=(
+                "sha256:" + hashlib.sha256(fidelity_receipt_bytes).hexdigest()
+            ),
+            effect=(
+                "created"
+                if proposed_path in created_paths
+                else "already_present_exact"
+            ),
+        )
+    result = {
         "ok": True,
         "dry_run": False,
         "lifecycle_action": "create_draft",
@@ -35334,7 +36538,30 @@ def create_draft_zettel(
         "created_paths": created_paths,
         "idempotent_replay": not created_paths,
         "approval_replay": approval_replay,
+        "approval_handoff": _create_draft_approval_handoff(
+            ready=False,
+            approval_replay=approval_replay,
+            completed=True,
+            receipt_ref=(
+                {
+                    "schema": (
+                        "wom-kit/exact-human-approval-link-receipt/v0.1"
+                    ),
+                    "receipt_id": exact_approval_link["approval_id"],
+                    "receipt_sha256": exact_approval_link["receipt_sha256"],
+                    "one_use": True,
+                    "consumed": True,
+                }
+                if exact_approval_link is not None
+                else None
+            ),
+        ),
     }
+    if exact_approval_reference is not None:
+        result["exact_human_approval_reference"] = exact_approval_reference
+    if exact_approval_link is not None:
+        result["exact_human_approval_link"] = exact_approval_link
+    return result
 
 
 def _source_fidelity_raw_draft_snapshot(
@@ -35354,7 +36581,7 @@ def _source_fidelity_raw_draft_snapshot(
         bound_root, bound_path = _source_fidelity_bound_root_and_path(
             root, path
         )
-        with hold_activity_group_evidence_file(
+        with _hold_activity_group_evidence_file(
             bound_root,
             bound_path,
             max_bytes=SOURCE_FIDELITY_MAX_DRAFT_BYTES,
@@ -35430,7 +36657,7 @@ def _source_fidelity_find_exact_regions(
     return positions
 
 
-def _source_fidelity_private_receipt_shape_valid(value: Any) -> bool:
+def _source_fidelity_private_receipt_shape_valid_v1(value: Any) -> bool:
     """Validate the complete private receipt contract without a runtime dependency.
 
     The packaged JSON Schema is the public contract.  WOM-kit deliberately
@@ -35459,7 +36686,7 @@ def _source_fidelity_private_receipt_shape_valid(value: Any) -> bool:
     }:
         return False
     if (
-        value.get("schema") != SOURCE_FIDELITY_DRAFT_RECEIPT_SCHEMA
+        value.get("schema") != SOURCE_FIDELITY_DRAFT_RECEIPT_SCHEMA_V1
         or value.get("action") != "create_source_fidelity_draft"
         or not isinstance(value.get("archive_id"), str)
         or not value.get("archive_id")
@@ -35542,7 +36769,7 @@ def _source_fidelity_private_receipt_shape_valid(value: Any) -> bool:
         return False
     mode = fidelity.get("mode")
     if (
-        fidelity.get("schema") != SOURCE_FIDELITY_SCHEMA
+        fidelity.get("schema") != SOURCE_FIDELITY_SCHEMA_V1
         or mode not in SOURCE_FIDELITY_MODES
         or fidelity.get("audience") not in ZET_QUALITY_AUDIENCES
         or fidelity.get("comparison_basis")
@@ -35626,6 +36853,188 @@ def _source_fidelity_private_receipt_shape_valid(value: Any) -> bool:
     return True
 
 
+def _source_fidelity_private_receipt_shape_valid_v2(value: Any) -> bool:
+    """Validate v0.2 by reusing v0.1 common/region checks plus its union."""
+
+    if not isinstance(value, dict):
+        return False
+    fidelity = value.get("source_fidelity")
+    source = fidelity.get("source") if isinstance(fidelity, dict) else None
+    if not isinstance(fidelity, dict) or not isinstance(source, dict):
+        return False
+    if (
+        value.get("schema") != SOURCE_FIDELITY_DRAFT_RECEIPT_SCHEMA_V2
+        or fidelity.get("schema") != SOURCE_FIDELITY_SCHEMA_V2
+    ):
+        return False
+
+    # The outer receipt contract, generic fidelity booleans, and region rules
+    # are unchanged.  Adapt only the version and private authority source so
+    # the already strict v0.1 verifier remains one source of truth.
+    legacy_projection = copy.deepcopy(value)
+    legacy_projection["schema"] = SOURCE_FIDELITY_DRAFT_RECEIPT_SCHEMA_V1
+    legacy_fidelity = legacy_projection["source_fidelity"]
+    legacy_fidelity["schema"] = SOURCE_FIDELITY_SCHEMA_V1
+    raw_sha = str(source.get("raw_sha256") or "")
+    legacy_fidelity["source"] = {
+        "object_id": "sha256:" + raw_sha,
+        "raw_sha256": raw_sha,
+        "raw_size_bytes": source.get("raw_size_bytes"),
+        "normalized_sha256": source.get("normalized_sha256"),
+        "normalized_size_bytes": source.get("normalized_size_bytes"),
+        "comparison_basis": source.get("comparison_basis"),
+        "newline_transformation_applied": source.get(
+            "newline_transformation_applied"
+        ),
+        "source_text_stored": source.get("source_text_stored"),
+        "source_locator_stored": source.get("source_locator_stored"),
+    }
+    if not _source_fidelity_private_receipt_shape_valid_v1(
+        legacy_projection
+    ):
+        return False
+
+    authority_kind = source.get("authority_kind")
+    common_keys = {
+        "authority_kind",
+        "raw_sha256",
+        "raw_size_bytes",
+        "normalized_sha256",
+        "normalized_size_bytes",
+        "comparison_basis",
+        "newline_transformation_applied",
+        "source_text_stored",
+        "source_locator_stored",
+    }
+    if authority_kind == "manifested_object":
+        if set(source) != common_keys | {"object_id", "provenance"}:
+            return False
+        if (
+            not isinstance(source.get("object_id"), str)
+            or OBJECT_ID_RE.fullmatch(source["object_id"]) is None
+            or source["object_id"].removeprefix("sha256:") != raw_sha
+        ):
+            return False
+        provenance = source.get("provenance")
+        expected_provenance_keys = {
+            "binding_state",
+            "captured_at",
+            "source_role",
+            "input_kind",
+            "source_intake_plan_sha256",
+            "staged_source_class",
+            "independent_external_provenance",
+            "raw_source_locator_stored",
+            "raw_source_locator_echoed",
+        }
+        if not isinstance(provenance, dict) or set(provenance) != expected_provenance_keys:
+            return False
+        if provenance.get("binding_state") not in {
+            "manifest_intake_bound",
+            "legacy_unbound",
+        }:
+            return False
+        captured_at = provenance.get("captured_at")
+        if captured_at is not None and (
+            not isinstance(captured_at, str)
+            or normalize_zet_revision_timestamp(
+                captured_at, default_now=False
+            )
+            is None
+        ):
+            return False
+        if provenance.get("source_role") is not None and provenance.get(
+            "source_role"
+        ) not in SOURCE_INTAKE_ROLES:
+            return False
+        plan_sha = provenance.get("source_intake_plan_sha256")
+        if plan_sha is not None and (
+            not isinstance(plan_sha, str)
+            or re.fullmatch(r"sha256:[0-9a-f]{64}", plan_sha) is None
+        ):
+            return False
+        if (
+            not isinstance(provenance.get("staged_source_class"), str)
+            or not isinstance(
+                provenance.get("independent_external_provenance"), bool
+            )
+            or provenance.get("raw_source_locator_stored") is not False
+            or provenance.get("raw_source_locator_echoed") is not False
+        ):
+            return False
+    elif authority_kind == "reviewed_session_evidence":
+        session_keys = {
+            "evidence_id",
+            "source_role",
+            "producer_kind",
+            "produced_at",
+            "captured_at",
+            "session_ref_sha256",
+            "input_provenance_sha256",
+            "semantic_fidelity_machine_verified",
+            "receipt_sha256",
+        }
+        if set(source) != common_keys | session_keys:
+            return False
+        if re.fullmatch(
+            r"source-fidelity-session-evidence:[0-9a-f]{64}",
+            str(source.get("evidence_id") or ""),
+        ) is None:
+            return False
+        if source.get("source_role") not in SOURCE_FIDELITY_SESSION_SOURCE_ROLES:
+            return False
+        if source.get("producer_kind") not in SOURCE_FIDELITY_SESSION_PRODUCER_KINDS:
+            return False
+        produced_at = normalize_zet_revision_timestamp(
+            source.get("produced_at")
+            if isinstance(source.get("produced_at"), str)
+            else None,
+            default_now=False,
+        )
+        captured_at = normalize_zet_revision_timestamp(
+            source.get("captured_at")
+            if isinstance(source.get("captured_at"), str)
+            else None,
+            default_now=False,
+        )
+        if (
+            produced_at is None
+            or captured_at is None
+            or produced_at > captured_at
+        ):
+            return False
+        if re.fullmatch(
+            r"sha256:[0-9a-f]{64}",
+            str(source.get("session_ref_sha256") or ""),
+        ) is None or re.fullmatch(
+            r"sha256:[0-9a-f]{64}",
+            str(source.get("receipt_sha256") or ""),
+        ) is None:
+            return False
+        input_provenance = source.get("input_provenance_sha256")
+        if not isinstance(input_provenance, list) or any(
+            not isinstance(item, str)
+            or re.fullmatch(r"sha256:[0-9a-f]{64}", item) is None
+            for item in input_provenance
+        ):
+            return False
+        if source.get("semantic_fidelity_machine_verified") is not False:
+            return False
+    else:
+        return False
+    return True
+
+
+def _source_fidelity_private_receipt_shape_valid(value: Any) -> bool:
+    if not isinstance(value, dict):
+        return False
+    if value.get("schema") == SOURCE_FIDELITY_DRAFT_RECEIPT_SCHEMA_V1:
+        return _source_fidelity_private_receipt_shape_valid_v1(value)
+    if value.get("schema") == SOURCE_FIDELITY_DRAFT_RECEIPT_SCHEMA_V2:
+        return _source_fidelity_private_receipt_shape_valid_v2(value)
+    return False
+
+
 def _source_fidelity_private_receipt_for_mint(
     root: Path,
     *,
@@ -35648,7 +37057,7 @@ def _source_fidelity_private_receipt_for_mint(
         bound_root, bound_path = _source_fidelity_bound_root_and_path(
             root, receipt_path
         )
-        with hold_activity_group_evidence_file(
+        with _hold_activity_group_evidence_file(
             bound_root,
             bound_path,
             max_bytes=1024 * 1024,
@@ -35693,7 +37102,7 @@ def _source_fidelity_private_receipt_for_mint(
     )
     receipt_archive_config = read_archive_config(root)
     expected = {
-        "schema": SOURCE_FIDELITY_DRAFT_RECEIPT_SCHEMA,
+        "schema": receipt.get("schema"),
         "action": "create_source_fidelity_draft",
         "archive_id": str(frontmatter.get("archive_id") or ""),
         "archive_type": (
@@ -35878,6 +37287,7 @@ def _source_fidelity_verify_for_mint(
         )
     )
     blockers: list[str] = list(receipt_blockers)
+    warnings: list[str] = []
     fidelity = (
         private_receipt.get("source_fidelity")
         if isinstance(private_receipt, dict)
@@ -35886,8 +37296,34 @@ def _source_fidelity_verify_for_mint(
     )
     mode = fidelity.get("mode")
     audience = fidelity.get("audience")
-    if fidelity.get("schema") != SOURCE_FIDELITY_SCHEMA:
+    fidelity_schema = fidelity.get("schema")
+    if fidelity_schema not in {
+        SOURCE_FIDELITY_SCHEMA_V1,
+        SOURCE_FIDELITY_SCHEMA_V2,
+    }:
         blockers.append("source_fidelity_schema_invalid")
+    authority_binding_state = (
+        "legacy_unbound"
+        if fidelity_schema == SOURCE_FIDELITY_SCHEMA_V1
+        else "reviewed_session_evidence"
+        if (
+            isinstance(fidelity.get("source"), dict)
+            and fidelity["source"].get("authority_kind")
+            == "reviewed_session_evidence"
+        )
+        else (
+            fidelity.get("source", {}).get("provenance", {}).get(
+                "binding_state"
+            )
+            if isinstance(fidelity.get("source"), dict)
+            and isinstance(
+                fidelity.get("source", {}).get("provenance"), dict
+            )
+            else "legacy_unbound"
+        )
+    )
+    if fidelity_schema == SOURCE_FIDELITY_SCHEMA_V1:
+        warnings.append("legacy_source_fidelity_authority_unbound")
     if mode not in SOURCE_FIDELITY_MODES:
         blockers.append("source_fidelity_mode_invalid")
     if audience not in ZET_QUALITY_AUDIENCES:
@@ -35915,18 +37351,35 @@ def _source_fidelity_verify_for_mint(
         if isinstance(fidelity.get("source"), dict)
         else {}
     )
-    current_source, normalized_source, source_blockers = (
-        _source_fidelity_read_manifested_object(
-            root,
-            source_meta.get("object_id"),
+    authority_kind = source_meta.get("authority_kind") or "manifested_object"
+    if authority_kind == "reviewed_session_evidence":
+        current_source, normalized_source, source_blockers = (
+            _read_verified_session_evidence(
+                root, source_meta.get("evidence_id")
+            )
         )
-    )
+    else:
+        current_source, normalized_source, source_blockers = (
+            _source_fidelity_read_manifested_object(
+                root,
+                source_meta.get("object_id"),
+            )
+        )
+        if (
+            fidelity_schema == SOURCE_FIDELITY_SCHEMA_V1
+            and isinstance(current_source, dict)
+        ):
+            current_source = {
+                key: value
+                for key, value in current_source.items()
+                if key not in {"authority_kind", "provenance"}
+            }
     blockers.extend(source_blockers)
     if current_source is None or normalized_source is None:
-        blockers.append("source_fidelity_source_object_unavailable")
+        blockers.append("source_fidelity_source_authority_unavailable")
     else:
         if json_safe(source_meta) != json_safe(current_source):
-            blockers.append("source_fidelity_source_object_drift")
+            blockers.append("source_fidelity_source_authority_drift")
 
     private_authority_values = _source_fidelity_private_authority_values(
         source_meta
@@ -36029,6 +37482,65 @@ def _source_fidelity_verify_for_mint(
     body_bytes = snapshot["body_bytes"]
     current_body_sha256 = _source_fidelity_digest_bytes(body_bytes)
     current_region: dict[str, Any] | None = None
+    if normalized_source is not None and hmac.compare_digest(
+        body_bytes, normalized_source
+    ):
+        if authority_kind == "reviewed_session_evidence":
+            local_session_hashes = {
+                "sha256:"
+                + _source_fidelity_digest_bytes(
+                    str(item.get("session_ref") or "").encode("utf-8")
+                )
+                for item in (
+                    frontmatter.get("local_ai_sessions")
+                    if isinstance(frontmatter.get("local_ai_sessions"), list)
+                    else []
+                )
+                if isinstance(item, dict)
+                and isinstance(item.get("session_ref"), str)
+                and item.get("session_ref")
+            }
+            source_produced_at = normalize_zet_revision_timestamp(
+                source_meta.get("produced_at")
+                if isinstance(source_meta.get("produced_at"), str)
+                else None,
+                default_now=False,
+            )
+            candidate_created_at = normalize_zet_revision_timestamp(
+                frontmatter.get("created_at")
+                if isinstance(frontmatter.get("created_at"), str)
+                else None,
+                default_now=False,
+            )
+            if source_meta.get("source_role") == "self_authored_candidate" or (
+                source_meta.get("producer_kind") == "ai_runtime"
+                and (
+                    source_meta.get("session_ref_sha256")
+                    in local_session_hashes
+                    or (
+                        source_produced_at
+                        and candidate_created_at
+                        and source_produced_at >= candidate_created_at
+                    )
+                )
+            ):
+                blockers.append("circular_self_source")
+        elif fidelity_schema == SOURCE_FIDELITY_SCHEMA_V2:
+            object_provenance = (
+                source_meta.get("provenance")
+                if isinstance(source_meta.get("provenance"), dict)
+                else {}
+            )
+            if (
+                not object_provenance.get("independent_external_provenance")
+                and (
+                    object_provenance.get("source_role")
+                    == "derived_context"
+                    or object_provenance.get("staged_source_class")
+                    == "archive_ai_scratch"
+                )
+            ):
+                blockers.append("circular_self_source")
     if SOURCE_FIDELITY_CREDENTIAL_SECRET_RE.search(
         body_bytes.decode("utf-8", errors="ignore")
     ):
@@ -36139,8 +37651,12 @@ def _source_fidelity_verify_for_mint(
             None if privacy_blocked else current_body_sha256
         ),
         "source_fidelity": None if privacy_blocked else safe_fidelity,
+        "authority_binding_state": (
+            None if privacy_blocked else authority_binding_state
+        ),
         "raw_snapshot": snapshot if not blockers else None,
         "blockers": unique_preserve_order(blockers),
+        "warnings": unique_preserve_order(warnings),
     }
 
 
@@ -37803,7 +39319,7 @@ def _activity_group_membership_transaction_journal_path(
 
 
 @contextmanager
-def activity_group_bound_directory_chain(
+def _activity_group_bound_directory_chain(
     root: Path,
     target: Path,
     *,
@@ -38075,7 +39591,7 @@ def activity_group_transaction_scan_entries(
     root: Path,
     private_root: Path,
 ) -> Iterable[os.DirEntry[str]]:
-    with activity_group_bound_directory_chain(
+    with _activity_group_bound_directory_chain(
         root,
         private_root,
     ) as binding:
@@ -38169,7 +39685,7 @@ def activity_group_evidence_json_bytes(
     ).encode("utf-8")
 
 
-def write_activity_group_bytes_new_file_bound(
+def _write_activity_group_bytes_new_file_bound(
     binding: dict[str, Any],
     path: Path,
     raw: bytes,
@@ -38212,7 +39728,7 @@ def write_activity_group_bytes_new_file_bound(
 
 
 @contextmanager
-def hold_activity_group_evidence_file(
+def _hold_activity_group_evidence_file(
     root: Path,
     path: Path,
     *,
@@ -38220,7 +39736,7 @@ def hold_activity_group_evidence_file(
 ) -> Iterable[dict[str, Any]]:
     """Hold one exact non-reparse evidence file stable while authority is used."""
 
-    with activity_group_bound_directory_chain(
+    with _activity_group_bound_directory_chain(
         root,
         path.parent,
     ) as binding:
@@ -38409,7 +39925,7 @@ def hold_activity_group_evidence_file(
             close_handle(handle)
 
 
-def delete_activity_group_evidence_exact(
+def _delete_activity_group_evidence_exact(
     root: Path,
     path: Path,
     *,
@@ -38426,7 +39942,7 @@ def delete_activity_group_evidence_exact(
         binding_context = (
             nullcontext(parent_binding)
             if parent_binding is not None
-            else activity_group_bound_directory_chain(
+            else _activity_group_bound_directory_chain(
                 root,
                 path.parent,
             )
@@ -38442,7 +39958,7 @@ def delete_activity_group_evidence_exact(
             quarantine_binding_context = (
                 nullcontext(binding)
                 if quarantine_parent_path == path.parent
-                else activity_group_bound_directory_chain(
+                else _activity_group_bound_directory_chain(
                     root,
                     quarantine_parent_path,
                     create=True,
@@ -38681,7 +40197,7 @@ def delete_activity_group_evidence_exact(
     binding_context = (
         nullcontext(parent_binding)
         if parent_binding is not None
-        else activity_group_bound_directory_chain(
+        else _activity_group_bound_directory_chain(
             root,
             path.parent,
         )
@@ -38879,7 +40395,7 @@ def _read_activity_group_regular_bytes_bound(
     if binding.get("path") != path.parent:
         raise OSError("activity_group_bound_parent_mismatch")
     if os.name == "nt":
-        with hold_activity_group_evidence_file(
+        with _hold_activity_group_evidence_file(
             root,
             path,
             max_bytes=max_bytes,
@@ -39146,7 +40662,7 @@ def _activity_group_swap_residue_bytes(
         return None
 
 
-def cleanup_activity_group_canonical_swap_residue(
+def _cleanup_activity_group_canonical_swap_residue(
     root: Path,
     path: Path,
     *,
@@ -39167,7 +40683,7 @@ def cleanup_activity_group_canonical_swap_residue(
         request_sha256,
     )
     removed = 0
-    with activity_group_bound_directory_chain(
+    with _activity_group_bound_directory_chain(
         root,
         path.parent,
     ) as binding:
@@ -39204,7 +40720,7 @@ def cleanup_activity_group_canonical_swap_residue(
                 raise OSError(
                     "activity_group_canonical_swap_evidence_changed"
                 )
-            delete_activity_group_evidence_exact(
+            _delete_activity_group_evidence_exact(
                 root,
                 residue,
                 expected_sha256=residue_sha256,
@@ -39228,7 +40744,7 @@ def cleanup_activity_group_canonical_swap_residue(
     return removed
 
 
-def replace_activity_group_canonical_bytes_compare_and_swap(
+def _replace_activity_group_canonical_bytes_compare_and_swap(
     root: Path,
     path: Path,
     *,
@@ -39250,7 +40766,7 @@ def replace_activity_group_canonical_bytes_compare_and_swap(
         path,
         request_sha256,
     )
-    with activity_group_bound_directory_chain(
+    with _activity_group_bound_directory_chain(
         root,
         path.parent,
     ) as binding:
@@ -39287,7 +40803,7 @@ def replace_activity_group_canonical_bytes_compare_and_swap(
                 current_bytes == replacement_bytes
                 and residue_bytes == expected_bytes
             ):
-                delete_activity_group_evidence_exact(
+                _delete_activity_group_evidence_exact(
                     root,
                     residue_path,
                     expected_sha256=(
@@ -39304,7 +40820,7 @@ def replace_activity_group_canonical_bytes_compare_and_swap(
                 current_bytes == expected_bytes
                 and residue_bytes == replacement_bytes
             ):
-                delete_activity_group_evidence_exact(
+                _delete_activity_group_evidence_exact(
                     root,
                     residue_path,
                     expected_sha256=(
@@ -39350,7 +40866,7 @@ def replace_activity_group_canonical_bytes_compare_and_swap(
             ):
                 raise OSError("activity_group_atomic_exchange_unsupported")
 
-        write_activity_group_bytes_new_file_bound(
+        _write_activity_group_bytes_new_file_bound(
             binding,
             swap_path,
             replacement_bytes,
@@ -39442,7 +40958,7 @@ def replace_activity_group_canonical_bytes_compare_and_swap(
                     "activity_group_canonical_changed_during_swap"
                 )
 
-            delete_activity_group_evidence_exact(
+            _delete_activity_group_evidence_exact(
                 root,
                 capture_path,
                 expected_sha256=(
@@ -39480,7 +40996,7 @@ def replace_activity_group_canonical_bytes_compare_and_swap(
                         )
                         if candidate_bytes != replacement_bytes:
                             continue
-                        delete_activity_group_evidence_exact(
+                        _delete_activity_group_evidence_exact(
                             root,
                             candidate,
                             expected_sha256=(
@@ -39753,7 +41269,7 @@ def preserve_activity_group_membership_before_snapshots(
         pending_records: list[dict[str, Any]] = []
         for item in candidates:
             snapshot = item["before_snapshot"]
-            if write_or_verify_zet_title_remap_snapshot_bytes(
+            if _write_or_verify_zet_title_remap_snapshot_bytes(
                 root,
                 canonical_bytes=item["before_bytes"],
                 snapshot=snapshot,
@@ -39820,7 +41336,7 @@ def preserve_activity_group_membership_before_snapshots(
                 )
             pending_records.append(record)
             manifest_index.setdefault(object_id, []).append(record)
-        append_zet_title_remap_snapshot_manifest_records_atomic(
+        _append_zet_title_remap_snapshot_manifest_records_atomic(
             manifest_path,
             pending_records,
         )
@@ -41054,7 +42570,7 @@ def _activity_group_membership_write(
     lock_sha256 = (
         "sha256:" + hashlib.sha256(lock_raw).hexdigest()
     )
-    private_root_context = activity_group_bound_directory_chain(
+    private_root_context = _activity_group_bound_directory_chain(
         root,
         write_lock_path.parent,
         create=True,
@@ -41091,14 +42607,14 @@ def _activity_group_membership_write(
     try:
         private_root_binding = private_root_context.__enter__()
         private_root_context_entered = True
-        write_activity_group_bytes_new_file_bound(
+        _write_activity_group_bytes_new_file_bound(
             private_root_binding,
             write_lock_path,
             lock_raw,
         )
         if recovery_guard_path.exists():
             try:
-                delete_activity_group_evidence_exact(
+                _delete_activity_group_evidence_exact(
                     root,
                     write_lock_path,
                     expected_sha256=lock_sha256,
@@ -41120,7 +42636,7 @@ def _activity_group_membership_write(
     except OSError:
         try:
             if write_lock_path.exists():
-                delete_activity_group_evidence_exact(
+                _delete_activity_group_evidence_exact(
                     root,
                     write_lock_path,
                     expected_sha256=lock_sha256,
@@ -41152,7 +42668,7 @@ def _activity_group_membership_write(
         )
         try:
             if write_lock_path.exists():
-                delete_activity_group_evidence_exact(
+                _delete_activity_group_evidence_exact(
                     root,
                     write_lock_path,
                     expected_sha256=lock_sha256,
@@ -41171,7 +42687,7 @@ def _activity_group_membership_write(
         journal_root_binding = private_root_binding
     else:
         try:
-            operation_root_context = activity_group_bound_directory_chain(
+            operation_root_context = _activity_group_bound_directory_chain(
                 root,
                 operation_private_root,
                 create=True,
@@ -41180,7 +42696,7 @@ def _activity_group_membership_write(
             operation_root_context_entered = True
         except (OSError, ValueError):
             try:
-                delete_activity_group_evidence_exact(
+                _delete_activity_group_evidence_exact(
                     root,
                     write_lock_path,
                     expected_sha256=lock_sha256,
@@ -41284,7 +42800,7 @@ def _activity_group_membership_write(
     except Exception:
         try:
             if write_lock_path.exists():
-                delete_activity_group_evidence_exact(
+                _delete_activity_group_evidence_exact(
                     root,
                     write_lock_path,
                     expected_sha256=lock_sha256,
@@ -41307,7 +42823,7 @@ def _activity_group_membership_write(
         "sha256:" + hashlib.sha256(journal_raw).hexdigest()
     )
     try:
-        write_activity_group_bytes_new_file_bound(
+        _write_activity_group_bytes_new_file_bound(
             journal_root_binding,
             transaction_journal_path,
             journal_raw,
@@ -41331,7 +42847,7 @@ def _activity_group_membership_write(
         transaction_journal_written = True
     except FileExistsError:
         try:
-            delete_activity_group_evidence_exact(
+            _delete_activity_group_evidence_exact(
                 root,
                 write_lock_path,
                 expected_sha256=lock_sha256,
@@ -41349,7 +42865,7 @@ def _activity_group_membership_write(
     except OSError:
         try:
             if write_lock_path.exists():
-                delete_activity_group_evidence_exact(
+                _delete_activity_group_evidence_exact(
                     root,
                     write_lock_path,
                     expected_sha256=lock_sha256,
@@ -41369,7 +42885,7 @@ def _activity_group_membership_write(
 
     attempted_candidates: list[dict[str, Any]] = []
     receipt_parent_existed = receipt_path.parent.exists()
-    receipt_parent_context = activity_group_bound_directory_chain(
+    receipt_parent_context = _activity_group_bound_directory_chain(
         root,
         receipt_path.parent,
         create=True,
@@ -41378,7 +42894,7 @@ def _activity_group_membership_write(
         receipt_parent_binding = receipt_parent_context.__enter__()
     except (OSError, ValueError):
         try:
-            delete_activity_group_evidence_exact(
+            _delete_activity_group_evidence_exact(
                 root,
                 write_lock_path,
                 expected_sha256=lock_sha256,
@@ -41392,7 +42908,7 @@ def _activity_group_membership_write(
             write_lock_removed = False
         if write_lock_removed:
             try:
-                delete_activity_group_evidence_exact(
+                _delete_activity_group_evidence_exact(
                     root,
                     transaction_journal_path,
                     expected_sha256=journal_sha256,
@@ -41431,7 +42947,7 @@ def _activity_group_membership_write(
                 )
             attempted_candidates.append(item)
             canonical_write_attempt_count += 1
-            replace_activity_group_canonical_bytes_compare_and_swap(
+            _replace_activity_group_canonical_bytes_compare_and_swap(
                 root,
                 item["path"],
                 expected_bytes=item["before_bytes"],
@@ -41484,7 +43000,7 @@ def _activity_group_membership_write(
             receipt_expected_sha256 = (
                 "sha256:" + hashlib.sha256(receipt_raw).hexdigest()
             )
-            write_activity_group_bytes_new_file_bound(
+            _write_activity_group_bytes_new_file_bound(
                 receipt_parent_binding,
                 receipt_path,
                 receipt_raw,
@@ -41495,7 +43011,7 @@ def _activity_group_membership_write(
             raise RuntimeError("receipt_created_concurrently")
         except Exception:
             raise
-        with hold_activity_group_evidence_file(
+        with _hold_activity_group_evidence_file(
             root,
             receipt_path,
             max_bytes=ACTIVITY_GROUP_MEMBERSHIP_MAX_RECEIPT_BYTES,
@@ -41546,7 +43062,7 @@ def _activity_group_membership_write(
                     raise OSError(
                         "activity_group_write_lock_changed_before_cleanup"
                     )
-                delete_activity_group_evidence_exact(
+                _delete_activity_group_evidence_exact(
                     root,
                     write_lock_path,
                     expected_sha256=lock_sha256,
@@ -41609,7 +43125,7 @@ def _activity_group_membership_write(
                         raise OSError(
                             "activity_group_unresolved_transaction_evidence_exists"
                         )
-                    delete_activity_group_evidence_exact(
+                    _delete_activity_group_evidence_exact(
                         root,
                         transaction_journal_path,
                         expected_sha256=journal_sha256,
@@ -41666,7 +43182,7 @@ def _activity_group_membership_write(
             and receipt_path.exists()
         ):
             try:
-                delete_activity_group_evidence_exact(
+                _delete_activity_group_evidence_exact(
                     root,
                     receipt_path,
                     expected_sha256=receipt_expected_sha256,
@@ -41686,7 +43202,7 @@ def _activity_group_membership_write(
                     _read_activity_group_canonical_bytes(item["path"])
                 )
                 if current_bytes == item["before_bytes"]:
-                    cleanup_activity_group_canonical_swap_residue(
+                    _cleanup_activity_group_canonical_swap_residue(
                         root,
                         item["path"],
                         request_sha256=actual_request_sha256,
@@ -41699,7 +43215,7 @@ def _activity_group_membership_write(
                     )
                 elif current_bytes == item["after_bytes"]:
                     changed = (
-                        replace_activity_group_canonical_bytes_compare_and_swap(
+                        _replace_activity_group_canonical_bytes_compare_and_swap(
                             root,
                             item["path"],
                             expected_bytes=item["after_bytes"],
@@ -41727,7 +43243,7 @@ def _activity_group_membership_write(
         if canonical_restore_ok and receipt_removed:
             try:
                 if write_lock_path.exists():
-                    delete_activity_group_evidence_exact(
+                    _delete_activity_group_evidence_exact(
                         root,
                         write_lock_path,
                         expected_sha256=lock_sha256,
@@ -41773,7 +43289,7 @@ def _activity_group_membership_write(
                     raise OSError(
                         "activity_group_unresolved_transaction_evidence_exists"
                     )
-                delete_activity_group_evidence_exact(
+                _delete_activity_group_evidence_exact(
                     root,
                     transaction_journal_path,
                     expected_sha256=journal_sha256,
@@ -41864,6 +43380,10 @@ def activity_group_membership_write(
     ]
     | None = None,
 ) -> dict[str, Any]:
+    if type(dry_run) is not bool or type(approve) is not bool or approve:
+        return _compound_exact_human_approval_blocked(
+            lifecycle_action="activity_group_membership_write",
+        )
     return _activity_group_membership_write(
         archive_root,
         request_path=request_path,
@@ -41895,6 +43415,10 @@ def activity_group_membership_removal_write(
     ]
     | None = None,
 ) -> dict[str, Any]:
+    if type(dry_run) is not bool or type(approve) is not bool or approve:
+        return _compound_exact_human_approval_blocked(
+            lifecycle_action="activity_group_membership_removal_write",
+        )
     return _activity_group_membership_write(
         archive_root,
         request_path=request_path,
@@ -42189,7 +43713,7 @@ def classify_activity_group_membership_transaction(
                     journal["request_sha256"],
                 )
             )
-            with activity_group_bound_directory_chain(
+            with _activity_group_bound_directory_chain(
                 root,
                 path.parent,
             ) as binding:
@@ -43103,7 +44627,7 @@ def _activity_group_membership_recover(
                 root,
                 item["zettel_id"],
             )
-            cleanup_activity_group_canonical_swap_residue(
+            _cleanup_activity_group_canonical_swap_residue(
                 root,
                 canonical_path,
                 request_sha256=request_sha256,
@@ -43186,7 +44710,7 @@ def _activity_group_membership_recover(
     guard_sha256 = (
         "sha256:" + hashlib.sha256(guard_raw).hexdigest()
     )
-    private_root_context = activity_group_bound_directory_chain(
+    private_root_context = _activity_group_bound_directory_chain(
         root,
         coordination_private_root,
         create=True,
@@ -43223,7 +44747,7 @@ def _activity_group_membership_recover(
     try:
         private_root_binding = private_root_context.__enter__()
         private_root_context_entered = True
-        write_activity_group_bytes_new_file_bound(
+        _write_activity_group_bytes_new_file_bound(
             private_root_binding,
             recovery_guard_path,
             guard_raw,
@@ -43234,7 +44758,7 @@ def _activity_group_membership_recover(
         return result_payload("blocked")
     except OSError:
         try:
-            delete_activity_group_evidence_exact(
+            _delete_activity_group_evidence_exact(
                 root,
                 recovery_guard_path,
                 expected_sha256=guard_sha256,
@@ -43255,7 +44779,7 @@ def _activity_group_membership_recover(
         journal_root_binding = private_root_binding
     else:
         try:
-            operation_root_context = activity_group_bound_directory_chain(
+            operation_root_context = _activity_group_bound_directory_chain(
                 root,
                 operation_private_root,
             )
@@ -43263,7 +44787,7 @@ def _activity_group_membership_recover(
             operation_root_context_entered = True
         except (FileNotFoundError, OSError, ValueError):
             try:
-                delete_activity_group_evidence_exact(
+                _delete_activity_group_evidence_exact(
                     root,
                     recovery_guard_path,
                     expected_sha256=guard_sha256,
@@ -43290,7 +44814,7 @@ def _activity_group_membership_recover(
                 "activity_group_recovery_guard_cleanup_authority_spent"
             )
         recovery_guard_cleanup_attempted = True
-        delete_activity_group_evidence_exact(
+        _delete_activity_group_evidence_exact(
             root,
             recovery_guard_path,
             expected_sha256=guard_sha256,
@@ -43431,7 +44955,7 @@ def _activity_group_membership_recover(
                 "sha256:" + hashlib.sha256(claim_raw).hexdigest()
             )
             try:
-                write_activity_group_bytes_new_file_bound(
+                _write_activity_group_bytes_new_file_bound(
                     private_root_binding,
                     write_lock_path,
                     claim_raw,
@@ -43443,7 +44967,7 @@ def _activity_group_membership_recover(
                 ) from exc
             except OSError as exc:
                 try:
-                    delete_activity_group_evidence_exact(
+                    _delete_activity_group_evidence_exact(
                         root,
                         write_lock_path,
                         expected_sha256=claim_sha256,
@@ -43663,7 +45187,7 @@ def _activity_group_membership_recover(
                         + hashlib.sha256(current_bytes).hexdigest()
                     )
                     if current_sha256 == item["before_file_sha256"]:
-                        cleanup_activity_group_canonical_swap_residue(
+                        _cleanup_activity_group_canonical_swap_residue(
                             root,
                             canonical_path,
                             request_sha256=request_sha256,
@@ -43676,7 +45200,7 @@ def _activity_group_membership_recover(
                         )
                     elif current_sha256 == item["after_file_sha256"]:
                         changed = (
-                            replace_activity_group_canonical_bytes_compare_and_swap(
+                            _replace_activity_group_canonical_bytes_compare_and_swap(
                                 root,
                                 canonical_path,
                                 expected_bytes=current_bytes,
@@ -43892,7 +45416,7 @@ def _activity_group_membership_recover(
             "verified_completed_lock_residue",
         }
         cleanup_receipt_context = (
-            hold_activity_group_evidence_file(
+            _hold_activity_group_evidence_file(
                 root,
                 receipt_path,
                 max_bytes=ACTIVITY_GROUP_MEMBERSHIP_MAX_RECEIPT_BYTES,
@@ -43948,7 +45472,7 @@ def _activity_group_membership_recover(
                         operation_contract=operation_contract,
                     )
                 )
-            delete_activity_group_evidence_exact(
+            _delete_activity_group_evidence_exact(
                 root,
                 write_lock_path,
                 expected_sha256=(
@@ -44011,7 +45535,7 @@ def _activity_group_membership_recover(
                     raise ArchiveServiceError(
                         "activity_group_recovery_journal_sha256_invalid"
                     )
-                delete_activity_group_evidence_exact(
+                _delete_activity_group_evidence_exact(
                     root,
                     journal_path,
                     expected_sha256=journal_sha256,
@@ -44098,6 +45622,10 @@ def activity_group_membership_recover(
     ]
     | None = None,
 ) -> dict[str, Any]:
+    if type(approve) is not bool or approve:
+        return _compound_exact_human_approval_blocked(
+            lifecycle_action="activity_group_membership_recover",
+        )
     return _activity_group_membership_recover(
         archive_root,
         expected_request_sha256=expected_request_sha256,
@@ -44123,6 +45651,10 @@ def activity_group_membership_removal_recover(
     ]
     | None = None,
 ) -> dict[str, Any]:
+    if type(approve) is not bool or approve:
+        return _compound_exact_human_approval_blocked(
+            lifecycle_action="activity_group_membership_removal_recover",
+        )
     return _activity_group_membership_recover(
         archive_root,
         expected_request_sha256=expected_request_sha256,
@@ -44135,7 +45667,7 @@ def activity_group_membership_removal_recover(
     )
 
 
-def created_file_cleanup_if_exact(path: Path, expected_sha256: str) -> bool:
+def _created_file_cleanup_if_exact(path: Path, expected_sha256: str) -> bool:
     """Checkpointed best-effort cleanup; external writer quiescence is required.
 
     The regular-file identity and expected hash are checked immediately before
@@ -44193,7 +45725,7 @@ def created_file_cleanup_if_exact(path: Path, expected_sha256: str) -> bool:
     return regular_identity() is None
 
 
-def restore_file_create_only_with_exact_bytes(path: Path, content: bytes) -> bool:
+def _restore_file_create_only_with_exact_bytes(path: Path, content: bytes) -> bool:
     """Restore removed bytes without ever overwriting a concurrent replacement."""
 
     expected_sha256 = hashlib.sha256(content).hexdigest()
@@ -44424,8 +45956,18 @@ def promote_zettel(
     relative_path: str | None = None,
     reviewed_by: str,
     allow_warnings: bool = False,
+    expected_exact_approval_plan_sha256: str | None = None,
+    expected_exact_approval_target_binding_sha256: str | None = None,
+    exact_human_approval_claim: _ClaimedExactHumanApproval | None = None,
     progress_callback: Callable[[str, str, int | None, int | None], None] | None = None,
 ) -> dict[str, Any]:
+    _require_exact_human_approval_inputs_before_archive_read(
+        claim=exact_human_approval_claim,
+        expected_plan_sha256=expected_exact_approval_plan_sha256,
+        expected_target_binding_sha256=(
+            expected_exact_approval_target_binding_sha256
+        ),
+    )
     reviewer = reviewed_by.strip()
     if not reviewer:
         raise ArchiveServiceError("Real promotion requires --reviewed-by.")
@@ -44500,6 +46042,26 @@ def promote_zettel(
     zettel_id_value = str(source_frontmatter.get("id") or source_path.stem)
     title = source_frontmatter.get("title")
     created_paths = [canonical_relative, receipt_relative]
+
+    try:
+        promotion_binding = (
+            warning_override_approval_binding(dry_run)
+            if dry_run["warnings"] and allow_warnings
+            else promote_zet_approval_binding(dry_run)
+        )
+        exact_operation_approval = _require_exact_human_operation_approval(
+            root,
+            promotion_binding,
+            reviewer_claim=reviewer,
+            expected_plan_sha256=expected_exact_approval_plan_sha256,
+            expected_target_binding_sha256=(
+                expected_exact_approval_target_binding_sha256
+            ),
+            claim=exact_human_approval_claim,
+        )
+    except OperationApprovalBindingError as exc:
+        raise ArchiveServiceError(exc.code) from None
+
     receipt = {
         "receipt_id": f"receipt:promotion:{zettel_id_value}",
         "action": "promote_zettel",
@@ -44526,6 +46088,7 @@ def promote_zettel(
             "created_paths": created_paths,
         },
     }
+    receipt["exact_human_approval"] = exact_operation_approval
     receipt_text = json.dumps(
         json_safe(receipt),
         indent=2,
@@ -44556,7 +46119,7 @@ def promote_zettel(
         cleanup_ok = True
         if created_canonical:
             cleanup_ok = (
-                created_file_cleanup_if_exact(
+                _created_file_cleanup_if_exact(
                     canonical_path,
                     expected_canonical_sha256,
                 )
@@ -44564,7 +46127,7 @@ def promote_zettel(
             )
         if created_receipt:
             cleanup_ok = (
-                created_file_cleanup_if_exact(
+                _created_file_cleanup_if_exact(
                     receipt_path,
                     expected_receipt_sha256,
                 )
@@ -44703,6 +46266,11 @@ def mint_zettel_dry_run(
         for code in fidelity_verification.get("blockers", [])
         if isinstance(code, str)
     )
+    warnings.extend(
+        str(code)
+        for code in fidelity_verification.get("warnings", [])
+        if isinstance(code, str)
+    )
     privacy_blockers = [
         str(code)
         for code in fidelity_verification.get("blockers", [])
@@ -44821,6 +46389,59 @@ def mint_zettel_dry_run(
     }
 
 
+def _require_exact_human_operation_approval(
+    root: Path,
+    binding: ExactOperationApprovalBinding,
+    *,
+    reviewer_claim: str,
+    expected_plan_sha256: str | None,
+    expected_target_binding_sha256: str | None,
+    claim: _ClaimedExactHumanApproval | None,
+) -> dict[str, Any]:
+    """Reauthenticate one approval claim against a freshly derived write plan."""
+
+    _require_exact_human_approval_inputs_before_archive_read(
+        claim=claim,
+        expected_plan_sha256=expected_plan_sha256,
+        expected_target_binding_sha256=expected_target_binding_sha256,
+    )
+    try:
+        assert_same_binding(
+            binding,
+            expected_plan_sha256=expected_plan_sha256,
+            expected_target_binding_sha256=expected_target_binding_sha256,
+        )
+        context = binding.context(
+            archive_id=read_archive_id(root),
+            reviewer_claim=reviewer_claim,
+        )
+        reference = claim.assert_ready_for_context(context)
+        return build_operation_exact_human_approval_receipt(
+            binding,
+            archive_id=read_archive_id(root),
+            reviewer_claim=reviewer_claim,
+            exact_human_approval_reference=reference,
+        )
+    except (OperationApprovalBindingError, ExactHumanApprovalError) as exc:
+        raise ArchiveServiceError(getattr(exc, "code", "exact_human_approval_invalid")) from None
+
+
+def _require_exact_human_approval_inputs_before_archive_read(
+    *,
+    claim: _ClaimedExactHumanApproval | None,
+    expected_plan_sha256: str | None,
+    expected_target_binding_sha256: str | None,
+) -> None:
+    """Reject unbound public writer calls before any archive or private read."""
+
+    if (
+        type(claim) is not _ClaimedExactHumanApproval
+        or type(expected_plan_sha256) is not str
+        or type(expected_target_binding_sha256) is not str
+    ):
+        raise ArchiveServiceError("exact_human_approval_required")
+
+
 def mint_zettel(
     archive_root: Path | str,
     *,
@@ -44830,8 +46451,18 @@ def mint_zettel(
     allow_warnings: bool = False,
     affirmations: dict[str, str] | None = None,
     expected_source_fidelity_plan_sha256: str | None = None,
+    expected_exact_approval_plan_sha256: str | None = None,
+    expected_exact_approval_target_binding_sha256: str | None = None,
+    exact_human_approval_claim: _ClaimedExactHumanApproval | None = None,
     progress_callback: Callable[[str, str, int | None, int | None], None] | None = None,
 ) -> dict[str, Any]:
+    _require_exact_human_approval_inputs_before_archive_read(
+        claim=exact_human_approval_claim,
+        expected_plan_sha256=expected_exact_approval_plan_sha256,
+        expected_target_binding_sha256=(
+            expected_exact_approval_target_binding_sha256
+        ),
+    )
     reviewer = reviewed_by.strip()
     if not reviewer:
         raise ArchiveServiceError("Real minting requires --reviewed-by.")
@@ -45034,6 +46665,23 @@ def mint_zettel(
     title = source_frontmatter.get("title")
     created_paths = [canonical_relative, receipt_relative, snapshot_relative]
 
+    try:
+        exact_operation_approval = _require_exact_human_operation_approval(
+            root,
+            mint_zet_approval_binding(dry_run),
+            reviewer_claim=reviewer,
+            expected_plan_sha256=expected_exact_approval_plan_sha256,
+            expected_target_binding_sha256=(
+                expected_exact_approval_target_binding_sha256
+            ),
+            claim=exact_human_approval_claim,
+        )
+    except OperationApprovalBindingError as exc:
+        raise ArchiveServiceError(exc.code) from None
+    approved_scratch_cleanup_projection = _ai_scratch_gc_approval_projection(
+        dry_run["scratch_cleanup"]
+    )
+
     canonical_path.parent.mkdir(parents=True, exist_ok=True)
     receipt_path.parent.mkdir(parents=True, exist_ok=True)
     snapshot_path.parent.mkdir(parents=True, exist_ok=True)
@@ -45123,6 +46771,7 @@ def mint_zettel(
             ],
             "near_duplicates": dry_run["near_duplicates"],
             "warnings": dry_run["warnings"],
+            "exact_human_approval": exact_operation_approval,
             "result": {
                 "created_paths": created_paths,
             },
@@ -45145,7 +46794,7 @@ def mint_zettel(
             expected_sha256 = cleanup_expected_sha256.get(created_path)
             cleanup_ok = (
                 isinstance(expected_sha256, str)
-                and created_file_cleanup_if_exact(created_path, expected_sha256)
+                and _created_file_cleanup_if_exact(created_path, expected_sha256)
                 and cleanup_ok
             )
         if cleanup_ok:
@@ -45209,25 +46858,25 @@ def mint_zettel(
         }
 
     try:
-        scratch_cleanup_result = ai_scratch_gc_for_zettel(
+        scratch_cleanup_result = _ai_scratch_gc_for_zettel_core(
             root,
             relative_path=dry_run["draft_path"],
             dry_run=False,
             approve=True,
             reviewed_by=reviewer,
             mint_receipt_path=receipt_relative,
+            _approved_cleanup_projection=(
+                approved_scratch_cleanup_projection
+            ),
         )
-    except (ArchiveServiceError, OSError) as exc:
-        scratch_cleanup_result = {
-            "ok": False,
-            "lifecycle_action": "ai_scratch_gc",
-            "blockers": ["scratch_cleanup_failed_after_mint"],
-            "warnings": [str(exc)],
-        }
-        dry_run["warnings"].append("AI scratch cleanup failed after mint; run archive ai-scratch-gc manually.")
+    except (ArchiveServiceError, OSError):
+        scratch_cleanup_result = _ai_scratch_gc_content_free_blocked_result(
+            blocker=AI_SCRATCH_GC_FAILED_AFTER_MINT,
+        )
 
-    return {
-        "ok": True,
+    scratch_cleanup_ok = scratch_cleanup_result.get("ok") is True
+    result = {
+        "ok": scratch_cleanup_ok,
         "dry_run": False,
         "draft_path": dry_run["draft_path"],
         "zettel_id": zettel_id_value,
@@ -45260,6 +46909,37 @@ def mint_zettel(
         "receipt": json_safe(receipt),
         "blockers": [],
     }
+    if not scratch_cleanup_ok:
+        result.update(
+            {
+                "state": (
+                    "canonical_written_scratch_cleanup_"
+                    "reconciliation_required"
+                ),
+                "warnings": unique_preserve_order(
+                    [
+                        *dry_run["warnings"],
+                        MINT_SCRATCH_CLEANUP_RECONCILIATION_REQUIRED,
+                    ]
+                ),
+                "blockers": [
+                    MINT_SCRATCH_CLEANUP_RECONCILIATION_REQUIRED
+                ],
+                "partial_result": {
+                    "canonical_receipt_and_snapshot_written": True,
+                    "index_current": True,
+                    "scratch_cleanup_attempted": True,
+                    "scratch_cleanup_complete": False,
+                    "reconciliation_required": True,
+                },
+                "reconciliation_required": True,
+                "automatic_retry": False,
+                "next_safe_actions": [
+                    "Reconcile the scratch cleanup state locally; do not automatically retry mint or cleanup."
+                ],
+            }
+        )
+    return result
 
 
 def resolve_inbox_draft_path(archive_root: Path, zettel_id: str | None, relative_path: str | None) -> Path:
@@ -45868,7 +47548,18 @@ def retire_minted_draft(
     reviewed_by: str | None = None,
     approve: bool = False,
     edge_receipts_by_source_index: dict[str, list[dict[str, Any]]] | None = None,
+    expected_exact_approval_plan_sha256: str | None = None,
+    expected_exact_approval_target_binding_sha256: str | None = None,
+    exact_human_approval_claim: _ClaimedExactHumanApproval | None = None,
 ) -> dict[str, Any]:
+    if approve:
+        _require_exact_human_approval_inputs_before_archive_read(
+            claim=exact_human_approval_claim,
+            expected_plan_sha256=expected_exact_approval_plan_sha256,
+            expected_target_binding_sha256=(
+                expected_exact_approval_target_binding_sha256
+            ),
+        )
     reviewer = (reviewed_by or "").strip()
     if approve and not reviewer:
         raise ArchiveServiceError("Retiring a minted draft requires --reviewed-by.")
@@ -45898,6 +47589,13 @@ def retire_minted_draft(
         zettel_id=zettel_id,
         relative_path=relative_path,
         expected_index_generation=str(index_evidence.get("generation") or ""),
+        expected_exact_approval_plan_sha256=(
+            expected_exact_approval_plan_sha256
+        ),
+        expected_exact_approval_target_binding_sha256=(
+            expected_exact_approval_target_binding_sha256
+        ),
+        exact_human_approval_claim=exact_human_approval_claim,
     )
 
 
@@ -45928,7 +47626,17 @@ def write_retired_draft_from_plan(
     zettel_id: str | None = None,
     relative_path: str | None = None,
     expected_index_generation: str | None = None,
+    expected_exact_approval_plan_sha256: str | None = None,
+    expected_exact_approval_target_binding_sha256: str | None = None,
+    exact_human_approval_claim: _ClaimedExactHumanApproval | None = None,
 ) -> dict[str, Any]:
+    _require_exact_human_approval_inputs_before_archive_read(
+        claim=exact_human_approval_claim,
+        expected_plan_sha256=expected_exact_approval_plan_sha256,
+        expected_target_binding_sha256=(
+            expected_exact_approval_target_binding_sha256
+        ),
+    )
     root = require_existing_archive_root(archive_root)
     if plan.get("blockers"):
         raise ArchiveServiceError("Retiring minted draft blocked: " + "; ".join(str(item) for item in plan.get("blockers", [])))
@@ -45937,12 +47645,27 @@ def write_retired_draft_from_plan(
     source_bytes = draft_path.read_bytes()
     verify_retired_draft_plan_still_current(root, plan)
 
+    try:
+        exact_operation_approval = _require_exact_human_operation_approval(
+            root,
+            retire_draft_approval_binding(plan),
+            reviewer_claim=reviewed_by,
+            expected_plan_sha256=expected_exact_approval_plan_sha256,
+            expected_target_binding_sha256=(
+                expected_exact_approval_target_binding_sha256
+            ),
+            claim=exact_human_approval_claim,
+        )
+    except OperationApprovalBindingError as exc:
+        raise ArchiveServiceError(exc.code) from None
+
     now = datetime.now().astimezone().replace(microsecond=0).isoformat()
     receipt = dict(plan["receipt_preview"])
     receipt["dry_run"] = False
     receipt["timestamp"] = now
     receipt["reviewed_by"] = reviewed_by
     receipt["reviewed_at"] = now
+    receipt["exact_human_approval"] = exact_operation_approval
     receipt["result"] = {
         "removed_paths": [plan["draft_path"]],
         "created_paths": [plan["retire_receipt_path"]],
@@ -45960,19 +47683,32 @@ def write_retired_draft_from_plan(
         expected_generation=expected_index_generation,
     )
     try:
+        try:
+            final_source_bytes = draft_path.read_bytes()
+        except OSError:
+            raise ArchiveServiceError(
+                "retired_draft_source_changed_after_approval"
+            ) from None
+        if (
+            not hmac.compare_digest(final_source_bytes, source_bytes)
+            or retire_receipt_path.exists()
+        ):
+            raise ArchiveServiceError(
+                "retired_draft_source_changed_after_approval"
+            )
         draft_path.unlink()
         try:
             with retire_receipt_path.open("x", encoding="utf-8") as handle:
                 handle.write(json.dumps(json_safe(receipt), indent=2, ensure_ascii=False, default=str) + "\n")
         except OSError as receipt_error:
-            if not restore_file_create_only_with_exact_bytes(draft_path, source_bytes):
+            if not _restore_file_create_only_with_exact_bytes(draft_path, source_bytes):
                 # Never overwrite or remove a draft that appeared after unlink.
                 # The committed dirty intent is the recovery authority.
                 raise ArchiveServiceError(
                     "retired_draft_restore_conflict"
                 ) from receipt_error
             raise
-    except OSError:
+    except (OSError, ArchiveServiceError):
         if draft_path.is_file():
             reseal_archive_index_mutation_without_delta(
                 root,
@@ -47183,6 +48919,10 @@ def remint_reconcile_apply(
     proceeds under that already-acked run. Guards: no-op refusal when no leading
     BOM; a hard normalized-content invariant asserted before the atomic rewrite.
     """
+    return _compound_exact_human_approval_blocked(
+        lifecycle_action="remint_reconcile",
+    )
+
     reviewer = (reviewed_by or "").strip()
     if not reviewer:
         raise ArchiveServiceError("Reconcile requires --reviewed-by.")
@@ -47805,6 +49545,10 @@ def retire_draft_reconcile_apply(
     a sibling immutable audit receipt. Refuses unless the plan is ok and the
     content_change ack gate is satisfied. Never edits content (except an opt-in
     --strip-bom on the canonical target, mirroring remint-reconcile Item 3)."""
+    return _compound_exact_human_approval_blocked(
+        lifecycle_action="retire_draft_reconcile",
+    )
+
     reviewer = (reviewed_by or "").strip()
     if not reviewer:
         raise ArchiveServiceError("Retire-draft reconcile requires --reviewed-by.")
@@ -48305,6 +50049,10 @@ def mint_zet_batch(
     max_items: int = 500,
     skip_existing: bool = False,
 ) -> dict[str, Any]:
+    if type(dry_run) is not bool or type(approve) is not bool or approve:
+        return _compound_exact_human_approval_blocked(
+            lifecycle_action="mint_zet_batch",
+        )
     root = require_existing_archive_root(archive_root)
     archive_id = read_archive_id(root)
     blockers: list[str] = []
@@ -48479,6 +50227,10 @@ def retire_draft_batch(
     max_items: int = 500,
     skip_existing: bool = False,
 ) -> dict[str, Any]:
+    if type(dry_run) is not bool or type(approve) is not bool or approve:
+        return _compound_exact_human_approval_blocked(
+            lifecycle_action="retire_draft_batch",
+        )
     root = require_existing_archive_root(archive_root)
     archive_id = read_archive_id(root)
     blockers: list[str] = []
@@ -49115,6 +50867,11 @@ def promotion_duplicate_state(
         "staleness_check": evidence.get("staleness_check"),
         "live_staleness_paths_checked": int(evidence.get("live_zettel_count") or 0),
         "index_evidence": evidence,
+        "next_safe_actions": (
+            []
+            if evidence.get("ok")
+            else list(INDEX_REBUILD_NEXT_SAFE_ACTIONS)
+        ),
     }
 
 
@@ -50088,10 +51845,189 @@ def ai_artifact_inventory_next_actions(*, has_unreviewed: bool, has_intake_recor
     return actions
 
 
+def ai_artifact_unmanaged_project_scratch_summary(
+    archive_root: Path,
+    project_root: Path | str | None,
+) -> dict[str, Any]:
+    """Inspect metadata only for the archive root's unmanaged parent scratch.
+
+    This is deliberately not an inventory source and never makes an external
+    file eligible for WOM cleanup. Only the exact direct parent is bound for
+    inspection; every other supplied root returns without scanning. It exists
+    only to make the same-name project/archive boundary visible without
+    reflecting local absolute paths or file names.
+    """
+
+    summary: dict[str, Any] = {
+        "inspected": project_root is not None,
+        "scope_label": "project_root/.wom-scratch",
+        "managed_by_inventory": False,
+        "managed_by_gc": False,
+        "same_as_archive_root": False,
+        "present": False,
+        "coverage_complete": True,
+        "entries_seen": 0,
+        "plain_file_count": 0,
+        "directory_count": 0,
+        "link_or_reparse_count": 0,
+        "special_file_count": 0,
+        "unreadable_count": 0,
+        "truncated": False,
+        "reason_codes": [],
+        "next_safe_actions": list(AI_ARTIFACT_UNMANAGED_PROJECT_NEXT_SAFE_ACTIONS),
+    }
+    if project_root is None:
+        return summary
+
+    supplied = Path(os.path.abspath(os.fspath(Path(project_root).expanduser())))
+    try:
+        project_info = os.lstat(supplied)
+    except FileNotFoundError:
+        summary.update(
+            {
+                "coverage_complete": False,
+                "reason_codes": ["unmanaged_project_root_not_bound"],
+            }
+        )
+        return summary
+    except OSError:
+        summary.update(
+            {
+                "coverage_complete": False,
+                "unreadable_count": 1,
+                "reason_codes": ["unmanaged_project_root_unavailable"],
+            }
+        )
+        return summary
+    if (
+        stat.S_ISLNK(project_info.st_mode)
+        or not stat.S_ISDIR(project_info.st_mode)
+        or (
+            getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+            and getattr(project_info, "st_file_attributes", 0)
+            & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+        )
+    ):
+        summary.update(
+            {
+                "coverage_complete": False,
+                "reason_codes": ["unmanaged_project_root_unsafe"],
+            }
+        )
+        return summary
+    try:
+        if supplied.samefile(archive_root):
+            summary["same_as_archive_root"] = True
+            return summary
+        if not supplied.samefile(archive_root.parent):
+            summary.update(
+                {
+                    "coverage_complete": False,
+                    "reason_codes": ["unmanaged_project_root_not_bound"],
+                }
+            )
+            return summary
+    except OSError:
+        summary.update(
+            {
+                "coverage_complete": False,
+                "reason_codes": ["unmanaged_project_root_unavailable"],
+            }
+        )
+        return summary
+
+    scratch = supplied / AI_ARTIFACT_UNMANAGED_PROJECT_SCRATCH
+    try:
+        scratch_info = os.lstat(scratch)
+    except FileNotFoundError:
+        return summary
+    except OSError:
+        summary.update(
+            {
+                "coverage_complete": False,
+                "unreadable_count": 1,
+                "reason_codes": ["unmanaged_project_scratch_unreadable"],
+            }
+        )
+        return summary
+    summary["present"] = True
+    if (
+        stat.S_ISLNK(scratch_info.st_mode)
+        or not stat.S_ISDIR(scratch_info.st_mode)
+        or (
+            getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+            and getattr(scratch_info, "st_file_attributes", 0)
+            & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+        )
+    ):
+        summary.update(
+            {
+                "coverage_complete": False,
+                "link_or_reparse_count": 1,
+                "reason_codes": ["unmanaged_project_scratch_unsafe"],
+            }
+        )
+        return summary
+
+    pending = [scratch]
+    reason_codes: list[str] = []
+    reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+    while pending and summary["entries_seen"] < AI_ARTIFACT_UNMANAGED_PROJECT_SCAN_LIMIT:
+        directory = pending.pop()
+        try:
+            iterator = os.scandir(directory)
+        except OSError:
+            summary["unreadable_count"] += 1
+            reason_codes.append("unmanaged_project_scratch_entry_unreadable")
+            continue
+        with iterator:
+            for entry in iterator:
+                if summary["entries_seen"] >= AI_ARTIFACT_UNMANAGED_PROJECT_SCAN_LIMIT:
+                    summary["truncated"] = True
+                    reason_codes.append("unmanaged_project_scratch_entry_limit_reached")
+                    break
+                summary["entries_seen"] += 1
+                try:
+                    entry_info = entry.stat(follow_symlinks=False)
+                except OSError:
+                    summary["unreadable_count"] += 1
+                    reason_codes.append("unmanaged_project_scratch_entry_unreadable")
+                    continue
+                if (
+                    stat.S_ISLNK(entry_info.st_mode)
+                    or (reparse_flag and getattr(entry_info, "st_file_attributes", 0) & reparse_flag)
+                ):
+                    summary["link_or_reparse_count"] += 1
+                    reason_codes.append("unmanaged_project_scratch_link_or_reparse_skipped")
+                    continue
+                if stat.S_ISDIR(entry_info.st_mode):
+                    summary["directory_count"] += 1
+                    pending.append(Path(entry.path))
+                elif stat.S_ISREG(entry_info.st_mode):
+                    summary["plain_file_count"] += 1
+                else:
+                    summary["special_file_count"] += 1
+                    reason_codes.append("unmanaged_project_scratch_special_file_skipped")
+    if pending:
+        summary["truncated"] = True
+        reason_codes.append("unmanaged_project_scratch_entry_limit_reached")
+    summary["reason_codes"] = unique_preserve_order(reason_codes)
+    summary["coverage_complete"] = not any(
+        (
+            summary["truncated"],
+            summary["link_or_reparse_count"],
+            summary["special_file_count"],
+            summary["unreadable_count"],
+        )
+    )
+    return summary
+
+
 def ai_artifact_inventory(
     archive_root: Path | str,
     *,
     include_roots: list[str] | None = None,
+    project_root: Path | str | None = None,
     max_items: int = 100,
     show_relative_paths: bool = False,
     dry_run: bool = True,
@@ -50182,6 +52118,27 @@ def ai_artifact_inventory(
 
     has_unreviewed = bool(fate_counts.get("unreviewed_ai_artifact"))
     has_intake_recorded = bool(fate_counts.get("source_intake_recorded"))
+    unmanaged_project_scratch = ai_artifact_unmanaged_project_scratch_summary(
+        root,
+        project_root,
+    )
+    if unmanaged_project_scratch["reason_codes"]:
+        warnings.append(
+            "The optional project-root scratch inspection was incomplete; it remains outside inventory and GC authority."
+        )
+    if (
+        unmanaged_project_scratch["present"]
+        and unmanaged_project_scratch["plain_file_count"]
+    ):
+        warnings.append(
+            "Unmanaged project-root .wom-scratch contains files; they were not inventoried and will never be deleted by ai-scratch-gc."
+        )
+    next_safe_actions = ai_artifact_inventory_next_actions(
+        has_unreviewed=has_unreviewed,
+        has_intake_recorded=has_intake_recorded,
+    )
+    if unmanaged_project_scratch["present"]:
+        next_safe_actions.extend(unmanaged_project_scratch["next_safe_actions"])
     return {
         "ok": not blockers,
         "dry_run": bool(dry_run),
@@ -50191,6 +52148,10 @@ def ai_artifact_inventory(
         "scan_policy": {
             "allowlisted_roots_only": True,
             "roots": normalized_roots,
+            "managed_archive_roots": list(AI_ARTIFACT_INVENTORY_DEFAULT_ROOTS),
+            "archive_root_only": True,
+            "external_project_roots_inventory_eligible": False,
+            "external_project_roots_gc_eligible": False,
             "broad_archive_sweep": False,
             "root_recursion_outside_allowlist": False,
             "archive_wide_scan_performed": False,
@@ -50200,6 +52161,7 @@ def ai_artifact_inventory(
                 "Only the listed roots were scanned. A clear result does not prove that no AI artifacts exist elsewhere in the archive."
             ),
         },
+        "unmanaged_project_scratch": unmanaged_project_scratch,
         "item_count": len(items),
         "total_candidate_count": total_candidates,
         "truncated": total_candidates > len(items),
@@ -50207,10 +52169,7 @@ def ai_artifact_inventory(
         "fate_counts": fate_counts,
         "artifact_kind_counts": kind_counts,
         "items": items,
-        "next_safe_actions": ai_artifact_inventory_next_actions(
-            has_unreviewed=has_unreviewed,
-            has_intake_recorded=has_intake_recorded,
-        ),
+        "next_safe_actions": next_safe_actions,
         "closed_actions": {
             "file_bodies_read": False,
             "content_hashes_calculated": False,
@@ -50225,6 +52184,8 @@ def ai_artifact_inventory(
             "local_absolute_paths_echoed": False,
             "provider_urls_echoed": False,
             "secrets_read": False,
+            "external_absolute_paths_echoed": False,
+            "external_file_names_echoed": False,
         },
         "would_change": [],
         "blockers": unique_preserve_order(blockers),
@@ -50265,17 +52226,251 @@ def zettel_self_contained_assessment(frontmatter: dict[str, Any], body: str) -> 
     }
 
 
-def ai_scratch_path_is_plain_file(path: Path) -> bool:
-    try:
-        stat_result = os.lstat(path)
-    except OSError:
-        return False
+def _ai_scratch_gc_approval_projection(plan: dict[str, Any]) -> dict[str, Any]:
+    """Select the exact cleanup effects and policy approved by mint."""
+
+    raw_candidates = plan.get("candidates")
+    candidates = (
+        [
+            {
+                "path": item.get("path"),
+                "state": item.get("state"),
+                "sha256": item.get("sha256"),
+                "bytes": item.get("bytes"),
+            }
+            if isinstance(item, dict)
+            else None
+            for item in raw_candidates
+        ]
+        if isinstance(raw_candidates, list)
+        else None
+    )
+    raw_missing = plan.get("missing")
+    missing = (
+        [
+            {"path": item.get("path"), "state": item.get("state")}
+            if isinstance(item, dict)
+            else None
+            for item in raw_missing
+        ]
+        if isinstance(raw_missing, list)
+        else None
+    )
+    blockers = plan.get("blockers")
+    return {
+        "target": {
+            "zettel_id": plan.get("zettel_id"),
+            "zettel_path": plan.get("zettel_path"),
+        },
+        "candidates": candidates,
+        "missing": missing,
+        "blockers": list(blockers) if isinstance(blockers, list) else None,
+        "counts": {
+            "candidate_count": plan.get("candidate_count"),
+            "scratch_reference_count": plan.get("scratch_reference_count"),
+        },
+        "policy": {
+            "safe_to_cleanup": plan.get("safe_to_cleanup"),
+        },
+    }
+
+
+def _ai_scratch_gc_content_free_blocked_result(
+    *,
+    blocker: str = AI_SCRATCH_GC_APPROVAL_BINDING_CHANGED,
+    deleted_count: int = 0,
+) -> dict[str, Any]:
+    binding_changed = blocker == AI_SCRATCH_GC_APPROVAL_BINDING_CHANGED
+    return {
+        "ok": False,
+        "dry_run": False,
+        "state": (
+            "approval_binding_changed"
+            if binding_changed
+            else "cleanup_failed_after_mint"
+        ),
+        "lifecycle_action": "ai_scratch_gc",
+        "blockers": [
+            blocker
+            if blocker
+            in {
+                AI_SCRATCH_GC_APPROVAL_BINDING_CHANGED,
+                AI_SCRATCH_GC_FAILED_AFTER_MINT,
+            }
+            else AI_SCRATCH_GC_FAILED_AFTER_MINT
+        ],
+        "warnings": [],
+        "deleted_count": max(0, int(deleted_count)),
+        "deleted_paths_echoed": False,
+        "created_paths": [],
+        "would_change": [],
+        "receipt": None,
+        "reconciliation_required": True,
+        "automatic_retry": False,
+        "private_values_echoed": False,
+        "privacy_guards": {
+            "body_text_echoed": False,
+            "source_ref_values_echoed": False,
+            "provider_urls_echoed": False,
+            "local_absolute_paths_echoed": False,
+            "deleted_paths_echoed": False,
+        },
+    }
+
+
+def _ai_scratch_stat_is_plain_file(stat_result: os.stat_result) -> bool:
     if stat.S_ISLNK(stat_result.st_mode):
         return False
     reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
     if reparse_flag and getattr(stat_result, "st_file_attributes", 0) & reparse_flag:
         return False
     return stat.S_ISREG(stat_result.st_mode)
+
+
+def _ai_scratch_stat_timestamp_ns(
+    stat_result: os.stat_result,
+    *,
+    nanoseconds_attribute: str,
+    seconds_attribute: str,
+) -> int:
+    nanoseconds = getattr(stat_result, nanoseconds_attribute, None)
+    if nanoseconds is not None:
+        return int(nanoseconds)
+    seconds = getattr(stat_result, seconds_attribute, None)
+    if seconds is None:
+        raise ValueError("scratch_file_timestamp_unavailable")
+    return int(float(seconds) * 1_000_000_000)
+
+
+def _ai_scratch_windows_stable_time_ns(stat_result: os.stat_result) -> int:
+    """Return the stable Windows creation timestamp across Python versions."""
+
+    # Python 3.12+ exposes NTFS creation time as st_birthtime_ns. Python 3.10
+    # and 3.11 expose that same creation-time meaning through st_ctime_ns.
+    if getattr(stat_result, "st_birthtime_ns", None) is not None:
+        return _ai_scratch_stat_timestamp_ns(
+            stat_result,
+            nanoseconds_attribute="st_birthtime_ns",
+            seconds_attribute="st_birthtime",
+        )
+    return _ai_scratch_stat_timestamp_ns(
+        stat_result,
+        nanoseconds_attribute="st_ctime_ns",
+        seconds_attribute="st_ctime",
+    )
+
+
+def _ai_scratch_stat_identity(stat_result: os.stat_result) -> tuple[int, ...]:
+    # Path stats and descriptor stats can legitimately observe different NTFS
+    # change times immediately after creation. Use creation time only for their
+    # cross-surface identity and validate change time per surface below.
+    identity_time_ns = (
+        _ai_scratch_windows_stable_time_ns(stat_result)
+        if os.name == "nt"
+        else _ai_scratch_stat_timestamp_ns(
+            stat_result,
+            nanoseconds_attribute="st_ctime_ns",
+            seconds_attribute="st_ctime",
+        )
+    )
+    return (
+        int(getattr(stat_result, "st_dev", 0)),
+        int(getattr(stat_result, "st_ino", 0)),
+        int(stat_result.st_mode),
+        int(stat_result.st_size),
+        int(getattr(stat_result, "st_mtime_ns", 0)),
+        identity_time_ns,
+    )
+
+
+def _ai_scratch_stat_change_time_ns(stat_result: os.stat_result) -> int:
+    return _ai_scratch_stat_timestamp_ns(
+        stat_result,
+        nanoseconds_attribute="st_ctime_ns",
+        seconds_attribute="st_ctime",
+    )
+
+
+def _ai_scratch_candidate_matches_current_file(
+    root: Path,
+    candidate: dict[str, Any],
+) -> bool:
+    relative = candidate.get("path")
+    expected_state = candidate.get("state")
+    expected_sha256 = candidate.get("sha256")
+    expected_bytes = candidate.get("bytes")
+    if (
+        type(relative) is not str
+        or normalize_ai_scratch_relative_path(relative) != relative
+        or expected_state != "ready"
+        or type(expected_sha256) is not str
+        or re.fullmatch(r"[0-9a-f]{64}", expected_sha256) is None
+        or type(expected_bytes) is not int
+        or expected_bytes < 0
+    ):
+        return False
+    try:
+        path = resolve_archive_relative_path(root, relative)
+        if not is_path_within_root(path, root):
+            return False
+    except (OSError, ArchivePathError, TypeError, ValueError):
+        return False
+
+    # NTFS path and descriptor observations can expose different change-time
+    # values immediately after file creation. Cross-check their stable identity
+    # (including NTFS birth time), then require each surface's change time to
+    # remain exact from its own before observation through its after observation.
+    try:
+        before = os.lstat(path)
+        if (
+            not _ai_scratch_stat_is_plain_file(before)
+            or before.st_size != expected_bytes
+        ):
+            return False
+        digest = hashlib.sha256()
+        byte_count = 0
+        before_identity = _ai_scratch_stat_identity(before)
+        before_change_time_ns = _ai_scratch_stat_change_time_ns(before)
+        with path.open("rb") as handle:
+            opened_before = os.fstat(handle.fileno())
+            opened_before_identity = _ai_scratch_stat_identity(opened_before)
+            opened_before_change_time_ns = (
+                _ai_scratch_stat_change_time_ns(opened_before)
+            )
+            if not _ai_scratch_stat_is_plain_file(opened_before):
+                return False
+            if opened_before_identity != before_identity:
+                return False
+            while True:
+                chunk = handle.read(1024 * 1024)
+                if not chunk:
+                    break
+                byte_count += len(chunk)
+                digest.update(chunk)
+            opened_after = os.fstat(handle.fileno())
+        after = os.lstat(path)
+    except (OSError, ArchivePathError, TypeError, ValueError):
+        return False
+    return bool(
+        byte_count == expected_bytes
+        and digest.hexdigest() == expected_sha256
+        and _ai_scratch_stat_is_plain_file(opened_after)
+        and _ai_scratch_stat_is_plain_file(after)
+        and _ai_scratch_stat_identity(opened_after) == before_identity
+        and _ai_scratch_stat_identity(after) == before_identity
+        and _ai_scratch_stat_change_time_ns(opened_after)
+        == opened_before_change_time_ns
+        and _ai_scratch_stat_change_time_ns(after)
+        == before_change_time_ns
+    )
+
+
+def ai_scratch_path_is_plain_file(path: Path) -> bool:
+    try:
+        stat_result = os.lstat(path)
+    except OSError:
+        return False
+    return _ai_scratch_stat_is_plain_file(stat_result)
 
 
 def cleanup_empty_ai_scratch_dirs(root: Path, paths: list[Path]) -> None:
@@ -50369,6 +52564,38 @@ def ai_scratch_gc_for_zettel(
     reviewed_by: str | None = None,
     mint_receipt_path: str | None = None,
 ) -> dict[str, Any]:
+    """Expose planning only until standalone cleanup has an exact binding."""
+
+    if type(dry_run) is not bool or type(approve) is not bool or approve:
+        return _compound_exact_human_approval_blocked(
+            lifecycle_action="ai_scratch_gc",
+        )
+    return _ai_scratch_gc_for_zettel_core(
+        archive_root,
+        zettel_id=zettel_id,
+        relative_path=relative_path,
+        dry_run=dry_run,
+        approve=False,
+        reviewed_by=reviewed_by,
+        mint_receipt_path=mint_receipt_path,
+    )
+
+
+def _ai_scratch_gc_for_zettel_core(
+    archive_root: Path | str,
+    *,
+    zettel_id: str | None = None,
+    relative_path: str | None = None,
+    dry_run: bool = True,
+    approve: bool = False,
+    reviewed_by: str | None = None,
+    mint_receipt_path: str | None = None,
+    _approved_cleanup_projection: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    if approve and type(_approved_cleanup_projection) is not dict:
+        return _compound_exact_human_approval_blocked(
+            lifecycle_action="ai_scratch_gc",
+        )
     root = require_existing_archive_root(archive_root)
     path = resolve_zettel_path(root, zettel_id=zettel_id, relative_path=relative_path)
     frontmatter, body = require_readable_zettel_content(path)
@@ -50382,6 +52609,12 @@ def ai_scratch_gc_for_zettel(
         blockers.append("ai-scratch-gc requires --reviewed-by when --approve is used.")
 
     plan = build_ai_scratch_gc_plan(root, path, frontmatter, body)
+    if _approved_cleanup_projection is not None and (
+        type(_approved_cleanup_projection) is not dict
+        or _ai_scratch_gc_approval_projection(plan)
+        != _approved_cleanup_projection
+    ):
+        return _ai_scratch_gc_content_free_blocked_result()
     blockers.extend(plan["blockers"])
     ready = [item for item in plan["candidates"] if item.get("state") == "ready"]
     result = {
@@ -50393,6 +52626,12 @@ def ai_scratch_gc_for_zettel(
         "zettel_path": plan["zettel_path"],
         "self_contained_check": zettel_self_contained_assessment(frontmatter, body),
         "cleanup_plan": plan,
+        "scope_boundary": {
+            "managed_archive_roots": list(AI_SCRATCH_ROOT_PREFIXES),
+            "archive_root_only": True,
+            "external_project_roots_included": False,
+            "external_project_roots_delete_eligible": False,
+        },
         "blockers": unique_preserve_order(blockers),
         "warnings": [],
         "would_change": [] if blockers else plan["would_change"],
@@ -50406,6 +52645,11 @@ def ai_scratch_gc_for_zettel(
     }
     if blockers or not approve:
         return result
+    if any(
+        not _ai_scratch_candidate_matches_current_file(root, item)
+        for item in ready
+    ):
+        return _ai_scratch_gc_content_free_blocked_result()
     if not ready:
         return {
             **result,
@@ -50423,17 +52667,23 @@ def ai_scratch_gc_for_zettel(
     for item in ready:
         relative = str(item["path"])
         path_to_delete = resolve_archive_relative_path(root, relative)
-        if not path_to_delete.is_file() or not ai_scratch_path_is_plain_file(path_to_delete):
-            result["warnings"].append(f"Skipped non-plain scratch file during cleanup: {relative}.")
-            continue
-        path_to_delete.unlink()
+        if not _ai_scratch_candidate_matches_current_file(root, item):
+            return _ai_scratch_gc_content_free_blocked_result(
+                deleted_count=len(deleted),
+            )
+        try:
+            path_to_delete.unlink()
+        except OSError:
+            return _ai_scratch_gc_content_free_blocked_result(
+                blocker=AI_SCRATCH_GC_FAILED_AFTER_MINT,
+                deleted_count=len(deleted),
+            )
         deleted_paths.append(path_to_delete)
         deleted.append({"path": relative, "sha256": item.get("sha256"), "bytes": item.get("bytes")})
     cleanup_empty_ai_scratch_dirs(root, deleted_paths)
 
     receipt_relative = str(plan["receipt_path"])
     receipt_path = resolve_archive_relative_path(root, receipt_relative)
-    receipt_path.parent.mkdir(parents=True, exist_ok=True)
     receipt = {
         "schema_version": "wom-kit/ai-scratch-gc-receipt/v0.1",
         "receipt_id": f"receipt:ai-scratch-gc:{plan['zettel_id']}",
@@ -50453,7 +52703,14 @@ def ai_scratch_gc_for_zettel(
             "provider_api_called": False,
         },
     }
-    write_json_new_file(receipt_path, receipt)
+    try:
+        receipt_path.parent.mkdir(parents=True, exist_ok=True)
+        write_json_new_file(receipt_path, receipt)
+    except OSError:
+        return _ai_scratch_gc_content_free_blocked_result(
+            blocker=AI_SCRATCH_GC_FAILED_AFTER_MINT,
+            deleted_count=len(deleted),
+        )
     return {
         **result,
         "ok": True,
@@ -53055,6 +55312,10 @@ def quarantine_foreign_block(
     expected_case_id: str | None = None,
     review_note: str | None = None,
 ) -> dict[str, Any]:
+    if type(dry_run) is not bool or type(approve) is not bool or approve:
+        return _compound_exact_human_approval_blocked(
+            lifecycle_action="quarantine_foreign_block",
+        )
     root = require_existing_archive_root(archive_root)
     archive_id = read_archive_id(root)
     blockers: list[str] = []
@@ -54094,6 +56355,10 @@ def record_quarantine_decision(
     expected_decision: str | None = None,
     review_note: str | None = None,
 ) -> dict[str, Any]:
+    if type(dry_run) is not bool or type(approve) is not bool or approve:
+        return _compound_exact_human_approval_blocked(
+            lifecycle_action="record_quarantine_decision",
+        )
     root = require_existing_archive_root(archive_root)
     archive_id = read_archive_id(root)
     blockers: list[str] = []
@@ -59627,7 +61892,9 @@ def connection_edge_intelligence_plan(
             "llm_or_provider_classification_implemented": False,
             "source_body_reader_implemented": False,
             "candidate_record_writer_implemented": False,
-            "bulk_edge_writer_implemented": True,
+            "bulk_edge_writer_implemented": False,
+            "legacy_bulk_edge_writer_present_but_blocked": True,
+            "compound_exact_human_approval_binding_required": True,
             "policy_batch_edge_writer_command": "zettel-edge-batch",
             "single_edge_writer_available_after_human_review": True,
         },
@@ -61334,6 +63601,10 @@ def notion_ancestor_fetch_adapter_run(
     scope_ancestor_refs: Iterable[str] | str | None = None,
     scope_leaf_refs: Iterable[str] | str | None = None,
 ) -> dict[str, Any]:
+    if type(dry_run) is not bool or type(approve) is not bool or approve:
+        return _compound_exact_human_approval_blocked(
+            lifecycle_action="notion_ancestor_fetch_adapter_run",
+        )
     root = require_existing_archive_root(archive_root)
     archive_id = read_archive_id(root)
     blockers: list[str] = []
@@ -61484,7 +63755,7 @@ def notion_ancestor_fetch_adapter_run(
         execution_status = "running"
         try:
             for request in request_queue:
-                result = notion_execute_one_ancestor_fetch_request(
+                result = _notion_execute_one_ancestor_fetch_request(
                     request,
                     token=str(token or ""),
                     notion_version=resolved_notion_version,
@@ -61785,7 +64056,7 @@ def notion_ancestor_fetch_receipt_payload(
     }
 
 
-def notion_execute_one_ancestor_fetch_request(
+def _notion_execute_one_ancestor_fetch_request(
     request: dict[str, Any],
     *,
     token: str,
@@ -61831,7 +64102,7 @@ def notion_execute_one_ancestor_fetch_request(
                 stop_condition = "unsafe_ref_or_provider_secret_detected"
                 partial = True
                 break
-            response = notion_api_get_json(
+            response = _notion_api_get_json(
                 target_kind=str(target["api_kind"]),
                 target_id=str(target["provider_id"]),
                 token=token,
@@ -61981,7 +64252,7 @@ def notion_error_code_from_http_body(body: bytes) -> str | None:
     return str(code).strip() if isinstance(code, str) and code.strip() else None
 
 
-def notion_api_get_json(
+def _notion_api_get_json(
     *,
     target_kind: str,
     target_id: str,
@@ -64206,6 +66477,10 @@ def tiro_lossless_recovery_capture(
     approve: bool = False,
     reviewed_by: str | None = None,
 ) -> dict[str, Any]:
+    if type(dry_run) is not bool or type(approve) is not bool or approve:
+        return _compound_exact_human_approval_blocked(
+            lifecycle_action="tiro_lossless_recovery_capture",
+        )
     root = require_existing_archive_root(archive_root)
     archive_id = read_archive_id(root)
     blockers: list[str] = []
@@ -64572,7 +66847,9 @@ def tiro_token_from_credential_value(value: str) -> str:
     return walk(payload) or text
 
 
-def tiro_windows_credential_manager_read_secret(target_label: str) -> tuple[str, dict[str, Any]]:
+def _tiro_windows_credential_manager_read_secret(
+    target_label: str,
+) -> tuple[str, dict[str, Any]]:
     label = str(target_label or "").strip()
     if os.name != "nt":
         raise ArchiveServiceError("Tiro OS credential read currently supports Windows Credential Manager only.")
@@ -64674,7 +66951,7 @@ def tiro_windows_credential_manager_read_secret(target_label: str) -> tuple[str,
     }
 
 
-def tiro_read_credential_value(
+def _tiro_read_credential_value(
     credential_ref: str,
     credential_store: str | None,
 ) -> tuple[str | None, dict[str, Any]]:
@@ -64694,7 +66971,7 @@ def tiro_read_credential_value(
         label = tiro_credential_ref_label(credential_ref)
         if not label:
             raise ArchiveServiceError("Tiro OS credential ref label was not safe.")
-        secret, keyring_summary = tiro_windows_credential_manager_read_secret(label)
+        secret, keyring_summary = _tiro_windows_credential_manager_read_secret(label)
         keyring_summary.update(
             {
                 "read_source": "os_keyring",
@@ -64726,7 +67003,7 @@ def tiro_lossless_recovery_fetch_receipt_id(
     return f"tiro-lossless-fetch-{digest}"
 
 
-def tiro_api_request_json(
+def _tiro_api_request_json(
     path: str,
     *,
     token: str,
@@ -64781,7 +67058,7 @@ def tiro_response_next_cursor(payload: dict[str, Any]) -> str | None:
     return str(cursor).strip() if isinstance(cursor, str) and cursor.strip() else None
 
 
-def tiro_paginated_get(
+def _tiro_paginated_get(
     path: str,
     *,
     token: str,
@@ -64796,7 +67073,12 @@ def tiro_paginated_get(
         query = {"size": size}
         if cursor:
             query["cursor"] = cursor
-        payload = tiro_api_request_json(path, token=token, query=query, timeout_seconds=timeout_seconds)
+        payload = _tiro_api_request_json(
+            path,
+            token=token,
+            query=query,
+            timeout_seconds=timeout_seconds,
+        )
         page_items = tiro_response_items(payload)
         items.extend(page_items)
         cursor = tiro_response_next_cursor(payload)
@@ -64815,7 +67097,7 @@ def tiro_paginated_get(
     return items, pages
 
 
-def tiro_optional_get(
+def _tiro_optional_get(
     path: str,
     *,
     token: str,
@@ -64826,9 +67108,17 @@ def tiro_optional_get(
 ) -> Any:
     try:
         if paginated:
-            items, _pages = tiro_paginated_get(path, token=token, timeout_seconds=timeout_seconds)
+            items, _pages = _tiro_paginated_get(
+                path,
+                token=token,
+                timeout_seconds=timeout_seconds,
+            )
             return {"content": items}
-        return tiro_api_request_json(path, token=token, timeout_seconds=timeout_seconds)
+        return _tiro_api_request_json(
+            path,
+            token=token,
+            timeout_seconds=timeout_seconds,
+        )
     except ArchiveServiceError:
         fetch_gaps.append({"category": category, "status": "provider_request_failed_raw_error_redacted"})
         return None
@@ -64847,6 +67137,10 @@ def tiro_lossless_recovery_fetch_run(
     approve: bool = False,
     reviewed_by: str | None = None,
 ) -> dict[str, Any]:
+    if type(dry_run) is not bool or type(approve) is not bool or approve:
+        return _compound_exact_human_approval_blocked(
+            lifecycle_action="tiro_lossless_recovery_fetch_run",
+        )
     root = require_existing_archive_root(archive_root)
     archive_id = read_archive_id(root)
     blockers: list[str] = []
@@ -64917,7 +67211,7 @@ def tiro_lossless_recovery_fetch_run(
     if approve and not blockers:
         credential_value_read = True
         try:
-            raw_credential_value, credential_read_summary = tiro_read_credential_value(
+            raw_credential_value, credential_read_summary = _tiro_read_credential_value(
                 normalized_credential_ref,
                 credential_store,
             )
@@ -64943,7 +67237,11 @@ def tiro_lossless_recovery_fetch_run(
             effective_workspace = scoped_workspace
             try:
                 provider_api_called = True
-                workspace_list = tiro_api_request_json("/v1/external/workspaces", token=str(token), timeout_seconds=timeout_seconds)
+                workspace_list = _tiro_api_request_json(
+                    "/v1/external/workspaces",
+                    token=str(token),
+                    timeout_seconds=timeout_seconds,
+                )
                 request_categories.add("workspaces")
                 listed_workspaces = workspace_list.get("workspaces")
                 if isinstance(listed_workspaces, list):
@@ -64966,7 +67264,11 @@ def tiro_lossless_recovery_fetch_run(
                 fetch_gaps.append({"category": "workspaces", "status": "provider_request_failed_raw_error_redacted"})
             if not effective_workspace and not blockers:
                 provider_api_called = True
-                workspace_me = tiro_api_request_json("/v1/external/workspaces/me", token=str(token), timeout_seconds=timeout_seconds)
+                workspace_me = _tiro_api_request_json(
+                    "/v1/external/workspaces/me",
+                    token=str(token),
+                    timeout_seconds=timeout_seconds,
+                )
                 request_categories.add("workspace_me")
                 workspace_records = [workspace_me]
                 candidate = workspace_me.get("guid") or workspace_me.get("workspaceGuid")
@@ -64977,7 +67279,7 @@ def tiro_lossless_recovery_fetch_run(
             if not blockers and scoped_note:
                 notes = [{"guid": scoped_note}]
             elif not blockers and effective_workspace:
-                notes, pages = tiro_paginated_get(
+                notes, pages = _tiro_paginated_get(
                     f"/v1/external/workspaces/{effective_workspace}/notes",
                     token=str(token),
                     timeout_seconds=timeout_seconds,
@@ -65000,14 +67302,14 @@ def tiro_lossless_recovery_fetch_run(
             documents_by_note: dict[str, Any] = {}
             folders_by_note: dict[str, Any] = {}
             for guid in note_guids:
-                note_details[guid] = tiro_api_request_json(
+                note_details[guid] = _tiro_api_request_json(
                     f"/v1/external/notes/{guid}",
                     token=str(token),
                     timeout_seconds=timeout_seconds,
                 )
                 provider_api_called = True
                 request_categories.add("note_metadata")
-                paragraphs, paragraph_pages = tiro_paginated_get(
+                paragraphs, paragraph_pages = _tiro_paginated_get(
                     f"/v1/external/notes/{guid}/paragraphs",
                     token=str(token),
                     timeout_seconds=timeout_seconds,
@@ -65015,7 +67317,7 @@ def tiro_lossless_recovery_fetch_run(
                 pagination.extend(paragraph_pages)
                 paragraphs_by_note[guid] = {"content": paragraphs}
                 request_categories.add("paragraphs")
-                summaries_by_note[guid] = tiro_optional_get(
+                summaries_by_note[guid] = _tiro_optional_get(
                     f"/v1/external/notes/{guid}/summaries",
                     token=str(token),
                     timeout_seconds=timeout_seconds,
@@ -65023,7 +67325,7 @@ def tiro_lossless_recovery_fetch_run(
                     category="summaries",
                     paginated=True,
                 )
-                documents_by_note[guid] = tiro_optional_get(
+                documents_by_note[guid] = _tiro_optional_get(
                     f"/v1/external/notes/{guid}/documents",
                     token=str(token),
                     timeout_seconds=timeout_seconds,
@@ -65031,7 +67333,7 @@ def tiro_lossless_recovery_fetch_run(
                     category="documents",
                     paginated=True,
                 )
-                folders_by_note[guid] = tiro_optional_get(
+                folders_by_note[guid] = _tiro_optional_get(
                     f"/v1/external/notes/{guid}/folders",
                     token=str(token),
                     timeout_seconds=timeout_seconds,
@@ -65040,7 +67342,7 @@ def tiro_lossless_recovery_fetch_run(
                     paginated=True,
                 )
 
-            user_word_memories = tiro_optional_get(
+            user_word_memories = _tiro_optional_get(
                 "/v1/external/users/me/word-memories",
                 token=str(token),
                 timeout_seconds=timeout_seconds,
@@ -65049,7 +67351,7 @@ def tiro_lossless_recovery_fetch_run(
                 paginated=True,
             )
             workspace_word_memories = (
-                tiro_optional_get(
+                _tiro_optional_get(
                     f"/v1/external/workspaces/{effective_workspace}/word-memories",
                     token=str(token),
                     timeout_seconds=timeout_seconds,
@@ -65061,7 +67363,7 @@ def tiro_lossless_recovery_fetch_run(
                 else None
             )
             wiki = (
-                tiro_optional_get(
+                _tiro_optional_get(
                     f"/v1/external/workspaces/{effective_workspace}/wiki/info",
                     token=str(token),
                     timeout_seconds=timeout_seconds,
@@ -66754,7 +69056,18 @@ def zettel_edge_write(
     reviewed_by: str | None = None,
     manifest_records_by_object_id: dict[str, list[dict[str, Any]]] | None = None,
     zettel_path_index: dict[str, Path] | None = None,
+    expected_exact_approval_plan_sha256: str | None = None,
+    expected_exact_approval_target_binding_sha256: str | None = None,
+    exact_human_approval_claim: _ClaimedExactHumanApproval | None = None,
 ) -> dict[str, Any]:
+    if approve:
+        _require_exact_human_approval_inputs_before_archive_read(
+            claim=exact_human_approval_claim,
+            expected_plan_sha256=expected_exact_approval_plan_sha256,
+            expected_target_binding_sha256=(
+                expected_exact_approval_target_binding_sha256
+            ),
+        )
     root = require_existing_archive_root(archive_root)
     archive_id = read_archive_id(root)
     blockers: list[str] = []
@@ -66788,13 +69101,17 @@ def zettel_edge_write(
     if bool(from_zettel) != bool(from_path):
         try:
             source_path = resolve_zettel_path(root, zettel_id=from_zettel, relative_path=from_path, zettel_path_index=zettel_path_index)
-            source_frontmatter, source_body = require_readable_zettel_content(source_path)
+            source_bytes = source_path.read_bytes()
+            source_frontmatter, source_body = require_readable_zettel_text(
+                decode_utf8_with_universal_newlines(source_bytes)
+            )
             source_zettel_id = str(source_frontmatter.get("id") or source_zettel_id).strip()
             source_relative = archive_relative_path(source_path, root)
             source_summary = {
                 "zettel_id": source_zettel_id,
                 "path": source_relative,
                 "status": source_frontmatter.get("status") if isinstance(source_frontmatter.get("status"), str) else None,
+                "current_sha256": "sha256:" + hashlib.sha256(source_bytes).hexdigest(),
             }
             if not ZETTEL_EDGE_ZETTEL_ID_RE.match(source_zettel_id):
                 blockers.append("source zettel id must be a safe zet_<id> value.")
@@ -66900,8 +69217,7 @@ def zettel_edge_write(
             warnings=warnings,
         )
 
-    if dry_run:
-        return zettel_edge_result(
+    planned_result = zettel_edge_result(
             archive_id=archive_id,
             dry_run=True,
             source_summary=source_summary,
@@ -66918,6 +69234,8 @@ def zettel_edge_write(
             blockers=[],
             warnings=warnings,
         )
+    if dry_run:
+        return planned_result
 
     assert source_path is not None
     assert source_summary is not None
@@ -66926,7 +69244,14 @@ def zettel_edge_write(
     assert receipt_path is not None
     assert reviewed_by is not None
 
-    original_text = source_path.read_text(encoding="utf-8")
+    original_bytes = source_path.read_bytes()
+    current_source_sha256 = "sha256:" + hashlib.sha256(original_bytes).hexdigest()
+    if not hmac.compare_digest(
+        current_source_sha256,
+        str(source_summary.get("current_sha256") or ""),
+    ):
+        raise ArchiveServiceError("zettel_edge_source_changed_after_dry_run")
+    original_text = decode_utf8_with_universal_newlines(original_bytes)
     updated_frontmatter = copy.deepcopy(source_frontmatter)
     updated_edges = list(existing_edges)
     updated_edges.append(proposed_edge)
@@ -66964,7 +69289,35 @@ def zettel_edge_write(
         },
     }
 
+    try:
+        exact_operation_approval = _require_exact_human_operation_approval(
+            root,
+            zettel_edge_approval_binding(planned_result),
+            reviewer_claim=reviewed_by,
+            expected_plan_sha256=expected_exact_approval_plan_sha256,
+            expected_target_binding_sha256=(
+                expected_exact_approval_target_binding_sha256
+            ),
+            claim=exact_human_approval_claim,
+        )
+    except OperationApprovalBindingError as exc:
+        raise ArchiveServiceError(exc.code) from None
+    receipt["exact_human_approval"] = exact_operation_approval
+
     receipt_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        final_source_bytes = source_path.read_bytes()
+    except OSError:
+        raise ArchiveServiceError(
+            "zettel_edge_source_changed_after_approval"
+        ) from None
+    if (
+        not hmac.compare_digest(final_source_bytes, original_bytes)
+        or receipt_path.exists()
+    ):
+        raise ArchiveServiceError(
+            "zettel_edge_source_changed_after_approval"
+        )
     zettel_written = False
     try:
         # Atomic: a kill mid-write leaves the canonical zet byte-identical rather
@@ -67289,8 +69642,10 @@ def zettel_edge_batch_result(
         "receipt_path": receipt_path,
         "reviewed_by": reviewed_by if approve else None,
         "current_capability": {
-            "policy_batch_approval_implemented": True,
-            "bulk_edge_writer_implemented": True,
+            "policy_batch_approval_implemented": False,
+            "bulk_edge_writer_implemented": False,
+            "legacy_bulk_edge_writer_present_but_blocked": True,
+            "compound_exact_human_approval_binding_required": True,
             "archive_relative_plan_path_resolution": True,
             "skip_existing_edges_implemented": True,
             "uses_single_zettel_edge_gate_per_item": True,
@@ -67357,6 +69712,10 @@ def zettel_edge_batch_write(
     max_edges: int = 200,
     skip_existing: bool = False,
 ) -> dict[str, Any]:
+    if type(dry_run) is not bool or type(approve) is not bool or approve:
+        return _compound_exact_human_approval_blocked(
+            lifecycle_action="zettel_edge_batch",
+        )
     root = require_existing_archive_root(archive_root)
     archive_id = read_archive_id(root)
     blockers: list[str] = []
@@ -67836,6 +70195,10 @@ def zettel_edge_revert(
     approve: bool = False,
     reviewed_by: str | None = None,
 ) -> dict[str, Any]:
+    if type(dry_run) is not bool or type(approve) is not bool or approve:
+        return _compound_exact_human_approval_blocked(
+            lifecycle_action="zettel_edge_revert",
+        )
     root = require_existing_archive_root(archive_root)
     archive_id = read_archive_id(root)
     blockers: list[str] = []
@@ -68115,6 +70478,10 @@ def zettel_edge_batch_revert(
     approve: bool = False,
     reviewed_by: str | None = None,
 ) -> dict[str, Any]:
+    if type(dry_run) is not bool or type(approve) is not bool or approve:
+        return _compound_exact_human_approval_blocked(
+            lifecycle_action="zettel_edge_batch_revert",
+        )
     root = require_existing_archive_root(archive_root)
     archive_id = read_archive_id(root)
     blockers: list[str] = []
@@ -69923,6 +72290,10 @@ def imap_mailbox_adapter_manifest_write(
     dry_run: bool = True,
     approve: bool = False,
 ) -> dict[str, Any]:
+    if type(dry_run) is not bool or type(approve) is not bool or approve:
+        return _compound_exact_human_approval_blocked(
+            lifecycle_action="imap_mailbox_adapter_manifest_write",
+        )
     root = require_existing_archive_root(archive_root)
     archive_id = read_archive_id(root)
     blockers: list[str] = []
@@ -71313,6 +73684,10 @@ def imap_mailbox_header_metadata_scan(
     dry_run: bool = True,
     approve: bool = False,
 ) -> dict[str, Any]:
+    if type(dry_run) is not bool or type(approve) is not bool or approve:
+        return _compound_exact_human_approval_blocked(
+            lifecycle_action="imap_mailbox_header_metadata_scan",
+        )
     root = require_existing_archive_root(archive_root)
     archive_id = read_archive_id(root)
     blockers: list[str] = []
@@ -73689,12 +76064,16 @@ def imap_mailbox_material_capture_approval_audit(
         "dry_run": bool(dry_run),
         "lifecycle_action": "imap_mailbox_material_capture_approval_audit",
         "archive_id": archive_id,
-        "audit_state": "approval_receipt_verified_for_future_material_capture"
-        if not blockers
-        else "blocked",
+        "audit_state": (
+            "legacy_unbound_approval_receipt_audited"
+            if not blockers
+            else "blocked"
+        ),
+        "binding_state": "legacy_unbound",
+        "authority_classification": "advisory",
         "capture_action": normalized_action,
         "expected_decision": normalized_expected_decision,
-        "future_capture_authorized": receipt_decision == "approve_once" and not blockers,
+        "future_capture_authorized": False,
         "approval_receipt_summary": {
             "receipt_loaded": bool(approval_payload),
             "approval_receipt_path_echoed": False,
@@ -77730,6 +80109,10 @@ def credential_access_approval_receipt_review(
 
     return {
         "ok": not blockers,
+        "structural_verification_ok": not blockers,
+        "binding_state": "legacy_unbound",
+        "authority_classification": "advisory",
+        "future_adapter_authorized": False,
         "receipt_path": normalized_receipt or receipt_relative,
         "receipt_present": bool(receipt_doc),
         "receipt_id": receipt_doc.get("receipt_id"),
@@ -77880,17 +80263,19 @@ def credential_policy_check(
     elif resolved_decision == "needs_review":
         policy_result = "needs_human_review"
     else:
-        policy_result = "ready_after_approval_receipt"
+        policy_result = "legacy_unbound"
 
     live_execution_allowed_now = False
-    would_allow_future_adapter_after_receipt = policy_result == "ready_after_approval_receipt"
+    would_allow_future_adapter_after_receipt = False
 
     return {
-        "ok": policy_result == "ready_after_approval_receipt",
+        "ok": policy_result == "legacy_unbound",
         "dry_run": True,
         "lifecycle_action": "credential_policy_check",
         "archive_id": archive_id,
         "policy_result": policy_result,
+        "binding_state": "legacy_unbound",
+        "authority_classification": "advisory",
         "policy_object_preview": {
             "policy_kind": "credential_access_policy",
             "schema_version": "wom-credential-policy/v0.1",
@@ -77926,17 +80311,18 @@ def credential_policy_check(
             "approval_receipt_required_before_use": True,
             "approval_receipt_written": approval_receipt_verified,
             "approval_receipt_verified": approval_receipt_verified,
+            "approval_receipt_structurally_verified": approval_receipt_verified,
             "approval_receipt_preview_path": approval_preview.get("proposed_receipt_path"),
             "approval_receipt_path": approval_receipt_summary.get("receipt_path") if isinstance(approval_receipt_summary, dict) else None,
             "live_execution_allowed_now": live_execution_allowed_now,
             "would_allow_future_adapter_after_receipt": would_allow_future_adapter_after_receipt,
-            "future_adapter_has_verified_receipt": approval_receipt_verified and would_allow_future_adapter_after_receipt,
+            "future_adapter_has_verified_receipt": False,
             "secret_value_return_to_ai": False,
             "secret_value_echoed": False,
             "exact_ref_value_echoed": False,
         },
         "next_gate": {
-            "if_ready": "verified approval receipt can be required by a future adapter; live adapter execution is still a separate command",
+            "if_ready": "legacy approval metadata is advisory only and cannot authorize a future adapter",
             "if_needs_review": "human must approve_once or deny through a local approval UI",
             "if_denied": "do not call a live adapter",
         },
@@ -78193,6 +80579,10 @@ def credential_keepassxc_write(
     dry_run: bool = True,
     approve: bool = False,
 ) -> dict[str, Any]:
+    if type(dry_run) is not bool or type(approve) is not bool or approve:
+        return _compound_exact_human_approval_blocked(
+            lifecycle_action="credential_keepassxc_write",
+        )
     root = require_existing_archive_root(archive_root)
     archive_id = read_archive_id(root)
     blockers: list[str] = []
@@ -78366,7 +80756,7 @@ def credential_keepassxc_write(
     return_code: int | None = None
     execution_status = "failed"
     try:
-        return_code = run_keepassxc_cli_add(
+        return_code = _run_keepassxc_cli_add(
             [
                 shutil.which("keepassxc-cli") or "keepassxc-cli",
                 "add",
@@ -78488,7 +80878,7 @@ def safe_keepassxc_database_path_for_write(
     return candidate
 
 
-def run_keepassxc_cli_add(argv: list[str]) -> int:
+def _run_keepassxc_cli_add(argv: list[str]) -> int:
     completed = subprocess.run(argv, check=False)
     return int(completed.returncode)
 
@@ -80165,6 +82555,10 @@ def prehashed_objet_ledger_register(
     reviewed_by: str | None = None,
     max_rows: int = 100000,
 ) -> dict[str, Any]:
+    if type(dry_run) is not bool or type(approve) is not bool or approve:
+        return _compound_exact_human_approval_blocked(
+            lifecycle_action="prehashed_objet_ledger_register",
+        )
     root = require_existing_archive_root(archive_root)
     archive_id = read_archive_id(root)
     blockers: list[str] = []
@@ -80402,7 +82796,7 @@ def prehashed_objet_ledger_register(
         "blockers": append_blockers,
         "warnings": unique_preserve_order(warnings),
     }
-    receipt_path = prehashed_objet_ledger_write_receipt(root, receipt, registered_at)
+    receipt_path = _prehashed_objet_ledger_write_receipt(root, receipt, registered_at)
     files_written = [receipt_path]
     if appended_count:
         files_written.insert(0, manifest_relative)
@@ -80642,7 +83036,7 @@ def prehashed_objet_manifest_record(
     }
 
 
-def prehashed_objet_ledger_write_receipt(root: Path, receipt: dict[str, Any], registered_at: str) -> str:
+def _prehashed_objet_ledger_write_receipt(root: Path, receipt: dict[str, Any], registered_at: str) -> str:
     receipts_dir = archive_internal_path(root, PREHASHED_OBJET_LEDGER_RECEIPTS_DIR)
     receipts_dir.mkdir(parents=True, exist_ok=True)
     timestamp_compact = re.sub(r"[^0-9TZ]", "", registered_at)
@@ -80674,6 +83068,10 @@ def object_storage_upload_evidence_register(
     reviewed_by: str | None = None,
     max_rows: int = 100000,
 ) -> dict[str, Any]:
+    if type(dry_run) is not bool or type(approve) is not bool or approve:
+        return _compound_exact_human_approval_blocked(
+            lifecycle_action="object_storage_upload_evidence_register",
+        )
     root = require_existing_archive_root(archive_root)
     archive_id = read_archive_id(root)
     blockers: list[str] = []
@@ -80888,8 +83286,12 @@ def object_storage_upload_evidence_register(
         "privacy_guards": base_result["privacy_guards"],
         "closed_actions": {**base_result["closed_actions"], "files_written": True},
     }
-    receipt_path = object_storage_upload_evidence_write_receipt(root, receipt, registered_at)
-    added_locations = update_manifest_with_object_storage_upload_evidence(
+    receipt_path = _object_storage_upload_evidence_write_receipt(
+        root,
+        receipt,
+        registered_at,
+    )
+    added_locations = _update_manifest_with_object_storage_upload_evidence(
         root,
         manifest_path,
         provider_kind=normalized_provider,
@@ -81117,7 +83519,7 @@ def object_storage_upload_evidence_location(
     }
 
 
-def update_manifest_with_object_storage_upload_evidence(
+def _update_manifest_with_object_storage_upload_evidence(
     root: Path,
     manifest_path: Path,
     *,
@@ -81175,7 +83577,11 @@ def object_storage_upload_evidence_receipt_preview_path(registered_at: str) -> s
     return f"{OBJECT_STORAGE_UPLOAD_EVIDENCE_RECEIPTS_DIR}/{timestamp_compact}-<receipt-id>.json"
 
 
-def object_storage_upload_evidence_write_receipt(root: Path, receipt: dict[str, Any], registered_at: str) -> str:
+def _object_storage_upload_evidence_write_receipt(
+    root: Path,
+    receipt: dict[str, Any],
+    registered_at: str,
+) -> str:
     receipts_dir = archive_internal_path(root, OBJECT_STORAGE_UPLOAD_EVIDENCE_RECEIPTS_DIR)
     receipts_dir.mkdir(parents=True, exist_ok=True)
     timestamp_compact = re.sub(r"[^0-9TZ]", "", registered_at)
@@ -82838,6 +85244,19 @@ def pack_work_context(
     mode: str = "reference",
     target_archive: str | None = None,
 ) -> dict[str, Any]:
+    return _compound_exact_human_approval_blocked(
+        lifecycle_action="pack_work_context",
+    )
+
+
+def _pack_work_context_legacy_core(
+    archive_root: Path | str,
+    *,
+    view_id: str,
+    purpose: str,
+    mode: str = "reference",
+    target_archive: str | None = None,
+) -> dict[str, Any]:
     root = require_existing_archive_root(archive_root)
     if mode not in WORKPACK_MODES:
         raise ArchiveServiceError("mode must be one of: " + ", ".join(sorted(WORKPACK_MODES)))
@@ -83343,6 +85762,12 @@ def import_external_archive(
     limit: int = 200,
     provider_locator_policy: str = "preserve",
 ) -> dict[str, Any]:
+    return _compound_exact_human_approval_blocked(
+        lifecycle_action="import_external_archive",
+    )
+
+    # Dormant legacy implementation retained for compatibility analysis.
+    # It is not an approval authority.
     reviewer = reviewed_by.strip()
     if not reviewer:
         raise ArchiveServiceError("External import requires --reviewed-by.")
@@ -84624,6 +87049,12 @@ def delegate_zets(
     target_policy: str | None = None,
     reviewed_by: str,
 ) -> dict[str, Any]:
+    return _compound_exact_human_approval_blocked(
+        lifecycle_action="delegate",
+    )
+
+    # Dormant legacy implementation retained for compatibility analysis.
+    # It is not an approval authority.
     reviewer = reviewed_by.strip()
     if not reviewer:
         raise ArchiveServiceError("Real zet delegation requires --reviewed-by.")
@@ -86798,6 +89229,9 @@ def approve_github_repository_setup_plan(
     visibility: str = GITHUB_REPOSITORY_DEFAULT_VISIBILITY,
     remote_protocol: str = GITHUB_REPOSITORY_DEFAULT_REMOTE_PROTOCOL,
 ) -> dict[str, Any]:
+    return _compound_exact_human_approval_blocked(
+        lifecycle_action="approve_github_repository_setup_plan",
+    )
     reviewer = (reviewed_by or "").strip()
     if not reviewer:
         raise ArchiveServiceError("GitHub repository setup approval requires reviewed_by.")
@@ -87990,6 +90424,12 @@ def approve_object_storage_setup_plan(
     objet_prefix: str | None = None,
     visibility: str = OBJECT_STORAGE_DEFAULT_VISIBILITY,
 ) -> dict[str, Any]:
+    return _compound_exact_human_approval_blocked(
+        lifecycle_action="object_storage_setup",
+    )
+
+    # Dormant legacy implementation retained for compatibility analysis.
+    # It is not an approval authority.
     reviewer = (reviewed_by or "").strip()
     if not reviewer:
         raise ArchiveServiceError("Object storage setup approval requires reviewed_by.")
@@ -88676,6 +91116,12 @@ def transfer_archive_ownership(
     reason: str | None = None,
     reviewed_by: str,
 ) -> dict[str, Any]:
+    return _compound_exact_human_approval_blocked(
+        lifecycle_action="transfer_archive_ownership",
+    )
+
+    # Dormant legacy implementation retained for compatibility analysis.
+    # It is not an approval authority.
     reviewer = reviewed_by.strip()
     if not reviewer:
         raise ArchiveServiceError("Real ownership transfer requires --reviewed-by.")
@@ -89103,6 +91549,12 @@ def reconcile_archive_identity(
     expected_proposed_identity_sha256: str,
     affirm_principal_metadata_reviewed: bool,
 ) -> dict[str, Any]:
+    return _compound_exact_human_approval_blocked(
+        lifecycle_action="archive_identity_reconcile",
+    )
+
+    # Dormant legacy implementation retained for compatibility analysis.
+    # It is not an approval authority.
     reviewer = str(reviewed_by or "").strip()
     if not reviewer or not safe_source_intake_plan_scalar(reviewer):
         raise ArchiveServiceError("identity-reconcile --approve requires a safe --reviewed-by value.")
@@ -89606,6 +92058,12 @@ def add_source_binding(
     source_visibility: str = "private",
     replace: bool = False,
 ) -> dict[str, Any]:
+    return _compound_exact_human_approval_blocked(
+        lifecycle_action="add_source_binding",
+    )
+
+    # Dormant legacy implementation retained for compatibility analysis.
+    # It is not an approval authority.
     reviewer = reviewed_by.strip()
     if not reviewer:
         raise ArchiveServiceError("Source registration requires --reviewed-by.")
@@ -89647,7 +92105,7 @@ def add_source_binding(
     changed_paths = ["source-bindings.yml"]
     local_profile_path: str | None = None
     if plan["local_profile"]["write"] and local_root is not None:
-        local_profile_path = write_local_source_root_profile(
+        local_profile_path = _write_local_source_root_profile(
             root,
             source_id=source_binding["source_id"],
             root_ref=source_binding["root_ref"],
@@ -89749,7 +92207,7 @@ def local_source_root_path(archive_root: Path, source_id: str) -> Path | None:
     return Path(entry["path"]).expanduser().resolve()
 
 
-def write_local_source_root_profile(
+def _write_local_source_root_profile(
     archive_root: Path,
     *,
     source_id: str,
@@ -92316,6 +94774,10 @@ def source_intake_record(
     approve: bool = False,
     reviewed_by: str | None = None,
 ) -> dict[str, Any]:
+    if type(dry_run) is not bool or type(approve) is not bool or approve:
+        return _compound_exact_human_approval_blocked(
+            lifecycle_action="source_intake_record",
+        )
     root = require_existing_archive_root(archive_root)
     archive_id = read_archive_id(root)
     blockers: list[str] = []
@@ -93343,7 +95805,19 @@ def restore_drill_should_exclude(relative_path: str) -> bool:
     return False
 
 
-def copy_restore_drill_tree(archive_root: Path, target: Path) -> list[str]:
+def copy_restore_drill_tree(
+    archive_root: Path,
+    target: Path,
+) -> dict[str, Any]:
+    return _compound_exact_human_approval_blocked(
+        lifecycle_action="copy_restore_drill_tree",
+    )
+
+
+def _copy_restore_drill_tree_legacy_core(
+    archive_root: Path,
+    target: Path,
+) -> list[str]:
     changed_paths: list[str] = []
     target.mkdir(parents=True, exist_ok=True)
     for path in sorted(iter_restore_drill_files(archive_root)):
@@ -94314,7 +96788,7 @@ def wom_kit_real_path_kind(root: Path, path: Path) -> str:
     return "unsafe"
 
 
-def wom_kit_read_bounded_real_bytes(
+def _wom_kit_read_bounded_real_bytes(
     root: Path,
     path: Path,
     *,
@@ -94362,13 +96836,13 @@ def wom_kit_read_bounded_real_bytes(
             os.close(descriptor)
 
 
-def wom_kit_read_bounded_real_text(
+def _wom_kit_read_bounded_real_text(
     root: Path,
     path: Path,
     *,
     max_bytes: int,
 ) -> str | None:
-    value = wom_kit_read_bounded_real_bytes(root, path, max_bytes=max_bytes)
+    value = _wom_kit_read_bounded_real_bytes(root, path, max_bytes=max_bytes)
     if value is None:
         return None
     try:
@@ -94416,7 +96890,7 @@ def wom_kit_project_source_mirror_location(root_label: str) -> str:
 
 
 def git_output_lines(cwd: Path, args: list[str]) -> list[str]:
-    ok, output = wom_kit_project_update_git(cwd, args, timeout_seconds=5)
+    ok, output = _wom_kit_project_update_git(cwd, args, timeout_seconds=5)
     if not ok:
         return []
     return [line.strip() for line in output.splitlines() if line.strip()]
@@ -94504,7 +96978,7 @@ def wom_kit_project_source_mirror_info(
             )
             return summary
         if source_init_kind == "file":
-            source_init_text = wom_kit_read_bounded_real_text(
+            source_init_text = _wom_kit_read_bounded_real_text(
                 mirror_path,
                 source_init_path,
                 max_bytes=WOM_KIT_VERSION_METADATA_MAX_BYTES,
@@ -94525,7 +96999,7 @@ def wom_kit_project_source_mirror_info(
         )
         return summary
     pyproject_text = (
-        wom_kit_read_bounded_real_text(
+        _wom_kit_read_bounded_real_text(
             mirror_path,
             pyproject_path,
             max_bytes=WOM_KIT_VERSION_METADATA_MAX_BYTES,
@@ -94552,7 +97026,7 @@ def wom_kit_project_source_mirror_info(
         )
         return summary
     if pin_kind == "file":
-        pin_text = wom_kit_read_bounded_real_text(
+        pin_text = _wom_kit_read_bounded_real_text(
             mirror_path,
             pin_path,
             max_bytes=WOM_KIT_VERSION_PIN_MAX_BYTES,
@@ -94753,7 +97227,7 @@ def wom_kit_runtime_head_python_entries(
     *,
     ref: str = "HEAD",
 ) -> dict[str, tuple[str, str]] | None:
-    tree_ok, tree_text = wom_kit_project_update_git(
+    tree_ok, tree_text = _wom_kit_project_update_git(
         mirror_path,
         [
             "ls-tree",
@@ -94968,7 +97442,7 @@ def wom_kit_runtime_tracked_python_integrity(
     if not source_set_complete:
         return result
 
-    flags_ok, flags_text = wom_kit_project_update_git(
+    flags_ok, flags_text = _wom_kit_project_update_git(
         mirror_path,
         [
             "ls-files",
@@ -95012,7 +97486,7 @@ def wom_kit_runtime_tracked_python_integrity(
         result["reason_code"] = "project_tracked_python_index_flags_unsafe"
         return result
 
-    index_ok, index_text = wom_kit_project_update_git(
+    index_ok, index_text = _wom_kit_project_update_git(
         mirror_path,
         [
             "ls-files",
@@ -95095,7 +97569,7 @@ def wom_kit_runtime_tracked_python_integrity(
         return result
 
     for relative_path in sorted(tracked_paths):
-        hash_ok, actual_object_id = wom_kit_project_update_git(
+        hash_ok, actual_object_id = _wom_kit_project_update_git(
             mirror_path,
             ["hash-object", "--no-filters", "--", relative_path],
         )
@@ -95129,7 +97603,7 @@ WOM_KIT_RUNTIME_PACKAGED_RESOURCE_PREFIX = "wom-kit/src/wom_kit/_resources/"
 def wom_kit_runtime_all_tracked_index_flags(
     mirror_path: Path,
 ) -> tuple[bool, int]:
-    flags_ok, flags_text = wom_kit_project_update_git(
+    flags_ok, flags_text = _wom_kit_project_update_git(
         mirror_path,
         ["ls-files", "-v", "-z"],
     )
@@ -95160,7 +97634,7 @@ def wom_kit_runtime_git_blob_at_ref(
     *,
     max_bytes: int,
 ) -> tuple[str, bytes] | None:
-    tree_ok, tree_text = wom_kit_project_update_git(
+    tree_ok, tree_text = _wom_kit_project_update_git(
         mirror_path,
         ["ls-tree", "-z", ref, "--", relative_path],
         max_output_bytes=16 * 1024,
@@ -95182,7 +97656,7 @@ def wom_kit_runtime_git_blob_at_ref(
         or not re.fullmatch(r"[0-9a-fA-F]{40,64}", object_id)
     ):
         return None
-    size_ok, size_text = wom_kit_project_update_git(
+    size_ok, size_text = _wom_kit_project_update_git(
         mirror_path,
         ["cat-file", "-s", object_id],
         max_output_bytes=256,
@@ -95193,7 +97667,7 @@ def wom_kit_runtime_git_blob_at_ref(
         return None
     if blob_size < 0 or blob_size > max_bytes:
         return None
-    blob = wom_kit_project_update_git_blob(mirror_path, object_id, blob_size)
+    blob = _wom_kit_project_update_git_blob(mirror_path, object_id, blob_size)
     if blob is None:
         return None
     return object_id.lower(), blob
@@ -95305,7 +97779,7 @@ def wom_kit_runtime_resource_integrity(
         if total_bytes > WOM_KIT_RUNTIME_MAX_TOTAL_PYTHON_SOURCE_BYTES:
             return result
 
-    tree_ok, tree_text = wom_kit_project_update_git(
+    tree_ok, tree_text = _wom_kit_project_update_git(
         mirror_path,
         [
             "ls-tree",
@@ -95343,7 +97817,7 @@ def wom_kit_runtime_resource_integrity(
 
     result["runtime_resource_entry_count"] = len(expected_specs)
     result["runtime_resource_manifest_verified"] = True
-    index_ok, index_text = wom_kit_project_update_git(
+    index_ok, index_text = _wom_kit_project_update_git(
         mirror_path,
         [
             "ls-files",
@@ -95397,7 +97871,7 @@ def wom_kit_runtime_resource_integrity(
         ):
             result["reason_code"] = "project_runtime_resource_path_unsafe"
             return result
-        actual_bytes = wom_kit_read_bounded_real_bytes(
+        actual_bytes = _wom_kit_read_bounded_real_bytes(
             project_root,
             path,
             max_bytes=(
@@ -95482,11 +97956,11 @@ def wom_kit_runtime_mirror_integrity(
         evidence["reason_code"] = "project_wrapper_path_unsafe"
         return evidence
 
-    inside_ok, inside_text = wom_kit_project_update_git(
+    inside_ok, inside_text = _wom_kit_project_update_git(
         mirror_path,
         ["rev-parse", "--is-inside-work-tree"],
     )
-    top_ok, top_text = wom_kit_project_update_git(
+    top_ok, top_text = _wom_kit_project_update_git(
         mirror_path,
         ["rev-parse", "--show-toplevel"],
     )
@@ -95511,7 +97985,7 @@ def wom_kit_runtime_mirror_integrity(
         evidence["reason_code"] = "project_git_metadata_not_local_real"
         return evidence
 
-    runtime_snapshot = wom_kit_project_update_git_snapshot(mirror_path)
+    runtime_snapshot = _wom_kit_project_update_git_snapshot(mirror_path)
     evidence["worktree_clean_except_untracked_installed_version"] = bool(
         runtime_snapshot is not None
         and runtime_snapshot.get("index_matches_head") is True
@@ -95527,7 +98001,7 @@ def wom_kit_runtime_mirror_integrity(
         evidence["reason_code"] = "project_git_worktree_dirty"
         return evidence
 
-    pin_tracked, _ = wom_kit_project_update_git(
+    pin_tracked, _ = _wom_kit_project_update_git(
         mirror_path,
         ["ls-files", "--error-unmatch", "--", "installed-version.txt"],
     )
@@ -95536,7 +98010,7 @@ def wom_kit_runtime_mirror_integrity(
         evidence["reason_code"] = "project_source_pin_tracked"
         return evidence
 
-    origin_ok, origin_key_text = wom_kit_project_update_git(
+    origin_ok, origin_key_text = _wom_kit_project_update_git(
         mirror_path,
         [
             "config",
@@ -95561,7 +98035,7 @@ def wom_kit_runtime_mirror_integrity(
         evidence["reason_code"] = "project_origin_not_configured"
         return evidence
 
-    head_ok, head_text = wom_kit_project_update_git(
+    head_ok, head_text = _wom_kit_project_update_git(
         mirror_path,
         ["rev-parse", "--verify", "HEAD"],
     )
@@ -96461,7 +98935,7 @@ def wom_kit_version_info(
                         )
                         break
                     if candidate_kind == "file":
-                        installed_version = wom_kit_read_bounded_real_text(
+                        installed_version = _wom_kit_read_bounded_real_text(
                             search_root,
                             candidate_path,
                             max_bytes=WOM_KIT_VERSION_PIN_MAX_BYTES,
@@ -97971,6 +100445,44 @@ def runtime_context(
     operational_context_summary = runtime_context_operational_context(root)
     if not operational_context_summary["ok"]:
         warnings.append("ops/operational-context.yml is present but not safe/readable; run operational-context dry-run.")
+    try:
+        instruction_policy = inspect_agent_instruction_policies(
+            root,
+            project_root=root.parent,
+        )
+    except AgentInstructionPolicyError:
+        instruction_policy = {
+            "schema_version": "wom-kit/agent-instruction-policy-inspection/v0.1",
+            "ok": False,
+            "lifecycle_action": "agent_instruction_policy_inspection",
+            "status": "unavailable",
+            "precedence": ["wom_runtime", "project_current", "archive_local"],
+            "sources": [],
+            "resolved_directives": [],
+            "conflict_directive_count": 0,
+            "unverified_source_count": 0,
+            "safe_to_continue_reads": False,
+            "write_actions_blocked": True,
+            "auto_rewrite_performed": False,
+            "instruction_text_executed": False,
+            "instruction_text_echoed": False,
+            "local_paths_echoed": False,
+            "next_safe_actions": [
+                "inspect the fixed project and archive instruction entrypoints without executing them"
+            ],
+            "blockers": ["agent_instruction_policy_unavailable"],
+            "warnings": [],
+        }
+    blockers.extend(
+        str(item)
+        for item in instruction_policy.get("blockers", [])
+        if isinstance(item, str)
+    )
+    warnings.extend(
+        str(item)
+        for item in instruction_policy.get("warnings", [])
+        if isinstance(item, str)
+    )
     if strict and warnings:
         blockers.extend(warnings)
         warnings = []
@@ -97990,6 +100502,7 @@ def runtime_context(
         "wom_kit_version": wom_kit_version_info(root, redact_local_paths=redact_local_paths),
         "storage_authority": local_sovereignty_authority_model(),
         "operational_context": operational_context_summary,
+        "agent_instruction_policy": instruction_policy,
         "runtime_guidance_readiness": {
             "status": "not_checked",
             "checked": False,
@@ -98075,7 +100588,7 @@ WOM_KIT_PROJECT_UPDATE_GIT_TRANSPORT_ENV_KEYS = {
 }
 
 
-class WomKitProjectUpdateDirectoryGuard:
+class _WomKitProjectUpdateDirectoryGuard:
     """Hold verified directories stable for the duration of an approved update.
 
     On Windows, directory handles deliberately omit FILE_SHARE_DELETE.  Once a
@@ -98464,7 +100977,7 @@ def wom_kit_project_update_git_command(
     ]
 
 
-def wom_kit_project_update_run_capped(
+def _wom_kit_project_update_run_capped(
     command: list[str],
     *,
     environment: dict[str, str],
@@ -98568,7 +101081,7 @@ def wom_kit_project_update_run_capped(
     return return_code, output
 
 
-def wom_kit_project_update_git(
+def _wom_kit_project_update_git(
     mirror_path: Path,
     args: list[str],
     *,
@@ -98578,7 +101091,7 @@ def wom_kit_project_update_git(
     allow_transport_environment: bool = False,
     extra_environment: dict[str, str] | None = None,
 ) -> tuple[bool, str]:
-    completed = wom_kit_project_update_run_capped(
+    completed = _wom_kit_project_update_run_capped(
         wom_kit_project_update_git_command(mirror_path, args),
         environment=wom_kit_project_update_git_environment(
             allow_transport_environment=allow_transport_environment,
@@ -98627,12 +101140,12 @@ def wom_kit_project_update_git_metadata_is_local_real(
     ):
         return False
 
-    git_dir_ok, git_dir_text = wom_kit_project_update_git(
+    git_dir_ok, git_dir_text = _wom_kit_project_update_git(
         mirror_path,
         ["rev-parse", "--absolute-git-dir"],
         max_output_bytes=64 * 1024,
     )
-    common_dir_ok, common_dir_text = wom_kit_project_update_git(
+    common_dir_ok, common_dir_text = _wom_kit_project_update_git(
         mirror_path,
         ["rev-parse", "--git-common-dir"],
         max_output_bytes=64 * 1024,
@@ -98685,7 +101198,7 @@ def wom_kit_project_update_git_metadata_is_local_real(
         packed_refs,
     )
     if packed_refs_kind == "file":
-        packed_refs_bytes = wom_kit_read_bounded_real_bytes(
+        packed_refs_bytes = _wom_kit_read_bounded_real_bytes(
             project_root,
             packed_refs,
             max_bytes=4 * 1024 * 1024,
@@ -98735,7 +101248,7 @@ def wom_kit_project_update_git_metadata_is_local_real(
     return True
 
 
-def wom_kit_project_update_git_blob(
+def _wom_kit_project_update_git_blob(
     mirror_path: Path,
     object_spec: str,
     expected_size: int,
@@ -98749,7 +101262,7 @@ def wom_kit_project_update_git_blob(
         or "\r" in object_spec
     ):
         return None
-    completed = wom_kit_project_update_run_capped(
+    completed = _wom_kit_project_update_run_capped(
         wom_kit_project_update_git_command(
             mirror_path,
             ["cat-file", "blob", object_spec],
@@ -98770,7 +101283,7 @@ WOM_KIT_PROJECT_UPDATE_BATCH_TIMEOUT_SECONDS = 180
 WOM_KIT_PROJECT_UPDATE_MAX_BATCH_HEADER_BYTES = 128
 
 
-def wom_kit_project_update_run_batch_capped(
+def _wom_kit_project_update_run_batch_capped(
     command: list[str],
     *,
     environment: dict[str, str],
@@ -98914,7 +101427,7 @@ def wom_kit_project_update_run_batch_capped(
     return return_code, output_box[0] if output_box else b""
 
 
-def wom_kit_project_update_git_blob_batch(
+def _wom_kit_project_update_git_blob_batch(
     mirror_path: Path,
     object_path_counts: dict[str, int],
 ) -> dict[str, bytes] | None:
@@ -98943,7 +101456,7 @@ def wom_kit_project_update_git_blob_batch(
         WOM_KIT_PROJECT_UPDATE_MAX_TRACKED_FILES
         * (WOM_KIT_PROJECT_UPDATE_MAX_BATCH_HEADER_BYTES + 1)
     )
-    completed = wom_kit_project_update_run_batch_capped(
+    completed = _wom_kit_project_update_run_batch_capped(
         wom_kit_project_update_git_command(
             mirror_path,
             ["cat-file", "--batch"],
@@ -99283,11 +101796,11 @@ def wom_kit_project_update_safe_worktree_paths(
     return bool(canonical_files)
 
 
-def wom_kit_project_update_tree_blobs(
+def _wom_kit_project_update_tree_blobs(
     mirror_path: Path,
     ref: str,
 ) -> dict[str, tuple[str, str, bytes]] | None:
-    tree_ok, tree_text = wom_kit_project_update_git(
+    tree_ok, tree_text = _wom_kit_project_update_git(
         mirror_path,
         ["ls-tree", "-r", "-z", ref],
     )
@@ -99325,7 +101838,7 @@ def wom_kit_project_update_tree_blobs(
     object_path_counts: dict[str, int] = {}
     for _, _, object_id in raw_entries:
         object_path_counts[object_id] = object_path_counts.get(object_id, 0) + 1
-    blobs = wom_kit_project_update_git_blob_batch(
+    blobs = _wom_kit_project_update_git_blob_batch(
         mirror_path,
         object_path_counts,
     )
@@ -99403,7 +101916,7 @@ def wom_kit_project_update_conflict_projection(
     }
 
 
-def wom_kit_project_update_worktree_conflicts(
+def _wom_kit_project_update_worktree_conflicts(
     mirror_path: Path,
     current_paths: set[str],
     target_paths: set[str],
@@ -99747,7 +102260,7 @@ def wom_kit_project_update_worktree_plan(
     current_paths: set[str],
     target_paths: set[str],
 ) -> dict[str, Any]:
-    conflicts, complete, authority = wom_kit_project_update_worktree_conflicts(
+    conflicts, complete, authority = _wom_kit_project_update_worktree_conflicts(
         mirror_path,
         current_paths,
         target_paths,
@@ -99784,14 +102297,14 @@ def wom_kit_project_update_branch_points_to_commit(
         or not re.fullmatch(r"[0-9a-fA-F]{40,64}", expected_commit)
     ):
         return False
-    branch_ok, checked_branch = wom_kit_project_update_git(
+    branch_ok, checked_branch = _wom_kit_project_update_git(
         mirror_path,
         ["check-ref-format", "--branch", branch_name],
         max_output_bytes=4096,
     )
     if not branch_ok or checked_branch != branch_name:
         return False
-    ref_ok, ref_commit = wom_kit_project_update_git(
+    ref_ok, ref_commit = _wom_kit_project_update_git(
         mirror_path,
         [
             "show-ref",
@@ -99813,7 +102326,7 @@ def wom_kit_project_update_symbolic_head_state(
 ) -> tuple[str, str | None]:
     """Return an exact branch, detached HEAD, or an unreadable unsafe state."""
 
-    completed = wom_kit_project_update_run_capped(
+    completed = _wom_kit_project_update_run_capped(
         wom_kit_project_update_git_command(
             mirror_path,
             ["symbolic-ref", "--quiet", "HEAD"],
@@ -99841,7 +102354,7 @@ def wom_kit_project_update_symbolic_head_state(
     ):
         return "invalid", None
     branch_name = full_ref.removeprefix("refs/heads/")
-    branch_ok, checked_branch = wom_kit_project_update_git(
+    branch_ok, checked_branch = _wom_kit_project_update_git(
         mirror_path,
         ["check-ref-format", "--branch", branch_name],
         max_output_bytes=4096,
@@ -99856,11 +102369,11 @@ def wom_kit_project_update_symbolic_head_state(
     return "branch", branch_name
 
 
-def wom_kit_project_update_unlink_tracked_file(
+def _wom_kit_project_update_unlink_tracked_file(
     mirror_path: Path,
     path: Path,
     *,
-    directory_guard: WomKitProjectUpdateDirectoryGuard | None,
+    directory_guard: _WomKitProjectUpdateDirectoryGuard | None,
 ) -> bool:
     if (
         not is_path_within_root(path, mirror_path)
@@ -99966,7 +102479,7 @@ def _wom_kit_project_update_target_worktree_snapshot_matches_internal(
     for relative_path, (mode, _, blob) in target_entries.items():
         path = mirror_path.joinpath(*PurePosixPath(relative_path).parts)
         if (
-            wom_kit_read_bounded_real_bytes(
+            _wom_kit_read_bounded_real_bytes(
                 mirror_path,
                 path,
                 max_bytes=len(blob),
@@ -100043,11 +102556,11 @@ def _wom_kit_project_update_materialization_plan_details_internal(
         )
         return projection, None, None, conflicts, authority
 
-    target_entries = wom_kit_project_update_tree_blobs(
+    target_entries = _wom_kit_project_update_tree_blobs(
         mirror_path,
         target_commit,
     )
-    current_entries = wom_kit_project_update_tree_blobs(mirror_path, "HEAD")
+    current_entries = _wom_kit_project_update_tree_blobs(mirror_path, "HEAD")
     if target_entries is None:
         conflicts.append(
             ("\0target-tree", "target_tree_unavailable_or_unsafe")
@@ -100087,7 +102600,7 @@ def _wom_kit_project_update_materialization_plan_details_internal(
         for path, (mode, object_id, blob) in current_entries.items()
     )
     worktree_conflicts, complete, worktree_authority = (
-        wom_kit_project_update_worktree_conflicts(
+        _wom_kit_project_update_worktree_conflicts(
             mirror_path,
             current_paths,
             target_paths,
@@ -100125,7 +102638,7 @@ def _wom_kit_project_update_materialization_plan_details_internal(
     return projection, target_entries, current_entries, conflicts, authority
 
 
-def wom_kit_project_update_materialization_plan_details(
+def _wom_kit_project_update_materialization_plan_details(
     mirror_path: Path,
     target_commit: str,
     *,
@@ -100161,7 +102674,7 @@ def wom_kit_project_update_materialization_plan(
 ) -> dict[str, Any]:
     """Bounded, structured, read-only commit materialization preflight."""
 
-    plan, _, _ = wom_kit_project_update_materialization_plan_details(
+    plan, _, _ = _wom_kit_project_update_materialization_plan_details(
         mirror_path,
         target_commit,
         attach_branch=attach_branch,
@@ -100182,7 +102695,7 @@ def _wom_kit_project_update_apply_tree_entries(
     destination_entries: dict[str, tuple[str, str, bytes]],
     destination_index_ref: str,
     *,
-    directory_guard: WomKitProjectUpdateDirectoryGuard | None,
+    directory_guard: _WomKitProjectUpdateDirectoryGuard | None,
 ) -> bool:
     """Apply one already-planned tree without moving HEAD."""
 
@@ -100196,7 +102709,7 @@ def _wom_kit_project_update_apply_tree_entries(
     try:
         for relative_path in removed_paths:
             path = mirror_path.joinpath(*PurePosixPath(relative_path).parts)
-            if not wom_kit_project_update_unlink_tracked_file(
+            if not _wom_kit_project_update_unlink_tracked_file(
                 mirror_path,
                 path,
                 directory_guard=directory_guard,
@@ -100288,7 +102801,7 @@ def _wom_kit_project_update_apply_tree_entries(
     except OSError:
         return False
 
-    index_ok, _ = wom_kit_project_update_git(
+    index_ok, _ = _wom_kit_project_update_git(
         mirror_path,
         ["read-tree", destination_index_ref],
         timeout_seconds=60,
@@ -100296,18 +102809,18 @@ def _wom_kit_project_update_apply_tree_entries(
     return index_ok
 
 
-def wom_kit_project_update_materialize_commit(
+def _wom_kit_project_update_materialize_commit(
     mirror_path: Path,
     target_commit: str,
     *,
     attach_branch: str | None = None,
     dry_run: bool = False,
-    directory_guard: WomKitProjectUpdateDirectoryGuard | None = None,
+    directory_guard: _WomKitProjectUpdateDirectoryGuard | None = None,
     project_root: Path | None = None,
     expected_source_snapshot: dict[str, Any] | None = None,
 ) -> bool:
     plan, target_entries, current_entries = (
-        wom_kit_project_update_materialization_plan_details(
+        _wom_kit_project_update_materialization_plan_details(
             mirror_path,
             target_commit,
             attach_branch=attach_branch,
@@ -100384,7 +102897,7 @@ def wom_kit_project_update_materialize_commit(
             )
         return False
     if attach_branch is None:
-        head_ok, _ = wom_kit_project_update_git(
+        head_ok, _ = _wom_kit_project_update_git(
             mirror_path,
             ["update-ref", "--no-deref", "HEAD", target_commit],
         )
@@ -100395,13 +102908,13 @@ def wom_kit_project_update_materialize_commit(
             target_commit,
         ):
             return False
-        head_ok, _ = wom_kit_project_update_git(
+        head_ok, _ = _wom_kit_project_update_git(
             mirror_path,
             ["symbolic-ref", "HEAD", f"refs/heads/{attach_branch}"],
         )
     if not head_ok:
         return False
-    verify_ok, verify_head = wom_kit_project_update_git(
+    verify_ok, verify_head = _wom_kit_project_update_git(
         mirror_path,
         ["rev-parse", "--verify", "HEAD"],
     )
@@ -100427,7 +102940,7 @@ def wom_kit_project_update_materialize_commit(
     )
 
 
-def wom_kit_project_update_materialize_runtime_sources(
+def _wom_kit_project_update_materialize_runtime_sources(
     mirror_path: Path,
 ) -> bool:
     head_entries = wom_kit_runtime_head_python_entries(mirror_path)
@@ -100450,7 +102963,7 @@ def wom_kit_project_update_materialize_runtime_sources(
             or not wom_kit_path_components_are_real(mirror_path, path)
         ):
             return False
-        size_ok, size_text = wom_kit_project_update_git(
+        size_ok, size_text = _wom_kit_project_update_git(
             mirror_path,
             ["cat-file", "-s", object_id],
         )
@@ -100466,7 +102979,7 @@ def wom_kit_project_update_materialize_runtime_sources(
         total_source_bytes += source_size
         if total_source_bytes > WOM_KIT_RUNTIME_MAX_TOTAL_PYTHON_SOURCE_BYTES:
             return False
-        source_bytes = wom_kit_project_update_git_blob(
+        source_bytes = _wom_kit_project_update_git_blob(
             mirror_path,
             object_id,
             source_size,
@@ -100484,7 +102997,7 @@ def wom_kit_project_update_materialize_runtime_sources(
     except OSError:
         return False
     for relative_path, (mode, object_id, _) in sorted(source_blobs.items()):
-        indexed, _ = wom_kit_project_update_git(
+        indexed, _ = _wom_kit_project_update_git(
             mirror_path,
             [
                 "update-index",
@@ -100514,7 +103027,7 @@ def wom_kit_project_update_source_versions(mirror_path: Path) -> dict[str, str |
     }
     versions: dict[str, str | None] = {}
     for label, (path, parser) in specs.items():
-        text = wom_kit_read_bounded_real_text(
+        text = _wom_kit_read_bounded_real_text(
             mirror_path,
             path,
             max_bytes=WOM_KIT_VERSION_METADATA_MAX_BYTES,
@@ -100530,7 +103043,7 @@ def wom_kit_project_update_target_evidence(
     target_tag: str,
 ) -> dict[str, Any]:
     tag_ref = f"refs/tags/{target_tag}"
-    tag_available, _ = wom_kit_project_update_git(mirror_path, ["show-ref", "--verify", "--quiet", tag_ref])
+    tag_available, _ = _wom_kit_project_update_git(mirror_path, ["show-ref", "--verify", "--quiet", tag_ref])
     evidence: dict[str, Any] = {
         "tag_available_locally": tag_available,
         "annotated_tag_verified": False,
@@ -100547,9 +103060,9 @@ def wom_kit_project_update_target_evidence(
     if not tag_available:
         return evidence
 
-    type_ok, tag_type = wom_kit_project_update_git(mirror_path, ["cat-file", "-t", tag_ref])
+    type_ok, tag_type = _wom_kit_project_update_git(mirror_path, ["cat-file", "-t", tag_ref])
     evidence["annotated_tag_verified"] = type_ok and tag_type == "tag"
-    commit_ok, target_commit = wom_kit_project_update_git(
+    commit_ok, target_commit = _wom_kit_project_update_git(
         mirror_path,
         ["rev-parse", "--verify", f"{tag_ref}^{{commit}}"],
     )
@@ -100566,7 +103079,7 @@ def wom_kit_project_update_target_evidence(
     source_versions: dict[str, str | None] = {}
     for label, (relative_path, parser) in blob_specs.items():
         object_spec = f"{target_commit}:{relative_path}"
-        size_ok, size_text = wom_kit_project_update_git(
+        size_ok, size_text = _wom_kit_project_update_git(
             mirror_path,
             ["cat-file", "-s", object_spec],
             max_output_bytes=256,
@@ -100576,7 +103089,7 @@ def wom_kit_project_update_target_evidence(
         except ValueError:
             blob_size = -1
         blob = (
-            wom_kit_project_update_git_blob(
+            _wom_kit_project_update_git_blob(
                 mirror_path,
                 object_spec,
                 blob_size,
@@ -100598,13 +103111,13 @@ def wom_kit_project_update_target_evidence(
         and all(value == target_version for value in source_versions.values())
     )
 
-    main_ok, _ = wom_kit_project_update_git(
+    main_ok, _ = _wom_kit_project_update_git(
         mirror_path,
         ["show-ref", "--verify", "--quiet", "refs/remotes/origin/main"],
     )
     evidence["origin_main_available_locally"] = main_ok
     if main_ok:
-        ancestor_ok, _ = wom_kit_project_update_git(
+        ancestor_ok, _ = _wom_kit_project_update_git(
             mirror_path,
             ["merge-base", "--is-ancestor", target_commit, "refs/remotes/origin/main"],
         )
@@ -100617,22 +103130,22 @@ def wom_kit_project_update_target_ref_snapshot(
     target_tag: str,
 ) -> dict[str, str] | None:
     tag_ref = f"refs/tags/{target_tag}"
-    tag_ok, tag_object = wom_kit_project_update_git(
+    tag_ok, tag_object = _wom_kit_project_update_git(
         mirror_path,
         ["rev-parse", "--verify", tag_ref],
         max_output_bytes=256,
     )
-    tag_type_ok, tag_type = wom_kit_project_update_git(
+    tag_type_ok, tag_type = _wom_kit_project_update_git(
         mirror_path,
         ["cat-file", "-t", tag_ref],
         max_output_bytes=256,
     )
-    commit_ok, target_commit = wom_kit_project_update_git(
+    commit_ok, target_commit = _wom_kit_project_update_git(
         mirror_path,
         ["rev-parse", "--verify", f"{tag_ref}^{{commit}}"],
         max_output_bytes=256,
     )
-    main_ok, origin_main = wom_kit_project_update_git(
+    main_ok, origin_main = _wom_kit_project_update_git(
         mirror_path,
         ["rev-parse", "--verify", "refs/remotes/origin/main"],
         max_output_bytes=256,
@@ -100708,7 +103221,7 @@ WOM_KIT_PROJECT_UPDATE_LOCK_BYTES = (
 )
 
 
-def wom_kit_project_update_remove_exclusive_receipt_if_owned(
+def _wom_kit_project_update_remove_exclusive_receipt_if_owned(
     project_root: Path,
     candidate: Path,
     created_identity: tuple[int, int] | None,
@@ -100742,7 +103255,7 @@ def wom_kit_project_update_remove_exclusive_receipt_if_owned(
     return wom_kit_real_path_kind(project_root, candidate) == "missing"
 
 
-def wom_kit_project_update_acquire_lock_exclusive(
+def _wom_kit_project_update_acquire_lock_exclusive(
     project_root: Path,
     metadata_root: Path,
     lock_path: Path,
@@ -100832,7 +103345,7 @@ def wom_kit_project_update_acquire_lock_exclusive(
         if descriptor is not None:
             os.close(descriptor)
             descriptor = None
-        if not wom_kit_project_update_remove_exclusive_receipt_if_owned(
+        if not _wom_kit_project_update_remove_exclusive_receipt_if_owned(
             project_root,
             lock_path,
             identity,
@@ -100844,7 +103357,7 @@ def wom_kit_project_update_acquire_lock_exclusive(
     finally:
         if descriptor is not None:
             os.close(descriptor)
-    lock_bytes = wom_kit_read_bounded_real_bytes(
+    lock_bytes = _wom_kit_read_bounded_real_bytes(
         project_root,
         lock_path,
         max_bytes=len(WOM_KIT_PROJECT_UPDATE_LOCK_BYTES),
@@ -100870,7 +103383,7 @@ def wom_kit_project_update_acquire_lock_exclusive(
             and identity[1] != lock_stat.st_ino
         )
     ):
-        if not wom_kit_project_update_remove_exclusive_receipt_if_owned(
+        if not _wom_kit_project_update_remove_exclusive_receipt_if_owned(
             project_root,
             lock_path,
             identity,
@@ -100882,7 +103395,7 @@ def wom_kit_project_update_acquire_lock_exclusive(
     return identity
 
 
-def wom_kit_project_update_release_owned_lock(
+def _wom_kit_project_update_release_owned_lock(
     project_root: Path,
     lock_path: Path,
     identity: tuple[int, int] | None,
@@ -100893,7 +103406,7 @@ def wom_kit_project_update_release_owned_lock(
         identity,
     ):
         return False
-    return wom_kit_project_update_remove_exclusive_receipt_if_owned(
+    return _wom_kit_project_update_remove_exclusive_receipt_if_owned(
         project_root,
         lock_path,
         identity,
@@ -100907,7 +103420,7 @@ def wom_kit_project_update_owned_lock_present(
 ) -> bool:
     if (
         identity is None
-        or wom_kit_read_bounded_real_bytes(
+        or _wom_kit_read_bounded_real_bytes(
             project_root,
             lock_path,
             max_bytes=len(WOM_KIT_PROJECT_UPDATE_LOCK_BYTES),
@@ -100934,13 +103447,13 @@ def wom_kit_project_update_owned_lock_present(
     )
 
 
-def wom_kit_project_update_write_receipt_exclusive(
+def _wom_kit_project_update_write_receipt_exclusive(
     project_root: Path,
     target_tag: str,
     timestamp: str,
     receipt_bytes: bytes,
     *,
-    directory_guard: WomKitProjectUpdateDirectoryGuard | None = None,
+    directory_guard: _WomKitProjectUpdateDirectoryGuard | None = None,
     reservation_callback: (
         Callable[[Path, str, tuple[int, int]], None] | None
     ) = None,
@@ -101055,7 +103568,7 @@ def wom_kit_project_update_write_receipt_exclusive(
             if descriptor is not None:
                 os.close(descriptor)
                 descriptor = None
-            if not wom_kit_project_update_remove_exclusive_receipt_if_owned(
+            if not _wom_kit_project_update_remove_exclusive_receipt_if_owned(
                 project_root,
                 candidate,
                 created_identity,
@@ -101089,7 +103602,7 @@ def wom_kit_project_update_write_receipt_exclusive(
                 or not candidate_stat.st_ino
                 or created_identity[1] == candidate_stat.st_ino
             )
-            and wom_kit_read_bounded_real_bytes(
+            and _wom_kit_read_bounded_real_bytes(
                 project_root,
                 candidate,
                 max_bytes=2 * 1024 * 1024,
@@ -101097,7 +103610,7 @@ def wom_kit_project_update_write_receipt_exclusive(
             == receipt_bytes
         )
         if not receipt_verified:
-            if not wom_kit_project_update_remove_exclusive_receipt_if_owned(
+            if not _wom_kit_project_update_remove_exclusive_receipt_if_owned(
                 project_root,
                 candidate,
                 created_identity,
@@ -101110,37 +103623,37 @@ def wom_kit_project_update_write_receipt_exclusive(
     raise OSError("receipt_name_space_exhausted")
 
 
-def wom_kit_project_update_git_snapshot(
+def _wom_kit_project_update_git_snapshot(
     mirror_path: Path,
 ) -> dict[str, Any] | None:
-    head_ok, head = wom_kit_project_update_git(
+    head_ok, head = _wom_kit_project_update_git(
         mirror_path,
         ["rev-parse", "--verify", "HEAD"],
     )
     symbolic_head_state, branch = (
         wom_kit_project_update_symbolic_head_state(mirror_path)
     )
-    tree_ok, tree_value = wom_kit_project_update_git(
+    tree_ok, tree_value = _wom_kit_project_update_git(
         mirror_path,
         ["ls-tree", "-r", "-z", "HEAD"],
     )
-    index_ok, index_value = wom_kit_project_update_git(
+    index_ok, index_value = _wom_kit_project_update_git(
         mirror_path,
         ["ls-files", "--stage", "-z"],
     )
-    flags_ok, flags_value = wom_kit_project_update_git(
+    flags_ok, flags_value = _wom_kit_project_update_git(
         mirror_path,
         ["ls-files", "-v", "-z"],
     )
-    eol_ok, eol_value = wom_kit_project_update_git(
+    eol_ok, eol_value = _wom_kit_project_update_git(
         mirror_path,
         ["ls-files", "--eol", "-z"],
     )
-    untracked_ok, untracked_value = wom_kit_project_update_git(
+    untracked_ok, untracked_value = _wom_kit_project_update_git(
         mirror_path,
         ["ls-files", "--others", "--exclude-standard", "-z"],
     )
-    autocrlf_ok, autocrlf_value = wom_kit_project_update_git(
+    autocrlf_ok, autocrlf_value = _wom_kit_project_update_git(
         mirror_path,
         [
             "config",
@@ -101290,7 +103803,7 @@ def wom_kit_project_update_git_snapshot(
         total_bytes += path_size
         if total_bytes > WOM_KIT_PROJECT_UPDATE_MAX_TRACKED_TOTAL_BYTES:
             return None
-        raw_bytes = wom_kit_read_bounded_real_bytes(
+        raw_bytes = _wom_kit_read_bounded_real_bytes(
             mirror_path,
             path,
             max_bytes=WOM_KIT_PROJECT_UPDATE_MAX_TRACKED_FILE_BYTES,
@@ -101401,12 +103914,12 @@ def wom_kit_project_update_source_matches_snapshot(
             project_root,
             mirror_path,
         )
-        and wom_kit_project_update_git_snapshot(mirror_path)
+        and _wom_kit_project_update_git_snapshot(mirror_path)
         == expected_snapshot
     )
 
 
-def wom_kit_project_update_restore_eol_overrides(
+def _wom_kit_project_update_restore_eol_overrides(
     project_root: Path,
     mirror_path: Path,
     snapshot: dict[str, Any] | None,
@@ -101427,7 +103940,7 @@ def wom_kit_project_update_restore_eol_overrides(
         ):
             return False
         path = mirror_path.joinpath(*PurePosixPath(relative_path).parts)
-        current_bytes = wom_kit_read_bounded_real_bytes(
+        current_bytes = _wom_kit_read_bounded_real_bytes(
             project_root,
             path,
             max_bytes=WOM_KIT_PROJECT_UPDATE_MAX_TRACKED_FILE_BYTES,
@@ -101447,7 +103960,7 @@ def wom_kit_project_update_restore_eol_overrides(
         except BaseException:
             return False
         if (
-            wom_kit_read_bounded_real_bytes(
+            _wom_kit_read_bounded_real_bytes(
                 project_root,
                 path,
                 max_bytes=WOM_KIT_PROJECT_UPDATE_MAX_TRACKED_FILE_BYTES,
@@ -101467,7 +103980,7 @@ def wom_kit_project_update_pin_matches_snapshot(
     if spec.get("existed"):
         if kind != "file":
             return False
-        current = wom_kit_read_bounded_real_bytes(
+        current = _wom_kit_read_bounded_real_bytes(
             project_root,
             path,
             max_bytes=WOM_KIT_VERSION_PIN_MAX_BYTES,
@@ -101777,12 +104290,12 @@ def _wom_kit_project_update_collision_git_eligibility(
     mirror_path: Path,
     internal_path: str,
 ) -> tuple[bool, bool]:
-    ignored, _ = wom_kit_project_update_git(
+    ignored, _ = _wom_kit_project_update_git(
         mirror_path,
         ["check-ignore", "--quiet", "--no-index", "--", internal_path],
         max_output_bytes=256,
     )
-    index_checked, index_text = wom_kit_project_update_git(
+    index_checked, index_text = _wom_kit_project_update_git(
         mirror_path,
         ["ls-files", "--stage", "--", internal_path],
         max_output_bytes=4096,
@@ -101820,7 +104333,7 @@ def _wom_kit_project_update_collision_git_eligibility_batch(
         return None
 
     ignore_input = b"".join(path.encode("utf-8") + b"\0" for path in paths)
-    ignore_completed = wom_kit_project_update_run_batch_capped(
+    ignore_completed = _wom_kit_project_update_run_batch_capped(
         wom_kit_project_update_git_command(
             mirror_path,
             ["check-ignore", "--no-index", "-z", "--stdin"],
@@ -101854,7 +104367,7 @@ def _wom_kit_project_update_collision_git_eligibility_batch(
     # ``--pathspec-from-file`` on all Git versions WOM still supports, while a
     # 64-path argv can exceed the Windows command-line limit.  A capped full
     # index stream is deterministic and avoids both failure modes.
-    index_completed = wom_kit_project_update_run_capped(
+    index_completed = _wom_kit_project_update_run_capped(
         wom_kit_project_update_git_command(
             mirror_path,
             [
@@ -102105,7 +104618,7 @@ def _wom_kit_project_update_collision_write_private_receipt(
     path: Path,
     payload: dict[str, Any],
     *,
-    directory_guard: WomKitProjectUpdateDirectoryGuard,
+    directory_guard: _WomKitProjectUpdateDirectoryGuard,
 ) -> bool:
     """Create and verify one create-only private receipt without replacement."""
 
@@ -102133,7 +104646,7 @@ def _wom_kit_project_update_collision_write_private_receipt(
     return bool(
         directory_guard.is_held(path.parent)
         and wom_kit_real_path_kind(project_root, path) == "file"
-        and wom_kit_read_bounded_real_bytes(
+        and _wom_kit_read_bounded_real_bytes(
             project_root,
             path,
             max_bytes=256 * 1024,
@@ -102341,7 +104854,7 @@ def _wom_kit_project_update_collision_move_windows(
     source: Path,
     destination: Path,
     *,
-    directory_guard: WomKitProjectUpdateDirectoryGuard,
+    directory_guard: _WomKitProjectUpdateDirectoryGuard,
     pre_move_check: Callable[[os.stat_result, dict[str, int | str]], bool],
 ) -> dict[str, Any]:
     """Atomically rename the exact opened regular file without replacement.
@@ -102677,12 +105190,12 @@ def _wom_kit_project_update_collision_existing_case_state(
         or not is_path_within_root(case_directory, project_root)
     ):
         return incomplete
-    intent_bytes = wom_kit_read_bounded_real_bytes(
+    intent_bytes = _wom_kit_read_bounded_real_bytes(
         project_root,
         intent_path,
         max_bytes=256 * 1024,
     )
-    completion_bytes = wom_kit_read_bounded_real_bytes(
+    completion_bytes = _wom_kit_read_bounded_real_bytes(
         project_root,
         completion_path,
         max_bytes=256 * 1024,
@@ -102844,11 +105357,11 @@ def _wom_kit_project_update_collision_existing_case_state(
         or not timestamp_re.fullmatch(completion_payload["completed_at"])
     ):
         return incomplete
-    target_entries = wom_kit_project_update_tree_blobs(
+    target_entries = _wom_kit_project_update_tree_blobs(
         mirror_path,
         target_commit,
     )
-    current_entries = wom_kit_project_update_tree_blobs(mirror_path, "HEAD")
+    current_entries = _wom_kit_project_update_tree_blobs(mirror_path, "HEAD")
     if (
         target_entries is None
         or current_entries is None
@@ -103086,15 +105599,15 @@ def _wom_kit_project_version_update_collision_inspect_batch_core(
                 add_blocker("project_update_collision_concurrent_operation")
 
     if mirror_path is not None and not blocker_codes:
-        inside_ok, inside_text = wom_kit_project_update_git(
+        inside_ok, inside_text = _wom_kit_project_update_git(
             mirror_path,
             ["rev-parse", "--is-inside-work-tree"],
         )
-        top_ok, top_text = wom_kit_project_update_git(
+        top_ok, top_text = _wom_kit_project_update_git(
             mirror_path,
             ["rev-parse", "--show-toplevel"],
         )
-        head_ok, head_text = wom_kit_project_update_git(
+        head_ok, head_text = _wom_kit_project_update_git(
             mirror_path,
             ["rev-parse", "--verify", "HEAD"],
         )
@@ -103119,7 +105632,7 @@ def _wom_kit_project_version_update_collision_inspect_batch_core(
             or head_before is None
             or symbolic_state == "invalid"
             or not wom_kit_project_update_snapshot_is_clean(
-                wom_kit_project_update_git_snapshot(mirror_path),
+                _wom_kit_project_update_git_snapshot(mirror_path),
                 expected_head=head_before,
                 expected_branch=original_branch,
             )
@@ -103520,6 +106033,40 @@ def wom_kit_project_version_update_collision(
     exception is an explicitly requested path that is independently present as
     the exact same key in the verified target Git tree.
     """
+
+    if type(dry_run) is not bool or type(approve) is not bool or approve:
+        return _compound_exact_human_approval_blocked(
+            lifecycle_action="project_version_update_collision",
+        )
+
+    return _wom_kit_project_version_update_collision_legacy_core(
+        inspection_root,
+        target=target,
+        entry_ref=entry_ref,
+        action=action,
+        dry_run=dry_run,
+        approve=approve,
+        expected_plan_sha256=expected_plan_sha256,
+        reviewed_by=reviewed_by,
+        affirm_external_writers_quiescent=affirm_external_writers_quiescent,
+        reveal_target_relative_path=reveal_target_relative_path,
+    )
+
+
+def _wom_kit_project_version_update_collision_legacy_core(
+    inspection_root: Path | str,
+    *,
+    target: str,
+    entry_ref: str,
+    action: str,
+    dry_run: bool = False,
+    approve: bool = False,
+    expected_plan_sha256: str | None = None,
+    reviewed_by: str | None = None,
+    affirm_external_writers_quiescent: bool = False,
+    reveal_target_relative_path: bool = False,
+) -> dict[str, Any]:
+    """Exercise the pre-v0.4 collision writer in historical tests only."""
 
     blocker_codes: list[str] = []
     warnings: list[str] = []
@@ -103946,15 +106493,15 @@ def wom_kit_project_version_update_collision(
     if blocker_codes:
         return build_result()
 
-    inside_ok, inside_text = wom_kit_project_update_git(
+    inside_ok, inside_text = _wom_kit_project_update_git(
         mirror_path,
         ["rev-parse", "--is-inside-work-tree"],
     )
-    top_ok, top_text = wom_kit_project_update_git(
+    top_ok, top_text = _wom_kit_project_update_git(
         mirror_path,
         ["rev-parse", "--show-toplevel"],
     )
-    head_ok, head_text = wom_kit_project_update_git(
+    head_ok, head_text = _wom_kit_project_update_git(
         mirror_path,
         ["rev-parse", "--verify", "HEAD"],
     )
@@ -103970,7 +106517,7 @@ def wom_kit_project_version_update_collision(
         if head_ok and re.fullmatch(r"[0-9a-fA-F]{40,64}", head_text)
         else None
     )
-    git_snapshot = wom_kit_project_update_git_snapshot(mirror_path)
+    git_snapshot = _wom_kit_project_update_git_snapshot(mirror_path)
     if (
         not inside_ok
         or inside_text != "true"
@@ -104140,7 +106687,7 @@ def wom_kit_project_version_update_collision(
         status = "ready_to_preserve_relocate"
         return build_result()
 
-    directory_guard = WomKitProjectUpdateDirectoryGuard(project_root)
+    directory_guard = _WomKitProjectUpdateDirectoryGuard(project_root)
     lock_identity: tuple[int, int] | None = None
     lock_reservation_identity: tuple[int, int] | None = None
     preserve_uncertain_lock = False
@@ -104163,7 +106710,7 @@ def wom_kit_project_version_update_collision(
                 lock_reservation_identity = identity
 
             try:
-                lock_identity = wom_kit_project_update_acquire_lock_exclusive(
+                lock_identity = _wom_kit_project_update_acquire_lock_exclusive(
                     project_root,
                     metadata_root,
                     lock_path,
@@ -104291,7 +106838,7 @@ def wom_kit_project_version_update_collision(
                 )
                 != target_ref_snapshot
                 or not wom_kit_project_update_snapshot_is_clean(
-                    wom_kit_project_update_git_snapshot(mirror_path),
+                    _wom_kit_project_update_git_snapshot(mirror_path),
                     expected_head=head_before,
                     expected_branch=original_branch,
                 )
@@ -104488,7 +107035,7 @@ def wom_kit_project_version_update_collision(
                 lock_released = False
         if lock_identity is not None and not preserve_uncertain_lock:
             try:
-                lock_released = wom_kit_project_update_release_owned_lock(
+                lock_released = _wom_kit_project_update_release_owned_lock(
                     project_root,
                     lock_path,
                     lock_identity,
@@ -104521,6 +107068,34 @@ def wom_kit_project_version_update(
     affirm_external_writers_quiescent: bool = False,
     progress_callback: Callable[[str, str, int | None, int | None], None] | None = None,
 ) -> dict[str, Any]:
+    if type(dry_run) is not bool or type(approve) is not bool or approve:
+        return _compound_exact_human_approval_blocked(
+            lifecycle_action="project_version_update",
+        )
+
+    return _wom_kit_project_version_update_legacy_core(
+        inspection_root,
+        target=target,
+        dry_run=dry_run,
+        approve=approve,
+        reviewed_by=reviewed_by,
+        affirm_external_writers_quiescent=affirm_external_writers_quiescent,
+        progress_callback=progress_callback,
+    )
+
+
+def _wom_kit_project_version_update_legacy_core(
+    inspection_root: Path | str,
+    *,
+    target: str,
+    dry_run: bool = False,
+    approve: bool = False,
+    reviewed_by: str | None = None,
+    affirm_external_writers_quiescent: bool = False,
+    progress_callback: Callable[[str, str, int | None, int | None], None] | None = None,
+) -> dict[str, Any]:
+    """Exercise the pre-v0.4 project updater in historical tests only."""
+
     blockers: list[str] = []
     warnings: list[str] = []
     target_tag = str(target or "").strip()
@@ -104625,8 +107200,8 @@ def wom_kit_project_version_update(
     )
 
     if mirror_kind == "directory":
-        inside_ok, inside_text = wom_kit_project_update_git(mirror_path, ["rev-parse", "--is-inside-work-tree"])
-        top_ok, top_text = wom_kit_project_update_git(mirror_path, ["rev-parse", "--show-toplevel"])
+        inside_ok, inside_text = _wom_kit_project_update_git(mirror_path, ["rev-parse", "--is-inside-work-tree"])
+        top_ok, top_text = _wom_kit_project_update_git(mirror_path, ["rev-parse", "--show-toplevel"])
         try:
             exact_top = top_ok and Path(top_text).resolve() == mirror_path.resolve()
         except (OSError, RuntimeError, ValueError):
@@ -104645,7 +107220,7 @@ def wom_kit_project_version_update(
                 "The project source mirror must be the exact root of a Git working tree whose real .git metadata stays inside that mirror."
             )
         else:
-            head_ok, head_text = wom_kit_project_update_git(mirror_path, ["rev-parse", "--verify", "HEAD"])
+            head_ok, head_text = _wom_kit_project_update_git(mirror_path, ["rev-parse", "--verify", "HEAD"])
             if head_ok and re.fullmatch(r"[0-9a-fA-F]{40,64}", head_text):
                 head_before = head_text.lower()
                 head_after = head_before
@@ -104677,7 +107252,7 @@ def wom_kit_project_version_update(
                 blockers.append(
                     "The original project source branch cannot be restored safely with Git's branch-name rules."
                 )
-            initial_snapshot = wom_kit_project_update_git_snapshot(mirror_path)
+            initial_snapshot = _wom_kit_project_update_git_snapshot(mirror_path)
             unexpected_worktree_entry_count = (
                 len(
                     [
@@ -104705,14 +107280,14 @@ def wom_kit_project_version_update(
                 blockers.append(
                     "The project source mirror has changed bytes, an unsafe index, or unknown untracked files."
                 )
-            tracked_pin_ok, _ = wom_kit_project_update_git(
+            tracked_pin_ok, _ = _wom_kit_project_update_git(
                 mirror_path,
                 ["ls-files", "--error-unmatch", "--", "installed-version.txt"],
             )
             mirror_pin_tracked = tracked_pin_ok
             if mirror_pin_tracked:
                 blockers.append("The source-mirror installed-version pin must not be Git-tracked.")
-            origin_ok, origin_key_text = wom_kit_project_update_git(
+            origin_ok, origin_key_text = _wom_kit_project_update_git(
                 mirror_path,
                 [
                     "config",
@@ -104786,7 +107361,7 @@ def wom_kit_project_version_update(
             continue
         if path_kind == "file":
             try:
-                previous_bytes = wom_kit_read_bounded_real_bytes(
+                previous_bytes = _wom_kit_read_bounded_real_bytes(
                     project_root,
                     path,
                     max_bytes=WOM_KIT_VERSION_PIN_MAX_BYTES,
@@ -104807,7 +107382,7 @@ def wom_kit_project_version_update(
             spec["previous_version"] = f"v{previous_version}"
 
     preflight_git_snapshot = (
-        wom_kit_project_update_git_snapshot(mirror_path)
+        _wom_kit_project_update_git_snapshot(mirror_path)
         if git_repo_verified
         else None
     )
@@ -104908,7 +107483,7 @@ def wom_kit_project_version_update(
     lock_reservation: dict[str, Any] | None = None
     lock_release_state = "not_acquired"
     lock_release_intent_status: str | None = None
-    directory_guard: WomKitProjectUpdateDirectoryGuard | None = None
+    directory_guard: _WomKitProjectUpdateDirectoryGuard | None = None
     preserve_lock = False
     target_git_snapshot: dict[str, Any] | None = None
     trusted_target_ref_snapshot: dict[str, str] | None = None
@@ -105256,7 +107831,7 @@ def wom_kit_project_version_update(
     if progress_callback is not None:
         progress_callback("project-preflight", "done", None, None)
 
-    directory_guard = WomKitProjectUpdateDirectoryGuard(project_root)
+    directory_guard = _WomKitProjectUpdateDirectoryGuard(project_root)
     guard_ready = bool(
         directory_guard.hold(project_root)
         and directory_guard.hold(metadata_root)
@@ -105280,7 +107855,7 @@ def wom_kit_project_version_update(
         lock_reservation = {"identity": identity}
 
     try:
-        wom_kit_project_update_acquire_lock_exclusive(
+        _wom_kit_project_update_acquire_lock_exclusive(
             project_root,
             metadata_root,
             lock_path,
@@ -105316,7 +107891,7 @@ def wom_kit_project_version_update(
             wom_kit_real_path_kind(project_root, lock_path) == "missing"
             or (
                 lock_reservation is not None
-                and wom_kit_project_update_release_owned_lock(
+                and _wom_kit_project_update_release_owned_lock(
                     project_root,
                     lock_path,
                     lock_reservation.get("identity"),
@@ -105354,7 +107929,7 @@ def wom_kit_project_version_update(
             if lock_reservation is not None
             else None
         )
-        if not wom_kit_project_update_release_owned_lock(
+        if not _wom_kit_project_update_release_owned_lock(
             project_root,
             lock_path,
             identity,
@@ -105392,7 +107967,7 @@ def wom_kit_project_version_update(
                 or not path_stat.st_ino
                 or identity[1] == path_stat.st_ino
             )
-            and wom_kit_read_bounded_real_bytes(
+            and _wom_kit_read_bounded_real_bytes(
                 project_root,
                 path,
                 max_bytes=2 * 1024 * 1024,
@@ -105432,7 +108007,7 @@ def wom_kit_project_version_update(
                 target_git_snapshot,
             )
             and all(
-                wom_kit_read_bounded_real_bytes(
+                _wom_kit_read_bounded_real_bytes(
                     project_root,
                     spec["path"],
                     max_bytes=WOM_KIT_VERSION_PIN_MAX_BYTES,
@@ -105451,7 +108026,7 @@ def wom_kit_project_version_update(
         )
 
     try:
-        post_lock_snapshot = wom_kit_project_update_git_snapshot(mirror_path)
+        post_lock_snapshot = _wom_kit_project_update_git_snapshot(mirror_path)
         if (
             preflight_git_snapshot is None
             or post_lock_snapshot != preflight_git_snapshot
@@ -105483,7 +108058,7 @@ def wom_kit_project_version_update(
             release_current_lock_or_raise("blocked")
             return result_payload("blocked")
         fetch_attempted = True
-        fetch_ok, _ = wom_kit_project_update_git(
+        fetch_ok, _ = _wom_kit_project_update_git(
             mirror_path,
             [
                 "fetch",
@@ -105549,7 +108124,7 @@ def wom_kit_project_version_update(
             release_current_lock_or_raise("blocked")
             return result_payload("blocked")
 
-        before_mutation_snapshot = wom_kit_project_update_git_snapshot(
+        before_mutation_snapshot = _wom_kit_project_update_git_snapshot(
             mirror_path
         )
         if (
@@ -105635,7 +108210,7 @@ def wom_kit_project_version_update(
             runtime_source_rematerialization_succeeded = False
             try:
                 materialization_succeeded = (
-                    wom_kit_project_update_materialize_commit(
+                    _wom_kit_project_update_materialize_commit(
                         mirror_path,
                         target_commit,
                         directory_guard=directory_guard,
@@ -105656,7 +108231,7 @@ def wom_kit_project_version_update(
                 # preserves the lock for recovery.
                 if (
                     preflight_git_snapshot is not None
-                    and wom_kit_project_update_git_snapshot(mirror_path)
+                    and _wom_kit_project_update_git_snapshot(mirror_path)
                     == preflight_git_snapshot
                     and wom_kit_project_update_source_matches_snapshot(
                         project_root,
@@ -105668,14 +108243,14 @@ def wom_kit_project_version_update(
                 raise RuntimeError("verified_source_materialization_failed")
             source_materialization_completed = True
             runtime_source_rematerialization_succeeded = True
-        head_ok, checked_out_head = wom_kit_project_update_git(
+        head_ok, checked_out_head = _wom_kit_project_update_git(
             mirror_path,
             ["rev-parse", "--verify", "HEAD"],
         )
         head_after = checked_out_head.lower() if head_ok else None
         if not head_ok or head_after != target_commit:
             raise RuntimeError("checkout_verification_failed")
-        target_git_snapshot = wom_kit_project_update_git_snapshot(mirror_path)
+        target_git_snapshot = _wom_kit_project_update_git_snapshot(mirror_path)
         if not wom_kit_project_update_snapshot_is_clean(
             target_git_snapshot,
             expected_head=target_commit,
@@ -105752,7 +108327,7 @@ def wom_kit_project_version_update(
                 write_bytes_atomic(path, target_pin_bytes)
                 pins_written.append(spec["logical"])
             if (
-                wom_kit_read_bounded_real_bytes(
+                _wom_kit_read_bounded_real_bytes(
                     project_root,
                     path,
                     max_bytes=WOM_KIT_VERSION_PIN_MAX_BYTES,
@@ -105780,7 +108355,7 @@ def wom_kit_project_version_update(
             raise RuntimeError("target_ref_snapshot_changed_during_pin_write")
         for spec in pin_specs:
             if (
-                wom_kit_read_bounded_real_bytes(
+                _wom_kit_read_bounded_real_bytes(
                     project_root,
                     spec["path"],
                     max_bytes=WOM_KIT_VERSION_PIN_MAX_BYTES,
@@ -105876,7 +108451,7 @@ def wom_kit_project_version_update(
         ):
             raise RuntimeError("receipt_directory_stability_unavailable")
         receipt_path, receipt_relative = (
-            wom_kit_project_update_write_receipt_exclusive(
+            _wom_kit_project_update_write_receipt_exclusive(
                 project_root,
                 target_tag,
                 timestamp,
@@ -106006,11 +108581,11 @@ def wom_kit_project_version_update(
         source_restore_operation_ok = True
         pins_restored = not uncertain_receipt_mutation
         if source_checkout_changed and head_before:
-            current_ok, current_head = wom_kit_project_update_git(
+            current_ok, current_head = _wom_kit_project_update_git(
                 mirror_path,
                 ["rev-parse", "--verify", "HEAD"],
             )
-            current_git_snapshot = wom_kit_project_update_git_snapshot(
+            current_git_snapshot = _wom_kit_project_update_git_snapshot(
                 mirror_path
             )
             rollback_head_safe = bool(
@@ -106029,7 +108604,7 @@ def wom_kit_project_version_update(
             try:
                 restored_ok = bool(
                     rollback_head_safe
-                    and wom_kit_project_update_materialize_commit(
+                    and _wom_kit_project_update_materialize_commit(
                         mirror_path,
                         head_before,
                         attach_branch=original_branch,
@@ -106038,7 +108613,7 @@ def wom_kit_project_version_update(
                 )
             except BaseException:
                 restored_ok = False
-            verify_ok, restored_head = wom_kit_project_update_git(mirror_path, ["rev-parse", "--verify", "HEAD"])
+            verify_ok, restored_head = _wom_kit_project_update_git(mirror_path, ["rev-parse", "--verify", "HEAD"])
             source_restore_operation_ok = (
                 restored_ok
                 and verify_ok
@@ -106046,7 +108621,7 @@ def wom_kit_project_version_update(
             )
             if source_restore_operation_ok:
                 source_restore_operation_ok = (
-                    wom_kit_project_update_restore_eol_overrides(
+                    _wom_kit_project_update_restore_eol_overrides(
                         project_root,
                         mirror_path,
                         preflight_git_snapshot,
@@ -106066,7 +108641,7 @@ def wom_kit_project_version_update(
             try:
                 path_kind = wom_kit_real_path_kind(project_root, path)
                 current_bytes = (
-                    wom_kit_read_bounded_real_bytes(
+                    _wom_kit_read_bounded_real_bytes(
                         project_root,
                         path,
                         max_bytes=WOM_KIT_VERSION_PIN_MAX_BYTES,
@@ -106090,7 +108665,7 @@ def wom_kit_project_version_update(
                     path.parent.mkdir(parents=True, exist_ok=True)
                     write_bytes_atomic(path, previous_bytes)
                     if (
-                        wom_kit_read_bounded_real_bytes(
+                        _wom_kit_read_bounded_real_bytes(
                             project_root,
                             path,
                             max_bytes=WOM_KIT_VERSION_PIN_MAX_BYTES,
@@ -106117,14 +108692,14 @@ def wom_kit_project_version_update(
                     receipt_candidate,
                 )
                 if receipt_kind == "file":
-                    current_receipt = wom_kit_read_bounded_real_bytes(
+                    current_receipt = _wom_kit_read_bounded_real_bytes(
                         project_root,
                         receipt_candidate,
                         max_bytes=2 * 1024 * 1024,
                     )
                     if receipt_bytes is None or current_receipt != receipt_bytes:
                         raise OSError("receipt_compare_and_swap_failed")
-                    if not wom_kit_project_update_remove_exclusive_receipt_if_owned(
+                    if not _wom_kit_project_update_remove_exclusive_receipt_if_owned(
                         project_root,
                         receipt_candidate,
                         receipt_identity,
@@ -106157,7 +108732,7 @@ def wom_kit_project_version_update(
                     project_root,
                     mirror_path,
                 )
-                and wom_kit_project_update_git_snapshot(mirror_path)
+                and _wom_kit_project_update_git_snapshot(mirror_path)
                 == preflight_git_snapshot
             )
         rollback["source_restored"] = source_restored
@@ -106170,7 +108745,7 @@ def wom_kit_project_version_update(
                 else None
             )
             try:
-                lock_removed = wom_kit_project_update_release_owned_lock(
+                lock_removed = _wom_kit_project_update_release_owned_lock(
                     project_root,
                     lock_path,
                     identity,
@@ -106483,6 +109058,7 @@ def ai_start_here(
         ),
         "inbox_attention": inbox_attention,
         "runtime_guidance_readiness": context.get("runtime_guidance_readiness"),
+        "agent_instruction_policy": context.get("agent_instruction_policy"),
         "operational_context": {
             "status": operational_context.get("status") or "unknown",
             "record_path": operational_context.get("record_path"),
@@ -106522,6 +109098,7 @@ def ai_start_here(
                     else "Full Doctor completed for this start-here result; inspect its blocker and warning counts before broad work."
                 ),
                 "Read AGENTS.md when canonical_entrypoints marks it present.",
+                "Honor agent_instruction_policy.write_actions_blocked before every write; never infer precedence from unmarked prose or auto-rewrite an instruction file.",
                 "Search zets and indexed records through archive search <archive-root> <query> --count-total --format json; raw grep and raw SQL are not authoritative WOM search results.",
                 "Create AI-assisted drafts only through archive create-draft dry-run and its reviewed replay; never write Markdown directly into inbox/.",
                 *(
@@ -108008,6 +110585,10 @@ def source_intake_batch(
 ) -> dict[str, Any]:
     """Plan or record many metadata-only local source intakes in one review gate."""
 
+    if type(dry_run) is not bool or type(approve) is not bool or approve:
+        return _compound_exact_human_approval_blocked(
+            lifecycle_action="source_intake_batch",
+        )
     root = require_existing_archive_root(archive_root)
     archive_id = read_archive_id(root)
     blockers: list[str] = []
@@ -109306,7 +111887,7 @@ def _sigv4_extract_error_code(body: bytes | str | None) -> str | None:
     return match.group(1) if match else None
 
 
-class S3CompatibleTransport:
+class _S3CompatibleTransport:
     """Real R2 / S3-compatible SigV4 transport (Stage 2).
 
     send is the SOLE egress (CA-10). sleep is unused here (the bounded retry loop
@@ -109683,7 +112264,7 @@ class S3CompatibleTransport:
         self._dispatch(method="DELETE", key=key, payload_hash=SIGV4_EMPTY_SHA256_HEX)
 
 
-def object_storage_resolve_transport(
+def _object_storage_resolve_transport(
     provider_kind: str,
     *,
     send: Callable[..., dict[str, Any]] | None = None,
@@ -109691,7 +112272,7 @@ def object_storage_resolve_transport(
 ) -> ObjectStorageTransport | None:
     """Resolve a live transport (Stage 2).
 
-    Returns a real S3CompatibleTransport for cloudflare-r2/generic-s3 ONLY when
+    Returns a real _S3CompatibleTransport for cloudflare-r2/generic-s3 ONLY when
     both an http `send` seam and a resolved credential bundle (endpoint_host,
     bucket, access_key_id, secret_access_key, region) are available. Returns None
     otherwise — so an --approve run with no send/credential still fails closed.
@@ -109715,7 +112296,7 @@ def object_storage_resolve_transport(
             return None
     if not (endpoint_host and bucket and access_key_id and secret_access_key):
         return None
-    return S3CompatibleTransport(
+    return _S3CompatibleTransport(
         endpoint_host=endpoint_host,
         bucket=bucket,
         access_key_id=access_key_id,
@@ -109995,13 +112576,16 @@ def safe_object_storage_execution_receipt_relative(value: Any) -> bool:
     return True
 
 
-def resolve_credential_value(credential_ref: str, credential_store: str | None) -> tuple[str | None, dict[str, Any]]:
-    """Shared ref->value resolver (generalization of tiro_read_credential_value).
+def _resolve_credential_value(
+    credential_ref: str,
+    credential_store: str | None,
+) -> tuple[str | None, dict[str, Any]]:
+    """Shared ref->value resolver (generalization of _tiro_read_credential_value).
 
     Dispatch is inherited verbatim: env: -> os.environ; keyring/credential-manager
     -> OS credential store; secret/wallet -> unsupported (blocks).
     """
-    return tiro_read_credential_value(credential_ref, credential_store)
+    return _tiro_read_credential_value(credential_ref, credential_store)
 
 
 def assert_no_secret_or_location_leak(serialized: str, *, key_values: list[str]) -> list[str]:
@@ -110399,7 +112983,7 @@ def object_storage_wom_uploaded_location(
     }
 
 
-class ResumeLedger:
+class _ResumeLedger:
     """Crash-safe append-only JSONL ledger (R3, §3.3).
 
     Rows are allowlist-built scalars only (RC5). append() does a real fsync'd
@@ -110640,7 +113224,11 @@ def object_storage_adopt_proven_tier(
     return 0
 
 
-def object_storage_write_execution_receipt(root: Path, case_id: str, receipt: dict[str, Any]) -> str:
+def _object_storage_write_execution_receipt(
+    root: Path,
+    case_id: str,
+    receipt: dict[str, Any],
+) -> str:
     """Write a monotonic-suffixed immutable execution receipt via _atomic_write_json."""
     receipts_dir = archive_internal_path(root, OBJECT_STORAGE_EXECUTIONS_DIR)
     receipts_dir.mkdir(parents=True, exist_ok=True)
@@ -110665,7 +113253,7 @@ def _object_storage_backoff_ms(attempt_index: int, rng: Callable[[], float]) -> 
     return int(base * jitter)
 
 
-def object_storage_execute_one_upload(
+def _object_storage_execute_one_upload(
     *,
     transport: ObjectStorageTransport,
     key: str,
@@ -110674,7 +113262,7 @@ def object_storage_execute_one_upload(
     content_sha256: str,
     multipart_threshold_bytes: int,
     skip_uploaded: bool,
-    ledger: ResumeLedger,
+    ledger: _ResumeLedger,
     max_attempts: int = OBJECT_STORAGE_MAX_ATTEMPTS_PER_OBJECT,
     sleep: Callable[[float], None] = time.sleep,
     rng: Callable[[], float] = random.random,
@@ -110766,7 +113354,11 @@ def object_storage_execute_one_upload(
                     "put_calls": 0,
                     "provider_api_called": True,
                 }
-                ledger.append(ResumeLedger.build_row({**result, "completed_at": _object_storage_now_iso()}))
+                ledger.append(
+                    _ResumeLedger.build_row(
+                        {**result, "completed_at": _object_storage_now_iso()}
+                    )
+                )
                 return result
             # Present but different bytes: fail closed, never overwrite.
             return {
@@ -110874,7 +113466,11 @@ def object_storage_execute_one_upload(
             "put_calls": put_calls,
             "provider_api_called": True,
         }
-        ledger.append(ResumeLedger.build_row({**result, "completed_at": _object_storage_now_iso()}))
+        ledger.append(
+            _ResumeLedger.build_row(
+                {**result, "completed_at": _object_storage_now_iso()}
+            )
+        )
         return result
     except ObjectStorageTransportNotImplemented:
         raise
@@ -111461,7 +114057,7 @@ def object_storage_upload_run(
     """Mutating upload command (§1.3, Stage 2).
 
     Live transport reachability: an injected `transport` (tests) OR a production
-    `send` seam plus resolvable credential yields a real S3CompatibleTransport;
+    `send` seam plus resolvable credential yields a real _S3CompatibleTransport;
     otherwise --approve fails closed (live_transport_not_implemented). The
     credential VALUES are read only under `if approve and not blockers`, so the
     real transport is resolved inside the approve branch after all gates. The
@@ -111474,6 +114070,10 @@ def object_storage_upload_run(
     the leak-gate key_values. SA-6: a tiered-gate refuse when the requested batch
     exceeds the tier the store's prior durable receipts have proved.
     """
+    if type(dry_run) is not bool or type(approve) is not bool or approve:
+        return _compound_exact_human_approval_blocked(
+            lifecycle_action="object_storage_upload_run",
+        )
     root = require_existing_archive_root(archive_root)
     archive_id = read_archive_id(root)
     blockers: list[str] = []
@@ -111683,8 +114283,14 @@ def object_storage_upload_run(
         access_value = None
         secret_value = None
         try:
-            access_value, _ = resolve_credential_value(access_ref, credential_ref_store(access_ref))
-            secret_value, _ = resolve_credential_value(secret_ref, credential_ref_store(secret_ref))
+            access_value, _ = _resolve_credential_value(
+                access_ref,
+                credential_ref_store(access_ref),
+            )
+            secret_value, _ = _resolve_credential_value(
+                secret_ref,
+                credential_ref_store(secret_ref),
+            )
             if not access_value or not secret_value:
                 blockers.append("credential_value_unresolved: a credential ref did not resolve to a value.")
             else:
@@ -111694,7 +114300,7 @@ def object_storage_upload_run(
                 if injected_transport is not None:
                     resolved_transport = injected_transport
                 else:
-                    resolved_transport = object_storage_resolve_transport(
+                    resolved_transport = _object_storage_resolve_transport(
                         normalized_provider,
                         send=send,
                         credential={
@@ -111893,7 +114499,7 @@ def object_storage_upload_run(
                         # R3: the RESUME LEDGER path is deterministic (no timestamp), so a
                         # re-run reads the SAME ledger and honours its terminal-success rows.
                         # The receipt case_id above stays timestamped for monotonic immutability.
-                        ledger = ResumeLedger(
+                        ledger = _ResumeLedger(
                             object_storage_resume_ledger_path(
                                 root,
                                 archive_id=archive_id,
@@ -111929,7 +114535,7 @@ def object_storage_upload_run(
                         # must still reach a provider PUT instead of returning a
                         # ledger-only skipped_already_present result.
                         force_upload_for_executor = bool(force_reupload or force_upload_after_absent)
-                        one = object_storage_execute_one_upload(
+                        one = _object_storage_execute_one_upload(
                             transport=resolved_transport,
                             key=remote_key,
                             data_path=local_path,
@@ -111985,7 +114591,11 @@ def object_storage_upload_run(
                             )
                             continue
                         if one["result_status"] in {"uploaded", "skipped_remote_same"}:
-                            receipt_relative = object_storage_write_execution_receipt(root, case_id, receipt)
+                            receipt_relative = _object_storage_write_execution_receipt(
+                                root,
+                                case_id,
+                                receipt,
+                            )
                             created_paths.append(archive_internal_path(root, receipt_relative))
                             receipts_written.append(receipt_relative)
                             result["closed_actions"]["files_written"] = True
@@ -112136,6 +114746,10 @@ def object_storage_adopt_existing_run(
     Reports verified-count vs total (§6.4) so a template miss is visible, never a
     silent partial adopt.
     """
+    if type(dry_run) is not bool or type(approve) is not bool or approve:
+        return _compound_exact_human_approval_blocked(
+            lifecycle_action="object_storage_adopt_existing",
+        )
     root = require_existing_archive_root(archive_root)
     archive_id = read_archive_id(root)
     blockers: list[str] = []
@@ -112590,8 +115204,14 @@ def object_storage_adopt_existing_run(
         access_value = None
         secret_value = None
         try:
-            access_value, _ = resolve_credential_value(access_ref, credential_ref_store(access_ref))
-            secret_value, _ = resolve_credential_value(secret_ref, credential_ref_store(secret_ref))
+            access_value, _ = _resolve_credential_value(
+                access_ref,
+                credential_ref_store(access_ref),
+            )
+            secret_value, _ = _resolve_credential_value(
+                secret_ref,
+                credential_ref_store(secret_ref),
+            )
             if not access_value or not secret_value:
                 blockers.append("credential_value_unresolved: a credential ref did not resolve to a value.")
             else:
@@ -112602,7 +115222,7 @@ def object_storage_adopt_existing_run(
                 if injected_transport is not None:
                     resolved_transport = injected_transport
                 else:
-                    resolved_transport = object_storage_resolve_transport(
+                    resolved_transport = _object_storage_resolve_transport(
                         normalized_provider,
                         send=send,
                         credential={
@@ -113016,7 +115636,7 @@ def _object_storage_write_adopt_receipt(
         if leak_guard(serialized):
             return None
     case_id = object_storage_execution_case_id(archive_id, digest, registered_at)
-    return object_storage_write_execution_receipt(root, case_id, receipt)
+    return _object_storage_write_execution_receipt(root, case_id, receipt)
 
 
 def _object_storage_build_execution_receipt(
@@ -113195,6 +115815,10 @@ def object_storage_wom_location_reconcile_run(
     object manifest, writes only the manifest plus one audit receipt under
     --approve, and never reads credentials, object bytes, or providers.
     """
+    if type(dry_run) is not bool or type(approve) is not bool or approve:
+        return _compound_exact_human_approval_blocked(
+            lifecycle_action="object_storage_wom_location_reconcile",
+        )
     root = require_existing_archive_root(archive_root)
     archive_id = read_archive_id(root)
     blockers: list[str] = []
@@ -114262,6 +116886,9 @@ def scan_source(
     source_root: Path | str | None = None,
     limit: int = 2000,
 ) -> dict[str, Any]:
+    return _compound_exact_human_approval_blocked(
+        lifecycle_action="scan_source",
+    )
     reviewer = reviewed_by.strip()
     if not reviewer:
         raise ArchiveServiceError("Source scan requires --reviewed-by.")
@@ -115126,7 +117753,7 @@ def index_archive(
     facet_count = 0
     principal_count = 0
     quarantined_zettels: list[dict[str, str]] = []
-    rebuild_session = private_objet_index_rebuild_session(
+    rebuild_session = _private_objet_index_rebuild_session(
         root,
         archive_id,
         db_path,
@@ -116515,6 +119142,113 @@ def facet_role_for_key(key: str) -> tuple[str, str]:
     if normalized.endswith(("_id", "_ids", "_hash", "_sha256", "_path", "_url", "_ref", "_refs")):
         return "internal", "locator_or_machine_reference_suffix"
     return "unknown", "needs_human_axis_review"
+
+
+FACET_VOCABULARY_SCHEMA = "wom-kit/facet-vocabulary/v0.1"
+FACET_VOCABULARY_KEY_RE = re.compile(r"^[a-z][a-z0-9_]{0,79}$")
+
+
+def _facet_recommended_keys(document: Any) -> set[str]:
+    if not isinstance(document, dict):
+        return set()
+    result: set[str] = set()
+    facet_sets = document.get("facet_sets")
+    if not isinstance(facet_sets, list):
+        return result
+    for item in facet_sets:
+        if not isinstance(item, dict) or not isinstance(
+            item.get("recommended_keys"), list
+        ):
+            continue
+        for key in item["recommended_keys"]:
+            normalized = str(key or "").strip().lower().replace("-", "_")
+            if FACET_VOCABULARY_KEY_RE.fullmatch(normalized):
+                result.add(normalized)
+    return result
+
+
+def facet_vocabulary(
+    archive_root: Path | str,
+    *,
+    dry_run: bool = True,
+) -> dict[str, Any]:
+    """List stable facet keys without reading zettel bodies or facet values."""
+
+    root = require_existing_archive_root(archive_root)
+    archive_id = read_archive_id(root)
+    blockers: list[str] = []
+    warnings: list[str] = []
+    if not dry_run:
+        blockers.append("dry_run_required")
+    try:
+        base_document = load_yaml(
+            (KIT_ZETTEL_KASTEN_ROOT / "types.yml").read_text(
+                encoding="utf-8"
+            )
+        )
+    except (OSError, UnicodeError, ValueError):
+        base_document = {}
+        blockers.append("base_facet_vocabulary_unavailable")
+    base_recommended = _facet_recommended_keys(base_document)
+    local_recommended: set[str] = set()
+    local_types_path = archive_internal_path(root, "zettel-kasten/types.yml")
+    if local_types_path.is_file():
+        try:
+            local_document = load_yaml(
+                local_types_path.read_text(encoding="utf-8")
+            )
+            local_recommended = _facet_recommended_keys(local_document)
+            if not isinstance(local_document, dict):
+                warnings.append("archive_local_facet_vocabulary_invalid")
+        except (OSError, UnicodeError, ValueError):
+            warnings.append("archive_local_facet_vocabulary_invalid")
+    recommended = base_recommended | local_recommended
+    all_keys = recommended | NAVIGATION_FACET_KEYS | INTERNAL_FACET_KEYS
+    keys: list[dict[str, Any]] = []
+    for key in sorted(all_keys):
+        if key in INTERNAL_FACET_KEYS:
+            role, reason = "internal", "known_import_or_system_metadata"
+        elif key in recommended:
+            role, reason = "navigation", "types_yml_recommended_axis"
+        else:
+            role, reason = facet_role_for_key(key)
+        sources: list[str] = []
+        if key in NAVIGATION_FACET_KEYS or key in INTERNAL_FACET_KEYS:
+            sources.append("static_classifier")
+        if key in base_recommended:
+            sources.append("base_types_yml")
+        if key in local_recommended:
+            sources.append("archive_types_yml")
+        keys.append(
+            {
+                "key": key,
+                "role": role,
+                "role_reason": reason,
+                "sources": sources,
+                "value_policy": "archive_defined_safe_scalar_or_list",
+            }
+        )
+    blockers = unique_preserve_order(blockers)
+    return {
+        "ok": not blockers,
+        "dry_run": bool(dry_run),
+        "schema": FACET_VOCABULARY_SCHEMA,
+        "lifecycle_action": "facet_vocabulary",
+        "archive_id": archive_id,
+        "keys": keys,
+        "key_count": len(keys),
+        "unknown_key_policy": {
+            "accepted_for_draft": True,
+            "warning_code": "unknown_facet_key_requires_human_review",
+            "blocks_create_draft": False,
+        },
+        "value_policy": "archive_defined_safe_scalar_or_list",
+        "facet_values_read": False,
+        "zettel_bodies_read": False,
+        "files_written": [],
+        "blockers": blockers,
+        "warnings": unique_preserve_order(warnings),
+    }
 
 
 def indexed_facet_role_report(conn: sqlite3.Connection, *, used_facet_keys: set[str], limit: int) -> tuple[dict[str, Any], list[dict[str, Any]]]:
@@ -118631,7 +121365,7 @@ def _bound_directory_chain(
 
     entered = False
     try:
-        with activity_group_bound_directory_chain(root, target) as binding:
+        with _activity_group_bound_directory_chain(root, target) as binding:
             entered = True
             descriptor = binding.get("descriptor")
             handles = binding.get("windows_handles")
@@ -119157,11 +121891,50 @@ def private_objet_source_metadata_write(
 ) -> dict[str, Any]:
     """Plan or apply one reviewed private objet metadata observation."""
 
-    from .private_objet_metadata_writer import private_objet_metadata_write
+    if type(dry_run) is not bool or type(approve) is not bool or approve:
+        return _compound_exact_human_approval_blocked(
+            lifecycle_action="private_objet_source_metadata_write",
+        )
+
+    return _private_objet_source_metadata_write_legacy_core(
+        archive_root,
+        intake=intake,
+        expected_intake_sha256=expected_intake_sha256,
+        expected_plan_sha256=expected_plan_sha256,
+        dry_run=dry_run,
+        approve=False,
+        reviewed_by=reviewed_by,
+        affirm_private_metadata_reviewed=affirm_private_metadata_reviewed,
+        affirm_external_writers_quiescent=(
+            affirm_external_writers_quiescent
+        ),
+    )
+
+
+def _private_objet_source_metadata_write_legacy_core(
+    archive_root: Path | str,
+    *,
+    intake: str,
+    expected_intake_sha256: str | None,
+    expected_plan_sha256: str | None = None,
+    dry_run: bool,
+    approve: bool,
+    reviewed_by: str | None = None,
+    affirm_private_metadata_reviewed: bool = False,
+    affirm_external_writers_quiescent: bool = False,
+) -> dict[str, Any]:
+    """Historical private-metadata engine for bounded regression fixtures only.
+
+    Production callers must enter through ``private_objet_source_metadata_write``.
+    Its approval branch is fixed-closed before archive or intake access in v0.4.0.
+    This underscore-only core is not exported or dispatched by CLI/MCP code.
+    """
+
+    from .private_objet_metadata_writer import _private_objet_metadata_write
 
     root = require_existing_archive_root(archive_root)
     archive_id = read_archive_id(root)
-    return private_objet_metadata_write(
+    return _private_objet_metadata_write(
         root,
         archive_id=archive_id,
         safe_projection=safe_projection_scalar,
@@ -119190,6 +121963,10 @@ def migrate_archive(
     reviewed_by: str | None = None,
     selected_link_types: list[str] | None = None,
 ) -> dict[str, Any]:
+    if type(dry_run) is not bool or type(approve) is not bool or approve:
+        return _compound_exact_human_approval_blocked(
+            lifecycle_action="migrate_archive",
+        )
     if selected_link_types and target != BASE_LINK_TYPES_TARGET:
         raise ArchiveServiceError(
             "--link-type is supported only with --target base-link-types."
@@ -119323,6 +122100,10 @@ def migrate_link_types_v03(
     dry_run: bool,
     approve: bool,
 ) -> dict[str, Any]:
+    if type(dry_run) is not bool or type(approve) is not bool or approve:
+        return _compound_exact_human_approval_blocked(
+            lifecycle_action="migrate_archive",
+        )
     if target != LINK_TYPES_V03_TARGET:
         raise ArchiveServiceError(f"Unsupported migration target: {target}")
     if dry_run == approve:
@@ -119501,6 +122282,10 @@ def sync_base_link_types(
     reviewed_by: str | None = None,
     selected_link_types: list[str] | None = None,
 ) -> dict[str, Any]:
+    if type(dry_run) is not bool or type(approve) is not bool or approve:
+        return _compound_exact_human_approval_blocked(
+            lifecycle_action="migrate_archive",
+        )
     if target != BASE_LINK_TYPES_TARGET:
         raise ArchiveServiceError(f"Unsupported migration target: {target}")
     if dry_run == approve:
@@ -119782,6 +122567,10 @@ def sync_base_link_types_revert(
 ) -> dict[str, Any]:
     """Revert only untouched, unused records added by one exact sync receipt."""
 
+    if type(dry_run) is not bool or type(approve) is not bool or approve:
+        return _compound_exact_human_approval_blocked(
+            lifecycle_action="migrate_archive",
+        )
     if target != BASE_LINK_TYPES_TARGET:
         raise ArchiveServiceError(f"Unsupported migration target: {target}")
     if dry_run == approve:
@@ -120101,6 +122890,10 @@ def migrate_link_types_v03_revert(
     dry_run: bool,
     approve: bool,
 ) -> dict[str, Any]:
+    if type(dry_run) is not bool or type(approve) is not bool or approve:
+        return _compound_exact_human_approval_blocked(
+            lifecycle_action="migrate_archive",
+        )
     if target != LINK_TYPES_V03_TARGET:
         raise ArchiveServiceError(f"Unsupported migration target: {target}")
     if dry_run == approve:
@@ -120353,6 +123146,10 @@ def migrate_frontmatter_v03_revert(
     dry_run: bool,
     approve: bool,
 ) -> dict[str, Any]:
+    if type(dry_run) is not bool or type(approve) is not bool or approve:
+        return _compound_exact_human_approval_blocked(
+            lifecycle_action="migrate_archive",
+        )
     if target != FRONTMATTER_V03_TARGET:
         raise ArchiveServiceError(f"Unsupported migration target: {target}")
     if dry_run == approve:
@@ -120403,6 +123200,10 @@ def migrate_frontmatter_v03(
     dry_run: bool,
     approve: bool,
 ) -> dict[str, Any]:
+    if type(dry_run) is not bool or type(approve) is not bool or approve:
+        return _compound_exact_human_approval_blocked(
+            lifecycle_action="migrate_archive",
+        )
     if target != FRONTMATTER_V03_TARGET:
         raise ArchiveServiceError(f"Unsupported migration target: {target}")
     if dry_run == approve:
@@ -122750,6 +125551,65 @@ def _derived_text_register(
     born_digital: bool = False,
     paired_with: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    if approve:
+        return _compound_exact_human_approval_blocked(
+            lifecycle_action="derived_text_register",
+        )
+    return _derived_text_register_legacy_core(
+        root,
+        archive_id=archive_id,
+        stored_text_bytes=stored_text_bytes,
+        source_text_encoding=source_text_encoding,
+        source_text_sha256=source_text_sha256,
+        text_filename=text_filename,
+        source_object_id=source_object_id,
+        source_record_present=source_record_present,
+        derivation_kind=derivation_kind,
+        tool_name=tool_name,
+        tool_version=tool_version,
+        review_status=review_status,
+        approve=False,
+        reviewed_by=reviewed_by,
+        captured_at=captured_at,
+        model_name=model_name,
+        model_version=model_version,
+        confidence=confidence,
+        language=language,
+        born_digital=born_digital,
+        paired_with=paired_with,
+    )
+
+
+def _derived_text_register_legacy_core(
+    root: Path,
+    *,
+    archive_id: str,
+    stored_text_bytes: bytes,
+    source_text_encoding: str | None,
+    source_text_sha256: str,
+    text_filename: str,
+    source_object_id: str,
+    source_record_present: bool,
+    derivation_kind: str,
+    tool_name: str,
+    tool_version: str,
+    review_status: str,
+    approve: bool,
+    reviewed_by: str | None,
+    captured_at: str,
+    model_name: str | None = None,
+    model_version: str | None = None,
+    confidence: float | int | None = None,
+    language: str | None = None,
+    born_digital: bool = False,
+    paired_with: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Historical derived-text engine for bounded regression fixtures only.
+
+    Production callers must enter through ``_derived_text_register``, whose
+    approve branch is fixed-closed in v0.4.0. This underscore-only core is not
+    exported or dispatched by CLI/MCP code.
+    """
     # Everything from record-build through store-write/verify, manifest append+fsync,
     # and receipt write, under _DerivedTextManifestLock. Identity (text_sha256,
     # text_logical_key, derived_text_id, size_bytes) and lossless verification are
@@ -123049,21 +125909,8 @@ def derived_text_capture_apply(
     language: str | None = None,
     born_digital: bool = False,
 ) -> dict[str, Any]:
-    return _derived_text_capture_run(
-        archive_root,
-        text_file=text_file,
-        source_object_id=source_object_id,
-        derivation_kind=derivation_kind,
-        tool_name=tool_name,
-        tool_version=tool_version,
-        review_status=review_status,
-        approve=True,
-        reviewed_by=reviewed_by,
-        model_name=model_name,
-        model_version=model_version,
-        confidence=confidence,
-        language=language,
-        born_digital=born_digital,
+    return _compound_exact_human_approval_blocked(
+        lifecycle_action="derived_text_capture_apply",
     )
 
 
@@ -123343,11 +126190,8 @@ def derived_text_capture_manifest_apply(
     *,
     reviewed_by: str,
 ) -> dict[str, Any]:
-    return _derived_text_capture_manifest_run(
-        archive_root,
-        manifest_path,
-        approve=True,
-        reviewed_by=reviewed_by,
+    return _compound_exact_human_approval_blocked(
+        lifecycle_action="derived_text_capture_manifest_apply",
     )
 
 
@@ -123836,7 +126680,7 @@ class _ObjetCaptureManifestLock:
         resolved_root = Path(root).resolve()
         if os.name == "nt":
             # Keep child lookup lexical until the resolved root is retained by
-            # PrivateMetadataMutationGuard.  Resolving this path here would
+            # _PrivateMetadataMutationGuard.  Resolving this path here would
             # follow an attacker-controlled reparse point before the guard can
             # inspect and reject it.
             manifests_dir = resolved_root / "objects" / "manifests"
@@ -123861,10 +126705,10 @@ class _ObjetCaptureManifestLock:
         if os.name == "nt":
             from . import private_metadata_win32 as win32
 
-            self._guard = win32.PrivateMetadataMutationGuard(self._root)
+            self._guard = win32._PrivateMetadataMutationGuard(self._root)
             try:
-                win32.bootstrap_object_manifest_lock_directories(self._guard)
-                self._win32_lock = win32.PersistentCoordinationLock(
+                win32._bootstrap_object_manifest_lock_directories(self._guard)
+                self._win32_lock = win32._PersistentCoordinationLock(
                     self._guard,
                     win32.CoordinationLockKind.OBJECT_MANIFEST,
                 )
@@ -123935,6 +126779,10 @@ def objet_capture_selection_manifest(
     language: str | None = None,
     born_digital: bool = False,
 ) -> dict[str, Any]:
+    if type(dry_run) is not bool or type(approve) is not bool or approve:
+        return _compound_exact_human_approval_blocked(
+            lifecycle_action="objet_capture_selection_record",
+        )
     root = require_existing_archive_root(archive_root)
     archive_id = read_archive_id(root)
     capture_enabled = read_capture_enablement(root).get("valid") is True
@@ -127037,6 +129885,12 @@ def objet_capture_apply(
     project_intake_receipt: str | None = None,
     selection_document: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    return _compound_exact_human_approval_blocked(
+        lifecycle_action="objet_capture",
+    )
+
+    # Dormant legacy implementation retained for compatibility analysis.
+    # It is not an approval authority.
     return _objet_capture_run(
         archive_root,
         selection_path,
@@ -127077,6 +129931,10 @@ def objet_capture_enable(
     receipt first and the record second (so a valid record implies at least one
     receipt even across a crash). Revocation is advisory and forward-only.
     """
+    if type(dry_run) is not bool or type(approve) is not bool or approve:
+        return _compound_exact_human_approval_blocked(
+            lifecycle_action="objet_capture_enable",
+        )
     root = require_existing_archive_root(archive_root)
     blockers: list[str] = []
     warnings: list[str] = []

@@ -6,7 +6,7 @@ Anchor: v0.3.177 public release.
 
 ## Problem
 
-The basoon v0.3.176 verification letter reported long silent runs for `doctor --strict` and a
+The protected pilot archive's v0.3.176 verification letter reported long silent runs for `doctor --strict` and a
 large `object-storage-adopt-existing --key-map` batch. Silence is operationally unsafe: the
 operator cannot distinguish a slow live HEAD loop from a hang.
 

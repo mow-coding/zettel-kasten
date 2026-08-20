@@ -1,6 +1,6 @@
 # Human Artifact Store Contract
 
-Status: v0.3.13 contract baseline
+Status: v0.4.0 provider-neutral private registry implementation; external adapters remain future
 
 WOM-kit separates three storage roles:
 
@@ -62,9 +62,70 @@ Supported roles:
 - `source_export`
 - `working_note_store`
 
+## v0.4.0 Private Registry
+
+The provider-planning command above remains read-only. v0.4.0 adds a separate
+local registry for human artifacts under one of two explicitly reviewed roots:
+
+- `external_project` scans only `<registered-root>/.wom-scratch`; and
+- `external_delivery` scans the registered root itself (`.`), for example an
+  exact delivery folder the human selected.
+
+Both are bounded metadata-only scopes. WOM never opens artifact bodies, never
+auto-discovers Downloads or a home directory, and never scans an unregistered
+root. Registration must complete through exact-human approval before that root
+contributes scan coverage or closeout authority.
+
+```powershell
+# Bind exactly one project root after native exact-human review.
+archive human-artifact-register-root <archive-root> `
+  --project-root <project-root> `
+  --root-kind external_project `
+  --dry-run --format json
+
+archive human-artifact-register-root <archive-root> `
+  --project-root <project-root> `
+  --root-kind external_project `
+  --expected-plan-sha256 <sha256> `
+  --reviewed-by <actor> `
+  --approve --format json
+
+# Or bind one explicitly reviewed delivery folder itself.
+archive human-artifact-register-root <archive-root> `
+  --external-root <delivery-root> `
+  --root-kind external_delivery `
+  --dry-run --format json
+
+# Always read-only, bounded metadata scan. Bodies and path values are not returned.
+archive human-artifact-scan <archive-root> --format json
+
+# Append one lifecycle receipt; never change or delete the artifact itself.
+archive human-artifact-transition <archive-root> `
+  --artifact-id <opaque-id> `
+  --target-state <state> `
+  --content-sha256 <sha256> `
+  --size-bytes <bytes> `
+  --dry-run --format json
+```
+
+Approved root registration and lifecycle transition use the v0.4.0 exact-human
+sequence: native TaskDialog, authenticated durable `started` claim, writer
+binding revalidation, and workflow-only finalization. There is no issued
+approval token or expiry window. The registry is stored inside the archive's
+ignored private profile boundary and exposes only content-free identifiers,
+digests, counts, states, and safe relationship kinds.
+
+MCP exposes `human_artifact_root_registration_plan`,
+`human_artifact_registry_scan`, and `human_artifact_transition_plan` as
+read-only surfaces. The registration plan accepts the same `root_kind` values.
+`--project-root` and `--external-root` are CLI aliases for the selected exact
+root; neither changes the scan rule encoded by `root_kind`. Any MCP write intent
+returns the local-interactive-CLI requirement; the caller cannot provide an
+approval claim.
+
 ## Adapter Contract Questions
 
-A future human artifact store adapter must answer these questions before it can
+A future external human artifact store adapter must answer these questions before it can
 write to a user-facing app:
 
 - What can the adapter list, read, write, update, retire, or delete?
@@ -111,6 +172,16 @@ automatically a manifest, source map, receipt, index entry, or trusted memory.
 
 `archive human-artifact-store --dry-run` writes nothing and never calls an external app. MCP exposes the same read-only contract as `human_artifact_store_plan`. Neither surface starts OAuth, creates notes, updates notes, deletes notes, publishes posts, attaches binaries, uploads files, mints zets, cleans source folders, or runs ZET transport.
 
+The v0.4.0 private registry can write only its own root-binding and append-only
+lifecycle evidence after local exact-human approval. It never writes, updates,
+retires, moves, or deletes the human artifact itself; never follows an
+unregistered root; never returns file names, paths, or bodies; and never calls
+an external provider. An `external_project` `.wom-scratch` scope or an
+`external_delivery` exact-root scope is discovery and closeout coverage only,
+not permission to treat its contents as canonical WOM memory. Closeout remains
+false while registered scan coverage is incomplete or any observed artifact
+lifecycle is unresolved.
+
 The command returns the contract that a future adapter must satisfy before WOM-kit can safely write to a user-facing app:
 
 - what the app can list, read, write, update, or delete,
@@ -122,7 +193,7 @@ The command returns the contract that a future adapter must satisfy before WOM-k
 
 This is intentionally conservative. A useful human note is not automatically a source map, manifest, receipt, index entry, or trusted system memory. Future app-specific adapters must preserve that separation.
 
-## First Safe Future Step
+## First Safe External-Adapter Step
 
 The first safe future write adapter should still be narrow:
 

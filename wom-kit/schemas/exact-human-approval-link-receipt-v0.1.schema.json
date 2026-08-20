@@ -1,0 +1,174 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "wom-kit/exact-human-approval-link-receipt/v0.1",
+  "title": "WOM-kit create-only exact human approval link receipt",
+  "description": "A content-free, approval-id-keyed correlation receipt for a legacy operation receipt that cannot be mutated in place.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "exact_human_approval",
+    "operation",
+    "plan_sha256",
+    "target_binding_sha256",
+    "source_operation_receipt",
+    "effect",
+    "original_operation_evidence_upgraded",
+    "content_contract",
+    "link_sha256",
+    "authentication"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "wom-kit/exact-human-approval-link-receipt/v0.1"
+    },
+    "exact_human_approval": {
+      "$ref": "#/$defs/exact_reference"
+    },
+    "operation": {
+      "enum": [
+        "create_draft",
+        "source_fidelity_session_evidence"
+      ]
+    },
+    "plan_sha256": {
+      "$ref": "#/$defs/sha256_ref"
+    },
+    "target_binding_sha256": {
+      "$ref": "#/$defs/sha256_ref"
+    },
+    "source_operation_receipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["relative_path", "sha256"],
+      "properties": {
+        "relative_path": {
+          "type": "string",
+          "pattern": "^receipts/source-fidelity/(?:drafts|session-evidence)/[0-9a-f]{64}\\.json$"
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256_ref"
+        }
+      }
+    },
+    "effect": {
+      "enum": ["created", "already_present_exact"]
+    },
+    "original_operation_evidence_upgraded": {
+      "type": "boolean"
+    },
+    "content_contract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "private_content_stored",
+        "absolute_path_stored",
+        "reviewer_claim_stored",
+        "source_operation_receipt_content_stored"
+      ],
+      "properties": {
+        "private_content_stored": {"const": false},
+        "absolute_path_stored": {"const": false},
+        "reviewer_claim_stored": {"const": false},
+        "source_operation_receipt_content_stored": {"const": false}
+      }
+    },
+    "link_sha256": {
+      "$ref": "#/$defs/sha256_ref"
+    },
+    "authentication": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "algorithm", "mac"],
+      "properties": {
+        "schema_version": {
+          "const": "wom-kit/exact-human-approval-link-authentication/v0.1"
+        },
+        "algorithm": {"const": "hmac-sha256"},
+        "mac": {
+          "type": "string",
+          "pattern": "^hmac-sha256:[0-9a-f]{64}$"
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {"operation": {"const": "create_draft"}},
+        "required": ["operation"]
+      },
+      "then": {
+        "properties": {
+          "source_operation_receipt": {
+            "properties": {
+              "relative_path": {
+                "pattern": "^receipts/source-fidelity/drafts/[0-9a-f]{64}\\.json$"
+              }
+            }
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "source_operation_receipt": {
+            "properties": {
+              "relative_path": {
+                "pattern": "^receipts/source-fidelity/session-evidence/[0-9a-f]{64}\\.json$"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {"effect": {"const": "created"}},
+        "required": ["effect"]
+      },
+      "then": {
+        "properties": {
+          "original_operation_evidence_upgraded": {"const": true}
+        }
+      },
+      "else": {
+        "properties": {
+          "original_operation_evidence_upgraded": {"const": false}
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "sha256_ref": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "exact_reference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "approval_id",
+        "context_sha256",
+        "approval_authority_sha256",
+        "one_use"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "wom-kit/exact-human-approval-reference/v0.1"
+        },
+        "approval_id": {
+          "type": "string",
+          "pattern": "^approval_[0-9a-f]{32}$"
+        },
+        "context_sha256": {
+          "$ref": "#/$defs/sha256_ref"
+        },
+        "approval_authority_sha256": {
+          "$ref": "#/$defs/sha256_ref"
+        },
+        "one_use": {"const": true}
+      }
+    }
+  }
+}

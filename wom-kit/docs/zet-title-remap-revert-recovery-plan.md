@@ -1,5 +1,10 @@
 # zet Title Remap Revert Recovery Plan
 
+Current v0.4.0 boundary: this recovery plan remains read-only. A recommended
+action grants no executor authority; `zet-title-remap-revert-recover` approval
+fails before private target read or mutation with
+`compound_exact_human_approval_binding_required`.
+
 Status: v0.3.276 read-only hard-exit title-revert recovery decision and approved-executor handoff
 
 Use this command when v0.3.274 or later leaves a private

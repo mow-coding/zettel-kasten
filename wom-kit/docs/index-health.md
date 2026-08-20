@@ -315,7 +315,7 @@ Revision/restore, retire-reconcile, abstract-backfill, and target-workpack
 fingerprint ordering remain the explicit v0.3.257 follow-up. Bounded-memory
 default S3-compatible transport remains the separate v0.3.258 release scope.
 
-The basoon v0.3.254 incident demonstrated why both boundaries matter. The first
+The protected pilot's v0.3.254 incident demonstrated why both boundaries matter. The first
 post-mint commands lost operator-visible output. A later official read-only
 health run completed after roughly 90 seconds with exit code 1 and reported
 8,586 live zettels, zero indexed zettels, and 8,586 missing rows. Output capture

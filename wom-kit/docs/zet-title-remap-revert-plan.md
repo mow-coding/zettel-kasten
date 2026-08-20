@@ -1,5 +1,9 @@
 # zet Title Remap Completed-Receipt Revert Plan
 
+Current v0.4.0 boundary: this compensation plan remains read-only. It grants no
+revert authority; `zet-title-remap-revert` approval fails before private target
+read or mutation with `compound_exact_human_approval_binding_required`.
+
 Status: v0.3.276 read-only completed-title compensation planning and recovery handoff
 
 ## Command

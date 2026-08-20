@@ -1,21 +1,17 @@
 # Tiro Lossless Recovery
 
-Status: v0.3.143 live Tiro REST fetch with OS credential-store read checkpoint
+Status: v0.4.0 dry-run-only Tiro recovery; fetch/capture approval fixed closed
 
 `archive tiro-lossless-recovery-plan`,
 `archive tiro-lossless-recovery-fetch-run`, and
 `archive tiro-lossless-recovery-capture` are the recovery path after
 `tiro-import-plan`.
 
-The v0.3.137 command checked a hand-reviewed meeting manifest. v0.3.139 added
-the broader recovery contract and raw-bundle capture. v0.3.140 adds the first
-approval-gated live Tiro REST fetch adapter so a human can provide a local
-`env:` credential reference, fetch official Tiro data directly, write a private
-raw recovery bundle, and then preserve that bundle as a WOM objet before any AI
-enrichment, derived text, zet drafting, or minting. v0.3.143 adds approved
-Windows Credential Manager reads through `keyring:` and `credential-manager:`
-refs so a user who already connected Tiro through a local desktop/MCP flow does
-not have to copy an API token into an environment variable first.
+The v0.3.137-v0.3.143 checkpoints documented historical planning, fetch, and
+capture behavior. In v0.4.0 only the plan and fetch/capture dry-runs are
+operational. Any fetch or capture approval returns
+`compound_exact_human_approval_binding_required` before credential, provider,
+private bundle, object-manifest, or target reads and writes nothing.
 
 ## Commands
 
@@ -25,19 +21,17 @@ archive tiro-lossless-recovery-plan <archive-root> --credential-ref env:WOM_TIRO
 
 ```powershell
 archive tiro-lossless-recovery-fetch-run <archive-root> --credential-ref env:WOM_TIRO_API_KEY --workspace-guid <workspace-guid> --output workbench/tiro-lossless-recovery.live.json --dry-run --format json
-archive tiro-lossless-recovery-fetch-run <archive-root> --credential-ref env:WOM_TIRO_API_KEY --workspace-guid <workspace-guid> --output workbench/tiro-lossless-recovery.live.json --approve --reviewed-by human:<id> --format json
 ```
 
-On Windows, approved fetch can also use a safe OS credential-store ref:
+The dry-run may validate a safe OS credential-store ref shape without opening
+the store:
 
 ```powershell
 archive tiro-lossless-recovery-fetch-run <archive-root> --credential-ref keyring:<safe-tiro-label> --workspace-guid <workspace-guid> --output workbench/tiro-lossless-recovery.live.json --dry-run --format json
-archive tiro-lossless-recovery-fetch-run <archive-root> --credential-ref credential-manager:<safe-tiro-label> --workspace-guid <workspace-guid> --output workbench/tiro-lossless-recovery.live.json --approve --reviewed-by human:<id> --format json
 ```
 
 ```powershell
 archive tiro-lossless-recovery-capture <archive-root> --bundle workbench/tiro-lossless-recovery.live.json --dry-run --format json
-archive tiro-lossless-recovery-capture <archive-root> --bundle workbench/tiro-lossless-recovery.live.json --approve --reviewed-by human:<id> --format json
 ```
 
 Aliases:
@@ -54,16 +48,14 @@ tiro-recovery-capture
    surfaces and safety contract.
 2. `tiro-lossless-recovery-fetch-run --dry-run` writes nothing, reads no token,
    and calls no provider. It only previews the approved fetch path.
-3. `tiro-lossless-recovery-fetch-run --approve --reviewed-by ...` reads the
-   approved `env:`, `keyring:`, or `credential-manager:` token locally, calls
-   Tiro REST endpoints, writes the private raw bundle under `workbench/`, and
-   writes a non-secret fetch receipt under `receipts/tiro/lossless-fetches/`.
-4. `tiro-lossless-recovery-capture --approve --reviewed-by ...` stores that raw
-   bundle exactly as a content-addressed WOM objet.
+3. Stop after the preview. In v0.4.0 fetch approval reads no token, calls no
+   Tiro endpoint, and writes no bundle or receipt.
+4. Capture approval likewise reads no bundle and writes no object, manifest
+   row, or receipt.
 
 ## Recovery Contract
 
-The plan and live fetch path cover these official-data surfaces where the Tiro
+The plan and historical fetch contract cover these official-data surfaces where the Tiro
 REST API exposes them:
 
 - workspaces,
@@ -94,15 +86,14 @@ The adapter follows the official Tiro REST shape:
 
 ## Bundle Capture
 
-`tiro-lossless-recovery-fetch-run` writes the raw recovery bundle:
+Historical v0.3 fetch evidence used this layout; v0.4.0 does not create it:
 
 ```text
 workbench/tiro-lossless-recovery.live.json
 -> receipts/tiro/lossless-fetches/*.json
 ```
 
-`tiro-lossless-recovery-capture` then preserves that reviewed raw bundle as a
-content-addressed WOM objet:
+Historical v0.3 capture evidence used this layout; v0.4.0 does not append to it:
 
 ```text
 workbench/tiro-lossless-recovery.live.json
@@ -130,13 +121,10 @@ inference, summary cleanup, or any other AI enrichment.
 
 ## Current Boundary
 
-v0.3.143 implements the live credential-bounded Tiro REST fetch adapter for
-local `env:` refs and Windows Credential Manager-backed `keyring:` /
-`credential-manager:` refs. A `keyring:<safe-label>` ref first tries an exact
-Windows generic credential target match. If no exact target exists, the local
-runtime may auto-detect exactly one Windows generic credential target whose
-name contains the safe label; if multiple matches exist, the command blocks
-without printing target names.
+v0.4.0 retains content-free planning only. Fetch/capture approval is fixed
+closed before any credential-store lookup, provider request, private bundle
+read, object-manifest read, or target write. Historical v0.3 receipts remain
+auditable but grant no replay authority.
 
 These pieces are still separate future layers:
 
@@ -156,15 +144,10 @@ When audio bytes cannot be fetched by the adapter, the raw bundle records an
 
 The plan command writes nothing and reads no credential values.
 
-The fetch command writes only after `--approve --reviewed-by`. In dry-run mode,
-it does not read the environment variable, open Windows Credential Manager, or
-call Tiro. In approve mode, it reads only the approved local credential ref,
-calls Tiro, writes the raw bundle, writes a non-secret fetch receipt, and
-clears the token from local runtime variables before returning.
-
-The capture command writes only after `--approve --reviewed-by`. It reads the
-selected archive-relative bundle, writes object bytes, appends one manifest
-record when needed, and writes a non-secret receipt.
+The fetch and capture dry-runs do not read an environment variable, open
+Windows Credential Manager, call Tiro, read a selected bundle, or write any
+file. Every approval attempt returns the fixed content-free blocker before
+those reads and effects.
 
 These commands do not draft zets, mint zets, write derived text, perform ASR,
 open unapproved credential stores, upload data, delete the staged bundle, or

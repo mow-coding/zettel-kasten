@@ -143,7 +143,7 @@ class PrivateObjetAuthorityError(RuntimeError):
 
 
 @dataclass(frozen=True)
-class PrivateObjetIndexAuthorityCapture:
+class _PrivateObjetIndexAuthorityCapture:
     """Immutable internal capture; private values are held as canonical bytes."""
 
     _compiler_input_bytes: bytes = field(repr=False)
@@ -546,7 +546,7 @@ def _authority_path_tokens(
 def _capture(
     root: Path,
     archive_id: str,
-) -> PrivateObjetIndexAuthorityCapture:
+) -> _PrivateObjetIndexAuthorityCapture:
     _verify_package_pins()
     root, root_token = _validate_root_and_archive_id(root, archive_id)
 
@@ -736,7 +736,7 @@ def _capture(
         fingerprint_sha256,
         _sha256(identity_bytes),
     )
-    return PrivateObjetIndexAuthorityCapture(
+    return _PrivateObjetIndexAuthorityCapture(
         _compiler_input_bytes=_canonical_json_bytes(compiler_input),
         _fingerprint_bytes=fingerprint_bytes,
         fingerprint_sha256=fingerprint_sha256,
@@ -744,10 +744,10 @@ def _capture(
     )
 
 
-def capture_private_objet_index_authority(
+def _capture_private_objet_index_authority(
     root: Path,
     archive_id: str,
-) -> PrivateObjetIndexAuthorityCapture:
+) -> _PrivateObjetIndexAuthorityCapture:
     """Capture one strict whole-authority snapshot or fail closed."""
 
     try:
@@ -765,6 +765,4 @@ def capture_private_objet_index_authority(
 
 __all__ = [
     "PrivateObjetAuthorityError",
-    "PrivateObjetIndexAuthorityCapture",
-    "capture_private_objet_index_authority",
 ]

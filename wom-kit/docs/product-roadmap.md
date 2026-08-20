@@ -1,7 +1,8 @@
 # WOM Product Roadmap
 
-Status: v0.3.115 public roadmap baseline
-Date: 2026-06-19
+Status: v0.4.0 current roadmap checkpoint
+Historical baseline: v0.3.115 public roadmap baseline
+Updated: 2026-08-20
 
 This document is a public orientation map for the WOM version line. It explains
 what each pre-1.0 minor line is meant to prove.
@@ -15,8 +16,8 @@ capability matrix remain the source of truth for what the current code can do.
 | --- | --- | --- | --- |
 | `v0.1.x` | Idea and protocol language | Can the worldview be named clearly? | Historical concept and vocabulary work. |
 | `v0.2.x` | Local implementation | Can WOM write, read, validate, and document a local archive safely? | Historical local-first implementation baseline. |
-| `v0.3.x` | WOM real-use feedback | Can real archives migrate, mint, connect, retire, recover, and inspect at scale? | Current active field-test and safety-hardening line. |
-| `v0.4.x` | Custom UI control layer | Can a non-developer operate WOM through a local control layer without bypassing receipts and safety gates? | Planned UI/control-layer connection phase. |
+| `v0.3.x` | WOM real-use feedback | Can real archives migrate, mint, connect, retire, recover, and inspect at scale? | Historical field-test and safety-hardening line. |
+| `v0.4.x` | Human-control layer | Can a non-developer approve an exact local operation without bypassing receipts and safety gates? | Current line. v0.4.0 implements the native exact-human TaskDialog foundation; it is not a complete custom control application. |
 | `v0.5.x` | ZET real-use feedback | Can people test ZET communication patterns without corrupting private archives or leaking private material? | Planned ZET sharing and communication feedback phase. |
 
 ## How To Read v0.3.x
@@ -37,14 +38,20 @@ Typical `v0.3.x` work includes:
 The line should stay conservative: local-first, receipt-backed, privacy-aware,
 and clear about what remains only planned.
 
-## v0.4.x Direction
+## v0.4.x Current Direction
 
-The `v0.4.x` line should connect a custom UI control layer to the existing WOM
-core.
+The `v0.4.x` line connects a human-control layer to the existing WOM core.
+v0.4.0 begins with a native Windows TaskDialog for supported exact single
+operations, an authenticated durable `started` claim before the writer, writer
+revalidation, and workflow-only finalization. Compound or otherwise unbound
+writes remain fixed fail-closed.
 
 This does not mean replacing the CLI, receipts, validation, or safety gates. The
 UI should read and operate through those existing boundaries so a beginner can
 use WOM without memorizing every command, while the archive remains auditable.
+
+Later `v0.4.x` work may make more review and status surfaces beginner-readable,
+but the current release must not be described as a complete custom UI.
 
 Good `v0.4.x` signals include:
 
@@ -52,7 +59,7 @@ Good `v0.4.x` signals include:
 - readable queue and review surfaces,
 - visible receipt and doctor status,
 - safer onboarding for archives, credentials, objets, and provider plans,
-- no hidden write path that bypasses CLI/MCP safety contracts.
+- no hidden write path that bypasses exact-human, CLI, or MCP safety contracts.
 
 ## v0.5.x Direction
 
@@ -73,9 +80,8 @@ blockchain mechanics exist today.
 
 ## Phase Gates
 
-Before leaving `v0.3.x`, WOM should be repeatable enough that a real private
-archive can move through import, review, mint, connect, retire, validate, and
-recover workflows without developer babysitting.
+The v0.3.x field-test record remains historical evidence. It does not reactivate
+an approval route that v0.4.0 now closes for lack of an exact operation binding.
 
 Before entering `v0.5.x`, the UI/control layer should make normal WOM operation
 clear enough that ZET feedback is about sharing and communication behavior, not

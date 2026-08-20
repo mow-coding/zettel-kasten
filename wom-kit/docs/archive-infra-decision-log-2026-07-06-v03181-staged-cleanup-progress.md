@@ -6,7 +6,7 @@ Anchor: v0.3.180 public release.
 
 ## Problem
 
-The basoon operator reported that `staged-cleanup-check` still had a no-output problem. The
+The protected pilot operator reported that `staged-cleanup-check` still had a no-output problem. The
 verifier is intentionally report-only and deletion-safe, but on a large staged folder or a very
 large source/store hash it could appear stalled until the final report printed.
 

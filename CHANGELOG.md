@@ -6,6 +6,47 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.4.0 - 2026-08-20
+
+- Added native Windows exact-human review for supported high-impact single
+  operations. Approval now flows from TaskDialog to one authenticated durable
+  `started` claim before the writer, with workflow-only finalization and
+  writer-side revalidation immediately before mutation.
+- Added authenticated create-only approval links, private human-artifact root
+  and lifecycle registry commands, byte-identical duplicate reconciliation,
+  and append-only approval-integrity audit/guard/overlay surfaces.
+- Added private source-fidelity session evidence, read-only facet discovery,
+  clearer archive/scratch/feedback/index recovery guidance, approval-handoff
+  lookup, replay identity, and explicit agent-instruction conflict policy.
+- Kept compound/batch mutations and edge rollback preview-only. The same fixed
+  blocker is enforced through one canonical 79-command top-level CLI inventory whose
+  `--approve` help explicitly says v0.4.0 approval is unavailable. It covers
+  project update/collision repair, bytecode repair, saved views,
+  private objet metadata, identity reconciliation, legacy cleanup, migration,
+  markup normalization, Principal lifecycle, objet capture, external import,
+  source registration/intake, ownership transfer, object-storage mutation,
+  Notion recovery, external-locator mutation, quarantine decisions, and
+  delegation, plus Tiro fetch/capture, Notion manifest labeling, GitHub
+  metadata, KeePassXC write, IMAP manifest/header execution, source scan,
+  onboarding, restore drill, standalone AI scratch deletion, and credential
+  lifecycle selection, plus gitignore repair, runtime-skill install/uninstall,
+  and catalog-pass cleanup. Their approval branches fail before private target read or
+  mutation with `compound_exact_human_approval_binding_required`; historical
+  receipts remain evidence, not current write authority. Nested derive
+  capture, non-exact/non-AI draft creation, real init, and parcel/pack are
+  separately fixed closed.
+- Added ten public runtime schemas and synchronized the current release identity
+  and schema set into the installable wheel resources. Provider calls, external
+  note writes, real archive repair, and MCP exact-human writes remain closed.
+- Sealed the packaged Python authority layer as well as the CLI: concrete claim,
+  key, credential, provider, storage, lifecycle, and recovery engines are
+  private implementation details rather than public write APIs. Public plans,
+  safe projections, schema validation, and read-only audits remain available.
+- Clarified the Letter 138 scope boundary: v0.4.0 does not detect or repair
+  historical Notion typed-property loss. Current recovery is limited to
+  page-body or location recovery and is not a complete source mirror; a
+  read-only loss audit and exact-approved backfill are an urgent follow-on.
+
 ## v0.3.320 - 2026-08-15
 
 - Hardened the existing approved Notion page-recovery worker with a fresh,
@@ -3302,7 +3343,7 @@ AI artifact lifecycle inventory checkpoint. Additive; no migration.
 
 ## v0.3.186 - 2026-07-07
 
-Basoon v0.3.185 revalidation follow-up for read-only adopt diagnostics and the next doctor mint-receipt progress gap. Additive; no migration.
+Protected-pilot v0.3.185 revalidation follow-up for read-only adopt diagnostics and the next doctor mint-receipt progress gap. Additive; no migration.
 
 - **Adopt stop-after-plan diagnostic mode.** `object-storage-adopt-existing` now accepts
   `--stop-after-plan`, so an operator can reuse an `--approve` command shape, resolve the
@@ -3319,7 +3360,7 @@ Basoon v0.3.185 revalidation follow-up for read-only adopt diagnostics and the n
 
 ## v0.3.185 - 2026-07-06
 
-Basoon v0.3.183 revalidation follow-up for adopt resume diagnostics, doctor mint-link progress, and version import-origin warnings. Additive; no migration.
+Protected-pilot v0.3.183 revalidation follow-up for adopt resume diagnostics, doctor mint-link progress, and version import-origin warnings. Additive; no migration.
 
 - **Same-provider nonmatching adopt diagnostics.** `object-storage-adopt-existing --progress` now
   reports a second resume diagnostic when digest-bound same-provider object-storage locations exist
@@ -3366,7 +3407,7 @@ Adopt resume-gap diagnostics and deeper doctor frontmatter progress. Additive; n
 
 ## v0.3.182 - 2026-07-06
 
-Basoon v0.3.180 revalidation follow-up for adopt resume and doctor receipt progress. Additive; no
+Protected-pilot v0.3.180 revalidation follow-up for adopt resume and doctor receipt progress. Additive; no
 migration.
 
 - **`object-storage-adopt-existing --skip-existing-wom-uploaded`.** Verified adopt now has an
@@ -3399,7 +3440,7 @@ migration.
 
 - **`object-storage-adopt-existing` adopt-plan manifest index.** Large key-map adopts now build
   one per-run `objects/manifests/files.jsonl` object-id index before plan resolution instead of
-  repeatedly scanning the manifest for every object. This targets the v0.3.179 basoon
+  repeatedly scanning the manifest for every object. This targets the v0.3.179 protected-pilot
   revalidation bottleneck where `adopt-plan` itself was slow before provider HEAD checks began.
 - **Doctor per-run file caches.** `archive doctor` now reuses file SHA-256 and zettel
   frontmatter/BOM evidence within one run, reducing repeated work in receipt stages such as
@@ -4261,8 +4302,10 @@ All five items are additive; no archive migration, no id rewrite, no hash change
 - The audit checks record path boundary, schema, expected status, expected
   operation kind, `reviewed_by` presence for `approved_once`, and closed-action
   safety flags.
-- The audit returns `future_operation_authorized: true` only for a matching
-  `approved_once` handoff.
+- At this historical checkpoint, a matching `approved_once` handoff was treated
+  as future-operation authority. v0.4.0 revokes that unbound behavior: the
+  audit now classifies the metadata `legacy_unbound`/advisory and always returns
+  `future_operation_authorized: false`.
 - Kept the audit execution-safe: it reads only handoff metadata, executes no
   operation, reads no private material, calls no providers, and echoes no
   target ref or requested action values.
@@ -5977,8 +6020,10 @@ All five items are additive; no archive migration, no id rewrite, no hash change
 
 ## v0.3.53 - 2026-06-16
 
-- Added CLI `archive imap-mailbox-adapter-manifest-write --dry-run|--approve`
-  with alias `archive mailbox-adapter-manifest-write`.
+- Historically added IMAP mailbox adapter-manifest dry-run and reviewed-write
+  modes, with alias `archive mailbox-adapter-manifest-write`. In v0.4.0 only
+  dry-run remains operational; approval is fixed closed before private input or
+  archive reads and writes no config or receipt.
 - `--dry-run` previews the schema-validated non-secret IMAP adapter manifest and
   the write receipt paths without writing files.
 - `--approve --reviewed-by <actor>` writes exactly one manifest under
@@ -6380,8 +6425,10 @@ All five items are additive; no archive migration, no id rewrite, no hash change
 
 ## v0.3.33 - 2026-06-15
 
-- Added CLI-only `archive credential-keepassxc-write --approve` for the first
-  minimal live KeePassXC credential write adapter.
+- Historically added the first CLI-only minimal KeePassXC credential write
+  adapter. In v0.4.0 only the content-free command preview remains; approval is
+  fixed closed before receipt, credential, database, or provider reads and
+  writes no execution receipt.
 - Reused approval receipt verification and `credential_policy_check` before
   execution, and required one scoped `approve_once` receipt for each write.
 - Invoked only `keepassxc-cli add --password-prompt` in approved local CLI

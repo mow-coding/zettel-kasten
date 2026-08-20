@@ -323,7 +323,7 @@ class PrivateObjetIndexContractError(ValueError):
 
 
 @dataclass(frozen=True)
-class PrivateObjetIndexProjection:
+class _PrivateObjetIndexProjection:
     """Immutable rows compiled from one complete authority snapshot."""
 
     observation_rows: tuple[tuple[Any, ...], ...]
@@ -743,9 +743,9 @@ def build_private_objet_authority_fingerprint(
     return encoded, sha256_digest(encoded)
 
 
-def compile_private_objet_index_projection(
+def _compile_private_objet_index_projection(
     authority: Mapping[str, Any],
-) -> PrivateObjetIndexProjection:
+) -> _PrivateObjetIndexProjection:
     """Compile one complete closed authority snapshot into immutable SQL rows."""
 
     observations, entries, scalar = _validated_authority(authority)
@@ -931,7 +931,7 @@ def compile_private_objet_index_projection(
     )
     if len(metadata_row) != 44:
         raise RuntimeError("private_objet_metadata_row_contract_invalid")
-    return PrivateObjetIndexProjection(
+    return _PrivateObjetIndexProjection(
         observation_rows=observation_tuple,
         alias_rows=alias_tuple,
         projection_rows=projection_tuple,
@@ -1229,11 +1229,11 @@ _INSERT_SQL = {
 
 def replace_private_objet_index_rows(
     conn: sqlite3.Connection,
-    projection: PrivateObjetIndexProjection,
+    projection: _PrivateObjetIndexProjection,
 ) -> None:
     """Replace the three derived row sets and leave the singleton absent."""
 
-    if not isinstance(projection, PrivateObjetIndexProjection):
+    if not isinstance(projection, _PrivateObjetIndexProjection):
         raise TypeError("private_objet_metadata_projection_invalid")
     if not conn.in_transaction:
         _fail("private_objet_metadata_projection_invalid")
@@ -1289,11 +1289,11 @@ def replace_private_objet_index_rows(
 
 def insert_private_objet_index_metadata(
     conn: sqlite3.Connection,
-    projection: PrivateObjetIndexProjection,
+    projection: _PrivateObjetIndexProjection,
 ) -> PrivateObjetIndexInspection:
     """Insert the singleton last and perform final semantic verification."""
 
-    if not isinstance(projection, PrivateObjetIndexProjection):
+    if not isinstance(projection, _PrivateObjetIndexProjection):
         raise TypeError("private_objet_metadata_projection_invalid")
     if not conn.in_transaction:
         _fail("private_objet_metadata_projection_invalid")
@@ -1312,7 +1312,7 @@ def insert_private_objet_index_metadata(
 
 def install_private_objet_index_projection(
     conn: sqlite3.Connection,
-    projection: PrivateObjetIndexProjection,
+    projection: _PrivateObjetIndexProjection,
 ) -> PrivateObjetIndexInspection:
     """Install all rows without owning the caller's transaction lifecycle."""
 
@@ -1323,7 +1323,7 @@ def install_private_objet_index_projection(
 def inspect_private_objet_index_semantics(
     conn: sqlite3.Connection,
     *,
-    expected: PrivateObjetIndexProjection | None = None,
+    expected: _PrivateObjetIndexProjection | None = None,
 ) -> PrivateObjetIndexInspection:
     """Verify exact schema, counts, row digests, and SQL-external invariants."""
 
@@ -1589,7 +1589,7 @@ def inspect_private_objet_index_semantics(
 
     if expected is not None:
         if (
-            not isinstance(expected, PrivateObjetIndexProjection)
+            not isinstance(expected, _PrivateObjetIndexProjection)
             or observation_rows != expected.observation_rows
             or alias_rows != expected.alias_rows
             or projection_rows != expected.projection_rows

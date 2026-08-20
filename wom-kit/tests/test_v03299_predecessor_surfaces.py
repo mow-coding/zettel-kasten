@@ -51,6 +51,11 @@ BASELINE_EXPECTATIONS = {
     },
 }
 CLI_ADDITIONS = {
+    ("approval-integrity-audit",),
+    ("approval-integrity-guard",),
+    ("approval-integrity-overlay",),
+    ("approval-integrity-repair",),
+    ("approval-receipt-integrity-audit",),
     ("archive-authoring-conventions",),
     ("archive-lifecycle-inventory",),
     ("authoring-conventions",),
@@ -61,6 +66,8 @@ CLI_ADDITIONS = {
     ("credential-secure-list",),
     ("discard-draft",),
     ("discard-draft-restore",),
+    ("duplicate-object-reconcile",),
+    ("duplicate-object-reconciliation",),
     ("external-locator-plan",),
     ("external-locator-record",),
     ("external-locator-deactivate-plan",),
@@ -68,6 +75,15 @@ CLI_ADDITIONS = {
     ("external-locator-recovery-plan",),
     ("external-locator-revert",),
     ("find-objet",),
+    ("facet-discovery",),
+    ("facet-vocabulary",),
+    ("human-artifact-project-root",),
+    ("human-artifact-register-root",),
+    ("human-artifact-registry-scan",),
+    ("human-artifact-scan",),
+    ("human-artifact-transition",),
+    ("human-artifact-transition-record",),
+    ("list-facets",),
     ("legacy-coordination-cleanup",),
     ("markup-normalization",),
     ("markup-normalization-plan",),
@@ -95,28 +111,51 @@ CLI_ADDITIONS = {
     ("relation-semantics-guide",),
     ("saved-view-revert",),
     ("saved-view-write",),
+    ("session-evidence",),
+    ("source-fidelity-session-evidence",),
     ("source-reference-coverage-audit",),
     ("source-intake-batch",),
     ("zet-objet-link",),
+    ("zet-objet-link-receipts",),
     ("zet-objet-link-revert",),
     ("zettel-objet-link",),
+    ("zettel-objet-link-receipts",),
     ("zettel-objet-link-revert",),
 }
-CURRENT_CLI_COUNT = 553
+CURRENT_CLI_COUNT = 573
 CURRENT_CLI_CANONICAL_SHA256 = (
-    "ba70474e64b024398c27ec920c5e8c121d71acb78556e2f69fbc7d30971b76ef"
+    "0d49e9e2f9821e29ddf73a0fed651cc207f3a9f0a7bd7a18d4634eb3a17b09c4"
 )
-CURRENT_MCP_COUNT = 121
+CURRENT_MCP_COUNT = 130
 CURRENT_MCP_CANONICAL_SHA256 = (
-    "622e90ed08dd189d2d79a49cc352051aecd0063d1b6913ac5f1f22eec4850f96"
+    "f3f2263e28ed490efc37313036a81d9e4eb1b8da9c184fce435ded44001db1fe"
 )
+MCP_ADDITIONS = {
+    "approval_integrity_audit",
+    "approval_integrity_guard",
+    "approval_integrity_overlay_plan",
+    "duplicate_object_reconciliation_plan",
+    "facet_vocabulary",
+    "human_artifact_registry_scan",
+    "human_artifact_root_registration_plan",
+    "human_artifact_transition_plan",
+    "zettel_objet_link_receipts",
+}
 CURRENT_DATABASE_COUNT = 3
 CURRENT_DATABASE_CANONICAL_SHA256 = (
     "d9a42f08ee12a6d42e40214cfb12441e4077bf50c38c25b2692ec1344328294a"
 )
 RESOURCE_ADDITIONS = {
-        "release-notes/v0.3.320.md",
-        "schemas/credential-capability-v0.1.schema.json",
+    "release-notes/v0.4.0.md",
+    "schemas/agent-instruction-policy-v0.1.schema.json",
+    "schemas/approval-handoff-v0.1.schema.json",
+    "schemas/approval-integrity-audit-result-v0.1.schema.json",
+    "schemas/approval-integrity-overlay-entry-v0.1.schema.json",
+    "schemas/credential-capability-v0.1.schema.json",
+    "schemas/duplicate-object-reconciliation-receipt-v0.1.schema.json",
+    "schemas/exact-human-approval-link-receipt-v0.1.schema.json",
+    "schemas/human-artifact-registry-v0.1.schema.json",
+    "schemas/operation-exact-human-approval-v0.1.schema.json",
     "schemas/artifact-lifecycle-inventory.schema.json",
     "schemas/authoring-conventions.schema.json",
     "schemas/draft-discard-receipt.schema.json",
@@ -149,13 +188,15 @@ RESOURCE_ADDITIONS = {
     "schemas/source-intake-batch-receipt.schema.json",
     "schemas/source-intake-batch-request.schema.json",
     "schemas/source-fidelity-draft-receipt.schema.json",
+    "schemas/source-fidelity-draft-receipt-v0.2.schema.json",
+    "schemas/source-fidelity-session-evidence-receipt-v0.1.schema.json",
     "schemas/zettel-objet-link-receipt.schema.json",
     "schemas/zettel-objet-link-revert-receipt.schema.json",
 }
 RESOURCE_REMOVALS = {"release-notes/v0.3.297.md"}
-CURRENT_RESOURCE_COUNT = 146
+CURRENT_RESOURCE_COUNT = 156
 CURRENT_RESOURCE_CANONICAL_SHA256 = (
-    "8b8ec67c60dada33eaff17ae90ba9e3cd0c0243d939af740acad640545aa2fad"
+    "1b752d5d980d6bfa37024604a13dea1cf6316f4040fbbf695e64b8654c379df0"
 )
 
 
@@ -386,7 +427,7 @@ class V03299PredecessorSurfaceTests(unittest.TestCase):
             CURRENT_DATABASE_CANONICAL_SHA256,
         )
 
-    def test_mcp_surface_changes_only_create_draft_source_fidelity_contract(self) -> None:
+    def test_mcp_surface_changes_only_declared_additive_contracts(self) -> None:
         predecessor = self.fixture["mcp"]["tools"]
         current = current_mcp_tools()
         self.assertEqual(len(current), CURRENT_MCP_COUNT)
@@ -394,20 +435,51 @@ class V03299PredecessorSurfaceTests(unittest.TestCase):
 
         predecessor_by_name = {row["name"]: row for row in predecessor}
         current_by_name = {row["name"]: row for row in current}
-        self.assertEqual(set(current_by_name), set(predecessor_by_name))
+        self.assertEqual(
+            set(current_by_name),
+            set(predecessor_by_name) | MCP_ADDITIONS,
+        )
 
         changed = sorted(
             name
-            for name in current_by_name
+            for name in set(current_by_name) & set(predecessor_by_name)
             if current_by_name[name] != predecessor_by_name[name]
         )
-        self.assertEqual(changed, ["create_draft_zettel"])
+        self.assertEqual(changed, ["archive_init", "create_draft_zettel"])
+
+        before_init = predecessor_by_name["archive_init"]["inputSchema"]
+        after_init = current_by_name["archive_init"]["inputSchema"]
+        expected_init = json.loads(json.dumps(before_init))
+        expected_init["properties"]["dry_run"]["default"] = True
+        self.assertEqual(after_init, expected_init)
+
+        lookup_schema = current_by_name["zettel_objet_link_receipts"][
+            "inputSchema"
+        ]
+        self.assertEqual(lookup_schema["required"], ["archive_root"])
+        self.assertEqual(
+            set(lookup_schema["properties"]),
+            {
+                "archive_root",
+                "zettel_id",
+                "path",
+                "object_id",
+                "role",
+                "dry_run",
+                "max_receipts",
+            },
+        )
+        self.assertEqual(
+            lookup_schema["properties"]["max_receipts"]["maximum"],
+            500,
+        )
 
         before = predecessor_by_name["create_draft_zettel"]["inputSchema"]
         after = current_by_name["create_draft_zettel"]["inputSchema"]
         added_properties = {
             "approved",
             "expected_source_fidelity_plan_sha256",
+            "fidelity_session_evidence_id",
             "fidelity_source_object_id",
             "source_fidelity_audience",
             "source_fidelity_mode",
@@ -435,7 +507,6 @@ class V03299PredecessorSurfaceTests(unittest.TestCase):
                 "facets",
                 "source_fidelity_mode",
                 "source_fidelity_audience",
-                "fidelity_source_object_id",
             ],
         )
         self.assertEqual(
@@ -483,10 +554,10 @@ class V03299PredecessorSurfaceTests(unittest.TestCase):
             actual,
             expected,
             "Current package-resource paths must be the full v0.3.297 set plus "
-            "the exact cumulative v0.3.298 through v0.3.320 delta. "
+            "the exact cumulative v0.3.298 through v0.4.0 delta. "
             f"missing={compact(missing)}; extra={compact(extra)}",
         )
-        self.assertEqual(manifest["version"], "0.3.320")
+        self.assertEqual(manifest["version"], "0.4.0")
         self.assertEqual(len(actual), CURRENT_RESOURCE_COUNT)
         self.assertEqual(
             canonical_sha256(actual),
@@ -505,14 +576,14 @@ class V03299PredecessorSurfaceTests(unittest.TestCase):
         self.assertIn("does not undo", predecessor_flat)
         self.assertNotIn("C:\\Users\\", predecessor_text)
 
-    def test_v03320_release_note_is_public_and_synchronized(self) -> None:
-        current_source_release = KIT_ROOT / "docs" / "releases" / "v0.3.320.md"
+    def test_v0400_release_note_is_public_and_synchronized(self) -> None:
+        current_source_release = KIT_ROOT / "docs" / "releases" / "v0.4.0.md"
         current_packaged_release = (
             SRC_ROOT
             / "wom_kit"
             / "_resources"
             / "release-notes"
-            / "v0.3.320.md"
+            / "v0.4.0.md"
         )
         self.assertEqual(
             current_source_release.read_bytes(),
@@ -521,18 +592,14 @@ class V03299PredecessorSurfaceTests(unittest.TestCase):
         current_text = current_source_release.read_text(encoding="utf-8")
         current_flat = " ".join(current_text.split())
         for token in (
-            "One-Use Credential Capability Broker",
-            "wom-kit/credential-capability/v0.1",
-            "notion_page_recovery_read",
-            "wom:workflow:notion-page-recovery",
-            "wom-kit/credential-capability-reference/v0.1",
-            "wom-credential-capability-use-summary/v0.1",
-            "claim deadline",
-            "exactly one transport attempt",
-            "HMAC-authenticated claim",
-            "Verified replay stays offline",
-            "Aside",
-            "no new CLI or MCP command",
+            "Exact Human Control And Operator Friction",
+            "native Windows TaskDialog",
+            "authenticated durable claim in started state",
+            "effect=created",
+            "external_delivery",
+            "exactly 79 top-level commands",
+            "compound_exact_human_approval_binding_required",
+            "source-fidelity-session-evidence-receipt-v0.1.schema.json",
         ):
             with self.subTest(token=token):
                 self.assertIn(token, current_flat)
@@ -545,8 +612,8 @@ class V03299PredecessorSurfaceTests(unittest.TestCase):
             with self.subTest(forbidden=forbidden):
                 self.assertNotIn(forbidden, current_text)
 
-        historical_release = KIT_ROOT / "docs" / "releases" / "v0.3.317.md"
-        historical_packaged = current_packaged_release.with_name("v0.3.317.md")
+        historical_release = KIT_ROOT / "docs" / "releases" / "v0.3.320.md"
+        historical_packaged = current_packaged_release.with_name("v0.3.320.md")
         self.assertTrue(historical_release.is_file())
         self.assertFalse(historical_packaged.exists())
 

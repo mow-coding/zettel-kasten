@@ -15,7 +15,7 @@ how it was folded in.
 
 ## Source
 
-basoon 3rd letter §3 (verified in intake): 60+ operator-feedback records carry a
+The protected pilot archive's 3rd letter §3 (verified in intake): 60+ operator-feedback records carry a
 `status` field, but there was (1) no read-only ledger/board aggregating delivery
 status + a pending list; (2) no delivery-boundary commit — status was hand-edited
 one record at a time via `operator-feedback-record --status`; (3) the running

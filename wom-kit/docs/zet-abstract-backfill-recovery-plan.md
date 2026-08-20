@@ -1,5 +1,10 @@
 # zet Abstract Backfill Recovery Plan
 
+Current v0.4.0 boundary: this recovery plan remains read-only. A recommended
+action grants no executor authority; `zet-abstract-backfill-recover` approval
+fails before private target read or mutation with
+`compound_exact_human_approval_binding_required`.
+
 Status: read-only decision surface since v0.3.266; single-case executor available since v0.3.267
 
 ## Purpose

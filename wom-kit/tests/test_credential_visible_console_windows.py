@@ -18,7 +18,7 @@ from wom_kit.credential_visible_console_windows import (
     ENABLE_VIRTUAL_TERMINAL_INPUT,
     VisibleConsolePromptContext,
     VisibleConsoleSecretPromptError,
-    prompt_masked_secret_in_new_console,
+    _prompt_masked_secret_in_new_console as prompt_masked_secret_in_new_console,
 )
 
 

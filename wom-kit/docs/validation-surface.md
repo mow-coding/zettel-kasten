@@ -91,8 +91,9 @@ local absolute paths, provider URLs, tokens, or secret values.
 
 Doctor/validate/preflight are read-only. `repair-gitignore --approve` appends
 missing `.gitignore` safety patterns only; it does not delete, clean, inspect
-source bodies, upload, or sync. Frontmatter rewriting is exclusively `archive
-migrate --approve` after its dry-run.
+source bodies, upload, or sync. In v0.4.0 `archive migrate` is also preview-only:
+approval returns `compound_exact_human_approval_binding_required` before private
+archive reads or mutation and rewrites no frontmatter/type registry or receipt.
 
 `repair-gitignore` includes local coordination quarantine patterns such as
 `/collab/` and the retired-tool path `/.mow-harness/`. Existing workspaces may

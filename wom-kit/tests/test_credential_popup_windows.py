@@ -1276,7 +1276,7 @@ class CredentialPopupWindowsTests(unittest.TestCase):
         self.assertIsNone(complete.result)
 
         with self.assertRaises(popup.CredentialPopupSecretPromptError) as no_input:
-            popup.prompt_secret_in_native_popup(
+            popup._prompt_secret_in_native_popup(
                 request_id="bad",
                 context=CONTEXT,
                 input_intent=(
@@ -1405,7 +1405,7 @@ class CredentialPopupWindowsTests(unittest.TestCase):
                 with self.assertRaises(
                     popup.CredentialPopupSecretPromptError
                 ) as error:
-                    popup.prompt_secret_in_native_popup(**kwargs)
+                    popup._prompt_secret_in_native_popup(**kwargs)
                 self.assertEqual(
                     (
                         error.exception.reason_code,
@@ -1445,7 +1445,7 @@ class CredentialPopupWindowsTests(unittest.TestCase):
                 with patch.object(popup, "_configure_native"), self.assertRaises(
                     popup.CredentialPopupSecretPromptError
                 ) as error:
-                    popup.prompt_secret_in_native_popup(
+                    popup._prompt_secret_in_native_popup(
                         request_id=REQUEST_ID,
                         context=CONTEXT,
                         input_intent=(
@@ -1479,7 +1479,7 @@ class CredentialPopupWindowsTests(unittest.TestCase):
         gdi32 = FakeGdi32(user32.events)
         comctl32 = FakeComctl32()
         with patch.object(popup, "_configure_native"):
-            result = popup.prompt_secret_in_native_popup(
+            result = popup._prompt_secret_in_native_popup(
                 request_id=REQUEST_ID,
                 context=CONTEXT,
                 input_intent=(
@@ -1616,7 +1616,7 @@ class CredentialPopupWindowsTests(unittest.TestCase):
                 ), self.assertRaises(
                     popup.CredentialPopupSecretPromptError
                 ) as error:
-                    popup.prompt_secret_in_native_popup(
+                    popup._prompt_secret_in_native_popup(
                         request_id=REQUEST_ID,
                         context=CONTEXT,
                         input_intent=(
@@ -1676,7 +1676,7 @@ class CredentialPopupWindowsTests(unittest.TestCase):
         with patch.object(popup, "_configure_native"), self.assertRaises(
             popup.CredentialPopupSecretPromptError
         ) as error:
-            popup.prompt_secret_in_native_popup(
+            popup._prompt_secret_in_native_popup(
                 request_id=REQUEST_ID,
                 context=CONTEXT,
                 input_intent=(

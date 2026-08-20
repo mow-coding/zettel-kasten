@@ -102,10 +102,11 @@ This command is read-only:
 - it drafts no zets,
 - it mints nothing.
 
-The next safe step after a clean plan is still human review. Audio bytes should
-be captured through the existing objet-capture flow, and transcript text should
-be registered as derived text only through a separate approval-gated capture
-path.
+The next safe step after a clean plan is human review. In v0.4.0
+`objet-capture` approval is fixed closed before private staged-byte reads or
+mutation, so the plan grants no audio capture authority. Registering already
+manifested transcript text, if applicable, remains a separate operation with
+its own exact authority; do not infer it from this import plan.
 
 ## Why This Exists
 

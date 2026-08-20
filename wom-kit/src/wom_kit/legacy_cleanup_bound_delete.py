@@ -28,7 +28,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
-from .archive_services import activity_group_bound_directory_chain
+from .archive_services import _activity_group_bound_directory_chain
 
 
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -565,7 +565,7 @@ def _delete_windows_file(
     path: Path,
     approved: _ApprovedFile,
 ) -> None:
-    with activity_group_bound_directory_chain(
+    with _activity_group_bound_directory_chain(
         workspace_root,
         path.parent,
     ):
@@ -668,7 +668,7 @@ def _delete_windows_directory(
     path: Path,
     approved: _ApprovedDirectory,
 ) -> None:
-    with activity_group_bound_directory_chain(
+    with _activity_group_bound_directory_chain(
         workspace_root,
         path.parent,
     ):
@@ -727,7 +727,7 @@ def _delete_windows_directory(
             raise _fail("legacy_cleanup_bound_win32_directory_delete_unproved")
 
 
-def delete_exact_approved_file(
+def _delete_exact_approved_file(
     workspace_root: Path | str,
     path: Path | str,
     expected: Mapping[str, Any],
@@ -747,7 +747,7 @@ def delete_exact_approved_file(
         raise _fail("legacy_cleanup_bound_file_delete_uncertain") from exc
 
 
-def delete_exact_approved_empty_directory(
+def _delete_exact_approved_empty_directory(
     workspace_root: Path | str,
     path: Path | str,
     expected: Mapping[str, Any],
@@ -769,6 +769,4 @@ def delete_exact_approved_empty_directory(
 
 __all__ = [
     "LegacyCleanupBoundDeleteError",
-    "delete_exact_approved_empty_directory",
-    "delete_exact_approved_file",
 ]

@@ -2,6 +2,12 @@
 
 Status: v0.3.305 implementation and release evidence guide
 
+Current v0.4.0 override: the apply, revert, and recovery approvals described
+below are historical evidence only. They now return
+`compound_exact_human_approval_binding_required` before private reads or
+mutation and write no canonical bytes, journal, snapshot, or receipt. Keep the
+plan/audit routes read-only; do not run the historical approved examples.
+
 Letter 114's publication-completion incident is handled in the same release;
 see `docs/letter114-completion.md`.
 

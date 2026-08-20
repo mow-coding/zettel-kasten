@@ -1,10 +1,12 @@
 # IMAP Mailbox Adapter Manifest Write
 
-Status: v0.3.55 approval-gated local manifest write baseline
+Status: v0.4.0 dry-run-only local manifest preview; write fixed closed
 Date: 2026-06-16
 
-`imap-mailbox-adapter-manifest-write` records a reviewed, non-secret IMAP
-mailbox adapter manifest inside the local WOM archive.
+`imap-mailbox-adapter-manifest-write --dry-run` previews a reviewed, non-secret
+IMAP mailbox adapter manifest. In v0.4.0 approval returns
+`compound_exact_human_approval_binding_required` before private input/archive
+target reads and records nothing.
 
 It is not an IMAP client. It does not connect, login, select a mailbox, search
 a mailbox, list messages, read headers, read bodies, read attachments, retrieve
@@ -26,20 +28,6 @@ archive imap-mailbox-adapter-manifest-write <archive-root> \
   --format json
 ```
 
-Approve:
-
-```bash
-archive imap-mailbox-adapter-manifest-write <archive-root> \
-  --adapter-id local-imap \
-  --provider gmail \
-  --provider naver \
-  --operation header_metadata_scan \
-  --selection-rule newest_first \
-  --reviewed-by person:me \
-  --approve \
-  --format json
-```
-
 Alias:
 
 ```text
@@ -48,9 +36,9 @@ mailbox-adapter-manifest-write
 
 There is no MCP live write tool for this command.
 
-## What It Writes
+## Historical Write Layout
 
-With `--approve`, the command writes exactly two archive-relative files:
+v0.3 approval wrote these two archive-relative files. v0.4.0 creates neither:
 
 ```text
 config/imap-adapters/<adapter-id>.imap-mailbox-adapter.json
@@ -105,8 +93,9 @@ Safe public labels such as `gmail`, `naver`, `generic_imap`, `local-imap`,
 
 ## Current Boundary
 
-v0.3.55 can write a reviewed, non-secret local adapter manifest and one
-non-secret write receipt.
+v0.4.0 retains the reviewed, non-secret dry-run only. Approval reads no private
+adapter input or target and writes no manifest or receipt. Historical v0.3
+files remain readable but grant no execution authority.
 
 It still does not:
 
@@ -129,7 +118,5 @@ It still does not:
 - draft zets,
 - mint zets.
 
-For beginners: this command is like signing and filing the adapter's job
-description. Filing the job description does not let the adapter read your mail.
-It only creates a safe local config that a future adapter must still prove it is
-allowed to use.
+For beginners: the command can show the adapter's proposed job description,
+but v0.4.0 cannot file it. The preview never lets an adapter read mail.

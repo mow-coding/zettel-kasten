@@ -1,5 +1,10 @@
 # External Imports
 
+Status: dry-run-only in v0.4.0. `import-external` approval fails with
+`compound_exact_human_approval_binding_required` before archive/export read or
+mutation and writes no inbox draft or import receipt. Approval examples below
+are historical v0.3 behavior, not current run instructions.
+
 External import brings records from existing systems into the archive as governed inbox drafts.
 
 Phase 9 supports:
@@ -28,8 +33,8 @@ The flow is:
 external system export
 archive import-external --dry-run
 human review
-archive import-external --approve --reviewed-by ...
-inbox drafts + import receipt
+stop: v0.4.0 approval is fixed fail-closed
+no inbox draft or import receipt
 ```
 
 ## Notion Export
@@ -40,13 +45,10 @@ Export Notion pages as Markdown, then run:
 archive import-external <archive> --source notion --export <notion-export-folder> --dry-run
 ```
 
-Apply after review:
-
-```text
-archive import-external <archive> --source notion --export <notion-export-folder> --approve --reviewed-by person:me
-```
-
-Each Markdown or text file becomes one draft zettel in `inbox/`.
+After review, keep the operation in dry-run. An approval request returns
+`compound_exact_human_approval_binding_required` before reading the private
+export/archive target or writing. Historical v0.3 runs could create one draft
+per Markdown/text file; v0.4.0 creates none.
 
 ## Notion Manifest Title Fallback
 

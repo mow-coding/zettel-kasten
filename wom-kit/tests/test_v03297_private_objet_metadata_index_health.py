@@ -14,12 +14,12 @@ from wom_kit import private_objet_metadata_index_health as health
 from wom_kit import private_objet_metadata_index_session as session
 from wom_kit.private_objet_metadata_index import (
     PrivateObjetIndexInspection,
-    compile_private_objet_index_projection,
+    _compile_private_objet_index_projection as compile_private_objet_index_projection,
     install_private_objet_index_projection,
 )
 from wom_kit.private_objet_metadata_index_authority import (
-    PrivateObjetIndexAuthorityCapture,
-    capture_private_objet_index_authority,
+    _PrivateObjetIndexAuthorityCapture as PrivateObjetIndexAuthorityCapture,
+    _capture_private_objet_index_authority as capture_private_objet_index_authority,
 )
 
 
@@ -327,7 +327,7 @@ class PrivateObjetHealthProbeTests(unittest.TestCase):
         with (
             mock.patch.object(
                 health,
-                "capture_private_objet_index_authority",
+                "_capture_private_objet_index_authority",
                 return_value=capture,
             ),
             mock.patch.object(
@@ -337,7 +337,7 @@ class PrivateObjetHealthProbeTests(unittest.TestCase):
             ),
             mock.patch.object(
                 health,
-                "compile_private_objet_index_projection",
+                "_compile_private_objet_index_projection",
                 return_value=mock.sentinel.expected_projection,
             ),
         ):

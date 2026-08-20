@@ -1,0 +1,251 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "wom-kit/source-fidelity-draft-receipt/v0.2",
+  "title": "WOM-kit private source fidelity draft receipt v0.2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema", "action", "archive_id", "archive_type", "draft_id",
+    "draft_path", "body_sha256", "creation_mode",
+    "frontmatter_authority_sha256", "source_fidelity_plan_sha256",
+    "reviewed_by", "review_binding_sha256", "candidate_created_at",
+    "source_fidelity", "content_contract", "result"
+  ],
+  "properties": {
+    "schema": {"const": "wom-kit/source-fidelity-draft-receipt/v0.2"},
+    "action": {"const": "create_source_fidelity_draft"},
+    "archive_id": {"type": "string", "minLength": 1},
+    "archive_type": {"type": ["string", "null"]},
+    "draft_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$"},
+    "draft_path": {"type": "string", "pattern": "^inbox/[A-Za-z0-9_-]+\\.md$"},
+    "body_sha256": {"$ref": "#/$defs/sha256"},
+    "creation_mode": {"enum": ["ai_assisted", "ai_generated"]},
+    "frontmatter_authority_sha256": {"$ref": "#/$defs/sha256"},
+    "source_fidelity_plan_sha256": {"$ref": "#/$defs/sha256"},
+    "reviewed_by": {"type": "string", "minLength": 1},
+    "review_binding_sha256": {"$ref": "#/$defs/sha256"},
+    "candidate_created_at": {"type": "string", "minLength": 1},
+    "source_fidelity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema", "mode", "audience", "comparison_basis", "source",
+        "region", "byte_exact", "mechanically_verified",
+        "semantic_fidelity_machine_verified", "human_review_required",
+        "source_changed", "share_performed", "source_text_stored",
+        "source_locator_stored", "creation_plan_sha256", "evidence_id"
+      ],
+      "properties": {
+        "schema": {"const": "wom-kit/source-fidelity/v0.2"},
+        "mode": {"enum": ["verbatim", "faithful_summary", "sanitized_derivative"]},
+        "audience": {
+          "enum": [
+            "private_self", "ai_working_context", "client_report",
+            "public_web", "legal_copyright_request"
+          ]
+        },
+        "comparison_basis": {"const": "utf8_newlines_lf"},
+        "source": {
+          "oneOf": [
+            {"$ref": "#/$defs/manifested_object"},
+            {"$ref": "#/$defs/reviewed_session_evidence"}
+          ]
+        },
+        "region": {
+          "oneOf": [
+            {"type": "null"},
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["offset_bytes", "length_bytes", "sha256"],
+              "properties": {
+                "offset_bytes": {"type": "integer", "minimum": 0},
+                "length_bytes": {"type": "integer", "minimum": 0},
+                "sha256": {"$ref": "#/$defs/sha256"}
+              }
+            }
+          ]
+        },
+        "byte_exact": {"const": false},
+        "mechanically_verified": {"type": "boolean"},
+        "semantic_fidelity_machine_verified": {"const": false},
+        "human_review_required": {"const": true},
+        "source_changed": {"const": false},
+        "share_performed": {"const": false},
+        "source_text_stored": {"const": false},
+        "source_locator_stored": {"const": false},
+        "creation_plan_sha256": {"$ref": "#/$defs/sha256"},
+        "evidence_id": {
+          "type": "string",
+          "pattern": "^source-fidelity-evidence:[0-9a-f]{24}$"
+        }
+      },
+      "if": {
+        "properties": {"mode": {"const": "verbatim"}},
+        "required": ["mode"]
+      },
+      "then": {
+        "properties": {
+          "region": {"type": "object"},
+          "mechanically_verified": {"const": true}
+        }
+      },
+      "else": {
+        "properties": {
+          "region": {"type": "null"},
+          "mechanically_verified": {"const": false}
+        }
+      }
+    },
+    "content_contract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source_text_stored", "source_locator_stored", "source_path_stored"],
+      "properties": {
+        "source_text_stored": {"const": false},
+        "source_locator_stored": {"const": false},
+        "source_path_stored": {"const": false}
+      }
+    },
+    "result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "draft_written_create_only", "receipt_written_create_only",
+        "source_changed", "share_performed"
+      ],
+      "properties": {
+        "draft_written_create_only": {"const": true},
+        "receipt_written_create_only": {"const": true},
+        "source_changed": {"const": false},
+        "share_performed": {"const": false}
+      }
+    }
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "sha256_ref": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "source_common": {
+      "type": "object",
+      "required": [
+        "authority_kind", "raw_sha256", "raw_size_bytes",
+        "normalized_sha256", "normalized_size_bytes", "comparison_basis",
+        "newline_transformation_applied", "source_text_stored",
+        "source_locator_stored"
+      ],
+      "properties": {
+        "authority_kind": {"enum": ["manifested_object", "reviewed_session_evidence"]},
+        "raw_sha256": {"$ref": "#/$defs/sha256"},
+        "raw_size_bytes": {"type": "integer", "minimum": 0},
+        "normalized_sha256": {"$ref": "#/$defs/sha256"},
+        "normalized_size_bytes": {"type": "integer", "minimum": 0},
+        "comparison_basis": {"const": "utf8_newlines_lf"},
+        "newline_transformation_applied": {"type": "boolean"},
+        "source_text_stored": {"const": false},
+        "source_locator_stored": {"const": false}
+      }
+    },
+    "manifested_object": {
+      "allOf": [
+        {"$ref": "#/$defs/source_common"},
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "authority_kind", "object_id", "raw_sha256", "raw_size_bytes",
+            "normalized_sha256", "normalized_size_bytes", "comparison_basis",
+            "newline_transformation_applied", "source_text_stored",
+            "source_locator_stored", "provenance"
+          ],
+          "properties": {
+            "authority_kind": {"const": "manifested_object"},
+            "object_id": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+            "raw_sha256": {"$ref": "#/$defs/sha256"},
+            "raw_size_bytes": {"type": "integer", "minimum": 0},
+            "normalized_sha256": {"$ref": "#/$defs/sha256"},
+            "normalized_size_bytes": {"type": "integer", "minimum": 0},
+            "comparison_basis": {"const": "utf8_newlines_lf"},
+            "newline_transformation_applied": {"type": "boolean"},
+            "source_text_stored": {"const": false},
+            "source_locator_stored": {"const": false},
+            "provenance": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "binding_state", "captured_at", "source_role", "input_kind",
+                "source_intake_plan_sha256", "staged_source_class",
+                "independent_external_provenance", "raw_source_locator_stored",
+                "raw_source_locator_echoed"
+              ],
+              "properties": {
+                "binding_state": {"enum": ["manifest_intake_bound", "legacy_unbound"]},
+                "captured_at": {"type": ["string", "null"]},
+                "source_role": {
+                  "enum": ["primary_source", "context", "attachment", "derived_context", null]
+                },
+                "input_kind": {"type": ["string", "null"]},
+                "source_intake_plan_sha256": {
+                  "oneOf": [{"$ref": "#/$defs/sha256_ref"}, {"type": "null"}]
+                },
+                "staged_source_class": {"type": "string", "minLength": 1},
+                "independent_external_provenance": {"type": "boolean"},
+                "raw_source_locator_stored": {"const": false},
+                "raw_source_locator_echoed": {"const": false}
+              }
+            }
+          }
+        }
+      ]
+    },
+    "reviewed_session_evidence": {
+      "allOf": [
+        {"$ref": "#/$defs/source_common"},
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "authority_kind", "evidence_id", "raw_sha256", "raw_size_bytes",
+            "normalized_sha256", "normalized_size_bytes", "comparison_basis",
+            "newline_transformation_applied", "source_role", "producer_kind",
+            "produced_at", "captured_at", "session_ref_sha256",
+            "input_provenance_sha256", "semantic_fidelity_machine_verified",
+            "receipt_sha256", "source_text_stored", "source_locator_stored"
+          ],
+          "properties": {
+            "authority_kind": {"const": "reviewed_session_evidence"},
+            "evidence_id": {
+              "type": "string",
+              "pattern": "^source-fidelity-session-evidence:[0-9a-f]{64}$"
+            },
+            "raw_sha256": {"$ref": "#/$defs/sha256"},
+            "raw_size_bytes": {"type": "integer", "minimum": 0},
+            "normalized_sha256": {"$ref": "#/$defs/sha256"},
+            "normalized_size_bytes": {"type": "integer", "minimum": 0},
+            "comparison_basis": {"const": "utf8_newlines_lf"},
+            "newline_transformation_applied": {"type": "boolean"},
+            "source_role": {
+              "enum": [
+                "external_primary_source", "external_context",
+                "human_authored_source", "reviewed_session_transcript",
+                "reviewed_multi_source_bundle", "human_reviewed_summary",
+                "self_authored_candidate"
+              ]
+            },
+            "producer_kind": {"enum": ["human", "external_system", "ai_runtime", "mixed"]},
+            "produced_at": {"type": "string", "pattern": "Z$"},
+            "captured_at": {"type": "string", "pattern": "Z$"},
+            "session_ref_sha256": {"$ref": "#/$defs/sha256_ref"},
+            "input_provenance_sha256": {
+              "type": "array", "uniqueItems": true,
+              "items": {"$ref": "#/$defs/sha256_ref"}
+            },
+            "semantic_fidelity_machine_verified": {"const": false},
+            "receipt_sha256": {"$ref": "#/$defs/sha256_ref"},
+            "source_text_stored": {"const": false},
+            "source_locator_stored": {"const": false}
+          }
+        }
+      ]
+    }
+  }
+}

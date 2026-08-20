@@ -1593,7 +1593,7 @@ def _configure_native(
     )
 
 
-def prompt_secret_in_native_popup(
+def _prompt_secret_in_native_popup(
     *,
     request_id: str,
     context: CredentialPopupContext,
@@ -1676,5 +1676,4 @@ __all__ = [
     "SYNTHETIC_STATUS_READY_TEXT",
     "popup_intent_banner_text",
     "popup_instruction_text",
-    "prompt_secret_in_native_popup",
 ]

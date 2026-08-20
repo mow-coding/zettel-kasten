@@ -12,17 +12,17 @@ import threading
 import unittest
 
 from wom_kit.credential_secure_intake import (
-    AtomicJsonReceiptCommitter,
+    _AtomicJsonReceiptCommitter as AtomicJsonReceiptCommitter,
     NOTION_PAT_SCOPE_FINGERPRINT_DOMAIN,
     NOTION_PAT_WORKSPACE_IDENTITY_BASIS,
-    WindowsCredentialManagerExactStore,
+    _WindowsCredentialManagerExactStore as WindowsCredentialManagerExactStore,
 )
 from wom_kit.credential_secure_intake_windows import (
     windows_credential_target,
     windows_credential_target_prefix,
 )
 from wom_kit.credential_capability import (
-    CredentialCapability,
+    _CredentialCapability as CredentialCapability,
     CredentialCapabilityScope,
 )
 from wom_kit.credential_secure_registry import (
@@ -30,17 +30,17 @@ from wom_kit.credential_secure_registry import (
     _capability_claim_mac,
     _receipt_mac,
     RECEIPT_AUTHENTICATION_SCHEMA,
-    ReceiptBackedNotionCredentialBroker,
+    _ReceiptBackedNotionCredentialBroker as ReceiptBackedNotionCredentialBroker,
     SecureCredentialRegistryError,
-    StableArchiveFingerprintKeyProvider,
-    claim_credential_capability_use,
-    create_archive_atomic_json_receipt_committer,
+    _StableArchiveFingerprintKeyProvider as StableArchiveFingerprintKeyProvider,
+    _claim_credential_capability_use as claim_credential_capability_use,
+    _create_archive_atomic_json_receipt_committer as create_archive_atomic_json_receipt_committer,
     list_secure_credentials,
     lookup_secure_credential,
-    evolve_legacy_authenticated_workspace_scope,
-    persist_duplicate_lifecycle_decision,
+    _evolve_legacy_authenticated_workspace_scope as evolve_legacy_authenticated_workspace_scope,
+    _persist_duplicate_lifecycle_decision as persist_duplicate_lifecycle_decision,
 )
-from wom_kit.notion_http_adapter import NotionBearerSecret
+from wom_kit.notion_http_adapter import _NotionBearerSecret as NotionBearerSecret
 from wom_kit.notion_page_recovery import ScopeBinding
 
 

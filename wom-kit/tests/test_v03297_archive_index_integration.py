@@ -105,11 +105,11 @@ def _instrumented_rebuild_factory(
         nonlocal capture_number
         capture_number += 1
         events.append(("call", f"snapshot_{capture_number}"))
-        return authority.capture_private_objet_index_authority(root, archive_id)
+        return authority._capture_private_objet_index_authority(root, archive_id)
 
     def compile_projection(compiler_input):
         events.append(("call", "compile"))
-        return generated_index.compile_private_objet_index_projection(
+        return generated_index._compile_private_objet_index_projection(
             compiler_input
         )
 
@@ -248,7 +248,7 @@ def _instrumented_rebuild_factory(
         *,
         busy_timeout_ms: int,
     ):
-        return rebuild.private_objet_index_rebuild_session(
+        return rebuild._private_objet_index_rebuild_session(
             archive_root,
             archive_id,
             db_path,
@@ -468,7 +468,7 @@ class V03297ArchiveIndexIntegrationTests(unittest.TestCase):
             factory = _instrumented_rebuild_factory(events)
             with patch.object(
                 archive_services,
-                "private_objet_index_rebuild_session",
+                "_private_objet_index_rebuild_session",
                 factory,
             ):
                 result = archive_services.index_archive(archive_root)

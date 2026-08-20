@@ -1,6 +1,11 @@
 # Saved-View Write And Exact Revert
 
-Status: v0.3.302 approval-gated saved-view lifecycle
+Status: dry-run-only writer/revert in v0.4.0; v0.3.302 receipts are historical
+
+Current boundary: `saved-view-write` and `saved-view-revert` approval fail with
+`compound_exact_human_approval_binding_required` before private request/target
+read or mutation. The plan and historical receipt/audit material below remain
+useful, but no v0.4.0 approved command creates or deletes a view.
 
 This command closes the gap between a read-only saved-view recommendation and
 a persistent `views/*.yml` file. It is intentionally preview-first: an AI may
@@ -42,28 +47,13 @@ authority, rendered YAML bytes, deterministic target path, match count, and
 one `plan_sha256`. It does not echo the private view name, facet keys, facet
 values, zettel titles, bodies, or absolute local paths.
 
-## 3. Approve The Exact Fresh Plan
+## 3. Stop After The Fresh Plan
 
-After a human opens the private request and verifies every name and filter:
-
-```powershell
-archive saved-view-write <archive-root> `
-  --request .wom-scratch/private/saved-views/education.json `
-  --expected-plan-sha256 sha256:<64-hex> `
-  --approve `
-  --reviewed-by person:<reviewer> `
-  --affirm-view-reviewed `
-  --format json
-```
-
-If the request, archive index, existing views, target, or receipt changed after
-preview, the old plan is refused. The writer creates one deterministic
-`views/generated-*.yml` file without overwriting an existing file, plus one
-immutable content-free receipt under `receipts/views/`.
-
-If the process created the exact view file but stopped before its receipt was
-written, a new dry-run returns `finalize_receipt`. A human must review and
-approve that new plan digest. Exact replay then converges.
+After a human opens the private request and verifies every name and filter,
+stop. In v0.4.0 approval returns
+`compound_exact_human_approval_binding_required` before reading the private
+request/target or writing a view, lock, journal, or receipt. Historical
+v0.3.302 receipts and `finalize_receipt` states remain audit evidence only.
 
 ## Exact Revert
 
@@ -76,22 +66,10 @@ archive saved-view-revert <archive-root> `
   --format json
 ```
 
-Approve only its exact fresh plan:
-
-```powershell
-archive saved-view-revert <archive-root> `
-  --receipt receipts/views/<receipt>.saved-view-write.json `
-  --expected-plan-sha256 sha256:<64-hex> `
-  --approve `
-  --reviewed-by person:<reviewer> `
-  --format json
-```
-
-Revert removes only the unchanged writer-owned YAML bytes named by the
-receipt. Any human edit, collision, malformed evidence, duplicate id, or
-incomplete saved-view authority blocks removal. A short transaction journal
-makes interruption resumable, and a separate immutable revert receipt proves
-the completed removal.
+Keep revert in dry-run. v0.4.0 approval returns
+`compound_exact_human_approval_binding_required` before reading the private
+target or removing bytes; it writes no journal or revert receipt. Historical
+v0.3 revert receipts remain readable but grant no current removal authority.
 
 ## Fail-Closed Authority
 

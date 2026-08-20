@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "wom-kit/operation-exact-human-approval/v0.1",
+  "title": "WOM-kit exact human approval binding embedded in an operation receipt",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "operation",
+    "plan_sha256",
+    "target_binding_sha256",
+    "exact_human_approval"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "wom-kit/operation-exact-human-approval/v0.1"
+    },
+    "operation": {
+      "enum": [
+        "promote_zet",
+        "warning_override",
+        "mint_zet",
+        "zettel_edge",
+        "retire_draft"
+      ]
+    },
+    "plan_sha256": {"$ref": "#/$defs/sha256_ref"},
+    "target_binding_sha256": {"$ref": "#/$defs/sha256_ref"},
+    "exact_human_approval": {"$ref": "#/$defs/exact_reference"}
+  },
+  "$defs": {
+    "sha256_ref": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "exact_reference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "approval_id",
+        "context_sha256",
+        "approval_authority_sha256",
+        "one_use"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "wom-kit/exact-human-approval-reference/v0.1"
+        },
+        "approval_id": {
+          "type": "string",
+          "pattern": "^approval_[0-9a-f]{32}$"
+        },
+        "context_sha256": {"$ref": "#/$defs/sha256_ref"},
+        "approval_authority_sha256": {"$ref": "#/$defs/sha256_ref"},
+        "one_use": {"const": true}
+      }
+    }
+  }
+}

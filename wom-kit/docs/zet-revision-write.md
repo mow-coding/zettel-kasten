@@ -1,11 +1,13 @@
 # Canonical zet Revision Write
 
-Status: approval-gated single-zet write with prior-byte preservation in v0.3.248
+Status: v0.4.0 dry-run-only revision effect planning; v0.3 receipts remain readable
 
-`zet-revision-write` is the second half of WOM's ordinary canonical correction
-workflow. It accepts only a private proposal that already passed
-`zet-revision-plan`, builds the exact writer-produced candidate in a separate
-dry-run, and replaces the canonical zet only after explicit human approval.
+`zet-revision-write` accepts only a private proposal that already passed
+`zet-revision-plan` and builds the exact writer-produced candidate in a
+separate dry-run. Its historical writer changes canonical bytes, private
+snapshot/manifest state, lock state, and receipt history as one compound
+effect. v0.4.0 has no exact-human binding for that complete effect set, so the
+approve path is intentionally closed.
 
 The command does not decide whether a correction is true. It proves that the
 bytes being written still match the proposal and both review steps that the
@@ -66,41 +68,22 @@ Dry-run returns only hashes, change categories, and the content-addressed
 before-snapshot descriptor. It writes no candidate, canonical file, receipt,
 lock, provider state, objet, manifest record, or database row.
 
-## Step 3: Approve The Bound Write
+## Step 3: Approval Is Closed In v0.4.0
 
-Reuse the same values and add the write-plan digest, reviewer, and review
-affirmations:
-
-```powershell
-archive zet-revision-write <archive-root> `
-  --zettel-id <safe-id> `
-  --proposal .wom-scratch/revisions/<private-name>.md `
-  --expected-canonical-sha256 <canonical.sha256> `
-  --expected-proposal-sha256 <proposal.sha256> `
-  --expected-proposal-semantic-sha256 <proposal.semantic.sha256> `
-  --expected-plan-digest <plan_digest> `
-  --revision-at <revision_at> `
-  --expected-write-plan-digest <write_plan.actual_digest> `
-  --approve `
-  --reviewed-by <safe-actor-id> `
-  --affirm-revision-reviewed `
-  --affirm-abstract-body-pair-reviewed `
-  --format json
-```
-
-If `change_summary.edges_changed` is true, approval also requires:
+Do not replay the preview as an approved write. Any `--approve` request returns
+the fixed content-free blocker below before private target read or mutation:
 
 ```text
---affirm-edge-changes-reviewed
+compound_exact_human_approval_binding_required
 ```
 
-Any changed canonical byte, proposal byte, proposal meaning, timestamp,
-candidate, or plan digest blocks the write. Generate a new read-only plan
-instead of reusing stale approval.
+The dry-run is still useful for human review and future binding design, but it
+grants no authority. No reviewer flags or stale v0.3 receipt can bypass this
+gate.
 
-## Write And Receipt Boundary
+## Historical v0.3 Receipt Boundary
 
-Approval:
+Existing v0.3 revision receipts describe a writer that:
 
 - uses one private lock shared by every revision plan for the same canonical
   zet, so distinct plans cannot race through the write section;
@@ -128,7 +111,10 @@ CLI output does not echo the zet id, canonical path, proposal filename,
 reviewer id, title, abstract, body, custom frontmatter value, provider URL,
 absolute path, or secret. The digest-only receipt path is safe to return.
 
-## Failure And Interruption Safety
+v0.4.0 does not enter that writer, create its lock, preserve a new snapshot,
+replace a canonical zet, or create a revision receipt.
+
+## Historical Failure And Interruption Evidence
 
 An ordinary runtime failure after canonical replacement restores the exact
 previous canonical bytes, removes a partial receipt, and removes the temporary
@@ -148,9 +134,7 @@ blocks and stays available for human inspection.
 
 ## Honest Stop
 
-`applied` proves that the reviewed, SHA-bound local proposal was installed,
-receipted, and preceded by a verified local prior-byte snapshot. It does not
-prove factual truth, completeness, usefulness, legal or copyright clearance,
-external synchronization, remote backup completion, or model understanding.
-MCP exposes the read-only `zet_revision_plan` tool but no revision write tool;
-canonical mutation remains an explicit local CLI approval.
+A v0.4.0 result can prove only that the revision effect was planned without
+writing. It cannot report `applied`. Historical `applied` receipts remain
+auditable evidence of their recorded local event but do not authorize replay.
+MCP exposes the read-only `zet_revision_plan` tool and no revision writer.

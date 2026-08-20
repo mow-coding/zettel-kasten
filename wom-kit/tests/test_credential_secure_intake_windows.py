@@ -20,15 +20,15 @@ from wom_kit.credential_secure_intake import (
 )
 from wom_kit import credential_secure_intake_windows as windows_module
 from wom_kit.credential_secure_intake_windows import (
-    CtypesWindowsNativeFacade,
+    _CtypesWindowsNativeFacade as CtypesWindowsNativeFacade,
     CredentialPopupPromptContext,
     WindowsAttachedConsoleSecretUI,
-    WindowsCredentialPopupSecretUI,
+    _WindowsCredentialPopupSecretUI as WindowsCredentialPopupSecretUI,
     WindowsDllBundle,
     WindowsNativeMaskedSecretUI,
     WindowsVisibleConsoleSecretUI,
     WindowsSecureIntakeError,
-    build_windows_secure_intake_worker,
+    _build_windows_secure_intake_worker as build_windows_secure_intake_worker,
     current_windows_owner_binding,
     windows_credential_target,
 )
@@ -515,7 +515,7 @@ class WindowsSecureIntakeTests(unittest.TestCase):
         )
         with patch.object(
             windows_module,
-            "prompt_secret_in_native_popup",
+            "_prompt_secret_in_native_popup",
             return_value=prompted,
         ) as popup_prompt:
             native = CtypesWindowsNativeFacade(

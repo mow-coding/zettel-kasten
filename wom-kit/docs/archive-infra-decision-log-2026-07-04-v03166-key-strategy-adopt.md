@@ -5,7 +5,7 @@ Batch: v0.3.166 (implements the LOCKED spec: "Object-storage upload: selectable/
 recorded key scheme + safe adopt-existing (the 158 GB false-skip fix)").
 Anchor tree at spec authoring: HEAD `cf16c11c` (v0.3.165), tree clean.
 Release action: working tree only — no git commit/tag/push. Never touches a real
-archive or `zettel-kasten-basoon`, and makes no real network call (fake transport
+archive or a named real archive, and makes no real network call (fake transport
 only in tests).
 
 This log records the decisions per §2, §3, §6, §8 and the Critique A/B ledger
@@ -153,7 +153,7 @@ all are now fixed and each has a mutation-checked regression test.
   adopt REFUSES with `tiered_gate_unmet` until a single `--only` object proves the
   store. The declared (no-network) adopt path is unaffected. Test §12.19.
 - **F6 — round-trip tests were self-consistent, not key-anchored (SHOULD).** Added
-  §12.20, which seeds the remote at a LITERAL byte-exact basoon key (a string
+  §12.20, which seeds the remote at a LITERAL byte-exact pilot key (a string
   constant, not `object_storage_remote_key`) and asserts the adopt/skip HEADed that
   literal key, so a consistent-but-wrong resolver is caught.
 

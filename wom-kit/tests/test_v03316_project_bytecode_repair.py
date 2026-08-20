@@ -37,7 +37,7 @@ class Letter129ProjectBytecodeRepairTests(unittest.TestCase):
                 max_files=100,
             )
 
-            result = completion_workflows.project_bytecode_repair(
+            result = completion_workflows._project_bytecode_repair_legacy_core(
                 project_root,
                 max_files=100,
                 expected_plan_sha256=plan["summary"]["plan_sha256"],
@@ -109,7 +109,7 @@ class Letter129ProjectBytecodeRepairTests(unittest.TestCase):
             bytecode.unlink()
             bytecode.write_bytes(original)
 
-            result = completion_workflows.project_bytecode_repair(
+            result = completion_workflows._project_bytecode_repair_legacy_core(
                 project_root,
                 max_files=100,
                 expected_plan_sha256=plan["summary"]["plan_sha256"],
@@ -140,7 +140,7 @@ class Letter129ProjectBytecodeRepairTests(unittest.TestCase):
                 .WOM_KIT_PROJECT_UPDATE_LOCK_BYTES
             )
 
-            result = completion_workflows.project_bytecode_repair(
+            result = completion_workflows._project_bytecode_repair_legacy_core(
                 project_root,
                 max_files=100,
                 expected_plan_sha256=plan["summary"]["plan_sha256"],
@@ -165,7 +165,7 @@ class Letter129ProjectBytecodeRepairTests(unittest.TestCase):
             )
             original_delete = (
                 completion_workflows.archive_services
-                .delete_activity_group_evidence_exact
+                ._delete_activity_group_evidence_exact
             )
             swapped = False
 
@@ -180,10 +180,10 @@ class Letter129ProjectBytecodeRepairTests(unittest.TestCase):
 
             with patch.object(
                 completion_workflows.archive_services,
-                "delete_activity_group_evidence_exact",
+                "_delete_activity_group_evidence_exact",
                 side_effect=swap_then_delete,
             ):
-                result = completion_workflows.project_bytecode_repair(
+                result = completion_workflows._project_bytecode_repair_legacy_core(
                     project_root,
                     max_files=100,
                     expected_plan_sha256=plan["summary"]["plan_sha256"],
@@ -210,7 +210,7 @@ class Letter129ProjectBytecodeRepairTests(unittest.TestCase):
             )
             original_delete = (
                 completion_workflows.archive_services
-                .delete_activity_group_evidence_exact
+                ._delete_activity_group_evidence_exact
             )
             swapped = False
 
@@ -224,10 +224,10 @@ class Letter129ProjectBytecodeRepairTests(unittest.TestCase):
 
             with patch.object(
                 completion_workflows.archive_services,
-                "delete_activity_group_evidence_exact",
+                "_delete_activity_group_evidence_exact",
                 side_effect=swap_then_delete,
             ):
-                result = completion_workflows.project_bytecode_repair(
+                result = completion_workflows._project_bytecode_repair_legacy_core(
                     project_root,
                     max_files=100,
                     expected_plan_sha256=plan["summary"]["plan_sha256"],
@@ -254,7 +254,7 @@ class Letter129ProjectBytecodeRepairTests(unittest.TestCase):
             alias = bytecode.with_name("late-alias.cpython-312.pyc")
             original_delete = (
                 completion_workflows.archive_services
-                .delete_activity_group_evidence_exact
+                ._delete_activity_group_evidence_exact
             )
             linked = False
 
@@ -267,10 +267,10 @@ class Letter129ProjectBytecodeRepairTests(unittest.TestCase):
 
             with patch.object(
                 completion_workflows.archive_services,
-                "delete_activity_group_evidence_exact",
+                "_delete_activity_group_evidence_exact",
                 side_effect=link_then_delete,
             ):
-                result = completion_workflows.project_bytecode_repair(
+                result = completion_workflows._project_bytecode_repair_legacy_core(
                     project_root,
                     max_files=100,
                     expected_plan_sha256=plan["summary"]["plan_sha256"],
@@ -293,7 +293,7 @@ class Letter129ProjectBytecodeRepairTests(unittest.TestCase):
             )
             original_delete = (
                 completion_workflows.archive_services
-                .delete_activity_group_evidence_exact
+                ._delete_activity_group_evidence_exact
             )
 
             def delete_then_report_durability_failure(*args, **kwargs):
@@ -302,10 +302,10 @@ class Letter129ProjectBytecodeRepairTests(unittest.TestCase):
 
             with patch.object(
                 completion_workflows.archive_services,
-                "delete_activity_group_evidence_exact",
+                "_delete_activity_group_evidence_exact",
                 side_effect=delete_then_report_durability_failure,
             ):
-                result = completion_workflows.project_bytecode_repair(
+                result = completion_workflows._project_bytecode_repair_legacy_core(
                     project_root,
                     max_files=100,
                     expected_plan_sha256=plan["summary"]["plan_sha256"],
@@ -339,7 +339,7 @@ class Letter129ProjectBytecodeRepairTests(unittest.TestCase):
                 "rmdir",
                 side_effect=OSError("injected rmdir failure"),
             ):
-                result = completion_workflows.project_bytecode_repair(
+                result = completion_workflows._project_bytecode_repair_legacy_core(
                     project_root,
                     max_files=100,
                     expected_plan_sha256=plan["summary"]["plan_sha256"],
@@ -398,7 +398,7 @@ class Letter129ProjectBytecodeRepairTests(unittest.TestCase):
             if created.returncode != 0:
                 self.skipTest("junction creation unavailable")
             try:
-                result = completion_workflows.project_bytecode_repair(
+                result = completion_workflows._project_bytecode_repair_legacy_core(
                     project_root,
                     max_files=100,
                     expected_plan_sha256=plan["summary"]["plan_sha256"],
@@ -435,7 +435,7 @@ class Letter129ProjectBytecodeRepairTests(unittest.TestCase):
                 max_files=100,
             )
             self.assertTrue(plan["ok"], plan)
-            repaired = completion_workflows.project_bytecode_repair(
+            repaired = completion_workflows._project_bytecode_repair_legacy_core(
                 archive_root,
                 max_files=100,
                 expected_plan_sha256=plan["summary"]["plan_sha256"],
@@ -507,7 +507,7 @@ class Letter129ProjectBytecodeRepairTests(unittest.TestCase):
             self.assertEqual(plan["summary"]["bytecode_file_count"], 0)
             self.assertEqual(plan["summary"]["pycache_directory_count"], 1)
 
-            result = completion_workflows.project_bytecode_repair(
+            result = completion_workflows._project_bytecode_repair_legacy_core(
                 project_root,
                 max_files=100,
                 expected_plan_sha256=plan["summary"]["plan_sha256"],
@@ -547,7 +547,7 @@ class Letter129ProjectBytecodeRepairTests(unittest.TestCase):
                 "_write_bytes_create_if_absent",
                 side_effect=fail_completion_receipt,
             ):
-                result = completion_workflows.project_bytecode_repair(
+                result = completion_workflows._project_bytecode_repair_legacy_core(
                     project_root,
                     max_files=100,
                     expected_plan_sha256=plan["summary"]["plan_sha256"],
@@ -579,7 +579,7 @@ class Letter129BoundRepairCanaryTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.fixture_case.tearDown()
 
-    def test_twenty_five_conflicts_repair_then_fresh_update_succeeds(self) -> None:
+    def test_historical_repair_preserves_planner_but_public_update_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             fixture, _private_markers = self.fixture_case.runtime_shadow_fixture(
                 Path(tmp),
@@ -605,7 +605,7 @@ class Letter129BoundRepairCanaryTests(unittest.TestCase):
             )
             self.assertEqual(plan["summary"]["collision_entry_count"], 25)
 
-            repaired = completion_workflows.project_bytecode_repair(
+            repaired = completion_workflows._project_bytecode_repair_legacy_core(
                 fixture["project_root"],
                 max_files=100,
                 expected_plan_sha256=plan["summary"]["plan_sha256"],
@@ -644,11 +644,12 @@ class Letter129BoundRepairCanaryTests(unittest.TestCase):
                 reviewed_by="person:letter-129-canary",
                 affirm_external_writers_quiescent=True,
             )
-            self.assertTrue(updated["ok"], updated)
-            self.assertIn(
-                updated["status"],
-                {"updated_restart_required", "no_change"},
+            self.assertFalse(updated["ok"], updated)
+            self.assertEqual(
+                updated["blockers"],
+                ["compound_exact_human_approval_binding_required"],
             )
+            self.assertEqual(updated["files_written"], [])
 
     def test_collision_set_name_drift_blocks_bound_repair_plan(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -740,7 +741,7 @@ class Letter129BoundRepairCanaryTests(unittest.TestCase):
                 result["blockers"],
             )
 
-    def test_actual_cli_batch_repair_and_fresh_preview(self) -> None:
+    def test_cli_repair_approve_fails_closed_and_preview_remains_read_only(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             fixture, private_markers = self.fixture_case.runtime_shadow_fixture(
                 Path(tmp),
@@ -812,9 +813,14 @@ class Letter129BoundRepairCanaryTests(unittest.TestCase):
                     "json",
                 ]
             )
-            self.assertEqual(repair_code, 0, repair_output)
+            self.assertEqual(repair_code, 1, repair_output)
             repaired = json.loads(repair_output)
-            self.assertEqual(repaired["summary"]["removed_count"], 3)
+            self.assertEqual(repaired["state"], "blocked")
+            self.assertEqual(
+                repaired["reason_codes"],
+                ["compound_exact_human_approval_binding_required"],
+            )
+            self.assertFalse(repaired["private_values_echoed"])
 
             fresh_code, fresh_output = run_cli(
                 [
@@ -827,12 +833,12 @@ class Letter129BoundRepairCanaryTests(unittest.TestCase):
                     "json",
                 ]
             )
-            self.assertEqual(fresh_code, 0, fresh_output)
+            self.assertEqual(fresh_code, 1, fresh_output)
             fresh = json.loads(fresh_output)
-            self.assertEqual(fresh["status"], "ready_for_approval")
+            self.assertEqual(fresh["status"], "blocked")
             self.assertEqual(
                 fresh["materialization_preflight"]["conflict_count"],
-                0,
+                4,
             )
             all_output = inspect_output + plan_output + repair_output
             for marker in private_markers:

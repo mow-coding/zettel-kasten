@@ -26,18 +26,20 @@ bulk external staging:    C:\Users\<user>\zettel-kasten-<profile_slug>-objets\in
 
 The intake layout ruling (D2, 2026-07-03) is one consistent statement:
 
-- **Canonical capture intake stages INSIDE the archive root**, recommended
+- **Capture review intake stages INSIDE the archive root**, recommended
   under `staging/incoming/<YYYY-MM-DD>/` (the date layer is recommended, not
-  required). Capture requires archive-relative staged paths, and the v0.3.158
-  enablement record makes this the real-archive path.
+  required). v0.4.0 selection and capture approval are fixed closed before
+  private staged-byte reads or mutation; a v0.3.158 enablement record grants no
+  current capture authority.
 - **The sibling `-objets` store is for bulk external originals** that must
   never enter git: it stays under the never-touch protection and is
-  represented in the archive through `prehashed-objet-ledger` plus
-  `object-storage-upload-evidence` evidence, not by copying bytes in.
+  eligible for content-free `prehashed-objet-ledger --dry-run` and
+  `object-storage-upload-evidence --dry-run` review only. Their approvals are
+  fixed closed in v0.4.0 and register no manifest location or receipt.
 - **A raw in-root `objets/` folder is NON-canonical** for long-term originals:
-  originals belong in the content-addressed `objects/sha256/` store via
-  capture. Doctor reports `archive_objets_layout_noncanonical` for it; see the
-  migration guide in section 5.
+  existing manifested originals belong in the content-addressed
+  `objects/sha256/` store. Doctor reports `archive_objets_layout_noncanonical`
+  for raw `objets/`; v0.4.0 has no approved automated capture/migration path.
 
 The local archive root is the Git-friendly control plane. It holds zets,
 metadata, manifests, source maps, receipts, views, and generated local indexes.
@@ -183,8 +185,8 @@ file-capture or staged-folder commands retain their own narrowly reviewed path
 authority and must not be pointed at these quarantine roots. These ignore
 rules do not advertise an integration.
 
-v0.3.307 adds one separate, destructive opt-in exception for a workspace owner
-who already knows an exact absolute workspace root:
+Historically, v0.3.307 added a destructive opt-in exception. In v0.4.0 only
+its exact-root dry-run remains:
 
 ```powershell
 archive legacy-coordination-cleanup <absolute-workspace-root> --dry-run --format json
@@ -192,14 +194,9 @@ archive legacy-coordination-cleanup <absolute-workspace-root> --dry-run --format
 
 This is not part of Doctor, archive discovery, restore, installation, project
 update, upgrade, or this repository checker. It considers only the exact direct
-child `.mow-harness/`; `collab/` is never traversed or changed. Approval requires the
-unchanged `plan_sha256`, reviewer, workspace-owner authority, external-writer
-quiescence, and explicit retired-state disposal. A true
-`summary.backups_or_receipts_present` requires a separate affirmation. Unknown,
-case-drifted, tracked, linked/reparse, special,
-unreadable, over-limit, or changed state blocks. The command emits only counts
-and hashes, creates no backup or receipt, and reports partial removal as
-`partial_cleanup_pending`, not success. See
+child `.mow-harness/`; `collab/` is never traversed or changed. Approval now
+returns `compound_exact_human_approval_binding_required` before private
+workspace reads or mutation and removes no entry or receipt. See
 [Legacy Coordination Cleanup](legacy-coordination-cleanup.md).
 
 `/objets/` (v0.3.160) is anchored on purpose: it excludes only a raw IN-ROOT
@@ -232,59 +229,46 @@ marker and the enclosing repository tracks the raw originals anyway.
 
 AI scratch files belong in `.wom-scratch/` or `workbench/ai-scratch/`, never in
 an objet location. Human-selected original material such as meeting audio,
-transcripts, photos, exports, or other source files that should remain
-recoverable belongs in the content-addressed `objects/sha256/` store through
-the reviewed capture chain (or, for bulk external stores, in the sibling
-`-objets` store under never-touch protection with `prehashed-objet-ledger`
-evidence). A raw in-root `objets/` folder is a non-canonical layout: it is
+transcripts, photos, exports, or other source files should remain in the
+human-controlled source location until a future approved capture path exists.
+Existing manifested originals belong in `objects/sha256/`; bulk external
+stores remain under never-touch protection. In v0.4.0 capture and
+prehashed-ledger approvals are fixed closed. A raw in-root `objets/` folder is
+a non-canonical layout: it is
 neither hashed, nor manifested, nor protected, and once gitignored its contents
 silently drop out of the git-push backup path. AI research notes, intermediate
 reports, prompt drafts, and temporary composition files are scratch unless a
-human explicitly preserves them as an objet through capture.
+human explicitly classifies them; no v0.4.0 blocked capture approval should be
+used to claim preservation.
 
 ### Migrating an existing in-root `objets/` folder
 
 Archives that already hold originals in an in-root `objets/` folder (doctor
 warning `archive_objets_layout_noncanonical`) migrate with the normal reviewed
 spine. In-root `objets/` files are ALREADY archive-relative, so selections can
-run in place; no preparatory move into `staging/incoming/` is needed.
+run in place; no preparatory move into `staging/incoming/` is needed. Selection
+paths are resolved from the archive root, never the process current directory.
 
-Prerequisite (BEFORE step 2, not just before capture): real (non-sandbox)
-archives must approve capture enablement once —
-`archive objet-capture-enable <archive-root> --approve --reviewed-by person:me`.
-Without the enablement record, `objet-capture-selection` in step 2 already
-blocks with `resolved_path_never_touch` on a real archive following the
-recommended naming; it is not only step 3 that refuses. When the archive root
-or a parent folder matches the never-touch naming pattern (`zettel-kasten-*` /
-`*-objets` — true for every archive following the recommended naming), the
-approval additionally requires `--acknowledge-never-touch-name`, otherwise the
-enablement refuses.
+In v0.4.0 this migration is assessment-only. `objet-capture-enable`,
+`source-intake-record`, `objet-capture-selection`, `objet-capture`,
+`prehashed-objet-ledger`, and `object-storage-upload-evidence` approval all
+return `compound_exact_human_approval_binding_required` before private input or
+target read and write nothing. Do not manually delete or relocate the existing
+folder on the strength of a preview.
 
 ```powershell
 # 1. Classify one file (metadata-only, no copy):
 archive source-intake <archive-root> --dry-run --local-path <archive-root>\objets\<file> --format json
-archive source-intake-record <archive-root> --source-intake-plan <plan.json> --approve --reviewed-by person:me --format json
 
-# 2. Prepare ONE reviewed selection per file (archive-relative staged path):
-archive objet-capture-selection <archive-root> --staged-path objets/<file> --source-intake-receipt <receipt> --approve --reviewed-by person:me --format json
-
-# 3. Capture through the enablement-gated write path. A relative --selection is
-#    resolved from the archive root, never the process current directory.
-#    Absolute selection paths remain compatible.
-archive objet-capture <archive-root> --selection <archive-relative-selection.json> --dry-run --format json
-archive objet-capture <archive-root> --selection <archive-relative-selection.json> --approve --reviewed-by person:me --format json
-
-# 4. Verify preservation evidence BEFORE any manual deletion:
+# 2. Inspect existing preservation evidence without changing anything:
 archive staged-cleanup-check <archive-root> --staged objets --dry-run --format json
 ```
 
-For bulk stores (hundreds of GB, thousands of files), do not run per-file
-capture: register the external content-addressed store with
-`archive prehashed-objet-ledger` and record storage evidence with
-`archive object-storage-upload-evidence` instead, then promote only the small
-human-selected subset through the capture spine above. Only
-`staged-cleanup-check` evidence — never this document — can say a migrated
-folder is safe to remove, and WOM-kit still never deletes it for you.
+For bulk stores, the prehashed-ledger and upload-evidence dry-runs can still
+describe content-free counts and candidate bindings, but v0.4.0 cannot register
+or promote them. Only complete historical preservation evidence plus a fresh
+`staged-cleanup-check` can inform later human review; this document never says
+a folder is safe to remove, and WOM-kit never deletes it for you.
 An entry classified through the legacy `--deferred` input is intentionally
 unresolved: keep it staged or preserve it first. Deferment alone can never make
 the whole folder safe to remove.
@@ -295,13 +279,14 @@ The current local cleanup flow is:
 $env:PYTHONPATH='wom-kit\src'; python -m wom_kit.archive_cli artifact-lifecycle-inventory <archive-root> --dry-run --format json
 $env:PYTHONPATH='wom-kit\src'; python -m wom_kit.archive_cli zet-self-contained-check <archive-root> --path inbox/example.md --dry-run --format json
 $env:PYTHONPATH='wom-kit\src'; python -m wom_kit.archive_cli ai-scratch-gc <archive-root> --path inbox/example.md --dry-run --format json
-$env:PYTHONPATH='wom-kit\src'; python -m wom_kit.archive_cli ai-scratch-gc <archive-root> --path inbox/example.md --approve --reviewed-by person:me --format json
 ```
 
-When `mint-zet --approve` sees explicit `.wom-scratch/` or
+Standalone `ai-scratch-gc --approve` is fixed closed in v0.4.0 before archive
+reads or deletion. When an exact-human-approved `mint-zet` sees explicit `.wom-scratch/` or
 `workbench/ai-scratch/` source refs, the minted canonical zet removes those
-scratch refs and the approved mint runs the same scratch cleanup gate for those
-explicit files. External citation URLs such as public articles or videos may
+scratch refs and the approved mint revalidates the exact candidate identity,
+byte count, and SHA-256 immediately before deleting those explicit files.
+External citation URLs such as public articles or videos may
 remain inside the zet body or `source_refs`; private provider locators and local
 file paths still need durable WOM refs.
 
@@ -328,7 +313,9 @@ These are not solved yet:
 - no byte-verifying orphan-objet sweep exists; v0.3.303 reports only
   content-free unmanifested local object candidates against valid complete
   manifest authority,
-- local objet capture runs on sandbox-marked archives, or on real archives after owner approval via `archive objet-capture-enable` (v0.3.158); the enablement record is a consent marker in the same write-trust domain, not a security boundary,
+- local objet capture enablement/selection/capture approvals are fixed closed
+  in v0.4.0 before private target reads or mutation; historical v0.3.158
+  consent records are audit evidence, not current capture authority,
 - no provider upload/sync cleanup exists,
 - no automatic staged-folder deletion executor exists; the existing
   `staged-cleanup-check` remains a report-only preservation verifier,

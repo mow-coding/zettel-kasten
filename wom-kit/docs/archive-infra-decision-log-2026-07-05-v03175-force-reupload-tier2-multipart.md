@@ -4,7 +4,7 @@ Date: 2026-07-05
 Batch: v0.3.175 (implements the LOCKED spec: "force-reupload + multipart-proven tier2").
 Anchor tree at spec authoring: HEAD `a15705f6` (v0.3.174), tree clean.
 Release action: working tree only — no git commit/tag/push (main session releases after
-gates). Never touches a real archive or `zettel-kasten-basoon`, and makes no real network
+gates). Never touches a real archive or a named real archive, and makes no real network
 call (fake transport only in tests).
 
 This log records DEC-1..DEC-20 with one-line rationales, both critiques' required changes, and
@@ -12,7 +12,7 @@ the Q1-Q6 safety resolutions, per the AGENTS.md decision-log mandate.
 
 ## The problem this batch fixes
 
-The basoon 5th operator letter (§3) surfaced two independent gaps that make a **live** R2
+The protected pilot archive's 5th operator letter (§3) surfaced two independent gaps that make a **live** R2
 multipart demonstration impossible today.
 
 - **GAP A** — an already-present object is auto-skipped by `object_storage_upload_run`'s F0-b

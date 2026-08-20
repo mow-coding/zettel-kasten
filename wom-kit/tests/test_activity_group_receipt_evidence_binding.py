@@ -36,6 +36,32 @@ MANUAL_HOLD_BLOCKER = (
 )
 
 
+def _historical_activity_group_membership_write(
+    archive_root: Path | str,
+    **kwargs: Any,
+) -> dict[str, Any]:
+    """Exercise the frozen add transaction core, not the public v0.4 gate."""
+
+    return archive_services._activity_group_membership_write(
+        archive_root,
+        operation_contract=archive_services.ACTIVITY_GROUP_MEMBERSHIP_ADD,
+        **kwargs,
+    )
+
+
+def _historical_activity_group_membership_recover(
+    archive_root: Path | str,
+    **kwargs: Any,
+) -> dict[str, Any]:
+    """Exercise the frozen add recovery core, not the public v0.4 gate."""
+
+    return archive_services._activity_group_membership_recover(
+        archive_root,
+        operation_contract=archive_services.ACTIVITY_GROUP_MEMBERSHIP_ADD,
+        **kwargs,
+    )
+
+
 class ActivityGroupReceiptEvidenceBindingTests(unittest.TestCase):
     """Adversarial contracts for receipt-to-residue recovery binding."""
 
@@ -179,7 +205,7 @@ class ActivityGroupReceiptEvidenceBindingTests(unittest.TestCase):
         )
         lock_path = self.lock_path(archive_root)
         original_delete = (
-            archive_services.delete_activity_group_evidence_exact
+            archive_services._delete_activity_group_evidence_exact
         )
         failed_once = False
 
@@ -204,11 +230,11 @@ class ActivityGroupReceiptEvidenceBindingTests(unittest.TestCase):
 
         with patch.object(
             archive_services,
-            "delete_activity_group_evidence_exact",
+            "_delete_activity_group_evidence_exact",
             new=fail_first_lock_cleanup,
         ):
             applied = (
-                archive_services.activity_group_membership_write(
+                _historical_activity_group_membership_write(
                     archive_root,
                     request_path=fixture["request_relative"],
                     expected_request_sha256=fixture[
@@ -257,7 +283,7 @@ class ActivityGroupReceiptEvidenceBindingTests(unittest.TestCase):
         recovery_plan_sha256: str,
     ) -> dict[str, Any]:
         return (
-            archive_services.activity_group_membership_recover(
+            _historical_activity_group_membership_recover(
                 archive_root,
                 expected_request_sha256=fixture[
                     "request_sha256"
@@ -1070,7 +1096,7 @@ class ActivityGroupReceiptEvidenceBindingTests(unittest.TestCase):
             )
             original_delete = (
                 archive_services
-                .delete_activity_group_evidence_exact
+                ._delete_activity_group_evidence_exact
             )
             injected = False
 
@@ -1096,7 +1122,7 @@ class ActivityGroupReceiptEvidenceBindingTests(unittest.TestCase):
 
             with patch.object(
                 archive_services,
-                "delete_activity_group_evidence_exact",
+                "_delete_activity_group_evidence_exact",
                 new=inject_after_journal_unlink,
             ):
                 recovered = self.recover(
@@ -1173,8 +1199,7 @@ class ActivityGroupReceiptEvidenceBindingTests(unittest.TestCase):
                 new=attempt_rewrite_after_success,
             ):
                 applied = (
-                    archive_services
-                    .activity_group_membership_write(
+                    _historical_activity_group_membership_write(
                         archive_root,
                         request_path=fixture["request_relative"],
                         expected_request_sha256=fixture[
@@ -1234,7 +1259,7 @@ class ActivityGroupReceiptEvidenceBindingTests(unittest.TestCase):
                 .verify_activity_group_membership_receipt
             )
             original_delete = (
-                archive_services.delete_activity_group_evidence_exact
+                archive_services._delete_activity_group_evidence_exact
             )
             replacement = b'{"foreign_replacement":true}\n'
             replacement_injected = False
@@ -1275,13 +1300,12 @@ class ActivityGroupReceiptEvidenceBindingTests(unittest.TestCase):
                 ),
                 patch.object(
                     archive_services,
-                    "delete_activity_group_evidence_exact",
+                    "_delete_activity_group_evidence_exact",
                     new=replace_before_exact_receipt_delete,
                 ),
             ):
                 result = (
-                    archive_services
-                    .activity_group_membership_write(
+                    _historical_activity_group_membership_write(
                         archive_root,
                         request_path=fixture["request_relative"],
                         expected_request_sha256=fixture[
@@ -1438,7 +1462,7 @@ class ActivityGroupReceiptEvidenceBindingTests(unittest.TestCase):
             }
             original_write = (
                 archive_services
-                .replace_activity_group_canonical_bytes_compare_and_swap
+                ._replace_activity_group_canonical_bytes_compare_and_swap
             )
             interrupted = False
 
@@ -1458,13 +1482,13 @@ class ActivityGroupReceiptEvidenceBindingTests(unittest.TestCase):
             with patch.object(
                 archive_services,
                 (
-                    "replace_activity_group_canonical_bytes_"
+                    "_replace_activity_group_canonical_bytes_"
                     "compare_and_swap"
                 ),
                 new=interrupt_before_first_member,
             ):
                 with self.assertRaises(KeyboardInterrupt):
-                    archive_services.activity_group_membership_write(
+                    _historical_activity_group_membership_write(
                         archive_root,
                         request_path=fixture["request_relative"],
                         expected_request_sha256=fixture[
@@ -1562,7 +1586,7 @@ class ActivityGroupReceiptEvidenceBindingTests(unittest.TestCase):
                 ),
             ):
                 with self.assertRaises(KeyboardInterrupt):
-                    archive_services.activity_group_membership_write(
+                    _historical_activity_group_membership_write(
                         archive_root,
                         request_path=fixture["request_relative"],
                         expected_request_sha256=fixture[
@@ -1587,7 +1611,7 @@ class ActivityGroupReceiptEvidenceBindingTests(unittest.TestCase):
                 "lock_only_before_journal",
             )
             original_delete = (
-                archive_services.delete_activity_group_evidence_exact
+                archive_services._delete_activity_group_evidence_exact
             )
             foreign_receipt = b'{"foreign_receipt":true}\n'
             receipt_injected = False
@@ -1615,7 +1639,7 @@ class ActivityGroupReceiptEvidenceBindingTests(unittest.TestCase):
 
             with patch.object(
                 archive_services,
-                "delete_activity_group_evidence_exact",
+                "_delete_activity_group_evidence_exact",
                 new=inject_receipt_after_lock_delete,
             ):
                 recovered = self.recover(

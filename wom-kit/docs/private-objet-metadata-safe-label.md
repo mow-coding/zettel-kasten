@@ -1,6 +1,10 @@
 # Private Objet Metadata, Safe Labels, And Reviewed Registration
 
-Status: v0.3.295 pure contract plus v0.3.296 approval-gated local writer
+Status: v0.4.0 read-only contract/plan; v0.3.296 writer evidence is historical
+
+Current boundary: `objet-source-metadata-write` approval fails with
+`compound_exact_human_approval_binding_required` before private intake/target
+read or mutation. It appends no row or receipt in v0.4.0.
 
 ## Why This Contract Exists
 
@@ -119,26 +123,13 @@ directory projection, journal and owned-temp states, complete prior
 row/receipt authority-chain digest, normalization profile, action, resource
 bounds, and deterministic receipt family.
 
-## Approval Boundary
+## v0.4.0 Approval Boundary
 
-Approval requires the exact dry-run plan plus two explicit human statements:
-
-```powershell
-archive objet-source-metadata-write <archive-root> `
-  --intake <archive-relative-private-json> `
-  --expected-intake-sha256 sha256:<64-lowercase-hex> `
-  --expected-plan-sha256 sha256:<64-lowercase-hex> `
-  --approve `
-  --reviewed-by operator:<safe-token> `
-  --affirm-private-metadata-reviewed `
-  --affirm-external-writers-quiescent `
-  --format json
-```
-
-v0.3.296 approval mutation is supported only on Windows 10 version 1607 or
-newer and Windows 11, on a local NTFS volume. Read-only planning remains
-cross-platform. Unsupported platforms and filesystems fail closed; there is no
-path-based or simulated write fallback.
+Run only the dry-run plan. In v0.4.0 approval returns
+`compound_exact_human_approval_binding_required` before reading the private
+intake/target or writing a manifest row, journal, temp file, or receipt.
+Read-only planning remains cross-platform. The Win32/NTFS mutation profile
+below describes historical v0.3.296 evidence only; it is not current authority.
 
 The quiescence affirmation means every other WOM and non-WOM process that
 could create, write, rename, link, replace, or delete an archive child remains

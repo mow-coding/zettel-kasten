@@ -14,7 +14,7 @@ from jsonschema import Draft202012Validator
 
 from wom_kit.credential_capability import (
     CREDENTIAL_CAPABILITY_ENDPOINT_CLASSES,
-    CredentialCapability,
+    _CredentialCapability as CredentialCapability,
     CredentialCapabilityError,
     CredentialCapabilityScope,
 )

@@ -415,7 +415,7 @@ class SourceReferenceCoverageAuditTests(unittest.TestCase):
                 )
             )
             receipt_ref = (
-                archive_services.object_storage_write_execution_receipt(
+                archive_services._object_storage_write_execution_receipt(
                     archive_root,
                     case_id,
                     receipt,

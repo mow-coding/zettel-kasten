@@ -170,7 +170,7 @@ The output keeps:
 
 ## Relationship To The Credential Layers
 
-The safe chain is now:
+The v0.4.0 safe chain stops at preview:
 
 ```text
 credential-store-recommendation
@@ -179,16 +179,15 @@ credential-store-recommendation
 -> credential-ref-plan
 -> credential-ref-inventory
 -> credential-access-broker-plan
--> credential-access-approval-plan / credential-access-approval --approve
+-> legacy credential-access approval metadata (advisory only)
 -> credential-policy-check --approval-receipt <path>
 -> credential-keepassxc-command-plan --approval-receipt <path>
--> credential-keepassxc-write --approval-receipt <path> --approve
--> non-secret KeePassXC write execution receipt
+-> stop; no KeePassXC or execution receipt write
 ```
 
 v0.3.32 adds the KeePassXC-specific command preflight. It still does not
 perform the execution.
 
-v0.3.33 adds [Credential KeePassXC Write](credential-keepassxc-write.md), a
-separate CLI-only adapter that can execute `keepassxc-cli add` after the same
-receipt and policy gates pass.
+v0.3.33 historically added [Credential KeePassXC Write](credential-keepassxc-write.md).
+In v0.4.0 approval is fixed closed before receipt, credential, database, or
+target reads and cannot execute `keepassxc-cli add`.

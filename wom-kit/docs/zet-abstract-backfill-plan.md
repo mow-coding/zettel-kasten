@@ -1,5 +1,9 @@
 # zet Abstract Backfill Plan
 
+Current v0.4.0 boundary: this plan remains read-only. It grants no authority to
+`zet-abstract-backfill-write`; that approval branch fails before private target
+read or mutation with `compound_exact_human_approval_binding_required`.
+
 Status: implemented as read-only planning in v0.3.218
 
 ## Plain-Language Purpose
@@ -108,11 +112,11 @@ zet, objet, map, index, or external database row.
 The v0.3.218 planner itself never writes. A green plan means the private
 candidates are bound to current canonical bytes and are ready for human review.
 It does not mean the abstracts are true, complete, stylistically good, or
-approved. Since v0.3.219, the separate approval-gated
-[`zet Abstract Backfill Write`](zet-abstract-backfill-write.md) can apply only
-the exact SHA-bound proposal after explicit attributed human review; it does not
-change this planner's read-only authority.
+approved. The separate [`zet Abstract Backfill Write
+Preview`](zet-abstract-backfill-write.md) can validate the exact SHA-bound
+proposal, but v0.4.0 approval returns
+`compound_exact_human_approval_binding_required` before private target reads or
+mutation and writes nothing.
 
-Do not hand-edit thousands of canonical files after this preview. Use the
-separate writer so proposal/canonical hashes, whole-batch runtime rollback, and
-before/after/body/abstract receipt evidence remain intact.
+Do not hand-edit canonical files after this preview. Historical v0.3 receipts
+remain audit evidence; v0.4.0 has no backfill writer authority.

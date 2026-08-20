@@ -110,6 +110,8 @@ to execute.
 
 Use `view-health` when a saved view returns zero zets, blocks, or looks stale.
 It helps decide whether to rebuild the index or repair unsupported filters.
-For a new persistent view, use the separate review-gated
-[`saved-view-write`](saved-view-write.md) lifecycle instead of direct AI file
-editing.
+For a proposed persistent view, use [`saved-view-write --dry-run`](saved-view-write.md)
+only. In v0.4.0 approval returns
+`compound_exact_human_approval_binding_required` before private request/target
+read or mutation and writes no view, journal, or receipt. Direct AI file
+editing remains forbidden.

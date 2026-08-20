@@ -51,9 +51,11 @@ that one canonical body, binds a private candidate to the exact file SHA-256,
 and validates it without writing. The catalog itself still never invents or
 auto-writes replacement text.
 
-Since v0.3.219, only the separate
-[`zet Abstract Backfill Write`](zet-abstract-backfill-write.md) can apply those
-candidates, and only after exact proposal binding plus explicit human review.
+Historically, v0.3.219 added a separate abstract writer. In v0.4.0
+[`zet Abstract Backfill Write`](zet-abstract-backfill-write.md) remains dry-run
+only; approval returns `compound_exact_human_approval_binding_required` before
+private target read or mutation and writes no canonical, snapshot, journal, or
+receipt.
 
 ## Live Catalog
 

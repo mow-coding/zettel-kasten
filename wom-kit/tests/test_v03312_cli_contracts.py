@@ -105,6 +105,12 @@ class V03312CliContractTests(unittest.TestCase):
 
     def test_mint_approve_passes_progress_callback(self) -> None:
         observed: dict[str, object] = {}
+        approval_claim = object()
+        binding = SimpleNamespace(
+            plan_sha256="sha256:" + "a" * 64,
+            target_binding_sha256="sha256:" + "b" * 64,
+            context=lambda **_kwargs: object(),
+        )
 
         def fake_mint(_root: Path, **kwargs: object) -> dict[str, object]:
             observed.update(kwargs)
@@ -114,7 +120,36 @@ class V03312CliContractTests(unittest.TestCase):
             callback("receipt_plan", "done", None, None)
             return {"ok": True, "dry_run": False}
 
-        with patch.object(archive_services, "mint_zettel", side_effect=fake_mint):
+        def execute(_root: Path, _context: object, writer):
+            return writer(approval_claim)
+
+        with (
+            patch.object(
+                archive_services,
+                "mint_zettel_dry_run",
+                return_value={"ok": True, "dry_run": True},
+            ),
+            patch.object(
+                archive_cli.operation_approval_binding,
+                "mint_zet_approval_binding",
+                return_value=binding,
+            ),
+            patch.object(
+                archive_services,
+                "read_archive_id",
+                return_value="archive:personal:test",
+            ),
+            patch.object(
+                archive_cli,
+                "_execute_exact_human_approved_write",
+                side_effect=execute,
+            ),
+            patch.object(
+                archive_services,
+                "mint_zettel",
+                side_effect=fake_mint,
+            ),
+        ):
             code, stdout, stderr = self.run_cli_split(
                 [
                     "mint-zet",
@@ -133,6 +168,7 @@ class V03312CliContractTests(unittest.TestCase):
         self.assertEqual(code, 0, stdout)
         self.assertTrue(json.loads(stdout)["ok"])
         self.assertTrue(callable(observed.get("progress_callback")))
+        self.assertIs(observed["exact_human_approval_claim"], approval_claim)
         self.assertEqual(self.jsonl_rows(stderr)[-1]["event"], "done")
 
     def test_mint_without_progress_preserves_result_shape_and_passes_no_callback(self) -> None:

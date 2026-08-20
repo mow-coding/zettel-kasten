@@ -85,14 +85,16 @@ MCP does not expose quarantine decision apply, write, accept, import, trust, att
 
 ## Decision Record
 
-v0.2.35 adds the next CLI-only approval step:
+The historical v0.2.35 decision writer is preview-only in v0.4.0:
 
 ```bash
 archive record-quarantine-decision <archive-root> --decision-preview workbench/foreign-block-quarantine-decision.json --dry-run --format json
-archive record-quarantine-decision <archive-root> --decision-preview workbench/foreign-block-quarantine-decision.json --approve --reviewed-by person:reviewer --format json
 ```
 
-This records only the local quarantine decision and a matching receipt. It re-validates the current case and receipt before writing, refuses overwrites, and keeps the foreign block untrusted.
+Approval returns `compound_exact_human_approval_binding_required` before reading
+the private decision/case target or writing. It creates no decision or receipt
+and keeps the foreign block untrusted. Historical decision receipts remain
+readable but grant no current write authority.
 
 v0.2.36 adds a read-only review index for recorded decisions:
 

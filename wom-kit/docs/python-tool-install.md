@@ -1,20 +1,21 @@
 # Install WOM-kit As A Python Tool
 
-Status: v0.3.320 conditional GitHub wheel and one-use credential capability
+Status: v0.4.0 conditional GitHub wheel and exact-human control boundary
 
 WOM-kit is a command-line tool. It should live in its own Python environment
 instead of being mixed into an application project's dependencies.
 
-The v0.3.320 URL below is a conditional contract, not proof that an artifact is
+The v0.4.0 URL below is a conditional contract, not proof that an artifact is
 public. Use it only after the matching GitHub Release exists and lists the
-verified wheel. See the [v0.3.320 release note](releases/v0.3.320.md) for the
+verified wheel. See the [v0.4.0 release note](releases/v0.4.0.md) for the
 separate source and release-evidence boundary.
 
-An installed v0.3.319 client does not contain the one-use recovery capability,
-exclusive authenticated claim, or bidirectional claim/recovery linkage. Updating
-repository files alone does not replace the isolated `uv tool` or
-virtual-environment wheel. After the verified v0.3.320 asset exists, install
-that exact wheel and start a new process.
+An installed v0.3.320 client does not contain the exact-human TaskDialog,
+authenticated one-use approval claim, approval-link authentication,
+human-artifact registry, duplicate reconciliation, or approval-integrity
+overlay. Updating repository files alone does not replace the isolated `uv
+tool` or virtual-environment wheel. After the verified v0.4.0 asset exists,
+install that exact wheel and start a new process.
 
 ## Recommended Install
 
@@ -23,7 +24,7 @@ verified wheel. The versioned URL alone is not proof that the asset is
 available:
 
 ```powershell
-uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.320/wom_kit-0.3.320-py3-none-any.whl"
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.0/wom_kit-0.4.0-py3-none-any.whl"
 archive --version
 ```
 
@@ -41,7 +42,7 @@ Plain `pip` works when it is placed inside a dedicated virtual environment:
 
 ```powershell
 py -m venv "$HOME\.wom-tools\wom-kit"
-& "$HOME\.wom-tools\wom-kit\Scripts\python.exe" -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.3.320/wom_kit-0.3.320-py3-none-any.whl"
+& "$HOME\.wom-tools\wom-kit\Scripts\python.exe" -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.0/wom_kit-0.4.0-py3-none-any.whl"
 & "$HOME\.wom-tools\wom-kit\Scripts\archive.exe" --version
 ```
 
@@ -103,9 +104,9 @@ verified project source for one invocation. It does not update, reinstall, or
 remove the global tool, and WOM does not guess whether pip, uv, pipx, or an
 editable checkout owns that tool.
 
-For existing Windows project mirrors, approved `project-version-update` also
-manually materializes the complete tracked target commit tree when prior CRLF
-bytes or other exact-tree drift would fail the gate. It validates
+For existing project mirrors, `project-version-update --dry-run` inspects the
+complete tracked target commit tree when prior CRLF bytes or other exact-tree
+drift would fail the historical gate. It validates
 cross-platform paths, rebuilds the index, avoids `git status` and repository
 filters, streams directory scans with entry caps, and blocks even an ignored
 noncolliding `wom-kit/src` shadow before mutation. Exclusive lock and receipt
@@ -113,13 +114,11 @@ ownership plus source/pin checkpoints detect observed drift, but they are not
 atomic file compare-and-swap and cannot guarantee that an external writer will
 never clobber a file.
 
-Before every approval, run the dry-run, then pause editors, sync clients,
-backup tools, and every other Git writer for the complete update transaction.
-Approve only while they remain paused:
-
-```powershell
-archive project-version-update <project-or-archive-root> --target vX.Y.Z --approve --reviewed-by <actor> --affirm-external-writers-quiescent --progress --output .zettel-kasten/diagnostics/update-20260811-001.json --format json
-```
+In v0.4.0, stop after dry-run. Approval returns
+`compound_exact_human_approval_binding_required` before private project reads,
+fetch, tree materialization, pin mutation, lock creation, or receipt
+publication. The transaction details below describe historical v0.3 receipts,
+not a current runbook.
 
 From v0.3.314, the explicit output also prints an opaque `operation_ref` early.
 If the caller times out, retain that reference and use `operation-control`
@@ -147,16 +146,17 @@ prerequisites stable too. If the bound configuration digest changes
 immediately before rollback, WOM skips restoration, preserves its owned lock,
 and reports incomplete rollback.
 
-In v0.3.291, approval is available only on Windows. WOM holds the verified
+Historically in v0.3.291, the writer was available only on Windows. WOM held the verified
 project, source/`.git`, pin, lock, and receipt directory chains without
 `FILE_SHARE_DELETE`, preventing rename, deletion, or junction replacement. A
 missing receipt parent and root are created and held in order, and the receipt
 writer rejects an unheld root.
 
-POSIX users can still run the complete read-only preview. It returns
+All v0.4.0 users can run the complete read-only preview. POSIX returns
 `preview_only_platform_unsupported` and
-`write_boundary.approval_platform_supported: false`; POSIX `--approve` is
-blocked until the Git/full-tree transaction is descriptor-relative end to end.
+`write_boundary.approval_platform_supported: false`. Approval on every
+platform returns `compound_exact_human_approval_binding_required` before
+private project reads or writes.
 
 The runtime Agent Skill is a third, separate lifecycle. Installing or updating
 the Python tool does not automatically install the Skill, and
@@ -168,7 +168,9 @@ Archive creation remains a separate dry-run-first operation:
 archive onboard --target-root <new-archive-folder> --type personal --archive-id <archive-id> --principal-id <principal-id> --dry-run --format json
 ```
 
-Review the preview before replacing `--dry-run` with `--approve`.
+In v0.4.0 stop after the preview. Onboarding approval returns
+`compound_exact_human_approval_binding_required` before target/template/provider
+reads and creates no archive.
 
 ## Optional Agent Skill Activation
 
@@ -198,6 +200,9 @@ executes both CLI version probes and performs initialize/list/EOF handshakes
 against both MCP aliases, requiring strict UTF-8, empty stderr, bounded
 output/runtime, descendant-process containment, and byte-identical complete
 tool inventories. It then previews/installs/verifies/uninstalls the Agent Skill
-in a disposable host directory, previews and creates a disposable archive, and
-runs strict Doctor. A release wheel may be preserved only after that entire
-check passes.
+in a disposable host directory, previews archive onboarding, proves the real
+onboarding write is fixed-closed with zero files written, and runs strict
+Doctor against the checked-in fake archive through the installed entrypoint.
+A release wheel may be preserved only after that entire check passes. The JSON
+result uses `wom-kit/wheel-install-check/v0.3` and records the onboarding write
+state as `fixed_closed`; it does not claim that v0.4 created a new archive.

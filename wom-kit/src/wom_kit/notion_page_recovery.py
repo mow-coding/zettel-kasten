@@ -515,7 +515,7 @@ class _DefaultDurableWriter:
             raise RecoveryStorageError("durable_write_verification_failed")
 
 
-class FilesystemRecoveryStorage:
+class _FilesystemRecoveryStorage:
     """Private, append-only recovery state beneath a selected archive root."""
 
     def __init__(
@@ -1266,7 +1266,7 @@ def plan_recovery(
     *,
     max_items: int,
     offset: int = 0,
-    storage: FilesystemRecoveryStorage | None = None,
+    storage: _FilesystemRecoveryStorage | None = None,
 ) -> dict[str, Any]:
     """Return an aggregate-only plan without provider, secret, or write calls."""
 
@@ -1275,7 +1275,7 @@ def plan_recovery(
         plan = build_plan(request, max_items=max_items, offset=offset)
     except ManifestValidationError as exc:
         return _invalid_plan_result(exc.codes)
-    state = storage or FilesystemRecoveryStorage(archive_root)
+    state = storage or _FilesystemRecoveryStorage(archive_root)
     try:
         state.validate_plan_boundary()
         group_by_id = {group.group_id: group for group in request.groups}
@@ -1378,7 +1378,7 @@ def _validate_credential_capability_reference(
     }
 
 
-def execute_recovery(
+def _execute_recovery(
     archive_root: Path | str,
     manifest: Mapping[str, Any],
     *,
@@ -1389,7 +1389,7 @@ def execute_recovery(
     credential_broker: CredentialBroker | Callable[[ScopeBinding], object],
     credential_capability_reference: Mapping[str, Any] | None = None,
     offset: int = 0,
-    storage: FilesystemRecoveryStorage | None = None,
+    storage: _FilesystemRecoveryStorage | None = None,
     request_pacer: ProviderRequestPacer | Callable[[], None] | None = None,
     sleep: Callable[[float], None] = time.sleep,
     jitter: Callable[[], float] = random.random,
@@ -1435,7 +1435,7 @@ def execute_recovery(
     if blockers:
         return _blocked_execute_result(request, plan, blockers)
 
-    state = storage or FilesystemRecoveryStorage(archive_root)
+    state = storage or _FilesystemRecoveryStorage(archive_root)
     stats = _RunStats()
     outcome_counts = {outcome: 0 for outcome in OUTCOMES}
     replayed_count = 0
@@ -2213,7 +2213,7 @@ def _authorize_credential_provider_request(
     """Consume one broker capability immediately before a provider attempt.
 
     Injected provider-neutral test credentials may omit this optional method.
-    The production ``NotionBearerSecret`` always exposes it, and fails closed
+    The production ``_NotionBearerSecret`` always exposes it, and fails closed
     when its receipt-backed broker did not bind a claimed capability.
     """
 
@@ -3055,7 +3055,7 @@ def _exclusive_object_manifest_lock(archive_root: Path) -> Iterable[None]:
     """Share the canonical zero-byte object-manifest coordination lock.
 
     The central ``files.jsonl`` writer contract predates this recovery lane.
-    On Windows it is guarded by ``PersistentCoordinationLock``; on POSIX it is
+    On Windows it is guarded by ``_PersistentCoordinationLock``; on POSIX it is
     a zero-byte flock file.  The generic recovery lock is intentionally not
     used here because that separate contract writes a one-byte sentinel.
     """

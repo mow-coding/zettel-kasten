@@ -72,7 +72,7 @@ class Letter129ProjectUpdateCollisionBatchCoreTests(unittest.TestCase):
 
     @staticmethod
     def update_preview(fixture: dict[str, object]) -> dict[str, object]:
-        return archive_services.wom_kit_project_version_update(
+        return archive_services._wom_kit_project_version_update_legacy_core(
             fixture["project_root"],
             target=str(fixture["target_tag"]),
             dry_run=True,
@@ -357,7 +357,7 @@ class Letter129ProjectUpdateCollisionBatchCoreTests(unittest.TestCase):
                 / archive_services.WOM_KIT_PROJECT_UPDATE_LOCK_RELATIVE
             )
             identity = (
-                archive_services.wom_kit_project_update_acquire_lock_exclusive(
+                archive_services._wom_kit_project_update_acquire_lock_exclusive(
                     project_root,
                     metadata_root,
                     lock_path,
@@ -410,7 +410,7 @@ class Letter129ProjectUpdateCollisionBatchCoreTests(unittest.TestCase):
                 )
             finally:
                 self.assertTrue(
-                    archive_services.wom_kit_project_update_release_owned_lock(
+                    archive_services._wom_kit_project_update_release_owned_lock(
                         project_root,
                         lock_path,
                         identity,

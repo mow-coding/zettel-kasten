@@ -5,7 +5,7 @@ Batch: v0.3.174 (implements the LOCKED spec: "Adopt-specific tier ladder: decoup
 verified-adopt gating from the 5 GiB upload-multipart proof").
 Anchor tree at spec authoring: HEAD `bc330ae9` (v0.3.173), tree clean.
 Release action: working tree only — no git commit/tag/push (main session releases
-after gates). Never touches a real archive or `zettel-kasten-basoon`, and makes no
+after gates). Never touches a real archive or a named real archive, and makes no
 real network call (fake transport only in tests).
 
 This log records DEC-1..DEC-8 with one-line rationales, the asymmetry from the
@@ -19,7 +19,7 @@ v0.3.166 (F5) made a batch verified adopt honour the SAME SA-6 tiered gate as
 `object-storage-upload`: a batch requested upload tier 3, which needs a store proven
 to upload tier >= 2, and upload tier 2 is a genuine 5 GiB multipart / large-object
 PUT proof. A verified adopt is HEAD-only — it moves zero bytes and produces no large
-PUT — so a store of already-present objects (the basoon 158 GB / 19,054-object
+PUT — so a store of already-present objects (the protected pilot's 158 GB / 19,054-object
 handover, 5th operator letter §2) can never reach upload tier 2 and its batch adopt
 could never be unblocked. A HEAD-only operation was gated on a PUT proof it could not
 structurally produce.
@@ -38,7 +38,7 @@ structurally produce.
   makes a single adopt always permitted and a batch need exactly one prior verified
   tiny-first adopt. *Rationale:* adopt moves zero bytes and each object runs a
   per-object HEAD-verify self-limit, so a byte/count middle tier for adopt bounds
-  nothing real and would re-block basoon.
+  nothing real and would re-block the protected pilot.
 - **DEC-3 — Positive, adopt-specific, value-checked marker.** A receipt counts as a
   verified-adopt proof only when `adopt_verification in {"presence_size",
   "content_hash"}` AND `result_status == "skipped_remote_same"`. *Rationale:*

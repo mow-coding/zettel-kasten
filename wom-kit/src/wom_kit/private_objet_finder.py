@@ -40,7 +40,7 @@ from .private_objet_metadata_index_authority import (
 )
 from .private_objet_metadata_index_session import (
     PRIVATE_HEALTH_KEYS,
-    PrivateObjetIndexReadAPI,
+    _PrivateObjetIndexReadAPI,
     PrivateObjetIndexSessionError,
     PrivateObjetMetadataHealthDecision,
     validate_private_objet_metadata_health_envelope,
@@ -726,7 +726,7 @@ def _require_object_id(value: object) -> str:
 
 
 def _projection_result(
-    api: PrivateObjetIndexReadAPI,
+    api: _PrivateObjetIndexReadAPI,
     object_id: str,
 ) -> dict[str, object]:
     rows = api.fetch_all(
@@ -799,7 +799,7 @@ def _projection_result(
 
 
 def _alias_evidence(
-    api: PrivateObjetIndexReadAPI,
+    api: _PrivateObjetIndexReadAPI,
     object_id: str,
     query_values: Sequence[str],
 ) -> tuple[list[str], int]:
@@ -846,7 +846,7 @@ def _alias_evidence(
 
 
 def _lookup(
-    api: PrivateObjetIndexReadAPI,
+    api: _PrivateObjetIndexReadAPI,
     query_plan: _QueryPlan,
     limit: int,
     *,
@@ -1647,7 +1647,7 @@ def _execute(
     consumer_completed = False
 
     def internal_consumer(
-        api: PrivateObjetIndexReadAPI,
+        api: _PrivateObjetIndexReadAPI,
         health_value: Mapping[str, object],
     ) -> None:
         nonlocal lookup, observed_case, consumer_phase, consumer_completed

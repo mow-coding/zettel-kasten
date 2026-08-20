@@ -3,6 +3,14 @@
 Status: v0.3.78 read-only upload execution-contract checkpoint
 Date: 2026-06-16
 
+Current v0.4.0 boundary: `object-storage`, `object-storage-upload`,
+`object-storage-adopt-existing`, and related evidence/reconcile writers are
+dry-run/contract-only. Approval returns
+`compound_exact_human_approval_binding_required` before private object,
+credential, provider, or target reads; it performs no network call and writes
+no manifest row, ledger, or receipt. Live upload/adopt details below preserve
+historical v0.3 implementation evidence and are not current run instructions.
+
 `object-storage-adapter-execution-contract` defines the safety contract a future
 live object-storage upload adapter must satisfy.
 
@@ -87,7 +95,7 @@ not a recomputed content-addressed key — this is the fix for the false-skip wh
 an object stored under a client's own key layout was re-uploaded (or, worse,
 falsely skipped).
 
-Since v0.3.175, `object-storage-upload --force-reupload` lets an operator RE-PUT an
+Historically since v0.3.175, `object-storage-upload --force-reupload` let an operator RE-PUT an
 already-present, size/hash-matching object for LIVE verification (e.g. a forced small
 multipart). A forced re-PUT bypasses the present+match skip (`skipped_remote_same`) and
 the resume-ledger terminal-success short-circuit, but PRESERVES the pre-PUT local
@@ -98,16 +106,16 @@ ceiling still in force).
 Since v0.3.177, that ledger bypass also applies when a post-crash/handoff state has a
 terminal resume-ledger row but no `wom_uploaded` manifest location, and a forced result
 with `put_calls == 0` fails closed as `force_reupload_not_performed`. It requires
-`--approve` AND `--reviewed-by`, is inert under `--dry-run`, and is REFUSED for any
+historical approval and reviewer evidence, is inert under `--dry-run`, and is REFUSED for any
 non-sha-derived `--key-strategy` (the conflict-guard bypass is safe only when the remote
 key embeds the object digest). The execution receipt records a top-level
 `forced_reupload` boolean.
 
 ### Adopt-existing (the 158 GB false-skip fix)
 
-`object-storage-adopt-existing` lets an operator whose objects already live under
+Historical v0.3 `object-storage-adopt-existing` let an operator whose objects already live under
 their own key layout record those objects without re-uploading. A **verified**
-adopt (with `--approve` + a live transport) issues a **presence-only** `HeadObject`
+adopt used a live transport and issued a **presence-only** `HeadObject`
 for each computed `remote_key` and adopts ONLY on a 200 + Content-Length
 size-match (presence+size). The presence-only HEAD deliberately does NOT trigger
 the whole-object re-download-and-hash described in Integrity Rules below — it reads
@@ -118,7 +126,7 @@ would download all 158 GB). `--content-hash-verify` is an explicit per-object
 opt-in that additionally GetObject-and-rehashes; it is never the default. A 404 /
 size-mismatch does NOT adopt, so a wrong-prefix/wrong-extension template
 self-limits to zero adopts and those objects simply re-upload. A **declared** adopt
-(`--accept-unverified-adopt`, distinct from `--approve`) records a NON-gating
+(`--accept-unverified-adopt`) recorded a NON-gating
 `declared_uploaded` location that never skips a PUT.
 
 Verified adopt is a live-execution surface (it reaches the live transport), so it
@@ -214,8 +222,8 @@ multipart** — real per-part SigV4 signing and a `CompleteMultipartUpload` acce
 R2's authorizer. That remains `unproven_against_live_provider` until a human runbook
 confirms the first live multipart object.
 
-To make that live proof reachable on a small object, `object-storage-upload` accepts a
-live-verification part-size override:
+The historical v0.3 writer accepted a live-verification part-size override to
+make that proof reachable on a small object:
 
 - **`--multipart-part-size <BYTES>`** — bounded to `[4096, 64 MiB]`. It changes ONLY the
   `handle.read()` chunk size (how the file is fragmented into parts); it changes nothing

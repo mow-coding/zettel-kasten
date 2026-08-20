@@ -3,6 +3,11 @@
 Status: implemented for v0.3.301
 Date: 2026-08-07
 
+Current v0.4.0 override: this is historical completion evidence. Structured
+zettel-objet apply/revert and never-minted draft discard/restore now remain
+preview-only; approval fails before private target read or mutation with
+`compound_exact_human_approval_binding_required`.
+
 This release responds to the v0.3.300 integrated real-use report without
 opening or modifying the beta tester's private archive. Product changes are
 additive: existing command names and records remain readable, and every new
@@ -21,8 +26,8 @@ by a human.
 | Relation candidates missed real archive coordinates | Candidate planning now recognizes existing `notion_event_time_start`/`end`, `thought_date`, `source_category`, `db1_category`, and `db1_subcategory` facets. Output reports only fixed signal classes, never private coordinate values; signals still create no edge. |
 | `--format json` argument failures emitted usage only to stderr | Commands that request JSON now return a content-free JSON validation envelope on stdout, including fixed reason codes and missing option names, with empty stderr. |
 | AI-authored zets contained tool traces, stale contradictions, invented format, and non-openable file claims | `ai-response-contract` and `zet-markdown-style-guide` add human-record integrity rules. `authoring-conventions` reads an optional strict archive-local `zettel-kasten/authoring-conventions.yml`. Mint previews warn on likely tool traces and contradictory status phrases. The bundled WOM Agent Skill requires a full re-read, openable references, and in-place unminted-draft revision. |
-| A complete objet could not be added to structured zet assets | `zettel-objet-link` adds one manifested full-SHA asset using strict `{object_id, role, label?}` frontmatter. Approval revalidates under a per-zettel lock and records exact before/after evidence. `zettel-objet-link-revert` restores only unchanged post-write bytes. Mint blocks likely truncated objet hashes. |
-| A never-minted draft had no safe discard lifecycle | `discard-draft` requires a safe reason, reviewer, and exact fresh plan SHA-256, then stores an exact private snapshot plus immutable receipt. It blocks minted/canonical twins. `discard-draft-restore` provides collision-safe exact restoration. Inbox audit counts intentional discard receipts separately. |
+| A complete objet could not be added to structured zet assets | Historical v0.3 link/revert receipts remain readable. In v0.4.0 `zettel-objet-link` and its revert are dry-run only and fail approval with `compound_exact_human_approval_binding_required`. |
+| A never-minted draft had no safe discard lifecycle | Historical v0.3 discard/restore receipts remain readable. In v0.4.0 both commands are dry-run only and fail approval with `compound_exact_human_approval_binding_required`. |
 
 ## Source Intake Batch
 
@@ -69,22 +74,21 @@ An unminted draft is revised in place. If a human decides it should not remain:
 
 ```text
 archive discard-draft <archive-root> --zettel-id <id> --reason <safe-reason> --dry-run --format json
-archive discard-draft <archive-root> --zettel-id <id> --reason <same-reason> --expected-plan-sha256 <sha256:...> --approve --reviewed-by <actor> --format json
 ```
 
-The output does not echo the reason or body. Restore requires the exact discard
-receipt and a fresh restore plan.
+The output does not echo the reason or body. v0.4.0 grants no discard or
+restore mutation authority; both approval branches return
+`compound_exact_human_approval_binding_required`.
 
 ## Structured zet-objet Links
 
 ```text
 archive zettel-objet-link <archive-root> --zettel-id <id> --object-id sha256:<64-hex> --role source --dry-run --format json
-archive zettel-objet-link <archive-root> --zettel-id <id> --object-id sha256:<64-hex> --role source --expected-plan-sha256 <sha256:...> --approve --reviewed-by <actor> --format json
 ```
 
-The object must already be manifested. The writer reads no object bytes and
-never guesses a truncated digest. Revert is exact-byte and refuses to overwrite
-unrelated later changes.
+The object must already be manifested. Preview reads no object bytes and never
+guesses a truncated digest. v0.4.0 link/revert approval fails before private
+target read or mutation with `compound_exact_human_approval_binding_required`.
 
 ## Deliberate Boundaries
 

@@ -1,9 +1,12 @@
 # Activity-Group Membership Write And Recovery
 
-`activity-group-membership-write` is the approval-gated continuation of the
-read-only [Activity-Group Membership Plan](activity-group-membership-plan.md).
-It adds one already-reviewed event anchor id to the exact canonical member zets
-named in one private request.
+Current v0.4.0 boundary: membership and recovery planning plus writer dry-run
+remain available. `activity-group-membership-write` and
+`activity-group-membership-recover` approvals return
+`compound_exact_human_approval_binding_required` before private target read or
+mutation. They create no canonical change, snapshot, journal, lock, receipt,
+guard, or cleanup. The later transaction sections describe historical v0.3
+evidence and do not reactivate either executor.
 
 It does not discover members, infer membership, remove an existing membership,
 or edit a canonical file outside the request.
@@ -41,24 +44,14 @@ archive activity-group-membership-write C:\path\to\archive `
 The preview writes nothing. It independently rebuilds the exact write
 candidates and returns `write_plan_sha256`.
 
-## Approve the write
+## Current v0.4.0 Approval Boundary
 
-After a human checks every requested membership:
+Stop after preview. Request/review digests, a reviewer label, and the historical
+`--affirm-memberships-reviewed` flag do not grant authority. Approval fails
+with `compound_exact_human_approval_binding_required` before private target
+read or mutation.
 
-```powershell
-archive activity-group-membership-write C:\path\to\archive `
-  --request .wom-scratch/private/activity-groups/reviewed.json `
-  --expected-request-sha256 sha256:<request-digest> `
-  --expected-review-plan-sha256 sha256:<review-plan-digest> `
-  --approve `
-  --reviewed-by person:<reviewer> `
-  --affirm-memberships-reviewed `
-  --progress --format json
-```
-
-The approval is rejected if the request, review plan, archive identity, event
-anchor, member list, or any participant byte changed. The writer then repeats
-the same checks after taking its exclusive archive-local lock.
+## Historical v0.3 Transaction Semantics
 
 The writer changes only:
 
@@ -206,18 +199,11 @@ and after hashes. It selects exactly one action:
 - or stop in `manual_forensic_hold` when evidence is missing, malformed, or
   current bytes match neither approved state.
 
-For a non-forensic action, review the returned `recovery_plan_sha256`, confirm
-again that no writer is running, and execute:
-
-```powershell
-archive activity-group-membership-recover C:\path\to\archive `
-  --expected-request-sha256 sha256:<request-digest> `
-  --expected-recovery-plan-sha256 sha256:<recovery-plan-digest> `
-  --approve `
-  --reviewed-by person:<reviewer> `
-  --affirm-recovery-reviewed `
-  --progress --format json
-```
+For a non-forensic action, review the returned `recovery_plan_sha256`, then
+stop. In v0.4.0, `activity-group-membership-recover` approval fails with
+`compound_exact_human_approval_binding_required` before private target read or
+mutation. The historical `--affirm-recovery-reviewed` flag does not grant
+current recovery authority.
 
 Recovery has its own exclusive guard and repeats the plan after acquiring it.
 The guard and any missing-writer-lock recovery claim are created and removed
@@ -273,15 +259,15 @@ journal filename or content.
 
 This command remains addition-only. v0.3.282 added a distinct read-only
 [Activity-Group Membership Removal Plan](activity-group-membership-removal-plan.md),
-and v0.3.284 adds a separate approval-gated
+and historical v0.3.284 evidence describes a separate
 [Activity-Group Membership Removal Write And Recovery](activity-group-membership-removal-write.md)
-path. The two writers share one global lock, recovery guard namespace, and
+path. The historical writers shared one global lock, recovery guard namespace, and
 bounded two-root transaction-evidence inventory, but they do not share
 requests, plan digests, journals, receipts, affirmations, or recovery
 authority.
 
-The addition writer never removes a membership, and the removal writer never
-reuses addition approval. Neither path infers membership, exposes an MCP
-writer, or grants direct canonical-edit permission. Search, title, time,
-proximity, and edges remain candidate-finding aids for a human, never write
-authority.
+In v0.4.0 both approval paths return
+`compound_exact_human_approval_binding_required` before private target reads or
+mutation. Neither path infers membership, exposes an MCP writer, or grants
+direct canonical-edit permission. Search, title, time, proximity, and edges
+remain candidate-finding aids for a human, never write authority.

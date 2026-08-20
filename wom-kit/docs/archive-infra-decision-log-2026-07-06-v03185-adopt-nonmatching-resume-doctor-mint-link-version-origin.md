@@ -11,7 +11,7 @@ visible.
 
 ## Context
 
-Basoon's v0.3.183 revalidation confirmed that the matching resume summary works:
+The protected pilot archive's v0.3.183 revalidation confirmed that the matching resume summary works:
 the current run had matching `wom_uploaded` rows and no matching
 `declared_uploaded` rows. However, the archive also contained legacy declared
 locations under another store reference. Operators needed to understand why

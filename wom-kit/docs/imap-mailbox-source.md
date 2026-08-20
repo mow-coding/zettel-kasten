@@ -184,14 +184,14 @@ labels, selection rules, and privacy gates. It still does not write a manifest,
 connect, login, select, search, list messages, read headers, read bodies, read
 attachments, or call providers.
 
-The matching write command is:
+The matching v0.4.0 preview command is:
 
 ```text
-imap-mailbox-adapter-manifest-write
+imap-mailbox-adapter-manifest-write --dry-run
 ```
 
-It writes only `config/imap-adapters/` and
-`receipts/imap/adapter-manifests/` files after `--approve`.
+Approval is fixed closed before private input/archive reads and writes no
+`config/imap-adapters/` file or receipt.
 
 v0.3.56 adds an approval-gated local audit receipt write:
 
@@ -275,31 +275,33 @@ token, or local machine path.
 
 ## Registering The Source
 
-After the plan is reviewed, the source type can be registered with the existing
-source registration flow:
+The source registration request can be previewed after review:
 
 ```powershell
 $env:PYTHONPATH='src'; python -m wom_kit.archive_cli add-source .\my-archive `
   --source-id imap:gmail-personal `
   --type imap_mailbox `
   --root-ref imap:account:gmail-personal `
-  --approve `
-  --reviewed-by person:me
+  --dry-run
 ```
 
-Registration still does not connect to IMAP. In v0.3.19, `scan-source` fails
-closed for `imap_mailbox` and tells the operator to run `imap-mailbox-plan`
-first.
+In v0.4.0 `add-source` approval returns
+`compound_exact_human_approval_binding_required` before private target reads or
+mutation and writes no source binding or receipt. It does not connect to IMAP.
+`scan-source` continues to fail closed for `imap_mailbox` and directs the
+operator to `imap-mailbox-plan` first.
 
 ## Future Workflow
 
 The intended sequence is:
 
 1. Plan the mailbox source with refs only.
-2. Register the `imap_mailbox` source after human review.
+2. Preview `add-source`; stop because registration approval is fixed-close in
+   v0.4.0.
 3. Preview the future adapter declaration with
-   `imap-mailbox-adapter-manifest-plan`, then write it after review with
-   `imap-mailbox-adapter-manifest-write`.
+   `imap-mailbox-adapter-manifest-plan` and
+   `imap-mailbox-adapter-manifest-write --dry-run`; stop because approval is
+   fixed closed in v0.4.0.
 4. Prepare an operation request package with
    `imap-mailbox-operation-request-plan`.
 5. Check adapter readiness with `imap-mailbox-adapter-readiness-plan`.

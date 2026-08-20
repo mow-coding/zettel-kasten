@@ -9,6 +9,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 
 
 KIT_ROOT = Path(__file__).resolve().parents[1]
@@ -220,11 +221,24 @@ class StagedCleanupEvidenceV03317Tests(unittest.TestCase):
             manifest_path=request_path,
         )
         self.assertTrue(plan["ok"], plan)
-        applied = completion_workflows.objet_capture_batch_apply(
-            archive_root,
-            manifest_path=request_path,
-            expected_plan_sha256=plan["summary"]["plan_sha256"],
-            reviewed_by="person:letter130-test",
+        # Install bounded pre-v0.4 capture evidence so the tests below keep
+        # exercising the read-only cleanup verifier.  The public v0.4 batch
+        # writer and its derived-text register remain deliberately fail-closed.
+        public_derived_text_register = archive_services._derived_text_register
+        with patch.object(
+            archive_services,
+            "_derived_text_register",
+            archive_services._derived_text_register_legacy_core,
+        ):
+            applied = completion_workflows._objet_capture_batch_apply_legacy_core(
+                archive_root,
+                manifest_path=request_path,
+                expected_plan_sha256=plan["summary"]["plan_sha256"],
+                reviewed_by="person:letter130-test",
+            )
+        self.assertIs(
+            archive_services._derived_text_register,
+            public_derived_text_register,
         )
         self.assertTrue(applied["ok"], applied)
 

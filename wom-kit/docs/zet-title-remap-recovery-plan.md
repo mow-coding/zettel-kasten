@@ -1,5 +1,10 @@
 # zet Title Remap Recovery Plan
 
+Current v0.4.0 boundary: this plan remains read-only. A recommended action
+grants no recovery authority; `zet-title-remap-recover` approval fails before
+private target read or mutation with
+`compound_exact_human_approval_binding_required`.
+
 Status: v0.3.276 read-only interrupted-apply recovery decision and separate revert-recovery handoff
 
 ## Command

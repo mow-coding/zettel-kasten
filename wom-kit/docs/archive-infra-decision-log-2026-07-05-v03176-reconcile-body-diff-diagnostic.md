@@ -4,14 +4,14 @@ Date: 2026-07-05
 Batch: v0.3.176 (implements the LOCKED spec: "reconcile body-diff diagnostic, DX-only").
 Anchor tree at spec authoring: HEAD `feb4ae9d` (v0.3.175), tree clean.
 Release action: working tree only — no git commit/tag/push (main session releases after
-gates). Never touches a real archive or `zettel-kasten-basoon`, and makes no network call.
+gates). Never touches a real archive or a named real archive, and makes no network call.
 
 This log records DEC-1..DEC-16 with one-line rationales and the Q1-Q6 safety resolutions, per
 the AGENTS.md decision-log mandate.
 
 ## The problem this batch fixes
 
-The basoon 5th operator letter (§4) reported a client running
+The protected pilot archive's 5th operator letter (§4) reported a client running
 `remint-reconcile --strip-bom --dry-run` on a zet (`source_outline`) and getting
 `drift_class=content_change` + `body_changed:true` + ack required, with no obvious post-BOM
 text edit visible.

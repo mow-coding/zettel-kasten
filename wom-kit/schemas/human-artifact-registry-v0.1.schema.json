@@ -1,0 +1,375 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "wom-kit/human-artifact-registry/v0.1",
+  "title": "WOM-kit private human artifact registry documents",
+  "description": "Private ignored-local registry documents for approved roots and append-only artifact lifecycle receipts.",
+  "oneOf": [
+    {"$ref": "#/$defs/authority"},
+    {"$ref": "#/$defs/rootRegistration"},
+    {"$ref": "#/$defs/approvalUse"},
+    {"$ref": "#/$defs/transitionReceipt"}
+  ],
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "timestamp": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+Z$"
+    },
+    "authentication": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["algorithm", "mac"],
+      "properties": {
+        "algorithm": {"const": "hmac-sha256"},
+        "mac": {
+          "type": "string",
+          "pattern": "^hmac-sha256:[0-9a-f]{64}$"
+        }
+      }
+    },
+    "approvalReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "approval_id",
+        "context_sha256",
+        "approval_authority_sha256",
+        "one_use"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "wom-kit/exact-human-approval-reference/v0.1"
+        },
+        "approval_id": {
+          "type": "string",
+          "pattern": "^approval_[0-9a-f]{32}$"
+        },
+        "context_sha256": {"$ref": "#/$defs/sha256"},
+        "approval_authority_sha256": {"$ref": "#/$defs/sha256"},
+        "one_use": {"const": true}
+      }
+    },
+    "identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode_type", "device", "inode"],
+      "properties": {
+        "mode_type": {"type": "integer", "minimum": 0},
+        "device": {"type": "integer", "minimum": 0},
+        "inode": {"type": "integer", "minimum": 1}
+      }
+    },
+    "relatedRef": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "ref"],
+          "properties": {
+            "kind": {"const": "object_id"},
+            "ref": {"$ref": "#/$defs/sha256"}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "ref"],
+          "properties": {
+            "kind": {"const": "zet_id"},
+            "ref": {
+              "type": "string",
+              "pattern": "^zet_[A-Za-z0-9][A-Za-z0-9._-]{0,95}$"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "ref"],
+          "properties": {
+            "kind": {"const": "receipt_id"},
+            "ref": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9._:-]{0,127}$"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "ref"],
+          "properties": {
+            "kind": {"const": "artifact_version_id"},
+            "ref": {
+              "type": "string",
+              "pattern": "^har_version_[0-9a-f]{32}$"
+            }
+          }
+        }
+      ]
+    },
+    "observation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "artifact_id",
+        "size_bytes",
+        "modified_ns",
+        "device",
+        "inode",
+        "observation_sha256"
+      ],
+      "properties": {
+        "artifact_id": {
+          "type": "string",
+          "pattern": "^har_artifact_[0-9a-f]{32}$"
+        },
+        "size_bytes": {"type": "integer", "minimum": 0},
+        "modified_ns": {"type": "integer", "minimum": 0},
+        "device": {"type": "integer", "minimum": 0},
+        "inode": {"type": "integer", "minimum": 0},
+        "observation_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "version": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "artifact_version_id",
+        "content_sha256",
+        "size_bytes",
+        "relationship",
+        "previous_artifact_version_id"
+      ],
+      "properties": {
+        "artifact_version_id": {
+          "type": "string",
+          "pattern": "^har_version_[0-9a-f]{32}$"
+        },
+        "content_sha256": {"$ref": "#/$defs/sha256"},
+        "size_bytes": {"type": "integer", "minimum": 0},
+        "relationship": {
+          "enum": ["initial", "same_version", "supersedes"]
+        },
+        "previous_artifact_version_id": {
+          "oneOf": [
+            {"type": "null"},
+            {
+              "type": "string",
+              "pattern": "^har_version_[0-9a-f]{32}$"
+            }
+          ]
+        }
+      }
+    },
+    "authority": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "authority_id",
+        "key_hex",
+        "created_at"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "wom-kit/human-artifact-registry-authority/v0.1"
+        },
+        "authority_id": {"$ref": "#/$defs/sha256"},
+        "key_hex": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "created_at": {"$ref": "#/$defs/timestamp"}
+      }
+    },
+    "rootRegistration": {
+      "type": "object",
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {"root_kind": {"const": "external_project"}},
+            "required": ["root_kind"]
+          },
+          "then": {
+            "properties": {"scan_relative_root": {"const": ".wom-scratch"}}
+          }
+        },
+        {
+          "if": {
+            "properties": {"root_kind": {"const": "external_delivery"}},
+            "required": ["root_kind"]
+          },
+          "then": {
+            "properties": {"scan_relative_root": {"const": "."}}
+          }
+        }
+      ],
+      "required": [
+        "schema_version",
+        "root_id",
+        "root_kind",
+        "canonical_path",
+        "scan_relative_root",
+        "identity",
+        "identity_sha256",
+        "registered_at",
+        "registration_plan_sha256",
+        "approval_reference",
+        "registry_writer_role",
+        "authentication"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "wom-kit/human-artifact-root-registration/v0.1"
+        },
+        "root_id": {
+          "type": "string",
+          "pattern": "^har_root_[0-9a-f]{32}$"
+        },
+        "root_kind": {"enum": ["external_project", "external_delivery"]},
+        "canonical_path": {"type": "string", "minLength": 1},
+        "scan_relative_root": {"enum": [".wom-scratch", "."]},
+        "identity": {"$ref": "#/$defs/identity"},
+        "identity_sha256": {"$ref": "#/$defs/sha256"},
+        "registered_at": {"$ref": "#/$defs/timestamp"},
+        "registration_plan_sha256": {"$ref": "#/$defs/sha256"},
+        "approval_reference": {"$ref": "#/$defs/approvalReference"},
+        "registry_writer_role": {"const": "actual_local_registry_writer"},
+        "authentication": {"$ref": "#/$defs/authentication"}
+      }
+    },
+    "approvalUse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "approval_id",
+        "operation",
+        "target_id",
+        "context_sha256",
+        "approval_authority_sha256",
+        "used_at",
+        "authentication"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "wom-kit/human-artifact-approval-use/v0.1"
+        },
+        "approval_id": {
+          "type": "string",
+          "pattern": "^approval_[0-9a-f]{32}$"
+        },
+        "operation": {
+          "enum": ["register_project_root", "transition_artifact"]
+        },
+        "target_id": {
+          "type": "string",
+          "pattern": "^(har_root|har_artifact)_[0-9a-f]{32}$"
+        },
+        "context_sha256": {"$ref": "#/$defs/sha256"},
+        "approval_authority_sha256": {"$ref": "#/$defs/sha256"},
+        "used_at": {"$ref": "#/$defs/timestamp"},
+        "authentication": {"$ref": "#/$defs/authentication"}
+      }
+    },
+    "transitionReceipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "receipt_id",
+        "artifact_id",
+        "root_id",
+        "root_kind",
+        "sequence",
+        "previous_receipt_id",
+        "expected_current_state_sha256",
+        "resulting_current_state_sha256",
+        "from_state",
+        "to_state",
+        "observation",
+        "version",
+        "related_refs",
+        "transition_plan_sha256",
+        "approval_reference",
+        "created_at",
+        "automatic_deletion_performed",
+        "content_sha256_verified_by_registry",
+        "authentication"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "wom-kit/human-artifact-transition-receipt/v0.1"
+        },
+        "receipt_id": {
+          "type": "string",
+          "pattern": "^har_receipt_[0-9a-f]{32}$"
+        },
+        "artifact_id": {
+          "type": "string",
+          "pattern": "^har_artifact_[0-9a-f]{32}$"
+        },
+        "root_id": {
+          "type": "string",
+          "pattern": "^(har_root_[0-9a-f]{32}|archive_scratch|archive_workbench_scratch)$"
+        },
+        "root_kind": {"enum": ["external_registered", "archive_managed"]},
+        "sequence": {"type": "integer", "minimum": 1},
+        "previous_receipt_id": {
+          "oneOf": [
+            {"type": "null"},
+            {
+              "type": "string",
+              "pattern": "^har_receipt_[0-9a-f]{32}$"
+            }
+          ]
+        },
+        "expected_current_state_sha256": {"$ref": "#/$defs/sha256"},
+        "resulting_current_state_sha256": {"$ref": "#/$defs/sha256"},
+        "from_state": {
+          "enum": [
+            "unclassified",
+            "working",
+            "review_requested",
+            "reviewed_current",
+            "superseded",
+            "preserved_as_objet",
+            "distilled_to_zet",
+            "discarded_with_receipt"
+          ]
+        },
+        "to_state": {
+          "enum": [
+            "working",
+            "review_requested",
+            "reviewed_current",
+            "superseded",
+            "preserved_as_objet",
+            "distilled_to_zet",
+            "discarded_with_receipt"
+          ]
+        },
+        "observation": {"$ref": "#/$defs/observation"},
+        "version": {"$ref": "#/$defs/version"},
+        "related_refs": {
+          "type": "array",
+          "maxItems": 32,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/relatedRef"}
+        },
+        "transition_plan_sha256": {"$ref": "#/$defs/sha256"},
+        "approval_reference": {"$ref": "#/$defs/approvalReference"},
+        "created_at": {"$ref": "#/$defs/timestamp"},
+        "automatic_deletion_performed": {"const": false},
+        "content_sha256_verified_by_registry": {"const": false},
+        "authentication": {"$ref": "#/$defs/authentication"}
+      }
+    }
+  }
+}

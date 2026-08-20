@@ -237,7 +237,7 @@ def _optional_row_label(item: Mapping[str, Any], *keys: str) -> str | None:
 
 
 @dataclass(frozen=True)
-class CredentialCandidate:
+class _CredentialCandidate:
     """One exact catalog row with private locator fields hidden from repr."""
 
     candidate_id: str
@@ -272,10 +272,10 @@ class CredentialCandidate:
 
 
 @dataclass(frozen=True)
-class CredentialDiscoveryReport:
+class _CredentialDiscoveryReport:
     archive_id: str
     status: str
-    candidates: tuple[CredentialCandidate, ...]
+    candidates: tuple[_CredentialCandidate, ...]
     ignored_row_count: int
     catalog_present: bool
     reason_code: str
@@ -310,7 +310,7 @@ class CredentialDiscoveryReport:
             "would_change": [],
         }
 
-    def require_candidate(self, candidate_id: str) -> CredentialCandidate:
+    def require_candidate(self, candidate_id: str) -> _CredentialCandidate:
         if SAFE_LABEL_RE.fullmatch(str(candidate_id or "")) is None:
             raise _fail("credential_candidate_not_found")
         matches = [candidate for candidate in self.candidates if candidate.candidate_id == candidate_id]
@@ -319,9 +319,9 @@ class CredentialDiscoveryReport:
         return matches[0]
 
 
-def discover_local_credential_candidates(
+def _discover_local_credential_candidates(
     archive_root: Path | str,
-) -> CredentialDiscoveryReport:
+) -> _CredentialDiscoveryReport:
     """Read legacy ``secret:`` rows without opening a credential store.
 
     Invalid rows are counted and skipped.  They never make another exact row
@@ -332,7 +332,7 @@ def discover_local_credential_candidates(
     archive_id = _read_archive_id(root)
     catalog_path = _archive_path(root, LOCAL_CATALOG_RELATIVE)
     if not catalog_path.exists() and not catalog_path.is_symlink():
-        return CredentialDiscoveryReport(
+        return _CredentialDiscoveryReport(
             archive_id=archive_id,
             status="catalog_absent",
             candidates=(),
@@ -345,7 +345,7 @@ def discover_local_credential_candidates(
         raw = _read_small_bytes(catalog_path)
         document = yaml.safe_load(raw.decode("utf-8"))
     except CredentialContinuityError:
-        return CredentialDiscoveryReport(
+        return _CredentialDiscoveryReport(
             archive_id=archive_id,
             status="blocked",
             candidates=(),
@@ -354,7 +354,7 @@ def discover_local_credential_candidates(
             reason_code="credential_catalog_unsafe",
         )
     except (UnicodeError, yaml.YAMLError):
-        return CredentialDiscoveryReport(
+        return _CredentialDiscoveryReport(
             archive_id=archive_id,
             status="blocked",
             candidates=(),
@@ -364,7 +364,7 @@ def discover_local_credential_candidates(
         )
 
     if not isinstance(document, Mapping):
-        return CredentialDiscoveryReport(
+        return _CredentialDiscoveryReport(
             archive_id=archive_id,
             status="blocked",
             candidates=(),
@@ -374,7 +374,7 @@ def discover_local_credential_candidates(
         )
     version = document.get("version")
     if version not in {None, CATALOG_VERSION}:
-        return CredentialDiscoveryReport(
+        return _CredentialDiscoveryReport(
             archive_id=archive_id,
             status="blocked",
             candidates=(),
@@ -384,7 +384,7 @@ def discover_local_credential_candidates(
         )
     rows = document.get("credentials")
     if not isinstance(rows, list):
-        return CredentialDiscoveryReport(
+        return _CredentialDiscoveryReport(
             archive_id=archive_id,
             status="blocked",
             candidates=(),
@@ -394,7 +394,7 @@ def discover_local_credential_candidates(
         )
 
     catalog_sha256 = _sha256_bytes(raw)
-    candidates: list[CredentialCandidate] = []
+    candidates: list[_CredentialCandidate] = []
     ignored = 0
     issued_ids: set[str] = set()
     for row in rows:
@@ -423,7 +423,7 @@ def discover_local_credential_candidates(
                 candidate_id = "candidate:" + secrets.token_hex(12)
             issued_ids.add(candidate_id)
             candidates.append(
-                CredentialCandidate(
+                _CredentialCandidate(
                     candidate_id=candidate_id,
                     credential_id=credential_id,
                     credential_kind=credential_kind,
@@ -444,7 +444,7 @@ def discover_local_credential_candidates(
 
     status = "ready_with_ignored_rows" if ignored else "ready"
     reason = "credential_candidates_ready_with_ignored_rows" if ignored else "credential_candidates_ready"
-    return CredentialDiscoveryReport(
+    return _CredentialDiscoveryReport(
         archive_id=archive_id,
         status=status,
         candidates=tuple(candidates),
@@ -455,7 +455,7 @@ def discover_local_credential_candidates(
 
 
 @dataclass(frozen=True)
-class CredentialAdoptionPlan:
+class _CredentialAdoptionPlan:
     archive_id: str
     binding_id: str
     binding_revision: int
@@ -527,7 +527,7 @@ class CredentialAdoptionPlan:
         }
 
 
-def _credential_adoption_plan_digest(plan: CredentialAdoptionPlan) -> str:
+def _credential_adoption_plan_digest(plan: _CredentialAdoptionPlan) -> str:
     private_bound_payload = {
         "schema": ADOPTION_RECEIPT_SCHEMA_VERSION,
         "archive_id": plan.archive_id,
@@ -551,16 +551,16 @@ def _credential_adoption_plan_digest(plan: CredentialAdoptionPlan) -> str:
     return _sha256_bytes(_canonical_json(private_bound_payload).encode("utf-8"))
 
 
-def plan_credential_adoption(
+def _plan_credential_adoption(
     archive_root: Path | str,
-    candidate: CredentialCandidate,
+    candidate: _CredentialCandidate,
     *,
     adapter_kind: str | None = None,
     account_label: str | None = None,
     workspace_label: str | None = None,
     vault_path: str | Path | None = None,
     binding_id_factory: Callable[[], str] | None = None,
-) -> CredentialAdoptionPlan:
+) -> _CredentialAdoptionPlan:
     """Bind one in-memory exact candidate into a drift-detecting dry-run plan."""
 
     root = _validated_archive_root(archive_root)
@@ -589,7 +589,7 @@ def plan_credential_adoption(
         raise _fail("credential_binding_id_invalid") from None
     if SAFE_LABEL_RE.fullmatch(binding_id) is None:
         raise _fail("credential_binding_id_invalid")
-    return CredentialAdoptionPlan(
+    return _CredentialAdoptionPlan(
         archive_id=_read_archive_id(root),
         binding_id=binding_id,
         binding_revision=1,
@@ -614,7 +614,7 @@ def plan_credential_adoption(
 
 
 @dataclass(frozen=True)
-class CredentialStoreVerificationEvidence:
+class _CredentialStoreVerificationEvidence:
     """Non-secret proof that the plan's exact store locator was found."""
 
     evidence_id: str
@@ -653,7 +653,7 @@ class CredentialStoreVerificationEvidence:
 
 
 @dataclass(frozen=True)
-class CredentialProviderVerificationEvidence:
+class _CredentialProviderVerificationEvidence:
     """Non-secret proof of the provider/account/workspace identity tuple."""
 
     evidence_id: str
@@ -695,7 +695,7 @@ class CredentialProviderVerificationEvidence:
 
 
 def _adoption_evidence_digest(
-    plan: CredentialAdoptionPlan,
+    plan: _CredentialAdoptionPlan,
     evidence_kind: str,
     public_payload: Mapping[str, Any],
 ) -> str:
@@ -717,7 +717,9 @@ def _adoption_evidence_digest(
     ).hexdigest()
 
 
-def _store_evidence_payload(evidence: CredentialStoreVerificationEvidence) -> dict[str, Any]:
+def _store_evidence_payload(
+    evidence: _CredentialStoreVerificationEvidence,
+) -> dict[str, Any]:
     return {
         "evidence_id": evidence.evidence_id,
         "plan_digest": evidence.plan_digest,
@@ -731,7 +733,9 @@ def _store_evidence_payload(evidence: CredentialStoreVerificationEvidence) -> di
     }
 
 
-def _provider_evidence_payload(evidence: CredentialProviderVerificationEvidence) -> dict[str, Any]:
+def _provider_evidence_payload(
+    evidence: _CredentialProviderVerificationEvidence,
+) -> dict[str, Any]:
     return {
         "evidence_id": evidence.evidence_id,
         "plan_digest": evidence.plan_digest,
@@ -749,12 +753,12 @@ def _provider_evidence_payload(evidence: CredentialProviderVerificationEvidence)
     }
 
 
-def verify_credential_store_for_adoption(
-    plan: CredentialAdoptionPlan,
+def _verify_credential_store_for_adoption(
+    plan: _CredentialAdoptionPlan,
     *,
     adapter: Any,
     verification_mode: str = "exact_probe",
-) -> CredentialStoreVerificationEvidence:
+) -> _CredentialStoreVerificationEvidence:
     """Issue plan-bound evidence from one injected exact-only store probe.
 
     The adapter receives the private locator in memory.  Its returned payload is
@@ -786,7 +790,7 @@ def verify_credential_store_for_adoption(
         raise _fail("credential_store_verification_evidence_invalid")
 
     issued_at = _utc_now()
-    provisional = CredentialStoreVerificationEvidence(
+    provisional = _CredentialStoreVerificationEvidence(
         evidence_id="store-evidence:" + secrets.token_hex(16),
         plan_digest=plan.plan_digest,
         binding_id=plan.binding_id,
@@ -798,7 +802,7 @@ def verify_credential_store_for_adoption(
         verified_at=issued_at,
         _evidence_digest="",
     )
-    return CredentialStoreVerificationEvidence(
+    return _CredentialStoreVerificationEvidence(
         **{
             **provisional.__dict__,
             "_evidence_digest": _adoption_evidence_digest(
@@ -810,12 +814,12 @@ def verify_credential_store_for_adoption(
     )
 
 
-def verify_credential_provider_for_adoption(
-    plan: CredentialAdoptionPlan,
+def _verify_credential_provider_for_adoption(
+    plan: _CredentialAdoptionPlan,
     *,
     verifier: Callable[[Mapping[str, Any]], Mapping[str, Any]],
     verifier_id: str,
-) -> CredentialProviderVerificationEvidence:
+) -> _CredentialProviderVerificationEvidence:
     """Issue plan-bound evidence from an injected provider identity verifier."""
 
     resolved_verifier = _safe_label(verifier_id, "credential_provider_verifier_invalid")
@@ -860,7 +864,7 @@ def verify_credential_provider_for_adoption(
         raise _fail("credential_default_selection_invalid")
 
     issued_at = _utc_now()
-    provisional = CredentialProviderVerificationEvidence(
+    provisional = _CredentialProviderVerificationEvidence(
         evidence_id="provider-evidence:" + secrets.token_hex(16),
         plan_digest=plan.plan_digest,
         binding_id=plan.binding_id,
@@ -876,7 +880,7 @@ def verify_credential_provider_for_adoption(
         verified_at=issued_at,
         _evidence_digest="",
     )
-    return CredentialProviderVerificationEvidence(
+    return _CredentialProviderVerificationEvidence(
         **{
             **provisional.__dict__,
             "_evidence_digest": _adoption_evidence_digest(
@@ -889,10 +893,10 @@ def verify_credential_provider_for_adoption(
 
 
 def _validate_store_evidence(
-    plan: CredentialAdoptionPlan,
-    evidence: CredentialStoreVerificationEvidence,
+    plan: _CredentialAdoptionPlan,
+    evidence: _CredentialStoreVerificationEvidence,
 ) -> None:
-    if not isinstance(evidence, CredentialStoreVerificationEvidence):
+    if not isinstance(evidence, _CredentialStoreVerificationEvidence):
         raise _fail("credential_store_verification_evidence_invalid")
     expected = _adoption_evidence_digest(plan, "credential_store", _store_evidence_payload(evidence))
     if not hmac.compare_digest(evidence.evidence_digest, expected):
@@ -910,10 +914,10 @@ def _validate_store_evidence(
 
 
 def _validate_provider_evidence(
-    plan: CredentialAdoptionPlan,
-    evidence: CredentialProviderVerificationEvidence,
+    plan: _CredentialAdoptionPlan,
+    evidence: _CredentialProviderVerificationEvidence,
 ) -> None:
-    if not isinstance(evidence, CredentialProviderVerificationEvidence):
+    if not isinstance(evidence, _CredentialProviderVerificationEvidence):
         raise _fail("credential_provider_verification_evidence_invalid")
     expected = _adoption_evidence_digest(plan, "credential_provider", _provider_evidence_payload(evidence))
     if not hmac.compare_digest(evidence.evidence_digest, expected):
@@ -1145,7 +1149,7 @@ def _safe_binding_projection(binding: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _unpersisted_adoption_result(
-    plan: CredentialAdoptionPlan,
+    plan: _CredentialAdoptionPlan,
     *,
     reason_code: str,
 ) -> dict[str, Any]:
@@ -1178,14 +1182,14 @@ def _unpersisted_adoption_result(
     return result
 
 
-def approve_credential_adoption(
+def _approve_credential_adoption(
     archive_root: Path | str,
-    plan: CredentialAdoptionPlan,
+    plan: _CredentialAdoptionPlan,
     *,
     expected_plan_digest: str,
     reviewed_by: str,
-    store_evidence: CredentialStoreVerificationEvidence | None = None,
-    provider_evidence: CredentialProviderVerificationEvidence | None = None,
+    store_evidence: _CredentialStoreVerificationEvidence | None = None,
+    provider_evidence: _CredentialProviderVerificationEvidence | None = None,
 ) -> dict[str, Any]:
     """Persist only a plan with exact-store and provider identity evidence."""
 
@@ -1443,7 +1447,7 @@ def _assert_no_private_payload(payload: Any, fragments: Sequence[str]) -> None:
 
 
 @dataclass(frozen=True)
-class AdapterProcessResult:
+class _AdapterProcessResult:
     """Injected subprocess result whose raw channels never appear in repr."""
 
     returncode: int
@@ -1452,7 +1456,7 @@ class AdapterProcessResult:
     outcome: str | None = field(default=None, repr=False)
 
 
-class WindowsCredentialManagerExactAdapter:
+class _WindowsCredentialManagerExactAdapter:
     """Exact-target Windows credential abstraction with no enumeration seam."""
 
     adapter_kind = "windows_credential_manager"
@@ -1536,12 +1540,16 @@ class WindowsCredentialManagerExactAdapter:
             secret_value = ""
 
 
-class KeePassXCExactEntryAdapter:
+class _KeePassXCExactEntryAdapter:
     """Exact-entry KeePassXC adapter with an injected subprocess runner."""
 
     adapter_kind = "keepassxc_cli"
 
-    def __init__(self, *, runner: Callable[[tuple[str, ...]], AdapterProcessResult]) -> None:
+    def __init__(
+        self,
+        *,
+        runner: Callable[[tuple[str, ...]], _AdapterProcessResult],
+    ) -> None:
         self._runner = runner
 
     def probe_exact(self, binding: Mapping[str, Any]) -> dict[str, Any]:
@@ -1625,12 +1633,12 @@ class KeePassXCExactEntryAdapter:
         finally:
             secret_value = ""
 
-    def _run(self, argv: tuple[str, ...]) -> AdapterProcessResult:
+    def _run(self, argv: tuple[str, ...]) -> _AdapterProcessResult:
         try:
             completed = self._runner(argv)
         except Exception:
             raise _fail("credential_adapter_failed") from None
-        if not isinstance(completed, AdapterProcessResult):
+        if not isinstance(completed, _AdapterProcessResult):
             raise _fail("credential_adapter_result_invalid")
         if isinstance(completed.returncode, bool) or not isinstance(completed.returncode, int):
             raise _fail("credential_adapter_result_invalid")
@@ -1662,7 +1670,7 @@ class _TrustedConsumer:
     allowed_result_fields: frozenset[str]
 
 
-class TrustedConsumerRegistry:
+class _TrustedConsumerRegistry:
     """An explicit registry; arbitrary commands and callbacks are not accepted."""
 
     def __init__(self) -> None:
@@ -1732,7 +1740,7 @@ def _safe_consumer_result_value(value: object) -> bool:
     return False
 
 
-class CredentialUseBroker:
+class _CredentialUseBroker:
     """One-time, receipt-claiming broker for registered trusted consumers."""
 
     REQUIRED_APPROVAL_FIELDS = {
@@ -1750,7 +1758,7 @@ class CredentialUseBroker:
         self,
         archive_root: Path | str,
         *,
-        registry: TrustedConsumerRegistry,
+        registry: _TrustedConsumerRegistry,
         adapters: Mapping[str, Any],
     ) -> None:
         self.root = _validated_archive_root(archive_root)
@@ -1962,16 +1970,16 @@ class CredentialUseBroker:
             raise _fail("credential_use_audit_finalize_failed") from None
 
 
-def execute_credential_broker_use(
+def _execute_credential_broker_use(
     archive_root: Path | str,
     *,
     approval: Mapping[str, Any],
-    registry: TrustedConsumerRegistry,
+    registry: _TrustedConsumerRegistry,
     adapters: Mapping[str, Any],
 ) -> dict[str, Any]:
     """Functional wrapper for integrating the one-time broker later."""
 
-    return CredentialUseBroker(
+    return _CredentialUseBroker(
         archive_root,
         registry=registry,
         adapters=adapters,
@@ -1980,25 +1988,9 @@ def execute_credential_broker_use(
 
 __all__ = [
     "ADOPTION_RECEIPTS_RELATIVE",
-    "AdapterProcessResult",
-    "CredentialAdoptionPlan",
-    "CredentialCandidate",
     "CredentialContinuityError",
-    "CredentialDiscoveryReport",
-    "CredentialProviderVerificationEvidence",
-    "CredentialStoreVerificationEvidence",
-    "CredentialUseBroker",
-    "KeePassXCExactEntryAdapter",
     "LOCAL_BINDINGS_RELATIVE",
     "LOCAL_CATALOG_RELATIVE",
-    "TrustedConsumerRegistry",
     "USE_RECEIPTS_RELATIVE",
-    "WindowsCredentialManagerExactAdapter",
-    "approve_credential_adoption",
-    "discover_local_credential_candidates",
-    "execute_credential_broker_use",
     "lookup_credential_binding",
-    "plan_credential_adoption",
-    "verify_credential_provider_for_adoption",
-    "verify_credential_store_for_adoption",
 ]

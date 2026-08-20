@@ -155,12 +155,10 @@ so WOM can preview a safe `keepassxc-cli add` command shape after approval
 receipt verification, without running KeePassXC, storing a vault path, or
 writing a secret.
 
-v0.3.33 adds [Credential KeePassXC Write](credential-keepassxc-write.md) so WOM
-can execute a minimal CLI-only `keepassxc-cli add` after a verified approval
-receipt. The adapter writes a non-secret execution receipt, blocks replay with
-the same approval receipt, and still never records the secret value, database
-password, `.kdbx` path, exact credential ref, raw adapter output, username,
-email address, token, or provider URL.
+v0.3.33 historically added [Credential KeePassXC Write](credential-keepassxc-write.md).
+In v0.4.0 approval is fixed closed before approval-receipt, credential,
+database, or target reads; it executes no `keepassxc-cli`, changes no vault,
+and writes no execution receipt.
 
 v0.3.311 added a separate authenticated Windows Credential Manager registry for
 reviewed Notion recovery. v0.3.320 hardens that already-live recovery path with

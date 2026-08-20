@@ -1,6 +1,6 @@
 # Credential Access Broker Plan
 
-Status: v0.3.23 generic read-only plan; v0.3.320 narrow live Notion recovery capability
+Status: v0.4.0 generic read-only plan; v0.3.320 Notion capability is historical evidence
 Date: 2026-08-15
 
 Previous checkpoint: Status: v0.3.23 read-only broker planning baseline
@@ -24,12 +24,15 @@ human asks AI to do a task
 The generic v0.3.23 command does not implement secret retrieval. It only plans
 the broker request.
 
-v0.3.320 separately implements one narrow live broker boundary inside the
-existing approved `notion-page-recovery` worker. It is not exposed as a new
-generic CLI/MCP command. See the
+Historically, v0.3.320 implemented one narrow broker boundary inside
+`notion-page-recovery`. In v0.4.0 that worker's approval is fixed closed before
+private request, credential, or provider reads and creates no capability or
+claim. It is not exposed as a generic CLI/MCP command. See the immutable
 [Credential Capability Contract](credential-capability-contract.md).
 
-v0.3.31 adds a non-secret approval receipt preview and local writer. See
+v0.3.31 historically added a non-secret approval receipt preview and local
+writer. Its v0.4.0 receipts are `legacy_unbound` advisory metadata and never
+authorize an adapter. See
 [Credential Access Approval Plan](credential-access-approval-plan.md).
 
 v0.3.25 adds a read-only adapter readiness preview. See
@@ -39,8 +42,10 @@ v0.3.32 adds a read-only KeePassXC command preflight after approval receipt
 verification. See
 [Credential KeePassXC Command Plan](credential-keepassxc-command-plan.md).
 
-v0.3.33 adds a minimal CLI-only KeePassXC write adapter after the same approval
-and policy gates. See [Credential KeePassXC Write](credential-keepassxc-write.md).
+v0.3.33 historically added a minimal CLI-only KeePassXC write adapter after the
+same approval and policy gates. Its v0.4.0 approval path is fixed closed before
+receipt, credential, or database reads. See
+[Credential KeePassXC Write](credential-keepassxc-write.md).
 
 ## Read-Only Planner
 
@@ -156,10 +161,11 @@ It should not include:
 
 It is a broker contract planner, not a broker adapter.
 
-## v0.3.320 Live Recovery Distinction
+## Historical v0.3.320 Recovery Distinction
 
-Do not confuse the generic planner above with the live recovery capability.
-The live path exists only after exact `notion-page-recovery` approval. Its
+Do not confuse the generic planner above with current live recovery. The
+following describes v0.3.320 evidence only. At that checkpoint the path existed
+only after `notion-page-recovery` approval, whose parent
 parent mints a fresh one-use, expiring, secret-free capability bound to the
 exact request, plan, reviewer, selected authenticated receipt/lifecycle scopes,
 fixed read-only Notion endpoints, and bounded provider-attempt budget.
@@ -168,9 +174,11 @@ The isolated worker validates the binding, then creates an exclusive
 archive-key-HMAC claim before the first native credential read. It rechecks the
 claim and exact authority before each provider attempt and finalizes the claim
 with content-free evidence. Any existing claim leaf permanently spends the id.
-A fully verified local replay creates no claim and performs no credential read
-or provider request.
+A fully verified historical local replay created no claim and performed no
+credential read or provider request.
 
-This narrow implementation does not make `credential-access-broker-plan` live,
-does not authorize other action kinds or stores, and does not return a secret to
-AI. The generic multi-provider/password-manager broker remains future work.
+In v0.4.0 `notion-page-recovery --approve` returns
+`compound_exact_human_approval_binding_required` before the private request,
+credential, provider, archive, capability, or claim boundary and writes
+nothing. The historical implementation does not make
+`credential-access-broker-plan` live or authorize any other action or store.

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import hashlib
-import json
 from pathlib import Path
 import subprocess
 import unittest
@@ -48,6 +47,28 @@ PACKAGED_SKILL_ROOT = (
 
 
 class V03320ReleaseDocsTests(unittest.TestCase):
+    def test_v03320_public_bytes_are_immutable_historical_evidence(self) -> None:
+        expected = {
+            RELEASE: "4c6710abb93331870df4c18f59976b2cc2a5ef524d9c697647c91c3c77b9a991",
+            CONTRACT: "cd7400af193bcaac86c3c41af1cfc9ee206365767e63fcba9de823e766073031",
+            DECISION: "ae50c1650381d5f9dad46bd77286565062a290cd9af15b17b7d8b9f50a17ec2d",
+            MINUTES: "ce4f9077eee04f55686a4e113e773c9df103810cd9de97cad514fe00f5dfaa80",
+        }
+        for path, expected_sha256 in expected.items():
+            with self.subTest(path=path.name):
+                relative = path.relative_to(ROOT).as_posix()
+                worktree_diff = subprocess.run(
+                    ["git", "diff", "--quiet", "HEAD", "--", relative],
+                    cwd=ROOT,
+                    check=False,
+                )
+                self.assertEqual(worktree_diff.returncode, 0)
+                committed = subprocess.check_output(
+                    ["git", "cat-file", "blob", f"HEAD:{relative}"],
+                    cwd=ROOT,
+                )
+                self.assertEqual(hashlib.sha256(committed).hexdigest(), expected_sha256)
+
     def test_v03319_public_bytes_are_immutable(self) -> None:
         expected = {
             HISTORICAL_RELEASE: (
@@ -87,29 +108,13 @@ class V03320ReleaseDocsTests(unittest.TestCase):
                     expected_sha256,
                 )
 
-    def test_version_release_schema_and_resources_are_synchronized(self) -> None:
-        self.assertEqual(__version__, "0.3.320")
-        self.assertEqual(RELEASE.read_bytes(), PACKAGED_RELEASE.read_bytes())
+    def test_v03320_is_source_history_not_the_current_packaged_release(self) -> None:
+        self.assertEqual(__version__, "0.4.0")
+        self.assertTrue(RELEASE.is_file())
+        self.assertFalse(PACKAGED_RELEASE.exists())
         self.assertEqual(SCHEMA.read_bytes(), PACKAGED_SCHEMA.read_bytes())
         self.assertTrue(HISTORICAL_RELEASE.is_file())
         self.assertFalse(HISTORICAL_PACKAGED_RELEASE.exists())
-
-        manifest = json.loads(
-            (
-                KIT
-                / "src"
-                / "wom_kit"
-                / "_resources"
-                / "resource-manifest.json"
-            ).read_text(encoding="utf-8")
-        )
-        self.assertEqual(manifest["version"], "0.3.320")
-        self.assertEqual(manifest["file_count"], 146)
-        self.assertEqual(len(manifest["files"]), 146)
-        packaged = {row["packaged"] for row in manifest["files"]}
-        self.assertIn("release-notes/v0.3.320.md", packaged)
-        self.assertIn("schemas/credential-capability-v0.1.schema.json", packaged)
-        self.assertNotIn("release-notes/v0.3.319.md", packaged)
 
     def test_release_contract_decision_and_minutes_define_exact_authority(self) -> None:
         documents = {
@@ -222,8 +227,8 @@ class V03320ReleaseDocsTests(unittest.TestCase):
         ):
             self.assertNotIn(forbidden, combined)
 
-    def test_current_surfaces_point_to_v03320_without_new_ui_or_command(self) -> None:
-        paths = (
+    def test_current_surfaces_keep_v03320_as_previous_history(self) -> None:
+        current_paths = (
             ROOT / "README.md",
             ROOT / "README.ko.md",
             ROOT / "UPGRADE.md",
@@ -240,9 +245,24 @@ class V03320ReleaseDocsTests(unittest.TestCase):
             KIT / "docs" / "public-documentation-map.md",
             KIT / "docs" / "public-documentation-map.ko.md",
         )
-        for path in paths:
+        for path in current_paths:
             with self.subTest(document=path.name):
-                self.assertIn("0.3.320", path.read_text(encoding="utf-8"))
+                text = path.read_text(encoding="utf-8")
+                self.assertIn("0.4.0", text)
+
+        previous_history_paths = tuple(
+            path
+            for path in current_paths
+            if path
+            not in (
+                ROOT / "VERSIONING.md",
+                KIT / "docs" / "ai-command-path-routing.md",
+            )
+        )
+        for path in previous_history_paths:
+            with self.subTest(previous_history=path.name):
+                text = path.read_text(encoding="utf-8")
+                self.assertIn("0.3.320", text)
 
         combined = " ".join(
             " ".join(path.read_text(encoding="utf-8").split())
@@ -259,7 +279,7 @@ class V03320ReleaseDocsTests(unittest.TestCase):
         install = (KIT / "docs" / "python-tool-install.md").read_text(
             encoding="utf-8"
         )
-        self.assertIn("wom_kit-0.3.320-py3-none-any.whl", install)
+        self.assertIn("wom_kit-0.4.0-py3-none-any.whl", install)
 
     def test_runtime_skill_and_operator_contract_are_synchronized(self) -> None:
         skill = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")

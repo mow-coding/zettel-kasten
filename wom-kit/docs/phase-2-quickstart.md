@@ -11,7 +11,7 @@ Implemented:
 ```text
 archive doctor
 archive validate
-archive init
+archive init --dry-run
 archive list-zettels
 archive read-zettel
 archive create-draft
@@ -21,7 +21,7 @@ archive promote --dry-run
 archive promote --approve --reviewed-by
 archive index
 archive search
-archive pack
+archive pack (fixed closed in v0.4.0)
 archive import --dry-run
 archive share --dry-run
 archive delegate-zet --dry-run
@@ -69,7 +69,7 @@ Expected result:
 all tests pass
 ```
 
-## 2. Create A Temporary Archive
+## 2. Preview A Temporary Archive
 
 Use a temporary folder first. Do not start with real private data.
 
@@ -79,30 +79,29 @@ $env:PYTHONPATH='wom-kit\src'; python -m wom_kit.archive_cli init .\tmp-my-archi
   --archive-id archive:personal:me `
   --principal-id person:me `
   --principal-name "Me" `
-  --name "My Personal Archive"
+  --name "My Personal Archive" `
+  --dry-run
 ```
 
-Check it:
+In v0.4.0 real init is fixed closed before target/template reads and creates no
+folder. Continue the read-only parts of this guide with the bundled fake
+archive or an archive that already exists; do not run Doctor against the
+uncreated preview target.
 
-```powershell
-$env:PYTHONPATH='wom-kit\src'; python -m wom_kit.archive_cli doctor .\tmp-my-archive --strict
-```
+## 3. Preview A Draft
 
-## 3. Create An AI Draft
-
-AI-created notes go to `inbox/` first.
+This basic example is a write-free preview:
 
 ```powershell
 $env:PYTHONPATH='wom-kit\src'; python -m wom_kit.archive_cli create-draft .\tmp-my-archive `
   --title "First safe draft" `
-  --body "# First safe draft`n`nThis is a temporary inbox draft created during the quickstart."
+  --body "# First safe draft`n`nThis is a temporary inbox draft preview." `
+  --dry-run
 ```
 
-List drafts:
-
-```powershell
-$env:PYTHONPATH='wom-kit\src'; python -m wom_kit.archive_cli list-zettels .\tmp-my-archive --status draft
-```
+Human-declared/non-AI non-dry-run creation is fixed closed in v0.4.0. The only
+supported draft write is the full exact reviewed AI source-fidelity route; this
+short quickstart does not simulate that native TaskDialog/claim workflow.
 
 ## 4. Preview Minting
 
@@ -187,26 +186,16 @@ It can be rebuilt.
 
 ## 6. Try Workpacks Safely
 
-`pack` writes a workpack, so use a temporary copy of the fake archive.
-
-```powershell
-Copy-Item -Recurse wom-kit\examples\fake-life-archive .\tmp-fake-life-archive
-```
-
-Create a small workpack from a saved view:
-
-```powershell
-$env:PYTHONPATH='wom-kit\src'; python -m wom_kit.archive_cli pack .\tmp-fake-life-archive `
-  --view view.fake.education.gilwon `
-  --purpose "Quickstart education context." `
-  --mode reference
-```
+`pack` and `parcel` are fixed closed in v0.4.0 before saved-view, body,
+manifest, or target reads. They create no workpack. Historical workpacks may
+still be inspected through the import dry-run, but this quickstart cannot
+generate a new one.
 
 Preview importing the workpack into your temporary archive:
 
 ```powershell
 $env:PYTHONPATH='wom-kit\src'; python -m wom_kit.archive_cli import .\tmp-my-archive `
-  .\tmp-fake-life-archive\workpacks\PUT-THE-WORKPACK-FOLDER-HERE `
+  .\EXISTING-HISTORICAL-WORKPACK `
   --dry-run
 ```
 

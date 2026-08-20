@@ -106,7 +106,7 @@ class PrivateMetadataWriterApprovalTests(unittest.TestCase):
         expected_plan_sha256: str | None,
         reviewed_by: str = OPERATOR,
     ) -> dict[str, object]:
-        return archive_services.private_objet_source_metadata_write(
+        return archive_services._private_objet_source_metadata_write_legacy_core(
             self.root,
             intake=self.intake_relative,
             expected_intake_sha256=self.intake_sha256,
@@ -126,6 +126,73 @@ class PrivateMetadataWriterApprovalTests(unittest.TestCase):
             dry_run=True,
             approve=False,
         )
+
+    def test_public_approve_fixed_closes_before_archive_or_intake_access(
+        self,
+    ) -> None:
+        before = {
+            path.relative_to(self.root).as_posix(): path.read_bytes()
+            for path in self.root.rglob("*")
+            if path.is_file()
+        }
+        with (
+            mock.patch.object(
+                archive_services,
+                "require_existing_archive_root",
+                side_effect=AssertionError("archive access must not start"),
+            ) as require_root,
+            mock.patch.object(
+                archive_services,
+                "read_archive_id",
+                side_effect=AssertionError("archive identity read must not start"),
+            ) as read_id,
+            mock.patch.object(
+                writer,
+                "_private_objet_metadata_write",
+                side_effect=AssertionError("private writer must not start"),
+            ) as private_writer,
+        ):
+            result = archive_services.private_objet_source_metadata_write(
+                self.root,
+                intake=self.intake_relative,
+                expected_intake_sha256=self.intake_sha256,
+                expected_plan_sha256="0" * 64,
+                dry_run=False,
+                approve=True,
+                reviewed_by=OPERATOR,
+                affirm_private_metadata_reviewed=True,
+                affirm_external_writers_quiescent=True,
+            )
+        self.assertEqual(
+            result,
+            {
+                "ok": False,
+                "dry_run": False,
+                "state": "blocked",
+                "status": "blocked",
+                "write_status": "blocked",
+                "lifecycle_action": "private_objet_source_metadata_write",
+                "blockers": [
+                    "compound_exact_human_approval_binding_required"
+                ],
+                "reason_codes": [
+                    "compound_exact_human_approval_binding_required"
+                ],
+                "warnings": [],
+                "would_change": [],
+                "files_written": [],
+                "private_values_echoed": False,
+            },
+        )
+        require_root.assert_not_called()
+        read_id.assert_not_called()
+        private_writer.assert_not_called()
+        after = {
+            path.relative_to(self.root).as_posix(): path.read_bytes()
+            for path in self.root.rglob("*")
+            if path.is_file()
+        }
+        self.assertEqual(after, before)
 
     def _append_fixture(self) -> tuple[dict[str, object], dict[str, object]]:
         dry_run = self._dry_run()
@@ -254,7 +321,7 @@ class PrivateMetadataWriterApprovalTests(unittest.TestCase):
                 time.sleep(300)
 
             if hook == "first_lock":
-                original = win32.PersistentCoordinationLock.acquire
+                original = win32._PersistentCoordinationLock.acquire
                 def acquire(lock):
                     result = original(lock)
                     if (
@@ -263,9 +330,9 @@ class PrivateMetadataWriterApprovalTests(unittest.TestCase):
                     ):
                         reached(hook)
                     return result
-                win32.PersistentCoordinationLock.acquire = acquire
+                win32._PersistentCoordinationLock.acquire = acquire
             elif hook.startswith("receipt_dir_"):
-                original = win32.create_guarded_directory
+                original = win32._create_guarded_directory
                 calls = 0
                 target = int(hook.rsplit("_", 1)[1])
                 def create_guarded_directory(*args, **kwargs):
@@ -275,7 +342,7 @@ class PrivateMetadataWriterApprovalTests(unittest.TestCase):
                     if calls == target:
                         reached(hook)
                     return result
-                win32.create_guarded_directory = create_guarded_directory
+                win32._create_guarded_directory = create_guarded_directory
             elif hook in {"journal_twin", "receipt_twin"}:
                 api = win32._api()
                 original = api.create_hard_link
@@ -290,7 +357,7 @@ class PrivateMetadataWriterApprovalTests(unittest.TestCase):
                     return result
                 api.create_hard_link = create_hard_link
             elif hook in {"journal_only", "receipt_only"}:
-                original = win32.publish_hard_link
+                original = win32._publish_hard_link
                 calls = 0
                 target = 1 if hook == "journal_only" else 2
                 def publish(*args, **kwargs):
@@ -300,9 +367,9 @@ class PrivateMetadataWriterApprovalTests(unittest.TestCase):
                     if calls == target:
                         reached(hook)
                     return result
-                win32.publish_hard_link = publish
+                win32._publish_hard_link = publish
             elif hook == "manifest_full":
-                original = win32.Win32BoundFile.flush
+                original = win32._Win32BoundFile.flush
                 def flush(
                     bound,
                     *,
@@ -311,11 +378,11 @@ class PrivateMetadataWriterApprovalTests(unittest.TestCase):
                     if bound.path.name.endswith(".manifest.tmp"):
                         reached(hook)
                     return original(bound, reason=reason)
-                win32.Win32BoundFile.flush = flush
+                win32._Win32BoundFile.flush = flush
             elif hook == "manifest_partial":
                 api = win32._api()
                 original_write_file = api.write_file
-                original_write_chunks = win32.Win32BoundFile.write_chunks
+                original_write_chunks = win32._Win32BoundFile.write_chunks
                 manifest_handle = None
 
                 def write_file(
@@ -372,7 +439,7 @@ class PrivateMetadataWriterApprovalTests(unittest.TestCase):
                         reason=reason,
                     )
                 api.write_file = write_file
-                win32.Win32BoundFile.write_chunks = write_chunks
+                win32._Win32BoundFile.write_chunks = write_chunks
             elif hook == "manifest_replaced":
                 api = win32._api()
                 original = api.set_file_information
@@ -402,7 +469,7 @@ class PrivateMetadataWriterApprovalTests(unittest.TestCase):
                 "residue_false_before_postproof",
             }:
                 api = win32._api()
-                original_dispose = win32.dispose_bound_residue
+                original_dispose = win32._dispose_bound_residue
                 original_set_information = api.set_file_information
                 original_close_handle = api.close_handle
                 original_clear = win32._clear_disposition
@@ -486,7 +553,7 @@ class PrivateMetadataWriterApprovalTests(unittest.TestCase):
                         operation=operation,
                     )
 
-                win32.dispose_bound_residue = dispose_bound_residue
+                win32._dispose_bound_residue = dispose_bound_residue
                 api.close_handle = close_handle
                 api.set_file_information = set_file_information
                 win32._clear_disposition = clear_disposition
@@ -496,14 +563,14 @@ class PrivateMetadataWriterApprovalTests(unittest.TestCase):
                 "residue_failed_true_after_link_one_before_release",
             }:
                 api = win32._api()
-                original_dispose = win32.dispose_bound_residue
+                original_dispose = win32._dispose_bound_residue
                 original_set_information = api.set_file_information
                 original_set_disposition = win32._set_disposition
                 original_later_proof = (
                     win32._prove_failed_disposition_name_guard_locks
                 )
                 original_terminal_release = (
-                    win32.release_terminal_bound_authority
+                    win32._release_terminal_bound_authority
                 )
                 residue = {
                     "handle": None,
@@ -632,17 +699,17 @@ class PrivateMetadataWriterApprovalTests(unittest.TestCase):
                         **kwargs,
                     )
 
-                win32.dispose_bound_residue = dispose_bound_residue
+                win32._dispose_bound_residue = dispose_bound_residue
                 api.set_file_information = set_file_information
                 win32._set_disposition = set_disposition
                 win32._prove_failed_disposition_name_guard_locks = (
                     fail_later_proof
                 )
-                win32.release_terminal_bound_authority = terminal_release
+                win32._release_terminal_bound_authority = terminal_release
             else:
                 raise RuntimeError("unknown interruption hook")
 
-            archive_services.private_objet_source_metadata_write(
+            archive_services._private_objet_source_metadata_write_legacy_core(
                 root,
                 intake=os.environ["WOM_P_INTAKE"],
                 expected_intake_sha256=os.environ["WOM_P_INTAKE_SHA"],
@@ -789,13 +856,13 @@ class PrivateMetadataWriterApprovalTests(unittest.TestCase):
             api.get_handle_information = get_handle_information
 
             if kind == "residue":
-                original_dispose = win32.dispose_bound_residue
+                original_dispose = win32._dispose_bound_residue
                 def dispose_bound_residue(guard, bound, *, locks):
                     mark(bound.raw_handle)
                     return original_dispose(guard, bound, locks=locks)
-                win32.dispose_bound_residue = dispose_bound_residue
+                win32._dispose_bound_residue = dispose_bound_residue
             elif kind == "residue_failed_true":
-                original_dispose = win32.dispose_bound_residue
+                original_dispose = win32._dispose_bound_residue
                 original_set_disposition = win32._set_disposition
 
                 def dispose_bound_residue(guard, bound, *, locks):
@@ -827,7 +894,7 @@ class PrivateMetadataWriterApprovalTests(unittest.TestCase):
                         ),
                     )
 
-                win32.dispose_bound_residue = dispose_bound_residue
+                win32._dispose_bound_residue = dispose_bound_residue
                 win32._set_disposition = fail_true_without_effect
                 win32._prove_failed_disposition_same_handle_no_change = (
                     fail_same_handle_proof
@@ -844,7 +911,7 @@ class PrivateMetadataWriterApprovalTests(unittest.TestCase):
                     return original_close_tracked(state, win32_module)
                 writer._close_tracked_handles = close_tracked_handles
             elif kind == "lock":
-                original_pair_release = win32.PrivateMetadataLockPair.release
+                original_pair_release = win32._PrivateMetadataLockPair.release
                 def unlock_file(handle, *args):
                     if (
                         target["handle"] is not None
@@ -856,18 +923,18 @@ class PrivateMetadataWriterApprovalTests(unittest.TestCase):
                     mark(pair.private_metadata.bound.raw_handle)
                     return original_pair_release(pair)
                 api.unlock_file = unlock_file
-                win32.PrivateMetadataLockPair.release = pair_release
+                win32._PrivateMetadataLockPair.release = pair_release
             elif kind == "guard":
-                original_guard_close = win32.PrivateMetadataMutationGuard.close
+                original_guard_close = win32._PrivateMetadataMutationGuard.close
                 def guard_close(guard):
                     key = guard._order[-1]
                     mark(guard._handles[key])
                     return original_guard_close(guard)
-                win32.PrivateMetadataMutationGuard.close = guard_close
+                win32._PrivateMetadataMutationGuard.close = guard_close
             else:
                 raise RuntimeError("unknown terminal fail-stop kind")
 
-            archive_services.private_objet_source_metadata_write(
+            archive_services._private_objet_source_metadata_write_legacy_core(
                 root,
                 intake=os.environ["WOM_P_INTAKE"],
                 expected_intake_sha256=os.environ["WOM_P_INTAKE_SHA"],
@@ -929,7 +996,7 @@ class PrivateMetadataWriterApprovalTests(unittest.TestCase):
         expected_plan_sha256: str,
         reviewed_by: str,
     ) -> dict[str, object]:
-        return archive_services.private_objet_source_metadata_write(
+        return archive_services._private_objet_source_metadata_write_legacy_core(
             self.root,
             intake=intake_relative,
             expected_intake_sha256=intake_sha256,
@@ -974,7 +1041,7 @@ class PrivateMetadataWriterApprovalTests(unittest.TestCase):
                     raise RuntimeError("concurrency start barrier timed out")
                 time.sleep(0.01)
 
-            result = archive_services.private_objet_source_metadata_write(
+            result = archive_services._private_objet_source_metadata_write_legacy_core(
                 Path(os.environ["WOM_P_ROOT"]),
                 intake=os.environ["WOM_P_INTAKE"],
                 expected_intake_sha256=os.environ["WOM_P_INTAKE_SHA"],
@@ -1401,9 +1468,10 @@ class PrivateMetadataWriterApprovalTests(unittest.TestCase):
                 return result
 
             archive_services._ObjetCaptureManifestLock.__enter__ = enter
-            result = archive_services.objet_capture_apply(
+            result = archive_services._objet_capture_run(
                 Path(os.environ["WOM_P_ROOT"]),
                 Path(os.environ["WOM_C_SELECTION"]),
+                approve=True,
                 reviewed_by="person:concurrent-capture",
             )
             print(json.dumps(result, separators=(",", ":")))
@@ -1421,7 +1489,7 @@ class PrivateMetadataWriterApprovalTests(unittest.TestCase):
             ready = Path(os.environ["WOM_C_PRIVATE_READY"])
             done = Path(os.environ["WOM_C_PRIVATE_DONE"])
             ready.write_text("ready", encoding="utf-8")
-            result = archive_services.private_objet_source_metadata_write(
+            result = archive_services._private_objet_source_metadata_write_legacy_core(
                 Path(os.environ["WOM_P_ROOT"]),
                 intake=os.environ["WOM_P_INTAKE"],
                 expected_intake_sha256=os.environ["WOM_P_INTAKE_SHA"],
@@ -1828,7 +1896,7 @@ class PrivateMetadataWriterApprovalTests(unittest.TestCase):
 
             from wom_kit import archive_services
 
-            result = archive_services.private_objet_source_metadata_write(
+            result = archive_services._private_objet_source_metadata_write_legacy_core(
                 Path(os.environ["WOM_P_ROOT"]),
                 intake=os.environ["WOM_P_INTAKE"],
                 expected_intake_sha256=os.environ["WOM_P_INTAKE_SHA"],
@@ -2734,7 +2802,7 @@ class PrivateMetadataWriterApprovalTests(unittest.TestCase):
         self,
     ) -> None:
         append_plan = self._dry_run()
-        original = win32.publish_hard_link
+        original = win32._publish_hard_link
 
         def fail_first_publication(*args: object, **kwargs: object) -> object:
             del args, kwargs
@@ -2745,7 +2813,7 @@ class PrivateMetadataWriterApprovalTests(unittest.TestCase):
 
         with mock.patch.object(
             win32,
-            "publish_hard_link",
+            "_publish_hard_link",
             side_effect=fail_first_publication,
         ):
             failed = self._write(
@@ -2784,7 +2852,7 @@ class PrivateMetadataWriterApprovalTests(unittest.TestCase):
         self,
     ) -> None:
         append_plan = self._dry_run()
-        original_flush = win32.Win32BoundFile.flush
+        original_flush = win32._Win32BoundFile.flush
         failed_once = False
 
         def fail_journal_flush(
@@ -2807,7 +2875,7 @@ class PrivateMetadataWriterApprovalTests(unittest.TestCase):
             original_flush(bound, *args, **kwargs)
 
         with mock.patch.object(
-            win32.Win32BoundFile,
+            win32._Win32BoundFile,
             "flush",
             new=fail_journal_flush,
         ):
@@ -2945,7 +3013,7 @@ class PrivateMetadataWriterApprovalTests(unittest.TestCase):
         self,
     ) -> None:
         append_plan = self._dry_run()
-        original_sha256 = win32.Win32BoundFile.sha256
+        original_sha256 = win32._Win32BoundFile.sha256
         injected = False
 
         def wrong_journal_digest(
@@ -2965,7 +3033,7 @@ class PrivateMetadataWriterApprovalTests(unittest.TestCase):
             return original_sha256(bound, *args, **kwargs)
 
         with mock.patch.object(
-            win32.Win32BoundFile,
+            win32._Win32BoundFile,
             "sha256",
             new=wrong_journal_digest,
         ):
@@ -3272,7 +3340,7 @@ class PrivateMetadataWriterApprovalTests(unittest.TestCase):
         self,
     ) -> None:
         append_plan = self._dry_run()
-        original_flush = win32.Win32BoundFile.flush
+        original_flush = win32._Win32BoundFile.flush
         injected = False
 
         def fail_receipt_flush(
@@ -3295,7 +3363,7 @@ class PrivateMetadataWriterApprovalTests(unittest.TestCase):
             original_flush(bound, *args, **kwargs)
 
         with mock.patch.object(
-            win32.Win32BoundFile,
+            win32._Win32BoundFile,
             "flush",
             new=fail_receipt_flush,
         ):
@@ -3446,8 +3514,8 @@ class PrivateMetadataWriterApprovalTests(unittest.TestCase):
         expected_stage: str,
     ) -> None:
         append_plan = self._dry_run()
-        original_close = win32.Win32BoundFile.close
-        original_terminal_release = win32.release_terminal_bound_authority
+        original_close = win32._Win32BoundFile.close
+        original_terminal_release = win32._release_terminal_bound_authority
         original_set_disposition = win32._set_disposition
         events: list[tuple[str, int, str]] = []
         injected = False
@@ -3455,7 +3523,7 @@ class PrivateMetadataWriterApprovalTests(unittest.TestCase):
         later_dispositions = 0
 
         def fail_journal_transitional_close(
-            bound: win32.Win32BoundFile,
+            bound: win32._Win32BoundFile,
             *,
             reason: str = win32.FINAL_VERIFICATION_FAILED,
             operation: str = "bound_handle_close",
@@ -3475,7 +3543,7 @@ class PrivateMetadataWriterApprovalTests(unittest.TestCase):
             original_close(bound, reason=reason, operation=operation)
 
         def record_terminal_release(
-            bound: win32.Win32BoundFile,
+            bound: win32._Win32BoundFile,
             *,
             reason: str = win32.RESIDUE_DISPOSITION_FAILED,
             operation: str = "residue_terminal_authority_release",
@@ -3505,13 +3573,13 @@ class PrivateMetadataWriterApprovalTests(unittest.TestCase):
 
         with (
             mock.patch.object(
-                win32.Win32BoundFile,
+                win32._Win32BoundFile,
                 "close",
                 new=fail_journal_transitional_close,
             ),
             mock.patch.object(
                 win32,
-                "release_terminal_bound_authority",
+                "_release_terminal_bound_authority",
                 new=record_terminal_release,
             ),
             mock.patch.object(
@@ -3583,8 +3651,8 @@ class PrivateMetadataWriterApprovalTests(unittest.TestCase):
         fault_operation: str,
     ) -> None:
         append_plan = self._dry_run()
-        original_close = win32.Win32BoundFile.close
-        original_terminal_release = win32.release_terminal_bound_authority
+        original_close = win32._Win32BoundFile.close
+        original_terminal_release = win32._release_terminal_bound_authority
         original_set_disposition = win32._set_disposition
         events: list[tuple[str, int, str]] = []
         injected = False
@@ -3592,7 +3660,7 @@ class PrivateMetadataWriterApprovalTests(unittest.TestCase):
         later_dispositions = 0
 
         def fail_manifest_handoff_close(
-            bound: win32.Win32BoundFile,
+            bound: win32._Win32BoundFile,
             *,
             reason: str = win32.FINAL_VERIFICATION_FAILED,
             operation: str = "bound_handle_close",
@@ -3612,7 +3680,7 @@ class PrivateMetadataWriterApprovalTests(unittest.TestCase):
             original_close(bound, reason=reason, operation=operation)
 
         def record_terminal_release(
-            bound: win32.Win32BoundFile,
+            bound: win32._Win32BoundFile,
             *,
             reason: str = win32.RESIDUE_DISPOSITION_FAILED,
             operation: str = "residue_terminal_authority_release",
@@ -3642,13 +3710,13 @@ class PrivateMetadataWriterApprovalTests(unittest.TestCase):
 
         with (
             mock.patch.object(
-                win32.Win32BoundFile,
+                win32._Win32BoundFile,
                 "close",
                 new=fail_manifest_handoff_close,
             ),
             mock.patch.object(
                 win32,
-                "release_terminal_bound_authority",
+                "_release_terminal_bound_authority",
                 new=record_terminal_release,
             ),
             mock.patch.object(
@@ -3762,8 +3830,8 @@ class PrivateMetadataWriterApprovalTests(unittest.TestCase):
 
         cleanup_plan = self._dry_run()
         self.assertEqual(cleanup_plan["action"], "already_applied")
-        original_close = win32.Win32BoundFile.close
-        original_terminal_release = win32.release_terminal_bound_authority
+        original_close = win32._Win32BoundFile.close
+        original_terminal_release = win32._release_terminal_bound_authority
         original_set_disposition = win32._set_disposition
         original_inventory = writer._inventory_receipt_directory
         original_receipt_chain = writer._observe_receipt_directory_chain
@@ -3785,7 +3853,7 @@ class PrivateMetadataWriterApprovalTests(unittest.TestCase):
         }
 
         def fail_exact_handoff_close(
-            bound: win32.Win32BoundFile,
+            bound: win32._Win32BoundFile,
             *,
             reason: str = win32.FINAL_VERIFICATION_FAILED,
             operation: str = "bound_handle_close",
@@ -3805,7 +3873,7 @@ class PrivateMetadataWriterApprovalTests(unittest.TestCase):
             original_close(bound, reason=reason, operation=operation)
 
         def record_terminal_release(
-            bound: win32.Win32BoundFile,
+            bound: win32._Win32BoundFile,
             *,
             reason: str = win32.RESIDUE_DISPOSITION_FAILED,
             operation: str = "residue_terminal_authority_release",
@@ -3846,13 +3914,13 @@ class PrivateMetadataWriterApprovalTests(unittest.TestCase):
 
         with (
             mock.patch.object(
-                win32.Win32BoundFile,
+                win32._Win32BoundFile,
                 "close",
                 new=fail_exact_handoff_close,
             ),
             mock.patch.object(
                 win32,
-                "release_terminal_bound_authority",
+                "_release_terminal_bound_authority",
                 new=record_terminal_release,
             ),
             mock.patch.object(
@@ -4304,7 +4372,7 @@ class PrivateMetadataWriterApprovalTests(unittest.TestCase):
         self,
     ) -> None:
         append_plan = self._dry_run()
-        original_close = win32.Win32BoundFile.close
+        original_close = win32._Win32BoundFile.close
         injected = False
         attempts = 0
         at_failure: dict[str, object] | None = None
@@ -4327,7 +4395,7 @@ class PrivateMetadataWriterApprovalTests(unittest.TestCase):
             original_close(bound, reason=reason, operation=operation)
 
         with mock.patch.object(
-            win32.Win32BoundFile,
+            win32._Win32BoundFile,
             "close",
             new=fail_disposition_close_once,
         ):
@@ -4363,7 +4431,7 @@ class PrivateMetadataWriterApprovalTests(unittest.TestCase):
         self,
     ) -> None:
         append_plan = self._dry_run()
-        original_close = win32.Win32BoundFile.close
+        original_close = win32._Win32BoundFile.close
         original_clear = win32._clear_disposition
         close_attempts = 0
         clear_attempts = 0
@@ -4409,7 +4477,7 @@ class PrivateMetadataWriterApprovalTests(unittest.TestCase):
 
         with (
             mock.patch.object(
-                win32.Win32BoundFile,
+                win32._Win32BoundFile,
                 "close",
                 new=fail_disposition_close_once,
             ),
@@ -4450,10 +4518,10 @@ class PrivateMetadataWriterApprovalTests(unittest.TestCase):
         self,
     ) -> None:
         append_plan = self._dry_run()
-        original_close = win32.Win32BoundFile.close
+        original_close = win32._Win32BoundFile.close
         original_clear = win32._clear_disposition
         original_sha256 = (
-            win32.Win32BoundFile._sha256_for_expected_link_count
+            win32._Win32BoundFile._sha256_for_expected_link_count
         )
         close_attempts = 0
         clear_attempts = 0
@@ -4520,7 +4588,7 @@ class PrivateMetadataWriterApprovalTests(unittest.TestCase):
 
         with (
             mock.patch.object(
-                win32.Win32BoundFile,
+                win32._Win32BoundFile,
                 "close",
                 new=fail_disposition_close_once,
             ),
@@ -4530,7 +4598,7 @@ class PrivateMetadataWriterApprovalTests(unittest.TestCase):
                 side_effect=track_clear_disposition,
             ),
             mock.patch.object(
-                win32.Win32BoundFile,
+                win32._Win32BoundFile,
                 "_sha256_for_expected_link_count",
                 new=fail_postclear_digest,
             ),
@@ -4618,7 +4686,7 @@ class PrivateMetadataWriterApprovalTests(unittest.TestCase):
         self,
     ) -> None:
         append_plan = self._dry_run()
-        original_close = win32.Win32BoundFile.close
+        original_close = win32._Win32BoundFile.close
         injected = False
         at_failure: dict[str, object] | None = None
 
@@ -4639,7 +4707,7 @@ class PrivateMetadataWriterApprovalTests(unittest.TestCase):
                 )
 
         with mock.patch.object(
-            win32.Win32BoundFile,
+            win32._Win32BoundFile,
             "close",
             new=fail_one_tracked_close,
         ):
@@ -4669,7 +4737,7 @@ class PrivateMetadataWriterApprovalTests(unittest.TestCase):
 
     def test_success_then_lock_release_failure_is_reported(self) -> None:
         append_plan = self._dry_run()
-        original_release = win32.PrivateMetadataLockPair.release
+        original_release = win32._PrivateMetadataLockPair.release
         injected = False
         at_failure: dict[str, object] | None = None
 
@@ -4685,7 +4753,7 @@ class PrivateMetadataWriterApprovalTests(unittest.TestCase):
                 )
 
         with mock.patch.object(
-            win32.PrivateMetadataLockPair,
+            win32._PrivateMetadataLockPair,
             "release",
             new=fail_after_release,
         ):
@@ -4762,7 +4830,7 @@ class PrivateMetadataWriterApprovalTests(unittest.TestCase):
         self,
     ) -> None:
         append_plan = self._dry_run()
-        original_close = win32.Win32BoundFile.close
+        original_close = win32._Win32BoundFile.close
         injected = False
         at_failure: dict[str, object] | None = None
 
@@ -4783,7 +4851,7 @@ class PrivateMetadataWriterApprovalTests(unittest.TestCase):
             original_close(bound, reason=reason, operation=operation)
 
         with mock.patch.object(
-            win32.Win32BoundFile,
+            win32._Win32BoundFile,
             "close",
             new=fail_first_lock_close,
         ):
@@ -4813,7 +4881,7 @@ class PrivateMetadataWriterApprovalTests(unittest.TestCase):
 
     def test_success_then_guard_close_failure_is_reported(self) -> None:
         append_plan = self._dry_run()
-        original_close = win32.PrivateMetadataMutationGuard.close
+        original_close = win32._PrivateMetadataMutationGuard.close
         injected = False
         at_failure: dict[str, object] | None = None
 
@@ -4829,7 +4897,7 @@ class PrivateMetadataWriterApprovalTests(unittest.TestCase):
                 )
 
         with mock.patch.object(
-            win32.PrivateMetadataMutationGuard,
+            win32._PrivateMetadataMutationGuard,
             "close",
             new=fail_after_guard_close,
         ):
@@ -4922,7 +4990,7 @@ class PrivateMetadataWriterApprovalTests(unittest.TestCase):
         self,
     ) -> None:
         append_plan = self._dry_run()
-        original_dispose = win32.dispose_bound_residue
+        original_dispose = win32._dispose_bound_residue
         failed_once = False
 
         def fail_manifest_disposition(
@@ -4953,7 +5021,7 @@ class PrivateMetadataWriterApprovalTests(unittest.TestCase):
             ),
             mock.patch.object(
                 win32,
-                "dispose_bound_residue",
+                "_dispose_bound_residue",
                 side_effect=fail_manifest_disposition,
             ),
         ):
@@ -5018,7 +5086,7 @@ class PrivateMetadataWriterApprovalTests(unittest.TestCase):
             ),
             mock.patch.object(
                 win32,
-                "handoff_to_residue_authority",
+                "_handoff_to_residue_authority",
                 side_effect=lose_manifest_authority,
             ),
         ):
@@ -5165,7 +5233,7 @@ class PrivateMetadataWriterApprovalTests(unittest.TestCase):
         )
 
     def test_intake_mismatch_precedes_missing_expected_plan(self) -> None:
-        result = archive_services.private_objet_source_metadata_write(
+        result = archive_services._private_objet_source_metadata_write_legacy_core(
             self.root,
             intake=self.intake_relative,
             expected_intake_sha256="sha256:" + ("9" * 64),
@@ -5186,8 +5254,8 @@ class PrivateMetadataWriterApprovalTests(unittest.TestCase):
     ) -> None:
         append_plan = self._dry_run()
         observed = {"pair_acquired": False, "object_open_checked": False}
-        original_acquire = win32.PrivateMetadataLockPair.acquire
-        original_open = win32.open_bound_file
+        original_acquire = win32._PrivateMetadataLockPair.acquire
+        original_open = win32._open_bound_file
 
         def acquire(pair: object) -> object:
             result = original_acquire(pair)
@@ -5206,13 +5274,13 @@ class PrivateMetadataWriterApprovalTests(unittest.TestCase):
 
         with (
             mock.patch.object(
-                win32.PrivateMetadataLockPair,
+                win32._PrivateMetadataLockPair,
                 "acquire",
                 new=acquire,
             ),
             mock.patch.object(
                 win32,
-                "open_bound_file",
+                "_open_bound_file",
                 side_effect=open_bound,
             ),
         ):
@@ -5225,7 +5293,7 @@ class PrivateMetadataWriterApprovalTests(unittest.TestCase):
     def test_preaccept_guard_release_failure_overrides_pending_refusal(
         self,
     ) -> None:
-        original_close = win32.PrivateMetadataMutationGuard.close
+        original_close = win32._PrivateMetadataMutationGuard.close
 
         def close_with_fault(guard: object) -> None:
             original_close(guard)
@@ -5245,7 +5313,7 @@ class PrivateMetadataWriterApprovalTests(unittest.TestCase):
                 },
             ),
             mock.patch.object(
-                win32.PrivateMetadataMutationGuard,
+                win32._PrivateMetadataMutationGuard,
                 "close",
                 new=close_with_fault,
             ),
@@ -5265,7 +5333,7 @@ class PrivateMetadataWriterApprovalTests(unittest.TestCase):
         self,
     ) -> None:
         append_plan = self._dry_run()
-        original_close = win32.Win32BoundFile.close
+        original_close = win32._Win32BoundFile.close
         injected = False
 
         def fail_after_one_tracked_close(
@@ -5284,7 +5352,7 @@ class PrivateMetadataWriterApprovalTests(unittest.TestCase):
                 )
 
         with mock.patch.object(
-            win32.Win32BoundFile,
+            win32._Win32BoundFile,
             "close",
             new=fail_after_one_tracked_close,
         ):
@@ -5315,7 +5383,7 @@ class PrivateMetadataWriterApprovalTests(unittest.TestCase):
         )
         self.assertEqual(applied["action"], "applied")
         applied_snapshot = self._applied_primary_snapshot(append_plan)
-        original_close = win32.Win32BoundFile.close
+        original_close = win32._Win32BoundFile.close
         injected = False
 
         def fail_after_one_tracked_close(
@@ -5334,7 +5402,7 @@ class PrivateMetadataWriterApprovalTests(unittest.TestCase):
                 )
 
         with mock.patch.object(
-            win32.Win32BoundFile,
+            win32._Win32BoundFile,
             "close",
             new=fail_after_one_tracked_close,
         ):
