@@ -3,6 +3,12 @@
 Status: v0.3.85 approval-gated upload evidence registration checkpoint
 Date: 2026-06-17
 
+Current v0.4.0 boundary: upload-evidence registration approval is fixed
+fail-closed before private ledger/manifest read or mutation with
+`compound_exact_human_approval_binding_required`. The audit remains read-only;
+no location or receipt is written. The v0.3 write shape retained below is
+historical evidence, not a runnable instruction.
+
 `object-storage-upload-evidence` records a reviewed external upload ledger after
 a human or separate script has already handled object-storage upload outside
 WOM-kit.
@@ -28,17 +34,9 @@ archive object-storage-upload-evidence <archive-root> \
   --format json
 ```
 
-Approved mode:
-
-```bash
-archive object-storage-upload-evidence <archive-root> \
-  --ledger upload-evidence.jsonl \
-  --provider-kind cloudflare-r2 \
-  --store-ref object-store-20260616 \
-  --approve \
-  --reviewed-by person:reviewer \
-  --format json
-```
+Stop after the dry-run in v0.4.0. An approval request returns
+`compound_exact_human_approval_binding_required` before private
+ledger/manifest read or mutation.
 
 Aliases:
 
@@ -110,15 +108,15 @@ It does not echo:
 - tokens,
 - secret values.
 
-## Approved Behavior
+## Historical v0.3 Approved Behavior
 
-Approved mode requires:
+The historical mode required:
 
 - `--approve`,
 - `--reviewed-by <safe actor id>`,
 - `--store-ref <safe label>`.
 
-When approved, WOM-kit writes:
+That historical mode wrote:
 
 ```text
 receipts/providers/object-storage-upload-evidence/*.json

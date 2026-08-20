@@ -1,5 +1,9 @@
 # Activity-Group Membership Plan
 
+Current v0.4.0 boundary: this plan remains read-only. It grants no writer or
+recovery authority; affected approvals fail before private target read or
+mutation with `compound_exact_human_approval_binding_required`.
+
 `activity-group-membership-plan` is a read-only planning command for one
 specific situation:
 
@@ -98,11 +102,10 @@ Alias:
 event-group-membership-plan
 ```
 
-The planning command always requires `--dry-run`. Since v0.3.281, its exact
-request and `review_plan_sha256` may continue through the separate
-approval-gated
-[`activity-group-membership-write`](activity-group-membership-write.md)
-command. The planner itself never writes.
+The planning command always requires `--dry-run`. Its exact request and
+`review_plan_sha256` may be inspected with the separate
+[`activity-group-membership-write` preview](activity-group-membership-write.md),
+but v0.4.0 approval is fixed fail-closed. The planner itself never writes.
 
 ## Result
 
@@ -164,9 +167,9 @@ not return body text.
 It writes no zettel, facet, receipt, index, diagnostic, or request file. It
 calls no model, provider, network, or credential store.
 
-## Write boundary
+## Historical Write Evidence
 
-v0.3.281 adds the separate approval-gated writer and explicit interruption
+v0.3.281 added the historical writer and explicit interruption
 recovery. It binds the exact request bytes and review-plan digest, revalidates
 current bytes under a lock, records human review, preserves before-snapshots,
 publishes a pre-mutation journal, and writes an immutable receipt last.
@@ -175,11 +178,11 @@ Member removal remains a separate reviewed operation. Neither this plan nor
 the v0.3.281 addition writer removes any membership. v0.3.282 added the
 separate read-only
 [Activity-Group Membership Removal Plan](activity-group-membership-removal-plan.md),
-and v0.3.284 adds its separate approval-gated
+and v0.3.284 added its historical
 [Activity-Group Membership Removal Write And Recovery](activity-group-membership-removal-write.md)
 continuation.
 
-The addition and removal operations share one global writer lock and scan both
+Historical addition and removal operations shared one global writer lock and scanned both
 private roots for retained transaction evidence, but their requests, plans,
 journals, receipts, approval affirmations, and recovery contracts remain
 separate. An addition request or receipt never grants removal authority.

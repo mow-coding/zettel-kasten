@@ -1,9 +1,15 @@
 # Notion Ancestor Fetch Adapter Run
 
-Status: v0.3.141 approval-gated local Notion ancestor structure fetch with actionable provider failure classification
+Status: v0.4.0 adapter preview; approval and provider execution are fixed closed
 
-`archive notion-ancestor-fetch-adapter-run` is the first local live Notion
-ancestor fetch adapter.
+Current v0.4.0 boundary: approval is fixed fail-closed before credential read,
+provider call, private input read, or archive mutation with
+`compound_exact_human_approval_binding_required`. Planning remains read-only;
+the v0.3 execution semantics retained below are historical evidence, not a
+runnable instruction.
+
+Historically, `archive notion-ancestor-fetch-adapter-run` was the first local
+Notion ancestor fetch adapter. In v0.4.0 only its dry-run preview is executable.
 
 It consumes the scoped `crawl_request_queue` from
 `notion-ancestor-crawl-plan`, verifies a credential access approval receipt,
@@ -24,7 +30,8 @@ provider request failure.
 
 ## Command
 
-First write a local non-secret approval receipt:
+The historical v0.3 flow first wrote a local non-secret credential approval
+receipt. That receipt does not authorize this adapter in v0.4.0.
 
 ```powershell
 archive credential-access-approval <archive-root> `
@@ -59,23 +66,9 @@ archive notion-ancestor-fetch-adapter-run <archive-root> `
   --format json
 ```
 
-Run it only after reviewing the dry-run output:
-
-```powershell
-archive notion-ancestor-fetch-adapter-run <archive-root> `
-  --tree workbench/notion-nested-tree.sample.json `
-  --output workbench/notion-ancestor-result.live.json `
-  --source notion `
-  --scope-ancestor-ref page:<32hex-notion-page-id> `
-  --credential-id cred:notion-readonly `
-  --credential-ref env:WOM_NOTION_READONLY_TOKEN `
-  --credential-kind provider_api_key `
-  --credential-provider notion `
-  --approval-decision approve_once `
-  --approval-receipt receipts/credentials/access-approvals/<receipt>.credential-access-approval.json `
-  --approve `
-  --format json
-```
+Stop after the adapter dry-run in v0.4.0. A non-dry-run approval request
+returns `compound_exact_human_approval_binding_required` before credential,
+provider, private input, or target access and writes nothing.
 
 Aliases:
 
@@ -87,9 +80,9 @@ notion-ancestor-live-fetch
 There is no MCP live execution tool for this command. MCP remains dry-run for
 the Notion ancestor contract boundary.
 
-## What It Writes
+## Historical v0.3 Write Shape
 
-Approved execution writes:
+Historical approved execution wrote:
 
 ```text
 workbench/<chosen-output>.json

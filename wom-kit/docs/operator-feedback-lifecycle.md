@@ -1,6 +1,6 @@
 # Operator Feedback Lifecycle
 
-Status: v0.3.149 approval-gated metadata checkpoint; runtime discoverability and shipped schema files since v0.3.160; delivery ledger + batched mark-delivered since v0.3.169; create-only checked body companion in v0.3.312
+Status: v0.4.0 archive-root guidance and body-authority preflight; earlier metadata, ledger, and body contracts preserved
 
 WOM now gives operator-generated tool feedback a separate lifecycle surface.
 
@@ -25,6 +25,32 @@ approval, or treat `delivered` as proof of either external submission or
 human receipt. User knowledge objets are not the canonical feedback tracker.
 
 ## Commands
+
+### v0.4.0 root and body-authority preflight
+
+The CLI now requires the first positional path for
+`operator-feedback-compose` and `operator-feedback-body-check` to be the actual
+WOM archive root containing `archive.yml`. The request is always an
+archive-relative private JSON file with this exact shape:
+
+```text
+profiles/local/operator-feedback/requests/<name>.json
+```
+
+The command result and help repeat that shape without echoing the supplied
+private path or request values. A project parent, checkout root, sibling
+folder, drive root, absolute out-of-archive request, or another request
+directory is rejected before composition. The request must also remain inside
+the effective ignored `profiles/local/` boundary.
+
+When `operator-feedback-record` receives a
+`feedback-body-sha256:<64 lowercase hex>` reference, it now verifies the body
+receipt and exact body bytes before planning or applying metadata. The
+preflight is stable-read and digest-bound, returns only content-free authority
+evidence, and blocks a new metadata record when the body authority is missing,
+changed, or invalid. Older non-body references remain readable as legacy
+unverified evidence; they are warned, never silently upgraded, and can follow
+the explicit status-withdrawal route without changing `feedback_ref`.
 
 ### Feedback body companion (v0.3.312)
 

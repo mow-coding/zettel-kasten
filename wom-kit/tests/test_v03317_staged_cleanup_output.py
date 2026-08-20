@@ -91,9 +91,12 @@ class StagedCleanupOutputTests(unittest.TestCase):
             json.dumps(selection, ensure_ascii=False, sort_keys=True) + "\n",
             encoding="utf-8",
         )
-        applied = archive_services.objet_capture_apply(
+        # Install a bounded pre-v0.4 receipt for the read-only output tests.
+        # The public v0.4 writer remains fail-closed.
+        applied = archive_services._objet_capture_run(
             archive_root,
             selection_path,
+            approve=True,
             reviewed_by="person:letter130-output-test",
         )
         self.assertTrue(applied["ok"], applied)

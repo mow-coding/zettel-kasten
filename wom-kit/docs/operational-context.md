@@ -46,20 +46,19 @@ returns the same official
 ai-start-here. It routes index search through `archive search` and global
 negative-claim planning through `archive objet-rediscovery-plan --dry-run`,
 conservative inbox
-shape review through `archive inbox-pipeline-audit`, AI draft creation through
-`archive create-draft`, and other writes through their dedicated
-preview/approval commands. Explicit event membership review routes through the
-read-only `activity-group-membership-plan`, approved additions through the
-digest-bound `activity-group-membership-write`, and interrupted writes through
-the separate recovery plan/approval commands. Explicit removals have a
-read-only removal plan, a distinct digest-bound removal writer, and their own
-recovery plan/approval commands. None infers membership. A destination folder
+shape review through `archive inbox-pipeline-audit`, and AI draft creation
+through the separately bound `archive create-draft`. Explicit event membership
+review routes through read-only add/removal plans. In v0.4.0 every membership
+add, removal, or recovery approval returns
+`compound_exact_human_approval_binding_required` before private target read or
+mutation; there is no approved writer/recovery continuation. None infers
+membership. A destination folder
 alone is never write authorization. v0.3.284 advanced routing to v0.6 while
 addition and removal share one global lock and a two-root retained-evidence
 scan but keep operation-specific request, journal, receipt, and recovery
-contracts. v0.3.293 advances routing to v0.7 with the exact
-operator-feedback plan, ledger, human-review, preview, and reviewed-approval
-sequence. Unknown completion evidence stays in forensic hold. The inbox audit
+contracts as historical evidence. v0.3.293 advanced routing to v0.7 with the
+operator-feedback plan and ledger sequence. Unknown completion evidence stays
+in forensic hold. The inbox audit
 proves no writer identity and performs no automatic repair. See
 [AI Command-Path Routing](ai-command-path-routing.md).
 

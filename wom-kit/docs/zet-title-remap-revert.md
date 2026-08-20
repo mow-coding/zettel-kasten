@@ -1,6 +1,12 @@
-# Approved zet Title Remap Revert
+# zet Title Remap Revert
 
-Status: v0.3.276 approval-gated completed-title compensation and hard-exit recovery
+Historical status: v0.3.276 approval-gated completed-title compensation and hard-exit recovery
+
+Current v0.4.0 boundary: the compensation plan and revert dry-run remain
+available. Approval returns `compound_exact_human_approval_binding_required`
+before private target read or mutation and creates no canonical change,
+journal, lock, snapshot, or compensation receipt. Historical v0.3 evidence
+remains readable.
 
 Use this command only for one clean, immutable title-remap receipt whose exact
 prior-byte compensation has been reviewed.
@@ -19,28 +25,13 @@ archive zet-title-remap-revert <archive-root> `
   --format json
 ```
 
-Approve only the same exact receipt and plan:
+Review the exact receipt and plan, then stop. In v0.4.0 their digests, a
+reviewer label, and the historical title-review/quiescence affirmations do not
+grant authority. Approval fails with
+`compound_exact_human_approval_binding_required` before private target read or
+mutation. Alias: `title-remap-revert`.
 
-```powershell
-archive zet-title-remap-revert <archive-root> `
-  --receipt receipts/revisions/title-remap/<digest>.zet-title-remap.json `
-  --expected-receipt-sha256 sha256:<reviewed-receipt-digest> `
-  --expected-plan-digest sha256:<reviewed-revert-plan-digest> `
-  --max-items 500 `
-  --approve `
-  --reviewed-by person:<reviewer-id> `
-  --affirm-title-reversions-reviewed `
-  --affirm-archive-quiescent `
-  --format json
-```
-
-Alias: `title-remap-revert`.
-
-Approval requires the exact source-receipt SHA-256, exact current revert-plan
-digest, a safe reviewer id, explicit review of every title reversion, and an
-explicit statement that archive writers are quiescent.
-
-## Exact Compensation Boundary
+## Historical v0.3.276 Exact Compensation Boundary
 
 The command reruns the complete receipt/journal/lock audit and complete
 revert plan. After exclusively taking the common title-remap write lock, it

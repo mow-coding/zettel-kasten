@@ -983,7 +983,7 @@ def _unlink_bound_identity(
         pass
 
 
-class FileOneTimeRequestClaims:
+class _FileOneTimeRequestClaims:
     """Archive-bound, durable create-if-absent one-use claim authority.
 
     ``archive_root`` and ``expected_relative_directory`` are optional only for
@@ -1032,7 +1032,7 @@ class FileOneTimeRequestClaims:
             self._authority_root = Path(".")
 
     def __repr__(self) -> str:
-        return "<FileOneTimeRequestClaims path=redacted>"
+        return "<_FileOneTimeRequestClaims path=redacted>"
 
     def _stage(self, name: str) -> None:
         try:
@@ -1359,7 +1359,7 @@ class WindowsCredentialManagerNativeCalls(Protocol):
 
 
 @dataclass
-class WindowsCredentialManagerExactStore:
+class _WindowsCredentialManagerExactStore:
     """Exact Generic Credential adapter; enumeration is not part of its API."""
 
     native: WindowsCredentialManagerNativeCalls = field(repr=False)
@@ -1415,7 +1415,7 @@ class AtomicReceiptCommitter(Protocol):
     def commit_atomic(self, receipt: Mapping[str, Any]) -> str: ...
 
 
-class AtomicJsonReceiptCommitter:
+class _AtomicJsonReceiptCommitter:
     """Durably commits one non-secret receipt with create-if-absent semantics."""
 
     def __init__(self, root: Path | str) -> None:
@@ -1563,7 +1563,7 @@ def _rollback(store: ExactCredentialStore, backend_id: str) -> str:
 
 
 @dataclass
-class SecureIntakeWorker:
+class _SecureIntakeWorker:
     """Runs the entire secret-bearing transaction inside one worker process."""
 
     claims: OneTimeRequestClaims = field(repr=False)
@@ -1894,7 +1894,7 @@ class SecureIntakeWorker:
 
 
 @dataclass(frozen=True)
-class WorkerInvocation:
+class _WorkerInvocation:
     """Secret-free payload that may cross from the AI parent to a worker."""
 
     plan: SecureIntakePlan
@@ -1909,9 +1909,9 @@ class WorkerInvocation:
         }
 
 
-class IsolatedWorkerSpawner(Protocol):
+class _IsolatedWorkerSpawner(Protocol):
     def run_worker(
-        self, invocation: WorkerInvocation
+        self, invocation: _WorkerInvocation
     ) -> Mapping[str, Any] | _SecureIntakeWorkerRunOutcome: ...
 
 
@@ -1930,10 +1930,10 @@ class _SecureIntakeWorkerRunOutcome:
 
 
 @dataclass
-class SecureIntakeProcessLauncher:
+class _SecureIntakeProcessLauncher:
     """Parent-side launcher that transports plans and status/receipts only."""
 
-    spawner: IsolatedWorkerSpawner = field(repr=False)
+    spawner: _IsolatedWorkerSpawner = field(repr=False)
 
     def launch(
         self,
@@ -1943,7 +1943,10 @@ class SecureIntakeProcessLauncher:
     ) -> dict[str, Any]:
         if not hmac.compare_digest(plan.plan_digest, str(expected_plan_digest or "")):
             return _fixed_failure("plan_digest_mismatch")
-        invocation = WorkerInvocation(plan=plan, expected_plan_digest=expected_plan_digest)
+        invocation = _WorkerInvocation(
+            plan=plan,
+            expected_plan_digest=expected_plan_digest,
+        )
         try:
             outcome = self.spawner.run_worker(invocation)
         except Exception:
@@ -2435,11 +2438,9 @@ def apply_duplicate_lifecycle_decision(
 
 
 __all__ = [
-    "AtomicJsonReceiptCommitter",
     "AtomicReceiptCommitter",
     "CredentialIntakeStageError",
     "ExactCredentialStore",
-    "FileOneTimeRequestClaims",
     "HumanOnlySecretUI",
     "HumanSecretInputResult",
     "InMemoryOneTimeRequestClaims",
@@ -2448,18 +2449,13 @@ __all__ = [
     "NOTION_PAT_WORKSPACE_IDENTITY_BASIS",
     "NOTION_PAT_SCOPE_FINGERPRINT_DOMAIN",
     "NOTION_WORKSPACE_IDENTITY_BASES",
-    "IsolatedWorkerSpawner",
     "ProviderIdentityVerifier",
     "RECEIPT_SCHEMA_VERSION",
     "RESULT_SCHEMA_VERSION",
     "SecureIntakePlan",
-    "SecureIntakeProcessLauncher",
-    "SecureIntakeWorker",
     "VerifiedCredentialIdentity",
-    "WindowsCredentialManagerExactStore",
     "WindowsCredentialManagerNativeCalls",
     "WindowsMaskedDialog",
-    "WorkerInvocation",
     "apply_duplicate_lifecycle_decision",
     "create_secure_intake_plan",
     "validate_secure_intake_plan",

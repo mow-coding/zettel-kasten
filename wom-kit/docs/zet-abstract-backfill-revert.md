@@ -1,6 +1,12 @@
 # zet Abstract Backfill Revert
 
-Status: implemented as a receipt-audited approval-gated revert in v0.3.220
+Historical v0.3 record — Status: implemented as a receipt-audited approval-gated revert in v0.3.220
+
+Current v0.4.0 boundary: the receipt audit and revert dry-run remain available,
+but approval is fixed fail-closed with
+`compound_exact_human_approval_binding_required` before private target read or
+mutation. It restores no canonical byte and creates no journal, lock, or revert
+receipt. The later write sections describe historical v0.3 evidence only.
 
 ## Purpose
 
@@ -50,20 +56,14 @@ archive zet-abstract-backfill-revert <archive-root> --receipt receipts/revisions
 The audit reads canonical bytes but writes nothing. Green is reversibility
 evidence, not removal authority.
 
-## Approved Revert
+## Current v0.4.0 Approval Boundary
 
-A human must review removal of every abstract in the source receipt. Only then:
+Approval returns `compound_exact_human_approval_binding_required` before
+private target read or mutation. The historical v0.3 contract required
+`--affirm-abstract-removal-reviewed`; that flag and a reviewer label do not
+grant revert authority in v0.4.0.
 
-```text
-archive zet-abstract-backfill-revert <archive-root> --receipt receipts/revisions/abstract-backfill/<digest>.zet-abstract-backfill.json --expected-receipt-sha256 <receipt.sha256> --max-items 500 --approve --reviewed-by person:<reviewer> --affirm-abstract-removal-reviewed --progress --format json
-```
-
-Exactly one of `--dry-run` and `--approve` is required. A new approved revert
-also requires a safe reviewer id and the explicit removal-review affirmation.
-An AI must never infer either from the source approval, a green audit, or prior
-conversation.
-
-## Mutation Contract
+## Historical v0.3.220 Mutation Contract
 
 The only allowed action is:
 

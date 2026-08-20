@@ -8,6 +8,8 @@ from pathlib import Path
 from typing import Any
 from unittest import mock
 
+from wom_kit import credential_popup_windows as _popup_module
+
 
 TOOL_PATH = (
     Path(__file__).resolve().parents[1]
@@ -18,7 +20,13 @@ SPEC = importlib.util.spec_from_file_location("wom_popup_acceptance", TOOL_PATH)
 if SPEC is None or SPEC.loader is None:
     raise RuntimeError("acceptance_tool_import_failed")
 TOOL = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(TOOL)
+_popup_module.prompt_secret_in_native_popup = (
+    _popup_module._prompt_secret_in_native_popup
+)
+try:
+    SPEC.loader.exec_module(TOOL)
+finally:
+    del _popup_module.prompt_secret_in_native_popup
 
 
 class WindowsCredentialPopupAcceptanceTests(unittest.TestCase):

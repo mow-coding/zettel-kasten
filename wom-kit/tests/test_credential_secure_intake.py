@@ -19,9 +19,9 @@ from unittest.mock import patch
 
 from wom_kit import credential_secure_intake as secure_intake_module
 from wom_kit.credential_secure_intake import (
-    AtomicJsonReceiptCommitter,
+    _AtomicJsonReceiptCommitter as AtomicJsonReceiptCommitter,
     CredentialIntakeStageError,
-    FileOneTimeRequestClaims,
+    _FileOneTimeRequestClaims as FileOneTimeRequestClaims,
     HumanSecretInputResult,
     InMemoryOneTimeRequestClaims,
     NOTION_PAT_SCOPE_FINGERPRINT_DOMAIN,
@@ -29,10 +29,10 @@ from wom_kit.credential_secure_intake import (
     NOTION_WORKSPACE_IDENTITY_BASIS,
     RECEIPT_SCHEMA_VERSION,
     RESULT_SCHEMA_VERSION,
-    SecureIntakeProcessLauncher,
-    SecureIntakeWorker,
+    _SecureIntakeProcessLauncher as SecureIntakeProcessLauncher,
+    _SecureIntakeWorker as SecureIntakeWorker,
     VerifiedCredentialIdentity,
-    WindowsCredentialManagerExactStore,
+    _WindowsCredentialManagerExactStore as WindowsCredentialManagerExactStore,
     WindowsMaskedDialog,
     apply_duplicate_lifecycle_decision,
     create_secure_intake_plan,

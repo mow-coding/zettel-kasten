@@ -1,5 +1,11 @@
 # zet Title Remap Receipt And Interruption Audit
 
+Current v0.4.0 boundary: this audit remains read-only. It may classify
+historical apply/revert evidence but grants no write, compensation, cleanup, or
+recovery authority; affected approvals fail with
+`compound_exact_human_approval_binding_required` before private target read or
+mutation.
+
 Status: v0.3.276 read-only apply and compensation evidence audit with separate recovery executors
 
 Use this command after a completed `zet-title-remap-write`, after an

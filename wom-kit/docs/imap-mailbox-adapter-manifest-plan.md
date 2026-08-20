@@ -152,10 +152,11 @@ imap-mailbox-plan
 -> imap-mailbox-selection-plan
 -> imap-mailbox-adapter-audit-plan
 -> imap-mailbox-adapter-preflight-plan
--> imap-mailbox-adapter-manifest-write
+-> imap-mailbox-adapter-manifest-write --dry-run
+-> stop; manifest approval is fixed closed in v0.4.0
 -> future read-only mailbox selection adapter, not implemented in v0.3.55
 -> future header-only metadata scan, not implemented in v0.3.55
--> imap-mailbox-adapter-audit-write
+-> historical audit evidence only
 -> future message capture with separate approval
 ```
 

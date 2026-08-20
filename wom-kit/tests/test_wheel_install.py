@@ -102,7 +102,7 @@ def patch_zip_member_name_bytes(wheel: Path, old_name: str, new_name: str) -> No
 
 
 class InstalledEntrypointTests(unittest.TestCase):
-    PACKAGE_VERSION = "0.3.320"
+    PACKAGE_VERSION = "0.4.0"
     SERVER_NAME = "zettel-kasten-archive-mcp"
 
     def setUp(self) -> None:
@@ -117,6 +117,55 @@ class InstalledEntrypointTests(unittest.TestCase):
 
     def tearDown(self) -> None:
         self.temp_directory.cleanup()
+
+    def test_run_parses_an_expected_fixed_close_exit_as_json(self) -> None:
+        payload = {
+            "ok": False,
+            "state": "blocked",
+            "reason_codes": [
+                "compound_exact_human_approval_binding_required"
+            ],
+        }
+        command = [
+            sys.executable,
+            "-c",
+            (
+                "import json,sys; "
+                f"print(json.dumps({payload!r})); "
+                "raise SystemExit(1)"
+            ),
+        ]
+
+        result = check_wheel_install.run(
+            command,
+            cwd=self.temp_root,
+            label="fixed-close fixture",
+            parse_json=True,
+            expected_returncode=1,
+            require_empty_stderr=True,
+        )
+
+        self.assertEqual(result, payload)
+        with self.assertRaises(check_wheel_install.WheelCheckError):
+            check_wheel_install.run(
+                command,
+                cwd=self.temp_root,
+                label="unexpected success contract",
+                parse_json=True,
+            )
+
+        noisy_command = [
+            sys.executable,
+            "-c",
+            "import sys; print('fixed stderr', file=sys.stderr)",
+        ]
+        with self.assertRaises(check_wheel_install.WheelCheckError):
+            check_wheel_install.run(
+                noisy_command,
+                cwd=self.temp_root,
+                label="stderr must be empty",
+                require_empty_stderr=True,
+            )
 
     def test_installed_runtime_dependencies_are_pip_clean_and_unicode17(self) -> None:
         python = self.scripts / "python.exe"
@@ -798,7 +847,7 @@ class InstalledEntrypointTests(unittest.TestCase):
                         cwd=self.temp_root,
                     )
 
-    def test_success_result_assembly_preserves_v02_contract(self) -> None:
+    def test_success_result_assembly_preserves_v03_contract(self) -> None:
         wheel_counts = {
             "manifested_resource_count": 103,
             "verified_resource_count": 103,
@@ -830,7 +879,7 @@ class InstalledEntrypointTests(unittest.TestCase):
             result,
             {
                 "ok": True,
-                "schema": "wom-kit/wheel-install-check/v0.2",
+                "schema": "wom-kit/wheel-install-check/v0.3",
                 "package_version": self.PACKAGE_VERSION,
                 **wheel_counts,
                 "entrypoints_checked": [
@@ -842,8 +891,11 @@ class InstalledEntrypointTests(unittest.TestCase):
                 "entrypoint_evidence": evidence,
                 "runtime_skill_lifecycle": "passed",
                 "onboarding_preview": "passed",
-                "onboarding_write": "passed",
-                "strict_doctor": "passed",
+                "onboarding_write": "fixed_closed",
+                "onboarding_write_reason_code": (
+                    "compound_exact_human_approval_binding_required"
+                ),
+                "strict_doctor": "passed_on_checked_in_fake_archive",
                 "wheel_filename": "wom_kit-0.3.296-py3-none-any.whl",
                 "wheel_sha256": "a" * 64,
                 "wheel_artifact_preserved": True,
@@ -851,7 +903,7 @@ class InstalledEntrypointTests(unittest.TestCase):
             },
         )
 
-    def test_main_uses_v02_success_and_failure_envelopes(self) -> None:
+    def test_main_uses_v03_success_and_failure_envelopes(self) -> None:
         success = {
             "ok": True,
             "schema": check_wheel_install.WHEEL_INSTALL_CHECK_SCHEMA,

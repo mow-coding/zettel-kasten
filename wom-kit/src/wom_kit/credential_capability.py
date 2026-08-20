@@ -5,7 +5,7 @@ It is issued in the parent process after explicit human approval, then checked
 and durably claimed by the isolated recovery worker before any credential read.
 
 This module deliberately does not persist claims or authenticate claim files.
-The receipt-backed registry owns that boundary.  ``CredentialCapabilityLease``
+The receipt-backed registry owns that boundary.  ``_CredentialCapabilityLease``
 is the small, thread-safe in-memory budget used only after a durable claim has
 been committed.
 """
@@ -243,7 +243,7 @@ def _strict_scopes(
 
 
 @dataclass(frozen=True, slots=True)
-class CredentialCapability:
+class _CredentialCapability:
     """One strict, single-invocation Notion recovery capability."""
 
     schema: str
@@ -364,7 +364,7 @@ class CredentialCapability:
 
     def __repr__(self) -> str:
         return (
-            "<CredentialCapability provider=notion "
+            "<_CredentialCapability provider=notion "
             "operation=notion_page_recovery_read bindings=redacted>"
         )
 
@@ -379,7 +379,7 @@ class CredentialCapability:
         max_provider_requests: int,
         issued_at: datetime | None = None,
         ttl_seconds: int = DEFAULT_CAPABILITY_TTL_SECONDS,
-    ) -> "CredentialCapability":
+    ) -> "_CredentialCapability":
         """Issue a fresh 128-bit parent-side capability after approval."""
 
         if issued_at is None:
@@ -421,7 +421,7 @@ class CredentialCapability:
         )
 
     @classmethod
-    def from_document(cls, document: Mapping[str, Any]) -> "CredentialCapability":
+    def from_document(cls, document: Mapping[str, Any]) -> "_CredentialCapability":
         """Parse one exact document and reject missing or unknown fields."""
 
         if type(document) is not dict or set(document) != _CAPABILITY_DOCUMENT_KEYS:
@@ -547,14 +547,14 @@ class CredentialCapability:
         if expected_scopes != self.scopes:
             raise _fail("credential_capability_scope_mismatch")
 
-    def new_lease(self, *, claimed_at: datetime) -> "CredentialCapabilityLease":
+    def new_lease(self, *, claimed_at: datetime) -> "_CredentialCapabilityLease":
         """Create the in-memory budget after the registry commits a claim."""
 
         self.assert_active(now_utc=claimed_at)
-        return CredentialCapabilityLease(self, claimed_at=claimed_at)
+        return _CredentialCapabilityLease(self, claimed_at=claimed_at)
 
 
-class CredentialCapabilityLease:
+class _CredentialCapabilityLease:
     """Thread-safe scope, endpoint, and provider-request budget after claim.
 
     ``expires_at`` is deliberately a claim deadline.  Once the registry has
@@ -570,11 +570,11 @@ class CredentialCapabilityLease:
 
     def __init__(
         self,
-        capability: CredentialCapability,
+        capability: _CredentialCapability,
         *,
         claimed_at: datetime,
     ) -> None:
-        if type(capability) is not CredentialCapability:
+        if type(capability) is not _CredentialCapability:
             raise _fail("credential_capability_lease_invalid")
         claimed = _validate_exact_utc_datetime(
             claimed_at, code="credential_capability_claimed_at_invalid"
@@ -585,10 +585,10 @@ class CredentialCapabilityLease:
         self._lock = threading.Lock()
 
     def __repr__(self) -> str:
-        return "<CredentialCapabilityLease bindings=redacted>"
+        return "<_CredentialCapabilityLease bindings=redacted>"
 
     @property
-    def capability(self) -> CredentialCapability:
+    def capability(self) -> _CredentialCapability:
         return self._capability
 
     @property
@@ -640,9 +640,7 @@ __all__ = [
     "CREDENTIAL_CAPABILITY_PROVIDER",
     "CREDENTIAL_CAPABILITY_REQUIRED_REGISTERED_CAPABILITIES",
     "CREDENTIAL_CAPABILITY_SCHEMA",
-    "CredentialCapability",
     "CredentialCapabilityError",
-    "CredentialCapabilityLease",
     "CredentialCapabilityScope",
     "DEFAULT_CAPABILITY_TTL_SECONDS",
     "MAX_CAPABILITY_PROVIDER_REQUESTS",

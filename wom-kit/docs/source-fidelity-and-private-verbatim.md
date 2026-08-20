@@ -1,6 +1,6 @@
 # Source Fidelity And Private Verbatim Preservation
 
-Status: v0.3.313 implementation contract
+Status: v0.4.0 exact-human and private session-evidence contract; v0.3.313 baseline preserved
 
 ## The problem this contract closes
 
@@ -87,9 +87,39 @@ CLI create uses `--source-fidelity`, `--fidelity-audience`, and
 `--draft-approved-by`, `--expected-body-sha256`, and
 `--expected-source-fidelity-plan-sha256`. Approved mint also requires the
 current fidelity-plan hash. MCP `create_draft_zettel` exposes the matching
-mode, audience, object, approval, reviewer, body-hash, and plan-hash fields
-while binding its own AI runtime identity. MCP `mint_zettel_check` remains
+dry-run inputs while binding its own AI runtime identity, but v0.4.0 rejects
+`approved: true` with `exact_human_approval_cli_required`; MCP cannot display
+the local native dialog or supply a claim. MCP `mint_zettel_check` remains
 preview-only.
+
+## v0.4.0 Session Evidence And Approval Link
+
+`source-fidelity-session-evidence --dry-run|--approve` can bind reviewed
+private UTF-8 session evidence without turning a mutable path or raw session
+reference into public authority. The source must be under the fixed private
+session-evidence scratch boundary. Its role, producer kind, produced/captured
+times, exact byte digest, and optional input-provenance digests form the plan;
+ordinary output and the receipt return no source text, path value, or raw
+session ref.
+
+Approved session evidence and AI draft creation use the exact-human sequence:
+
+```text
+native TaskDialog -> authenticated durable started claim -> writer -> workflow finalize
+```
+
+There is no issued approval receipt with a time-to-live. The writer revalidates
+the current exact plan and target binding immediately before mutation, and the
+workflow alone finalizes the claim. A surviving `started` state is unknown and
+must be reconciled rather than retried automatically.
+
+The strict source-fidelity receipt remains immutable. A separate create-only,
+HMAC-authenticated approval-link receipt binds it to the exact approval claim
+after all source-fidelity evidence is verified. Reading or verifying that link
+requires the archive authentication key and a matching authenticated
+`succeeded` claim. Only `effect=created` proves that the approved invocation
+created the source operation. `effect=already_present_exact` records a later
+review and does not rewrite or silently upgrade historical evidence.
 
 ## Privacy and authority boundary
 

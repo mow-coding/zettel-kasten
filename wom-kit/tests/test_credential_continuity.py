@@ -9,18 +9,18 @@ from pathlib import Path
 import yaml
 
 from wom_kit.credential_continuity import (
-    AdapterProcessResult,
+    _AdapterProcessResult as AdapterProcessResult,
     CredentialContinuityError,
-    CredentialUseBroker,
-    KeePassXCExactEntryAdapter,
-    TrustedConsumerRegistry,
-    WindowsCredentialManagerExactAdapter,
-    approve_credential_adoption,
-    discover_local_credential_candidates,
+    _CredentialUseBroker as CredentialUseBroker,
+    _KeePassXCExactEntryAdapter as KeePassXCExactEntryAdapter,
+    _TrustedConsumerRegistry as TrustedConsumerRegistry,
+    _WindowsCredentialManagerExactAdapter as WindowsCredentialManagerExactAdapter,
+    _approve_credential_adoption as approve_credential_adoption,
+    _discover_local_credential_candidates as discover_local_credential_candidates,
     lookup_credential_binding,
-    plan_credential_adoption,
-    verify_credential_provider_for_adoption,
-    verify_credential_store_for_adoption,
+    _plan_credential_adoption as plan_credential_adoption,
+    _verify_credential_provider_for_adoption as verify_credential_provider_for_adoption,
+    _verify_credential_store_for_adoption as verify_credential_store_for_adoption,
 )
 
 

@@ -1,23 +1,27 @@
 # Legacy Coordination Cleanup
 
-Status: implemented CLI-only, exact-root, cross-platform dry-run with
-Windows-only approved filesystem cleanup in v0.3.307
+Status: exact-root cross-platform dry-run only in v0.4.0; v0.3.307 Windows
+cleanup is historical
+
+Current boundary: cleanup approval fails with
+`compound_exact_human_approval_binding_required` before workspace read or
+mutation. It deletes or creates nothing. Approval examples below document the
+historical v0.3.307 receipt-less contract and are not v0.4.0 run instructions.
 
 `archive legacy-coordination-cleanup` previews one retired local-state tree on
-every supported platform without writing or exposing content. On Windows only,
-it may remove that tree after a human reviews the plan and repeats its exact
-SHA-256 with explicit authority statements. It does not restore MOW Harness
+every supported platform without writing or exposing content. In v0.4.0 it
+cannot remove the tree on any platform. It does not restore MOW Harness
 support.
 
 ## Beginner Summary
 
 This is not an automatic cleaner.
 
-Think of it as a two-step disposal form:
+Think of it as a review-only disposal form:
 
 1. You name one exact workspace root and inspect a dry-run.
-2. On Windows only, and only if the plan is still unchanged, the workspace owner
-   may approve removal of that root's direct `.mow-harness/` child.
+2. Stop. Approval returns `compound_exact_human_approval_binding_required`
+   before workspace reads or mutation.
 
 The command never searches the computer for old installations. Doctor, upgrade,
 project update, archive discovery, and normal artifact-hygiene checks never run
@@ -41,10 +45,9 @@ derives only this one candidate:
 
 It does not accept `.mow-harness/` itself, a relative path, a drive root, an
 account-profile root, a UNC/device namespace, or a broader directory to search.
-Every supplied ancestor must be a real non-link directory. On Windows, approved
-cleanup retains handles to every workspace ancestor and the workspace root for
-the entire operation so those path components cannot be replaced underneath the
-command. A sibling `collab/` remains outside both tree traversal and mutation.
+Every supplied ancestor must be a real non-link directory. A sibling `collab/`
+remains outside both tree traversal and mutation. Historical v0.3 Windows
+handle-retention details below are audit context only.
 
 The command fails closed when the target or any scanned entry is:
 
@@ -120,24 +123,12 @@ a quarantine name. Windows reparse points and named
 alternate data streams block, while Linux dry-run uses `mnt_id` evidence to
 block cross-mount entries.
 
-## Step 2: Windows Approved Cleanup
+## Historical v0.3 Windows Cleanup Evidence
 
-On Windows, first close editors and pause sync, backup, indexing, terminal, and
-other processes that could write inside the workspace. Then reuse the exact
-`plan_sha256` from the dry-run:
-
-```powershell
-$planSha256 = '<64-lowercase-hex-from-plan-sha256>'
-
-archive legacy-coordination-cleanup $workspaceRoot `
-  --approve `
-  --reviewed-by 'person:workspace-owner' `
-  --expected-plan-sha256 $planSha256 `
-  --affirm-workspace-owner-authorized `
-  --affirm-external-writers-quiescent `
-  --affirm-retired-state-disposable `
-  --format json
-```
+Historical v0.3.307 Windows runs used the exact unchanged plan digest plus
+workspace-owner, external-writer-quiescence, and retired-state-disposal
+affirmations. v0.4.0 accepts no approved cleanup invocation and deletes or
+creates nothing.
 
 Approval requires all of the following:
 

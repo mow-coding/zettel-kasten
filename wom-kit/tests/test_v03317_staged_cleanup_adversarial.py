@@ -423,12 +423,21 @@ class StagedCleanupAdversarialV03317Tests(unittest.TestCase):
                 manifest_path=request_path,
             )
             self.assertTrue(plan["ok"], plan)
-            applied = completion_workflows.objet_capture_batch_apply(
-                archive_root,
-                manifest_path=request_path,
-                expected_plan_sha256=plan["summary"]["plan_sha256"],
-                reviewed_by="person:letter130-replay-test",
-            )
+            # Reproduce a historical pre-v0.4 replay receipt without reopening
+            # the public compound writer.
+            with patch.object(
+                archive_services,
+                "_derived_text_register",
+                archive_services._derived_text_register_legacy_core,
+            ):
+                applied = (
+                    completion_workflows._objet_capture_batch_apply_legacy_core(
+                        archive_root,
+                        manifest_path=request_path,
+                        expected_plan_sha256=plan["summary"]["plan_sha256"],
+                        reviewed_by="person:letter130-replay-test",
+                    )
+                )
             self.assertTrue(applied["ok"], applied)
 
             result = archive_services.staged_cleanup_check(
@@ -481,18 +490,26 @@ class StagedCleanupAdversarialV03317Tests(unittest.TestCase):
             ]
             self._write_jsonl(derived_manifest, rows)
 
-            repaired = archive_services.derived_text_capture_apply(
-                archive_root,
-                text_file=fixture["derived_path"],
-                source_object_id=derived_record["source_object_id"],
-                derivation_kind=derived_record["derivation_kind"],
-                tool_name=derived_record["tool_name"],
-                tool_version=derived_record["tool_version"],
-                review_status=derived_record["review_status"],
-                reviewed_by="person:letter130-repair-test",
-                language=derived_record.get("language"),
-                born_digital=bool(derived_record.get("born_digital", False)),
-            )
+            with patch.object(
+                archive_services,
+                "_derived_text_register",
+                archive_services._derived_text_register_legacy_core,
+            ):
+                repaired = archive_services._derived_text_capture_run(
+                    archive_root,
+                    text_file=fixture["derived_path"],
+                    source_object_id=derived_record["source_object_id"],
+                    derivation_kind=derived_record["derivation_kind"],
+                    tool_name=derived_record["tool_name"],
+                    tool_version=derived_record["tool_version"],
+                    review_status=derived_record["review_status"],
+                    approve=True,
+                    reviewed_by="person:letter130-repair-test",
+                    language=derived_record.get("language"),
+                    born_digital=bool(
+                        derived_record.get("born_digital", False)
+                    ),
+                )
             self.assertTrue(repaired["ok"], repaired)
             self.assertEqual(repaired["planned_action"], "repair_append")
             self.assertEqual(repaired["action"], "repair_appended")

@@ -132,7 +132,7 @@ def run_session(
     )
 
     def default_consumer(
-        api: session.PrivateObjetIndexReadAPI,
+        api: session._PrivateObjetIndexReadAPI,
         health: object,
     ) -> None:
         assert api.scalar("SELECT COUNT(*) FROM private_probe") == 1
@@ -351,7 +351,7 @@ class PrivateObjetIndexReadSessionTests(unittest.TestCase):
             real_open = session._open_private_objet_index_connection
             events: list[tuple[str, str]] = []
             proxies: list[RecordingConnection] = []
-            saved_api: list[session.PrivateObjetIndexReadAPI] = []
+            saved_api: list[session._PrivateObjetIndexReadAPI] = []
             captures = iter(
                 [
                     SyntheticAuthorityCapture(("authority", 1)),
@@ -370,7 +370,7 @@ class PrivateObjetIndexReadSessionTests(unittest.TestCase):
                 return next(captures)
 
             def inspect_health(
-                api: session.PrivateObjetIndexReadAPI,
+                api: session._PrivateObjetIndexReadAPI,
                 authority: object,
             ) -> dict[str, object]:
                 events.append(("callback", "health"))
@@ -379,7 +379,7 @@ class PrivateObjetIndexReadSessionTests(unittest.TestCase):
                 return current_health()
 
             def consume(
-                api: session.PrivateObjetIndexReadAPI,
+                api: session._PrivateObjetIndexReadAPI,
                 health: object,
             ) -> None:
                 events.append(("callback", "consumer"))
@@ -391,7 +391,7 @@ class PrivateObjetIndexReadSessionTests(unittest.TestCase):
                 return None
 
             def final_check(
-                api: session.PrivateObjetIndexReadAPI,
+                api: session._PrivateObjetIndexReadAPI,
                 authority: object,
             ) -> bool:
                 events.append(("callback", "final"))
@@ -653,7 +653,7 @@ class PrivateObjetIndexReadSessionTests(unittest.TestCase):
         capture_calls = 0
 
         def unavailable_health(
-            _api: session.PrivateObjetIndexReadAPI,
+            _api: session._PrivateObjetIndexReadAPI,
             _authority: object,
         ) -> dict[str, object]:
             raise session.PrivateObjetIndexSessionError(
@@ -908,7 +908,7 @@ class PrivateObjetIndexReadSessionTests(unittest.TestCase):
                 create_synthetic_archive(root)
 
                 def consumer(
-                    api: session.PrivateObjetIndexReadAPI,
+                    api: session._PrivateObjetIndexReadAPI,
                     _health: object,
                 ) -> None:
                     api.fetch_all(statement)
@@ -1008,7 +1008,7 @@ class PrivateObjetIndexReadSessionTests(unittest.TestCase):
                 return sentinel
 
             def inspect_health(
-                api: session.PrivateObjetIndexReadAPI,
+                api: session._PrivateObjetIndexReadAPI,
                 _authority: object,
             ) -> dict[str, object]:
                 self.assertIs(

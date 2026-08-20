@@ -31,8 +31,10 @@ REQUEST_SCHEMA = "wom-kit/operator-feedback-body-request/v0.1"
 PLAN_SCHEMA = "wom-kit/operator-feedback-body-plan/v0.1"
 RECEIPT_SCHEMA = "wom-kit/operator-feedback-body-receipt/v0.1"
 RESULT_SCHEMA = "wom-kit/operator-feedback-body-result/v0.1"
+CLI_REQUIRE_ARCHIVE_MARKER = True
 
 REQUEST_PREFIX = "profiles/local/operator-feedback/requests"
+REQUEST_PATH_PATTERN = "profiles/local/operator-feedback/requests/<name>.json"
 BODY_PREFIX = "ops/feedback/letters"
 RECEIPT_PREFIX = "receipts/operator-feedback/body"
 RECORD_PREFIX = "ops/feedback"
@@ -170,7 +172,11 @@ def _canonical_json_bytes(value: Any) -> bytes:
         raise _fail("feedback_body_request_invalid") from None
 
 
-def _validated_root(archive_root: Path | str) -> Path:
+def _validated_root(
+    archive_root: Path | str,
+    *,
+    require_archive_marker: bool = False,
+) -> Path:
     supplied = Path(archive_root)
     if not supplied.is_absolute():
         supplied = Path(os.path.abspath(os.fspath(supplied)))
@@ -178,11 +184,19 @@ def _validated_root(archive_root: Path | str) -> Path:
         info = os.lstat(supplied)
         if _is_reparse(info) or not stat.S_ISDIR(info.st_mode):
             raise _fail("feedback_body_archive_root_unsafe")
-        return supplied.resolve(strict=True)
+        root = supplied.resolve(strict=True)
     except _BodyContractError:
         raise
     except OSError:
         raise _fail("feedback_body_archive_root_unavailable") from None
+    if require_archive_marker:
+        try:
+            marker = os.lstat(root / "archive.yml")
+        except OSError:
+            raise _fail("feedback_body_archive_root_invalid") from None
+        if _is_reparse(marker) or not stat.S_ISREG(marker.st_mode):
+            raise _fail("feedback_body_archive_root_invalid")
+    return root
 
 
 def _archive_path(root: Path, relative: str) -> Path:
@@ -530,6 +544,12 @@ def _empty_result(action: str, *, dry_run: bool) -> dict[str, Any]:
         "would_change": [],
         "files_written": [],
         "next_safe_actions": [],
+        "requirements": {
+            "archive_root": "existing WOM archive root containing archive.yml",
+            "request_path_scope": "archive_relative",
+            "request_path_pattern": REQUEST_PATH_PATTERN,
+            "request_must_be_private_and_git_ignored": True,
+        },
         "external_delivery_performed": False,
         "privacy_guards": {
             "title_echoed": False,
@@ -554,9 +574,13 @@ def _prepare_plan(
     *,
     action: str,
     dry_run: bool,
+    require_archive_marker: bool = False,
 ) -> tuple[dict[str, Any], _PreparedPlan | None]:
     try:
-        root = _validated_root(archive_root)
+        root = _validated_root(
+            archive_root,
+            require_archive_marker=require_archive_marker,
+        )
         request_relative = _normalize_request_path(root, request_path)
         _require_effective_gitignore(root, request_relative)
         raw = _read_exact_bytes(
@@ -693,6 +717,8 @@ def _prepare_plan(
 def plan_operator_feedback_body(
     archive_root: Path | str,
     request_path: Path | str,
+    *,
+    require_archive_marker: bool = False,
 ) -> dict[str, Any]:
     """Return a content-free, write-free plan for one reviewed body request."""
 
@@ -701,6 +727,7 @@ def plan_operator_feedback_body(
         request_path,
         action="operator_feedback_body_plan",
         dry_run=True,
+        require_archive_marker=require_archive_marker,
     )
     return result
 
@@ -891,6 +918,7 @@ def approve_operator_feedback_body(
     *,
     expected_plan_sha256: str,
     reviewed_by: str,
+    require_archive_marker: bool = False,
 ) -> dict[str, Any]:
     """Write the exact reviewed body and receipt without touching metadata."""
 
@@ -899,6 +927,7 @@ def approve_operator_feedback_body(
         request_path,
         action="operator_feedback_body_approve",
         dry_run=False,
+        require_archive_marker=require_archive_marker,
     )
     if prepared is None:
         return result
@@ -1248,6 +1277,8 @@ def _check_receipt(
 def check_operator_feedback_body(
     archive_root: Path | str,
     feedback_id: str,
+    *,
+    require_archive_marker: bool = False,
 ) -> dict[str, Any]:
     """Verify body, receipt, and existing metadata binding without echoing body."""
 
@@ -1262,7 +1293,10 @@ def check_operator_feedback_body(
     body_relative = f"{BODY_PREFIX}/{feedback_id}.md"
     result["proposed_relative_path"] = body_relative
     try:
-        root = _validated_root(archive_root)
+        root = _validated_root(
+            archive_root,
+            require_archive_marker=require_archive_marker,
+        )
         raw = _read_exact_bytes(
             root,
             _archive_path(root, body_relative),
@@ -1333,6 +1367,7 @@ def check_operator_feedback_body(
 
 
 __all__ = [
+    "CLI_REQUIRE_ARCHIVE_MARKER",
     "approve_operator_feedback_body",
     "check_operator_feedback_body",
     "plan_operator_feedback_body",

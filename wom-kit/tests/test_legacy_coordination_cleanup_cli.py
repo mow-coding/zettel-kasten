@@ -93,8 +93,8 @@ class LegacyCoordinationCleanupCliTests(unittest.TestCase):
             for action in command._actions
             if "--approve" in action.option_strings
         )
-        self.assertIn("windows only", approve_action.help.lower())
-        self.assertIn("posix platforms support dry-run preview only", approve_action.help.lower())
+        self.assertIn("unavailable in v0.4.0", approve_action.help.lower())
+        self.assertIn("dry-run, plan, or audit", approve_action.help.lower())
 
         with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
             parser.parse_args(["legacy-coordination-cleanup", "workspace"])
@@ -150,8 +150,7 @@ class LegacyCoordinationCleanupCliTests(unittest.TestCase):
         )
         plan.assert_not_called()
 
-    def test_approve_propagates_every_destructive_affirmation(self) -> None:
-        result = self.apply_result()
+    def test_approve_fails_closed_before_cleanup_service(self) -> None:
         expected_plan_sha256 = "b" * 64
         with tempfile.TemporaryDirectory() as tmp, mock.patch.object(
             archive_cli.legacy_cleanup,
@@ -159,7 +158,7 @@ class LegacyCoordinationCleanupCliTests(unittest.TestCase):
         ) as plan, mock.patch.object(
             archive_cli.legacy_cleanup,
             "legacy_coordination_cleanup",
-            return_value=result,
+            return_value=self.apply_result(),
         ) as apply:
             workspace_root = Path(tmp) / "generated-workspace"
             code, output = self.run_cli(
@@ -184,33 +183,29 @@ class LegacyCoordinationCleanupCliTests(unittest.TestCase):
                 ]
             )
 
-        self.assertEqual(code, 0, output)
-        self.assertEqual(json.loads(output), result)
-        apply.assert_called_once_with(
-            workspace_root,
-            dry_run=False,
-            approve=True,
-            expected_plan_sha256=expected_plan_sha256,
-            reviewed_by="person:test",
-            affirm_workspace_owner_authorized=True,
-            affirm_external_writers_quiescent=True,
-            affirm_retired_state_disposable=True,
-            affirm_backups_and_receipts_disposable=True,
-            max_files=24,
-            max_bytes=7890,
+        self.assertEqual(code, 1, output)
+        self.assertEqual(
+            json.loads(output),
+            {
+                "ok": False,
+                "state": "blocked",
+                "lifecycle_action": "legacy_coordination_cleanup",
+                "reason_codes": [
+                    "compound_exact_human_approval_binding_required"
+                ],
+                "files_written": [],
+                "private_values_echoed": False,
+            },
         )
+        apply.assert_not_called()
         plan.assert_not_called()
 
     def test_blocked_and_partial_results_exit_nonzero(self) -> None:
         blocked = self.plan_result(ok=False, status="blocked")
-        partial = self.apply_result(
-            ok=False,
-            status="partial_cleanup_pending",
-        )
         with tempfile.TemporaryDirectory() as tmp, mock.patch.object(
             archive_cli.legacy_cleanup,
             "legacy_coordination_cleanup",
-            side_effect=[blocked, partial],
+            return_value=blocked,
         ):
             workspace_root = Path(tmp) / "generated-workspace"
             blocked_code, blocked_output = self.run_cli(
@@ -235,9 +230,10 @@ class LegacyCoordinationCleanupCliTests(unittest.TestCase):
         self.assertEqual(blocked_code, 1, blocked_output)
         self.assertEqual(partial_code, 1, partial_output)
         self.assertEqual(json.loads(blocked_output)["status"], "blocked")
+        self.assertEqual(json.loads(partial_output)["state"], "blocked")
         self.assertEqual(
-            json.loads(partial_output)["status"],
-            "partial_cleanup_pending",
+            json.loads(partial_output)["reason_codes"],
+            ["compound_exact_human_approval_binding_required"],
         )
 
     def test_text_output_is_count_only_and_does_not_echo_private_paths(self) -> None:
@@ -273,7 +269,7 @@ class LegacyCoordinationCleanupCliTests(unittest.TestCase):
         self.assertNotIn(private_sentinel, output)
         self.assertNotIn("secret-mailbox.json", output)
 
-    def test_capabilities_exposes_destructive_opt_in_without_alias_or_broad_path(self) -> None:
+    def test_capabilities_exposes_preview_only_boundary_without_broad_path(self) -> None:
         code, output = self.run_cli(["capabilities", "--machine"])
         self.assertEqual(code, 0, output)
         result = json.loads(output)
@@ -300,11 +296,11 @@ class LegacyCoordinationCleanupCliTests(unittest.TestCase):
         self.assertTrue(expected_options.issubset(set(command["options"])))
         self.assertNotIn("--target", command["options"])
         self.assertNotIn("--path", command["options"])
-        self.assertIn("destructive opt-in", command["help"].lower())
+        self.assertIn("unavailable in v0.4.0", command["help"].lower())
         self.assertIn("collab/ is never traversed or changed", command["help"].lower())
 
     @unittest.skipUnless(os.name == "nt", "approved apply is Windows-only")
-    def test_real_generated_workspace_dry_run_and_approved_cleanup(self) -> None:
+    def test_real_generated_workspace_dry_run_and_approve_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             workspace = Path(tmp) / "generated-workspace"
             archive = workspace / "archive"
@@ -362,10 +358,14 @@ class LegacyCoordinationCleanupCliTests(unittest.TestCase):
                     "json",
                 ]
             )
-            self.assertEqual(apply_code, 0, apply_output)
+            self.assertEqual(apply_code, 1, apply_output)
             apply_result = json.loads(apply_output)
-            self.assertEqual(apply_result["status"], "cleanup_completed")
-            self.assertFalse((workspace / ".mow-harness").exists())
+            self.assertEqual(apply_result["state"], "blocked")
+            self.assertEqual(
+                apply_result["reason_codes"],
+                ["compound_exact_human_approval_binding_required"],
+            )
+            self.assertTrue((workspace / ".mow-harness").exists())
             self.assertEqual(collab_file.read_bytes(), b"outside-collab-sentinel")
             self.assertEqual(outside_file.read_bytes(), b"outside-sentinel")
             residues = [

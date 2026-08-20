@@ -2,9 +2,23 @@
 
 Status: public navigation baseline
 Date: 2026-06-02
-Updated: 2026-08-15
+Updated: 2026-08-20
 Philosophy clarified: 2026-07-15
 Harness compatibility clarified: 2026-07-16
+
+Current v0.4.0 write boundary: 79 canonical top-level compound, batch, revert,
+archive-authority, durable, and external commands remain available only for
+their command-specific plan/dry-run/audit behavior. Their approval branches
+return `compound_exact_human_approval_binding_required` before private target,
+project, input, credential, or provider reads and write nothing. Links whose
+titles retain “write”, “revert”, or “recovery” document preview shapes and
+historical receipts; they are not executable approval instructions.
+Nested derive capture, non-exact/non-AI draft creation, real init, and
+parcel/pack creation are separately fixed closed.
+
+Letter 138 is an urgent follow-on, not a v0.4.0 capability. Current Notion
+recovery covers page bodies or locations only; it is not a complete source
+mirror and does not detect or repair historical typed-property loss.
 
 This repository intentionally separates four kinds of public project records:
 
@@ -63,6 +77,9 @@ Supporting philosophy and model docs:
 - [v0.3.319 Letter 132 Credential Input Evidence Decision](archive-infra-decision-log-2026-08-14-v03319-letter132-credential-input-evidence.md)
 - [v0.3.320 Credential Capability Broker Decision](archive-infra-decision-log-2026-08-15-v03320-credential-capability-broker.md)
 - [Credential Capability Contract](credential-capability-contract.md)
+- [Exact Human Approval Contract](exact-human-approval-contract.md)
+- [v0.4.0 Exact Human Control And Operator Friction Decision](archive-infra-decision-log-2026-08-20-v0400-letter136-operator-friction.md)
+- [Human Artifact Store And Private Registry Contract](human-artifact-store-contract.md)
 - [Project Version Update](project-version-update.md)
 - [Derived Text Capture And Paired-Batch Recovery](derived-text.md)
 - [Letters 120 and 123 Index Lifecycle And Feedback Body](letter120-123-index-lifecycle-and-feedback-body.md)
@@ -91,20 +108,20 @@ Supporting philosophy and model docs:
 - [zet Catalog Compact Continuations](zet-catalog-compact-continuations.md)
 - [zet Catalog Pass Artifact Lifecycle](zet-catalog-pass-artifact-lifecycle.md)
 - [zet Abstract Backfill Plan](zet-abstract-backfill-plan.md)
-- [zet Abstract Backfill Write](zet-abstract-backfill-write.md)
-- [zet Abstract Backfill Revert](zet-abstract-backfill-revert.md)
+- [zet Abstract Backfill Write Preview](zet-abstract-backfill-write.md)
+- [zet Abstract Backfill Revert Preview](zet-abstract-backfill-revert.md)
 - [zet Abstract Receipt Lifecycle Audit](zet-abstract-backfill-receipt-audit.md)
 - [zet Abstract Backfill Recovery Plan](zet-abstract-backfill-recovery-plan.md)
-- [zet Abstract Backfill Recovery Executor](zet-abstract-backfill-recover.md)
+- [zet Abstract Backfill Recovery Preview](zet-abstract-backfill-recover.md)
 - [Reviewed zet Title Remap Plan](zet-title-remap-plan.md)
-- [Approved zet Title Remap Write](zet-title-remap-write.md)
+- [zet Title Remap Write Preview](zet-title-remap-write.md)
 - [zet Title Remap Receipt And Interruption Audit](zet-title-remap-receipt-audit.md)
 - [zet Title Remap Recovery Plan](zet-title-remap-recovery-plan.md)
-- [zet Title Remap Recover](zet-title-remap-recover.md)
+- [zet Title Remap Recovery Preview](zet-title-remap-recover.md)
 - [zet Title Remap Completed-Receipt Revert Plan](zet-title-remap-revert-plan.md)
-- [Approved zet Title Remap Revert](zet-title-remap-revert.md)
+- [zet Title Remap Revert Preview](zet-title-remap-revert.md)
 - [zet Title Remap Revert Recovery Plan](zet-title-remap-revert-recovery-plan.md)
-- [zet Title Remap Revert Recover](zet-title-remap-revert-recover.md)
+- [zet Title Remap Revert Recovery Preview](zet-title-remap-revert-recover.md)
 - [Contiguous Node Reading](zet-catalog-contiguous-reading.md)
 - [Seeded Connection Reading Order](seeded-connection-reading-order.md)
 - [Seeded Reading Route Evidence](seeded-reading-route-evidence.md)
@@ -435,6 +452,7 @@ These documents record public-safe work already performed.
 - [v0.2.11 Delegate Capability Contract Work Log](../plans/work-log-2026-05-23-delegate-capability-contract.md)
 - [Changelog](../../CHANGELOG.md)
 - [Release Notes](releases/)
+- [v0.4.0 Release Note](releases/v0.4.0.md)
 - [v0.3.320 Release Note](releases/v0.3.320.md)
 - [v0.3.308 Release Note](releases/v0.3.308.md)
 - [v0.3.309 Release Note](releases/v0.3.309.md)
@@ -475,6 +493,16 @@ Schemas:
 
 - [Schemas Directory](../schemas/)
 - [Source-Fidelity Draft Receipt Schema](../schemas/source-fidelity-draft-receipt.schema.json)
+- [Source-Fidelity Draft Receipt v0.2 Schema](../schemas/source-fidelity-draft-receipt-v0.2.schema.json)
+- [Source-Fidelity Session-Evidence Receipt Schema](../schemas/source-fidelity-session-evidence-receipt-v0.1.schema.json)
+- [Exact-Human Operation Approval Schema](../schemas/operation-exact-human-approval-v0.1.schema.json)
+- [Exact-Human Approval Link Schema](../schemas/exact-human-approval-link-receipt-v0.1.schema.json)
+- [Human-Artifact Registry Schema](../schemas/human-artifact-registry-v0.1.schema.json)
+- [Duplicate-Object Reconciliation Receipt Schema](../schemas/duplicate-object-reconciliation-receipt-v0.1.schema.json)
+- [Approval-Integrity Audit Result Schema](../schemas/approval-integrity-audit-result-v0.1.schema.json)
+- [Approval-Integrity Overlay Entry Schema](../schemas/approval-integrity-overlay-entry-v0.1.schema.json)
+- [Agent Instruction Policy Schema](../schemas/agent-instruction-policy-v0.1.schema.json)
+- [Approval Handoff Schema](../schemas/approval-handoff-v0.1.schema.json)
 - [IMAP Mailbox Adapter Manifest Schema](../schemas/imap-mailbox-adapter-manifest.schema.json)
 - [Credential Capability v0.1 Schema](../schemas/credential-capability-v0.1.schema.json)
 

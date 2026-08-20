@@ -43,7 +43,7 @@ durable edge write:
 
 ```text
 candidate edge -> meaning/mechanism review -> human approval -> zettel-edge
-candidate edge set -> reviewed policy -> zettel-edge-batch
+candidate edge set -> reviewed policy -> zettel-edge-batch --dry-run -> stop
 ```
 
 It keeps two axes separate:
@@ -73,9 +73,11 @@ This means `ambiguous_count: 0` does not mean the edge candidates are ready to
 write. For example, a clean Notion relation can still require review because
 it may fit a richer provisional meaning such as `responds_to` or `fulfills`.
 
-For high-confidence sets, a human can now prepare a separate reviewed JSON plan
-for `archive zettel-edge-batch`. That later command writes only candidates
-matching the approved policy and returns the rest in `human_review_queue`.
+For high-confidence sets, a human can prepare a separate reviewed JSON plan for
+`archive zettel-edge-batch --dry-run`. In v0.4.0 approval returns
+`compound_exact_human_approval_binding_required` before private target read or
+mutation and writes no item or batch receipt. Use the separately reviewed
+single `zettel-edge` exact-human path for one edge at a time.
 
 ## Current Active Meanings
 
@@ -136,8 +138,8 @@ relationship_meaning.suggested_id: version_replacement
 
 This does not read source bodies and does not write the edge. It only helps the
 reviewer see that a newer plan, correction, or revision may replace an older
-zet. Durable writes still require a later human-approved `zettel-edge` or
-`zettel-edge-batch` step.
+zet. A durable write requires the operation-specific exact-human single
+`zettel-edge` path. `zettel-edge-batch` is preview-only in v0.4.0.
 
 ## Provisional Meanings
 

@@ -21,11 +21,15 @@ from wom_kit.credential_secure_intake import (
 )
 from wom_kit.notion_http_adapter import (
     NOTION_API_VERSION,
-    NotionBearerSecret,
-    NotionHttpAdapter,
+    _NotionBearerSecret as NotionBearerSecret,
+    _NotionHttpAdapter as NotionHttpAdapter,
     NotionHttpAdapterError,
 )
-from wom_kit.notion_page_recovery import REQUEST_SCHEMA, execute_recovery, plan_recovery
+from wom_kit.notion_page_recovery import (
+    REQUEST_SCHEMA,
+    _execute_recovery as execute_recovery,
+    plan_recovery,
+)
 
 
 SECRET = "secret_N0t10n_PAT_must_never_leak"

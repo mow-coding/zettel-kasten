@@ -126,7 +126,7 @@ Before a profile-bound AI draft write, the AI should run a draft creation dry-ru
 archive create-draft <archive-root> --dry-run --expected-archive-id <id> --expected-type <type> --profile-id <profile-id> --format json
 ```
 
-The dry-run shows the proposed `inbox/` path, frontmatter preview, body hash, and replay values. It writes nothing. A later approved draft write must replay the expected body hash and include `draft-approved-by`; that approval is only for inbox draft creation, not minting.
+The dry-run shows the proposed `inbox/` path, frontmatter preview, body hash, and replay values. It writes nothing. The only v0.4.0 write is the unchanged AI-declared exact replay through native TaskDialog, a concrete authenticated claim, and operation-context re-derivation; human/non-exact requests are fixed closed. Draft approval is only for inbox creation, not minting.
 
 Before planning a GitHub repository for a WOM profile, the AI should run:
 
@@ -134,7 +134,7 @@ Before planning a GitHub repository for a WOM profile, the AI should run:
 archive github-repo <archive-root> --dry-run --profile-id <profile-id> --profile-slug <ascii-slug> --github-owner <owner> --github-account-ref <safe-ref> --format json
 ```
 
-The v0.2.20 planner proposes a private `zettel-kasten-<profile_slug>` repository, provider binding metadata, local profile hints, a setup receipt preview, and manual steps. Dry-run writes nothing. Approved mode writes only local metadata and a receipt; it still does not create a GitHub repository, start OAuth, call GitHub APIs, run `gh`, configure remotes, push, or sync.
+The v0.2.20 planner proposes a private `zettel-kasten-<profile_slug>` repository, provider binding metadata, local profile hints, a setup receipt preview, and manual steps. Dry-run writes nothing. In v0.4.0 approval returns `compound_exact_human_approval_binding_required` before private profile/target reads and writes no metadata or receipt; it also does not create a GitHub repository, start OAuth, call GitHub APIs, run `gh`, configure remotes, push, or sync.
 
 Before planning object storage for WOM objets, the AI should run:
 
@@ -142,7 +142,7 @@ Before planning object storage for WOM objets, the AI should run:
 archive object-storage <archive-root> --dry-run --provider <provider> --profile-id <profile-id> --profile-slug <ascii-slug> --storage-account-ref <safe-ref> --format json
 ```
 
-The v0.2.21 planner proposes a private bucket/container such as `zettel-kasten-<normalized-profile-slug>-objets`, an `archives/<archive_id>/objets/` prefix, provider binding metadata, local profile hints, a setup receipt preview, an objet storage policy preview, and manual steps. Dry-run writes nothing. Approved mode writes only local metadata and a receipt; it still does not create buckets, start OAuth, call provider APIs, upload, sync, copy, hash, or import source files.
+The v0.2.21 planner proposes a private bucket/container such as `zettel-kasten-<normalized-profile-slug>-objets`, an `archives/<archive_id>/objets/` prefix, provider binding metadata, local profile hints, a setup receipt preview, an objet storage policy preview, and manual steps. Dry-run writes nothing. In v0.4.0 approval returns `compound_exact_human_approval_binding_required` before private target/provider reads or mutation and writes no provider metadata or receipt; it also does not create buckets, start OAuth, call provider APIs, upload, sync, copy, hash, or import source files.
 
 But the AI should not silently:
 
@@ -198,14 +198,15 @@ stores zets, source maps, manifests, specs, and receipts. It should not be
 presented as the default place for private raw documents, videos, photos, or
 large binary originals.
 
-`capture intake staging` means a temporary one-project-folder working area
-INSIDE the archive root for a [project intake session](project-intake-session.md)
-that feeds objet capture (capture requires archive-relative staged paths; the
-date layer is recommended, not required). `bulk external staging` under the
-sibling objet store is for originals that must never enter git and are
-represented through `prehashed-objet-ledger` evidence. Neither is the archive
-of record. The durable records are objets, manifests, source maps, drafts,
-minted zets, and receipts. A raw in-root `objets/` folder is discouraged — see
+`capture intake staging` means a temporary one-project-folder review area
+INSIDE the archive root for a [project intake session](project-intake-session.md).
+In v0.4.0 it feeds dry-run selection/capture planning only; approval is fixed
+closed before private staged-byte reads or mutation. `bulk external staging`
+under the sibling objet store is human-owned original material that must never
+enter git. `prehashed-objet-ledger` may preview metadata but cannot register it
+in v0.4.0. Neither staging area is itself the archive of record, and WOM grants
+no copy, cleanup, capture, or manifest authority for it. A raw in-root
+`objets/` folder is discouraged — see
 the migration guide in [artifact-hygiene.md](artifact-hygiene.md).
 
 Do now:
@@ -276,7 +277,8 @@ If yes:
 - run `archive github-repo --dry-run`,
 - show that the default repo name is `zettel-kasten-<profile_slug>`,
 - ask for human review,
-- write local provider metadata only with `--approve --reviewed-by`,
+- stop because v0.4.0 GitHub metadata approval is fixed fail-closed and writes
+  no binding or receipt,
 - create/select the actual GitHub repository manually outside this batch,
 - configure Git remotes only after a separate explicit human step,
 - do not commit secrets.
@@ -298,6 +300,7 @@ If object storage is selected:
 - run `archive object-storage --dry-run`,
 - explain that local objet store means raw source/original files and the remote bucket is deferred unless the user explicitly proceeds,
 - review the proposed bucket/container, prefix, provider binding, and receipt,
+- stop because v0.4.0 object-storage approval is fixed fail-closed and writes no binding or receipt,
 - use provider login/API key flow outside WOM-kit,
 - store credentials in keyring/env/local profile,
 - write only references in `provider-bindings.yml`,
@@ -400,9 +403,8 @@ Examples:
 ```text
 "이 폴더를 적재해줘"
 -> add-source dry-run
--> scan-source dry-run
--> approval
--> source-map + receipt
+-> stop because add-source approval is fixed fail-closed in v0.4.0
+-> no source binding, source-map, or receipt
 ```
 
 ```text

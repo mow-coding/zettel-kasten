@@ -45,18 +45,18 @@ from pathlib import Path
 from typing import Any, Callable, Protocol
 
 from .credential_secure_intake import (
-    AtomicJsonReceiptCommitter,
-    FileOneTimeRequestClaims,
+    _AtomicJsonReceiptCommitter,
+    _FileOneTimeRequestClaims,
     HumanSecretInputResult,
     ProviderIdentityVerifier,
-    SecureIntakeWorker,
-    WindowsCredentialManagerExactStore,
+    _SecureIntakeWorker,
+    _WindowsCredentialManagerExactStore,
     _HumanSecretInputEvidenceError,
 )
 from .credential_popup_windows import (
     CredentialPopupContext,
     CredentialPopupInputIntent,
-    prompt_secret_in_native_popup,
+    _prompt_secret_in_native_popup,
 )
 
 
@@ -212,7 +212,7 @@ def _configure(function: Any, argtypes: list[Any], restype: Any) -> None:
         raise _fail("windows_native_load_failed") from None
 
 
-class CtypesWindowsNativeFacade:
+class _CtypesWindowsNativeFacade:
     """Explicitly approved ctypes implementation of the native facade."""
 
     def __init__(
@@ -250,7 +250,7 @@ class CtypesWindowsNativeFacade:
             self._popup_prompt = (
                 prompt_overrides[0]
                 if prompt_overrides
-                else prompt_secret_in_native_popup
+                else _prompt_secret_in_native_popup
             )
             self._configure_signatures()
         except WindowsSecureIntakeError:
@@ -259,7 +259,7 @@ class CtypesWindowsNativeFacade:
             raise _fail("windows_native_load_failed") from None
 
     def __repr__(self) -> str:
-        return "CtypesWindowsNativeFacade(live_approved=True, popup=True)"
+        return "_CtypesWindowsNativeFacade(live_approved=True, popup=True)"
 
     def _configure_signatures(self) -> None:
         _configure(
@@ -558,7 +558,7 @@ class CtypesWindowsNativeFacade:
 
 
 @dataclass
-class WindowsCredentialPopupSecretUI:
+class _WindowsCredentialPopupSecretUI:
     """Worker-only native-popup adapter with no fallback input channel."""
 
     native: WindowsSecureIntakeNative = field(repr=False)
@@ -583,9 +583,9 @@ class WindowsCredentialPopupSecretUI:
 
 # Source compatibility for integrations that imported the earlier names.
 # All production aliases now resolve to the native popup class above.
-WindowsAttachedConsoleSecretUI = WindowsCredentialPopupSecretUI
-WindowsVisibleConsoleSecretUI = WindowsCredentialPopupSecretUI
-WindowsNativeMaskedSecretUI = WindowsCredentialPopupSecretUI
+WindowsAttachedConsoleSecretUI = _WindowsCredentialPopupSecretUI
+WindowsVisibleConsoleSecretUI = _WindowsCredentialPopupSecretUI
+WindowsNativeMaskedSecretUI = _WindowsCredentialPopupSecretUI
 
 
 def current_windows_owner_binding(native: WindowsSecureIntakeNative) -> str:
@@ -637,7 +637,7 @@ def derive_windows_fingerprint_key(
     )
 
 
-def build_windows_secure_intake_worker(
+def _build_windows_secure_intake_worker(
     *,
     cli_live_approved: bool,
     claims_directory: Path | str,
@@ -651,13 +651,13 @@ def build_windows_secure_intake_worker(
     credential_id_factory: Any | None = None,
     backend_id_factory: Any | None = None,
     now_factory: Any | None = None,
-) -> SecureIntakeWorker:
+) -> _SecureIntakeWorker:
     """Assemble the Windows-first worker after explicit CLI approval.
 
     Construction queries only the current SID and creates no claim/receipt
     directory. The native popup, exact Credential Manager operations, and
     provider verifier run later inside
-    ``SecureIntakeWorker.execute``.
+    ``_SecureIntakeWorker.execute``.
     ``claims_directory`` must be lexically contained by the explicit
     ``archive_root``; omission or an outside path fails before the SID query.
     The master key must come from an approved secure configuration channel; it
@@ -684,16 +684,16 @@ def build_windows_secure_intake_worker(
     selected_native = (
         native
         if native is not None
-        else CtypesWindowsNativeFacade(cli_live_approved=True)
+        else _CtypesWindowsNativeFacade(cli_live_approved=True)
     )
     owner_binding = current_windows_owner_binding(selected_native)
     worker_kwargs: dict[str, Any] = {
-        "claims": FileOneTimeRequestClaims(
+        "claims": _FileOneTimeRequestClaims(
             canonical_claims_directory,
             archive_root=canonical_archive_root,
             expected_relative_directory=claims_relative_directory,
         ),
-        "ui": WindowsCredentialPopupSecretUI(
+        "ui": _WindowsCredentialPopupSecretUI(
             selected_native,
             prompt_context
             if prompt_context is not None
@@ -706,12 +706,12 @@ def build_windows_secure_intake_worker(
                 connection_reason="이 작업을 계속하려면 해당 Notion 작업공간 연결을 확인해 주세요.",
             ),
         ),
-        "store": WindowsCredentialManagerExactStore(
+        "store": _WindowsCredentialManagerExactStore(
             native=selected_native,
             target_prefix=windows_credential_target_prefix(archive_scope_id),
         ),
         "verifier": provider_verifier,
-        "receipt_committer": AtomicJsonReceiptCommitter(receipt_directory),
+        "receipt_committer": _AtomicJsonReceiptCommitter(receipt_directory),
         "fingerprint_key": derive_windows_fingerprint_key(
             fingerprint_master_key, owner_binding
         ),
@@ -722,21 +722,18 @@ def build_windows_secure_intake_worker(
         worker_kwargs["backend_id_factory"] = backend_id_factory
     if now_factory is not None:
         worker_kwargs["now_factory"] = now_factory
-    return SecureIntakeWorker(**worker_kwargs)
+    return _SecureIntakeWorker(**worker_kwargs)
 
 
 __all__ = [
-    "CtypesWindowsNativeFacade",
     "CredentialPopupPromptContext",
     "WindowsDllBundle",
     "WindowsAttachedConsoleSecretUI",
-    "WindowsCredentialPopupSecretUI",
     "WindowsNativeMaskedSecretUI",
     "WindowsVisibleConsoleSecretUI",
     "WindowsSecureIntakeError",
     "WindowsSecureIntakeNative",
     "VisibleConsolePromptContext",
-    "build_windows_secure_intake_worker",
     "current_windows_owner_binding",
     "derive_windows_fingerprint_key",
     "windows_credential_target",

@@ -28,7 +28,7 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any, Iterator
 
-from .archive_services import activity_group_bound_directory_chain
+from .archive_services import _activity_group_bound_directory_chain
 
 
 REPARSE_FLAG = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
@@ -240,7 +240,7 @@ def bind_workspace_root(root: Path | str) -> Iterator[BoundCleanupRoot]:
     path = Path(root)
     _validate_root_syntax(path)
     anchor = Path(path.anchor)
-    with activity_group_bound_directory_chain(anchor, path) as raw_binding:
+    with _activity_group_bound_directory_chain(anchor, path) as raw_binding:
         descriptor = raw_binding.get("descriptor")
         windows_handles = tuple(raw_binding.get("windows_handles") or ())
         if os.name == "nt":
@@ -355,7 +355,7 @@ def bind_directory(
             os.close(current)
         return
 
-    with activity_group_bound_directory_chain(root.path, target_path) as raw_binding:
+    with _activity_group_bound_directory_chain(root.path, target_path) as raw_binding:
         windows_handles = tuple(raw_binding.get("windows_handles") or ())
         if not windows_handles:
             raise LegacyCleanupFilesystemError(

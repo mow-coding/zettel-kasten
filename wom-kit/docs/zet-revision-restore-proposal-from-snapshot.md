@@ -73,9 +73,11 @@ mean that the old state is true, preferred, current, reviewed, or approved for
 canonical installation.
 
 Next, inspect the private proposal and current canonical zet together. Then run
-`zet-revision-restore-plan --dry-run` with the returned proposal path. Only the
-separate `zet-revision-restore-write` preview, explicit human review
-affirmations, and final approval may change canonical memory.
+`zet-revision-restore-plan --dry-run` with the returned proposal path. The
+separate `zet-revision-restore-write` preview may validate the binding, but its
+v0.4.0 approval returns `compound_exact_human_approval_binding_required`
+before private target read or mutation and changes no canonical memory or
+receipt.
 
 The command writes no receipt because the proposal is a reproducible private
 working file whose source remains the immutable v0.2 receipt and snapshot. It

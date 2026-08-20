@@ -1,9 +1,13 @@
 # Credential KeePassXC Write
 
-Status: v0.3.33 CLI-only KeePassXC write adapter
+Status: v0.4.0 dry-run-only KeePassXC command preview; write fixed closed
 Date: 2026-06-15
 
-This document defines the first live credential write adapter in WOM-kit.
+This document preserves the historical v0.3.33 adapter contract and the current
+v0.4.0 boundary. Only dry-run is operational now. Approval returns
+`compound_exact_human_approval_binding_required` before approval-receipt,
+credential, database, provider, or target reads; it never invokes KeePassXC and
+writes no receipt.
 
 It is intentionally narrow:
 
@@ -40,24 +44,6 @@ archive credential-keepassxc-write <archive-root> \
   --format json
 ```
 
-Approved local execution:
-
-```bash
-archive credential-keepassxc-write <archive-root> \
-  --credential-id cred:openai-api \
-  --action-kind plaintext_secret_migration \
-  --operation write_new_secret \
-  --approval-receipt receipts/credentials/access-approvals/<id>.credential-access-approval.json \
-  --entry-label openai-api \
-  --group-label wom-secrets \
-  --database-ref keepassxc:personal-vault \
-  --database-path <local-human-selected-database.kdbx> \
-  --consumer wom:adapter:keepassxc \
-  --reviewed-by human:me \
-  --approve \
-  --format json
-```
-
 Alias:
 
 ```text
@@ -68,20 +54,21 @@ There is no MCP live execution tool.
 
 ## Execution Chain
 
-The intended chain is:
+The current safe chain stops at preview:
 
 ```text
-credential-access-approval --approve
+credential-access-approval metadata receipt (legacy, advisory only)
 -> credential-policy-check --approval-receipt <path> --dry-run
 -> credential-keepassxc-command-plan --approval-receipt <path> --dry-run
--> credential-keepassxc-write --approval-receipt <path> --approve
--> non-secret KeePassXC write execution receipt
+-> credential-keepassxc-write --dry-run
+-> stop; no vault or execution receipt write in v0.4.0
 ```
 
-`credential-keepassxc-write` reuses the same receipt verification and policy
-gate as the command preflight before it executes.
+Legacy receipt verification is structural and `legacy_unbound`/advisory only.
+`would_allow_future_adapter_after_receipt` remains false and the write command
+does not execute.
 
-## What It Executes
+## Historical Execution Contract
 
 KeePassXC documents this CLI shape:
 
@@ -106,7 +93,7 @@ References:
 
 ## Required Human Inputs
 
-For `--approve`, the human operator must provide:
+The historical v0.3 writer required:
 
 - an archive-relative approval receipt path,
 - a safe entry label,
@@ -122,7 +109,8 @@ archive root.
 
 ## Execution Receipt
 
-On approved execution, WOM-kit writes one non-secret receipt:
+Historical v0.3 approved execution wrote one non-secret receipt; v0.4.0 does
+not create it:
 
 ```text
 receipts/credentials/keepassxc-writes/<id>.credential-keepassxc-write.json
@@ -154,13 +142,12 @@ The receipt does not record:
 - provider URL,
 - raw adapter stdout/stderr.
 
-If the execution receipt already exists for the same approval receipt and
-entry target, replay is blocked. The human must create a new approval receipt
-for another attempt.
+Historical replay evidence remains auditable but grants no current execution
+authority.
 
 ## Current Closed Actions
 
-`credential-keepassxc-write --approve` still does not:
+In v0.4.0 `credential-keepassxc-write` does not:
 
 - return a secret to AI,
 - read a plaintext secret note,
@@ -174,8 +161,8 @@ for another attempt.
 - start OAuth,
 - call OpenAI or paid OCR providers.
 
-It does execute `keepassxc-cli add` locally and can modify the human-selected
-KeePassXC database.
+Historical v0.3 approved execution could run `keepassxc-cli add` locally and
+modify the human-selected KeePassXC database. v0.4.0 never invokes it.
 
 ## Output Guarantees
 
@@ -191,15 +178,16 @@ The output keeps:
 
 ## Relationship To The Credential Layers
 
-v0.3.33 is the first end-to-end credential execution path:
+The v0.3.33 historical path was:
 
 ```text
-approval receipt writer
+legacy approval receipt writer
 -> policy gate
 -> KeePassXC command preflight
 -> CLI-only KeePassXC write adapter
 -> execution receipt
 ```
 
-It does not implement secret retrieval, model API calls, OCR API calls, OS
-keyring writes, browser password-store access, OAuth, or provider integrations.
+In v0.4.0 the chain stops at content-free preflight. It implements no secret
+retrieval, vault write, execution receipt, model/OCR call, OS keyring write,
+browser password-store access, OAuth, or provider integration.

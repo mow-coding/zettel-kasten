@@ -1,6 +1,8 @@
 # Runtime Canonical Entry Points
 
-Status: v0.3.320 one-use credential capability broker checkpoint
+Status: v0.4.0 exact human approval and operator-friction checkpoint
+
+Previous checkpoint: Status: v0.3.320 one-use credential capability broker checkpoint
 
 Previous checkpoint: Status: v0.3.319 native credential popup and causal-evidence checkpoint
 
@@ -21,6 +23,92 @@ The underlying raw context packet remains available through:
 ```powershell
 archive runtime-context <archive-root> --format json
 ```
+
+## v0.4.0 Exact Human Control Entry Points
+
+An AI may prepare a dry-run, but it cannot assert that a person approved an
+exact write. Supported high-impact single writes must continue in the same
+local interactive Windows CLI through this fixed sequence:
+
+```text
+TaskDialog -> authenticated durable started claim -> writer -> workflow finalize
+```
+
+Runtime prerequisite: the Windows Python host must provide a Comctl32 v6
+activation context. Microsoft documents `TaskDialogIndirect` as requiring
+[Comctl32.dll version 6](https://learn.microsoft.com/en-us/windows/win32/api/commctrl/nf-commctrl-taskdialogindirect).
+WOM-kit verifies `DllGetVersion` immediately before dialog construction and
+requires major version 6 or newer. Missing, older, or unverifiable activation
+returns `exact_human_approval_activation_context_required` before dialog
+display or claim creation.
+
+There is no separately issued approval receipt or expiry window. The claim is
+created after the native confirmation and before the writer. The writer
+re-derives its operation binding immediately before mutation. Only the workflow
+may finalize the claim. A remaining `started` state is an unknown outcome that
+requires reconciliation and must not be replayed automatically.
+
+The new operator routes are:
+
+- `source-fidelity-session-evidence --dry-run|--approve` for private exact-byte
+  session evidence;
+- `facet-vocabulary --dry-run` for read-only stable facet discovery;
+- `human-artifact-register-root --project-root|--external-root <root>
+  --root-kind external_project|external_delivery --dry-run|--approve`, always-
+  read-only `human-artifact-scan`, and
+  `human-artifact-transition --dry-run|--approve`; `external_project` scans
+  only `<root>/.wom-scratch`, while `external_delivery` scans the reviewed root
+  itself; no Downloads/home auto-scan exists;
+- `duplicate-object-reconcile --dry-run|--approve`, which may remove only
+  unchanged byte-identical manifest repeats;
+- read-only `approval-integrity-audit` and `approval-integrity-guard`, followed
+  by `approval-integrity-overlay --dry-run|--approve` for an append-only
+  reviewed overlay; and
+- the existing AI create, mint, promotion, single-edge, and single-retirement
+  routes after their exact dry-run bindings are reviewed.
+
+MCP exposes only plan, scan, audit, and guard variants for these new local
+approval operations. It cannot run the native dialog or accept an approval
+claim supplied by the caller.
+
+The runtime parser exposes one canonical fixed-close inventory of exactly 79
+top-level commands. Every affected `--approve` help entry says that approval is
+unavailable in v0.4.0 and directs the operator to the command-specific dry-run,
+plan, preview, or audit surface; the exact list is published in the v0.4.0
+release note and enforced against parser construction.
+
+Nested `derive-text capture`, non-exact/non-AI `create-draft`, non-dry-run
+CLI/MCP `init`, and `parcel`/`pack` are separately fixed closed. The existing
+exact reviewed AI draft route and read-only previews remain available.
+
+Compound writes have no complete target-set approval in v0.4.0.
+`mint-zet-batch`, `retire-draft-batch`, `zettel-edge-batch`, `revert-edge`,
+`revert-batch`, `zet-revision-write`, `zet-revision-restore-write`,
+`zettel-objet-link`, `zettel-objet-link-revert`, and
+`notion-objet-link-convert` remain dry-run only. So do the write/recovery
+executors for activity-group membership add/removal, abstract backfill, and
+title remap; `discard-draft`, `discard-draft-restore`, `remint-reconcile`, and
+`retire-draft-reconcile`. Their read-only plan, preview, and audit commands
+remain available. The `accept` branch of `relation-candidate-decide` is also
+closed. Any affected approve request fails before private target read or mutation with
+`compound_exact_human_approval_binding_required`.
+
+The same fixed blocker covers project update/collision mutation, bytecode
+repair, saved-view write/revert, private objet source-metadata write, identity
+reconciliation, legacy cleanup, archive migration/revert, markup normalization
+apply/revert/recovery, Principal register/unregister, objet-capture
+enable/selection/single/batch, external import, source registration, ownership
+transfer, object-storage mutation, Notion recovery, external-locator mutation,
+source-intake record/batch, quarantine decisions, and delegation. These routes
+have no exact-human v0.4 writer binding. Their plans, previews, and audits remain
+available where documented; approval fails before private archive, project,
+input, credential, or target reads and before provider calls, mutation, or
+receipt publication.
+
+Authenticated approval links for strict historical evidence require an exact
+matching `succeeded` claim. Only `effect=created` proves that the approved
+invocation created the original effect; `already_present_exact` records a later
+review without rewriting history.
 
 Both paths are quick by default and do not construct Doctor. Add
 `--full-doctor` only when a complete archive health check is required. The
@@ -62,28 +150,26 @@ inbox pipeline-shape review, explicit event-membership add/removal planning, com
 discovery, draft creation, minting, typed edges, source capture, and
 operational-context updates.
 
-v0.3.300 adds official plan/write/recovery routes for provider-neutral
+v0.3.300 historically added plan/write/recovery routes for provider-neutral
 external locators, local relation candidate judgment, migration-markup
-normalization, bounded batch Objet capture, and project derived-bytecode
-repair. It also routes reviewed third-party Principal registration and
-unregistration, Principal listing, and selected base link-type
-adoption/revert. The relation rule reserves `continues` for the next
+normalization, bounded batch Objet capture, project derived-bytecode repair,
+Principal lifecycle, and selected base link-type adoption/revert. In v0.4.0
+their mutation branches are fixed fail-closed as listed above; only read-only
+plans, previews, audits, and Principal listing remain current entry points. The
+relation rule reserves `continues` for the next
 week/installment of the same course or work and `sequence` for the next
-reviewed generic process step. Candidates and plans remain non-authorizing.
-Every listed mutation still requires a separate exact plan SHA-256 and
-attributed human approval.
+reviewed generic process step. Candidates and plans remain non-authorizing. A
+plan digest and actor label do not substitute for an exact-human binding.
 
-v0.3.302 adds a closed private request, preview, approval, immutable receipt,
-and exact revert route for persistent saved views. Direct AI writes to
-`views/*.yml` remain forbidden.
+v0.3.302 historically added saved-view write/revert receipts. In v0.4.0 both
+approval branches are fixed fail-closed before private request/target read or
+mutation; direct AI writes to `views/*.yml` remain forbidden.
 
-v0.3.308 extends the locator route with read-only
-`external-locator-deactivate-plan` and approval-gated
-`external-locator-deactivate`. A runtime must never choose a duplicate by
-itself: the human names both the weaker active target and the compatible active
-keeper. Approval re-plans under the existing lock, changes only the target to
-`inactive`, preserves a prior snapshot and receipt, and keeps the ordinary
-exact-byte locator revert route. Different occurrence anchors, missing keeper
+v0.3.308 historically extended the locator route with read-only
+`external-locator-deactivate-plan` and mutation/revert executors. In v0.4.0
+record, deactivate, and revert approvals are fixed fail-closed before private
+target read or mutation. A runtime must never choose a duplicate by itself.
+Different occurrence anchors, missing keeper
 coordinates, canonical body references, ambiguity, and stale bytes block.
 
 The same checkpoint extends reviewed migration-markup routing for one complete
@@ -143,18 +229,16 @@ or infer local names. Run the alias-free CLI-only
 `project-version-update-collision --action inspect-all --dry-run`; it evaluates
 the complete set from one unchanged plan.
 
-Only `project_bytecode_repair` eligibility for the exact complete set may
-continue. Run `project-bytecode-repair-plan` with the same target and
-materialization digest, review its separate plan digest, then use the approved
-`project-bytecode-repair` form with reviewer attribution and
-`--affirm-external-writers-quiescent`. The repair shares the updater lock and
-removes only exact supported ignored cache artifacts. Mixed or unsupported
-sets remain `inspected_remediation_unavailable`.
+Only the read-only `project-bytecode-repair-plan --dry-run` eligibility and
+repair plan may continue in v0.4.0. Historical v0.3
+`project-bytecode-repair` could apply one reviewed bounded cleanup. In v0.4.0
+its approval is fixed fail-closed before private project read or mutation with
+`compound_exact_human_approval_binding_required`; it removes no cache artifact.
+Mixed or unsupported sets remain `inspected_remediation_unavailable`.
 
-Repair success is not update success. The repair does not fetch, change `HEAD`
-or a pin, retry an updater, or grant update approval. Always run a fresh updater
-preview and approve that new update plan separately, then verify import/source/
-pin/tag agreement from a new process. See
+The preview does not fetch, change `HEAD` or a pin, retry an updater, or grant
+update authority. The updater approval is also fixed fail-closed in v0.4.0.
+Verify import/source/pin/tag agreement from a new process. See
 [Project Version Update](project-version-update.md),
 [Bounded Operation Control](operation-control.md), and the
 [v0.3.316 release note](releases/v0.3.316.md).
@@ -166,20 +250,19 @@ path or repeat approval. Preserve its `materialization_plan_sha256` and opaque
 `update-entry:NNNN` reference. Use the CLI-only
 `project-version-update-collision --action inspect --dry-run` surface first.
 Only an explicitly eligible ignored regular entry can proceed through a
-separate `preserve-relocate` preview and approval. That action does not delete,
-overwrite, copy, fetch, retry the updater, or change a pin. After a successful
-preservation, always run a fresh updater dry-run and a separate updater
-approval. Treat `recovery_required` and nullable write/relocation fields as a
+separate `preserve-relocate` preview. In v0.4.0 collision mutation and updater
+approval are fixed fail-closed; they do not delete, overwrite, copy, fetch,
+retry the updater, or change a pin. Treat `recovery_required` and nullable write/relocation fields as a
 stop signal and retain the private case and owned lock.
 
 For one reviewed multi-item request containing originals with paired derived
-text, use `objet-capture-batch` rather than rebuilding selection rows by hand.
-The v0.3.315 result must partition original and derived requested,
-written-or-ready, skipped, and blocked counts separately. `partial`,
+text, `objet-capture-batch --dry-run` can inspect the bounded request. In
+v0.4.0 batch approval is fixed fail-closed before private source read or
+mutation. Historical v0.3.315 results partitioned original and derived
+requested, written-or-ready, skipped, and blocked counts separately. `partial`,
 `evidence_incomplete`, `recovery_required`, or
 `batch_capture_outcome_unverified` is not success and must not be replayed
-automatically. A fresh replay of the same request may skip exact existing
-originals and finish derived text. If the staging originals are unavailable,
+automatically. Historical evidence does not grant replay authority. If the staging originals are unavailable,
 use durable original capture receipt object IDs in a separately reviewed
 `derive-text capture --from-manifest` request instead of recopying them.
 
@@ -233,8 +316,8 @@ safe projection with explicit reviewer attribution.
 
 Before publication, run `mint-zet --dry-run` and use its current
 source-fidelity plan digest in the approved CLI replay. Mint re-reads the source
-and raw draft body. Existing human-written creation remains compatible; an old
-AI draft needs the attributed `legacy_source_fidelity_reviewed` affirmation,
+and raw draft body. In v0.4.0 human-declared/non-AI non-dry-run creation is
+fixed closed; an old AI draft needs the attributed `legacy_source_fidelity_reviewed` affirmation,
 not an inferred historical mode. MCP `create_draft_zettel` carries the matching
 create fields and binds its own AI identity; `mint_zettel_check` is preview-only.
 Audience is not an ACL and none of these actions shares, exports, transports,
@@ -275,9 +358,9 @@ secret reader, provider caller, or archive writer:
 | --- | --- |
 | `credential-adopt` | First enrollment or explicit replacement only. Dry-run hashes the helper AI's public-safe task/reason with the stable request and opens no popup. Exact digest approval starts one isolated child and separate native Windows popup. Production hard-codes `CredentialPopupInputIntent.live_registration` and the blue `실제 자격 증명 등록` banner. A standard password EDIT retains ordinary editing/paste while an opaque sibling hides value, mask, caret, count, and length; WOM never reads the clipboard. The child detaches and sends `popup_child_detached` before live work. The parent restores its start-signal lease, accepts acknowledgement → final mapping → EOF, and joins every normally started child. A matching registration returns without another popup only after authenticated receipt, exact saved-secret fingerprint, provider/workspace-scope, and reviewed-anchor revalidation; no PAT/token/secret command option exists. |
 | `credential-secure-list` | Lists unauthenticated content-free receipt metadata by default. `--verify` reads only the exact archive authentication-key target and verifies receipt/lifecycle MACs; it neither enumerates the native vault nor resolves a provider credential. |
-| `credential-lifecycle` | Authenticates and digest-plans one human-selected active/current/default credential for an exact provider/workspace scope, then records only that unchanged approved decision. It never deletes or revokes another credential. |
+| `credential-lifecycle` | Authenticates and digest-plans one selected active/current/default credential for an exact provider/workspace scope. In v0.4.0 the legacy approval writer is fixed closed before archive-key or credential access; it never records, deletes, or revokes a credential. |
 | `notion-page-recovery-plan` | Validates the exact ignored-local two-group request of 577 plus 43 unique page UUIDs, exactly 620, and digest-plans a bounded slice with zero credential reads, provider calls, or writes. |
-| `notion-page-recovery` | Repeats the same plan in dry-run or, with the exact reviewed plan SHA and reviewer, invokes spawned authenticated read-only Notion recovery. A live slice gets one fresh plan-bound capability and exclusive authenticated claim before secret read; each provider attempt enforces exact endpoint/scope/budget authority. Fully verified replay creates no claim. Recovery writes only content-addressed objets plus private recovery evidence. |
+| `notion-page-recovery` | Dry-run/verified local replay only in v0.4.0. The approval branch is fixed fail-closed before credential read, provider call, or archive mutation with `compound_exact_human_approval_binding_required`. Historical v0.3.320 capability and recovery receipts remain auditable. |
 
 The v0.3.319 correction replaces the rejected terminal-input prototypes with
 one separate native Windows popup. Production hard-codes
@@ -315,8 +398,8 @@ prerequisite. Actual registration remains `not_performed`; it may proceed only
 after published-runtime verification and explicit confirmation of the blue
 live-registration banner. Automated evidence is not human/live evidence.
 
-The v0.3.320 correction leaves that popup and every public command unchanged.
-After exact recovery approval, the parent issues one
+The v0.3.320 historical correction left that popup and every public command unchanged.
+After historical exact recovery approval, the parent issued one
 `wom-kit/credential-capability/v0.1` document bound to request, plan, reviewer,
 selected authenticated scopes, fixed read-only endpoints, registered
 capabilities, a claim deadline, one use, and a request budget. The isolated
@@ -352,16 +435,18 @@ archive credential-adopt <archive-root> --account-label <safe-label> --workspace
 archive credential-secure-list <archive-root> --format json
 archive credential-secure-list <archive-root> --verify --format json
 archive credential-lifecycle <archive-root> --provider notion --workspace-fingerprint <sha256> --default-credential-id <opaque-id> --dry-run --format json
-archive credential-lifecycle <archive-root> --provider notion --workspace-fingerprint <sha256> --default-credential-id <opaque-id> --expected-plan-sha256 <sha256> --reviewed-by <actor> --approve --format json
 archive notion-page-recovery-plan <archive-root> --request profiles/local/notion-page-recovery/<private>.json --max-items 5 --offset 0 --dry-run --format json
-archive notion-page-recovery <archive-root> --request profiles/local/notion-page-recovery/<private>.json --max-items 5 --offset 0 --expected-plan-sha256 <sha256> --reviewed-by <actor> --approve --format json
 ```
+
+`credential-lifecycle --approve` is intentionally not a runnable v0.4.0
+example: it returns `compound_exact_human_approval_binding_required` before
+archive-key or credential access and writes nothing.
 
 The request path, reviewed anchor UUID, page UUIDs, page bodies, native
 credential target, PAT, Authorization header, token, and derived key must never
-be echoed. Recovery approval already permits credential reads, read-only
-provider GETs, and archive evidence writes for the selected slice; locally
-verified replay is only an optimization and not a separate approval authority.
+be echoed. In v0.4.0 recovery approval is fixed fail-closed before credential
+read, provider call, or archive mutation; locally verified replay is not a
+separate approval authority.
 The recovery lane never searches a workspace broadly, writes to Notion,
 downloads media, rewrites canonical zets, infers edges, or mints pages.
 
@@ -397,14 +482,13 @@ source/body re-verification when applicable, and is not complete until the
 approved mint has canonical and receipt evidence; blockers must be reported
 immediately. `archive version` does not verify remote
 release freshness. `archive inbox-pipeline-audit --dry-run` returns
-conservative structural signals, not proof or automatic repair. Saved-view
-writes use only the review-gated `saved-view-write` and exact
-`saved-view-revert` routes. Event-membership additions and removals use
-separate digest-bound writers and separate recovery commands; neither path
-infers membership or exposes an MCP writer. v0.3.284 routes explicit removal
-from its read-only plan through approved write and interruption recovery.
-Both operations share one global lock and fail-closed two-root evidence scan
-while retaining separate request, journal, receipt, and recovery contracts. See
+conservative structural signals, not proof or automatic repair. In v0.4.0
+saved-view write/revert and event-membership add/removal/recovery approvals are
+fixed fail-closed before private target read or mutation with
+`compound_exact_human_approval_binding_required`. Their read-only plans and
+audits remain available, and historical request/journal/receipt evidence stays
+separate and immutable. Neither path infers membership or exposes an MCP
+writer. See
 [AI Command-Path Routing](ai-command-path-routing.md).
 
 ## AI Runtime Order
@@ -452,7 +536,7 @@ anything:
    `wom-kit/schemas/operator-feedback.schema.json` and
    `wom-kit/schemas/operator-feedback-receipt.schema.json`.
 
-After any approved `zet-revision-write`, run the separate CLI-only
+To audit historical `zet-revision-write` evidence, run the separate CLI-only
 `archive zet-revision-receipt-audit <archive-root> --dry-run --progress
 --format json` before session handoff. This is a bounded history and
 transaction-lock check, not another archive startup scan and not permission to
@@ -469,12 +553,11 @@ private backup. Then use CLI-only `archive zet-revision-restore-plan <archive-ro
 --restore-proposal .wom-scratch/revisions/restores/<private>.md --dry-run
 --format json`. A green plan only prepares private human review and grants no
 manual-copy authority. The selected receipt must be the actual newest event,
-even when current bytes repeat an older state. Since v0.3.239, pass the exact
-plan hashes through CLI-only `zet-revision-restore-write --dry-run`, then use
-its unchanged write digest and event time only after explicit human approval.
-The approved writer installs exact reviewed bytes and appends one restore
-receipt; rerun the exact approved command after interruption. MCP has no
-restore writer.
+even when current bytes repeat an older state. Pass the exact plan hashes
+through CLI-only `zet-revision-restore-write --dry-run`, then stop. In v0.4.0
+restore approval is fixed fail-closed before private target read or mutation
+with `compound_exact_human_approval_binding_required`; it writes no canonical
+byte or restore receipt. MCP has no restore writer.
 
 This order keeps archive identity, operational mission/state, local
 instructions, beginner-facing wording, and material-link safety gates aligned

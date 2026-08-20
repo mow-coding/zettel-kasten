@@ -1,10 +1,16 @@
 # Notion Recover
 
-Status: v0.3.141 beginner-friendly one-command local Notion location recovery with actionable failure classification
+Status: v0.4.0 content-free recovery preview; live execution is fixed closed
 Date: 2026-06-22
 
-`archive notion-recover` is the beginner-facing wrapper for the existing
-Notion ancestor structure fetch adapter.
+Current v0.4.0 boundary: only `archive notion-recover --dry-run` remains an
+executable preview. The implicit non-dry-run route and every approval attempt
+return `compound_exact_human_approval_binding_required` before credential,
+private target, or provider reads; they call no provider and write no fixture
+or receipt. Live behavior below is historical v0.3 evidence.
+
+`archive notion-recover --dry-run` is the beginner-facing content-free preview
+for the historical Notion ancestor recovery workflow.
 
 It exists because a non-developer should not have to choose a page id, invent an
 environment variable name, copy an approval receipt path, and run a chain of
@@ -12,27 +18,15 @@ low-level commands in the right order.
 
 ## Command
 
-Run this from an archive root:
-
-```bash
-archive notion-recover
-```
-
-For a no-write preview:
+Run the no-write preview from an archive root:
 
 ```bash
 archive notion-recover --dry-run
 ```
 
-If the human already has the Notion integration token in a local text file, the
-CLI-only fallback is:
-
-```bash
-archive notion-recover --credential-ref file:<local-token-file>
-```
-
-The file path is a local handoff only. WOM does not echo the path, file name, or
-token value in command output or receipts.
+Do not supply a credential ref for execution in v0.4.0. Approval is blocked
+before credential resolution, so no token file, environment value, or hidden
+prompt is read.
 
 For the connection-experience product contract:
 
@@ -40,7 +34,7 @@ For the connection-experience product contract:
 archive notion-connection-plan --dry-run --format json
 ```
 
-## What It Does
+## What The v0.4.0 Preview Does
 
 The command:
 
@@ -48,17 +42,11 @@ The command:
   location links,
 - shows how many location checks and affected items it found,
 - explains that it reads location links only,
-- asks for local human confirmation,
-- accepts the Notion token through an existing local process value, a local
-  `file:<path>` token-file fallback, or a hidden local terminal prompt when
-  needed,
-- writes the one-time approval receipt internally,
-- runs the approved location fetch,
-- classifies provider failures into safe human-action categories without raw
-  provider error echo,
-- writes a sanitized ancestor result fixture,
-- previews the merge handoff so the human can ask AI to tidy and merge the
-  recovered locations.
+- reports that execution requires an unavailable operation-specific exact-human
+  binding,
+- reads no credential and makes no provider call,
+- writes no approval receipt or sanitized ancestor fixture, and
+- keeps historical failure categories and merge guidance available for audit.
 
 ## What It Does Not Do
 
@@ -102,7 +90,11 @@ the target page or database has not been shared with the connection. WOM still
 does not echo the raw provider error body, page title, page body, provider URL,
 account id, email, or token.
 
-## Safety Boundary
+## Historical v0.3 Safety Boundary
+
+The bullets in this section describe the v0.3 execution evidence only. They do
+not grant v0.4.0 authority. The current route stops before credential, private
+target, or provider access and creates no fixture or receipt.
 
 The security boundary is unchanged from the lower-level adapter:
 
@@ -125,7 +117,7 @@ vault/keyring alone: the default future path should be a managed "Connect
 Notion" browser flow. See `notion-connection-plan` for the one-click connection
 contract. The current token paths remain power-user fallbacks.
 
-Power-user commands such as `notion-ancestor-crawl-plan`,
-`credential-access-approval`, `notion-ancestor-fetch-adapter-run`, and
-`notion-ancestor-merge-plan` remain available for automation and debugging.
-The beginner path should start with `archive notion-recover`.
+Power users may still use read-only `notion-ancestor-crawl-plan`, adapter
+dry-run, and `notion-ancestor-merge-plan` surfaces for planning or historical
+audit. No live provider automation is available through this route in v0.4.0.
+The beginner path starts and stops with `archive notion-recover --dry-run`.

@@ -15,8 +15,12 @@ from pathlib import Path
 from typing import Any
 
 from . import __version__
+from . import approval_integrity
 from . import archive_cli
 from . import archive_services
+from . import completion_workflows
+from . import duplicate_object_reconciliation
+from . import human_artifact_registry
 
 
 SERVER_NAME = "zettel-kasten-archive-mcp"
@@ -375,6 +379,259 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
                 "dry_run": {"type": "boolean", "default": True},
             },
             "required": ["archive_root", "surface_kind"],
+        },
+    },
+    {
+        "name": "human_artifact_root_registration_plan",
+        "description": (
+            "Plan registration of one project .wom-scratch scope or one "
+            "explicitly reviewed delivery root. Read-only and metadata-only; "
+            "MCP cannot approve or write the private registry, so live "
+            "registration must use the local CLI."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "archive_root": {"type": "string"},
+                "project_root": {"type": "string"},
+                "root_kind": {
+                    "type": "string",
+                    "enum": sorted(human_artifact_registry.EXTERNAL_ROOT_KINDS),
+                    "default": "external_project",
+                },
+                "dry_run": {"type": "boolean", "const": True, "default": True},
+                "approve": {
+                    "type": "boolean",
+                    "const": False,
+                    "default": False,
+                    "description": (
+                        "Must remain false. Use human-artifact-register-root "
+                        "in a local terminal for the native approval dialog."
+                    ),
+                },
+            },
+            "required": ["archive_root", "project_root"],
+        },
+    },
+    {
+        "name": "human_artifact_registry_scan",
+        "description": (
+            "Run a bounded metadata-only human-artifact scan. Read-only; "
+            "never opens artifact bodies or returns file names or paths."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "archive_root": {"type": "string"},
+                "max_entries_per_root": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": human_artifact_registry.MAX_ENTRIES_PER_ROOT,
+                    "default": human_artifact_registry.DEFAULT_MAX_ENTRIES_PER_ROOT,
+                },
+                "dry_run": {"type": "boolean", "const": True, "default": True},
+                "approve": {"type": "boolean", "const": False, "default": False},
+            },
+            "required": ["archive_root"],
+        },
+    },
+    {
+        "name": "human_artifact_transition_plan",
+        "description": (
+            "Plan one append-only human-artifact lifecycle transition from "
+            "caller-supplied content and destination bindings. Read-only; "
+            "live receipt writing requires the local native-approval CLI."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "archive_root": {"type": "string"},
+                "artifact_id": {"type": "string"},
+                "target_state": {
+                    "type": "string",
+                    "enum": sorted(human_artifact_registry.LIFECYCLE_STATES),
+                },
+                "content_sha256": {
+                    "type": "string",
+                    "pattern": "^sha256:[0-9a-f]{64}$",
+                },
+                "size_bytes": {"type": "integer", "minimum": 0},
+                "related_refs": {
+                    "type": "array",
+                    "maxItems": 32,
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "kind": {
+                                "type": "string",
+                                "enum": [
+                                    "object_id",
+                                    "zet_id",
+                                    "receipt_id",
+                                    "artifact_version_id",
+                                ],
+                            },
+                            "ref": {"type": "string"},
+                        },
+                        "required": ["kind", "ref"],
+                        "additionalProperties": False,
+                    },
+                },
+                "max_entries_per_root": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": human_artifact_registry.MAX_ENTRIES_PER_ROOT,
+                    "default": human_artifact_registry.DEFAULT_MAX_ENTRIES_PER_ROOT,
+                },
+                "dry_run": {"type": "boolean", "const": True, "default": True},
+                "approve": {
+                    "type": "boolean",
+                    "const": False,
+                    "default": False,
+                    "description": (
+                        "Must remain false. Use human-artifact-transition in "
+                        "a local terminal for the native approval dialog."
+                    ),
+                },
+            },
+            "required": [
+                "archive_root",
+                "artifact_id",
+                "target_state",
+                "content_sha256",
+                "size_bytes",
+            ],
+        },
+    },
+    {
+        "name": "duplicate_object_reconciliation_plan",
+        "description": (
+            "Classify duplicate object-manifest rows by count and digest. "
+            "Read-only; MCP cannot apply reconciliation, which requires the "
+            "local native exact-approval CLI."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "archive_root": {"type": "string"},
+                "dry_run": {"type": "boolean", "const": True, "default": True},
+                "approve": {"type": "boolean", "const": False, "default": False},
+            },
+            "required": ["archive_root"],
+        },
+    },
+    {
+        "name": "approval_integrity_audit",
+        "description": (
+            "Classify a bounded set of operation receipts through the "
+            "existing archive authentication key. Read-only and content-free."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "archive_root": {"type": "string"},
+                "max_receipts": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 10000,
+                    "default": 4096,
+                },
+                "dry_run": {"type": "boolean", "const": True, "default": True},
+                "approve": {"type": "boolean", "const": False, "default": False},
+            },
+            "required": ["archive_root"],
+        },
+    },
+    {
+        "name": "approval_integrity_guard",
+        "description": (
+            "Read one authenticated approval-integrity overlay chain and "
+            "fail closed when review is active or the ledger is invalid."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "archive_root": {"type": "string"},
+                "affected_kind": {
+                    "type": "string",
+                    "enum": sorted(approval_integrity.AFFECTED_KINDS),
+                },
+                "affected_id_sha256": {
+                    "type": "string",
+                    "pattern": "^sha256:[0-9a-f]{64}$",
+                },
+                "max_overlays": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 10000,
+                    "default": 1024,
+                },
+                "dry_run": {"type": "boolean", "const": True, "default": True},
+                "approve": {"type": "boolean", "const": False, "default": False},
+            },
+            "required": ["archive_root", "affected_kind", "affected_id_sha256"],
+        },
+    },
+    {
+        "name": "approval_integrity_overlay_plan",
+        "description": (
+            "Plan one append-only approval-integrity overlay from exact "
+            "receipt and affected-id digests. Read-only; live repair requires "
+            "the local native exact-approval CLI."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "archive_root": {"type": "string"},
+                "operation_receipt": {
+                    "type": "string",
+                    "description": "Exact archive-relative receipt path; never echoed.",
+                },
+                "expected_operation_receipt_sha256": {
+                    "type": "string",
+                    "pattern": "^sha256:[0-9a-f]{64}$",
+                },
+                "affected_kind": {
+                    "type": "string",
+                    "enum": sorted(approval_integrity.AFFECTED_KINDS),
+                },
+                "affected_id_sha256": {
+                    "type": "string",
+                    "pattern": "^sha256:[0-9a-f]{64}$",
+                },
+                "state": {
+                    "type": "string",
+                    "enum": sorted(approval_integrity.OVERLAY_STATES),
+                },
+                "expected_current_overlay_digest": {
+                    "type": "string",
+                    "pattern": "^sha256:[0-9a-f]{64}$",
+                },
+                "max_overlays": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 10000,
+                    "default": 1024,
+                },
+                "dry_run": {"type": "boolean", "const": True, "default": True},
+                "approve": {
+                    "type": "boolean",
+                    "const": False,
+                    "default": False,
+                    "description": (
+                        "Must remain false. Use approval-integrity-overlay "
+                        "locally for the native exact-approval dialog."
+                    ),
+                },
+            },
+            "required": [
+                "archive_root",
+                "operation_receipt",
+                "expected_operation_receipt_sha256",
+                "affected_kind",
+                "affected_id_sha256",
+                "state",
+            ],
         },
     },
     {
@@ -1521,7 +1778,7 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
     },
     {
         "name": "archive_init",
-        "description": "Initialize a new personal, company, or family archive from safe defaults. Target must be absent or empty.",
+        "description": "Preview archive initialization only. Real initialization is unavailable in v0.4.0 pending exact compound human approval.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -1536,7 +1793,7 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
                     "default": "person",
                 },
                 "name": {"type": "string"},
-                "dry_run": {"type": "boolean", "default": False},
+                "dry_run": {"type": "boolean", "default": True},
             },
             "required": ["archive_root", "archive_type", "archive_id", "principal_id"],
         },
@@ -2073,6 +2330,59 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
                 "path": {"type": "string"},
                 "dry_run": {"type": "boolean", "default": True},
                 "max_refs": {"type": "integer", "minimum": 1, "maximum": 500, "default": 100},
+            },
+            "required": ["archive_root"],
+        },
+    },
+    {
+        "name": "zettel_objet_link_receipts",
+        "description": (
+            "Find internally validated immutable receipts for current structured "
+            "Zettel-Objet links. Read-only; returns only safe ids, roles, "
+            "archive-relative receipt paths, and lifecycle states. Never "
+            "returns labels, zettel content, object bytes, provider data, or "
+            "absolute paths."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "archive_root": {"type": "string"},
+                "zettel_id": {"type": "string"},
+                "path": {"type": "string"},
+                "object_id": {
+                    "type": "string",
+                    "pattern": "^sha256:[0-9a-f]{64}$",
+                },
+                "role": {
+                    "type": "string",
+                    "pattern": "^[a-z][a-z0-9_]{0,79}$",
+                },
+                "dry_run": {"type": "boolean", "default": True},
+                "max_receipts": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 500,
+                    "default": 100,
+                },
+            },
+            "required": ["archive_root"],
+            "oneOf": [
+                {"required": ["zettel_id"], "not": {"required": ["path"]}},
+                {"required": ["path"], "not": {"required": ["zettel_id"]}},
+            ],
+        },
+    },
+    {
+        "name": "facet_vocabulary",
+        "description": (
+            "List the base and archive-local stable facet key vocabulary and "
+            "role classifications without reading facet values or zettel bodies."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "archive_root": {"type": "string"},
+                "dry_run": {"type": "boolean", "default": True},
             },
             "required": ["archive_root"],
         },
@@ -2640,12 +2950,13 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
     {
         "name": "create_draft_zettel",
         "description": (
-            "Preview or explicitly approve an AI-assisted/generated inbox draft. "
+            "Preview an AI-assisted/generated inbox draft. "
             "Dry-run returns the exact source-fidelity plan and approval replay; "
-            "live writing requires approved=true and the reviewed body and plan "
-            "digests. Verbatim mode may compose its body from one content-addressed "
-            "source object. This never mints canonical memory and never accepts a "
-            "mutable source path."
+            "live writing is CLI-only because it requires the local Windows exact-human "
+            "approval dialog and authenticated one-use claim. Verbatim mode may compose "
+            "its body from one content-addressed "
+            "source object or one approved reviewed-session evidence id. This never "
+            "mints canonical memory and never accepts a mutable source path."
         ),
         "inputSchema": {
             "type": "object",
@@ -2671,10 +2982,11 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
                 },
                 "approved": {
                     "type": "boolean",
+                    "const": False,
                     "default": False,
                     "description": (
-                        "Explicitly approve the exact reviewed replay. Exactly one "
-                        "of dry_run or approved must be true."
+                        "Must remain false. MCP cannot perform live exact-human "
+                        "approval; use the reviewed local CLI command."
                     ),
                 },
                 "expected_archive_id": {"type": "string"},
@@ -2727,6 +3039,14 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
                     "pattern": "^sha256:[0-9a-f]{64}$",
                     "description": "Immutable source object id; a local source path is never accepted.",
                 },
+                "fidelity_session_evidence_id": {
+                    "type": "string",
+                    "pattern": "^source-fidelity-session-evidence:[0-9a-f]{64}$",
+                    "description": (
+                        "Approved private reviewed-session evidence id. Exactly "
+                        "one fidelity authority id is required."
+                    ),
+                },
                 "expected_source_fidelity_plan_sha256": {
                     "type": "string",
                     "pattern": "^[0-9a-f]{64}$",
@@ -2740,7 +3060,16 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
                 "facets",
                 "source_fidelity_mode",
                 "source_fidelity_audience",
-                "fidelity_source_object_id",
+            ],
+            "oneOf": [
+                {
+                    "required": ["fidelity_source_object_id"],
+                    "not": {"required": ["fidelity_session_evidence_id"]},
+                },
+                {
+                    "required": ["fidelity_session_evidence_id"],
+                    "not": {"required": ["fidelity_source_object_id"]},
+                },
             ],
         },
     },
@@ -3137,6 +3466,20 @@ def handle_tools_call(params: dict[str, Any]) -> dict[str, Any]:
         return tool_object_storage_upload_verify(arguments)
     if name == "human_artifact_store_plan":
         return tool_human_artifact_store_plan(arguments)
+    if name == "human_artifact_root_registration_plan":
+        return tool_human_artifact_root_registration_plan(arguments)
+    if name == "human_artifact_registry_scan":
+        return tool_human_artifact_registry_scan(arguments)
+    if name == "human_artifact_transition_plan":
+        return tool_human_artifact_transition_plan(arguments)
+    if name == "duplicate_object_reconciliation_plan":
+        return tool_duplicate_object_reconciliation_plan(arguments)
+    if name == "approval_integrity_audit":
+        return tool_approval_integrity_audit(arguments)
+    if name == "approval_integrity_guard":
+        return tool_approval_integrity_guard(arguments)
+    if name == "approval_integrity_overlay_plan":
+        return tool_approval_integrity_overlay_plan(arguments)
     if name == "imap_mailbox_plan":
         return tool_imap_mailbox_plan(arguments)
     if name == "imap_mailbox_operation_request_plan":
@@ -3265,6 +3608,10 @@ def handle_tools_call(params: dict[str, Any]) -> dict[str, Any]:
         return tool_read_zettel(arguments)
     if name == "zettel_objet_links":
         return tool_zettel_objet_links(arguments)
+    if name == "zettel_objet_link_receipts":
+        return tool_zettel_objet_link_receipts(arguments)
+    if name == "facet_vocabulary":
+        return tool_facet_vocabulary(arguments)
     if name == "view_health":
         return tool_view_health(arguments)
     if name == "view_recommendation_plan":
@@ -3647,6 +3994,307 @@ def tool_human_artifact_store_plan(arguments: dict[str, Any]) -> dict[str, Any]:
     )
     state = "passed" if result["ok"] else "blocked"
     return tool_success_result(f"human_artifact_store_plan: {state}.", result)
+
+
+def _human_artifact_mcp_local_ui_required(
+    lifecycle_action: str,
+) -> dict[str, Any]:
+    return tool_success_result(
+        f"{lifecycle_action}: blocked; local native approval UI required.",
+        {
+            "ok": False,
+            "state": "blocked",
+            "lifecycle_action": lifecycle_action,
+            "reason_codes": ["exact_human_approval_cli_required"],
+            "requires_local_native_approval_ui": True,
+            "write_performed": False,
+            "private_values_echoed": False,
+        },
+    )
+
+
+def _human_artifact_mcp_write_requested(arguments: dict[str, Any]) -> bool:
+    dry_run = arguments.get("dry_run", True)
+    approve = arguments.get("approve", False)
+    approved = arguments.get("approved", False)
+    if any(type(value) is not bool for value in (dry_run, approve, approved)):
+        raise ToolError()
+    return dry_run is not True or approve is True or approved is True
+
+
+def _human_artifact_mcp_max_entries(arguments: dict[str, Any]) -> int:
+    value = arguments.get(
+        "max_entries_per_root",
+        human_artifact_registry.DEFAULT_MAX_ENTRIES_PER_ROOT,
+    )
+    if type(value) is not int:
+        raise ToolError()
+    return value
+
+
+def _human_artifact_mcp_result(
+    lifecycle_action: str,
+    function: Any,
+    *args: Any,
+    **kwargs: Any,
+) -> dict[str, Any]:
+    try:
+        result = function(*args, **kwargs)
+    except human_artifact_registry.HumanArtifactRegistryError as exc:
+        result = {
+            "ok": False,
+            "state": "blocked",
+            "lifecycle_action": lifecycle_action,
+            "reason_codes": [exc.code],
+            "write_performed": False,
+            "private_values_echoed": False,
+        }
+    state = "passed" if result.get("ok") is True else "blocked"
+    return tool_success_result(f"{lifecycle_action}: {state}.", result)
+
+
+def tool_human_artifact_root_registration_plan(
+    arguments: dict[str, Any],
+) -> dict[str, Any]:
+    lifecycle_action = "human_artifact_project_root_registration_plan"
+    if _human_artifact_mcp_write_requested(arguments):
+        return _human_artifact_mcp_local_ui_required(
+            "human_artifact_project_root_registration"
+        )
+    archive_root = require_path_arg(arguments, "archive_root")
+    project_root = require_path_arg(arguments, "project_root")
+    root_kind = optional_string_arg(arguments, "root_kind") or "external_project"
+    if root_kind not in human_artifact_registry.EXTERNAL_ROOT_KINDS:
+        raise ToolError()
+    return _human_artifact_mcp_result(
+        lifecycle_action,
+        human_artifact_registry.plan_project_root_registration,
+        archive_root,
+        project_root,
+        root_kind=root_kind,
+    )
+
+
+def tool_human_artifact_registry_scan(
+    arguments: dict[str, Any],
+) -> dict[str, Any]:
+    lifecycle_action = "human_artifact_registry_scan"
+    if _human_artifact_mcp_write_requested(arguments):
+        return _human_artifact_mcp_local_ui_required(lifecycle_action)
+    archive_root = require_path_arg(arguments, "archive_root")
+    return _human_artifact_mcp_result(
+        lifecycle_action,
+        human_artifact_registry.scan_human_artifacts,
+        archive_root,
+        max_entries_per_root=_human_artifact_mcp_max_entries(arguments),
+    )
+
+
+def tool_human_artifact_transition_plan(
+    arguments: dict[str, Any],
+) -> dict[str, Any]:
+    lifecycle_action = "human_artifact_transition_plan"
+    if _human_artifact_mcp_write_requested(arguments):
+        return _human_artifact_mcp_local_ui_required(
+            "human_artifact_transition"
+        )
+    archive_root = require_path_arg(arguments, "archive_root")
+    related_refs = arguments.get("related_refs", [])
+    if not isinstance(related_refs, list):
+        raise ToolError()
+    normalized_refs: list[dict[str, str]] = []
+    for value in related_refs:
+        if (
+            not isinstance(value, dict)
+            or set(value) != {"kind", "ref"}
+            or type(value.get("kind")) is not str
+            or type(value.get("ref")) is not str
+        ):
+            raise ToolError()
+        normalized_refs.append(
+            {"kind": value["kind"], "ref": value["ref"]}
+        )
+    size_bytes = arguments.get("size_bytes")
+    if type(size_bytes) is not int:
+        raise ToolError()
+    return _human_artifact_mcp_result(
+        lifecycle_action,
+        human_artifact_registry.plan_artifact_transition,
+        archive_root,
+        require_string_arg(arguments, "artifact_id"),
+        target_state=require_string_arg(arguments, "target_state"),
+        content_sha256=require_string_arg(arguments, "content_sha256"),
+        size_bytes=size_bytes,
+        related_refs=normalized_refs,
+        max_entries_per_root=_human_artifact_mcp_max_entries(arguments),
+    )
+
+
+def _mcp_use_archive_receipt_authentication_key(
+    archive_root: Path,
+    consumer: Any,
+) -> dict[str, Any]:
+    """Use the established callback-only archive key without creating it."""
+
+    from .credential_secure_intake_windows import _CtypesWindowsNativeFacade
+    from .credential_secure_registry import _StableArchiveFingerprintKeyProvider
+
+    native = _CtypesWindowsNativeFacade(cli_live_approved=True)
+    provider = _StableArchiveFingerprintKeyProvider(native)
+    return provider.use_key(
+        archive_root,
+        consumer,
+        create_if_missing=False,
+    )
+
+
+def _approval_integrity_mcp_keyed_result(
+    lifecycle_action: str,
+    archive_root: Path,
+    consumer: Any,
+) -> dict[str, Any]:
+    try:
+        result = _mcp_use_archive_receipt_authentication_key(
+            archive_root,
+            consumer,
+        )
+    except approval_integrity.ApprovalIntegrityError as exc:
+        result = {
+            "ok": False,
+            "state": "blocked",
+            "lifecycle_action": lifecycle_action,
+            "reason_codes": [exc.code],
+            "private_values_echoed": False,
+        }
+    except Exception:
+        result = {
+            "ok": False,
+            "state": "blocked",
+            "lifecycle_action": lifecycle_action,
+            "reason_codes": ["approval_integrity_key_unavailable"],
+            "private_values_echoed": False,
+        }
+    if not isinstance(result, dict):
+        raise ToolError()
+    state = "passed" if result.get("ok") is True else "blocked"
+    return tool_success_result(f"{lifecycle_action}: {state}.", result)
+
+
+def tool_duplicate_object_reconciliation_plan(
+    arguments: dict[str, Any],
+) -> dict[str, Any]:
+    lifecycle_action = "duplicate_object_reconciliation_plan"
+    if _human_artifact_mcp_write_requested(arguments):
+        return _human_artifact_mcp_local_ui_required(
+            "duplicate_object_reconciliation"
+        )
+    archive_root = require_path_arg(arguments, "archive_root")
+    try:
+        result = duplicate_object_reconciliation.plan_duplicate_object_reconciliation(
+            archive_root
+        )
+    except (
+        duplicate_object_reconciliation.DuplicateObjectReconciliationError
+    ) as exc:
+        result = {
+            "ok": False,
+            "state": "blocked",
+            "lifecycle_action": lifecycle_action,
+            "reason_codes": [exc.code],
+            "object_ids_echoed": False,
+            "paths_echoed": False,
+            "row_content_echoed": False,
+        }
+    state = "passed" if result.get("ok") is True else "blocked"
+    return tool_success_result(f"{lifecycle_action}: {state}.", result)
+
+
+def tool_approval_integrity_audit(
+    arguments: dict[str, Any],
+) -> dict[str, Any]:
+    lifecycle_action = "approval_integrity_audit"
+    if _human_artifact_mcp_write_requested(arguments):
+        return _human_artifact_mcp_local_ui_required(lifecycle_action)
+    max_receipts = arguments.get("max_receipts", 4096)
+    if type(max_receipts) is not int:
+        raise ToolError()
+    archive_root = require_path_arg(arguments, "archive_root")
+    return _approval_integrity_mcp_keyed_result(
+        lifecycle_action,
+        archive_root,
+        lambda key: approval_integrity.audit_approval_integrity(
+            archive_root,
+            max_receipts=max_receipts,
+            receipt_authentication_key=key,
+        ),
+    )
+
+
+def tool_approval_integrity_guard(
+    arguments: dict[str, Any],
+) -> dict[str, Any]:
+    lifecycle_action = "approval_integrity_guard"
+    if _human_artifact_mcp_write_requested(arguments):
+        return _human_artifact_mcp_local_ui_required(lifecycle_action)
+    max_overlays = arguments.get("max_overlays", 1024)
+    if type(max_overlays) is not int:
+        raise ToolError()
+    archive_root = require_path_arg(arguments, "archive_root")
+    return _approval_integrity_mcp_keyed_result(
+        lifecycle_action,
+        archive_root,
+        lambda key: approval_integrity.approval_integrity_guard(
+            archive_root,
+            affected_kind=require_string_arg(arguments, "affected_kind"),
+            affected_id_sha256=require_string_arg(
+                arguments,
+                "affected_id_sha256",
+            ),
+            receipt_authentication_key=key,
+            max_overlays=max_overlays,
+        ),
+    )
+
+
+def tool_approval_integrity_overlay_plan(
+    arguments: dict[str, Any],
+) -> dict[str, Any]:
+    lifecycle_action = "approval_integrity_overlay_plan"
+    if _human_artifact_mcp_write_requested(arguments):
+        return _human_artifact_mcp_local_ui_required(
+            "approval_integrity_overlay"
+        )
+    max_overlays = arguments.get("max_overlays", 1024)
+    if type(max_overlays) is not int:
+        raise ToolError()
+    archive_root = require_path_arg(arguments, "archive_root")
+    return _approval_integrity_mcp_keyed_result(
+        lifecycle_action,
+        archive_root,
+        lambda key: approval_integrity.plan_approval_integrity_overlay(
+            archive_root,
+            operation_receipt=require_string_arg(
+                arguments,
+                "operation_receipt",
+            ),
+            expected_operation_receipt_sha256=require_string_arg(
+                arguments,
+                "expected_operation_receipt_sha256",
+            ),
+            affected_kind=require_string_arg(arguments, "affected_kind"),
+            affected_id_sha256=require_string_arg(
+                arguments,
+                "affected_id_sha256",
+            ),
+            state=require_string_arg(arguments, "state"),
+            expected_current_overlay_digest=optional_string_arg(
+                arguments,
+                "expected_current_overlay_digest",
+            ),
+            receipt_authentication_key=key,
+            max_overlays=max_overlays,
+        ),
+    )
 
 
 def tool_imap_mailbox_plan(arguments: dict[str, Any]) -> dict[str, Any]:
@@ -4539,6 +5187,21 @@ def tool_tiro_import_plan(arguments: dict[str, Any]) -> dict[str, Any]:
 
 
 def tool_archive_init(arguments: dict[str, Any]) -> dict[str, Any]:
+    if arguments.get("dry_run", True) is not True:
+        return tool_success_result(
+            "archive_init: blocked.",
+            {
+                "ok": False,
+                "dry_run": False,
+                "state": "blocked",
+                "lifecycle_action": "archive_init",
+                "reason_codes": [
+                    "compound_exact_human_approval_binding_required"
+                ],
+                "files_written": [],
+                "private_values_echoed": False,
+            },
+        )
     archive_cli.require_yaml()
     archive_root = require_path_arg(arguments, "archive_root")
     archive_type = require_string_arg(arguments, "archive_type")
@@ -4547,7 +5210,7 @@ def tool_archive_init(arguments: dict[str, Any]) -> dict[str, Any]:
     principal_name = optional_string_arg(arguments, "principal_name")
     principal_kind = optional_string_arg(arguments, "principal_kind") or "person"
     name = optional_string_arg(arguments, "name")
-    dry_run = bool(arguments.get("dry_run", False))
+    dry_run = bool(arguments.get("dry_run", True))
 
     template = archive_cli.TEMPLATES_ROOT / archive_type
     if archive_type not in {"personal", "company", "family"} or not template.is_dir():
@@ -4561,35 +5224,7 @@ def tool_archive_init(arguments: dict[str, Any]) -> dict[str, Any]:
             {"archive_root": str(archive_root), "archive_type": archive_type, "dry_run": True},
         )
 
-    namespace = SimpleArgs(
-        archive_root=str(archive_root),
-        type=archive_type,
-        archive_id=archive_id,
-        principal_id=principal_id,
-        principal_name=principal_name,
-        principal_kind=principal_kind,
-        name=name,
-        dry_run=False,
-    )
-    archive_root.mkdir(parents=True, exist_ok=True)
-    archive_cli.copy_template(template, archive_root)
-    archive_cli.copy_zettel_kasten_layer(archive_root)
-    archive_cli.create_recommended_dirs(archive_root)
-    archive_cli.write_safe_gitignore(archive_root)
-    archive_cli.update_archive_yml(archive_root, namespace)
-    archive_cli.update_archive_identity_yml(archive_root, namespace)
-    archive_cli.update_provider_bindings_yml(archive_root, namespace)
-    archive_cli.update_source_bindings_yml(archive_root, namespace)
-
-    return tool_success_result(
-        f"Initialized {archive_type} archive at {archive_root}",
-        {
-            "archive_root": str(archive_root),
-            "archive_type": archive_type,
-            "archive_id": archive_id,
-            "principal_id": principal_id,
-        },
-    )
+    raise AssertionError("archive_init_non_dry_run_must_fail_closed")
 
 
 def tool_archive_onboarding_plan(arguments: dict[str, Any]) -> dict[str, Any]:
@@ -5121,6 +5756,43 @@ def tool_zettel_objet_links(arguments: dict[str, Any]) -> dict[str, Any]:
     return tool_success_result(f"zettel_objet_links: {state}, {result['count']} link(s).", result)
 
 
+def tool_zettel_objet_link_receipts(
+    arguments: dict[str, Any],
+) -> dict[str, Any]:
+    if arguments.get("dry_run", True) is not True:
+        raise ToolError("zettel_objet_link_receipts is dry-run only.")
+    archive_root = require_path_arg(arguments, "archive_root")
+    zettel_id = optional_string_arg(arguments, "zettel_id")
+    relative_path = optional_string_arg(arguments, "path")
+    max_receipts = arguments.get("max_receipts", 100)
+    if isinstance(max_receipts, bool) or not isinstance(max_receipts, int):
+        raise ToolError("max_receipts must be an integer.")
+    result = call_service(
+        completion_workflows.zettel_objet_link_receipts,
+        archive_root,
+        zettel_id=zettel_id,
+        relative_path=relative_path,
+        object_id=optional_string_arg(arguments, "object_id"),
+        role=optional_string_arg(arguments, "role"),
+        dry_run=True,
+        max_receipts=max_receipts,
+    )
+    summary = (
+        result.get("summary")
+        if isinstance(result.get("summary"), dict)
+        else {}
+    )
+    state = "passed" if result.get("ok") else "blocked"
+    return tool_success_result(
+        (
+            "zettel_objet_link_receipts: "
+            f"{state}, {summary.get('validated_receipt_count', 0)} "
+            "validated receipt(s)."
+        ),
+        result,
+    )
+
+
 def tool_notion_objet_link_plan(arguments: dict[str, Any]) -> dict[str, Any]:
     if arguments.get("dry_run", True) is not True:
         raise ToolError("notion_objet_link_plan is dry-run only.")
@@ -5247,6 +5919,19 @@ def tool_notion_objet_link_rewrite_plan(arguments: dict[str, Any]) -> dict[str, 
         f"{len(result.get('would_change') or [])} planned change(s).",
         result,
     )
+
+
+def tool_facet_vocabulary(arguments: dict[str, Any]) -> dict[str, Any]:
+    archive_root = require_path_arg(arguments, "archive_root")
+    if arguments.get("dry_run", True) is not True:
+        raise ToolError("facet_vocabulary is read-only and requires dry_run=true.")
+    result = call_service(
+        archive_services.facet_vocabulary,
+        archive_root,
+        dry_run=True,
+    )
+    state = "passed" if result.get("ok") else "blocked"
+    return tool_success_result(f"facet_vocabulary: {state}.", result)
 
 
 def tool_view_health(arguments: dict[str, Any]) -> dict[str, Any]:
@@ -5809,6 +6494,38 @@ def tool_create_draft_zettel(arguments: dict[str, Any]) -> dict[str, Any]:
     approved = raw_approved
     if dry_run == approved:
         raise ToolError()
+    if approved:
+        return tool_success_result(
+            "create_draft_zettel: blocked.",
+            {
+                "ok": False,
+                "dry_run": False,
+                "lifecycle_action": "create_draft",
+                "state": "blocked",
+                "reason_codes": ["exact_human_approval_cli_required"],
+                "private_values_echoed": False,
+            },
+        )
+
+    draft_id = optional_string_arg(arguments, "draft_id")
+    created_at = optional_string_arg(arguments, "created_at")
+    if approved and not all(
+        isinstance(value, str) and value.strip()
+        for value in (draft_id, created_at)
+    ):
+        return tool_success_result(
+            "create_draft_zettel: blocked.",
+            {
+                "ok": False,
+                "dry_run": False,
+                "lifecycle_action": "create_draft",
+                "state": "blocked",
+                "reason_codes": [
+                    "create_draft_ai_replay_identity_required"
+                ],
+                "private_values_echoed": False,
+            },
+        )
 
     expected_body_sha256 = optional_string_arg(arguments, "expected_body_sha256")
     draft_approved_by = optional_string_arg(arguments, "draft_approved_by")
@@ -5843,6 +6560,16 @@ def tool_create_draft_zettel(arguments: dict[str, Any]) -> dict[str, Any]:
     local_ai_sessions = arguments.get("local_ai_sessions") if isinstance(arguments.get("local_ai_sessions"), list) else []
     created_by = optional_string_arg(arguments, "created_by") or "mcp:zettel-kasten-archive-mcp"
     source = optional_string_arg(arguments, "source") or "mcp_tool_call"
+    fidelity_source_object_id = optional_string_arg(
+        arguments, "fidelity_source_object_id"
+    )
+    fidelity_session_evidence_id = optional_string_arg(
+        arguments, "fidelity_session_evidence_id"
+    )
+    if bool(fidelity_source_object_id) == bool(
+        fidelity_session_evidence_id
+    ):
+        raise ToolError()
     result = call_service(
         archive_services.create_draft_zettel,
         archive_root,
@@ -5881,17 +6608,15 @@ def tool_create_draft_zettel(arguments: dict[str, Any]) -> dict[str, Any]:
         source_intake_plan=source_intake_plan,
         prompt_boundary_report=prompt_boundary_report,
         local_ai_sessions=local_ai_sessions,
-        draft_id=optional_string_arg(arguments, "draft_id"),
-        created_at=optional_string_arg(arguments, "created_at"),
+        draft_id=draft_id,
+        created_at=created_at,
         expected_body_sha256=expected_body_sha256,
         draft_approved_by=draft_approved_by,
         approved=approved,
         source_fidelity_mode=source_fidelity_mode,
         source_fidelity_audience=source_fidelity_audience,
-        fidelity_source_object_id=optional_string_arg(
-            arguments,
-            "fidelity_source_object_id",
-        ),
+        fidelity_source_object_id=fidelity_source_object_id,
+        fidelity_session_evidence_id=fidelity_session_evidence_id,
         expected_source_fidelity_plan_sha256=(
             expected_source_fidelity_plan_sha256
         ),

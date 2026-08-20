@@ -80,7 +80,7 @@ class _NoRedirectHandler(urllib_request.HTTPRedirectHandler):
         return None
 
 
-class NotionBearerSecret:
+class _NotionBearerSecret:
     """A short-lived mutable bearer whose public forms are always redacted.
 
     A receipt-backed broker may bind a content-free authority revalidator.
@@ -106,7 +106,7 @@ class NotionBearerSecret:
         self._adopt_mutable(mutable)
 
     @classmethod
-    def _from_owned_mutable(cls, value: bytearray) -> "NotionBearerSecret":
+    def _from_owned_mutable(cls, value: bytearray) -> "_NotionBearerSecret":
         """Take ownership of one exact native buffer without copying it."""
 
         instance = cls.__new__(cls)
@@ -130,7 +130,7 @@ class NotionBearerSecret:
         self.__capability_authorizer: Callable[[str], None] | None = None
 
     def __repr__(self) -> str:
-        return "<NotionBearerSecret redacted>"
+        return "<_NotionBearerSecret redacted>"
 
     def __str__(self) -> str:
         return "[redacted]"
@@ -205,14 +205,14 @@ class _HttpResult:
     reason_code: str | None
 
 
-class NotionIdentityVerifier:
+class _NotionIdentityVerifier:
     """Callable wrapper suitable for a later secure-intake verifier callback."""
 
     __slots__ = ("_adapter", "_anchor_page_id", "_anchor_valid")
 
     def __init__(
         self,
-        adapter: "NotionHttpAdapter",
+        adapter: "_NotionHttpAdapter",
         reviewed_anchor_page_id: str,
     ) -> None:
         self._adapter = adapter
@@ -220,17 +220,17 @@ class NotionIdentityVerifier:
         self._anchor_page_id = normalized or ""
         self._anchor_valid = normalized is not None
 
-    def __call__(self, secret: str | NotionBearerSecret) -> dict[str, Any]:
+    def __call__(self, secret: str | _NotionBearerSecret) -> dict[str, Any]:
         if not self._anchor_valid:
             return _identity_evidence("notion_workspace_anchor_id_invalid")
         return self._adapter.verify_identity(secret, self._anchor_page_id)
 
     def __repr__(self) -> str:
-        return "<NotionIdentityVerifier provider=notion anchor=redacted>"
+        return "<_NotionIdentityVerifier provider=notion anchor=redacted>"
 
 
 @dataclass(frozen=True)
-class NotionSecureIntakeIdentity:
+class _NotionSecureIntakeIdentity:
     """Duck-typed private identity accepted by credential_secure_intake."""
 
     provider: str
@@ -243,12 +243,12 @@ class NotionSecureIntakeIdentity:
     anchor_access_verified: bool = True
 
 
-class NotionSecureIntakeVerifier:
+class _NotionSecureIntakeVerifier:
     """Bridge for ``ProviderIdentityVerifier`` without returning raw ids."""
 
     __slots__ = ("_adapter",)
 
-    def __init__(self, adapter: "NotionHttpAdapter") -> None:
+    def __init__(self, adapter: "_NotionHttpAdapter") -> None:
         self._adapter = adapter
 
     def validate_secret_input(self, secret: memoryview, provider: str) -> bool:
@@ -284,7 +284,7 @@ class NotionSecureIntakeVerifier:
         provider: str,
         reviewed_anchor_uuid: str,
         provider_request_observer: Callable[[], None],
-    ) -> NotionSecureIntakeIdentity:
+    ) -> _NotionSecureIntakeIdentity:
         if provider != "notion":
             raise NotionHttpAdapterError("notion_provider_mismatch")
         if not callable(provider_request_observer):
@@ -336,7 +336,7 @@ class NotionSecureIntakeVerifier:
         normalized_anchor = _normalize_uuid(reviewed_anchor_uuid)
         if normalized_anchor is None:
             raise CredentialIntakeStageError("reviewed_anchor_inaccessible")
-        return NotionSecureIntakeIdentity(
+        return _NotionSecureIntakeIdentity(
             provider="notion",
             account_subject=str(evidence["account_fingerprint"]),
             workspace_identity=str(evidence["workspace_fingerprint"]),
@@ -346,10 +346,10 @@ class NotionSecureIntakeVerifier:
         )
 
     def __repr__(self) -> str:
-        return "<NotionSecureIntakeVerifier provider=notion transport=redacted>"
+        return "<_NotionSecureIntakeVerifier provider=notion transport=redacted>"
 
 
-class NotionHttpAdapter:
+class _NotionHttpAdapter:
     """Notion 2026-03-11 read-only adapter over one injected stdlib opener."""
 
     def __init__(
@@ -415,7 +415,7 @@ class NotionHttpAdapter:
 
     def __repr__(self) -> str:
         return (
-            "<NotionHttpAdapter provider=notion api_version="
+            "<_NotionHttpAdapter provider=notion api_version="
             f"{NOTION_API_VERSION} transport=redacted>"
         )
 
@@ -442,7 +442,7 @@ class NotionHttpAdapter:
             return _safe_provider_error(400, "notion_page_id_invalid")
         if api_version != NOTION_API_VERSION:
             return _safe_provider_error(400, "notion_api_version_invalid")
-        owned = not isinstance(credential, NotionBearerSecret)
+        owned = not isinstance(credential, _NotionBearerSecret)
         secret = _coerce_secret(credential)
         if secret is None:
             return _safe_provider_error(401, "notion_secret_invalid")
@@ -482,7 +482,7 @@ class NotionHttpAdapter:
             return _safe_provider_error(400, "notion_page_or_block_id_invalid")
         if api_version != NOTION_API_VERSION:
             return _safe_provider_error(400, "notion_api_version_invalid")
-        owned = not isinstance(credential, NotionBearerSecret)
+        owned = not isinstance(credential, _NotionBearerSecret)
         secret = _coerce_secret(credential)
         if secret is None:
             return _safe_provider_error(401, "notion_secret_invalid")
@@ -512,7 +512,7 @@ class NotionHttpAdapter:
 
     def verify_identity(
         self,
-        secret: str | NotionBearerSecret,
+        secret: str | _NotionBearerSecret,
         reviewed_anchor_page_id: str,
         *,
         provider_request_observer: Callable[[], None] | None = None,
@@ -522,7 +522,7 @@ class NotionHttpAdapter:
         normalized_anchor = _normalize_uuid(reviewed_anchor_page_id)
         if normalized_anchor is None:
             return _identity_evidence("notion_workspace_anchor_id_invalid")
-        owned = not isinstance(secret, NotionBearerSecret)
+        owned = not isinstance(secret, _NotionBearerSecret)
         wrapped = _coerce_secret(secret)
         if wrapped is None:
             return _identity_evidence("notion_secret_invalid")
@@ -619,18 +619,18 @@ class NotionHttpAdapter:
     def identity_verifier(
         self,
         reviewed_anchor_page_id: str,
-    ) -> NotionIdentityVerifier:
-        return NotionIdentityVerifier(self, reviewed_anchor_page_id)
+    ) -> _NotionIdentityVerifier:
+        return _NotionIdentityVerifier(self, reviewed_anchor_page_id)
 
-    def secure_intake_verifier(self) -> NotionSecureIntakeVerifier:
+    def secure_intake_verifier(self) -> _NotionSecureIntakeVerifier:
         """Return a verifier matching credential_secure_intake's Protocol."""
 
-        return NotionSecureIntakeVerifier(self)
+        return _NotionSecureIntakeVerifier(self)
 
     def _get_json(
         self,
         path: str,
-        secret: NotionBearerSecret,
+        secret: _NotionBearerSecret,
         *,
         provider_request_observer: Callable[[], None] | None = None,
     ) -> _HttpResult:
@@ -683,7 +683,7 @@ class NotionHttpAdapter:
     def _get_json_once(
         self,
         path: str,
-        secret: NotionBearerSecret,
+        secret: _NotionBearerSecret,
         *,
         provider_request_observer: Callable[[], None] | None = None,
     ) -> _HttpResult:
@@ -740,13 +740,13 @@ class NotionHttpAdapter:
                 pass
 
 
-def _coerce_secret(value: object) -> NotionBearerSecret | None:
-    if isinstance(value, NotionBearerSecret):
+def _coerce_secret(value: object) -> _NotionBearerSecret | None:
+    if isinstance(value, _NotionBearerSecret):
         return value
     if not isinstance(value, str):
         return None
     try:
-        return NotionBearerSecret(value)
+        return _NotionBearerSecret(value)
     except NotionHttpAdapterError:
         return None
 

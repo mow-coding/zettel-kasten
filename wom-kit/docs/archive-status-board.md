@@ -16,9 +16,10 @@ for that separate review-evidence check. It also does not reconstruct canonical
 revision history; run `archive zet-revision-receipt-audit <archive-root>
 --dry-run` after revision work. If separately recovered old full-zet bytes need
 review, use `archive zet-revision-restore-plan <archive-root> --dry-run`; the
-board itself grants no restore authority. A separately reviewed plan may
-continue through `zet-revision-restore-write`, but that command remains outside
-the status board and requires its own exact dry-run and human approval.
+board itself grants no restore authority. In v0.4.0
+`zet-revision-restore-write` remains dry-run only; approval returns
+`compound_exact_human_approval_binding_required` before private target read or
+mutation and writes no canonical byte or restore receipt.
 
 ## Command
 

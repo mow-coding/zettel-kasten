@@ -1,6 +1,6 @@
 # AI Command-Path Routing
 
-Status: implemented in v0.3.278, extended through v0.3.320
+Status: implemented in v0.3.278, extended through v0.4.0
 
 ## Purpose
 
@@ -120,8 +120,9 @@ tightens the existing draft-create and mint routes: every new AI draft carries
 one manifested source, explicit fidelity mode and audience, a dry-run body and
 plan digest, and attributed human replay. Declared AI provenance cannot use the
 human route. Mint re-verifies the private receipt and source/body authority.
-Human-written creation remains compatible; old AI drafts use an attributed
-legacy review. Audience metadata never authorizes sharing or transport.
+Human-declared/non-AI non-dry-run creation is fixed closed in v0.4.0; old AI
+drafts use an attributed legacy review. Audience metadata never authorizes
+sharing or transport.
 
 The additive routes cover:
 
@@ -198,8 +199,8 @@ packaged runtime skill, the fake archive, and live read-only command output.
 | Inspect saved-view state | `archive view-health <archive-root> --dry-run --format json` | Follow with `view-recommendation-plan`; both are read-only. |
 | Inspect declared local artifact lifecycle state | `archive artifact-lifecycle-inventory <archive-root> --dry-run --format json` | Covers only fixed archive-owned lifecycle roots and exact generated-index files. It reports incomplete coverage, grants no deletion authority, reads no ordinary artifact body or object byte, and checks no provider or sibling object store. |
 | Inspect possible historical inbox pipeline bypasses | `archive inbox-pipeline-audit <archive-root> --dry-run --format json` | Structural classes are conservative signals, not proof of command execution; no automatic repair exists. |
-| Plan one explicit event membership set | `archive activity-group-membership-plan <archive-root> --request .wom-scratch/private/activity-groups/<reviewed>.json --dry-run --progress --format json` | The private request must contain one human-selected event anchor and ordered member ids. The command infers no member and writes nothing. |
-| Plan removing one explicit event membership from selected zets | `archive activity-group-membership-removal-plan <archive-root> --request .wom-scratch/private/activity-group-removals/<reviewed>.json --dry-run --progress --format json` | The private request must contain the exact human-selected event anchor and ordered member ids. It writes nothing; continue only through the exact request/review digests and dedicated removal writer. |
+| Plan one explicit event membership set | `archive activity-group-membership-plan <archive-root> --request .wom-scratch/private/activity-groups/<reviewed>.json --dry-run --progress --format json` | The private request must contain one human-selected event anchor and ordered member ids. The command infers no member and writes nothing. In v0.4.0 this preview grants no writer authority. |
+| Plan removing one explicit event membership from selected zets | `archive activity-group-membership-removal-plan <archive-root> --request .wom-scratch/private/activity-group-removals/<reviewed>.json --dry-run --progress --format json` | The private request must contain the exact human-selected event anchor and ordered member ids. It writes nothing and grants no removal-writer authority in v0.4.0. |
 | Discover installed commands | `archive capabilities --machine --format json` | Use the installed inventory before declaring that WOM lacks a command. |
 
 ## Official Write Routes
@@ -211,14 +212,14 @@ Every write remains preview-first and human-reviewed.
 | Create an AI-assisted draft | `archive create-draft <archive-root> --title <title> --abstract <reviewed-first-read> --body-file <private-body-file> --facet <key=value> --creation-mode ai_assisted --created-by <ai-actor> --dry-run --format json` | Missing abstract/facets or a same-normalized-title unminted draft blocks the AI route. Replay the preview's `draft_id`, `created_at`, and `expected_body_sha256` with `--draft-approved-by <human-actor>`. Never write Markdown directly into `inbox/`. |
 | Mint a reviewed draft | `archive mint-zet <archive-root> --zettel-id <draft-id> --dry-run --format json` | A human publication request starts this preview now. Use the separate `--approve --reviewed-by <human-actor>` path; claim completion only after canonical and receipt evidence exists, and report any blocker immediately. |
 | Add a typed edge | `archive zettel-edge <archive-root> --from-zettel <id> --target <ref> --edge-type <type> --dry-run --format json` | Use the separate `--approve --reviewed-by <human-actor>` path and retain its receipt. |
-| Capture source material | `archive source-intake <archive-root> --dry-run --local-path <file> --format json` | Continue through `source-intake-record`, `objet-capture-selection`, and `objet-capture`; a source-intake preview alone grants no copy/upload authority. |
+| Review source material intake | `archive source-intake <archive-root> --dry-run --local-path <file> --format json` | Keep `source-intake-record`, `objet-capture-selection`, and `objet-capture` in dry-run. In v0.4.0 their approval branches fail before private input/target reads or writes with `compound_exact_human_approval_binding_required`; a preview grants no copy/upload authority. |
 | Update operating context | `archive operational-context <archive-root> --record workbench/operational-context.next.yml --dry-run --format json` | Use the separate `--approve --reviewed-by <human-actor>` path and retain its receipt. |
-| Create a persistent saved-view | Run `view-recommendation-plan`, then preview `archive saved-view-write <archive-root> --request .wom-scratch/private/saved-views/<reviewed>.json --dry-run --format json` | Approve only the exact fresh plan using `--expected-plan-sha256`, `--approve`, `--reviewed-by`, and `--affirm-view-reviewed`. Never edit `views/*.yml` directly. |
-| Revert a WOM-written saved-view | `archive saved-view-revert <archive-root> --receipt receipts/views/<receipt>.saved-view-write.json --dry-run --format json` | Approve only the exact fresh revert plan. It refuses changed bytes and never removes a human-authored view. |
-| Add reviewed event memberships | Run `activity-group-membership-plan`, then preview `archive activity-group-membership-write <archive-root> --request <private-reviewed-request> --expected-request-sha256 <sha256> --expected-review-plan-sha256 <sha256> --dry-run --progress --format json` | Approve the same digest-bound writer with `--approve --reviewed-by <human-actor> --affirm-memberships-reviewed`. It writes a journal and receipt; it does not infer or remove memberships. |
-| Recover an interrupted event-membership write | `archive activity-group-membership-recovery-plan <archive-root> --expected-request-sha256 <sha256> --dry-run --format json` | First confirm the old writer is no longer running. Approve only the exact recovery-plan digest with `activity-group-membership-recover`; unknown drift remains a manual forensic hold. |
-| Remove reviewed event memberships | Run `activity-group-membership-removal-plan`, then preview `archive activity-group-membership-removal-write <archive-root> --request <private-reviewed-request> --expected-request-sha256 <sha256> --expected-review-plan-sha256 <sha256> --dry-run --progress --format json`. | Approve the unchanged digest-bound writer with `--approve --reviewed-by <human-actor> --affirm-removals-reviewed`. It removes only explicitly reviewed anchors, writes a separate removal journal and receipt, and performs no inference. |
-| Recover an interrupted event-membership removal | `archive activity-group-membership-removal-recovery-plan <archive-root> --expected-request-sha256 <sha256> --dry-run --format json` | First confirm the old removal writer is no longer running. Approve only the exact recovery-plan digest with `activity-group-membership-removal-recover`; unknown drift remains `manual_forensic_hold`. |
+| Preview a persistent saved-view | Run `view-recommendation-plan`, then preview `archive saved-view-write <archive-root> --request .wom-scratch/private/saved-views/<reviewed>.json --dry-run --format json` | v0.4.0 approval is fixed fail-closed with `compound_exact_human_approval_binding_required`; it reads no private request/target and writes no view or receipt. Never edit `views/*.yml` directly. |
+| Audit a WOM-written saved-view revert | `archive saved-view-revert <archive-root> --receipt receipts/views/<receipt>.saved-view-write.json --dry-run --format json` | Keep this as a read-only preview. v0.4.0 approval returns `compound_exact_human_approval_binding_required` before private target read or mutation. |
+| Preview reviewed event memberships | Run `activity-group-membership-plan`, then preview `archive activity-group-membership-write <archive-root> --request <private-reviewed-request> --expected-request-sha256 <sha256> --expected-review-plan-sha256 <sha256> --dry-run --progress --format json` | v0.4.0 approval fails before private target read or mutation with `compound_exact_human_approval_binding_required`; it writes no canonical file, journal, or receipt. |
+| Inspect interrupted event-membership write | `archive activity-group-membership-recovery-plan <archive-root> --expected-request-sha256 <sha256> --dry-run --format json` | The plan is read-only. `activity-group-membership-recover` approval is fixed fail-closed with `compound_exact_human_approval_binding_required`; unknown drift remains a manual forensic hold. |
+| Preview reviewed event-membership removal | Run `activity-group-membership-removal-plan`, then preview `archive activity-group-membership-removal-write <archive-root> --request <private-reviewed-request> --expected-request-sha256 <sha256> --expected-review-plan-sha256 <sha256> --dry-run --progress --format json`. | v0.4.0 approval fails before private target read or mutation with `compound_exact_human_approval_binding_required`; it writes no canonical file, journal, or receipt. |
+| Inspect interrupted event-membership removal | `archive activity-group-membership-removal-recovery-plan <archive-root> --expected-request-sha256 <sha256> --dry-run --format json` | The plan is read-only and performs no membership inference. `activity-group-membership-removal-recover` approval is fixed fail-closed with `compound_exact_human_approval_binding_required`; unknown drift remains `manual_forensic_hold`. |
 
 ## Safety And Compatibility
 

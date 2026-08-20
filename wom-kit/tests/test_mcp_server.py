@@ -103,6 +103,286 @@ class McpServerTests(unittest.TestCase):
         shutil.copytree(KIT_ROOT / "examples" / "fake-life-archive", root)
         return root
 
+    def _install_historical_archive_fixture(
+        self,
+        root: Path,
+        *,
+        archive_type: str,
+        archive_id: str,
+        principal_id: str,
+        principal_kind: str,
+        principal_name: str,
+        archive_name: str,
+    ) -> Path:
+        """Copy a checked-in template fixture without invoking public init."""
+
+        fixture_root = root.resolve()
+        template_root = (KIT_ROOT / "templates" / archive_type).resolve()
+        zettel_kasten_root = (KIT_ROOT / "zettel-kasten").resolve()
+        self.assertEqual(template_root.parent, (KIT_ROOT / "templates").resolve())
+        self.assertTrue(template_root.is_dir())
+        self.assertEqual(zettel_kasten_root, (KIT_ROOT / "zettel-kasten").resolve())
+        self.assertTrue(zettel_kasten_root.is_dir())
+        self.assertFalse(
+            fixture_root.exists(),
+            f"historical fixture target already exists: {fixture_root}",
+        )
+
+        shutil.copytree(template_root, fixture_root)
+        shutil.copytree(
+            zettel_kasten_root,
+            fixture_root / "zettel-kasten",
+            dirs_exist_ok=True,
+        )
+        for relative in (
+            "inbox",
+            "zettels",
+            "views",
+            "source-maps",
+            "objects/manifests",
+            "objects/derived-text/sha256",
+            "db",
+            "workbench",
+            "receipts",
+            "receipts/derived-text-capture",
+            "receipts/delegate",
+            "receipts/edges",
+            "receipts/import",
+            "receipts/lineage",
+            "receipts/mint",
+            "receipts/mint/drafts",
+            "receipts/recovery",
+            "receipts/share",
+            "receipts/sources",
+        ):
+            destination = (fixture_root / Path(relative)).resolve()
+            self.assertTrue(destination.is_relative_to(fixture_root))
+            destination.mkdir(parents=True, exist_ok=True)
+
+        archive_path = fixture_root / "archive.yml"
+        archive_doc = archive_cli.load_yaml(archive_path.read_text(encoding="utf-8"))
+        archive_doc["archive_id"] = archive_id
+        archive_doc["name"] = archive_name
+        archive_doc["type"] = archive_type
+        archive_doc["principal"] = {
+            "principal_id": principal_id,
+            "display_name": principal_name,
+            "kind": principal_kind,
+        }
+        archive_path.write_text(archive_cli.dump_yaml(archive_doc), encoding="utf-8")
+
+        identity_path = fixture_root / "archive-identity.yml"
+        identity_doc = archive_cli.load_yaml(identity_path.read_text(encoding="utf-8"))
+        identity_doc["identity"].update(
+            {
+                "archive_id": archive_id,
+                "identity_id": f"identity:{archive_id}",
+                "scope": archive_type,
+                "principal_id": principal_id,
+                "display_name": principal_name,
+            }
+        )
+        identity_doc["ownership"].update(
+            {
+                "owner_id": principal_id,
+                "owner_kind": principal_kind,
+                "owner_display_name": principal_name,
+                "owner_archive_id": archive_id,
+            }
+        )
+        if archive_type == "personal":
+            identity_doc["ownership"]["operators"] = [
+                {
+                    "operator_id": principal_id,
+                    "role": "owner_operator",
+                    "permissions": [
+                        "capture",
+                        "curate",
+                        "approve",
+                        "transfer_request",
+                    ],
+                }
+            ]
+        identity_path.write_text(
+            archive_cli.dump_yaml(identity_doc),
+            encoding="utf-8",
+        )
+
+        for filename in ("provider-bindings.yml", "source-bindings.yml"):
+            binding_path = fixture_root / filename
+            binding_doc = archive_cli.load_yaml(
+                binding_path.read_text(encoding="utf-8")
+            )
+            binding_doc["archive_id"] = archive_id
+            binding_path.write_text(
+                archive_cli.dump_yaml(binding_doc),
+                encoding="utf-8",
+            )
+
+        (fixture_root / ".gitignore").write_text(
+            "# Bounded historical pre-v0.4 fixture defaults\n"
+            + "\n".join(archive_cli.RECOMMENDED_GITIGNORE_PATTERNS)
+            + "\n",
+            encoding="utf-8",
+        )
+        self.assertEqual(archive_services.read_archive_id(fixture_root), archive_id)
+        self.assertEqual(
+            archive_cli.load_yaml(identity_path.read_text(encoding="utf-8"))[
+                "identity"
+            ]["archive_id"],
+            archive_id,
+        )
+        return fixture_root
+
+    def install_historical_personal_archive_fixture(
+        self,
+        root: Path,
+        *,
+        archive_id: str,
+        principal_id: str,
+        principal_name: str | None = None,
+    ) -> Path:
+        """Install a bounded pre-v0.4 personal archive fixture."""
+
+        return self._install_historical_archive_fixture(
+            root,
+            archive_type="personal",
+            archive_id=archive_id,
+            principal_id=principal_id,
+            principal_kind="person",
+            principal_name=principal_name or principal_id,
+            archive_name="Historical MCP Test Archive",
+        )
+
+    def install_historical_object_storage_setup_fixture(
+        self,
+        archive_root: Path,
+        *,
+        profile_id: str = "profile:personal:username",
+        profile_slug: str,
+        bucket_name: str,
+        storage_account_ref: str,
+    ) -> dict[str, object]:
+        """Install bounded pre-v0.4 setup evidence without invoking a writer."""
+
+        plan = archive_services.object_storage_setup_plan(
+            archive_root,
+            provider="cloudflare-r2",
+            profile_id=profile_id,
+            profile_slug=profile_slug,
+            storage_account_ref=storage_account_ref,
+            bucket_name=bucket_name,
+        )
+        self.assertEqual(plan["blockers"], [])
+        receipt_relative = plan["provider_setup_receipt_preview"]["receipt_path"]
+        receipt = archive_services.build_object_storage_provider_setup_receipt(
+            archive_id=plan["archive_id"],
+            profile_id=plan["profile_id"],
+            profile_slug=plan["profile_slug"],
+            provider_kind=plan["provider"],
+            storage_account_ref=plan["storage_account_ref"],
+            bucket_name=plan["proposed_bucket_name"],
+            region=plan["region"],
+            endpoint_ref=plan["endpoint_ref"],
+            objet_prefix=plan["proposed_objet_prefix"],
+            visibility=plan["proposed_visibility"],
+            receipt_path=receipt_relative,
+            reviewed_by="person:historical-object-storage-reviewer",
+            timestamp="2026-08-19T00:00:00+09:00",
+            dry_run=False,
+            manual_steps=plan["manual_steps"],
+        )
+        receipt["result"] = {
+            "changed_paths": ["provider-bindings.yml", receipt_relative],
+            "provider_api_called": False,
+            "bucket_created": False,
+            "files_uploaded": False,
+            "sync_started": False,
+            "files_hashed": False,
+        }
+        receipt_path = archive_root / Path(receipt_relative)
+        receipt_path.parent.mkdir(parents=True, exist_ok=True)
+        receipt_path.write_text(
+            json.dumps(receipt, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+
+        provider_doc = archive_services.load_provider_bindings(archive_root)
+        provider_doc["version"] = "provider-bindings/v0.1"
+        provider_doc["archive_id"] = plan["archive_id"]
+        provider_doc["bindings"] = archive_services.upsert_object_storage_provider_binding(
+            archive_services.provider_bindings_list(provider_doc),
+            plan["provider_binding_preview"],
+        )
+        (archive_root / "provider-bindings.yml").write_text(
+            archive_cli.dump_yaml(provider_doc),
+            encoding="utf-8",
+        )
+        return {
+            "receipt_path": receipt_relative,
+            "provider_binding": plan["provider_binding_preview"],
+        }
+
+    def install_historical_github_setup_fixture(
+        self,
+        archive_root: Path,
+        *,
+        profile_id: str,
+        profile_slug: str,
+        github_owner: str,
+        github_account_ref: str,
+        repo_name: str,
+    ) -> dict[str, object]:
+        """Install bounded pre-v0.4 GitHub setup evidence without a writer."""
+
+        plan = archive_services.github_repository_setup_plan(
+            archive_root,
+            profile_id=profile_id,
+            profile_slug=profile_slug,
+            github_owner=github_owner,
+            github_account_ref=github_account_ref,
+            repo_name=repo_name,
+        )
+        self.assertEqual(plan["blockers"], [])
+        receipt_relative = plan["provider_setup_receipt_preview"]["receipt_path"]
+        receipt = archive_services.build_github_provider_setup_receipt(
+            archive_id=plan["archive_id"],
+            profile_id=plan["profile_id"],
+            profile_slug=plan["profile_slug"],
+            github_owner=plan["github_owner"],
+            github_account_ref=plan["github_account_ref"],
+            repo_name=plan["proposed_repo_name"],
+            visibility=plan["proposed_visibility"],
+            remote_protocol=plan["proposed_remote_protocol"],
+            receipt_path=receipt_relative,
+            reviewed_by="person:historical-github-reviewer",
+            timestamp="2026-08-19T00:00:00+09:00",
+            dry_run=False,
+            manual_steps=plan["manual_steps"],
+        )
+        receipt_path = archive_root / Path(receipt_relative)
+        receipt_path.parent.mkdir(parents=True, exist_ok=True)
+        receipt_path.write_text(
+            json.dumps(receipt, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+
+        provider_doc = archive_services.load_provider_bindings(archive_root)
+        provider_doc["version"] = "provider-bindings/v0.1"
+        provider_doc["archive_id"] = plan["archive_id"]
+        provider_doc["bindings"] = archive_services.upsert_github_provider_binding(
+            archive_services.provider_bindings_list(provider_doc),
+            plan["provider_binding_preview"],
+        )
+        (archive_root / "provider-bindings.yml").write_text(
+            archive_cli.dump_yaml(provider_doc),
+            encoding="utf-8",
+        )
+        return {
+            "receipt_path": receipt_relative,
+            "provider_binding": plan["provider_binding_preview"],
+        }
+
     def source_fidelity_fixture_arguments(
         self,
         archive_root: Path,
@@ -662,36 +942,15 @@ class McpServerTests(unittest.TestCase):
         return path
 
     def init_transfer_ready_family_archive(self, root: Path) -> Path:
-        env = os.environ.copy()
-        env["PYTHONPATH"] = str(SRC_ROOT)
-        env["PYTHONDONTWRITEBYTECODE"] = "1"
-        result = subprocess.run(
-            [
-                sys.executable,
-                "-m",
-                "wom_kit.archive_cli",
-                "init",
-                str(root),
-                "--type",
-                "family",
-                "--archive-id",
-                "archive:family:example-household",
-                "--principal-id",
-                "family:example-household",
-                "--principal-kind",
-                "family",
-                "--principal-name",
-                "Example Household",
-                "--name",
-                "Example Household Archive",
-            ],
-            cwd=KIT_ROOT,
-            env=env,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
+        root = self._install_historical_archive_fixture(
+            root,
+            archive_type="family",
+            archive_id="archive:family:example-household",
+            principal_id="family:example-household",
+            principal_kind="family",
+            principal_name="Example Household",
+            archive_name="Example Household Archive",
         )
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         identity_path = root / "archive-identity.yml"
         identity = archive_cli.load_yaml(identity_path.read_text(encoding="utf-8"))
         identity["trusted_counterparties"].append(
@@ -2392,11 +2651,8 @@ class McpServerTests(unittest.TestCase):
             allowed_archive = self.copy_fake_archive(allowed_root / "archive")
             outside_archive = self.copy_fake_archive(outside_root / "archive")
             bucket_name = "zettel-kasten-mcp-adapter-objets"
-            setup = archive_services.approve_object_storage_setup_plan(
+            setup = self.install_historical_object_storage_setup_fixture(
                 allowed_archive,
-                reviewed_by="reviewer:test",
-                provider="cloudflare-r2",
-                profile_id="person:test",
                 profile_slug="mcp-adapter",
                 storage_account_ref="storage:account:test",
                 bucket_name=bucket_name,
@@ -2519,11 +2775,8 @@ class McpServerTests(unittest.TestCase):
             allowed_archive = self.copy_fake_archive(allowed_root / "archive")
             outside_archive = self.copy_fake_archive(outside_root / "archive")
             bucket_name = "zettel-kasten-mcp-request-objets"
-            setup = archive_services.approve_object_storage_setup_plan(
+            setup = self.install_historical_object_storage_setup_fixture(
                 allowed_archive,
-                reviewed_by="reviewer:test",
-                provider="cloudflare-r2",
-                profile_id="person:test",
                 profile_slug="mcp-request",
                 storage_account_ref="storage:account:test",
                 bucket_name=bucket_name,
@@ -2663,11 +2916,8 @@ class McpServerTests(unittest.TestCase):
             allowed_archive = self.copy_fake_archive(allowed_root / "archive")
             outside_archive = self.copy_fake_archive(outside_root / "archive")
             bucket_name = "zettel-kasten-mcp-execution-contract-objets"
-            setup = archive_services.approve_object_storage_setup_plan(
+            setup = self.install_historical_object_storage_setup_fixture(
                 allowed_archive,
-                reviewed_by="reviewer:test",
-                provider="cloudflare-r2",
-                profile_id="person:test",
                 profile_slug="mcp-execution-contract",
                 storage_account_ref="storage:account:test",
                 bucket_name=bucket_name,
@@ -5179,8 +5429,14 @@ class McpServerTests(unittest.TestCase):
                 serialized = json.dumps(structured)
                 self.assertTrue(structured["ok"])
                 self.assertEqual(structured["lifecycle_action"], "credential_policy_check")
-                self.assertEqual(structured["policy_result"], "ready_after_approval_receipt")
-                self.assertTrue(structured["policy_evaluation"]["would_allow_future_adapter_after_receipt"])
+                self.assertEqual(structured["policy_result"], "legacy_unbound")
+                self.assertEqual(structured["binding_state"], "legacy_unbound")
+                self.assertEqual(structured["authority_classification"], "advisory")
+                self.assertFalse(
+                    structured["policy_evaluation"][
+                        "would_allow_future_adapter_after_receipt"
+                    ]
+                )
                 self.assertFalse(structured["policy_evaluation"]["live_execution_allowed_now"])
                 self.assertFalse(structured["closed_actions"]["approval_receipt_written"])
                 self.assertFalse(structured["closed_actions"]["live_adapter_executed"])
@@ -5325,10 +5581,23 @@ class McpServerTests(unittest.TestCase):
                 self.assertFalse(result["isError"])
                 structured = result["structuredContent"]
                 serialized = json.dumps(structured)
-                self.assertTrue(structured["ok"])
+                self.assertFalse(structured["ok"])
                 self.assertEqual(structured["lifecycle_action"], "credential_keepassxc_command_plan")
                 self.assertTrue(structured["adapter"]["approval_receipt_verified"])
-                self.assertEqual(structured["policy_check_summary"]["policy_result"], "ready_after_approval_receipt")
+                self.assertEqual(
+                    structured["policy_check_summary"]["policy_result"],
+                    "legacy_unbound",
+                )
+                self.assertTrue(structured["policy_check_summary"]["ok"])
+                self.assertFalse(
+                    structured["policy_check_summary"][
+                        "future_adapter_has_verified_receipt"
+                    ]
+                )
+                self.assertIn(
+                    "credential policy must be ready_after_approval_receipt before a KeePassXC command plan can be considered ready.",
+                    structured["blockers"],
+                )
                 self.assertEqual(structured["command_plan"]["argv_preview"][0:3], ["keepassxc-cli", "add", "--password-prompt"])
                 self.assertEqual(structured["command_plan"]["argv_preview"][3], "<database.kdbx selected by human outside WOM>")
                 self.assertFalse(structured["command_plan"]["database_path_included"])
@@ -6862,26 +7131,23 @@ class McpServerTests(unittest.TestCase):
             allowed_archive = self.copy_fake_archive(allowed_root / "archive")
             outside_archive = self.copy_fake_archive(outside_root / "archive")
 
-            github_result = archive_services.approve_github_repository_setup_plan(
+            github_result = self.install_historical_github_setup_fixture(
                 allowed_archive,
-                reviewed_by="person:mcp",
                 profile_id="profile:personal:mcp",
                 profile_slug="mcp",
                 github_owner="example-owner",
                 github_account_ref="github:account:mcp",
                 repo_name="zettel-kasten-mcp-status",
             )
-            self.assertTrue(github_result["ok"], github_result)
-            storage_result = archive_services.approve_object_storage_setup_plan(
+            self.assertIn("receipt_path", github_result)
+            storage_result = self.install_historical_object_storage_setup_fixture(
                 allowed_archive,
-                reviewed_by="person:mcp",
-                provider="cloudflare-r2",
                 profile_id="profile:personal:mcp",
                 profile_slug="mcp",
                 storage_account_ref="storage:account:mcp",
                 bucket_name="zettel-kasten-mcp-status-objets",
             )
-            self.assertTrue(storage_result["ok"], storage_result)
+            self.assertIn("receipt_path", storage_result)
 
             before = {
                 path.relative_to(allowed_archive).as_posix(): path.read_text(encoding="utf-8")
@@ -7515,6 +7781,65 @@ class McpServerTests(unittest.TestCase):
             finally:
                 self.stop_server(process)
 
+    def test_archive_init_defaults_to_dry_run_and_non_dry_run_is_fixed_closed(self) -> None:
+        process = self.start_server()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                archive_root = Path(tmp) / "mcp-init"
+                arguments = {
+                    "archive_root": str(archive_root),
+                    "archive_type": "personal",
+                    "archive_id": "archive:personal:mcp-init",
+                    "principal_id": "person:mcp-init",
+                }
+                preview_response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "archive_init",
+                            "arguments": arguments,
+                        },
+                    },
+                )
+                preview_result = preview_response["result"]
+                self.assertFalse(preview_result["isError"])
+                preview = preview_result["structuredContent"]
+                self.assertTrue(preview["dry_run"])
+                self.assertEqual(preview["archive_type"], "personal")
+                self.assertFalse(archive_root.exists())
+
+                blocked_response = self.send(
+                    process,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 2,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "archive_init",
+                            "arguments": {**arguments, "dry_run": False},
+                        },
+                    },
+                )
+                blocked_result = blocked_response["result"]
+                self.assertFalse(blocked_result["isError"])
+                blocked = blocked_result["structuredContent"]
+                self.assertFalse(blocked["ok"])
+                self.assertFalse(blocked["dry_run"])
+                self.assertEqual(blocked["state"], "blocked")
+                self.assertEqual(
+                    blocked["reason_codes"],
+                    ["compound_exact_human_approval_binding_required"],
+                )
+                self.assertEqual(blocked["files_written"], [])
+                self.assertFalse(blocked["private_values_echoed"])
+                self.assert_wire_omits(blocked_response, str(archive_root))
+                self.assertFalse(archive_root.exists())
+        finally:
+            self.stop_server(process)
+
     def test_archive_onboarding_plan_never_writes_files(self) -> None:
         process = self.start_server()
         try:
@@ -7664,25 +7989,11 @@ class McpServerTests(unittest.TestCase):
         process = self.start_server()
         try:
             with tempfile.TemporaryDirectory() as tmp:
-                archive_root = Path(tmp) / "archive"
-                init_response = self.send(
-                    process,
-                    {
-                        "jsonrpc": "2.0",
-                        "id": 1,
-                        "method": "tools/call",
-                        "params": {
-                            "name": "archive_init",
-                            "arguments": {
-                                "archive_root": str(archive_root),
-                                "archive_type": "personal",
-                                "archive_id": "archive:personal:mcp-external-import",
-                                "principal_id": "person:mcp-external-import",
-                            },
-                        },
-                    },
+                archive_root = self.install_historical_personal_archive_fixture(
+                    Path(tmp) / "archive",
+                    archive_id="archive:personal:mcp-external-import",
+                    principal_id="person:mcp-external-import",
                 )
-                self.assertFalse(init_response["result"]["isError"])
 
                 export_root = KIT_ROOT / "examples" / "external-imports" / "notion-export"
                 response = self.send(
@@ -7717,25 +8028,11 @@ class McpServerTests(unittest.TestCase):
         process = self.start_server()
         try:
             with tempfile.TemporaryDirectory() as tmp:
-                archive_root = Path(tmp) / "archive"
-                init_response = self.send(
-                    process,
-                    {
-                        "jsonrpc": "2.0",
-                        "id": 1,
-                        "method": "tools/call",
-                        "params": {
-                            "name": "archive_init",
-                            "arguments": {
-                                "archive_root": str(archive_root),
-                                "archive_type": "personal",
-                                "archive_id": "archive:personal:mcp-source",
-                                "principal_id": "person:mcp-source",
-                            },
-                        },
-                    },
+                archive_root = self.install_historical_personal_archive_fixture(
+                    Path(tmp) / "archive",
+                    archive_id="archive:personal:mcp-source",
+                    principal_id="person:mcp-source",
                 )
-                self.assertFalse(init_response["result"]["isError"])
 
                 source_root = Path(tmp) / "source-root"
                 source_root.mkdir()
@@ -7788,25 +8085,11 @@ class McpServerTests(unittest.TestCase):
         process = self.start_server()
         try:
             with tempfile.TemporaryDirectory() as tmp:
-                archive_root = Path(tmp) / "archive"
-                init_response = self.send(
-                    process,
-                    {
-                        "jsonrpc": "2.0",
-                        "id": 1,
-                        "method": "tools/call",
-                        "params": {
-                            "name": "archive_init",
-                            "arguments": {
-                                "archive_root": str(archive_root),
-                                "archive_type": "personal",
-                                "archive_id": "archive:personal:mcp-source-register",
-                                "principal_id": "person:mcp-source-register",
-                            },
-                        },
-                    },
+                archive_root = self.install_historical_personal_archive_fixture(
+                    Path(tmp) / "archive",
+                    archive_id="archive:personal:mcp-source-register",
+                    principal_id="person:mcp-source-register",
                 )
-                self.assertFalse(init_response["result"]["isError"])
                 before = (archive_root / "source-bindings.yml").read_text(encoding="utf-8")
 
                 plan_response = self.send(
@@ -8325,30 +8608,16 @@ class McpServerTests(unittest.TestCase):
         finally:
             self.stop_server(process)
 
-    def test_create_draft_zettel_tool_writes_to_inbox(self) -> None:
+    def test_create_draft_zettel_tool_requires_local_ui_for_write(self) -> None:
         process = self.start_server()
         try:
             with tempfile.TemporaryDirectory() as tmp:
-                archive_root = Path(tmp) / "archive"
-                init_response = self.send(
-                    process,
-                    {
-                        "jsonrpc": "2.0",
-                        "id": 1,
-                        "method": "tools/call",
-                        "params": {
-                            "name": "archive_init",
-                            "arguments": {
-                                "archive_root": str(archive_root),
-                                "archive_type": "personal",
-                                "archive_id": "archive:personal:mcp-test",
-                                "principal_id": "person:mcp-test",
-                                "principal_name": "MCP Test",
-                            },
-                        },
-                    },
+                archive_root = self.install_historical_personal_archive_fixture(
+                    Path(tmp) / "archive",
+                    archive_id="archive:personal:mcp-test",
+                    principal_id="person:mcp-test",
+                    principal_name="MCP Test",
                 )
-                self.assertFalse(init_response["result"]["isError"])
 
                 draft_arguments = {
                     "archive_root": str(archive_root),
@@ -8404,121 +8673,14 @@ class McpServerTests(unittest.TestCase):
                     },
                 )
                 self.assertFalse(draft_response["result"]["isError"])
-                relative_path = draft_response["result"]["structuredContent"]["path"]
-                self.assertTrue(relative_path.startswith("inbox"))
-                self.assertNotIn("\\", relative_path)
-                self.assertTrue((archive_root / relative_path).is_file())
-                draft_text = (archive_root / relative_path).read_text(encoding="utf-8")
-                draft_frontmatter, _draft_body = archive_services.split_zettel_text(draft_text)
+                blocked = draft_response["result"]["structuredContent"]
+                self.assertFalse(blocked["ok"])
                 self.assertEqual(
-                    draft_frontmatter["abstract"],
-                    "A compact MCP-created draft for first-pass reading.",
+                    blocked["reason_codes"],
+                    ["exact_human_approval_cli_required"],
                 )
-
-                read_response = self.send(
-                    process,
-                    {
-                        "jsonrpc": "2.0",
-                        "id": 3,
-                        "method": "tools/call",
-                        "params": {
-                            "name": "read_zettel",
-                            "arguments": {
-                                "archive_root": str(archive_root),
-                                "path": relative_path.replace("/", "\\"),
-                                "section": "overview",
-                            },
-                        },
-                    },
-                )
-                self.assertFalse(read_response["result"]["isError"])
-                read_result = read_response["result"]["structuredContent"]
-                self.assertEqual(read_result["path"], relative_path)
-                self.assertEqual(read_result["section"], "overview")
-                self.assertTrue(read_result["body_omitted"])
-                self.assertEqual(read_result["body"], "")
-                self.assertEqual(
-                    read_result["overview"]["gist"],
-                    "A compact MCP-created draft for first-pass reading.",
-                )
-                self.assertEqual(read_result["overview"]["gist_source"], "frontmatter.abstract")
-
-                paged_response = self.send(
-                    process,
-                    {
-                        "jsonrpc": "2.0",
-                        "id": 4,
-                        "method": "tools/call",
-                        "params": {
-                            "name": "read_zettel",
-                            "arguments": {
-                                "archive_root": str(archive_root),
-                                "path": relative_path,
-                                "section": "document",
-                                "body_max_chars": 10,
-                            },
-                        },
-                    },
-                )
-                self.assertFalse(paged_response["result"]["isError"])
-                paged_result = paged_response["result"]["structuredContent"]
-                self.assertEqual(paged_result["section"], "document")
-                self.assertEqual(paged_result["body_page"]["cursor"], 0)
-                self.assertEqual(paged_result["body_page"]["max_chars"], 10)
-                self.assertEqual(paged_result["body_page"]["returned_chars"], 10)
-                self.assertFalse(paged_result["body_page"]["complete"])
-                self.assertEqual(paged_result["body_page"]["next_cursor"], 10)
-                self.assertEqual(
-                    paged_result["body_page"]["body_sha256"],
-                    paged_result["integrity"]["body_sha256"],
-                )
-
-                unbound_response = self.send(
-                    process,
-                    {
-                        "jsonrpc": "2.0",
-                        "id": 5,
-                        "method": "tools/call",
-                        "params": {
-                            "name": "read_zettel",
-                            "arguments": {
-                                "archive_root": str(archive_root),
-                                "path": relative_path,
-                                "section": "document",
-                                "body_cursor": paged_result["body_page"]["next_cursor"],
-                                "body_max_chars": 10,
-                            },
-                        },
-                    },
-                )
-                self.assertTrue(unbound_response["result"]["isError"])
-                self.assert_tool_error_envelope(unbound_response["result"])
-
-                continued_response = self.send(
-                    process,
-                    {
-                        "jsonrpc": "2.0",
-                        "id": 6,
-                        "method": "tools/call",
-                        "params": {
-                            "name": "read_zettel",
-                            "arguments": {
-                                "archive_root": str(archive_root),
-                                "path": relative_path,
-                                "section": "document",
-                                "body_cursor": paged_result["body_page"]["next_cursor"],
-                                "body_max_chars": 10,
-                                "expected_body_sha256": paged_result["integrity"]["body_sha256"],
-                            },
-                        },
-                    },
-                )
-                self.assertFalse(continued_response["result"]["isError"])
-                continued_result = continued_response["result"]["structuredContent"]
-                self.assertEqual(
-                    continued_result["body_page"]["cursor"],
-                    paged_result["body_page"]["next_cursor"],
-                )
+                self.assertFalse(blocked["private_values_echoed"])
+                self.assertEqual(list((archive_root / "inbox").glob("*.md")), [])
         finally:
             self.stop_server(process)
 
@@ -8526,26 +8688,12 @@ class McpServerTests(unittest.TestCase):
         process = self.start_server()
         try:
             with tempfile.TemporaryDirectory() as tmp:
-                archive_root = Path(tmp) / "archive"
-                init_response = self.send(
-                    process,
-                    {
-                        "jsonrpc": "2.0",
-                        "id": 1,
-                        "method": "tools/call",
-                        "params": {
-                            "name": "archive_init",
-                            "arguments": {
-                                "archive_root": str(archive_root),
-                                "archive_type": "personal",
-                                "archive_id": "archive:personal:mcp-dry-run",
-                                "principal_id": "person:mcp-dry-run",
-                                "principal_name": "MCP Dry Run",
-                            },
-                        },
-                    },
+                archive_root = self.install_historical_personal_archive_fixture(
+                    Path(tmp) / "archive",
+                    archive_id="archive:personal:mcp-dry-run",
+                    principal_id="person:mcp-dry-run",
+                    principal_name="MCP Dry Run",
                 )
-                self.assertFalse(init_response["result"]["isError"])
 
                 draft_response = self.send(
                     process,
@@ -10793,26 +10941,12 @@ class McpServerTests(unittest.TestCase):
         process = self.start_server()
         try:
             with tempfile.TemporaryDirectory() as tmp:
-                archive_root = Path(tmp) / "archive"
-                init_response = self.send(
-                    process,
-                    {
-                        "jsonrpc": "2.0",
-                        "id": 1,
-                        "method": "tools/call",
-                        "params": {
-                            "name": "archive_init",
-                            "arguments": {
-                                "archive_root": str(archive_root),
-                                "archive_type": "personal",
-                                "archive_id": "archive:personal:mcp-plan",
-                                "principal_id": "person:mcp-plan",
-                                "principal_name": "MCP Plan",
-                            },
-                        },
-                    },
+                archive_root = self.install_historical_personal_archive_fixture(
+                    Path(tmp) / "archive",
+                    archive_id="archive:personal:mcp-plan",
+                    principal_id="person:mcp-plan",
+                    principal_name="MCP Plan",
                 )
-                self.assertFalse(init_response["result"]["isError"])
                 source_plan = {
                     "ok": True,
                     "dry_run": True,
@@ -10879,26 +11013,12 @@ class McpServerTests(unittest.TestCase):
         process = self.start_server()
         try:
             with tempfile.TemporaryDirectory() as tmp:
-                archive_root = Path(tmp) / "archive"
-                init_response = self.send(
-                    process,
-                    {
-                        "jsonrpc": "2.0",
-                        "id": 1,
-                        "method": "tools/call",
-                        "params": {
-                            "name": "archive_init",
-                            "arguments": {
-                                "archive_root": str(archive_root),
-                                "archive_type": "personal",
-                                "archive_id": "archive:personal:mcp-plan-block",
-                                "principal_id": "person:mcp-plan-block",
-                                "principal_name": "MCP Plan Block",
-                            },
-                        },
-                    },
+                archive_root = self.install_historical_personal_archive_fixture(
+                    Path(tmp) / "archive",
+                    archive_id="archive:personal:mcp-plan-block",
+                    principal_id="person:mcp-plan-block",
+                    principal_name="MCP Plan Block",
                 )
-                self.assertFalse(init_response["result"]["isError"])
                 base_plan = {
                     "ok": True,
                     "dry_run": True,
@@ -10987,26 +11107,12 @@ class McpServerTests(unittest.TestCase):
         process = self.start_server()
         try:
             with tempfile.TemporaryDirectory() as tmp:
-                archive_root = Path(tmp) / "archive"
-                init_response = self.send(
-                    process,
-                    {
-                        "jsonrpc": "2.0",
-                        "id": 1,
-                        "method": "tools/call",
-                        "params": {
-                            "name": "archive_init",
-                            "arguments": {
-                                "archive_root": str(archive_root),
-                                "archive_type": "personal",
-                                "archive_id": "archive:personal:mcp-prompt-boundary",
-                                "principal_id": "person:mcp-prompt-boundary",
-                                "principal_name": "MCP Prompt Boundary",
-                            },
-                        },
-                    },
+                archive_root = self.install_historical_personal_archive_fixture(
+                    Path(tmp) / "archive",
+                    archive_id="archive:personal:mcp-prompt-boundary",
+                    principal_id="person:mcp-prompt-boundary",
+                    principal_name="MCP Prompt Boundary",
                 )
-                self.assertFalse(init_response["result"]["isError"])
 
                 draft_response = self.send(
                     process,
@@ -11045,26 +11151,12 @@ class McpServerTests(unittest.TestCase):
         process = self.start_server()
         try:
             with tempfile.TemporaryDirectory() as tmp:
-                archive_root = Path(tmp) / "archive"
-                init_response = self.send(
-                    process,
-                    {
-                        "jsonrpc": "2.0",
-                        "id": 1,
-                        "method": "tools/call",
-                        "params": {
-                            "name": "archive_init",
-                            "arguments": {
-                                "archive_root": str(archive_root),
-                                "archive_type": "personal",
-                                "archive_id": "archive:personal:mcp-prompt-boundary-block",
-                                "principal_id": "person:mcp-prompt-boundary-block",
-                                "principal_name": "MCP Prompt Boundary Block",
-                            },
-                        },
-                    },
+                archive_root = self.install_historical_personal_archive_fixture(
+                    Path(tmp) / "archive",
+                    archive_id="archive:personal:mcp-prompt-boundary-block",
+                    principal_id="person:mcp-prompt-boundary-block",
+                    principal_name="MCP Prompt Boundary Block",
                 )
-                self.assertFalse(init_response["result"]["isError"])
 
                 high_response = self.send(
                     process,
@@ -11122,26 +11214,12 @@ class McpServerTests(unittest.TestCase):
         process = self.start_server()
         try:
             with tempfile.TemporaryDirectory() as tmp:
-                archive_root = Path(tmp) / "archive"
-                init_response = self.send(
-                    process,
-                    {
-                        "jsonrpc": "2.0",
-                        "id": 1,
-                        "method": "tools/call",
-                        "params": {
-                            "name": "archive_init",
-                            "arguments": {
-                                "archive_root": str(archive_root),
-                                "archive_type": "personal",
-                                "archive_id": "archive:personal:mcp-ai-identity",
-                                "principal_id": "person:mcp-ai-identity",
-                                "principal_name": "MCP AI Identity",
-                            },
-                        },
-                    },
+                archive_root = self.install_historical_personal_archive_fixture(
+                    Path(tmp) / "archive",
+                    archive_id="archive:personal:mcp-ai-identity",
+                    principal_id="person:mcp-ai-identity",
+                    principal_name="MCP AI Identity",
                 )
-                self.assertFalse(init_response["result"]["isError"])
 
                 draft_response = self.send(
                     process,
@@ -11179,30 +11257,16 @@ class McpServerTests(unittest.TestCase):
         finally:
             self.stop_server(process)
 
-    def test_create_draft_zettel_normal_mode_writes_profile_provenance_after_approval(self) -> None:
+    def test_create_draft_zettel_normal_mode_requires_local_ui_for_approval(self) -> None:
         process = self.start_server()
         try:
             with tempfile.TemporaryDirectory() as tmp:
-                archive_root = Path(tmp) / "archive"
-                init_response = self.send(
-                    process,
-                    {
-                        "jsonrpc": "2.0",
-                        "id": 1,
-                        "method": "tools/call",
-                        "params": {
-                            "name": "archive_init",
-                            "arguments": {
-                                "archive_root": str(archive_root),
-                                "archive_type": "personal",
-                                "archive_id": "archive:personal:mcp-approved",
-                                "principal_id": "person:mcp-approved",
-                                "principal_name": "MCP Approved",
-                            },
-                        },
-                    },
+                archive_root = self.install_historical_personal_archive_fixture(
+                    Path(tmp) / "archive",
+                    archive_id="archive:personal:mcp-approved",
+                    principal_id="person:mcp-approved",
+                    principal_name="MCP Approved",
                 )
-                self.assertFalse(init_response["result"]["isError"])
                 body = "Approved MCP draft body."
                 expected_hash = hashlib.sha256((body.rstrip() + "\n").encode("utf-8")).hexdigest()
 
@@ -11288,16 +11352,14 @@ class McpServerTests(unittest.TestCase):
                     },
                 )
                 self.assertFalse(draft_response["result"]["isError"])
-                relative_path = draft_response["result"]["structuredContent"]["path"]
-                draft_path = archive_root / relative_path
-                self.assertTrue(draft_path.is_file())
-                match = archive_cli.FRONTMATTER_RE.match(draft_path.read_text(encoding="utf-8"))
-                self.assertIsNotNone(match)
-                assert match is not None
-                frontmatter = archive_cli.load_yaml(match.group(1))
-                self.assertEqual(frontmatter["provenance"]["created_by"], "ai_runtime:codex")
-                self.assertEqual(frontmatter["local_ai_sessions"][0]["profile_id"], "profile:personal:mcp")
-                self.assertEqual(frontmatter["draft_creation"]["approved_body_sha256"], expected_hash)
+                blocked = draft_response["result"]["structuredContent"]
+                self.assertFalse(blocked["ok"])
+                self.assertEqual(
+                    blocked["reason_codes"],
+                    ["exact_human_approval_cli_required"],
+                )
+                self.assertFalse(blocked["private_values_echoed"])
+                self.assertEqual(list((archive_root / "inbox").glob("*.md")), [])
         finally:
             self.stop_server(process)
 
@@ -11305,25 +11367,11 @@ class McpServerTests(unittest.TestCase):
         process = self.start_server()
         try:
             with tempfile.TemporaryDirectory() as tmp:
-                archive_root = Path(tmp) / "archive"
-                init_response = self.send(
-                    process,
-                    {
-                        "jsonrpc": "2.0",
-                        "id": 1,
-                        "method": "tools/call",
-                        "params": {
-                            "name": "archive_init",
-                            "arguments": {
-                                "archive_root": str(archive_root),
-                                "archive_type": "personal",
-                                "archive_id": "archive:personal:mcp-path-test",
-                                "principal_id": "person:mcp-path-test",
-                            },
-                        },
-                    },
+                archive_root = self.install_historical_personal_archive_fixture(
+                    Path(tmp) / "archive",
+                    archive_id="archive:personal:mcp-path-test",
+                    principal_id="person:mcp-path-test",
                 )
-                self.assertFalse(init_response["result"]["isError"])
 
                 read_response = self.send(
                     process,

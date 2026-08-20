@@ -1,5 +1,11 @@
 # zet Abstract Receipt Lifecycle Audit
 
+Current v0.4.0 boundary: this audit remains read-only. It may classify
+historical evidence but grants no write, revert, cleanup, or recovery authority;
+all three executor approvals fail with
+`compound_exact_human_approval_binding_required` before private target read or
+mutation.
+
 Status: implemented as an archive-wide read-only audit in v0.3.221
 
 ## Purpose

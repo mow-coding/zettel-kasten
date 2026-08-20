@@ -10,8 +10,8 @@ from unittest.mock import patch
 from wom_kit import legacy_cleanup_bound_delete as bound_delete
 from wom_kit.legacy_cleanup_bound_delete import (
     LegacyCleanupBoundDeleteError,
-    delete_exact_approved_empty_directory,
-    delete_exact_approved_file,
+    _delete_exact_approved_empty_directory as delete_exact_approved_empty_directory,
+    _delete_exact_approved_file as delete_exact_approved_file,
 )
 
 

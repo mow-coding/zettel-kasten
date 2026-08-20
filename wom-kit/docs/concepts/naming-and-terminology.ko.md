@@ -191,7 +191,7 @@ proof or credential -> core evidence layer
 - 장기 canonical/interchange/rendering target은 [WOM Safe HTML Profile](wom-safe-html-profile.ko.md)입니다.
 - Markdown은 v0.2 authoring/import compatibility로 유지합니다.
 - `promote`, `share`는 legacy compatibility command로만 남겨야 합니다.
-- `parcel`은 범위가 정해진 portable unit을 만드는 선호 CLI surface입니다. `pack`은 compatibility alias로 남습니다.
+- `parcel`은 범위가 정해진 portable unit의 선호 용어입니다. v0.4.0에서는 생성 CLI와 `pack` alias 모두 고정 차단됩니다.
 - `admit --dry-run`은 parcel/workpack을 검증 후 들여오는 과정을 preview하는 선호 CLI surface입니다. `import --dry-run`은 compatibility alias로 남습니다.
 - `workpack`은 안전한 migration이 생기기 전까지 v0.2 storage path/folder compatibility term으로 남습니다.
 - `receipt`는 implementation compatibility를 유지하되, product copy에서는 `proof`, `credential`을 도입합니다.
