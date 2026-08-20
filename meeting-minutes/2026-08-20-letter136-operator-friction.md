@@ -537,3 +537,12 @@ the post-ready exit with a five-second bound. Its `finally` path always reaps
 the child and closes all streams. A delayed-start reproduction, a deliberate
 post-ready hang control, a 25-run ResourceWarning check, adjacent tests, and the
 affected frozen local shards are required before the single CI-fix push.
+
+The second CI run confirmed that the post-ready test was corrected, but exposed
+the same cold-start assumption in a separate complete-stdio test. The file had
+exactly three raw `python -m wom_kit.mcp_server` calls whose 15-second total
+timeout included Windows cold start. All three were changed together to one
+named 30-second cold-start-inclusive bound. The five-second post-ready hang
+limit remains unchanged. A 16-second delayed-start reproduction, a forced
+timeout control, an AST inventory of all three calls, and focused output/privacy
+assertions prevent this from becoming an unbounded or behavior-weakened test.
