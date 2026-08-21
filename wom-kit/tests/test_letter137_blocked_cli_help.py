@@ -46,7 +46,15 @@ class Letter137BlockedCliHelpTests(unittest.TestCase):
         }
         self.assertEqual(
             len(archive_cli.COMPOUND_APPROVAL_BLOCKED_COMMANDS),
-            79,
+            78,
+        )
+        self.assertNotIn(
+            "zettel-objet-link",
+            archive_cli.COMPOUND_APPROVAL_BLOCKED_COMMANDS,
+        )
+        self.assertIn(
+            "zettel-objet-link-revert",
+            archive_cli.COMPOUND_APPROVAL_BLOCKED_COMMANDS,
         )
         self.assertTrue(
             expected_additional_public_commands.issubset(
@@ -61,11 +69,25 @@ class Letter137BlockedCliHelpTests(unittest.TestCase):
                 action = self._approval_action(command_parser)
                 self.assertEqual(
                     action.help,
-                    archive_cli.COMPOUND_APPROVAL_BLOCKED_HELP,
+                    (
+                        archive_cli.PROJECT_VERSION_UPDATE_BLOCKED_HELP
+                        if command_name == "project-version-update"
+                        else archive_cli.COMPOUND_APPROVAL_BLOCKED_HELP
+                    ),
                 )
                 rendered = " ".join(command_parser.format_help().split())
-                self.assertIn("Unavailable in v0.4.0", rendered)
-                self.assertIn("dry-run, plan, or audit mode only", rendered)
+                self.assertIn(
+                    f"Unavailable in v{archive_cli.__version__}",
+                    rendered,
+                )
+                if command_name == "project-version-update":
+                    self.assertIn("exact public", rendered)
+                    self.assertIn("global CLI", rendered)
+                else:
+                    self.assertIn(
+                        "dry-run, plan, or audit mode",
+                        rendered,
+                    )
 
     def test_exact_single_write_flows_keep_their_specific_help(self) -> None:
         exact_commands = {
@@ -79,6 +101,7 @@ class Letter137BlockedCliHelpTests(unittest.TestCase):
             "retire-draft",
             "source-fidelity-session-evidence",
             "zettel-edge",
+            "zettel-objet-link",
         }
         self.assertTrue(
             exact_commands.isdisjoint(

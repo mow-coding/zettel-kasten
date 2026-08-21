@@ -2352,8 +2352,14 @@ class ObjetCaptureBatchDerivedTextTests(unittest.TestCase):
         self.assertEqual(
             json.loads(stdout.getvalue()),
             {
+                "schema": "wom-kit/cli-error/v0.1",
                 "ok": False,
                 "state": "blocked",
+                "command": None,
+                "error_class": "policy",
+                "status_class": "blocked",
+                "effects_state": "none",
+                "exit_code": 1,
                 "lifecycle_action": "objet_capture_batch",
                 "reason_codes": [
                     "compound_exact_human_approval_binding_required"

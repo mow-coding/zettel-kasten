@@ -24,6 +24,82 @@ Before upgrading a real archive:
 
 The archive should never silently rewrite memory.
 
+## v0.4.1 Emergency Global-CLI Bootstrap And One Link Apply
+
+v0.4.1 is a narrow recovery release. Do not run the URL below merely because
+it appears in source documentation. It becomes an install command only after
+the matching public GitHub Release exists and lists the exact wheel.
+
+If v0.4.0 is already installed with `uv tool`, replace that isolated global
+CLI environment with the exact released wheel:
+
+```powershell
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.1/wom_kit-0.4.1-py3-none-any.whl"
+archive --version
+```
+
+`uv tool install` normally replaces an existing tool that `uv` manages. Do not
+add `--force` unless `uv` explicitly reports an unmanaged executable collision;
+that option permits replacing executables outside the existing managed tool.
+
+Close any older WOM process first, then run `archive --version` in a new
+process and require the exact output `archive 0.4.1`. The command updates only the global Python
+tool selected by `PATH`. It does not update `.zettel-kasten/source`, a project
+pin, an archive, the packaged Agent Skill installed in an AI host, or any
+provider. `project-version-update`, collision mutation, and
+`project-bytecode-repair` approval remain fixed closed in v0.4.1, so an
+existing project-local v0.4.0 mirror stays unchanged. Do not hand-edit its pin
+to pretend that the project mirror was upgraded.
+
+### Reopened operation
+
+Only the single structured `zettel-objet-link` apply route moved out of the
+canonical fixed-close inventory. Preview one exact target first:
+
+```powershell
+archive zettel-objet-link <archive-root> `
+  --zettel-id <zettel-id> `
+  --object-id sha256:<64-lowercase-hex> `
+  --role <reviewed-role> `
+  --dry-run `
+  --format json
+```
+
+Review the returned content-free plan. Then repeat the same target, object,
+role, and optional label with the exact returned plan digest, a human reviewer,
+and `--approve`:
+
+```powershell
+archive zettel-objet-link <archive-root> `
+  --zettel-id <zettel-id> `
+  --object-id sha256:<64-lowercase-hex> `
+  --role <reviewed-role> `
+  --expected-plan-sha256 <64-lowercase-hex> `
+  --reviewed-by person:reviewer-id `
+  --approve `
+  --format json
+```
+
+If the preview used `--path` or `--label`, the approval must use the same
+value. The local interactive Windows CLI shows the native exact-human dialog.
+The binding covers one zettel, one already manifested Objet, role and optional
+label, exact plan and target set, snapshot/receipt effects, and the stable
+per-zettel control artifact. The writer rechecks those facts before mutation
+and verifies durable readback. MCP remains plan/audit only.
+
+A claim left in `started`, an uncertain effect, or an approval reconciliation
+result is not a retry signal. Stop and inspect that exact claim. Do not create a
+second approval automatically.
+
+### Still closed
+
+`zettel-objet-link-revert` remains preview-only. Every objet-capture approval,
+including enablement, selection, single capture, and batch capture, also
+remains fixed closed. v0.4.1 therefore has 78 current canonical fixed-closed
+commands: it subtracts only `zettel-objet-link` from the v0.4.0 list. The
+v0.4.0 section and its exact 79-command release inventory are historical and
+remain unchanged. See the [v0.4.1 release note](wom-kit/docs/releases/v0.4.1.md).
+
 ## v0.4.0 Exact Human Control And Operator Friction
 
 Install only after the exact v0.4.0 GitHub Release lists the verified wheel.

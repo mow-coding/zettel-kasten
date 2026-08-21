@@ -1778,7 +1778,7 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
     },
     {
         "name": "archive_init",
-        "description": "Preview archive initialization only. Real initialization is unavailable in v0.4.0 pending exact compound human approval.",
+        "description": f"Preview archive initialization only. Real initialization is unavailable in v{__version__} pending exact compound human approval.",
         "inputSchema": {
             "type": "object",
             "properties": {

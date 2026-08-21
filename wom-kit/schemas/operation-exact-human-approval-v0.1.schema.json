@@ -21,6 +21,7 @@
         "warning_override",
         "mint_zet",
         "zettel_edge",
+        "zettel_objet_link",
         "retire_draft"
       ]
     },

@@ -43,6 +43,179 @@ MCP_SERVER_NAME = "zettel-kasten-archive-mcp"
 ENTRYPOINT_TIMEOUT_SECONDS = 60
 ENTRYPOINT_OUTPUT_LIMIT_BYTES = 8 * 1024 * 1024
 ENTRYPOINT_READ_CHUNK_BYTES = 64 * 1024
+INSTALLED_LETTER140_SMOKE_SCHEMA = (
+    "wom-kit/installed-letter140-wheel-smoke/v0.1"
+)
+INSTALLED_LETTER140_SMOKE_SCRIPT = r'''
+import hashlib
+import json
+import sys
+from pathlib import Path
+
+from wom_kit import archive_services, completion_workflows
+from wom_kit import operation_approval_binding
+from wom_kit.exact_human_approval import (
+    _claim_exact_human_approval_core as claim_exact_human_approval,
+)
+from wom_kit.exact_human_approval_windows import (
+    _ExactHumanApprovalDecision as ExactHumanApprovalDecision,
+)
+
+root = Path(sys.argv[1])
+zettel_id = "zet_20240504_fake_lunch_thought"
+object_id = (
+    "sha256:"
+    "9dabf9b965a3f789b1b36100f3f70515ce8dfd81b411b1503e1e2c3304303647"
+)
+role = "evidence"
+reviewer = "person:wheel-smoke"
+zettel_path = root / "zettels" / f"{zettel_id}.md"
+original_text = zettel_path.read_bytes().decode("utf-8")
+original_match = archive_services.FRONTMATTER_RE.match(original_text)
+if original_match is None:
+    raise RuntimeError("installed_letter140_fixture_frontmatter_invalid")
+exact_body = b"    print('WOM_WHEEL_SAFE_SYNTHETIC')\r\n\r\nparagraph\r\n"
+before = original_text[: original_match.end()].encode("utf-8") + exact_body
+zettel_path.write_bytes(before)
+
+plan = completion_workflows.zettel_objet_link_plan(
+    root,
+    zettel_id=zettel_id,
+    object_id=object_id,
+    role=role,
+)
+if (
+    not plan.get("ok")
+    or plan.get("state") != "ready"
+    or plan.get("dry_run") is not True
+):
+    raise RuntimeError("installed_letter140_plan_failed")
+binding = operation_approval_binding.zettel_objet_link_approval_binding(plan)
+context = binding.context(
+    archive_id=archive_services.read_archive_id(root),
+    reviewer_claim=reviewer,
+)
+claim = claim_exact_human_approval(
+    root,
+    context,
+    ExactHumanApprovalDecision(
+        approved=True,
+        synthetic_acknowledged=False,
+        reason_code="exact_human_approval_approved",
+        plan_sha256=context.plan_sha256,
+        target_binding_sha256=context.target_binding_sha256,
+    ),
+    bytearray(b"W" * 32),
+)
+succeeded = False
+try:
+    result = completion_workflows.zettel_objet_link_apply(
+        root,
+        zettel_id=zettel_id,
+        object_id=object_id,
+        role=role,
+        expected_plan_sha256=str(plan["summary"]["plan_sha256"]),
+        reviewed_by=reviewer,
+        expected_exact_approval_plan_sha256=binding.plan_sha256,
+        expected_exact_approval_target_binding_sha256=(
+            binding.target_binding_sha256
+        ),
+        exact_human_approval_claim=claim,
+    )
+    if not result.get("ok") or result.get("state") != "written":
+        raise RuntimeError("installed_letter140_apply_failed")
+
+    after = zettel_path.read_bytes()
+    if (
+        after == before
+        or result.get("summary", {}).get("zettel_sha256")
+        != hashlib.sha256(after).hexdigest()
+    ):
+        raise RuntimeError("installed_letter140_canonical_not_changed_exactly")
+    after_text = after.decode("utf-8")
+    after_match = archive_services.FRONTMATTER_RE.match(after_text)
+    if after_match is None:
+        raise RuntimeError("installed_letter140_after_frontmatter_invalid")
+    if after_text[after_match.end() :].encode("utf-8") != exact_body:
+        raise RuntimeError("installed_letter140_body_bytes_changed")
+    boundary = archive_services.parse_approval_zettel_content_boundary(after_text)
+    frontmatter = boundary.get("frontmatter")
+    if boundary.get("state") != "readable" or not isinstance(frontmatter, dict):
+        raise RuntimeError("installed_letter140_after_frontmatter_unreadable")
+    assets = frontmatter.get("assets")
+    if not isinstance(assets, list):
+        raise RuntimeError("installed_letter140_after_assets_invalid")
+    exact_links = [
+        asset
+        for asset in assets
+        if isinstance(asset, dict)
+        and asset.get("object_id") == object_id
+        and asset.get("role") == role
+    ]
+    if exact_links != [{"object_id": object_id, "role": role}]:
+        raise RuntimeError("installed_letter140_canonical_link_not_exact")
+
+    snapshot_path = root.joinpath(
+        *str(plan["summary"]["snapshot_path"]).split("/")
+    )
+    if snapshot_path.read_bytes() != before:
+        raise RuntimeError("installed_letter140_snapshot_not_exact")
+    receipt_path = root.joinpath(
+        *str(plan["summary"]["receipt_path"]).split("/")
+    )
+    validated_receipt, receipt_bytes = (
+        completion_workflows._read_validated_zettel_objet_link_receipt(
+            receipt_path
+        )
+    )
+    if (
+        validated_receipt is None
+        or receipt_bytes != receipt_path.read_bytes()
+        or validated_receipt.get("schema")
+        != "wom-kit/zettel-objet-link-receipt/v0.2"
+    ):
+        raise RuntimeError("installed_letter140_receipt_invalid")
+    lookup = completion_workflows.zettel_objet_link_receipts(
+        root,
+        zettel_id=zettel_id,
+        object_id=object_id,
+        role=role,
+    )
+    if (
+        not lookup.get("ok")
+        or lookup.get("summary", {}).get("validated_receipt_count") != 1
+        or lookup.get("summary", {}).get("selected_receipt_path")
+        != plan["summary"]["receipt_path"]
+    ):
+        raise RuntimeError("installed_letter140_receipt_lookup_failed")
+    succeeded = True
+finally:
+    try:
+        if claim.status == "started":
+            if succeeded:
+                claim.finalize_succeeded()
+            else:
+                claim.finalize_failed("operation_blocked")
+    finally:
+        claim.close()
+
+print(
+    json.dumps(
+        {
+            "ok": True,
+            "schema": "wom-kit/installed-letter140-wheel-smoke/v0.1",
+            "body_bytes_preserved": True,
+            "canonical_link_exact": True,
+            "snapshot_exact": True,
+            "receipt_schema": "wom-kit/zettel-objet-link-receipt/v0.2",
+            "receipt_schema_validated_from_installed_package": True,
+            "receipt_lookup": "passed",
+            "validated_receipt_count": 1,
+        },
+        sort_keys=True,
+    )
+)
+'''
 WINDOWS_CREATE_SUSPENDED = 0x00000004
 WINDOWS_JOB_TERMINATION_TIMEOUT_MILLISECONDS = 1000
 WINDOWS_FORBIDDEN_SEGMENT_CHARACTERS = frozenset('<>:"|?*')
@@ -1394,6 +1567,7 @@ def _wheel_install_success_result(
     wheel_counts: dict[str, int],
     entrypoints_checked: list[str],
     entrypoint_evidence: dict[str, Any],
+    letter140_link_evidence: dict[str, Any],
     wheel_filename: str,
     wheel_sha256: str,
     artifact_preserved: bool,
@@ -1407,6 +1581,7 @@ def _wheel_install_success_result(
         **wheel_counts,
         "entrypoints_checked": entrypoints_checked,
         "entrypoint_evidence": entrypoint_evidence,
+        "installed_letter140_link_workflow": letter140_link_evidence,
         "runtime_skill_lifecycle": "passed",
         "onboarding_preview": "passed",
         "onboarding_write": "fixed_closed",
@@ -1419,6 +1594,46 @@ def _wheel_install_success_result(
         "wheel_artifact_preserved": artifact_preserved,
         "temporary_environment_removed_on_exit": True,
     }
+
+
+def _check_installed_letter140_link_workflow(
+    python: Path,
+    archive_root: Path,
+    *,
+    cwd: Path,
+) -> dict[str, Any]:
+    """Exercise the reopened writer using only the isolated installed wheel."""
+
+    evidence = run(
+        [
+            str(python),
+            "-I",
+            "-c",
+            INSTALLED_LETTER140_SMOKE_SCRIPT,
+            str(archive_root),
+        ],
+        cwd=cwd,
+        label="installed Letter140 zettel-objet link workflow",
+        parse_json=True,
+        require_empty_stderr=True,
+    )
+    expected = {
+        "ok": True,
+        "schema": INSTALLED_LETTER140_SMOKE_SCHEMA,
+        "body_bytes_preserved": True,
+        "canonical_link_exact": True,
+        "snapshot_exact": True,
+        "receipt_schema": "wom-kit/zettel-objet-link-receipt/v0.2",
+        "receipt_schema_validated_from_installed_package": True,
+        "receipt_lookup": "passed",
+        "validated_receipt_count": 1,
+    }
+    if evidence != expected:
+        raise WheelCheckError(
+            "Installed Letter140 link workflow did not prove the exact expected "
+            "plan/apply/receipt/body-preservation contract."
+        )
+    return evidence
 
 
 def check_wheel(output_dir: Path | None = None) -> dict[str, Any]:
@@ -1528,12 +1743,18 @@ def check_wheel(output_dir: Path | None = None) -> dict[str, Any]:
             require_empty_stderr=True,
         )
         if blocked_skill_install != {
+            "schema": "wom-kit/cli-error/v0.1",
             "ok": False,
             "state": "blocked",
+            "status_class": "blocked",
+            "command": "runtime-skill-install",
             "lifecycle_action": "runtime_skill_install",
+            "error_class": "policy",
             "reason_codes": [
                 "compound_exact_human_approval_binding_required"
             ],
+            "exit_code": 1,
+            "effects_state": "none",
             "files_written": [],
             "private_values_echoed": False,
         } or skills_root.exists() or skill_target.exists():
@@ -1588,12 +1809,18 @@ def check_wheel(output_dir: Path | None = None) -> dict[str, Any]:
             require_empty_stderr=True,
         )
         if blocked_skill_uninstall != {
+            "schema": "wom-kit/cli-error/v0.1",
             "ok": False,
             "state": "blocked",
+            "status_class": "blocked",
+            "command": "runtime-skill-uninstall",
             "lifecycle_action": "runtime_skill_uninstall",
+            "error_class": "policy",
             "reason_codes": [
                 "compound_exact_human_approval_binding_required"
             ],
+            "exit_code": 1,
+            "effects_state": "none",
             "files_written": [],
             "private_values_echoed": False,
         } or skills_root.exists() or skill_target.exists():
@@ -1634,12 +1861,18 @@ def check_wheel(output_dir: Path | None = None) -> dict[str, Any]:
             require_empty_stderr=True,
         )
         if blocked_write != {
+            "schema": "wom-kit/cli-error/v0.1",
             "ok": False,
             "state": "blocked",
+            "status_class": "blocked",
+            "command": "onboard",
             "lifecycle_action": "onboard",
+            "error_class": "policy",
             "reason_codes": [
                 "compound_exact_human_approval_binding_required"
             ],
+            "exit_code": 1,
+            "effects_state": "none",
             "files_written": [],
             "private_values_echoed": False,
         } or target.exists():
@@ -1673,6 +1906,17 @@ def check_wheel(output_dir: Path | None = None) -> dict[str, Any]:
                 "Installed strict Doctor did not pass on the checked-in fake archive."
             )
 
+        letter140_fixture = temp_root / "letter140-link-archive"
+        shutil.copytree(
+            source_copy / "examples" / "fake-life-archive",
+            letter140_fixture,
+        )
+        letter140_link_evidence = _check_installed_letter140_link_workflow(
+            python,
+            letter140_fixture,
+            cwd=temp_root,
+        )
+
         wheel_sha256 = hashlib.sha256(wheel.read_bytes()).hexdigest()
         artifact_preserved = False
         if output_dir is not None:
@@ -1692,6 +1936,7 @@ def check_wheel(output_dir: Path | None = None) -> dict[str, Any]:
             wheel_counts=wheel_counts,
             entrypoints_checked=entrypoints_checked,
             entrypoint_evidence=entrypoint_evidence,
+            letter140_link_evidence=letter140_link_evidence,
             wheel_filename=wheel.name,
             wheel_sha256=wheel_sha256,
             artifact_preserved=artifact_preserved,

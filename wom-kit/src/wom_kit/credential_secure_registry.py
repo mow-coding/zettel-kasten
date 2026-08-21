@@ -622,9 +622,22 @@ class _InterprocessLock:
         if self.create_if_missing:
             self.path.parent.mkdir(parents=True, exist_ok=True)
         try:
-            self._handle = self.path.open(
-                "a+b" if self.create_if_missing else "r+b"
-            )
+            if os.name == "nt":
+                from ._windows_file_safety import (
+                    open_regular_rw_descriptor_no_reparse,
+                )
+
+                descriptor = open_regular_rw_descriptor_no_reparse(
+                    self.path,
+                    create_if_missing=self.create_if_missing,
+                )
+                self._handle = os.fdopen(descriptor, "r+b")
+            else:
+                flags = os.O_RDWR | getattr(os, "O_NOFOLLOW", 0)
+                if self.create_if_missing:
+                    flags |= os.O_CREAT
+                descriptor = os.open(self.path, flags, 0o600)
+                self._handle = os.fdopen(descriptor, "r+b")
             self._handle.seek(0, os.SEEK_END)
             if self._handle.tell() == 0:
                 if not self.create_if_missing:

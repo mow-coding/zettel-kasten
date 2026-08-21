@@ -19,6 +19,7 @@ operation is performed.
 
 from __future__ import annotations
 
+from contextlib import AbstractContextManager, nullcontext
 from pathlib import Path
 from typing import Any, Callable, Mapping, Protocol, TypeVar
 
@@ -89,6 +90,15 @@ def _execute_exact_human_approved_write_core(
     *,
     native: _ExactHumanApprovalNative | None = None,
     key_provider: _ArchiveAuthenticationKeyProvider | None = None,
+    post_decision_boundary: (
+        Callable[
+            [],
+            AbstractContextManager[
+                tuple[Path, dict[str, Any]] | None
+            ],
+        ]
+        | None
+    ) = None,
 ) -> dict[str, Any]:
     """Internal fakeable orchestration core for production and bounded tests."""
 
@@ -105,15 +115,26 @@ def _execute_exact_human_approved_write_core(
     if decision.approved is not True:
         raise _fail("exact_human_approval_cancelled")
 
-    selected = key_provider if key_provider is not None else _production_key_provider()
-
-    def _with_key(key: memoryview) -> dict[str, Any]:
+    def _with_key(
+        key: memoryview,
+        filesystem_boundary: tuple[Path, dict[str, Any]] | None,
+    ) -> dict[str, Any]:
         try:
             claim = _claim_exact_human_approval_core(
                 archive_root,
                 context,
                 decision,
                 key,
+                bound_archive_root=(
+                    filesystem_boundary[0]
+                    if filesystem_boundary is not None
+                    else None
+                ),
+                claim_parent_binding=(
+                    filesystem_boundary[1]
+                    if filesystem_boundary is not None
+                    else None
+                ),
             )
         except ExactHumanApprovalError:
             raise _fail("exact_human_approval_claim_failed") from None
@@ -160,11 +181,22 @@ def _execute_exact_human_approved_write_core(
             claim.close()
 
     try:
-        return selected.use_key(
-            archive_root,
-            _with_key,
-            create_if_missing=True,
+        boundary_context = (
+            post_decision_boundary()
+            if post_decision_boundary is not None
+            else nullcontext(None)
         )
+        with boundary_context as filesystem_boundary:
+            selected = (
+                key_provider
+                if key_provider is not None
+                else _production_key_provider()
+            )
+            return selected.use_key(
+                archive_root,
+                lambda key: _with_key(key, filesystem_boundary),
+                create_if_missing=True,
+            )
     except ExactHumanApprovalWorkflowError:
         raise
     except BaseException:
@@ -184,6 +216,7 @@ def _execute_exact_human_approved_write(
         writer,
         native=None,
         key_provider=None,
+        post_decision_boundary=None,
     )
 
 

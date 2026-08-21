@@ -15,14 +15,20 @@ import math
 import os
 import re
 import stat
+import time
 import unicodedata
 import urllib.parse
+from contextlib import ExitStack
 from datetime import datetime, timezone
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
 
-from . import archive_services
+from . import archive_services, operation_approval_binding
+from .exact_human_approval import (
+    _ClaimedExactHumanApproval,
+    exact_human_approval_archive_identity_sha256,
+)
 
 
 EXTERNAL_LOCATOR_SCHEMA = "wom-kit/external-locator-record/v0.3"
@@ -56,8 +62,11 @@ EXTERNAL_LOCATOR_TYPES = (
     "export_coordinate",
     "other",
 )
-ZETTEL_OBJET_LINK_RECEIPT_SCHEMA = (
+ZETTEL_OBJET_LINK_RECEIPT_LEGACY_SCHEMA = (
     "wom-kit/zettel-objet-link-receipt/v0.1"
+)
+ZETTEL_OBJET_LINK_RECEIPT_SCHEMA = (
+    "wom-kit/zettel-objet-link-receipt/v0.2"
 )
 ZETTEL_OBJET_LINK_REVERT_RECEIPT_SCHEMA = (
     "wom-kit/zettel-objet-link-revert-receipt/v0.1"
@@ -71,6 +80,30 @@ ZETTEL_OBJET_LINK_RECEIPT_LOOKUP_MAX = 500
 ZETTEL_OBJET_LINK_RECEIPT_NAME_RE = re.compile(
     r"^link\.(?P<prefix>[0-9a-f]{24})\.g(?P<generation>[0-9]{4})\.json$"
 )
+ZETTEL_OBJET_LINK_MAX_ARCHIVE_CONFIG_BYTES = 1024 * 1024
+ZETTEL_OBJET_LINK_MAX_ZETTEL_BYTES = 16 * 1024 * 1024
+ZETTEL_OBJET_LINK_MAX_ZETTEL_SCAN_ENTRIES = 100_000
+ZETTEL_OBJET_LINK_MAX_ZETTEL_SCAN_BYTES = 1024 * 1024 * 1024
+ZETTEL_OBJET_LINK_MAX_ZETTEL_SCAN_DEPTH = 128
+ZETTEL_OBJET_LINK_MAX_MANIFEST_BYTES = 64 * 1024 * 1024
+ZETTEL_OBJET_LINK_MAX_MANIFEST_RECORDS = 500_000
+ZETTEL_OBJET_LINK_MAX_MANIFEST_JSON_DEPTH = 32
+ZETTEL_OBJET_LINK_MAX_MANIFEST_JSON_NODES = 5_000_000
+
+
+class _ZettelObjetLinkManifestChangedAfterApproval(
+    archive_services.ArchiveServiceError
+):
+    """Keep final manifest drift distinct through the stable resolver."""
+
+
+ZETTEL_OBJET_LINK_LOCK_TIMEOUT_SECONDS = 2.0
+ZETTEL_OBJET_LINK_CANONICAL_SWAP_SUFFIX = ".zettel-objet-link.swap"
+ZETTEL_OBJET_LINK_ABSENT_LABEL_SHA256 = hashlib.sha256(b"").hexdigest()
+ZETTEL_OBJET_LINK_LOCK_BYTES = b"wom-kit/zettel-objet-link-lock/v0.1\n"
+ZETTEL_OBJET_LINK_LOCK_SHA256 = hashlib.sha256(
+    ZETTEL_OBJET_LINK_LOCK_BYTES
+).hexdigest()
 DRAFT_DISCARD_RECEIPT_SCHEMA = "wom-kit/draft-discard-receipt/v0.1"
 DRAFT_DISCARD_RESTORE_RECEIPT_SCHEMA = (
     "wom-kit/draft-discard-restore-receipt/v0.1"
@@ -2564,16 +2597,228 @@ def external_locator_revert(
     }
 
 
-class _ZettelObjetLinkLock(_LocatorLock):
-    def __init__(self, root: Path, zettel_id: str) -> None:
-        lock_dir = archive_services.archive_internal_path(
-            root,
-            f"{ZETTEL_OBJET_LINK_RECEIPTS_DIR}/.locks",
+class _ZettelObjetLinkLock:
+    """Bounded lock on one exact, plan-bound persistent control artifact."""
+
+    def __init__(
+        self,
+        root: Path,
+        path: Path,
+        *,
+        expected_state: str,
+        parent_binding: dict[str, Any],
+        parent_stack: ExitStack,
+    ) -> None:
+        self._root = root
+        self._path = path
+        self._expected_state = expected_state
+        self._parent_binding = parent_binding
+        self._parent_stack = parent_stack
+        self._handle: Any = None
+        self._opened_identity: tuple[int, int] | None = None
+        self.created_from_absent = False
+
+    @staticmethod
+    def _unsafe_lock_stat(value: os.stat_result) -> bool:
+        reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+        return bool(
+            not stat.S_ISREG(value.st_mode)
+            or stat.S_ISLNK(value.st_mode)
+            or (
+                reparse_flag
+                and getattr(value, "st_file_attributes", 0) & reparse_flag
+            )
         )
-        lock_dir.mkdir(parents=True, exist_ok=True)
-        lock_name = hashlib.sha256(zettel_id.encode("utf-8")).hexdigest()
-        self._path = lock_dir / f"{lock_name}.lock"
-        self._handle = None
+
+    def _bound_lstat(self) -> os.stat_result:
+        descriptor = self._parent_binding.get("descriptor")
+        if isinstance(descriptor, int):
+            return os.stat(
+                self._path.name,
+                dir_fd=descriptor,
+                follow_symlinks=False,
+            )
+        return os.lstat(self._path)
+
+    def _enter_bound(self) -> "_ZettelObjetLinkLock":
+        if self._parent_binding.get("path") != self._path.parent:
+            raise OSError("zettel_objet_link_lock_parent_mismatch")
+        if self._expected_state == "absent":
+            archive_services._write_activity_group_bytes_new_file_bound(
+                self._parent_binding,
+                self._path,
+                ZETTEL_OBJET_LINK_LOCK_BYTES,
+            )
+            self.created_from_absent = True
+        elif self._expected_state == "existing_exact":
+            pass
+        else:
+            raise OSError("zettel_objet_link_lock_artifact_invalid")
+        if (
+            archive_services._read_activity_group_regular_bytes_bound(
+                self._root,
+                self._parent_binding,
+                self._path,
+                max_bytes=len(ZETTEL_OBJET_LINK_LOCK_BYTES),
+            )
+            != ZETTEL_OBJET_LINK_LOCK_BYTES
+        ):
+            raise OSError("zettel_objet_link_lock_artifact_invalid")
+
+        flags = (
+            os.O_RDWR
+            | getattr(os, "O_BINARY", 0)
+            | getattr(os, "O_NOFOLLOW", 0)
+        )
+        try:
+            if os.name == "nt":
+                from ._windows_file_safety import (
+                    open_regular_rw_descriptor_no_reparse,
+                )
+
+                descriptor = open_regular_rw_descriptor_no_reparse(
+                    self._path,
+                    create_if_missing=False,
+                )
+            else:
+                parent_descriptor = self._parent_binding.get("descriptor")
+                if isinstance(parent_descriptor, int):
+                    descriptor = os.open(
+                        self._path.name,
+                        flags,
+                        dir_fd=parent_descriptor,
+                    )
+                else:
+                    descriptor = os.open(str(self._path), flags)
+            self._handle = os.fdopen(descriptor, "r+b")
+            opened = os.fstat(self._handle.fileno())
+            path_stat = self._bound_lstat()
+            if (
+                self._unsafe_lock_stat(opened)
+                or self._unsafe_lock_stat(path_stat)
+                or (opened.st_dev, opened.st_ino)
+                != (path_stat.st_dev, path_stat.st_ino)
+                or opened.st_size != len(ZETTEL_OBJET_LINK_LOCK_BYTES)
+            ):
+                raise OSError("zettel_objet_link_lock_unsafe")
+            if self._handle.read() != ZETTEL_OBJET_LINK_LOCK_BYTES:
+                raise OSError("zettel_objet_link_lock_unsafe")
+            self._handle.seek(0)
+        except OSError:
+            if self._handle is not None:
+                self._handle.close()
+                self._handle = None
+            raise OSError("zettel_objet_link_lock_unavailable") from None
+
+        deadline = time.monotonic() + ZETTEL_OBJET_LINK_LOCK_TIMEOUT_SECONDS
+        while True:
+            try:
+                self._handle.seek(0)
+                if os.name == "nt":
+                    import msvcrt
+
+                    msvcrt.locking(
+                        self._handle.fileno(),
+                        msvcrt.LK_NBLCK,
+                        1,
+                    )
+                else:
+                    import fcntl
+
+                    fcntl.flock(
+                        self._handle.fileno(),
+                        fcntl.LOCK_EX | fcntl.LOCK_NB,
+                    )
+                opened_after = os.fstat(self._handle.fileno())
+                path_after = self._bound_lstat()
+                if (
+                    self._unsafe_lock_stat(opened_after)
+                    or self._unsafe_lock_stat(path_after)
+                    or (opened_after.st_dev, opened_after.st_ino)
+                    != (path_after.st_dev, path_after.st_ino)
+                    or opened_after.st_size
+                    != len(ZETTEL_OBJET_LINK_LOCK_BYTES)
+                ):
+                    raise OSError("zettel_objet_link_lock_unsafe")
+                self._handle.seek(0)
+                if self._handle.read() != ZETTEL_OBJET_LINK_LOCK_BYTES:
+                    raise OSError("zettel_objet_link_lock_unsafe")
+                self._handle.seek(0)
+                self._opened_identity = (
+                    opened_after.st_dev,
+                    opened_after.st_ino,
+                )
+                return self
+            except OSError:
+                if time.monotonic() >= deadline:
+                    self._handle.close()
+                    self._handle = None
+                    raise OSError(
+                        "zettel_objet_link_lock_unavailable"
+                    ) from None
+                time.sleep(0.02)
+
+    def __enter__(self) -> "_ZettelObjetLinkLock":
+        try:
+            return self._enter_bound()
+        except BaseException:
+            if self._handle is not None:
+                self._handle.close()
+                self._handle = None
+            self._opened_identity = None
+            self._parent_stack.close()
+            raise
+
+    def verify_exact(self) -> None:
+        """Reprove the held descriptor, public name, and fixed bytes."""
+
+        if self._handle is None or self._opened_identity is None:
+            raise OSError("zettel_objet_link_lock_artifact_changed")
+        try:
+            opened = os.fstat(self._handle.fileno())
+            current_path = self._bound_lstat()
+            if (
+                self._unsafe_lock_stat(opened)
+                or self._unsafe_lock_stat(current_path)
+                or (opened.st_dev, opened.st_ino) != self._opened_identity
+                or (current_path.st_dev, current_path.st_ino)
+                != self._opened_identity
+                or opened.st_size != len(ZETTEL_OBJET_LINK_LOCK_BYTES)
+                or current_path.st_size != len(ZETTEL_OBJET_LINK_LOCK_BYTES)
+            ):
+                raise OSError("zettel_objet_link_lock_artifact_changed")
+            self._handle.seek(0)
+            if self._handle.read() != ZETTEL_OBJET_LINK_LOCK_BYTES:
+                raise OSError("zettel_objet_link_lock_artifact_changed")
+            self._handle.seek(0)
+        except OSError:
+            raise OSError("zettel_objet_link_lock_artifact_changed") from None
+
+    def __exit__(self, *exc_info: Any) -> bool:
+        if self._handle is None:
+            return False
+        try:
+            self._handle.seek(0)
+            if os.name == "nt":
+                import msvcrt
+
+                msvcrt.locking(
+                    self._handle.fileno(),
+                    msvcrt.LK_UNLCK,
+                    1,
+                )
+            else:
+                import fcntl
+
+                fcntl.flock(self._handle.fileno(), fcntl.LOCK_UN)
+        finally:
+            try:
+                self._handle.close()
+                self._handle = None
+                self._opened_identity = None
+            finally:
+                self._parent_stack.close()
+        return False
 
 
 def _safe_zettel_objet_label(value: str | None) -> str | None:
@@ -2594,6 +2839,1438 @@ def _safe_zettel_objet_label(value: str | None) -> str | None:
     return text
 
 
+def _zettel_objet_link_bound_lstat(
+    binding: dict[str, Any],
+    path: Path,
+) -> os.stat_result:
+    """Observe one child name through an already-bound archive parent."""
+
+    if binding.get("path") != path.parent:
+        raise OSError("zettel_objet_link_bound_parent_mismatch")
+    descriptor = binding.get("descriptor")
+    if isinstance(descriptor, int):
+        return os.stat(
+            path.name,
+            dir_fd=descriptor,
+            follow_symlinks=False,
+        )
+    # Windows directory handles in the binding deny delete sharing, so the
+    # checked ancestor chain cannot be replaced before this lexical lstat.
+    return os.lstat(path)
+
+
+def _zettel_objet_link_windows_directory_token_from_handle(
+    handle: Any,
+) -> tuple[Any, ...]:
+    """Query identity and namespace generations from one exact Win32 handle."""
+
+    if os.name != "nt":
+        raise OSError("zettel_objet_link_directory_token_wrong_platform")
+
+    import ctypes
+    from ctypes import wintypes
+
+    class ByHandleFileInformation(ctypes.Structure):
+        _fields_ = [
+            ("dwFileAttributes", wintypes.DWORD),
+            ("ftCreationTime", wintypes.FILETIME),
+            ("ftLastAccessTime", wintypes.FILETIME),
+            ("ftLastWriteTime", wintypes.FILETIME),
+            ("dwVolumeSerialNumber", wintypes.DWORD),
+            ("nFileSizeHigh", wintypes.DWORD),
+            ("nFileSizeLow", wintypes.DWORD),
+            ("nNumberOfLinks", wintypes.DWORD),
+            ("nFileIndexHigh", wintypes.DWORD),
+            ("nFileIndexLow", wintypes.DWORD),
+        ]
+
+    class FileBasicInformation(ctypes.Structure):
+        _fields_ = [
+            ("CreationTime", ctypes.c_longlong),
+            ("LastAccessTime", ctypes.c_longlong),
+            ("LastWriteTime", ctypes.c_longlong),
+            ("ChangeTime", ctypes.c_longlong),
+            ("FileAttributes", wintypes.DWORD),
+        ]
+
+    class FileIdInformation(ctypes.Structure):
+        _fields_ = [
+            ("VolumeSerialNumber", ctypes.c_ulonglong),
+            ("FileId", ctypes.c_ubyte * 16),
+        ]
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    get_information = kernel32.GetFileInformationByHandle
+    get_information.argtypes = [
+        wintypes.HANDLE,
+        ctypes.POINTER(ByHandleFileInformation),
+    ]
+    get_information.restype = wintypes.BOOL
+    get_information_ex = kernel32.GetFileInformationByHandleEx
+    get_information_ex.argtypes = [
+        wintypes.HANDLE,
+        ctypes.c_int,
+        wintypes.LPVOID,
+        wintypes.DWORD,
+    ]
+    get_information_ex.restype = wintypes.BOOL
+
+    information = ByHandleFileInformation()
+    basic = FileBasicInformation()
+    file_id = FileIdInformation()
+    if (
+        not get_information(handle, ctypes.byref(information))
+        or not get_information_ex(
+            handle,
+            0,  # FileBasicInfo
+            ctypes.byref(basic),
+            ctypes.sizeof(basic),
+        )
+        or not get_information_ex(
+            handle,
+            18,  # FileIdInfo
+            ctypes.byref(file_id),
+            ctypes.sizeof(file_id),
+        )
+    ):
+        raise OSError("zettel_objet_link_directory_token_unavailable")
+    file_attribute_directory = 0x00000010
+    file_attribute_reparse_point = 0x00000400
+    attributes = int(information.dwFileAttributes)
+    if (
+        not attributes & file_attribute_directory
+        or attributes & file_attribute_reparse_point
+        or int(basic.FileAttributes) != attributes
+    ):
+        raise OSError("zettel_objet_link_directory_token_unsafe")
+    file_index = (
+        int(information.nFileIndexHigh) << 32
+    ) | int(information.nFileIndexLow)
+    if not file_index or not any(file_id.FileId):
+        raise OSError("zettel_objet_link_directory_identity_unavailable")
+    return (
+        "windows",
+        int(information.dwVolumeSerialNumber),
+        file_index,
+        int(file_id.VolumeSerialNumber),
+        bytes(file_id.FileId),
+        attributes,
+        int(basic.CreationTime),
+        int(basic.LastWriteTime),
+        int(basic.ChangeTime),
+        int(information.nNumberOfLinks),
+    )
+
+
+def _zettel_objet_link_directory_stability_token(
+    binding: dict[str, Any],
+) -> tuple[Any, ...]:
+    """Return a generation token through the exact held directory object."""
+
+    descriptor = binding.get("descriptor")
+    if isinstance(descriptor, int):
+        observed = os.fstat(descriptor)
+        if not stat.S_ISDIR(observed.st_mode):
+            raise OSError("zettel_objet_link_directory_token_unsafe")
+        return (
+            "posix",
+            int(observed.st_dev),
+            int(observed.st_ino),
+            int(observed.st_mode),
+            int(observed.st_nlink),
+            int(observed.st_size),
+            int(observed.st_mtime_ns),
+            int(observed.st_ctime_ns),
+        )
+    handles = binding.get("windows_handles")
+    if os.name == "nt" and isinstance(handles, list) and handles:
+        return _zettel_objet_link_windows_directory_token_from_handle(
+            handles[-1]
+        )
+    raise OSError("zettel_objet_link_directory_token_unavailable")
+
+
+def _zettel_objet_link_directory_token_identity(
+    token: tuple[Any, ...],
+) -> tuple[Any, ...]:
+    if token and token[0] == "windows" and len(token) == 10:
+        return token[:5]
+    if token and token[0] == "posix" and len(token) == 8:
+        return token[:3]
+    raise OSError("zettel_objet_link_directory_token_invalid")
+
+
+def _zettel_objet_link_directory_entry_state(
+    name: str,
+    observed: os.stat_result,
+) -> tuple[Any, ...]:
+    """Describe one child name strongly enough for a post-scan comparison."""
+
+    return (
+        name,
+        int(observed.st_mode),
+        int(observed.st_dev),
+        int(observed.st_ino),
+        int(observed.st_nlink),
+        int(observed.st_size),
+        int(observed.st_mtime_ns),
+        int(observed.st_ctime_ns),
+        int(getattr(observed, "st_birthtime_ns", 0)),
+        int(getattr(observed, "st_file_attributes", 0)),
+    )
+
+
+class _ZettelObjetLinkWindowsDirectoryWatcher:
+    """Fail-closed subtree mutation watcher for one exact held directory."""
+
+    def __init__(
+        self,
+        binding: dict[str, Any],
+        *,
+        watch_subtree: bool,
+        names_only: bool = False,
+    ) -> None:
+        if os.name != "nt":
+            raise OSError("zettel_objet_link_directory_watcher_wrong_platform")
+        if type(watch_subtree) is not bool or type(names_only) is not bool:
+            raise OSError("zettel_objet_link_directory_watcher_invalid")
+        self._path = Path(binding.get("path"))
+        self._watch_subtree = watch_subtree
+        self._names_only = names_only
+
+        import ctypes
+        from ctypes import wintypes
+
+        class Overlapped(ctypes.Structure):
+            _fields_ = [
+                ("Internal", ctypes.c_size_t),
+                ("InternalHigh", ctypes.c_size_t),
+                ("Offset", wintypes.DWORD),
+                ("OffsetHigh", wintypes.DWORD),
+                ("hEvent", wintypes.HANDLE),
+            ]
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        create_file = kernel32.CreateFileW
+        create_file.argtypes = [
+            wintypes.LPCWSTR,
+            wintypes.DWORD,
+            wintypes.DWORD,
+            wintypes.LPVOID,
+            wintypes.DWORD,
+            wintypes.DWORD,
+            wintypes.HANDLE,
+        ]
+        create_file.restype = wintypes.HANDLE
+        create_event = kernel32.CreateEventW
+        create_event.argtypes = [
+            wintypes.LPVOID,
+            wintypes.BOOL,
+            wintypes.BOOL,
+            wintypes.LPCWSTR,
+        ]
+        create_event.restype = wintypes.HANDLE
+        read_changes = kernel32.ReadDirectoryChangesW
+        read_changes.argtypes = [
+            wintypes.HANDLE,
+            wintypes.LPVOID,
+            wintypes.DWORD,
+            wintypes.BOOL,
+            wintypes.DWORD,
+            ctypes.POINTER(wintypes.DWORD),
+            ctypes.POINTER(Overlapped),
+            wintypes.LPVOID,
+        ]
+        read_changes.restype = wintypes.BOOL
+        get_result = kernel32.GetOverlappedResult
+        get_result.argtypes = [
+            wintypes.HANDLE,
+            ctypes.POINTER(Overlapped),
+            ctypes.POINTER(wintypes.DWORD),
+            wintypes.BOOL,
+        ]
+        get_result.restype = wintypes.BOOL
+        cancel_io = kernel32.CancelIoEx
+        cancel_io.argtypes = [
+            wintypes.HANDLE,
+            ctypes.POINTER(Overlapped),
+        ]
+        cancel_io.restype = wintypes.BOOL
+        wait = kernel32.WaitForSingleObject
+        wait.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+        wait.restype = wintypes.DWORD
+        close_handle = kernel32.CloseHandle
+        close_handle.argtypes = [wintypes.HANDLE]
+        close_handle.restype = wintypes.BOOL
+
+        self._ctypes = ctypes
+        self._get_result = get_result
+        self._cancel_io = cancel_io
+        self._wait = wait
+        self._close_handle = close_handle
+        self._handle: Any = None
+        self._event: Any = None
+        self._active = False
+        self._verified = False
+        self._overlapped = Overlapped()
+        self._buffer = ctypes.create_string_buffer(64 * 1024)
+        invalid_handle = wintypes.HANDLE(-1).value
+        file_list_directory = 0x00000001
+        file_share_read = 0x00000001
+        file_share_write = 0x00000002
+        file_share_delete = 0x00000004
+        open_existing = 3
+        file_flag_open_reparse_point = 0x00200000
+        file_flag_backup_semantics = 0x02000000
+        file_flag_overlapped = 0x40000000
+        error_io_pending = 997
+        notify_filter = 0x00000001 | 0x00000002
+        if not names_only:
+            notify_filter |= (
+                0x00000004  # FILE_NOTIFY_CHANGE_ATTRIBUTES
+                | 0x00000008  # FILE_NOTIFY_CHANGE_SIZE
+                | 0x00000010  # FILE_NOTIFY_CHANGE_LAST_WRITE
+                | 0x00000040  # FILE_NOTIFY_CHANGE_CREATION
+                | 0x00000100  # FILE_NOTIFY_CHANGE_SECURITY
+            )
+
+        try:
+            self._handle = create_file(
+                str(binding.get("path")),
+                file_list_directory,
+                file_share_read | file_share_write | file_share_delete,
+                None,
+                open_existing,
+                (
+                    file_flag_open_reparse_point
+                    | file_flag_backup_semantics
+                    | file_flag_overlapped
+                ),
+                None,
+            )
+            if self._handle == invalid_handle:
+                raise OSError("zettel_objet_link_directory_watcher_unavailable")
+            binding_token = _zettel_objet_link_directory_stability_token(
+                binding
+            )
+            watcher_token = (
+                _zettel_objet_link_windows_directory_token_from_handle(
+                    self._handle
+                )
+            )
+            if (
+                _zettel_objet_link_directory_token_identity(binding_token)
+                != _zettel_objet_link_directory_token_identity(watcher_token)
+            ):
+                raise OSError("zettel_objet_link_directory_watcher_changed")
+            self._event = create_event(None, True, False, None)
+            if not self._event:
+                raise OSError("zettel_objet_link_directory_watcher_unavailable")
+            self._overlapped.hEvent = self._event
+            if not read_changes(
+                self._handle,
+                self._buffer,
+                len(self._buffer),
+                watch_subtree,
+                notify_filter,
+                None,
+                self._ctypes.byref(self._overlapped),
+                None,
+            ):
+                error = self._ctypes.get_last_error()
+                if error != error_io_pending:
+                    raise OSError(
+                        "zettel_objet_link_directory_watcher_unavailable"
+                    )
+            self._active = True
+        except BaseException:
+            self.close()
+            raise
+
+    def verify_clean(self) -> None:
+        """Cancel only a still-pending watch; every other state is unsafe."""
+
+        if not self._active or self._verified:
+            raise OSError("zettel_objet_link_directory_watcher_state_invalid")
+        from ctypes import wintypes
+
+        transferred = wintypes.DWORD()
+        if self._get_result(
+            self._handle,
+            self._ctypes.byref(self._overlapped),
+            self._ctypes.byref(transferred),
+            False,
+        ):
+            self._active = False
+            raise OSError("zettel_objet_link_directory_changed")
+        error = self._ctypes.get_last_error()
+        error_io_incomplete = 996
+        error_operation_aborted = 995
+        if error != error_io_incomplete:
+            if error == error_operation_aborted:
+                self._active = False
+            raise OSError("zettel_objet_link_directory_watcher_ambiguous")
+        cancel_succeeded = bool(
+            self._cancel_io(
+                self._handle,
+                self._ctypes.byref(self._overlapped),
+            )
+        )
+        cancel_error = (
+            0 if cancel_succeeded else self._ctypes.get_last_error()
+        )
+        error_not_found = 1168
+        if not cancel_succeeded and cancel_error != error_not_found:
+            raise OSError("zettel_objet_link_directory_watcher_ambiguous")
+        if self._get_result(
+            self._handle,
+            self._ctypes.byref(self._overlapped),
+            self._ctypes.byref(transferred),
+            True,
+        ):
+            self._active = False
+            raise OSError("zettel_objet_link_directory_changed")
+        error = self._ctypes.get_last_error()
+        self._active = False
+        if (
+            not cancel_succeeded
+            or error != error_operation_aborted
+        ):
+            raise OSError("zettel_objet_link_directory_watcher_ambiguous")
+        self._verified = True
+
+    def close(self) -> None:
+        if self._active and self._handle is not None:
+            cancel_succeeded = bool(
+                self._cancel_io(
+                    self._handle,
+                    self._ctypes.byref(self._overlapped),
+                )
+            )
+            cancel_error = (
+                0 if cancel_succeeded else self._ctypes.get_last_error()
+            )
+            error_not_found = 1168
+            drained = False
+            if cancel_succeeded or cancel_error == error_not_found:
+                try:
+                    from ctypes import wintypes
+
+                    transferred = wintypes.DWORD()
+                    self._get_result(
+                        self._handle,
+                        self._ctypes.byref(self._overlapped),
+                        self._ctypes.byref(transferred),
+                        True,
+                    )
+                    drained = True
+                except BaseException:
+                    drained = False
+            if not drained:
+                if self._close_handle(self._handle):
+                    self._handle = None
+                wait_object_0 = 0
+                wait_infinite = 0xFFFFFFFF
+                if self._wait(self._event, wait_infinite) != wait_object_0:
+                    raise OSError(
+                        "zettel_objet_link_directory_watcher_undrained"
+                    )
+                drained = True
+            if not drained:
+                raise OSError(
+                    "zettel_objet_link_directory_watcher_undrained"
+                )
+            self._active = False
+        if self._event is not None:
+            try:
+                self._close_handle(self._event)
+            finally:
+                self._event = None
+        if self._handle is not None:
+            try:
+                self._close_handle(self._handle)
+            finally:
+                self._handle = None
+
+
+def _zettel_objet_link_known_internal_path(
+    root: Path,
+    relative: str,
+) -> Path:
+    """Build one lexically validated internal path for later bound access."""
+
+    try:
+        normalized = archive_services.normalize_archive_relative_path(relative)
+    except archive_services.ArchivePathError:
+        raise archive_services.ArchiveServiceError(
+            "zettel_objet_link_internal_path_invalid"
+        ) from None
+    return root.joinpath(*normalized.split("/"))
+
+
+def _read_zettel_objet_archive_id(root: Path) -> str:
+    """Read archive.yml without permitting an ancestor replacement escape."""
+
+    config_path = root / "archive.yml"
+    try:
+        with archive_services._activity_group_bound_directory_chain(
+            root,
+            root,
+        ) as root_binding:
+            raw = archive_services._read_activity_group_regular_bytes_bound(
+                root,
+                root_binding,
+                config_path,
+                max_bytes=ZETTEL_OBJET_LINK_MAX_ARCHIVE_CONFIG_BYTES,
+            )
+        loaded = archive_services.load_approval_yaml_without_duplicate_keys(
+            raw.decode("utf-8")
+        )
+        data = archive_services.normalize_approval_json_tree(loaded)
+    except Exception:
+        raise archive_services.ArchiveServiceError(
+            "zettel_objet_link_archive_identity_unavailable"
+        ) from None
+    if not isinstance(data, dict):
+        raise archive_services.ArchiveServiceError(
+            "zettel_objet_link_archive_identity_unavailable"
+        )
+    archive_id = data.get("archive_id")
+    try:
+        exact_human_approval_archive_identity_sha256(archive_id)
+    except Exception:
+        raise archive_services.ArchiveServiceError(
+            "zettel_objet_link_archive_identity_unavailable"
+        ) from None
+    return archive_id
+
+
+def _zettel_objet_link_file_stability_token(
+    value: os.stat_result,
+) -> tuple[Any, ...]:
+    """Return a non-content file version token for stable snapshot proofs."""
+
+    return (
+        int(value.st_mode),
+        int(value.st_dev),
+        int(value.st_ino),
+        int(value.st_nlink),
+        int(value.st_size),
+        int(value.st_mtime_ns),
+        int(value.st_ctime_ns),
+        int(getattr(value, "st_birthtime_ns", 0)),
+        int(getattr(value, "st_file_attributes", 0)),
+    )
+
+
+def _read_zettel_objet_candidate_bound_observation(
+    root: Path,
+    binding: dict[str, Any],
+    path: Path,
+) -> tuple[bytes, tuple[int, int], tuple[Any, ...]]:
+    """Read one candidate with its identity and monotonic version token."""
+
+    observed = _zettel_objet_link_bound_lstat(binding, path)
+    reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+    if (
+        not stat.S_ISREG(observed.st_mode)
+        or stat.S_ISLNK(observed.st_mode)
+        or int(observed.st_nlink) != 1
+        or (
+            reparse_flag
+            and getattr(observed, "st_file_attributes", 0) & reparse_flag
+        )
+        or observed.st_size > ZETTEL_OBJET_LINK_MAX_ZETTEL_BYTES
+    ):
+        raise OSError("zettel_objet_link_zettel_boundary_unsafe")
+    raw = archive_services._read_activity_group_regular_bytes_bound(
+        root,
+        binding,
+        path,
+        max_bytes=ZETTEL_OBJET_LINK_MAX_ZETTEL_BYTES,
+    )
+    final = _zettel_objet_link_bound_lstat(binding, path)
+    observed_state = _zettel_objet_link_file_stability_token(observed)
+    final_state = _zettel_objet_link_file_stability_token(final)
+    if (
+        observed_state != final_state
+        or int(final.st_nlink) != 1
+    ):
+        raise OSError("zettel_objet_link_zettel_boundary_changed")
+    return (
+        raw,
+        (int(final.st_dev), int(final.st_ino)),
+        final_state,
+    )
+
+
+def _read_zettel_objet_candidate_bound(
+    root: Path,
+    binding: dict[str, Any],
+    path: Path,
+) -> bytes:
+    """Read one single-link Markdown candidate through its held parent."""
+
+    raw, _identity, _state = (
+        _read_zettel_objet_candidate_bound_observation(
+            root,
+            binding,
+            path,
+        )
+    )
+    return raw
+
+
+def _zettel_objet_link_manifest_bound_observation(
+    root: Path,
+    binding: dict[str, Any],
+    path: Path,
+) -> tuple[bytes, tuple[Any, ...], tuple[Any, ...]]:
+    """Read one manifest identity while holding its exact parent chain."""
+
+    parent_before = _zettel_objet_link_directory_stability_token(binding)
+    observed = _zettel_objet_link_bound_lstat(binding, path)
+    reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+    if (
+        not stat.S_ISREG(observed.st_mode)
+        or stat.S_ISLNK(observed.st_mode)
+        or int(observed.st_nlink) != 1
+        or (
+            reparse_flag
+            and getattr(observed, "st_file_attributes", 0) & reparse_flag
+        )
+        or observed.st_size > ZETTEL_OBJET_LINK_MAX_MANIFEST_BYTES
+    ):
+        raise OSError("zettel_objet_link_manifest_boundary_unsafe")
+    raw = archive_services._read_activity_group_regular_bytes_bound(
+        root,
+        binding,
+        path,
+        max_bytes=ZETTEL_OBJET_LINK_MAX_MANIFEST_BYTES,
+    )
+    final = _zettel_objet_link_bound_lstat(binding, path)
+    parent_after = _zettel_objet_link_directory_stability_token(binding)
+
+    observed_state = _zettel_objet_link_file_stability_token(observed)
+    final_state = _zettel_objet_link_file_stability_token(final)
+    if (
+        parent_before != parent_after
+        or observed_state != final_state
+        or len(raw) != int(final.st_size)
+    ):
+        raise OSError("zettel_objet_link_manifest_boundary_changed")
+    return raw, final_state, parent_after
+
+
+def _resolve_zettel_objet_link_target_bound(
+    root: Path,
+    *,
+    archive_id: str,
+    zettel_id: str | None,
+    relative_path: str | None,
+    final_manifest_object_id: str | None = None,
+    final_manifest_record_set_sha256: str | None = None,
+) -> tuple[Path, str, bytes, dict[str, Any], str]:
+    """Resolve one zettel, optionally with one joint final manifest proof."""
+
+    if bool(zettel_id) == bool(relative_path):
+        raise archive_services.ArchiveServiceError(
+            "zettel_objet_link_zettel_unavailable"
+        )
+    if (final_manifest_object_id is None) != (
+        final_manifest_record_set_sha256 is None
+    ):
+        raise archive_services.ArchiveServiceError(
+            "zettel_objet_link_zettel_unavailable"
+        )
+
+    requested_relative: str | None = None
+    requested_raw: bytes | None = None
+    requested_identity: tuple[int, int] | None = None
+    candidate: Path | None = None
+    if relative_path is not None:
+        try:
+            normalized = archive_services.normalize_archive_relative_path(
+                relative_path
+            )
+        except (archive_services.ArchivePathError, TypeError, ValueError):
+            raise archive_services.ArchiveServiceError(
+                "zettel_objet_link_zettel_unavailable"
+            ) from None
+        if (
+            not normalized.startswith(archive_services.VALID_ZETTEL_FOLDERS)
+            or not normalized.casefold().endswith(".md")
+        ):
+            raise archive_services.ArchiveServiceError(
+                "zettel_objet_link_zettel_unavailable"
+            )
+        candidate = _zettel_objet_link_known_internal_path(root, normalized)
+        safe_requested_id: str | None = None
+    else:
+        safe_requested_id = _safe_zettel_id(zettel_id)
+        if safe_requested_id is None or safe_requested_id != zettel_id:
+            raise archive_services.ArchiveServiceError(
+                "zettel_objet_link_zettel_unavailable"
+            )
+
+    initial_entry_count = 0
+    final_entry_count = 0
+    scanned_bytes = 0
+    final_scanned_bytes = 0
+    matches: list[
+        tuple[Path, str, bytes, dict[str, Any], str, tuple[int, int]]
+    ] = []
+    roots: list[tuple[Path, str, dict[str, Any]]] = []
+    held_directories: list[
+        tuple[
+            Path,
+            dict[str, Any],
+            tuple[Any, ...],
+            tuple[tuple[Any, ...], ...],
+        ]
+    ] = []
+    additional_directory_tokens: list[
+        tuple[dict[str, Any], tuple[Any, ...]]
+    ] = []
+    file_snapshots: list[
+        tuple[
+            dict[str, Any],
+            Path,
+            tuple[int, int],
+            tuple[Any, ...],
+            str,
+        ]
+    ] = []
+
+    def scan_rows(
+        directory: Path,
+        directory_binding: dict[str, Any],
+        *,
+        final: bool,
+    ) -> list[tuple[str, os.stat_result]]:
+        nonlocal initial_entry_count, final_entry_count
+        scan_target = (
+            directory_binding["descriptor"]
+            if directory_binding.get("descriptor") is not None
+            else directory
+        )
+        rows: list[tuple[str, os.stat_result]] = []
+        with os.scandir(scan_target) as entries:
+            for entry in entries:
+                if final:
+                    final_entry_count += 1
+                    count = final_entry_count
+                else:
+                    initial_entry_count += 1
+                    count = initial_entry_count
+                if count > ZETTEL_OBJET_LINK_MAX_ZETTEL_SCAN_ENTRIES:
+                    raise OSError("zettel_objet_link_zettel_scan_limit")
+                entry_stat = (
+                    os.stat(entry.path, follow_symlinks=False)
+                    if os.name == "nt"
+                    else entry.stat(follow_symlinks=False)
+                )
+                rows.append((entry.name, entry_stat))
+        rows.sort(key=lambda item: (item[0].casefold(), item[0]))
+        return rows
+
+    def directory_inventory(
+        rows: list[tuple[str, os.stat_result]],
+    ) -> tuple[tuple[Any, ...], ...]:
+        return tuple(
+            _zettel_objet_link_directory_entry_state(name, observed)
+            for name, observed in rows
+        )
+
+    def record_directory(
+        directory: Path,
+        directory_binding: dict[str, Any],
+    ) -> list[tuple[str, os.stat_result]]:
+        before_token = _zettel_objet_link_directory_stability_token(
+            directory_binding
+        )
+        rows = scan_rows(directory, directory_binding, final=False)
+        held_directories.append(
+            (
+                directory,
+                directory_binding,
+                before_token,
+                directory_inventory(rows),
+            )
+        )
+        return rows
+
+    def inspect_candidate(
+        directory_binding: dict[str, Any],
+        path: Path,
+        relative: str,
+    ) -> None:
+        nonlocal scanned_bytes
+        raw, identity, file_state = (
+            _read_zettel_objet_candidate_bound_observation(
+                root,
+                directory_binding,
+                path,
+            )
+        )
+        scanned_bytes += len(raw)
+        if scanned_bytes > ZETTEL_OBJET_LINK_MAX_ZETTEL_SCAN_BYTES:
+            raise OSError("zettel_objet_link_zettel_scan_limit")
+        file_snapshots.append(
+            (
+                directory_binding,
+                path,
+                identity,
+                file_state,
+                hashlib.sha256(raw).hexdigest(),
+            )
+        )
+        try:
+            frontmatter, body = _validated_zettel_objet_link_content(
+                raw,
+                archive_id=archive_id,
+                requested_zettel_id=None,
+            )
+        except archive_services.ArchiveServiceError:
+            return
+        if frontmatter.get("id") == safe_requested_id:
+            matches.append(
+                (path, relative, raw, frontmatter, body, identity)
+            )
+
+    def visit(
+        directory: Path,
+        relative_parts: tuple[str, ...],
+        directory_binding: dict[str, Any],
+        depth: int,
+    ) -> None:
+        if depth > ZETTEL_OBJET_LINK_MAX_ZETTEL_SCAN_DEPTH:
+            raise OSError("zettel_objet_link_zettel_scan_limit")
+        rows = record_directory(directory, directory_binding)
+        reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+        for name, entry_stat in rows:
+            path = directory / name
+            relative_parts_for_entry = (*relative_parts, name)
+            relative = "/".join(relative_parts_for_entry)
+            if (
+                stat.S_ISLNK(entry_stat.st_mode)
+                or (
+                    reparse_flag
+                    and getattr(entry_stat, "st_file_attributes", 0)
+                    & reparse_flag
+                )
+                ):
+                raise OSError("zettel_objet_link_zettel_boundary_unsafe")
+            if stat.S_ISDIR(entry_stat.st_mode):
+                child_binding = stack.enter_context(
+                    archive_services._activity_group_bound_directory_chain(
+                        root,
+                        path,
+                    )
+                )
+                visit(
+                    path,
+                    relative_parts_for_entry,
+                    child_binding,
+                    depth + 1,
+                )
+                continue
+            if not name.casefold().endswith(".md"):
+                continue
+            if (
+                not stat.S_ISREG(entry_stat.st_mode)
+                or int(entry_stat.st_nlink) != 1
+                or entry_stat.st_size > ZETTEL_OBJET_LINK_MAX_ZETTEL_BYTES
+            ):
+                raise OSError("zettel_objet_link_zettel_boundary_unsafe")
+            inspect_candidate(directory_binding, path, relative)
+
+    def revalidate_snapshot() -> None:
+        nonlocal final_entry_count, final_scanned_bytes
+        final_entry_count = 0
+        final_scanned_bytes = 0
+        for directory_binding, before_token in additional_directory_tokens:
+            if (
+                _zettel_objet_link_directory_stability_token(
+                    directory_binding
+                )
+                != before_token
+            ):
+                raise OSError("zettel_objet_link_directory_changed")
+        for (
+            directory,
+            directory_binding,
+            before_token,
+            before_inventory,
+        ) in held_directories:
+            if (
+                _zettel_objet_link_directory_stability_token(
+                    directory_binding
+                )
+                != before_token
+            ):
+                raise OSError("zettel_objet_link_directory_changed")
+            final_rows = scan_rows(
+                directory,
+                directory_binding,
+                final=True,
+            )
+            if directory_inventory(final_rows) != before_inventory:
+                raise OSError("zettel_objet_link_directory_changed")
+            if (
+                _zettel_objet_link_directory_stability_token(
+                    directory_binding
+                )
+                != before_token
+            ):
+                raise OSError("zettel_objet_link_directory_changed")
+
+        for (
+            directory_binding,
+            path,
+            before_identity,
+            before_file_state,
+            before_sha256,
+        ) in file_snapshots:
+            final_raw, final_identity, final_file_state = (
+                _read_zettel_objet_candidate_bound_observation(
+                    root,
+                    directory_binding,
+                    path,
+                )
+            )
+            final_scanned_bytes += len(final_raw)
+            if (
+                final_scanned_bytes
+                > ZETTEL_OBJET_LINK_MAX_ZETTEL_SCAN_BYTES
+                or final_identity != before_identity
+                or final_file_state != before_file_state
+                or hashlib.sha256(final_raw).hexdigest()
+                != before_sha256
+            ):
+                raise OSError("zettel_objet_link_zettel_changed")
+
+        for _, directory_binding, before_token, _ in held_directories:
+            if (
+                _zettel_objet_link_directory_stability_token(
+                    directory_binding
+                )
+                != before_token
+                ):
+                raise OSError("zettel_objet_link_directory_changed")
+        for directory_binding, before_token in additional_directory_tokens:
+            if (
+                _zettel_objet_link_directory_stability_token(
+                    directory_binding
+                )
+                != before_token
+            ):
+                raise OSError("zettel_objet_link_directory_changed")
+
+    try:
+        with ExitStack() as stack:
+            archive_binding = stack.enter_context(
+                archive_services._activity_group_bound_directory_chain(
+                    root,
+                    root,
+                )
+            )
+            watchers: list[_ZettelObjetLinkWindowsDirectoryWatcher] = []
+            if os.name == "nt":
+                archive_watcher = _ZettelObjetLinkWindowsDirectoryWatcher(
+                    archive_binding,
+                    watch_subtree=False,
+                    names_only=True,
+                )
+                watchers.append(archive_watcher)
+                stack.callback(archive_watcher.close)
+
+            # Freeze the root inventory before any missing-child probe.  On
+            # POSIX there is no notification watcher, so recording it later
+            # could absorb a newly created ``zettels`` or ``inbox`` directory
+            # into the baseline after that directory had already been skipped.
+            record_directory(root, archive_binding)
+
+            for folder in ("zettels", "inbox"):
+                folder_path = _zettel_objet_link_known_internal_path(
+                    root,
+                    folder,
+                )
+                try:
+                    binding = stack.enter_context(
+                        archive_services._activity_group_bound_directory_chain(
+                            root,
+                            folder_path,
+                        )
+                    )
+                except FileNotFoundError:
+                    continue
+                roots.append((folder_path, folder, binding))
+                if os.name == "nt":
+                    folder_watcher = (
+                        _ZettelObjetLinkWindowsDirectoryWatcher(
+                            binding,
+                            watch_subtree=True,
+                        )
+                    )
+                    watchers.append(folder_watcher)
+                    stack.callback(folder_watcher.close)
+
+            if candidate is not None:
+                parent_binding = stack.enter_context(
+                    archive_services._activity_group_bound_directory_chain(
+                        root,
+                        candidate.parent,
+                    )
+                )
+                additional_directory_tokens.append(
+                    (
+                        parent_binding,
+                        _zettel_objet_link_directory_stability_token(
+                            parent_binding
+                        ),
+                    )
+                )
+                raw, identity, _requested_file_state = (
+                    _read_zettel_objet_candidate_bound_observation(
+                        root,
+                        parent_binding,
+                        candidate,
+                    )
+                )
+                frontmatter, _body = _validated_zettel_objet_link_content(
+                    raw,
+                    archive_id=archive_id,
+                    requested_zettel_id=None,
+                )
+                safe_requested_id = _safe_zettel_id(frontmatter.get("id"))
+                if safe_requested_id is None:
+                    raise OSError("zettel_objet_link_zettel_unavailable")
+                requested_relative = normalized
+                requested_raw = raw
+                requested_identity = identity
+
+            for folder_path, folder, binding in roots:
+                visit(folder_path, (folder,), binding, 0)
+
+            revalidate_snapshot()
+            closing_guard: (
+                _ZettelObjetLinkWindowsDirectoryWatcher | None
+            ) = None
+            if os.name == "nt":
+                closing_guard = _ZettelObjetLinkWindowsDirectoryWatcher(
+                    archive_binding,
+                    watch_subtree=True,
+                )
+                stack.callback(closing_guard.close)
+            revalidate_snapshot()
+            if final_manifest_object_id is not None:
+                manifest_path = _zettel_objet_link_known_internal_path(
+                    root,
+                    "objects/manifests/files.jsonl",
+                )
+                try:
+                    manifest_parent_binding = stack.enter_context(
+                        archive_services._activity_group_bound_directory_chain(
+                            root,
+                            manifest_path.parent,
+                        )
+                    )
+                    manifest_before = (
+                        _zettel_objet_link_manifest_bound_observation(
+                            root,
+                            manifest_parent_binding,
+                            manifest_path,
+                        )
+                    )
+                    _require_exact_zettel_objet_manifest_target_bytes(
+                        manifest_before[0],
+                        object_id=final_manifest_object_id,
+                        expected_record_set_sha256=(
+                            final_manifest_record_set_sha256
+                        ),
+                    )
+                except _ZettelObjetLinkManifestChangedAfterApproval:
+                    raise
+                except (
+                    archive_services.ArchiveServiceError,
+                    OSError,
+                    RecursionError,
+                    TypeError,
+                    ValueError,
+                ):
+                    raise _ZettelObjetLinkManifestChangedAfterApproval(
+                        "zettel_objet_link_manifest_changed_after_approval"
+                    ) from None
+
+                # The manifest observation brackets one complete Zettel
+                # snapshot revalidation.  On Windows the archive-subtree
+                # closing watcher remains armed across this whole interval;
+                # on POSIX the held parent and file tokens expose even a
+                # transient change that restores the original bytes.  The
+                # successful revalidation therefore supplies one point where
+                # both authorities are jointly valid.
+                revalidate_snapshot()
+                try:
+                    manifest_after = (
+                        _zettel_objet_link_manifest_bound_observation(
+                            root,
+                            manifest_parent_binding,
+                            manifest_path,
+                        )
+                    )
+                    if manifest_after != manifest_before:
+                        raise _ZettelObjetLinkManifestChangedAfterApproval(
+                            "zettel_objet_link_manifest_changed_after_approval"
+                        )
+                    _require_exact_zettel_objet_manifest_target_bytes(
+                        manifest_after[0],
+                        object_id=final_manifest_object_id,
+                        expected_record_set_sha256=(
+                            final_manifest_record_set_sha256
+                        ),
+                    )
+                except _ZettelObjetLinkManifestChangedAfterApproval:
+                    raise
+                except (
+                    archive_services.ArchiveServiceError,
+                    OSError,
+                    RecursionError,
+                    TypeError,
+                    ValueError,
+                ):
+                    raise _ZettelObjetLinkManifestChangedAfterApproval(
+                        "zettel_objet_link_manifest_changed_after_approval"
+                    ) from None
+            for watcher in watchers:
+                watcher.verify_clean()
+            if closing_guard is not None:
+                closing_guard.verify_clean()
+    except _ZettelObjetLinkManifestChangedAfterApproval:
+        raise
+    except (
+        archive_services.ArchiveServiceError,
+        OSError,
+        RecursionError,
+        TypeError,
+        ValueError,
+    ):
+        raise archive_services.ArchiveServiceError(
+            "zettel_objet_link_zettel_unavailable"
+        ) from None
+
+    if len(matches) != 1:
+        raise archive_services.ArchiveServiceError(
+            "zettel_objet_link_zettel_unavailable"
+        )
+    match = matches[0]
+    if requested_relative is not None and (
+        match[1] != requested_relative
+        or match[2] != requested_raw
+        or match[5] != requested_identity
+    ):
+        raise archive_services.ArchiveServiceError(
+            "zettel_objet_link_zettel_unavailable"
+        )
+    return match[0], match[1], match[2], match[3], match[4]
+
+
+def _strict_zettel_objet_manifest_records(root: Path) -> list[dict[str, Any]]:
+    """Load the complete object manifest or fail closed on any unsafe row."""
+
+    manifest_path = _zettel_objet_link_known_internal_path(
+        root,
+        "objects/manifests/files.jsonl",
+    )
+    try:
+        with archive_services._activity_group_bound_directory_chain(
+            root,
+            manifest_path.parent,
+        ) as manifest_parent_binding:
+            raw = archive_services._read_activity_group_regular_bytes_bound(
+                root,
+                manifest_parent_binding,
+                manifest_path,
+                max_bytes=ZETTEL_OBJET_LINK_MAX_MANIFEST_BYTES,
+            )
+    except OSError:
+        raise archive_services.ArchiveServiceError(
+            "zettel_objet_link_manifest_unavailable"
+        ) from None
+    return _strict_zettel_objet_manifest_records_from_bytes(raw)
+
+
+def _strict_zettel_objet_manifest_records_from_bytes(
+    raw: bytes,
+) -> list[dict[str, Any]]:
+    """Validate one already-bound manifest byte observation."""
+
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        raise archive_services.ArchiveServiceError(
+            "zettel_objet_link_manifest_invalid"
+        ) from None
+    records: list[dict[str, Any]] = []
+    remaining_json_nodes = ZETTEL_OBJET_LINK_MAX_MANIFEST_JSON_NODES
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        if len(records) >= ZETTEL_OBJET_LINK_MAX_MANIFEST_RECORDS:
+            raise archive_services.ArchiveServiceError(
+                "zettel_objet_link_manifest_invalid"
+            )
+        try:
+            record = json.loads(
+                line,
+                object_pairs_hook=_reject_duplicate_json_members,
+                parse_constant=_reject_non_finite_json_constant,
+            )
+        except (json.JSONDecodeError, RecursionError, ValueError):
+            raise archive_services.ArchiveServiceError(
+                "zettel_objet_link_manifest_invalid"
+            ) from None
+        node_count = _bounded_zettel_objet_manifest_json_node_count(
+            record,
+            maximum_nodes=remaining_json_nodes,
+        )
+        if node_count is None:
+            raise archive_services.ArchiveServiceError(
+                "zettel_objet_link_manifest_invalid"
+            )
+        remaining_json_nodes -= node_count
+        try:
+            schema_issues = archive_services.validate_schema(
+                record,
+                "object-manifest-entry.schema.json",
+            )
+        except (
+            OSError,
+            RecursionError,
+            TypeError,
+            ValueError,
+        ):
+            raise archive_services.ArchiveServiceError(
+                "zettel_objet_link_manifest_invalid"
+            ) from None
+        if schema_issues or not _zettel_objet_manifest_record_is_complete(
+            record
+        ):
+            raise archive_services.ArchiveServiceError(
+                "zettel_objet_link_manifest_invalid"
+            )
+        records.append(record)
+    return records
+
+
+def _reject_non_finite_json_constant(_value: str) -> Any:
+    raise ValueError("non_finite_json_number")
+
+
+def _bounded_zettel_objet_manifest_json_node_count(
+    value: Any,
+    *,
+    maximum_nodes: int,
+) -> int | None:
+    """Return the node count for one bounded, finite JSON tree."""
+
+    if maximum_nodes < 1:
+        return None
+    stack: list[tuple[Any, int]] = [(value, 0)]
+    visited = 0
+    while stack:
+        item, depth = stack.pop()
+        visited += 1
+        if (
+            visited > maximum_nodes
+            or depth > ZETTEL_OBJET_LINK_MAX_MANIFEST_JSON_DEPTH
+        ):
+            return None
+        if item is None or type(item) in {str, bool, int}:
+            continue
+        if type(item) is float:
+            if not math.isfinite(item):
+                return None
+            continue
+        if type(item) is dict:
+            if any(type(key) is not str for key in item):
+                return None
+            if visited + len(stack) + len(item) > maximum_nodes:
+                return None
+            stack.extend((child, depth + 1) for child in item.values())
+            continue
+        if type(item) is list:
+            if visited + len(stack) + len(item) > maximum_nodes:
+                return None
+            stack.extend((child, depth + 1) for child in item)
+            continue
+        return None
+    return visited
+
+
+def _zettel_objet_manifest_record_is_complete(value: Any) -> bool:
+    if type(value) is not dict:
+        return False
+    object_id = value.get("object_id")
+    digest = value.get("sha256")
+    logical_key = value.get("logical_key")
+    locations = value.get("locations")
+    provenance = value.get("provenance")
+    size_bytes = value.get("size_bytes")
+    mime = value.get("mime")
+    if (
+        type(object_id) is not str
+        or archive_services.OBJECT_ID_RE.fullmatch(object_id) is None
+        or type(digest) is not str
+        or archive_services.SHA256_RE.fullmatch(digest) is None
+        or object_id != f"sha256:{digest}"
+        or type(logical_key) is not str
+        or not logical_key.strip()
+        or type(locations) is not list
+        or type(provenance) is not dict
+        or (
+            "size_bytes" in value
+            and (type(size_bytes) is not int or size_bytes < 0)
+        )
+        or (
+            "mime" in value
+            and (type(mime) is not str or not mime.strip())
+        )
+    ):
+        return False
+    return all(
+        type(location) is dict
+        and type(location.get("provider")) is str
+        and bool(location["provider"].strip())
+        for location in locations
+    )
+
+
+def _require_exact_zettel_objet_manifest_target(
+    root: Path,
+    *,
+    object_id: str,
+    expected_record_set_sha256: str,
+) -> None:
+    """Reprove one unique target record without exposing manifest contents."""
+
+    try:
+        manifest_records = _strict_zettel_objet_manifest_records(root)
+    except archive_services.ArchiveServiceError:
+        raise _ZettelObjetLinkManifestChangedAfterApproval(
+            "zettel_objet_link_manifest_changed_after_approval"
+        ) from None
+    _require_exact_zettel_objet_manifest_target_records(
+        manifest_records,
+        object_id=object_id,
+        expected_record_set_sha256=expected_record_set_sha256,
+    )
+
+
+def _require_exact_zettel_objet_manifest_target_bytes(
+    raw: bytes,
+    *,
+    object_id: str,
+    expected_record_set_sha256: str,
+) -> None:
+    """Reprove the target from one stable, already-bound observation."""
+
+    try:
+        manifest_records = _strict_zettel_objet_manifest_records_from_bytes(
+            raw
+        )
+    except archive_services.ArchiveServiceError:
+        raise _ZettelObjetLinkManifestChangedAfterApproval(
+            "zettel_objet_link_manifest_changed_after_approval"
+        ) from None
+    _require_exact_zettel_objet_manifest_target_records(
+        manifest_records,
+        object_id=object_id,
+        expected_record_set_sha256=expected_record_set_sha256,
+    )
+
+
+def _require_exact_zettel_objet_manifest_target_records(
+    manifest_records: list[dict[str, Any]],
+    *,
+    object_id: str,
+    expected_record_set_sha256: str,
+) -> None:
+    matching_records = [
+        record
+        for record in manifest_records
+        if str(record.get("object_id") or "").strip().lower()
+        == object_id
+    ]
+    if (
+        len(matching_records) != 1
+        or _sha256_bytes(_canonical_json_bytes(matching_records))
+        != expected_record_set_sha256
+    ):
+        raise _ZettelObjetLinkManifestChangedAfterApproval(
+            "zettel_objet_link_manifest_changed_after_approval"
+        )
+
+
+def _validated_zettel_objet_link_content(
+    raw: bytes,
+    *,
+    archive_id: str,
+    requested_zettel_id: str | None,
+) -> tuple[dict[str, Any], str]:
+    """Validate approval-bound frontmatter on the exact observed bytes."""
+
+    try:
+        text = raw.decode("utf-8")
+        approval_text = text[1:] if text.startswith("\ufeff") else text
+        boundary = archive_services.parse_approval_zettel_content_boundary(
+            text
+        )
+        frontmatter = boundary.get("frontmatter")
+        if (
+            boundary.get("state") != "readable"
+            or not isinstance(frontmatter, dict)
+            or archive_services.validate_schema(
+                frontmatter,
+                "zettel-frontmatter.schema.json",
+            )
+        ):
+            raise ValueError("zettel_frontmatter_invalid")
+        safe_zettel_id = _safe_zettel_id(frontmatter.get("id"))
+        if (
+            safe_zettel_id is None
+            or (
+                requested_zettel_id is not None
+                and safe_zettel_id != requested_zettel_id
+            )
+            or frontmatter.get("archive_id") != archive_id
+            or frontmatter.get("status")
+            not in archive_services.ZETTEL_QUERYABLE_STATUSES
+        ):
+            raise ValueError("zettel_frontmatter_identity_invalid")
+        frontmatter_match = archive_services.FRONTMATTER_RE.match(approval_text)
+        if frontmatter_match is None:
+            raise ValueError("zettel_body_invalid")
+        # The approval parser intentionally normalizes metadata, but a link
+        # write must preserve the exact Markdown body suffix.  In particular,
+        # leading blank lines, tabs, and four-space code blocks are content,
+        # not disposable formatting.
+        body = approval_text[frontmatter_match.end() :]
+        return frontmatter, body
+    except (
+        archive_services.ArchiveServiceError,
+        OSError,
+        RecursionError,
+        TypeError,
+        UnicodeError,
+        ValueError,
+    ):
+        raise archive_services.ArchiveServiceError(
+            "zettel_objet_link_zettel_unavailable"
+        ) from None
+
+
 def _zettel_objet_link_plan_core(
     archive_root: Path | str,
     *,
@@ -2602,9 +4279,11 @@ def _zettel_objet_link_plan_core(
     object_id: str | None,
     role: str,
     label: str | None,
+    created_control_artifact_for_approved_absent: bool = False,
+    held_control_artifact_verified_exact: bool = False,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     root = archive_services.require_existing_archive_root(archive_root)
-    archive_id = archive_services.read_archive_id(root)
+    archive_id = _read_zettel_objet_archive_id(root)
     blockers: list[str] = []
     if bool(zettel_id) == bool(relative_path):
         blockers.append("zettel_objet_link_target_required")
@@ -2628,13 +4307,17 @@ def _zettel_objet_link_plan_core(
     zettel_relative: str | None = None
     if bool(zettel_id) != bool(relative_path):
         try:
-            zettel_path = archive_services.resolve_zettel_path(
+            (
+                zettel_path,
+                zettel_relative,
+                before_bytes,
+                zettel_frontmatter,
+                zettel_body,
+            ) = _resolve_zettel_objet_link_target_bound(
                 root,
+                archive_id=archive_id,
                 zettel_id=zettel_id,
                 relative_path=relative_path,
-            )
-            zettel_frontmatter, zettel_body = (
-                archive_services.require_readable_zettel_content(zettel_path)
             )
             safe_zettel_id = _safe_zettel_id(zettel_frontmatter.get("id"))
             if (
@@ -2643,23 +4326,90 @@ def _zettel_objet_link_plan_core(
                 not in archive_services.ZETTEL_QUERYABLE_STATUSES
             ):
                 blockers.append("zettel_objet_link_zettel_unavailable")
-            zettel_relative = archive_services.archive_relative_path(
-                zettel_path,
-                root,
-            )
-            before_bytes = zettel_path.read_bytes()
             before_sha256 = _sha256_bytes(before_bytes)
         except (archive_services.ArchiveServiceError, OSError):
             blockers.append("zettel_objet_link_zettel_unavailable")
 
-    manifest_record: dict[str, Any] | None = None
-    if archive_services.OBJECT_ID_RE.fullmatch(normalized_object_id):
-        manifest_record = archive_services.find_manifest_record(
-            root,
-            normalized_object_id,
+    control_artifact_relative: str | None = None
+    control_artifact_path: Path | None = None
+    control_artifact_observed_state: str | None = None
+    control_artifact_state: str | None = None
+    if safe_zettel_id is not None:
+        lock_name = hashlib.sha256(
+            safe_zettel_id.encode("utf-8")
+        ).hexdigest()
+        control_artifact_relative = (
+            f"{ZETTEL_OBJET_LINK_RECEIPTS_DIR}/.locks/{lock_name}.lock"
         )
-        if manifest_record is None:
-            blockers.append("zettel_objet_link_manifest_record_missing")
+        control_artifact_path = _zettel_objet_link_known_internal_path(
+            root,
+            control_artifact_relative,
+        )
+        if held_control_artifact_verified_exact:
+            control_artifact_observed_state = "existing_exact"
+        else:
+            try:
+                with archive_services._activity_group_bound_directory_chain(
+                    root,
+                    control_artifact_path.parent,
+                ) as control_parent_binding:
+                    try:
+                        _zettel_objet_link_bound_lstat(
+                            control_parent_binding,
+                            control_artifact_path,
+                        )
+                    except FileNotFoundError:
+                        control_artifact_observed_state = "absent"
+                    else:
+                        control_raw = (
+                            archive_services._read_activity_group_regular_bytes_bound(
+                                root,
+                                control_parent_binding,
+                                control_artifact_path,
+                                max_bytes=len(ZETTEL_OBJET_LINK_LOCK_BYTES),
+                            )
+                        )
+                        if control_raw == ZETTEL_OBJET_LINK_LOCK_BYTES:
+                            control_artifact_observed_state = "existing_exact"
+                        else:
+                            raise OSError(
+                                "zettel_objet_link_lock_artifact_invalid"
+                            )
+            except FileNotFoundError:
+                control_artifact_observed_state = "absent"
+            except OSError:
+                blockers.append("zettel_objet_link_lock_artifact_invalid")
+        control_artifact_state = control_artifact_observed_state
+        if created_control_artifact_for_approved_absent:
+            if control_artifact_observed_state == "existing_exact":
+                control_artifact_state = "absent"
+            else:
+                blockers.append(
+                    "zettel_objet_link_lock_artifact_transition_invalid"
+                )
+
+    manifest_record: dict[str, Any] | None = None
+    matching_manifest_records: list[dict[str, Any]] = []
+    manifest_record_set_complete = False
+    if archive_services.OBJECT_ID_RE.fullmatch(normalized_object_id):
+        try:
+            all_manifest_records = _strict_zettel_objet_manifest_records(root)
+        except archive_services.ArchiveServiceError:
+            blockers.append("zettel_objet_link_manifest_set_incomplete")
+        else:
+            manifest_record_set_complete = True
+            matching_manifest_records = [
+                record
+                for record in all_manifest_records
+                if str(record.get("object_id") or "").strip().lower()
+                == normalized_object_id
+            ]
+            if len(matching_manifest_records) == 1:
+                manifest_record = matching_manifest_records[0]
+            elif not matching_manifest_records:
+                blockers.append("zettel_objet_link_manifest_record_missing")
+            else:
+                blockers.append("zettel_objet_link_manifest_record_ambiguous")
 
     assets = zettel_frontmatter.get("assets")
     if zettel_path is not None and not isinstance(assets, list):
@@ -2681,45 +4431,274 @@ def _zettel_objet_link_plan_core(
     }
     link_digest = _sha256_bytes(_canonical_json_bytes(link_seed))
     link_id = f"asset:sha256:{link_digest}"
-    receipt_root = archive_services.archive_internal_path(
+    receipt_root = _zettel_objet_link_known_internal_path(
         root,
         ZETTEL_OBJET_LINK_RECEIPTS_DIR,
     )
     receipt_prefix = f"link.{link_digest[:24]}.g"
-    generation = 1 + sum(
-        1
-        for path in receipt_root.glob(f"{receipt_prefix}*.json")
-        if path.is_file()
-    ) if receipt_root.is_dir() else 1
+    existing_generations: list[int] = []
+    receipt_root_observed = False
+    try:
+        with archive_services._activity_group_bound_directory_chain(
+            root,
+            receipt_root,
+        ) as receipt_root_binding:
+            receipt_root_observed = True
+            scan_target = (
+                receipt_root_binding["descriptor"]
+                if receipt_root_binding.get("descriptor") is not None
+                else receipt_root
+            )
+            with os.scandir(scan_target) as entries:
+                for entry in entries:
+                    match = ZETTEL_OBJET_LINK_RECEIPT_NAME_RE.fullmatch(
+                        entry.name
+                    )
+                    if (
+                        match is not None
+                        and entry.name.startswith(receipt_prefix)
+                    ):
+                        existing_generations.append(
+                            int(match.group("generation"))
+                        )
+    except FileNotFoundError:
+        pass
+    except OSError:
+        blockers.append("zettel_objet_link_receipt_directory_unavailable")
+    generation = max(existing_generations, default=0) + 1
+    if generation > 9999:
+        blockers.append("zettel_objet_link_receipt_generation_exhausted")
     receipt_relative = (
         f"{ZETTEL_OBJET_LINK_RECEIPTS_DIR}/"
         f"{receipt_prefix}{generation:04d}.json"
     )
-    if archive_services.archive_internal_path(root, receipt_relative).exists():
-        blockers.append("zettel_objet_link_receipt_collision")
+    receipt_path = _zettel_objet_link_known_internal_path(
+        root,
+        receipt_relative,
+    )
+    if receipt_root_observed:
+        try:
+            with archive_services._activity_group_bound_directory_chain(
+                root,
+                receipt_root,
+            ) as receipt_root_binding:
+                _zettel_objet_link_bound_lstat(
+                    receipt_root_binding,
+                    receipt_path,
+                )
+        except FileNotFoundError:
+            pass
+        except OSError:
+            blockers.append("zettel_objet_link_receipt_collision")
+        else:
+            blockers.append("zettel_objet_link_receipt_collision")
 
-    manifest_sha256 = (
-        _sha256_bytes(_canonical_json_bytes(manifest_record))
-        if manifest_record is not None
-        else None
+    manifest_record_set_sha256 = _sha256_bytes(
+        _canonical_json_bytes(matching_manifest_records)
     )
     label_sha256 = (
         _sha256_bytes(safe_label.encode("utf-8"))
         if safe_label is not None
-        else None
+        else ZETTEL_OBJET_LINK_ABSENT_LABEL_SHA256
     )
+    snapshot_relative: str | None = None
+    snapshot_path: Path | None = None
+    snapshot_state: str | None = None
+    snapshot_sha256 = before_sha256
+    if before_sha256 is not None and before_bytes is not None:
+        snapshot_relative = (
+            f"{ZETTEL_OBJET_LINK_SNAPSHOT_DIR}/"
+            f"{before_sha256}.zettel.md"
+        )
+        snapshot_path = _zettel_objet_link_known_internal_path(
+            root,
+            snapshot_relative,
+        )
+        try:
+            with archive_services._activity_group_bound_directory_chain(
+                root,
+                snapshot_path.parent,
+            ) as snapshot_parent_binding:
+                try:
+                    _zettel_objet_link_bound_lstat(
+                        snapshot_parent_binding,
+                        snapshot_path,
+                    )
+                except FileNotFoundError:
+                    snapshot_state = "absent"
+                else:
+                    snapshot_raw = (
+                        archive_services._read_activity_group_regular_bytes_bound(
+                            root,
+                            snapshot_parent_binding,
+                            snapshot_path,
+                            max_bytes=len(before_bytes),
+                        )
+                    )
+                    if _sha256_bytes(snapshot_raw) == before_sha256:
+                        snapshot_state = "existing_exact"
+                    else:
+                        raise OSError(
+                            "zettel_objet_link_snapshot_invalid"
+                        )
+        except FileNotFoundError:
+            snapshot_state = "absent"
+        except OSError:
+            blockers.append("zettel_objet_link_snapshot_invalid")
+
+    transaction_sha256: str | None = None
+    canonical_swap_relative: str | None = None
+    canonical_previous_relative: str | None = None
+    canonical_swap_path: Path | None = None
+    canonical_previous_path: Path | None = None
+    canonical_swap_state: str | None = None
+    if (
+        zettel_path is not None
+        and zettel_relative is not None
+        and before_sha256 is not None
+        and safe_zettel_id is not None
+    ):
+        transaction_sha256 = _sha256_bytes(
+            _canonical_json_bytes(
+                {
+                    "schema": "wom-kit/zettel-objet-link-cas/v0.1",
+                    "archive_id": archive_id,
+                    "zettel_id": safe_zettel_id,
+                    "zettel_path": zettel_relative,
+                    "before_sha256": before_sha256,
+                    "object_id": normalized_object_id,
+                    "role": normalized_role,
+                    "label_sha256": label_sha256,
+                    "link_id": link_id,
+                    "receipt_path": receipt_relative,
+                    "receipt_generation": generation,
+                }
+            )
+        )
+        try:
+            canonical_swap_path, canonical_previous_path = (
+                archive_services.regular_file_canonical_swap_paths(
+                    zettel_path,
+                    f"sha256:{transaction_sha256}",
+                    swap_suffix=ZETTEL_OBJET_LINK_CANONICAL_SWAP_SUFFIX,
+                )
+            )
+            with archive_services._activity_group_bound_directory_chain(
+                root,
+                zettel_path.parent,
+            ) as canonical_parent_binding:
+                canonical_swap_relative = (
+                    archive_services.archive_relative_path(
+                        canonical_swap_path,
+                        root,
+                    )
+                )
+                canonical_previous_relative = (
+                    archive_services.archive_relative_path(
+                        canonical_previous_path,
+                        root,
+                    )
+                )
+                for candidate in (
+                    canonical_swap_path,
+                    canonical_previous_path,
+                ):
+                    try:
+                        _zettel_objet_link_bound_lstat(
+                            canonical_parent_binding,
+                            candidate,
+                        )
+                    except FileNotFoundError:
+                        continue
+                    except OSError:
+                        blockers.append(
+                            "zettel_objet_link_transaction_evidence_invalid"
+                        )
+                        break
+                    else:
+                        blockers.append(
+                            "zettel_objet_link_transaction_evidence_present"
+                        )
+                        break
+                else:
+                    canonical_swap_state = "absent"
+        except (ValueError, archive_services.ArchivePathError, OSError):
+            blockers.append("zettel_objet_link_transaction_binding_invalid")
+
+    support_effect_set: dict[str, Any] | None = None
+    support_effect_set_sha256: str | None = None
+    if (
+        zettel_relative is not None
+        and before_sha256 is not None
+        and snapshot_relative is not None
+        and snapshot_state in {"absent", "existing_exact"}
+        and transaction_sha256 is not None
+        and canonical_swap_relative is not None
+        and canonical_previous_relative is not None
+        and canonical_swap_state == "absent"
+    ):
+        support_effect_set = {
+            "zettel": {
+                "path": zettel_relative,
+                "before_sha256": before_sha256,
+            },
+            "snapshot": {
+                "path": snapshot_relative,
+                "state": snapshot_state,
+                "sha256": before_sha256,
+            },
+            "receipt": {
+                "path": receipt_relative,
+                "generation": generation,
+            },
+            "canonical_compare_and_swap": {
+                "transaction_sha256": transaction_sha256,
+                "swap_path": canonical_swap_relative,
+                "previous_path": canonical_previous_relative,
+                "state": canonical_swap_state,
+            },
+        }
+        support_effect_set_sha256 = _sha256_bytes(
+            _canonical_json_bytes(support_effect_set)
+        )
+    control_artifact: dict[str, Any] | None = None
+    if (
+        control_artifact_relative is not None
+        and control_artifact_state in {"absent", "existing_exact"}
+    ):
+        control_artifact = {
+            "kind": "zettel_objet_link_lock",
+            "path": control_artifact_relative,
+            "state": control_artifact_state,
+            "sha256": ZETTEL_OBJET_LINK_LOCK_SHA256,
+        }
     plan_binding = {
-        "schema": "wom-kit/zettel-objet-link-plan-binding/v0.1",
+        "schema": "wom-kit/zettel-objet-link-plan-binding/v0.2",
         "archive_id": archive_id,
         "zettel_id": safe_zettel_id,
+        "zettel_path": zettel_relative,
         "zettel_sha256": before_sha256,
         "object_id": normalized_object_id,
-        "manifest_record_sha256": manifest_sha256,
+        "manifest_record_count": len(matching_manifest_records),
+        "manifest_record_set_sha256": manifest_record_set_sha256,
+        "manifest_record_set_complete": manifest_record_set_complete,
+        "manifest_record_set_unique": len(matching_manifest_records) == 1,
         "role": normalized_role,
         "label_sha256": label_sha256,
         "link_id": link_id,
         "receipt_path": receipt_relative,
-        "generation": generation,
+        "receipt_generation": generation,
+        "snapshot_path": snapshot_relative,
+        "snapshot_state": snapshot_state,
+        "snapshot_sha256": snapshot_sha256,
+        "support_effect_set_sha256": support_effect_set_sha256,
+        "transaction_sha256": transaction_sha256,
+        "canonical_swap_path": canonical_swap_relative,
+        "canonical_previous_path": canonical_previous_relative,
+        "canonical_swap_state": canonical_swap_state,
+        "control_artifact_path": control_artifact_relative,
+        "control_artifact_state": control_artifact_state,
+        "control_artifact_sha256": ZETTEL_OBJET_LINK_LOCK_SHA256,
     }
     plan_sha256 = _sha256_bytes(_canonical_json_bytes(plan_binding))
     result = {
@@ -2737,8 +4716,23 @@ def _zettel_objet_link_plan_core(
             "link_id": link_id,
             "current_asset_count": len(existing_assets),
             "manifest_record_verified": manifest_record is not None,
+            "manifest_record_count": len(matching_manifest_records),
+            "manifest_record_set_sha256": manifest_record_set_sha256,
             "zettel_sha256": before_sha256,
+            "label_sha256": label_sha256,
             "receipt_path": receipt_relative,
+            "receipt_generation": generation,
+            "snapshot_path": snapshot_relative,
+            "snapshot_state": snapshot_state,
+            "snapshot_sha256": snapshot_sha256,
+            "support_effect_set_sha256": support_effect_set_sha256,
+            "transaction_sha256": transaction_sha256,
+            "canonical_swap_path": canonical_swap_relative,
+            "canonical_previous_path": canonical_previous_relative,
+            "canonical_swap_state": canonical_swap_state,
+            "control_artifact_path": control_artifact_relative,
+            "control_artifact_state": control_artifact_state,
+            "control_artifact_sha256": ZETTEL_OBJET_LINK_LOCK_SHA256,
             "plan_sha256": plan_sha256 if not blockers else None,
         },
         "data": {
@@ -2749,15 +4743,39 @@ def _zettel_objet_link_plan_core(
             },
             "receipt_schema": ZETTEL_OBJET_LINK_RECEIPT_SCHEMA,
             "exact_byte_revert_supported": True,
+            "manifest_record_set_complete": manifest_record_set_complete,
+            "manifest_record_set_unique": len(matching_manifest_records) == 1,
+            "support_effect_set": support_effect_set,
+            "control_artifact": control_artifact,
+            "parent_directory_effects_implied_by_bound_artifact_paths": True,
         },
         "blockers": archive_services.unique_preserve_order(blockers),
         "warnings": [],
         "would_change": (
             [
                 f"{zettel_relative} frontmatter.assets +1",
+                (
+                    f"{snapshot_relative} create-only"
+                    if snapshot_state == "absent"
+                    else f"{snapshot_relative} reuse-existing-exact"
+                ),
+                (
+                    f"{control_artifact_relative} create-only"
+                    if control_artifact_state == "absent"
+                    else f"{control_artifact_relative} reuse-existing-exact"
+                ),
+                f"{canonical_swap_relative} transient-create-delete",
+                f"{canonical_previous_relative} transient-create-delete",
                 receipt_relative,
             ]
-            if not blockers and zettel_relative
+            if (
+                not blockers
+                and zettel_relative
+                and snapshot_relative
+                and control_artifact_relative
+                and canonical_swap_relative
+                and canonical_previous_relative
+            )
             else []
         ),
         "privacy_guards": {
@@ -2779,11 +4797,34 @@ def _zettel_objet_link_plan_core(
         "safe_zettel_id": safe_zettel_id,
         "before_bytes": before_bytes,
         "before_sha256": before_sha256,
+        "manifest_record": manifest_record,
+        "matching_manifest_records": matching_manifest_records,
+        "manifest_record_set_sha256": manifest_record_set_sha256,
         "object_id": normalized_object_id,
         "role": normalized_role,
         "safe_label": safe_label,
+        "label_sha256": label_sha256,
         "link_id": link_id,
         "receipt_relative": receipt_relative,
+        "receipt_path": receipt_path,
+        "receipt_generation": generation,
+        "snapshot_relative": snapshot_relative,
+        "snapshot_path": snapshot_path,
+        "snapshot_state": snapshot_state,
+        "snapshot_sha256": snapshot_sha256,
+        "support_effect_set": support_effect_set,
+        "support_effect_set_sha256": support_effect_set_sha256,
+        "transaction_sha256": transaction_sha256,
+        "canonical_swap_relative": canonical_swap_relative,
+        "canonical_previous_relative": canonical_previous_relative,
+        "canonical_swap_path": canonical_swap_path,
+        "canonical_previous_path": canonical_previous_path,
+        "canonical_swap_state": canonical_swap_state,
+        "control_artifact_relative": control_artifact_relative,
+        "control_artifact_path": control_artifact_path,
+        "control_artifact_state": control_artifact_state,
+        "control_artifact_observed_state": control_artifact_observed_state,
+        "control_artifact_sha256": ZETTEL_OBJET_LINK_LOCK_SHA256,
         "plan_sha256": plan_sha256,
         "existing_assets": existing_assets,
     }
@@ -2851,16 +4892,17 @@ def zettel_objet_link_apply(
     label: str | None = None,
     expected_plan_sha256: str | None,
     reviewed_by: str | None,
+    expected_exact_approval_plan_sha256: str | None = None,
+    expected_exact_approval_target_binding_sha256: str | None = None,
+    exact_human_approval_claim: _ClaimedExactHumanApproval | None = None,
 ) -> dict[str, Any]:
-    # This legacy writer changes one canonical zettel plus snapshot/receipt
-    # state as a compound operation.  Until one exact-human context binds the
-    # full set, fail before even planning/reading the requested target.
-    return _compound_exact_human_approval_binding_blocked(
-        "zettel_objet_link_apply"
+    archive_services._require_exact_human_approval_inputs_before_archive_read(
+        claim=exact_human_approval_claim,
+        expected_plan_sha256=expected_exact_approval_plan_sha256,
+        expected_target_binding_sha256=(
+            expected_exact_approval_target_binding_sha256
+        ),
     )
-
-    # Retained unreachable implementation documents the exact legacy effect
-    # set that a future compound binding must cover.
     result, private = _zettel_objet_link_plan_core(
         archive_root,
         zettel_id=zettel_id,
@@ -2878,7 +4920,16 @@ def zettel_objet_link_apply(
         blockers.append("zettel_objet_link_plan_changed")
     if reviewer is None:
         blockers.append("zettel_objet_link_reviewer_invalid")
-    if blockers or private["safe_zettel_id"] is None:
+    if (
+        blockers
+        or private["safe_zettel_id"] is None
+        or private["control_artifact_path"] is None
+        or private["snapshot_path"] is None
+        or private["receipt_path"] is None
+        or private["zettel_path"] is None
+        or private["control_artifact_state"]
+        not in {"absent", "existing_exact"}
+    ):
         return {
             **result,
             "ok": False,
@@ -2892,7 +4943,65 @@ def zettel_objet_link_apply(
         }
 
     root: Path = private["root"]
-    with _ZettelObjetLinkLock(root, private["safe_zettel_id"]):
+    try:
+        initial_binding = (
+            operation_approval_binding.zettel_objet_link_approval_binding(
+                result
+            )
+        )
+        archive_services._require_exact_human_operation_approval(
+            root,
+            initial_binding,
+            reviewer_claim=reviewer,
+            expected_plan_sha256=expected_exact_approval_plan_sha256,
+            expected_target_binding_sha256=(
+                expected_exact_approval_target_binding_sha256
+            ),
+            claim=exact_human_approval_claim,
+        )
+    except operation_approval_binding.OperationApprovalBindingError as exc:
+        raise archive_services.ArchiveServiceError(exc.code) from None
+
+    parent_stack = ExitStack()
+    try:
+        control_parent_binding = parent_stack.enter_context(
+            archive_services._activity_group_bound_directory_chain(
+                root,
+                private["control_artifact_path"].parent,
+                create=True,
+            )
+        )
+    except BaseException:
+        parent_stack.close()
+        raise
+    control_lock = _ZettelObjetLinkLock(
+        root,
+        private["control_artifact_path"],
+        expected_state=private["control_artifact_state"],
+        parent_binding=control_parent_binding,
+        parent_stack=parent_stack,
+    )
+    with control_lock:
+        canonical_parent_binding = parent_stack.enter_context(
+            archive_services._activity_group_bound_directory_chain(
+                root,
+                private["zettel_path"].parent,
+            )
+        )
+        snapshot_parent_binding = parent_stack.enter_context(
+            archive_services._activity_group_bound_directory_chain(
+                root,
+                private["snapshot_path"].parent,
+                create=True,
+            )
+        )
+        receipt_parent_binding = parent_stack.enter_context(
+            archive_services._activity_group_bound_directory_chain(
+                root,
+                private["receipt_path"].parent,
+                create=True,
+            )
+        )
         fresh, fresh_private = _zettel_objet_link_plan_core(
             root,
             zettel_id=zettel_id,
@@ -2900,8 +5009,16 @@ def zettel_objet_link_apply(
             object_id=object_id,
             role=role,
             label=label,
+            created_control_artifact_for_approved_absent=(
+                control_lock.created_from_absent
+            ),
+            held_control_artifact_verified_exact=True,
         )
         if not fresh["ok"] or fresh_private["plan_sha256"] != expected:
+            if control_lock.created_from_absent:
+                raise archive_services.ArchiveServiceError(
+                    "zettel_objet_link_plan_changed_after_control_artifact_creation"
+                )
             return {
                 **fresh,
                 "ok": False,
@@ -2915,6 +5032,29 @@ def zettel_objet_link_apply(
                 "would_change": [],
                 "files_written": [],
             }
+
+        try:
+            fresh_binding = (
+                operation_approval_binding.zettel_objet_link_approval_binding(
+                    fresh
+                )
+            )
+            exact_operation_approval = (
+                archive_services._require_exact_human_operation_approval(
+                    root,
+                    fresh_binding,
+                    reviewer_claim=reviewer,
+                    expected_plan_sha256=(
+                        expected_exact_approval_plan_sha256
+                    ),
+                    expected_target_binding_sha256=(
+                        expected_exact_approval_target_binding_sha256
+                    ),
+                    claim=exact_human_approval_claim,
+                )
+            )
+        except operation_approval_binding.OperationApprovalBindingError as exc:
+            raise archive_services.ArchiveServiceError(exc.code) from None
 
         timestamp = _now()
         asset = {
@@ -2937,38 +5077,68 @@ def zettel_objet_link_apply(
         )
         updated_bytes = updated_text.encode("utf-8")
         after_sha256 = _sha256_bytes(updated_bytes)
-        snapshot_relative = (
-            f"{ZETTEL_OBJET_LINK_SNAPSHOT_DIR}/"
-            f"{fresh_private['before_sha256']}.zettel.md"
-        )
-        snapshot_path = archive_services.archive_internal_path(
-            root,
-            snapshot_relative,
-        )
-        receipt_path = archive_services.archive_internal_path(
-            root,
-            fresh_private["receipt_relative"],
-        )
+        snapshot_relative = fresh_private["snapshot_relative"]
+        snapshot_path = fresh_private["snapshot_path"]
+        receipt_path = fresh_private["receipt_path"]
+        transaction_sha256 = fresh_private["transaction_sha256"]
+        canonical_swap_path = fresh_private["canonical_swap_path"]
+        canonical_previous_path = fresh_private["canonical_previous_path"]
+        if (
+            snapshot_relative is None
+            or snapshot_path is None
+            or receipt_path is None
+            or fresh_private["before_bytes"] is None
+            or transaction_sha256 is None
+            or canonical_swap_path is None
+            or canonical_previous_path is None
+            or fresh_private["canonical_swap_state"] != "absent"
+        ):
+            raise archive_services.ArchiveServiceError(
+                "zettel_objet_link_plan_changed"
+            )
         receipt = {
             "schema": ZETTEL_OBJET_LINK_RECEIPT_SCHEMA,
             "action": "add_zettel_objet_link",
-            "archive_id": archive_services.read_archive_id(root),
+            "archive_id": fresh["archive_id"],
             "zettel_id": fresh_private["safe_zettel_id"],
             "zettel_path": fresh_private["zettel_relative"],
             "object_id": fresh_private["object_id"],
             "role": fresh_private["role"],
-            "label_sha256": (
-                _sha256_bytes(fresh_private["safe_label"].encode("utf-8"))
-                if fresh_private["safe_label"] is not None
-                else None
-            ),
+            "label_sha256": fresh_private["label_sha256"],
             "link_id": fresh_private["link_id"],
             "plan_sha256": expected,
+            "manifest_record_set_sha256": fresh_private[
+                "manifest_record_set_sha256"
+            ],
+            "receipt_generation": fresh_private["receipt_generation"],
             "before_zettel_sha256": fresh_private["before_sha256"],
             "after_zettel_sha256": after_sha256,
             "before_snapshot_path": snapshot_relative,
+            "snapshot_state": fresh_private["snapshot_state"],
+            "snapshot_sha256": fresh_private["snapshot_sha256"],
+            "support_effect_set_sha256": fresh_private[
+                "support_effect_set_sha256"
+            ],
+            "transaction_sha256": transaction_sha256,
+            "canonical_swap_path": fresh_private[
+                "canonical_swap_relative"
+            ],
+            "canonical_previous_path": fresh_private[
+                "canonical_previous_relative"
+            ],
+            "canonical_swap_state": "clean",
+            "control_artifact_path": fresh_private[
+                "control_artifact_relative"
+            ],
+            "control_artifact_state": fresh_private[
+                "control_artifact_state"
+            ],
+            "control_artifact_sha256": fresh_private[
+                "control_artifact_sha256"
+            ],
             "reviewed_by": reviewer,
             "created_at": timestamp,
+            "exact_human_approval": exact_operation_approval,
             "privacy": {
                 "label_included": False,
                 "zettel_body_included": False,
@@ -2976,36 +5146,326 @@ def zettel_objet_link_apply(
                 "provider_called": False,
             },
         }
+        if archive_services.validate_schema(
+            receipt,
+            "zettel-objet-link-receipt.schema.json",
+        ):
+            raise archive_services.ArchiveServiceError(
+                "zettel_objet_link_receipt_invalid"
+            )
+
+        try:
+            approved_canonical_bytes = (
+                archive_services._read_activity_group_regular_bytes_bound(
+                    root,
+                    canonical_parent_binding,
+                    fresh_private["zettel_path"],
+                    max_bytes=ZETTEL_OBJET_LINK_MAX_ZETTEL_BYTES,
+                )
+            )
+        except OSError:
+            raise archive_services.ArchiveServiceError(
+                "zettel_objet_link_zettel_changed_after_approval"
+            ) from None
+        if approved_canonical_bytes != fresh_private["before_bytes"]:
+            raise archive_services.ArchiveServiceError(
+                "zettel_objet_link_zettel_changed_after_approval"
+            )
+        _require_exact_zettel_objet_manifest_target(
+            root,
+            object_id=fresh_private["object_id"],
+            expected_record_set_sha256=(
+                fresh_private["manifest_record_set_sha256"]
+            ),
+        )
+        try:
+            archive_services._read_activity_group_regular_bytes_bound(
+                root,
+                receipt_parent_binding,
+                receipt_path,
+                max_bytes=1,
+            )
+        except FileNotFoundError:
+            pass
+        except OSError:
+            raise archive_services.ArchiveServiceError(
+                "zettel_objet_link_receipt_changed_after_approval"
+            ) from None
+        else:
+            raise archive_services.ArchiveServiceError(
+                "zettel_objet_link_receipt_changed_after_approval"
+            )
+        if fresh_private["snapshot_state"] == "existing_exact":
+            try:
+                approved_snapshot_bytes = (
+                    archive_services._read_activity_group_regular_bytes_bound(
+                        root,
+                        snapshot_parent_binding,
+                        snapshot_path,
+                        max_bytes=ZETTEL_OBJET_LINK_MAX_ZETTEL_BYTES,
+                    )
+                )
+            except OSError:
+                raise archive_services.ArchiveServiceError(
+                    "zettel_objet_link_snapshot_changed_after_approval"
+                ) from None
+            if approved_snapshot_bytes != fresh_private["before_bytes"]:
+                raise archive_services.ArchiveServiceError(
+                    "zettel_objet_link_snapshot_changed_after_approval"
+                )
+        elif fresh_private["snapshot_state"] == "absent":
+            try:
+                archive_services._read_activity_group_regular_bytes_bound(
+                    root,
+                    snapshot_parent_binding,
+                    snapshot_path,
+                    max_bytes=1,
+                )
+            except FileNotFoundError:
+                pass
+            except OSError:
+                raise archive_services.ArchiveServiceError(
+                    "zettel_objet_link_snapshot_changed_after_approval"
+                ) from None
+            else:
+                raise archive_services.ArchiveServiceError(
+                    "zettel_objet_link_snapshot_changed_after_approval"
+                )
+        else:
+            raise archive_services.ArchiveServiceError(
+                "zettel_objet_link_snapshot_invalid"
+            )
+        for candidate in (canonical_swap_path, canonical_previous_path):
+            try:
+                archive_services._read_activity_group_regular_bytes_bound(
+                    root,
+                    canonical_parent_binding,
+                    candidate,
+                    max_bytes=1,
+                )
+            except FileNotFoundError:
+                continue
+            except OSError:
+                raise archive_services.ArchiveServiceError(
+                    "zettel_objet_link_transaction_evidence_invalid"
+                ) from None
+            else:
+                raise archive_services.ArchiveServiceError(
+                    "zettel_objet_link_transaction_evidence_present"
+                )
+
         snapshot_created = False
         receipt_created = False
-        zettel_written = False
+        receipt_bytes = b""
         try:
-            if not snapshot_path.exists():
-                archive_services._write_bytes_create_if_absent(
+            control_lock.verify_exact()
+            if fresh_private["snapshot_state"] == "absent":
+                archive_services._write_activity_group_bytes_new_file_bound(
+                    snapshot_parent_binding,
                     snapshot_path,
                     fresh_private["before_bytes"],
                 )
                 snapshot_created = True
-            archive_services.write_bytes_atomic(
+            if (
+                archive_services._read_activity_group_regular_bytes_bound(
+                    root,
+                    snapshot_parent_binding,
+                    snapshot_path,
+                    max_bytes=ZETTEL_OBJET_LINK_MAX_ZETTEL_BYTES,
+                )
+                != fresh_private["before_bytes"]
+            ):
+                raise OSError("zettel_objet_link_snapshot_readback_failed")
+            if (
+                archive_services._read_activity_group_regular_bytes_bound(
+                    root,
+                    canonical_parent_binding,
+                    fresh_private["zettel_path"],
+                    max_bytes=ZETTEL_OBJET_LINK_MAX_ZETTEL_BYTES,
+                )
+                != fresh_private["before_bytes"]
+            ):
+                raise OSError("zettel_objet_link_zettel_changed_before_write")
+            archive_services._replace_regular_file_bytes_compare_and_swap(
+                root,
                 fresh_private["zettel_path"],
-                updated_bytes,
+                expected_bytes=fresh_private["before_bytes"],
+                replacement_bytes=updated_bytes,
+                transaction_sha256=f"sha256:{transaction_sha256}",
+                swap_suffix=ZETTEL_OBJET_LINK_CANONICAL_SWAP_SUFFIX,
+                max_bytes=ZETTEL_OBJET_LINK_MAX_ZETTEL_BYTES,
+                error_prefix="zettel_objet_link",
             )
-            zettel_written = True
-            archive_services._write_bytes_create_if_absent(
+            if (
+                archive_services._read_activity_group_regular_bytes_bound(
+                    root,
+                    canonical_parent_binding,
+                    fresh_private["zettel_path"],
+                    max_bytes=ZETTEL_OBJET_LINK_MAX_ZETTEL_BYTES,
+                )
+                != updated_bytes
+            ):
+                raise OSError("zettel_objet_link_zettel_readback_failed")
+            receipt_bytes = _canonical_json_bytes(receipt)
+            archive_services._write_activity_group_bytes_new_file_bound(
+                receipt_parent_binding,
                 receipt_path,
-                _canonical_json_bytes(receipt),
+                receipt_bytes,
             )
             receipt_created = True
-        except OSError:
-            if zettel_written:
-                archive_services.write_bytes_atomic(
-                    fresh_private["zettel_path"],
-                    fresh_private["before_bytes"],
+            if (
+                archive_services._read_activity_group_regular_bytes_bound(
+                    root,
+                    receipt_parent_binding,
+                    receipt_path,
+                    max_bytes=len(receipt_bytes),
                 )
-            if receipt_created:
-                receipt_path.unlink(missing_ok=True)
-            if snapshot_created:
-                snapshot_path.unlink(missing_ok=True)
+                != receipt_bytes
+            ):
+                raise OSError("zettel_objet_link_receipt_readback_failed")
+            if (
+                archive_services._read_activity_group_regular_bytes_bound(
+                    root,
+                    canonical_parent_binding,
+                    fresh_private["zettel_path"],
+                    max_bytes=ZETTEL_OBJET_LINK_MAX_ZETTEL_BYTES,
+                )
+                != updated_bytes
+                or archive_services._read_activity_group_regular_bytes_bound(
+                    root,
+                    snapshot_parent_binding,
+                    snapshot_path,
+                    max_bytes=ZETTEL_OBJET_LINK_MAX_ZETTEL_BYTES,
+                )
+                != fresh_private["before_bytes"]
+                or archive_services._read_activity_group_regular_bytes_bound(
+                    root,
+                    receipt_parent_binding,
+                    receipt_path,
+                    max_bytes=len(receipt_bytes),
+                )
+                != receipt_bytes
+            ):
+                raise OSError("zettel_objet_link_final_readback_failed")
+            for candidate in (canonical_swap_path, canonical_previous_path):
+                try:
+                    archive_services._read_activity_group_regular_bytes_bound(
+                        root,
+                        canonical_parent_binding,
+                        candidate,
+                        max_bytes=1,
+                    )
+                except FileNotFoundError:
+                    continue
+                except OSError:
+                    raise OSError(
+                        "zettel_objet_link_transaction_readback_failed"
+                    ) from None
+                else:
+                    raise OSError(
+                        "zettel_objet_link_transaction_readback_failed"
+            )
+            control_lock.verify_exact()
+            # Reject already-observed manifest drift before the more expensive
+            # joint final proof below.  This check is not itself the success
+            # linearization point because Zettel uniqueness must overlap it.
+            _require_exact_zettel_objet_manifest_target(
+                root,
+                object_id=fresh_private["object_id"],
+                expected_record_set_sha256=(
+                    fresh_private["manifest_record_set_sha256"]
+                ),
+            )
+            try:
+                (
+                    final_zettel_path,
+                    final_zettel_relative,
+                    final_zettel_bytes,
+                    _final_frontmatter,
+                    _final_body,
+                ) = _resolve_zettel_objet_link_target_bound(
+                    root,
+                    archive_id=str(fresh["archive_id"]),
+                    zettel_id=None,
+                    relative_path=fresh_private["zettel_relative"],
+                    final_manifest_object_id=fresh_private["object_id"],
+                    final_manifest_record_set_sha256=(
+                        fresh_private["manifest_record_set_sha256"]
+                    ),
+                )
+            except _ZettelObjetLinkManifestChangedAfterApproval:
+                raise
+            except (archive_services.ArchiveServiceError, OSError):
+                raise archive_services.ArchiveServiceError(
+                    "zettel_objet_link_zettel_authority_changed_after_approval"
+                ) from None
+            if (
+                final_zettel_path != fresh_private["zettel_path"]
+                or final_zettel_relative != fresh_private["zettel_relative"]
+                or final_zettel_bytes != updated_bytes
+            ):
+                raise archive_services.ArchiveServiceError(
+                    "zettel_objet_link_zettel_authority_changed_after_approval"
+                )
+        except BaseException:
+            # A writer can raise after publication.  Delete recovery evidence
+            # only when the canonical zettel is independently proven back at
+            # its approved pre-write bytes.  If the current state is our exact
+            # update, attempt one rollback; an ambiguous or concurrently
+            # changed state is never overwritten and keeps snapshot/receipt
+            # evidence for reconciliation of the durable ``started`` claim.
+            try:
+                rollback_observed_bytes = (
+                    archive_services._read_activity_group_regular_bytes_bound(
+                        root,
+                        canonical_parent_binding,
+                        fresh_private["zettel_path"],
+                        max_bytes=ZETTEL_OBJET_LINK_MAX_ZETTEL_BYTES,
+                    )
+                )
+            except BaseException:
+                rollback_observed_bytes = None
+            canonical_restored = (
+                rollback_observed_bytes == fresh_private["before_bytes"]
+            )
+            if (
+                not canonical_restored
+                and rollback_observed_bytes == updated_bytes
+            ):
+                try:
+                    archive_services._replace_regular_file_bytes_compare_and_swap(
+                        root,
+                        fresh_private["zettel_path"],
+                        expected_bytes=updated_bytes,
+                        replacement_bytes=fresh_private["before_bytes"],
+                        transaction_sha256=f"sha256:{transaction_sha256}",
+                        swap_suffix=ZETTEL_OBJET_LINK_CANONICAL_SWAP_SUFFIX,
+                        max_bytes=ZETTEL_OBJET_LINK_MAX_ZETTEL_BYTES,
+                        error_prefix="zettel_objet_link_rollback",
+                        allow_already_replacement=True,
+                    )
+                except BaseException:
+                    pass
+                try:
+                    rollback_final_bytes = (
+                        archive_services._read_activity_group_regular_bytes_bound(
+                            root,
+                            canonical_parent_binding,
+                            fresh_private["zettel_path"],
+                            max_bytes=ZETTEL_OBJET_LINK_MAX_ZETTEL_BYTES,
+                        )
+                    )
+                except BaseException:
+                    rollback_final_bytes = None
+                canonical_restored = (
+                    rollback_final_bytes == fresh_private["before_bytes"]
+                )
+            # Never detach an exact-byte observation from a later pathname
+            # deletion. A same-user process could replace the receipt or
+            # snapshot between those operations and make cleanup delete
+            # foreign evidence. Even after a proven canonical CAS rollback,
+            # retain every created support artifact for explicit
+            # reconciliation of the durable started claim.
             raise
 
     return {
@@ -3020,12 +5480,27 @@ def zettel_objet_link_apply(
             "current_asset_count": len(fresh_private["existing_assets"]) + 1,
             "zettel_sha256": after_sha256,
             "snapshot_path": snapshot_relative,
+            "snapshot_state": (
+                "created"
+                if snapshot_created
+                else "reused_existing_exact"
+            ),
+            "control_artifact_state": (
+                "created"
+                if control_lock.created_from_absent
+                else "reused_existing_exact"
+            ),
         },
         "blockers": [],
         "would_change": [],
         "files_written": [
             fresh_private["zettel_relative"],
-            snapshot_relative,
+            *([snapshot_relative] if snapshot_created else []),
+            *(
+                [fresh_private["control_artifact_relative"]]
+                if control_lock.created_from_absent
+                else []
+            ),
             fresh_private["receipt_relative"],
         ],
         "privacy_guards": {**fresh["privacy_guards"], "writes": True},
@@ -3038,13 +5513,28 @@ def _read_validated_zettel_objet_link_json(
     schema_name: str,
     schema_id: str,
     max_bytes: int = 64 * 1024,
+    bound_root: Path | None = None,
+    parent_binding: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any] | None, bytes | None]:
-    raw, reason = archive_services._bounded_stable_regular_file_read(
-        path,
-        max_bytes=max_bytes,
-    )
-    if reason is not None or raw is None:
+    if (bound_root is None) != (parent_binding is None):
         return None, None
+    if bound_root is not None and parent_binding is not None:
+        try:
+            raw = archive_services._read_activity_group_regular_bytes_bound(
+                bound_root,
+                parent_binding,
+                path,
+                max_bytes=max_bytes,
+            )
+        except OSError:
+            return None, None
+    else:
+        raw, reason = archive_services._bounded_stable_regular_file_read(
+            path,
+            max_bytes=max_bytes,
+        )
+        if reason is not None or raw is None:
+            return None, None
     try:
         document = json.loads(
             raw.decode("utf-8"),
@@ -3056,6 +5546,200 @@ def _read_validated_zettel_objet_link_json(
         not isinstance(document, dict)
         or document.get("schema") != schema_id
         or archive_services.validate_schema(document, schema_name)
+    ):
+        return None, None
+    return document, raw
+
+
+def _read_validated_zettel_objet_link_receipt(
+    path: Path,
+    *,
+    max_bytes: int = 64 * 1024,
+    bound_root: Path | None = None,
+    parent_binding: dict[str, Any] | None = None,
+) -> tuple[dict[str, Any] | None, bytes | None]:
+    """Read one historical v0.1 or exact-approval v0.2 link receipt."""
+
+    if (bound_root is None) != (parent_binding is None):
+        return None, None
+    if bound_root is not None and parent_binding is not None:
+        try:
+            raw = archive_services._read_activity_group_regular_bytes_bound(
+                bound_root,
+                parent_binding,
+                path,
+                max_bytes=max_bytes,
+            )
+        except OSError:
+            return None, None
+    else:
+        raw, reason = archive_services._bounded_stable_regular_file_read(
+            path,
+            max_bytes=max_bytes,
+        )
+        if reason is not None or raw is None:
+            return None, None
+    try:
+        document = json.loads(
+            raw.decode("utf-8"),
+            object_pairs_hook=_reject_duplicate_json_members,
+        )
+    except (UnicodeDecodeError, json.JSONDecodeError, ValueError):
+        return None, None
+    if not isinstance(document, dict) or archive_services.validate_schema(
+        document,
+        "zettel-objet-link-receipt.schema.json",
+    ):
+        return None, None
+    common_fields = {
+        "schema",
+        "action",
+        "archive_id",
+        "zettel_id",
+        "zettel_path",
+        "object_id",
+        "role",
+        "label_sha256",
+        "link_id",
+        "plan_sha256",
+        "before_zettel_sha256",
+        "after_zettel_sha256",
+        "before_snapshot_path",
+        "reviewed_by",
+        "created_at",
+        "privacy",
+    }
+    v2_fields = {
+        "manifest_record_set_sha256",
+        "receipt_generation",
+        "snapshot_state",
+        "snapshot_sha256",
+        "support_effect_set_sha256",
+        "transaction_sha256",
+        "canonical_swap_path",
+        "canonical_previous_path",
+        "canonical_swap_state",
+        "control_artifact_path",
+        "control_artifact_state",
+        "control_artifact_sha256",
+        "exact_human_approval",
+    }
+    schema = document.get("schema")
+    if schema == ZETTEL_OBJET_LINK_RECEIPT_LEGACY_SCHEMA:
+        if set(document) != common_fields:
+            return None, None
+        return document, raw
+    if (
+        schema != ZETTEL_OBJET_LINK_RECEIPT_SCHEMA
+        or set(document) != common_fields | v2_fields
+    ):
+        return None, None
+    exact_approval = document.get("exact_human_approval")
+    exact_reference = (
+        exact_approval.get("exact_human_approval")
+        if isinstance(exact_approval, dict)
+        else None
+    )
+    transaction_sha256 = str(
+        document.get("transaction_sha256") or ""
+    )
+    zettel_path = str(document.get("zettel_path") or "")
+    try:
+        expected_swap_path, expected_previous_path = (
+            archive_services.regular_file_canonical_swap_paths(
+                Path(zettel_path),
+                f"sha256:{transaction_sha256}",
+                swap_suffix=ZETTEL_OBJET_LINK_CANONICAL_SWAP_SUFFIX,
+            )
+        )
+    except ValueError:
+        return None, None
+    if (
+        not isinstance(exact_approval, dict)
+        or set(exact_approval)
+        != {
+            "schema_version",
+            "operation",
+            "plan_sha256",
+            "target_binding_sha256",
+            "exact_human_approval",
+        }
+        or exact_approval.get("schema_version")
+        != "wom-kit/operation-exact-human-approval/v0.1"
+        or exact_approval.get("operation") != "zettel_objet_link"
+        or re.fullmatch(
+            r"sha256:[0-9a-f]{64}",
+            str(exact_approval.get("plan_sha256") or ""),
+        )
+        is None
+        or re.fullmatch(
+            r"sha256:[0-9a-f]{64}",
+            str(exact_approval.get("target_binding_sha256") or ""),
+        )
+        is None
+        or re.fullmatch(
+            r"[0-9a-f]{64}",
+            str(document.get("manifest_record_set_sha256") or ""),
+        )
+        is None
+        or type(document.get("receipt_generation")) is not int
+        or int(document["receipt_generation"]) < 1
+        or document.get("snapshot_state")
+        not in {"absent", "existing_exact"}
+        or document.get("snapshot_sha256")
+        != document.get("before_zettel_sha256")
+        or re.fullmatch(
+            r"[0-9a-f]{64}",
+            str(document.get("support_effect_set_sha256") or ""),
+        )
+        is None
+        or re.fullmatch(r"[0-9a-f]{64}", transaction_sha256) is None
+        or document.get("canonical_swap_path")
+        != expected_swap_path.as_posix()
+        or document.get("canonical_previous_path")
+        != expected_previous_path.as_posix()
+        or document.get("canonical_swap_state") != "clean"
+        or re.fullmatch(
+            r"[0-9a-f]{64}",
+            str(document.get("label_sha256") or ""),
+        )
+        is None
+        or re.fullmatch(
+            r"receipts/objects/zettel-links/\.locks/[0-9a-f]{64}\.lock",
+            str(document.get("control_artifact_path") or ""),
+        )
+        is None
+        or document.get("control_artifact_state")
+        not in {"absent", "existing_exact"}
+        or document.get("control_artifact_sha256")
+        != ZETTEL_OBJET_LINK_LOCK_SHA256
+        or not isinstance(exact_reference, dict)
+        or set(exact_reference)
+        != {
+            "schema_version",
+            "approval_id",
+            "context_sha256",
+            "approval_authority_sha256",
+            "one_use",
+        }
+        or exact_reference.get("schema_version")
+        != "wom-kit/exact-human-approval-reference/v0.1"
+        or re.fullmatch(
+            r"approval_[0-9a-f]{32}",
+            str(exact_reference.get("approval_id") or ""),
+        )
+        is None
+        or re.fullmatch(
+            r"sha256:[0-9a-f]{64}",
+            str(exact_reference.get("context_sha256") or ""),
+        )
+        is None
+        or re.fullmatch(
+            r"sha256:[0-9a-f]{64}",
+            str(exact_reference.get("approval_authority_sha256") or ""),
+        )
+        is None
+        or exact_reference.get("one_use") is not True
     ):
         return None, None
     return document, raw
@@ -3074,14 +5758,30 @@ def _zettel_objet_link_revert_receipt_state(
         f"{ZETTEL_OBJET_LINK_RECEIPTS_DIR}/reverts/"
         f"{source_receipt_sha256[:24]}.json"
     )
-    revert_path = archive_services.archive_internal_path(root, revert_relative)
-    if not revert_path.exists() and not revert_path.is_symlink():
+    revert_path = _zettel_objet_link_known_internal_path(root, revert_relative)
+    try:
+        with archive_services._activity_group_bound_directory_chain(
+            root,
+            revert_path.parent,
+        ) as revert_parent_binding:
+            try:
+                _zettel_objet_link_bound_lstat(
+                    revert_parent_binding,
+                    revert_path,
+                )
+            except FileNotFoundError:
+                return "not_reverted", None
+            document, _raw = _read_validated_zettel_objet_link_json(
+                revert_path,
+                schema_name="zettel-objet-link-revert-receipt.schema.json",
+                schema_id=ZETTEL_OBJET_LINK_REVERT_RECEIPT_SCHEMA,
+                bound_root=root,
+                parent_binding=revert_parent_binding,
+            )
+    except FileNotFoundError:
         return "not_reverted", None
-    document, _raw = _read_validated_zettel_objet_link_json(
-        revert_path,
-        schema_name="zettel-objet-link-revert-receipt.schema.json",
-        schema_id=ZETTEL_OBJET_LINK_REVERT_RECEIPT_SCHEMA,
-    )
+    except OSError:
+        return "invalid", None
     if (
         document is None
         or document.get("archive_id") != archive_id
@@ -3091,6 +5791,37 @@ def _zettel_objet_link_revert_receipt_state(
     ):
         return "invalid", None
     return "reverted", revert_relative
+
+
+def _zettel_objet_link_internal_input_path(
+    root: Path,
+    value: Path | str,
+) -> tuple[Path, str]:
+    """Normalize one internal input lexically without resolving its target."""
+
+    raw = os.fspath(value).strip()
+    if not raw:
+        raise archive_services.ArchiveServiceError(
+            "zettel_objet_link_input_path_invalid"
+        )
+    candidate = Path(raw).expanduser()
+    try:
+        if candidate.is_absolute():
+            absolute = Path(os.path.abspath(candidate))
+            relative = absolute.relative_to(root).as_posix()
+        else:
+            relative = raw
+        normalized = archive_services.normalize_archive_relative_path(
+            relative
+        )
+    except (archive_services.ArchivePathError, OSError, TypeError, ValueError):
+        raise archive_services.ArchiveServiceError(
+            "zettel_objet_link_input_path_invalid"
+        ) from None
+    return (
+        _zettel_objet_link_known_internal_path(root, normalized),
+        normalized,
+    )
 
 
 def zettel_objet_link_receipts(
@@ -3112,7 +5843,7 @@ def zettel_objet_link_receipts(
     """
 
     root = archive_services.require_existing_archive_root(archive_root)
-    archive_id = archive_services.read_archive_id(root)
+    archive_id = _read_zettel_objet_archive_id(root)
     blockers: list[str] = []
     warnings: list[str] = []
     if not dry_run:
@@ -3149,40 +5880,31 @@ def zettel_objet_link_receipts(
     assets: list[Any] = []
     if bool(zettel_id) != bool(relative_path):
         try:
-            zettel_path = archive_services.resolve_zettel_path(
+            (
+                zettel_path,
+                zettel_relative,
+                current_bytes,
+                frontmatter,
+                _body,
+            ) = _resolve_zettel_objet_link_target_bound(
                 root,
+                archive_id=archive_id,
                 zettel_id=zettel_id,
                 relative_path=relative_path,
             )
-            zettel_relative = archive_services.archive_relative_path(
-                zettel_path,
-                root,
-            )
-            current_bytes, current_reason = (
-                archive_services._bounded_stable_regular_file_read(
-                    zettel_path,
-                    max_bytes=16 * 1024 * 1024,
-                )
-            )
-            if current_reason is not None or current_bytes is None:
+            current_sha256 = _sha256_bytes(current_bytes)
+            safe_zettel_id = _safe_zettel_id(frontmatter.get("id"))
+            if (
+                safe_zettel_id is None
+                or frontmatter.get("status")
+                not in archive_services.ZETTEL_QUERYABLE_STATUSES
+            ):
                 blockers.append("zettel_objet_link_receipts_zettel_unavailable")
+            raw_assets = frontmatter.get("assets")
+            if not isinstance(raw_assets, list):
+                blockers.append("zettel_objet_link_receipts_assets_not_array")
             else:
-                current_sha256 = _sha256_bytes(current_bytes)
-                frontmatter, _body = archive_services.require_readable_zettel_text(
-                    current_bytes.decode("utf-8")
-                )
-                safe_zettel_id = _safe_zettel_id(frontmatter.get("id"))
-                if (
-                    safe_zettel_id is None
-                    or frontmatter.get("status")
-                    not in archive_services.ZETTEL_QUERYABLE_STATUSES
-                ):
-                    blockers.append("zettel_objet_link_receipts_zettel_unavailable")
-                raw_assets = frontmatter.get("assets")
-                if not isinstance(raw_assets, list):
-                    blockers.append("zettel_objet_link_receipts_assets_not_array")
-                else:
-                    assets = raw_assets
+                assets = raw_assets
         except (archive_services.ArchiveServiceError, OSError, UnicodeError):
             blockers.append("zettel_objet_link_receipts_zettel_unavailable")
 
@@ -3227,7 +5949,7 @@ def zettel_objet_link_receipts(
     ):
         warnings.append("zettel_objet_link_receipts_target_asset_not_found")
 
-    receipt_root = archive_services.archive_internal_path(
+    receipt_root = _zettel_objet_link_known_internal_path(
         root,
         ZETTEL_OBJET_LINK_RECEIPTS_DIR,
     )
@@ -3251,22 +5973,62 @@ def zettel_objet_link_receipts(
                 "link_id": f"asset:sha256:{link_digest}",
             }
 
-    candidates: list[tuple[Path, str, int, dict[str, Any]]] = []
-    if prefixes and receipt_root.is_dir() and not blockers:
+    candidates: list[
+        tuple[
+            Path,
+            str,
+            int,
+            dict[str, Any],
+            dict[str, Any] | None,
+            bytes | None,
+            str,
+        ]
+    ] = []
+    if prefixes and not blockers:
         try:
-            with os.scandir(receipt_root) as entries:
-                for entry in entries:
-                    match = ZETTEL_OBJET_LINK_RECEIPT_NAME_RE.fullmatch(entry.name)
-                    if match is None or match.group("prefix") not in prefixes:
-                        continue
-                    candidates.append(
-                        (
-                            Path(entry.path),
-                            entry.name,
-                            int(match.group("generation")),
-                            prefixes[match.group("prefix")],
+            with archive_services._activity_group_bound_directory_chain(
+                root,
+                receipt_root,
+            ) as receipt_root_binding:
+                scan_target = (
+                    receipt_root_binding["descriptor"]
+                    if receipt_root_binding.get("descriptor") is not None
+                    else receipt_root
+                )
+                with os.scandir(scan_target) as entries:
+                    for entry in entries:
+                        match = ZETTEL_OBJET_LINK_RECEIPT_NAME_RE.fullmatch(
+                            entry.name
                         )
-                    )
+                        if (
+                            match is None
+                            or match.group("prefix") not in prefixes
+                        ):
+                            continue
+                        candidate_path = receipt_root / entry.name
+                        document, raw = (
+                            _read_validated_zettel_objet_link_receipt(
+                                candidate_path,
+                                bound_root=root,
+                                parent_binding=receipt_root_binding,
+                            )
+                        )
+                        candidates.append(
+                            (
+                                candidate_path,
+                                entry.name,
+                                int(match.group("generation")),
+                                prefixes[match.group("prefix")],
+                                document,
+                                raw,
+                                (
+                                    f"{ZETTEL_OBJET_LINK_RECEIPTS_DIR}/"
+                                    f"{entry.name}"
+                                ),
+                            )
+                        )
+        except FileNotFoundError:
+            pass
         except OSError:
             blockers.append("zettel_objet_link_receipts_directory_unavailable")
     candidates.sort(key=lambda item: (item[3]["object_id"], item[3]["role"], item[2]))
@@ -3275,20 +6037,18 @@ def zettel_objet_link_receipts(
 
     receipts: list[dict[str, Any]] = []
     invalid_candidate_count = 0
+    v2_manifest_index: dict[str, list[dict[str, Any]]] | None = None
+    v2_manifest_load_failed = False
     if not blockers:
-        for candidate_path, candidate_name, generation, target in candidates:
-            document, raw = _read_validated_zettel_objet_link_json(
-                candidate_path,
-                schema_name="zettel-objet-link-receipt.schema.json",
-                schema_id=ZETTEL_OBJET_LINK_RECEIPT_SCHEMA,
-            )
-            try:
-                candidate_relative = archive_services.archive_relative_path(
-                    candidate_path,
-                    root,
-                )
-            except Exception:
-                candidate_relative = ""
+        for (
+            candidate_path,
+            candidate_name,
+            generation,
+            target,
+            document,
+            raw,
+            candidate_relative,
+        ) in candidates:
             expected_prefix = target["link_id"].rsplit(":", 1)[-1][:24]
             expected_name = f"link.{expected_prefix}.g{generation:04d}.json"
             if (
@@ -3312,19 +6072,60 @@ def zettel_objet_link_receipts(
                 invalid_candidate_count += 1
                 continue
 
-            snapshot_path = archive_services.archive_internal_path(
+            if document.get("schema") == ZETTEL_OBJET_LINK_RECEIPT_SCHEMA:
+                if v2_manifest_index is None and not v2_manifest_load_failed:
+                    try:
+                        manifest_records = (
+                            _strict_zettel_objet_manifest_records(root)
+                        )
+                    except archive_services.ArchiveServiceError:
+                        v2_manifest_load_failed = True
+                    else:
+                        v2_manifest_index = {}
+                        for manifest_record in manifest_records:
+                            manifest_object_id = str(
+                                manifest_record.get("object_id") or ""
+                            ).strip().lower()
+                            v2_manifest_index.setdefault(
+                                manifest_object_id, []
+                            ).append(manifest_record)
+                matching_manifest_records = (
+                    []
+                    if v2_manifest_index is None
+                    else v2_manifest_index.get(target["object_id"], [])
+                )
+                if (
+                    v2_manifest_load_failed
+                    or len(matching_manifest_records) != 1
+                    or _sha256_bytes(
+                        _canonical_json_bytes(matching_manifest_records)
+                    )
+                    != document.get("manifest_record_set_sha256")
+                ):
+                    invalid_candidate_count += 1
+                    continue
+
+            snapshot_path = _zettel_objet_link_known_internal_path(
                 root,
                 str(document["before_snapshot_path"]),
             )
-            snapshot_raw, snapshot_reason = (
-                archive_services._bounded_stable_regular_file_read(
-                    snapshot_path,
-                    max_bytes=16 * 1024 * 1024,
-                )
-            )
+            try:
+                with archive_services._activity_group_bound_directory_chain(
+                    root,
+                    snapshot_path.parent,
+                ) as snapshot_parent_binding:
+                    snapshot_raw = (
+                        archive_services._read_activity_group_regular_bytes_bound(
+                            root,
+                            snapshot_parent_binding,
+                            snapshot_path,
+                            max_bytes=16 * 1024 * 1024,
+                        )
+                    )
+            except OSError:
+                snapshot_raw = None
             if (
-                snapshot_reason is not None
-                or snapshot_raw is None
+                snapshot_raw is None
                 or _sha256_bytes(snapshot_raw)
                 != document.get("before_zettel_sha256")
             ):
@@ -3344,7 +6145,16 @@ def zettel_objet_link_receipts(
             if revert_state == "reverted":
                 lifecycle_state = "reverted"
             elif current_sha256 == document.get("after_zettel_sha256"):
-                if document.get("label_sha256") != target["label_sha256"]:
+                expected_label_sha256 = target["label_sha256"]
+                if (
+                    document.get("schema")
+                    == ZETTEL_OBJET_LINK_RECEIPT_SCHEMA
+                    and expected_label_sha256 is None
+                ):
+                    expected_label_sha256 = (
+                        ZETTEL_OBJET_LINK_ABSENT_LABEL_SHA256
+                    )
+                if document.get("label_sha256") != expected_label_sha256:
                     invalid_candidate_count += 1
                     continue
                 lifecycle_state = "revert_ready"
@@ -3367,15 +6177,23 @@ def zettel_objet_link_receipts(
         blockers.append("zettel_objet_link_receipts_validation_failed")
         receipts = []
     if not blockers and zettel_path is not None and current_sha256 is not None:
-        final_current_bytes, final_current_reason = (
-            archive_services._bounded_stable_regular_file_read(
-                zettel_path,
-                max_bytes=16 * 1024 * 1024,
-            )
-        )
+        try:
+            with archive_services._activity_group_bound_directory_chain(
+                root,
+                zettel_path.parent,
+            ) as zettel_parent_binding:
+                final_current_bytes = (
+                    archive_services._read_activity_group_regular_bytes_bound(
+                        root,
+                        zettel_parent_binding,
+                        zettel_path,
+                        max_bytes=16 * 1024 * 1024,
+                    )
+                )
+        except OSError:
+            final_current_bytes = None
         if (
-            final_current_reason is not None
-            or final_current_bytes is None
+            final_current_bytes is None
             or _sha256_bytes(final_current_bytes) != current_sha256
         ):
             blockers.append("zettel_objet_link_receipts_zettel_changed_during_lookup")
@@ -3398,9 +6216,9 @@ def zettel_objet_link_receipts(
         next_safe_actions = [
             (
                 "Preview zettel-objet-link-revert with the selected receipt for "
-                "audit only. In v0.4.0 both revert and relink approval are fixed "
-                "closed; preserve the current zettel and hand off a separately "
-                "reviewed conservative correction until an exact compound binding exists."
+                "audit only. Revert approval remains fixed closed; preserve the "
+                "current zettel and hand off a separately reviewed conservative "
+                "correction until an exact revert binding exists."
             )
         ]
     elif receipts and not blockers:
@@ -3468,44 +6286,45 @@ def _zettel_objet_link_revert_plan_core(
     receipt: Path | str,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     root = archive_services.require_existing_archive_root(archive_root)
-    archive_id = archive_services.read_archive_id(root)
+    archive_id = _read_zettel_objet_archive_id(root)
     blockers: list[str] = []
-    receipt_path, path_error = _resolve_json_input(root, receipt)
     receipt_doc: dict[str, Any] | None = None
     receipt_bytes: bytes | None = None
-    if path_error or receipt_path is None:
+    try:
+        receipt_path, receipt_relative = (
+            _zettel_objet_link_internal_input_path(root, receipt)
+        )
+    except archive_services.ArchiveServiceError:
         blockers.append("zettel_objet_link_receipt_path_invalid")
     else:
-        try:
-            receipt_bytes = receipt_path.read_bytes()
-            loaded = json.loads(receipt_bytes.decode("utf-8"))
-        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
-            loaded = None
         if (
-            not isinstance(loaded, dict)
-            or loaded.get("schema") != ZETTEL_OBJET_LINK_RECEIPT_SCHEMA
-            or loaded.get("archive_id") != archive_id
-            or archive_services.validate_schema(
-                loaded,
-                "zettel-objet-link-receipt.schema.json",
+            not receipt_relative.startswith(
+                f"{ZETTEL_OBJET_LINK_RECEIPTS_DIR}/link."
             )
+            or not receipt_relative.endswith(".json")
         ):
-            blockers.append("zettel_objet_link_receipt_invalid")
+            blockers.append("zettel_objet_link_receipt_path_invalid")
         else:
             try:
-                receipt_relative = archive_services.archive_relative_path(
-                    receipt_path,
+                with archive_services._activity_group_bound_directory_chain(
                     root,
-                )
-            except Exception:
-                receipt_relative = ""
+                    receipt_path.parent,
+                ) as receipt_parent_binding:
+                    loaded, receipt_bytes = (
+                        _read_validated_zettel_objet_link_receipt(
+                            receipt_path,
+                            bound_root=root,
+                            parent_binding=receipt_parent_binding,
+                        )
+                    )
+            except (FileNotFoundError, OSError):
+                loaded = None
+                receipt_bytes = None
             if (
-                not receipt_relative.startswith(
-                    f"{ZETTEL_OBJET_LINK_RECEIPTS_DIR}/link."
-                )
-                or not receipt_relative.endswith(".json")
+                not isinstance(loaded, dict)
+                or loaded.get("archive_id") != archive_id
             ):
-                blockers.append("zettel_objet_link_receipt_path_invalid")
+                blockers.append("zettel_objet_link_receipt_invalid")
             else:
                 receipt_doc = loaded
 
@@ -3516,14 +6335,30 @@ def _zettel_objet_link_revert_plan_core(
     revert_receipt_relative: str | None = None
     if receipt_doc is not None:
         safe_zettel_id = _safe_zettel_id(receipt_doc.get("zettel_id"))
-        try:
-            zettel_path = archive_services.archive_internal_path(
-                root,
-                str(receipt_doc.get("zettel_path") or ""),
-            )
-            current_bytes = zettel_path.read_bytes()
-        except (archive_services.ArchiveServiceError, OSError):
-            blockers.append("zettel_objet_link_current_zettel_unavailable")
+        if safe_zettel_id is None:
+            blockers.append("zettel_objet_link_receipt_invalid")
+        else:
+            try:
+                (
+                    zettel_path,
+                    zettel_relative,
+                    current_bytes,
+                    _frontmatter,
+                    _body,
+                ) = _resolve_zettel_objet_link_target_bound(
+                    root,
+                    archive_id=archive_id,
+                    zettel_id=safe_zettel_id,
+                    relative_path=None,
+                )
+                if zettel_relative != receipt_doc.get("zettel_path"):
+                    raise archive_services.ArchiveServiceError(
+                        "zettel_objet_link_receipt_target_mismatch"
+                    )
+            except (archive_services.ArchiveServiceError, OSError):
+                blockers.append(
+                    "zettel_objet_link_current_zettel_unavailable"
+                )
         if (
             current_bytes is not None
             and _sha256_bytes(current_bytes)
@@ -3531,12 +6366,36 @@ def _zettel_objet_link_revert_plan_core(
         ):
             blockers.append("zettel_objet_link_current_zettel_changed")
         try:
-            snapshot_path = archive_services.archive_internal_path(
-                root,
-                str(receipt_doc.get("before_snapshot_path") or ""),
+            snapshot_relative = archive_services.normalize_archive_relative_path(
+                str(receipt_doc.get("before_snapshot_path") or "")
             )
-            snapshot_bytes = snapshot_path.read_bytes()
-        except (archive_services.ArchiveServiceError, OSError):
+            if not snapshot_relative.startswith(
+                f"{ZETTEL_OBJET_LINK_SNAPSHOT_DIR}/"
+            ):
+                raise archive_services.ArchiveServiceError(
+                    "zettel_objet_link_snapshot_path_invalid"
+                )
+            snapshot_path = _zettel_objet_link_known_internal_path(
+                root,
+                snapshot_relative,
+            )
+            with archive_services._activity_group_bound_directory_chain(
+                root,
+                snapshot_path.parent,
+            ) as snapshot_parent_binding:
+                snapshot_bytes = (
+                    archive_services._read_activity_group_regular_bytes_bound(
+                        root,
+                        snapshot_parent_binding,
+                        snapshot_path,
+                        max_bytes=ZETTEL_OBJET_LINK_MAX_ZETTEL_BYTES,
+                    )
+                )
+        except (
+            archive_services.ArchivePathError,
+            archive_services.ArchiveServiceError,
+            OSError,
+        ):
             blockers.append("zettel_objet_link_snapshot_missing")
         if (
             snapshot_bytes is not None
@@ -3544,17 +6403,29 @@ def _zettel_objet_link_revert_plan_core(
             != receipt_doc.get("before_zettel_sha256")
         ):
             blockers.append("zettel_objet_link_snapshot_mismatch")
-        if safe_zettel_id is None:
-            blockers.append("zettel_objet_link_receipt_invalid")
         source_receipt_sha256 = _sha256_bytes(receipt_bytes or b"")
         revert_receipt_relative = (
             f"{ZETTEL_OBJET_LINK_RECEIPTS_DIR}/reverts/"
             f"{source_receipt_sha256[:24]}.json"
         )
-        if archive_services.archive_internal_path(
+        revert_receipt_path = _zettel_objet_link_known_internal_path(
             root,
             revert_receipt_relative,
-        ).exists():
+        )
+        try:
+            with archive_services._activity_group_bound_directory_chain(
+                root,
+                revert_receipt_path.parent,
+            ) as revert_parent_binding:
+                _zettel_objet_link_bound_lstat(
+                    revert_parent_binding,
+                    revert_receipt_path,
+                )
+        except FileNotFoundError:
+            pass
+        except OSError:
+            blockers.append("zettel_objet_link_revert_evidence_invalid")
+        else:
             blockers.append("zettel_objet_link_revert_already_recorded")
     else:
         source_receipt_sha256 = None

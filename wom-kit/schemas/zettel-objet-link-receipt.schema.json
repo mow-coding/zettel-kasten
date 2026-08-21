@@ -1,12 +1,34 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "wom-kit/zettel-objet-link-receipt/v0.1",
-  "title": "WOM-kit reviewed zettel to Objet link receipt",
+  "$id": "wom-kit/zettel-objet-link-receipt/v0.2",
+  "title": "WOM-kit reviewed zettel to Objet link receipt (v0.1/v0.2 reader)",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema", "action", "archive_id", "zettel_id", "zettel_path", "object_id", "role", "label_sha256", "link_id", "plan_sha256", "before_zettel_sha256", "after_zettel_sha256", "before_snapshot_path", "reviewed_by", "created_at", "privacy"],
+  "required": [
+    "schema",
+    "action",
+    "archive_id",
+    "zettel_id",
+    "zettel_path",
+    "object_id",
+    "role",
+    "label_sha256",
+    "link_id",
+    "plan_sha256",
+    "before_zettel_sha256",
+    "after_zettel_sha256",
+    "before_snapshot_path",
+    "reviewed_by",
+    "created_at",
+    "privacy"
+  ],
   "properties": {
-    "schema": {"const": "wom-kit/zettel-objet-link-receipt/v0.1"},
+    "schema": {
+      "enum": [
+        "wom-kit/zettel-objet-link-receipt/v0.1",
+        "wom-kit/zettel-objet-link-receipt/v0.2"
+      ]
+    },
     "action": {"const": "add_zettel_objet_link"},
     "archive_id": {"type": "string", "minLength": 1},
     "zettel_id": {"type": "string", "pattern": "^zet_[A-Za-z0-9][A-Za-z0-9_-]{0,159}$"},
@@ -16,11 +38,24 @@
     "label_sha256": {"type": ["string", "null"], "pattern": "^[0-9a-f]{64}$"},
     "link_id": {"type": "string", "pattern": "^asset:sha256:[0-9a-f]{64}$"},
     "plan_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "manifest_record_set_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "receipt_generation": {"type": "integer", "minimum": 1, "maximum": 9999},
     "before_zettel_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
     "after_zettel_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
     "before_snapshot_path": {"type": "string", "pattern": "^receipts/objects/zettel-links/snapshots/[0-9a-f]{64}\\.zettel\\.md$"},
+    "snapshot_state": {"enum": ["absent", "existing_exact"]},
+    "snapshot_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "support_effect_set_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "transaction_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "canonical_swap_path": {"type": "string", "pattern": "^(?:inbox|zettels)/\\.[0-9a-f]{64}\\.[0-9a-f]{24}\\.zettel-objet-link\\.swap$"},
+    "canonical_previous_path": {"type": "string", "pattern": "^(?:inbox|zettels)/\\.[0-9a-f]{64}\\.[0-9a-f]{24}\\.zettel-objet-link\\.swap\\.previous$"},
+    "canonical_swap_state": {"const": "clean"},
+    "control_artifact_path": {"type": "string", "pattern": "^receipts/objects/zettel-links/\\.locks/[0-9a-f]{64}\\.lock$"},
+    "control_artifact_state": {"enum": ["absent", "existing_exact"]},
+    "control_artifact_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
     "reviewed_by": {"type": "string", "minLength": 1},
     "created_at": {"type": "string", "minLength": 1},
+    "exact_human_approval": {"$ref": "#/$defs/operation_exact_human_approval"},
     "privacy": {
       "type": "object",
       "additionalProperties": false,
@@ -30,6 +65,103 @@
         "zettel_body_included": {"const": false},
         "object_bytes_read": {"const": false},
         "provider_called": {"const": false}
+      }
+    }
+  },
+  "if": {
+    "properties": {
+      "schema": {"const": "wom-kit/zettel-objet-link-receipt/v0.2"}
+    },
+    "required": ["schema"]
+  },
+  "then": {
+    "required": [
+      "manifest_record_set_sha256",
+      "receipt_generation",
+      "snapshot_state",
+      "snapshot_sha256",
+      "support_effect_set_sha256",
+      "transaction_sha256",
+      "canonical_swap_path",
+      "canonical_previous_path",
+      "canonical_swap_state",
+      "control_artifact_path",
+      "control_artifact_state",
+      "control_artifact_sha256",
+      "exact_human_approval"
+    ],
+    "properties": {
+      "label_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+    }
+  },
+  "else": {
+    "properties": {
+      "schema": {"const": "wom-kit/zettel-objet-link-receipt/v0.1"}
+    },
+    "not": {
+      "anyOf": [
+        {"required": ["manifest_record_set_sha256"]},
+        {"required": ["receipt_generation"]},
+        {"required": ["snapshot_state"]},
+        {"required": ["snapshot_sha256"]},
+        {"required": ["support_effect_set_sha256"]},
+        {"required": ["transaction_sha256"]},
+        {"required": ["canonical_swap_path"]},
+        {"required": ["canonical_previous_path"]},
+        {"required": ["canonical_swap_state"]},
+        {"required": ["control_artifact_path"]},
+        {"required": ["control_artifact_state"]},
+        {"required": ["control_artifact_sha256"]},
+        {"required": ["exact_human_approval"]}
+      ]
+    }
+  },
+  "$defs": {
+    "sha256_ref": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "exact_reference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "approval_id",
+        "context_sha256",
+        "approval_authority_sha256",
+        "one_use"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "wom-kit/exact-human-approval-reference/v0.1"
+        },
+        "approval_id": {
+          "type": "string",
+          "pattern": "^approval_[0-9a-f]{32}$"
+        },
+        "context_sha256": {"$ref": "#/$defs/sha256_ref"},
+        "approval_authority_sha256": {"$ref": "#/$defs/sha256_ref"},
+        "one_use": {"const": true}
+      }
+    },
+    "operation_exact_human_approval": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "operation",
+        "plan_sha256",
+        "target_binding_sha256",
+        "exact_human_approval"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "wom-kit/operation-exact-human-approval/v0.1"
+        },
+        "operation": {"const": "zettel_objet_link"},
+        "plan_sha256": {"$ref": "#/$defs/sha256_ref"},
+        "target_binding_sha256": {"$ref": "#/$defs/sha256_ref"},
+        "exact_human_approval": {"$ref": "#/$defs/exact_reference"}
       }
     }
   }

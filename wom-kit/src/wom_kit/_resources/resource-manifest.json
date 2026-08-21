@@ -1,8 +1,8 @@
 {
   "schema": "wom-kit/package-resource-manifest/v0.1",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "source_of_truth": "wom-kit source resource directories",
-  "file_count": 156,
+  "file_count": 158,
   "files": [
     {
       "source": "schemas/activity-group-membership-receipt.schema.json",
@@ -93,6 +93,18 @@
       "packaged": "schemas/authoring-conventions.schema.json",
       "bytes": 1165,
       "sha256": "4053d214dc681a55870f1f5635ce7259ccf2c5885b0e731e11b831372117159f"
+    },
+    {
+      "source": "schemas/cli-error-v0.1.schema.json",
+      "packaged": "schemas/cli-error-v0.1.schema.json",
+      "bytes": 2746,
+      "sha256": "61f651d2f3b252202321ee82e6759e000551df3b7c402bd9e6e2be1459a78bc1"
+    },
+    {
+      "source": "schemas/command-approval-status-inventory-v0.1.schema.json",
+      "packaged": "schemas/command-approval-status-inventory-v0.1.schema.json",
+      "bytes": 4776,
+      "sha256": "55c35d576eade85702072e8e67774650df4162d1c9307c7fa13306d7a30e15c1"
     },
     {
       "source": "schemas/credential-adapter-manifest.schema.json",
@@ -283,8 +295,8 @@
     {
       "source": "schemas/operation-exact-human-approval-v0.1.schema.json",
       "packaged": "schemas/operation-exact-human-approval-v0.1.schema.json",
-      "bytes": 1618,
-      "sha256": "810885e620518a005892c36ff39ba489077f88f26402d26e33b528d6f763f395"
+      "bytes": 1647,
+      "sha256": "d8f0de0538b683f0367cac7720605c8719ccc8f94a324d2db1b3d0d081fb4dbe"
     },
     {
       "source": "schemas/operator-feedback-delivery-receipt.schema.json",
@@ -625,8 +637,8 @@
     {
       "source": "schemas/zettel-objet-link-receipt.schema.json",
       "packaged": "schemas/zettel-objet-link-receipt.schema.json",
-      "bytes": 2007,
-      "sha256": "78d6fb91d1b24efccf637c6de99da97804ee97a58093d855f51644fb1c1305a9"
+      "bytes": 6185,
+      "sha256": "181c109e0c50a541cf548c15a0c8b76b73b2161009c1086f5f9cdd16b592b9ae"
     },
     {
       "source": "schemas/zettel-objet-link-revert-receipt.schema.json",
@@ -649,8 +661,8 @@
     {
       "source": "templates/ai-runtime/wom-archive/references/capture-draft-and-publication.md",
       "packaged": "templates/ai-runtime/wom-archive/references/capture-draft-and-publication.md",
-      "bytes": 9445,
-      "sha256": "70831f8859fd7b8a9421d61712b794f7061f5c13bb9ab7b614f39c9626324da9"
+      "bytes": 9624,
+      "sha256": "55644b68dd662ecc7165a30e0a66716d370aae77bede417d2798146ad19ffd40"
     },
     {
       "source": "templates/ai-runtime/wom-archive/references/foreign-sharing-and-trust.md",
@@ -661,8 +673,8 @@
     {
       "source": "templates/ai-runtime/wom-archive/references/operator-contract.md",
       "packaged": "templates/ai-runtime/wom-archive/references/operator-contract.md",
-      "bytes": 75615,
-      "sha256": "4c908d18c554554c86a490bc2bfcaac2db216b3532cedd052f556919884cac70"
+      "bytes": 75781,
+      "sha256": "1c9d54c81d01dfe05eca9a7f981c5f23fbabbedc2439ed1d339dfa0939d06a42"
     },
     {
       "source": "templates/ai-runtime/wom-archive/references/reading-memory-and-revision.md",
@@ -935,10 +947,10 @@
       "sha256": "d619dc26af3216498c8392dfe838b0fe752d4bad9da998a58ca682d668fc510c"
     },
     {
-      "source": "docs/releases/v0.4.0.md",
-      "packaged": "release-notes/v0.4.0.md",
-      "bytes": 17033,
-      "sha256": "511f86ee2ca48b84916d719974445e4e7f58272ed654a50d21722e28a2478579"
+      "source": "docs/releases/v0.4.1.md",
+      "packaged": "release-notes/v0.4.1.md",
+      "bytes": 13890,
+      "sha256": "a5d3f506d93877768ecb9368e01a6e1581daa131287b392d6522a136f0d42704"
     }
   ]
 }
