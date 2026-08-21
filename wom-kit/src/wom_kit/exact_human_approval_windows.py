@@ -62,6 +62,7 @@ class ExactHumanApprovalOperation(Enum):
     promote_zet = "promote_zet"
     mint_zet = "mint_zet"
     zettel_edge = "zettel_edge"
+    zettel_objet_link = "zettel_objet_link"
     retire_draft = "retire_draft"
     warning_override = "warning_override"
     source_fidelity_session_evidence = "source_fidelity_session_evidence"
@@ -108,6 +109,7 @@ _OPERATION_LABELS = {
     ExactHumanApprovalOperation.promote_zet: "제텔 승격",
     ExactHumanApprovalOperation.mint_zet: "제텔 발행",
     ExactHumanApprovalOperation.zettel_edge: "제텔 연결 생성",
+    ExactHumanApprovalOperation.zettel_objet_link: "제텔-오브제 연결 생성",
     ExactHumanApprovalOperation.retire_draft: "초안 폐기",
     ExactHumanApprovalOperation.warning_override: "경고 예외 적용",
     ExactHumanApprovalOperation.source_fidelity_session_evidence: "세션 근거 보존",

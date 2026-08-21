@@ -31,6 +31,11 @@ from .exact_human_approval_windows import (
 BINDING_SCHEMA_VERSION = "wom-kit/operation-exact-human-approval-plan/v0.1"
 _SHA256_RE = re.compile(r"^(?:sha256:)?[0-9a-f]{64}$")
 _WARNING_CODE_RE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
+_ZETTEL_OBJET_ROLE_RE = re.compile(r"^[a-z][a-z0-9_]{0,79}$")
+_ZETTEL_OBJET_LINK_ID_RE = re.compile(r"^asset:sha256:[0-9a-f]{64}$")
+_ZETTEL_OBJET_CONTROL_SHA256 = "sha256:" + hashlib.sha256(
+    b"wom-kit/zettel-objet-link-lock/v0.1\n"
+).hexdigest()
 _APPROVAL_ID_RE = re.compile(r"^approval_[0-9a-f]{32}$")
 _MAX_CANONICAL_BYTES = 16 * 1024 * 1024
 OPERATION_RECEIPT_SCHEMA_VERSION = "wom-kit/operation-exact-human-approval/v0.1"
@@ -73,6 +78,27 @@ def _canonical(value: Any) -> bytes:
 
 def _sha256(value: Any) -> str:
     return "sha256:" + hashlib.sha256(_canonical(value)).hexdigest()
+
+
+def _service_jsonl_sha256(value: Any) -> str:
+    """Reproduce completion-workflow canonical JSONL digests for safe fields."""
+
+    try:
+        raw = (
+            json.dumps(
+                value,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+                allow_nan=False,
+            )
+            + "\n"
+        ).encode("utf-8")
+    except (TypeError, ValueError, UnicodeError):
+        raise _fail("operation_approval_plan_invalid") from None
+    if len(raw) > _MAX_CANONICAL_BYTES:
+        raise _fail("operation_approval_plan_invalid")
+    return "sha256:" + hashlib.sha256(raw).hexdigest()
 
 
 def _plain_mapping(value: Any) -> dict[str, Any]:
@@ -426,6 +452,249 @@ def zettel_edge_approval_binding(
     )
 
 
+def zettel_objet_link_approval_binding(
+    dry_run: Mapping[str, Any],
+) -> ExactOperationApprovalBinding:
+    """Bind one zettel-to-objet write and its complete support-effect set.
+
+    The service plan intentionally exposes only content-free identifiers,
+    digests, relative paths, counts, and state codes.  Paths and identifiers
+    are reduced to digests again before the public binding is returned.
+    """
+
+    plan = _plain_mapping(dry_run)
+    if plan.get("ok") is not True or plan.get("dry_run") is not True:
+        raise _fail("operation_approval_plan_blocked")
+    if (
+        plan.get("state") != "ready"
+        or plan.get("lifecycle_action") != "zettel_objet_link_plan"
+        or plan.get("blockers") != []
+    ):
+        raise _fail("operation_approval_plan_invalid")
+
+    warnings = plan.get("warnings")
+    would_change = plan.get("would_change")
+    if (
+        not isinstance(warnings, list)
+        or any(type(item) is not str for item in warnings)
+        or not isinstance(would_change, list)
+        or any(type(item) is not str for item in would_change)
+    ):
+        raise _fail("operation_approval_plan_invalid")
+
+    summary = _plain_mapping(plan.get("summary"))
+    data = _plain_mapping(plan.get("data"))
+    required_text = {
+        name: summary.get(name)
+        for name in (
+            "zettel_id",
+            "zettel_path",
+            "role",
+            "link_id",
+            "receipt_path",
+            "snapshot_path",
+            "snapshot_state",
+            "transaction_sha256",
+            "canonical_swap_path",
+            "canonical_previous_path",
+            "canonical_swap_state",
+            "control_artifact_path",
+            "control_artifact_state",
+        )
+    }
+    if any(
+        type(value) is not str or not value.strip()
+        for value in required_text.values()
+    ):
+        raise _fail("operation_approval_plan_invalid")
+    if _ZETTEL_OBJET_ROLE_RE.fullmatch(required_text["role"]) is None:
+        raise _fail("operation_approval_plan_invalid")
+    if _ZETTEL_OBJET_LINK_ID_RE.fullmatch(required_text["link_id"]) is None:
+        raise _fail("operation_approval_plan_invalid")
+    if required_text["snapshot_state"] not in {"absent", "existing_exact"}:
+        raise _fail("operation_approval_plan_invalid")
+    if required_text["canonical_swap_state"] != "absent":
+        raise _fail("operation_approval_plan_invalid")
+    if required_text["control_artifact_state"] not in {
+        "absent",
+        "existing_exact",
+    }:
+        raise _fail("operation_approval_plan_invalid")
+
+    label_present = summary.get("label_present")
+    if type(label_present) is not bool:
+        raise _fail("operation_approval_plan_invalid")
+    counts = {
+        "current_asset_count": summary.get("current_asset_count"),
+        "manifest_record_count": summary.get("manifest_record_count"),
+        "receipt_generation": summary.get("receipt_generation"),
+    }
+    if (
+        type(counts["current_asset_count"]) is not int
+        or counts["current_asset_count"] < 0
+        or type(counts["manifest_record_count"]) is not int
+        or counts["manifest_record_count"] != 1
+        or type(counts["receipt_generation"]) is not int
+        or counts["receipt_generation"] < 1
+    ):
+        raise _fail("operation_approval_plan_invalid")
+    if (
+        data.get("manifest_record_set_complete") is not True
+        or data.get("manifest_record_set_unique") is not True
+    ):
+        raise _fail("operation_approval_plan_invalid")
+
+    zettel_sha256 = _sha_ref(summary.get("zettel_sha256"))
+    object_id = _sha_ref(summary.get("object_id"))
+    manifest_record_set_sha256 = _sha_ref(
+        summary.get("manifest_record_set_sha256")
+    )
+    label_sha256 = _sha_ref(summary.get("label_sha256"))
+    snapshot_sha256 = _sha_ref(summary.get("snapshot_sha256"))
+    support_effect_set_sha256 = _sha_ref(
+        summary.get("support_effect_set_sha256")
+    )
+    transaction_sha256 = _sha_ref(summary.get("transaction_sha256"))
+    control_artifact_sha256 = _sha_ref(
+        summary.get("control_artifact_sha256")
+    )
+    service_plan_sha256 = _sha_ref(summary.get("plan_sha256"))
+    if not hmac.compare_digest(snapshot_sha256, zettel_sha256):
+        raise _fail("operation_approval_plan_invalid")
+    expected_control_path = (
+        "receipts/objects/zettel-links/.locks/"
+        + hashlib.sha256(required_text["zettel_id"].encode("utf-8")).hexdigest()
+        + ".lock"
+    )
+    if (
+        required_text["control_artifact_path"] != expected_control_path
+        or not hmac.compare_digest(
+            control_artifact_sha256,
+            _ZETTEL_OBJET_CONTROL_SHA256,
+        )
+    ):
+        raise _fail("operation_approval_plan_invalid")
+
+    support_effect_set = _plain_mapping(data.get("support_effect_set"))
+    if set(support_effect_set) != {
+        "zettel",
+        "snapshot",
+        "receipt",
+        "canonical_compare_and_swap",
+    }:
+        raise _fail("operation_approval_plan_invalid")
+    zettel_effect = _plain_mapping(support_effect_set.get("zettel"))
+    snapshot_effect = _plain_mapping(support_effect_set.get("snapshot"))
+    receipt_effect = _plain_mapping(support_effect_set.get("receipt"))
+    swap_effect = _plain_mapping(
+        support_effect_set.get("canonical_compare_and_swap")
+    )
+    if (
+        set(zettel_effect) != {"path", "before_sha256"}
+        or set(snapshot_effect) != {"path", "state", "sha256"}
+        or set(receipt_effect) != {"path", "generation"}
+        or set(swap_effect)
+        != {"transaction_sha256", "swap_path", "previous_path", "state"}
+    ):
+        raise _fail("operation_approval_plan_invalid")
+    if (
+        zettel_effect.get("path") != required_text["zettel_path"]
+        or _sha_ref(zettel_effect.get("before_sha256")) != zettel_sha256
+        or snapshot_effect.get("path") != required_text["snapshot_path"]
+        or snapshot_effect.get("state") != required_text["snapshot_state"]
+        or _sha_ref(snapshot_effect.get("sha256")) != snapshot_sha256
+        or receipt_effect.get("path") != required_text["receipt_path"]
+        or receipt_effect.get("generation") != counts["receipt_generation"]
+        or _sha_ref(swap_effect.get("transaction_sha256"))
+        != transaction_sha256
+        or swap_effect.get("swap_path")
+        != required_text["canonical_swap_path"]
+        or swap_effect.get("previous_path")
+        != required_text["canonical_previous_path"]
+        or swap_effect.get("state") != required_text["canonical_swap_state"]
+        or not hmac.compare_digest(
+            _service_jsonl_sha256(support_effect_set),
+            support_effect_set_sha256,
+        )
+    ):
+        raise _fail("operation_approval_plan_invalid")
+
+    control_artifact = _plain_mapping(data.get("control_artifact"))
+    if set(control_artifact) != {"kind", "path", "state", "sha256"}:
+        raise _fail("operation_approval_plan_invalid")
+    if (
+        control_artifact.get("kind") != "zettel_objet_link_lock"
+        or control_artifact.get("path")
+        != required_text["control_artifact_path"]
+        or control_artifact.get("state")
+        != required_text["control_artifact_state"]
+        or _sha_ref(control_artifact.get("sha256"))
+        != control_artifact_sha256
+    ):
+        raise _fail("operation_approval_plan_invalid")
+
+    target = {
+        "zettel_id_digest": _sha256(required_text["zettel_id"]),
+        "zettel_path_digest": _sha256(required_text["zettel_path"]),
+        "zettel_current_sha256": zettel_sha256,
+        "current_asset_count": counts["current_asset_count"],
+        "object_id": object_id,
+        "manifest_record_count": counts["manifest_record_count"],
+        "manifest_record_set_complete": True,
+        "manifest_record_set_unique": True,
+        "manifest_record_set_sha256": manifest_record_set_sha256,
+        "role": required_text["role"],
+        "label_present": label_present,
+        "label_sha256": label_sha256,
+        "link_id": required_text["link_id"],
+        "receipt_path_digest": _sha256(required_text["receipt_path"]),
+        "receipt_generation": counts["receipt_generation"],
+        "snapshot_path_digest": _sha256(required_text["snapshot_path"]),
+        "snapshot_state": required_text["snapshot_state"],
+        "snapshot_sha256": snapshot_sha256,
+        "support_effect_set_sha256": support_effect_set_sha256,
+        "transaction_sha256": transaction_sha256,
+        "canonical_swap_path_digest": _sha256(
+            required_text["canonical_swap_path"]
+        ),
+        "canonical_previous_path_digest": _sha256(
+            required_text["canonical_previous_path"]
+        ),
+        "canonical_swap_state": required_text["canonical_swap_state"],
+        "control_artifact_path_digest": _sha256(
+            required_text["control_artifact_path"]
+        ),
+        "control_artifact_state": required_text["control_artifact_state"],
+        "control_artifact_sha256": control_artifact_sha256,
+    }
+    basis = {
+        "schema_version": BINDING_SCHEMA_VERSION,
+        "operation": "zettel_objet_link",
+        "service_plan_sha256": service_plan_sha256,
+        "target": target,
+        # Bind future content-free plan fields too, while keeping them out of
+        # the returned public document.
+        "summary_digest": _sha256(summary),
+        "data_digest": _sha256(data),
+        "warning_set_digest": _sha256(warnings),
+        "would_change_digest": _sha256(would_change),
+    }
+    return ExactOperationApprovalBinding(
+        operation=ExactHumanApprovalOperation.zettel_objet_link,
+        plan_sha256=_sha256(basis),
+        target_binding_sha256=_sha256(target),
+        warning_codes=_warning_codes(warnings),
+        review_binding_codes=(
+            "control_artifact",
+            "label_digest",
+            "manifest_record_set",
+            "support_effect_set",
+            "warning_codes",
+            "zettel_objet_target_set",
+        ),
+    )
+
+
 def retire_draft_approval_binding(
     dry_run: Mapping[str, Any],
 ) -> ExactOperationApprovalBinding:
@@ -551,4 +820,5 @@ __all__ = [
     "retire_draft_approval_binding",
     "warning_override_approval_binding",
     "zettel_edge_approval_binding",
+    "zettel_objet_link_approval_binding",
 ]

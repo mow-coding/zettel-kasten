@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 import unittest
 
-from wom_kit import __version__, archive_cli
+from wom_kit import archive_cli
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -14,7 +14,6 @@ KIT = ROOT / "wom-kit"
 RESOURCE_ROOT = KIT / "src" / "wom_kit" / "_resources"
 MANIFEST_PATH = RESOURCE_ROOT / "resource-manifest.json"
 RELEASE_PATH = KIT / "docs" / "releases" / "v0.4.0.md"
-PACKAGED_RELEASE_PATH = RESOURCE_ROOT / "release-notes" / "v0.4.0.md"
 
 NEW_SCHEMAS = (
     "agent-instruction-policy-v0.1.schema.json",
@@ -29,54 +28,11 @@ NEW_SCHEMAS = (
     "source-fidelity-session-evidence-receipt-v0.1.schema.json",
 )
 
-CURRENT_SURFACES = (
-    ROOT / "README.md",
-    ROOT / "README.ko.md",
-    ROOT / "UPGRADE.md",
-    ROOT / "UPGRADE.ko.md",
-    ROOT / "VERSIONING.md",
-    KIT / "README.md",
-    KIT / "cli" / "README.md",
-    KIT / "docs" / "exact-human-approval-contract.md",
-    KIT / "docs" / "runtime-canonical-entrypoints.md",
-    KIT / "docs" / "capability-matrix.md",
-    KIT / "docs" / "human-artifact-store-contract.md",
-    RELEASE_PATH,
-)
-
-
 class V0400ReleaseDocsTests(unittest.TestCase):
-    def test_version_sources_and_current_release_are_synchronized(self) -> None:
-        self.assertEqual(__version__, "0.4.0")
-        self.assertIn('version = "0.4.0"', (KIT / "pyproject.toml").read_text(encoding="utf-8"))
-        self.assertIn(
-            '__version__ = "0.4.0"',
-            (KIT / "src" / "wom_kit" / "__init__.py").read_text(encoding="utf-8"),
-        )
-        self.assertIn(
-            '__version__ = "0.4.0"',
-            (ROOT / "wom_kit" / "__init__.py").read_text(encoding="utf-8"),
-        )
-        self.assertEqual(RELEASE_PATH.read_bytes(), PACKAGED_RELEASE_PATH.read_bytes())
-        packaged_release_names = sorted(
-            path.name for path in (RESOURCE_ROOT / "release-notes").glob("v*.md")
-        )
-        self.assertEqual(packaged_release_names, ["v0.4.0.md"])
-
-    def test_manifest_has_exact_v0400_resource_set(self) -> None:
-        manifest = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
-        self.assertEqual(manifest["version"], "0.4.0")
-        self.assertEqual(manifest["file_count"], 156)
-        self.assertEqual(len(manifest["files"]), 156)
-        packaged = [row["packaged"] for row in manifest["files"]]
-        self.assertEqual(len(packaged), len(set(packaged)))
+    def test_historical_release_source_is_preserved_byte_for_byte(self) -> None:
         self.assertEqual(
-            [path for path in packaged if path.startswith("release-notes/")],
-            ["release-notes/v0.4.0.md"],
-        )
-        self.assertEqual(
-            hashlib.sha256(MANIFEST_PATH.read_bytes()).hexdigest(),
-            "b0442f0dd6d8606970f0e86cab3545896ac42167b837cca453982f25dc8df5d9",
+            hashlib.sha256(RELEASE_PATH.read_bytes()).hexdigest(),
+            "511f86ee2ca48b84916d719974445e4e7f58272ed654a50d21722e28a2478579",
         )
 
     def test_all_ten_new_public_schemas_are_packaged_byte_for_byte(self) -> None:
@@ -122,11 +78,8 @@ class V0400ReleaseDocsTests(unittest.TestCase):
             with self.subTest(token=token):
                 self.assertIn(token, combined)
 
-    def test_compound_and_repair_executors_are_fixed_fail_closed(self) -> None:
-        combined = " ".join(
-            " ".join(path.read_text(encoding="utf-8").split())
-            for path in CURRENT_SURFACES
-        )
+    def test_v0400_published_compound_and_repair_executors_as_fixed_closed(self) -> None:
+        combined = " ".join(RELEASE_PATH.read_text(encoding="utf-8").split())
         for command in (
             "mint-zet-batch",
             "retire-draft-batch",
@@ -158,15 +111,25 @@ class V0400ReleaseDocsTests(unittest.TestCase):
             with self.subTest(command=command):
                 self.assertIn(command, combined)
         self.assertIn("compound_exact_human_approval_binding_required", combined)
-        self.assertIn("before private target read or mutation", combined)
+        self.assertIn(
+            "before private archive, project, input, credential, or target reads",
+            combined,
+        )
+        self.assertIn("before mutation", combined)
 
     def test_all_seventy_nine_cli_fixed_close_commands_are_published_exactly(self) -> None:
-        blocked = archive_cli.COMPOUND_APPROVAL_BLOCKED_COMMANDS
-        self.assertEqual(len(blocked), 79)
+        current_blocked = archive_cli.COMPOUND_APPROVAL_BLOCKED_COMMANDS
+        historical_blocked = frozenset(
+            {*current_blocked, "zettel-objet-link"}
+        )
+        self.assertEqual(len(current_blocked), 78)
+        self.assertEqual(len(historical_blocked), 79)
+        self.assertNotIn("zettel-objet-link", current_blocked)
+        self.assertIn("zettel-objet-link-revert", current_blocked)
 
         release = RELEASE_PATH.read_text(encoding="utf-8")
         self.assertIn("exactly 79 top-level", release)
-        for command in sorted(blocked):
+        for command in sorted(historical_blocked):
             with self.subTest(command=command):
                 self.assertIn(f"\n{command}\n", release)
 
@@ -176,7 +139,7 @@ class V0400ReleaseDocsTests(unittest.TestCase):
             for action in parser._actions
             if isinstance(action, argparse._SubParsersAction)
         )
-        for command in sorted(blocked):
+        for command in sorted(current_blocked):
             with self.subTest(help=command):
                 actions = [
                     action
@@ -186,8 +149,22 @@ class V0400ReleaseDocsTests(unittest.TestCase):
                 self.assertEqual(len(actions), 1)
                 self.assertEqual(
                     actions[0].help,
-                    archive_cli.COMPOUND_APPROVAL_BLOCKED_HELP,
+                    (
+                        archive_cli.PROJECT_VERSION_UPDATE_BLOCKED_HELP
+                        if command == "project-version-update"
+                        else archive_cli.COMPOUND_APPROVAL_BLOCKED_HELP
+                    ),
                 )
+
+        link_approve = next(
+            action
+            for action in subcommands.choices["zettel-objet-link"]._actions
+            if "--approve" in action.option_strings
+        )
+        self.assertNotEqual(
+            link_approve.help,
+            archive_cli.COMPOUND_APPROVAL_BLOCKED_HELP,
+        )
 
         release_folded = " ".join(RELEASE_PATH.read_text(encoding="utf-8").split())
         for token in (

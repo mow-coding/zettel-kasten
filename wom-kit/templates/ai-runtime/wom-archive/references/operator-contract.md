@@ -692,13 +692,15 @@ with `compound_exact_human_approval_binding_required` and store no snapshot or
 receipt.
 
 To preview binding an already-manifested objet into structured zettel
-frontmatter, use `zettel-objet-link --dry-run`. In v0.4.0 both link and revert
-approval branches fail before private target read or mutation with
-`compound_exact_human_approval_binding_required`. The strict `assets`
-item is `{object_id, role, label?}`; `object_id` must be the complete
-`sha256:<64 hex>` value. Historical receipts remain auditable but grant no
-write/revert authority. Mint review warns on truncated
-objet hashes and on likely tool traces or stale internal status claims.
+frontmatter, use `zettel-objet-link --dry-run`. In v0.4.1 this single link apply
+is available only as a fresh plan-digest-bound replay with native exact-human
+approval. The strict `assets` item is `{object_id, role, label?}`; `object_id`
+must be the complete `sha256:<64 hex>` value. `zettel-objet-link-revert`
+remains preview-only and fixed closed: its approval branch fails before private
+target read or mutation with `compound_exact_human_approval_binding_required`. Historical
+receipts remain auditable but grant no new write or revert authority. Mint
+review warns on truncated objet hashes and on likely tool traces or stale
+internal status claims.
 
 An incomplete draft may remain in `inbox/` without an abstract. Before minting or legacy promotion, require one human-reviewed, normalized, bounded, safe explicit `frontmatter.abstract`. `gist`, `summary`, `description`, and `overview` never authorize canonical publication. Inspect the dry-run `first_read_check` and proceed only when `ready_for_publication` is true. The real write binds the full draft SHA-256 and abstract SHA-256, rereads one byte snapshot, and blocks before canonical, receipt, or snapshot creation if any draft byte drifted or the abstract is missing or invalid. This structural gate does not judge semantic truth, completeness, freshness, or model consumption.
 

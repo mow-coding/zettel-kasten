@@ -102,7 +102,7 @@ def patch_zip_member_name_bytes(wheel: Path, old_name: str, new_name: str) -> No
 
 
 class InstalledEntrypointTests(unittest.TestCase):
-    PACKAGE_VERSION = "0.4.0"
+    PACKAGE_VERSION = "0.4.1"
     SERVER_NAME = "zettel-kasten-archive-mcp"
 
     def setUp(self) -> None:
@@ -860,6 +860,17 @@ class InstalledEntrypointTests(unittest.TestCase):
                 "mcp_canonical_inventories_byte_identical": True,
             }
         }
+        letter140_evidence = {
+            "ok": True,
+            "schema": "wom-kit/installed-letter140-wheel-smoke/v0.1",
+            "body_bytes_preserved": True,
+            "canonical_link_exact": True,
+            "snapshot_exact": True,
+            "receipt_schema": "wom-kit/zettel-objet-link-receipt/v0.2",
+            "receipt_schema_validated_from_installed_package": True,
+            "receipt_lookup": "passed",
+            "validated_receipt_count": 1,
+        }
         result = check_wheel_install._wheel_install_success_result(
             package_version=self.PACKAGE_VERSION,
             wheel_counts=wheel_counts,
@@ -870,6 +881,7 @@ class InstalledEntrypointTests(unittest.TestCase):
                 "wom-mcp",
             ],
             entrypoint_evidence=evidence,
+            letter140_link_evidence=letter140_evidence,
             wheel_filename="wom_kit-0.3.296-py3-none-any.whl",
             wheel_sha256="a" * 64,
             artifact_preserved=True,
@@ -889,6 +901,7 @@ class InstalledEntrypointTests(unittest.TestCase):
                     "wom-mcp",
                 ],
                 "entrypoint_evidence": evidence,
+                "installed_letter140_link_workflow": letter140_evidence,
                 "runtime_skill_lifecycle": "passed",
                 "onboarding_preview": "passed",
                 "onboarding_write": "fixed_closed",
@@ -902,6 +915,63 @@ class InstalledEntrypointTests(unittest.TestCase):
                 "temporary_environment_removed_on_exit": True,
             },
         )
+
+    def test_installed_letter140_link_workflow_requires_exact_evidence(self) -> None:
+        compile(
+            check_wheel_install.INSTALLED_LETTER140_SMOKE_SCRIPT,
+            "<installed-letter140-wheel-smoke>",
+            "exec",
+        )
+        python = self.scripts / "python.exe"
+        archive_root = self.temp_root / "archive"
+        expected = {
+            "ok": True,
+            "schema": check_wheel_install.INSTALLED_LETTER140_SMOKE_SCHEMA,
+            "body_bytes_preserved": True,
+            "canonical_link_exact": True,
+            "snapshot_exact": True,
+            "receipt_schema": "wom-kit/zettel-objet-link-receipt/v0.2",
+            "receipt_schema_validated_from_installed_package": True,
+            "receipt_lookup": "passed",
+            "validated_receipt_count": 1,
+        }
+        with mock.patch.object(
+            check_wheel_install,
+            "run",
+            return_value=expected,
+        ) as run_mock:
+            evidence = (
+                check_wheel_install._check_installed_letter140_link_workflow(
+                    python,
+                    archive_root,
+                    cwd=self.temp_root,
+                )
+            )
+
+        self.assertEqual(evidence, expected)
+        command = run_mock.call_args.args[0]
+        self.assertEqual(command[:3], [str(python), "-I", "-c"])
+        self.assertEqual(command[-1], str(archive_root))
+        self.assertIn("import hashlib", command[3])
+        self.assertIn("zettel_objet_link_apply", command[3])
+        self.assertIn("receipt/v0.2", command[3])
+        self.assertIn("WOM_WHEEL_SAFE_SYNTHETIC", command[3])
+        self.assertTrue(run_mock.call_args.kwargs["parse_json"])
+        self.assertTrue(run_mock.call_args.kwargs["require_empty_stderr"])
+
+        invalid = dict(expected)
+        invalid["body_bytes_preserved"] = False
+        with mock.patch.object(
+            check_wheel_install,
+            "run",
+            return_value=invalid,
+        ):
+            with self.assertRaises(check_wheel_install.WheelCheckError):
+                check_wheel_install._check_installed_letter140_link_workflow(
+                    python,
+                    archive_root,
+                    cwd=self.temp_root,
+                )
 
     def test_main_uses_v03_success_and_failure_envelopes(self) -> None:
         success = {

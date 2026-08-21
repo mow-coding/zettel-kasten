@@ -6,6 +6,39 @@ The filesystem folder is `wom-kit/`, the Python import package is `wom_kit`, and
 
 See `wom-kit/docs/concepts/naming-and-terminology.md` for the naming baseline.
 
+v0.4.1 opens exactly one previously fixed-closed top-level writer:
+`zettel-objet-link --approve`. A fresh successful dry-run produces the exact
+service-plan digest required by `--expected-plan-sha256`; approval also requires
+`--reviewed-by` and the native local exact-human workflow. The writer binds and
+revalidates the canonical zettel, a strict complete manifest read plus its
+exact unique matching record set, exact before
+snapshot, next create-only receipt generation, and persistent per-zettel
+control artifact before publishing a v0.2 receipt. The optional label and
+zettel body are never echoed, object bytes are not read, and no provider or
+network is called. `zettel-objet-link-revert` remains fixed closed, and MCP
+exposes no link writer. See `wom-kit/docs/zettel-objet-links.md` and the
+v0.4.1 release note.
+
+The current parser-derived approval inventory contains 78 fixed-closed command
+paths, down from the historical v0.4.0 count of 79 because link apply is now
+operation-specifically bound. Revert, Objet capture enable/selection/single/
+batch, `project-version-update`, collision preservation, and project bytecode
+repair remain fixed closed. `archive capabilities --machine` publishes the
+full status inventory under `data.approval_status_inventory`; the result is
+parser evidence only and does not claim that archive-specific prerequisites
+have passed.
+
+For JSON callers, v0.4.1 adds the common
+`wom-kit/cli-error/v0.1` envelope to repaired usage, policy, and precondition
+paths. Usage errors return exit code `2`; policy and precondition failures
+return `1`. `effects_state: none` means the protected workflow did not start,
+while `effects_state: unknown` means an exact-human workflow had started and
+its durable claim must be reconciled without automatic retry. The related
+parser inventory contract is
+`wom-kit/command-approval-status-inventory/v0.1`.
+
+Historical v0.4.0 checkpoint:
+
 v0.4.0 routes supported high-impact single writes through local exact-human
 approval. The native Windows TaskDialog is followed immediately by one
 authenticated durable `started` claim, writer-side binding revalidation, and

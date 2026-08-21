@@ -1,21 +1,20 @@
 # Install WOM-kit As A Python Tool
 
-Status: v0.4.0 conditional GitHub wheel and exact-human control boundary
+Status: v0.4.1 conditional GitHub wheel and exact-human control boundary
 
 WOM-kit is a command-line tool. It should live in its own Python environment
 instead of being mixed into an application project's dependencies.
 
-The v0.4.0 URL below is a conditional contract, not proof that an artifact is
+The v0.4.1 URL below is a conditional contract, not proof that an artifact is
 public. Use it only after the matching GitHub Release exists and lists the
-verified wheel. See the [v0.4.0 release note](releases/v0.4.0.md) for the
+verified wheel. See the [v0.4.1 release note](releases/v0.4.1.md) for the
 separate source and release-evidence boundary.
 
-An installed v0.3.320 client does not contain the exact-human TaskDialog,
-authenticated one-use approval claim, approval-link authentication,
-human-artifact registry, duplicate reconciliation, or approval-integrity
-overlay. Updating repository files alone does not replace the isolated `uv
-tool` or virtual-environment wheel. After the verified v0.4.0 asset exists,
-install that exact wheel and start a new process.
+An installed v0.4.0 client still fixes `zettel-objet-link` closed and does not
+contain the v0.4.1 exact binding, control artifact, common CLI error envelope,
+or parser-derived approval inventory. Updating repository files alone does not
+replace the isolated `uv tool` or virtual-environment wheel. After the verified
+v0.4.1 asset exists, install that exact wheel and start a new process.
 
 ## Recommended Install
 
@@ -24,7 +23,7 @@ verified wheel. The versioned URL alone is not proof that the asset is
 available:
 
 ```powershell
-uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.0/wom_kit-0.4.0-py3-none-any.whl"
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.1/wom_kit-0.4.1-py3-none-any.whl"
 archive --version
 ```
 
@@ -36,13 +35,36 @@ This release does not publish WOM-kit to PyPI. Therefore
 `pip install wom-kit` is not the official command yet. The exact GitHub release
 URL keeps the installed artifact tied to a reviewed repository tag.
 
+### Replace an installed v0.4.0 global CLI
+
+After the v0.4.1 Release and wheel actually exist, replace the isolated
+`uv tool` environment and verify the result from a new process:
+
+```powershell
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.1/wom_kit-0.4.1-py3-none-any.whl"
+archive --version
+```
+
+The official `uv` contract says a repeated `uv tool install` generally replaces
+an existing `uv`-managed tool. Use `--force` only if `uv` explicitly reports an
+unmanaged executable collision and a human has reviewed that executable; the
+flag permits replacing executables that `uv` does not manage. See the
+[official `uv tool install` reference](https://docs.astral.sh/uv/reference/cli/#uv-tool-install).
+
+Require exactly `archive 0.4.1`. This is a global CLI-only bootstrap. It does not
+change a project-local `.zettel-kasten/source` mirror or version pin. The
+project updater, collision mutation, and bytecode-repair approval paths remain
+fixed closed, so an existing v0.4.0 project mirror stays v0.4.0. Do not
+hand-edit the pin. See [Project Version Update](project-version-update.md) and
+the [Upgrade Guide](../../UPGRADE.md).
+
 ## Standard pip Alternative
 
 Plain `pip` works when it is placed inside a dedicated virtual environment:
 
 ```powershell
 py -m venv "$HOME\.wom-tools\wom-kit"
-& "$HOME\.wom-tools\wom-kit\Scripts\python.exe" -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.0/wom_kit-0.4.0-py3-none-any.whl"
+& "$HOME\.wom-tools\wom-kit\Scripts\python.exe" -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.1/wom_kit-0.4.1-py3-none-any.whl"
 & "$HOME\.wom-tools\wom-kit\Scripts\archive.exe" --version
 ```
 
@@ -114,7 +136,7 @@ ownership plus source/pin checkpoints detect observed drift, but they are not
 atomic file compare-and-swap and cannot guarantee that an external writer will
 never clobber a file.
 
-In v0.4.0, stop after dry-run. Approval returns
+In v0.4.1, stop after dry-run. Approval returns
 `compound_exact_human_approval_binding_required` before private project reads,
 fetch, tree materialization, pin mutation, lock creation, or receipt
 publication. The transaction details below describe historical v0.3 receipts,
@@ -152,7 +174,7 @@ project, source/`.git`, pin, lock, and receipt directory chains without
 missing receipt parent and root are created and held in order, and the receipt
 writer rejects an unheld root.
 
-All v0.4.0 users can run the complete read-only preview. POSIX returns
+All v0.4.1 users can run the complete read-only preview. POSIX returns
 `preview_only_platform_unsupported` and
 `write_boundary.approval_platform_supported: false`. Approval on every
 platform returns `compound_exact_human_approval_binding_required` before
@@ -168,7 +190,7 @@ Archive creation remains a separate dry-run-first operation:
 archive onboard --target-root <new-archive-folder> --type personal --archive-id <archive-id> --principal-id <principal-id> --dry-run --format json
 ```
 
-In v0.4.0 stop after the preview. Onboarding approval returns
+In v0.4.1 stop after the preview. Onboarding approval returns
 `compound_exact_human_approval_binding_required` before target/template/provider
 reads and creates no archive.
 
@@ -203,6 +225,12 @@ tool inventories. It then previews/installs/verifies/uninstalls the Agent Skill
 in a disposable host directory, previews archive onboarding, proves the real
 onboarding write is fixed-closed with zero files written, and runs strict
 Doctor against the checked-in fake archive through the installed entrypoint.
+For v0.4.1 it also copies that synthetic fixture into a second temporary
+archive and uses only the isolated installed wheel to prove one ready
+`zettel-objet-link` plan, one exact approved `written` result, the exact
+canonical object link, unchanged leading Markdown body bytes, an exact
+snapshot, a schema-valid v0.2 receipt, and successful receipt lookup.
 A release wheel may be preserved only after that entire check passes. The JSON
 result uses `wom-kit/wheel-install-check/v0.3` and records the onboarding write
-state as `fixed_closed`; it does not claim that v0.4 created a new archive.
+state as `fixed_closed` plus the installed Letter 140 workflow evidence; it
+does not claim that v0.4 created a new real archive.

@@ -373,26 +373,37 @@ class Letter136LookupFeedbackTests(unittest.TestCase):
     def test_receipt_lookup_blocks_when_target_changes_during_observation(self) -> None:
         self.install_historical_link_fixture()
         target = (self.root / "zettels" / f"{self.ZETTEL_ID}.md").resolve()
-        original_read = archive_services._bounded_stable_regular_file_read
+        original_read = archive_services._read_activity_group_regular_bytes_bound
         target_reads = 0
 
-        def changed_second_target_read(
+        def changed_final_target_read(
+            root: Path,
+            parent_binding: dict[str, object],
             path: Path,
             *args: object,
             **kwargs: object,
-        ) -> tuple[bytes | None, str | None]:
+        ) -> bytes:
             nonlocal target_reads
-            raw, reason = original_read(path, *args, **kwargs)
+            raw = original_read(
+                root,
+                parent_binding,
+                path,
+                *args,
+                **kwargs,
+            )
             if Path(path).resolve() == target:
                 target_reads += 1
-                if target_reads == 2 and raw is not None and reason is None:
-                    return raw + b"\nConcurrent reviewed edit.\n", None
-            return raw, reason
+                # The stable resolver reads the selected Markdown once and
+                # revalidates it twice. Mutate only the later receipt-level
+                # read so this test keeps covering its named final guard.
+                if target_reads == 4:
+                    return raw + b"\nConcurrent reviewed edit.\n"
+            return raw
 
         with mock.patch.object(
             archive_services,
-            "_bounded_stable_regular_file_read",
-            side_effect=changed_second_target_read,
+            "_read_activity_group_regular_bytes_bound",
+            side_effect=changed_final_target_read,
         ):
             result = completion_workflows.zettel_objet_link_receipts(
                 self.root,

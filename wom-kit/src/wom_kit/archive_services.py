@@ -39933,11 +39933,24 @@ def _delete_activity_group_evidence_exact(
     max_bytes: int,
     parent_binding: dict[str, Any] | None = None,
     expected_identity: tuple[int, int, int] | None = None,
+    expected_windows_metadata: tuple[int, bytes] | None = None,
+    windows_cas_error_prefix: str | None = None,
 ) -> None:
-    """Delete only the exact non-reparse evidence bytes that were reviewed."""
+    """Delete only the exact non-reparse evidence bytes that were reviewed.
+
+    CAS residue callers provide ``windows_cas_error_prefix`` to require an
+    immediate POSIX namespace unlink.  Ordinary evidence deletion retains its
+    historical delayed-disposition behavior and can never be selected as a
+    fallback from that CAS mode.
+    """
 
     if not re.fullmatch(r"sha256:[0-9a-f]{64}", expected_sha256):
         raise OSError("activity_group_evidence_sha256_invalid")
+    if windows_cas_error_prefix is not None and not re.fullmatch(
+        r"[a-z][a-z0-9_]{0,63}",
+        windows_cas_error_prefix,
+    ):
+        raise OSError("canonical_swap_error_prefix_invalid")
     if os.name != "nt":
         binding_context = (
             nullcontext(parent_binding)
@@ -40265,6 +40278,7 @@ def _delete_activity_group_evidence_exact(
         if handle == invalid_handle:
             raise ctypes.WinError(ctypes.get_last_error())
         delete_marked = False
+        close_failed = False
         try:
             information = ByHandleFileInformation()
             if not get_information(
@@ -40306,6 +40320,17 @@ def _delete_activity_group_evidence_exact(
                 raise OSError(
                     "activity_group_evidence_file_unsafe"
                 )
+            observed_windows_metadata = (
+                _windows_regular_file_supported_metadata(
+                    handle,
+                    error_prefix="activity_group_evidence",
+                )
+            )
+            if (
+                expected_windows_metadata is not None
+                and observed_windows_metadata != expected_windows_metadata
+            ):
+                raise OSError("activity_group_evidence_changed")
             chunks: list[bytes] = []
             remaining = size
             while remaining:
@@ -40352,37 +40377,69 @@ def _delete_activity_group_evidence_exact(
                 or int(final_information.nNumberOfLinks) != 1
             ):
                 raise OSError("activity_group_evidence_changed")
-            disposition = FileDispositionInformation(1)
-            if not set_information(
-                handle,
-                4,
-                ctypes.byref(disposition),
-                ctypes.sizeof(disposition),
-            ):
-                raise ctypes.WinError(ctypes.get_last_error())
+            if windows_cas_error_prefix is None:
+                disposition = FileDispositionInformation(1)
+                if not set_information(
+                    handle,
+                    4,
+                    ctypes.byref(disposition),
+                    ctypes.sizeof(disposition),
+                ):
+                    raise ctypes.WinError(ctypes.get_last_error())
+            else:
+                _windows_mark_handle_posix_delete(
+                    handle,
+                    error_prefix=windows_cas_error_prefix,
+                )
             delete_marked = True
         finally:
-            close_handle(handle)
+            close_failed = not bool(close_handle(handle))
+        if close_failed:
+            raise ctypes.WinError(ctypes.get_last_error())
         if not delete_marked or path.exists() or path.is_symlink():
+            if windows_cas_error_prefix is not None:
+                raise OSError(
+                    f"{windows_cas_error_prefix}"
+                    "_canonical_swap_cleanup_failed"
+                )
             raise OSError("activity_group_evidence_delete_failed")
         fsync_directory(path.parent)
+
+
+def regular_file_canonical_swap_paths(
+    path: Path,
+    transaction_sha256: str,
+    *,
+    swap_suffix: str,
+) -> tuple[Path, Path]:
+    """Return content-free deterministic names for one interrupted CAS."""
+
+    if not re.fullmatch(r"sha256:[0-9a-f]{64}", transaction_sha256):
+        raise ValueError("canonical_swap_transaction_sha256_invalid")
+    if not re.fullmatch(r"\.[a-z0-9][a-z0-9.-]{0,79}", swap_suffix):
+        raise ValueError("canonical_swap_suffix_invalid")
+    request_digest = transaction_sha256.removeprefix("sha256:")
+    path_digest = hashlib.sha256(path.name.encode("utf-8")).hexdigest()[:24]
+    swap_path = path.with_name(
+        f".{request_digest}.{path_digest}{swap_suffix}"
+    )
+    return swap_path, swap_path.with_name(swap_path.name + ".previous")
 
 
 def activity_group_canonical_swap_paths(
     path: Path,
     request_sha256: str,
 ) -> tuple[Path, Path]:
-    """Return content-free deterministic names for one interrupted CAS."""
+    """Return the historical activity-group CAS residue names."""
 
-    if not re.fullmatch(r"sha256:[0-9a-f]{64}", request_sha256):
-        raise ValueError("activity_group_request_sha256_invalid")
-    request_digest = request_sha256.removeprefix("sha256:")
-    path_digest = hashlib.sha256(path.name.encode("utf-8")).hexdigest()[:24]
-    swap_path = path.with_name(
-        f".{request_digest}.{path_digest}"
-        f"{ACTIVITY_GROUP_MEMBERSHIP_CANONICAL_SWAP_SUFFIX}"
-    )
-    return swap_path, swap_path.with_name(swap_path.name + ".previous")
+    try:
+        return regular_file_canonical_swap_paths(
+            path,
+            request_sha256,
+            swap_suffix=ACTIVITY_GROUP_MEMBERSHIP_CANONICAL_SWAP_SUFFIX,
+        )
+    except ValueError as exc:
+        raise ValueError("activity_group_request_sha256_invalid") from exc
 
 
 def _read_activity_group_regular_bytes_bound(
@@ -40601,12 +40658,444 @@ def _move_activity_group_entry_no_replace(
     os.fsync(parent_descriptor)
 
 
+def _windows_assert_default_backup_stream_only(
+    handle: Any,
+    *,
+    expected_size: int,
+    error_prefix: str,
+) -> None:
+    """Reject NTFS metadata that a plain namespace swap would discard.
+
+    ``FileStreamInfo`` only inventories named ``$DATA`` streams.  BackupRead's
+    stream headers also expose EAs, object IDs, sparse blocks, property data,
+    and the other metadata stream types that must not be silently deleted with
+    the old file.  The held handle keeps this inventory bound to the exact file
+    that may be moved.  BackupRead advances the file pointer, so preserve it.
+    """
+
+    if os.name != "nt":
+        raise OSError("canonical_swap_metadata_wrong_platform")
+    if (
+        not isinstance(expected_size, int)
+        or isinstance(expected_size, bool)
+        or expected_size < 0
+    ):
+        raise OSError(f"{error_prefix}_canonical_swap_streams_unverified")
+
+    import ctypes
+    from ctypes import wintypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    backup_read = kernel32.BackupRead
+    backup_read.argtypes = [
+        wintypes.HANDLE,
+        wintypes.LPVOID,
+        wintypes.DWORD,
+        ctypes.POINTER(wintypes.DWORD),
+        wintypes.BOOL,
+        wintypes.BOOL,
+        ctypes.POINTER(ctypes.c_void_p),
+    ]
+    backup_read.restype = wintypes.BOOL
+    backup_seek = kernel32.BackupSeek
+    backup_seek.argtypes = [
+        wintypes.HANDLE,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        ctypes.POINTER(wintypes.DWORD),
+        ctypes.POINTER(wintypes.DWORD),
+        ctypes.POINTER(ctypes.c_void_p),
+    ]
+    backup_seek.restype = wintypes.BOOL
+    set_file_pointer_ex = kernel32.SetFilePointerEx
+    set_file_pointer_ex.argtypes = [
+        wintypes.HANDLE,
+        ctypes.c_longlong,
+        ctypes.POINTER(ctypes.c_longlong),
+        wintypes.DWORD,
+    ]
+    set_file_pointer_ex.restype = wintypes.BOOL
+
+    file_begin = 0
+    file_current = 1
+    header_bytes = 20
+    backup_data = 0x00000001
+    original_position = ctypes.c_longlong()
+    if not set_file_pointer_ex(
+        handle,
+        0,
+        ctypes.byref(original_position),
+        file_current,
+    ):
+        raise OSError(f"{error_prefix}_canonical_swap_streams_unverified")
+    if not set_file_pointer_ex(handle, 0, None, file_begin):
+        raise OSError(f"{error_prefix}_canonical_swap_streams_unverified")
+
+    context = ctypes.c_void_p()
+    cleanup_failed = False
+    try:
+        default_stream_seen = False
+        while True:
+            header = ctypes.create_string_buffer(header_bytes)
+            read_count = wintypes.DWORD()
+            if not backup_read(
+                handle,
+                header,
+                header_bytes,
+                ctypes.byref(read_count),
+                False,
+                False,
+                ctypes.byref(context),
+            ):
+                raise OSError(
+                    f"{error_prefix}_canonical_swap_streams_unverified"
+                )
+            if int(read_count.value) == 0:
+                break
+            if int(read_count.value) != header_bytes:
+                raise OSError(
+                    f"{error_prefix}_canonical_swap_streams_unverified"
+                )
+            stream_id = int.from_bytes(header.raw[0:4], "little")
+            stream_attributes = int.from_bytes(
+                header.raw[4:8],
+                "little",
+            )
+            stream_size = int.from_bytes(
+                header.raw[8:16],
+                "little",
+                signed=True,
+            )
+            stream_name_size = int.from_bytes(
+                header.raw[16:20],
+                "little",
+            )
+            if (
+                stream_id != backup_data
+                or stream_attributes != 0
+                or stream_name_size != 0
+            ):
+                raise OSError(
+                    f"{error_prefix}_canonical_swap_backup_stream_unsupported"
+                )
+            if (
+                default_stream_seen
+                or stream_size < 0
+                or stream_size != expected_size
+            ):
+                raise OSError(
+                    f"{error_prefix}_canonical_swap_streams_unverified"
+                )
+            default_stream_seen = True
+            if stream_size == 0:
+                continue
+            low_seeked = wintypes.DWORD()
+            high_seeked = wintypes.DWORD()
+            if not backup_seek(
+                handle,
+                stream_size & 0xFFFFFFFF,
+                (stream_size >> 32) & 0xFFFFFFFF,
+                ctypes.byref(low_seeked),
+                ctypes.byref(high_seeked),
+                ctypes.byref(context),
+            ):
+                raise OSError(
+                    f"{error_prefix}_canonical_swap_streams_unverified"
+                )
+            actual_seeked = (
+                int(high_seeked.value) << 32
+            ) | int(low_seeked.value)
+            if actual_seeked != stream_size:
+                raise OSError(
+                    f"{error_prefix}_canonical_swap_streams_unverified"
+                )
+        if not default_stream_seen and expected_size != 0:
+            raise OSError(
+                f"{error_prefix}_canonical_swap_streams_unverified"
+            )
+    finally:
+        active_error = sys.exc_info()[0] is not None
+        if context.value is not None:
+            ignored = wintypes.DWORD()
+            if not backup_read(
+                handle,
+                None,
+                0,
+                ctypes.byref(ignored),
+                True,
+                False,
+                ctypes.byref(context),
+            ):
+                cleanup_failed = True
+        if not set_file_pointer_ex(
+            handle,
+            int(original_position.value),
+            None,
+            file_begin,
+        ):
+            cleanup_failed = True
+        if cleanup_failed and not active_error:
+            raise OSError(
+                f"{error_prefix}_canonical_swap_streams_unverified"
+            )
+
+
+def _windows_regular_file_supported_metadata(
+    handle: Any,
+    *,
+    error_prefix: str,
+) -> tuple[int, bytes]:
+    """Return supported Windows metadata and reject named data streams."""
+
+    if os.name != "nt":
+        raise OSError("canonical_swap_metadata_wrong_platform")
+    if not re.fullmatch(r"[a-z][a-z0-9_]{0,63}", error_prefix):
+        raise OSError("canonical_swap_error_prefix_invalid")
+
+    import ctypes
+    from ctypes import wintypes
+
+    class ByHandleFileInformation(ctypes.Structure):
+        _fields_ = [
+            ("dwFileAttributes", wintypes.DWORD),
+            ("ftCreationTime", wintypes.FILETIME),
+            ("ftLastAccessTime", wintypes.FILETIME),
+            ("ftLastWriteTime", wintypes.FILETIME),
+            ("dwVolumeSerialNumber", wintypes.DWORD),
+            ("nFileSizeHigh", wintypes.DWORD),
+            ("nFileSizeLow", wintypes.DWORD),
+            ("nNumberOfLinks", wintypes.DWORD),
+            ("nFileIndexHigh", wintypes.DWORD),
+            ("nFileIndexLow", wintypes.DWORD),
+        ]
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    get_information = kernel32.GetFileInformationByHandle
+    get_information.argtypes = [
+        wintypes.HANDLE,
+        ctypes.POINTER(ByHandleFileInformation),
+    ]
+    get_information.restype = wintypes.BOOL
+    get_information_ex = kernel32.GetFileInformationByHandleEx
+    get_information_ex.argtypes = [
+        wintypes.HANDLE,
+        ctypes.c_int,
+        wintypes.LPVOID,
+        wintypes.DWORD,
+    ]
+    get_information_ex.restype = wintypes.BOOL
+
+    information = ByHandleFileInformation()
+    if not get_information(handle, ctypes.byref(information)):
+        raise OSError(f"{error_prefix}_canonical_swap_metadata_unverified")
+    file_attribute_directory = 0x00000010
+    file_attribute_archive = 0x00000020
+    file_attribute_normal = 0x00000080
+    file_attribute_reparse_point = 0x00000400
+    if information.dwFileAttributes & (
+        file_attribute_directory | file_attribute_reparse_point
+    ):
+        raise OSError(f"{error_prefix}_canonical_swap_file_unsafe")
+
+    stream_info_buffer_bytes = 64 * 1024
+    stream_info_header_bytes = 24
+    stream_buffer = ctypes.create_string_buffer(stream_info_buffer_bytes)
+    if not get_information_ex(
+        handle,
+        7,  # FileStreamInfo
+        stream_buffer,
+        stream_info_buffer_bytes,
+    ):
+        raise OSError(f"{error_prefix}_canonical_swap_streams_unverified")
+    offset = 0
+    default_stream_seen = False
+    while True:
+        if offset + stream_info_header_bytes > stream_info_buffer_bytes:
+            raise OSError(
+                f"{error_prefix}_canonical_swap_streams_unverified"
+            )
+        next_offset = int.from_bytes(
+            stream_buffer.raw[offset : offset + 4],
+            "little",
+        )
+        name_length = int.from_bytes(
+            stream_buffer.raw[offset + 4 : offset + 8],
+            "little",
+        )
+        name_start = offset + stream_info_header_bytes
+        name_end = name_start + name_length
+        if (
+            name_length % 2
+            or name_end > stream_info_buffer_bytes
+            or (next_offset and (next_offset < 24 or next_offset % 8))
+        ):
+            raise OSError(
+                f"{error_prefix}_canonical_swap_streams_unverified"
+            )
+        try:
+            stream_name = stream_buffer.raw[name_start:name_end].decode(
+                "utf-16-le",
+                errors="strict",
+            )
+        except UnicodeDecodeError:
+            raise OSError(
+                f"{error_prefix}_canonical_swap_streams_unverified"
+            ) from None
+        if stream_name and stream_name.casefold() != "::$data":
+            raise OSError(
+                f"{error_prefix}_canonical_swap_named_stream_unsupported"
+            )
+        if default_stream_seen:
+            raise OSError(
+                f"{error_prefix}_canonical_swap_streams_unverified"
+            )
+        default_stream_seen = True
+        if next_offset == 0:
+            break
+        if offset + next_offset <= offset:
+            raise OSError(
+                f"{error_prefix}_canonical_swap_streams_unverified"
+            )
+        offset += next_offset
+    if not default_stream_seen:
+        raise OSError(f"{error_prefix}_canonical_swap_streams_unverified")
+
+    file_size = (
+        int(information.nFileSizeHigh) << 32
+    ) | int(information.nFileSizeLow)
+    _windows_assert_default_backup_stream_only(
+        handle,
+        expected_size=file_size,
+        error_prefix=error_prefix,
+    )
+
+    advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
+    get_kernel_object_security = advapi32.GetKernelObjectSecurity
+    get_kernel_object_security.argtypes = [
+        wintypes.HANDLE,
+        wintypes.DWORD,
+        wintypes.LPVOID,
+        wintypes.DWORD,
+        ctypes.POINTER(wintypes.DWORD),
+    ]
+    get_kernel_object_security.restype = wintypes.BOOL
+    security_information = (
+        0x00000001  # OWNER_SECURITY_INFORMATION
+        | 0x00000002  # GROUP_SECURITY_INFORMATION
+        | 0x00000004  # DACL_SECURITY_INFORMATION
+        | 0x00000010  # LABEL_SECURITY_INFORMATION
+        | 0x00000020  # ATTRIBUTE_SECURITY_INFORMATION
+        | 0x00000040  # SCOPE_SECURITY_INFORMATION
+    )
+    needed = wintypes.DWORD()
+    ctypes.set_last_error(0)
+    first_ok = get_kernel_object_security(
+        handle,
+        security_information,
+        None,
+        0,
+        ctypes.byref(needed),
+    )
+    first_error = ctypes.get_last_error()
+    if first_ok or first_error != 122:  # ERROR_INSUFFICIENT_BUFFER
+        raise OSError(f"{error_prefix}_canonical_swap_security_unverified")
+    if int(needed.value) < 1 or int(needed.value) > 1024 * 1024:
+        raise OSError(f"{error_prefix}_canonical_swap_security_unverified")
+    security_buffer = ctypes.create_string_buffer(int(needed.value))
+    final_needed = wintypes.DWORD()
+    if not get_kernel_object_security(
+        handle,
+        security_information,
+        security_buffer,
+        int(needed.value),
+        ctypes.byref(final_needed),
+    ):
+        raise OSError(f"{error_prefix}_canonical_swap_security_unverified")
+    if (
+        int(final_needed.value) < 1
+        or int(final_needed.value) > int(needed.value)
+    ):
+        raise OSError(f"{error_prefix}_canonical_swap_security_unverified")
+    semantic_attributes = int(information.dwFileAttributes) & ~(
+        file_attribute_archive | file_attribute_normal
+    )
+    return (
+        semantic_attributes,
+        bytes(security_buffer.raw[: int(final_needed.value)]),
+    )
+
+
+def _windows_mark_handle_posix_delete(
+    handle: Any,
+    *,
+    error_prefix: str,
+) -> None:
+    """Mark one held Windows file for immediate POSIX namespace unlink."""
+
+    if os.name != "nt":
+        raise OSError("canonical_swap_posix_delete_wrong_platform")
+    if not re.fullmatch(r"[a-z][a-z0-9_]{0,63}", error_prefix):
+        raise OSError("canonical_swap_error_prefix_invalid")
+
+    import ctypes
+    from ctypes import wintypes
+
+    class FileDispositionInformationEx(ctypes.Structure):
+        _fields_ = [("Flags", wintypes.DWORD)]
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    set_information = kernel32.SetFileInformationByHandle
+    set_information.argtypes = [
+        wintypes.HANDLE,
+        ctypes.c_int,
+        wintypes.LPVOID,
+        wintypes.DWORD,
+    ]
+    set_information.restype = wintypes.BOOL
+    file_disposition_flag_delete = 0x00000001
+    file_disposition_flag_posix_semantics = 0x00000002
+    file_disposition_flag_ignore_readonly_attribute = 0x00000010
+    disposition = FileDispositionInformationEx(
+        file_disposition_flag_delete
+        | file_disposition_flag_posix_semantics
+        | file_disposition_flag_ignore_readonly_attribute
+    )
+    if not set_information(
+        handle,
+        21,  # FileDispositionInfoEx
+        ctypes.byref(disposition),
+        ctypes.sizeof(disposition),
+    ):
+        raise OSError(
+            f"{error_prefix}_canonical_swap_posix_delete_unsupported"
+        )
+
+
 def _replace_activity_group_file_with_backup_windows(
     replaced_path: Path,
     replacement_path: Path,
     backup_path: Path,
+    *,
+    expected_replaced_bytes: bytes | None = None,
+    expected_replacement_bytes: bytes | None = None,
+    max_bytes: int = ACTIVITY_GROUP_MEMBERSHIP_MAX_CANONICAL_FILE_BYTES,
+    error_prefix: str = "activity_group",
+    _failpoint: Callable[[str], None] | None = None,
 ) -> None:
-    """Atomically replace one Windows file while preserving its prior bytes."""
+    """Install one exact Windows file without ever replacing an unknown name.
+
+    ``ReplaceFileW`` cannot express "create the backup only if absent": when a
+    file appears at ``backup_path`` between a userspace absence check and the
+    API call, Windows overwrites that file.  This primitive instead retains
+    write/delete-denying handles for both exact source files and renames those
+    same handles with ``FileRenameInfo.ReplaceIfExists = FALSE``.
+
+    There is deliberately a recoverable namespace gap between the two moves.
+    A process exit after the first move leaves ``backup_path`` holding the old
+    bytes and ``replacement_path`` holding the new bytes.  A retry can finish
+    that exact state.  If another process wins the public name during the gap,
+    the second move refuses and all three occupants remain visible.
+    """
 
     if os.name != "nt":
         raise OSError("activity_group_replace_with_backup_wrong_platform")
@@ -40615,51 +41104,715 @@ def _replace_activity_group_file_with_backup_windows(
         or replaced_path.parent != backup_path.parent
     ):
         raise OSError("activity_group_bound_parent_mismatch")
-    if backup_path.exists() or backup_path.is_symlink():
-        raise FileExistsError(backup_path)
+    if len(
+        {
+            os.path.normcase(os.path.abspath(candidate))
+            for candidate in (
+                replaced_path,
+                replacement_path,
+                backup_path,
+            )
+        }
+    ) != 3:
+        raise OSError("activity_group_canonical_swap_paths_overlap")
+    if not re.fullmatch(r"[a-z][a-z0-9_]{0,63}", error_prefix):
+        raise OSError("canonical_swap_error_prefix_invalid")
+    if (
+        not isinstance(max_bytes, int)
+        or isinstance(max_bytes, bool)
+        or max_bytes < 1
+    ):
+        raise OSError(f"{error_prefix}_canonical_swap_binding_invalid")
+    for expected in (
+        expected_replaced_bytes,
+        expected_replacement_bytes,
+    ):
+        if expected is not None and (
+            not isinstance(expected, bytes) or len(expected) > max_bytes
+        ):
+            raise OSError(f"{error_prefix}_canonical_swap_bytes_too_large")
 
     import ctypes
     from ctypes import wintypes
 
+    class ByHandleFileInformation(ctypes.Structure):
+        _fields_ = [
+            ("dwFileAttributes", wintypes.DWORD),
+            ("ftCreationTime", wintypes.FILETIME),
+            ("ftLastAccessTime", wintypes.FILETIME),
+            ("ftLastWriteTime", wintypes.FILETIME),
+            ("dwVolumeSerialNumber", wintypes.DWORD),
+            ("nFileSizeHigh", wintypes.DWORD),
+            ("nFileSizeLow", wintypes.DWORD),
+            ("nNumberOfLinks", wintypes.DWORD),
+            ("nFileIndexHigh", wintypes.DWORD),
+            ("nFileIndexLow", wintypes.DWORD),
+        ]
+
     kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-    replace_file = kernel32.ReplaceFileW
-    replace_file.argtypes = [
-        wintypes.LPCWSTR,
-        wintypes.LPCWSTR,
+    create_file = kernel32.CreateFileW
+    create_file.argtypes = [
         wintypes.LPCWSTR,
         wintypes.DWORD,
+        wintypes.DWORD,
         wintypes.LPVOID,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.HANDLE,
+    ]
+    create_file.restype = wintypes.HANDLE
+    get_information = kernel32.GetFileInformationByHandle
+    get_information.argtypes = [
+        wintypes.HANDLE,
+        ctypes.POINTER(ByHandleFileInformation),
+    ]
+    get_information.restype = wintypes.BOOL
+    read_file = kernel32.ReadFile
+    read_file.argtypes = [
+        wintypes.HANDLE,
+        wintypes.LPVOID,
+        wintypes.DWORD,
+        ctypes.POINTER(wintypes.DWORD),
         wintypes.LPVOID,
     ]
-    replace_file.restype = wintypes.BOOL
-    replacefile_write_through = 0x00000001
-    if not replace_file(
-        str(replaced_path),
-        str(replacement_path),
-        str(backup_path),
-        replacefile_write_through,
-        None,
-        None,
-    ):
-        raise ctypes.WinError(ctypes.get_last_error())
+    read_file.restype = wintypes.BOOL
+    get_information_ex = kernel32.GetFileInformationByHandleEx
+    get_information_ex.argtypes = [
+        wintypes.HANDLE,
+        ctypes.c_int,
+        wintypes.LPVOID,
+        wintypes.DWORD,
+    ]
+    get_information_ex.restype = wintypes.BOOL
+    set_information = kernel32.SetFileInformationByHandle
+    set_information.argtypes = [
+        wintypes.HANDLE,
+        ctypes.c_int,
+        wintypes.LPVOID,
+        wintypes.DWORD,
+    ]
+    set_information.restype = wintypes.BOOL
+    close_handle = kernel32.CloseHandle
+    close_handle.argtypes = [wintypes.HANDLE]
+    close_handle.restype = wintypes.BOOL
+
+    advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
+    get_kernel_object_security = advapi32.GetKernelObjectSecurity
+    get_kernel_object_security.argtypes = [
+        wintypes.HANDLE,
+        wintypes.DWORD,
+        wintypes.LPVOID,
+        wintypes.DWORD,
+        ctypes.POINTER(wintypes.DWORD),
+    ]
+    get_kernel_object_security.restype = wintypes.BOOL
+
+    generic_read = 0x80000000
+    delete_access = 0x00010000
+    read_control = 0x00020000
+    file_read_attributes = 0x00000080
+    file_share_read = 0x00000001
+    open_existing = 3
+    file_flag_open_reparse_point = 0x00200000
+    file_flag_sequential_scan = 0x08000000
+    invalid_handle = wintypes.HANDLE(-1).value
+    file_attribute_directory = 0x00000010
+    file_attribute_archive = 0x00000020
+    file_attribute_normal = 0x00000080
+    file_attribute_reparse_point = 0x00000400
+    file_stream_info = 7
+    stream_info_buffer_bytes = 64 * 1024
+    stream_info_header_bytes = 24
+    owner_security_information = 0x00000001
+    group_security_information = 0x00000002
+    dacl_security_information = 0x00000004
+    label_security_information = 0x00000010
+    attribute_security_information = 0x00000020
+    scope_security_information = 0x00000040
+    security_information = (
+        owner_security_information
+        | group_security_information
+        | dacl_security_information
+        | label_security_information
+        | attribute_security_information
+        | scope_security_information
+    )
+    error_insufficient_buffer = 122
+    max_security_descriptor_bytes = 1024 * 1024
+
+    def handle_value(handle: Any) -> int | None:
+        value = (
+            handle
+            if isinstance(handle, int)
+            else getattr(handle, "value", None)
+        )
+        if value in {None, invalid_handle}:
+            return None
+        return int(value)
+
+    def query(handle: Any) -> ByHandleFileInformation:
+        information = ByHandleFileInformation()
+        if not get_information(handle, ctypes.byref(information)):
+            raise ctypes.WinError(ctypes.get_last_error())
+        return information
+
+    def identity(
+        information: ByHandleFileInformation,
+    ) -> tuple[int, int]:
+        return (
+            int(information.dwVolumeSerialNumber),
+            (int(information.nFileIndexHigh) << 32)
+            | int(information.nFileIndexLow),
+        )
+
+    def size(information: ByHandleFileInformation) -> int:
+        return (int(information.nFileSizeHigh) << 32) | int(
+            information.nFileSizeLow
+        )
+
+    def named_identity(path: Path) -> tuple[int, int] | None:
+        try:
+            entry = os.lstat(path)
+        except FileNotFoundError:
+            return None
+        if (
+            not stat.S_ISREG(entry.st_mode)
+            or stat.S_ISLNK(entry.st_mode)
+            or (
+                getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+                and getattr(entry, "st_file_attributes", 0)
+                & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+            )
+        ):
+            raise OSError(f"{error_prefix}_canonical_swap_file_unsafe")
+        return (int(entry.st_dev), int(entry.st_ino))
+
+    def assert_default_data_stream_only(handle: Any) -> None:
+        buffer = ctypes.create_string_buffer(stream_info_buffer_bytes)
+        if not get_information_ex(
+            handle,
+            file_stream_info,
+            buffer,
+            stream_info_buffer_bytes,
+        ):
+            raise OSError(
+                f"{error_prefix}_canonical_swap_streams_unverified"
+            )
+        offset = 0
+        default_stream_seen = False
+        while True:
+            if offset + stream_info_header_bytes > stream_info_buffer_bytes:
+                raise OSError(
+                    f"{error_prefix}_canonical_swap_streams_unverified"
+                )
+            next_offset = int.from_bytes(
+                buffer.raw[offset : offset + 4],
+                "little",
+            )
+            name_length = int.from_bytes(
+                buffer.raw[offset + 4 : offset + 8],
+                "little",
+            )
+            name_start = offset + stream_info_header_bytes
+            name_end = name_start + name_length
+            if (
+                name_length % 2
+                or name_end > stream_info_buffer_bytes
+                or (next_offset and (next_offset < 24 or next_offset % 8))
+            ):
+                raise OSError(
+                    f"{error_prefix}_canonical_swap_streams_unverified"
+                )
+            try:
+                stream_name = buffer.raw[name_start:name_end].decode(
+                    "utf-16-le",
+                    errors="strict",
+                )
+            except UnicodeDecodeError:
+                raise OSError(
+                    f"{error_prefix}_canonical_swap_streams_unverified"
+                ) from None
+            if stream_name not in {""} and stream_name.casefold() != "::$data":
+                raise OSError(
+                    f"{error_prefix}_canonical_swap_named_stream_unsupported"
+                )
+            if default_stream_seen:
+                raise OSError(
+                    f"{error_prefix}_canonical_swap_streams_unverified"
+                )
+            default_stream_seen = True
+            if next_offset == 0:
+                break
+            if offset + next_offset <= offset:
+                raise OSError(
+                    f"{error_prefix}_canonical_swap_streams_unverified"
+                )
+            offset += next_offset
+        if not default_stream_seen:
+            raise OSError(
+                f"{error_prefix}_canonical_swap_streams_unverified"
+            )
+
+    def security_descriptor(handle: Any) -> bytes:
+        needed = wintypes.DWORD()
+        ctypes.set_last_error(0)
+        first_ok = get_kernel_object_security(
+            handle,
+            security_information,
+            None,
+            0,
+            ctypes.byref(needed),
+        )
+        first_error = ctypes.get_last_error()
+        if first_ok or first_error != error_insufficient_buffer:
+            raise OSError(
+                f"{error_prefix}_canonical_swap_security_unverified"
+            )
+        if (
+            int(needed.value) < 1
+            or int(needed.value) > max_security_descriptor_bytes
+        ):
+            raise OSError(
+                f"{error_prefix}_canonical_swap_security_unverified"
+            )
+        buffer = ctypes.create_string_buffer(int(needed.value))
+        final_needed = wintypes.DWORD()
+        if not get_kernel_object_security(
+            handle,
+            security_information,
+            buffer,
+            int(needed.value),
+            ctypes.byref(final_needed),
+        ):
+            raise OSError(
+                f"{error_prefix}_canonical_swap_security_unverified"
+            )
+        if (
+            int(final_needed.value) < 1
+            or int(final_needed.value) > int(needed.value)
+        ):
+            raise OSError(
+                f"{error_prefix}_canonical_swap_security_unverified"
+            )
+        return bytes(buffer.raw[: int(final_needed.value)])
+
+    def supported_metadata(
+        handle: Any,
+        information: ByHandleFileInformation,
+    ) -> tuple[int, bytes]:
+        assert_default_data_stream_only(handle)
+        _windows_assert_default_backup_stream_only(
+            handle,
+            expected_size=size(information),
+            error_prefix=error_prefix,
+        )
+        semantic_attributes = int(information.dwFileAttributes) & ~(
+            file_attribute_archive | file_attribute_normal
+        )
+        return semantic_attributes, security_descriptor(handle)
+
+    def open_exact(
+        path: Path,
+        expected: bytes | None,
+    ) -> tuple[Any, bytes, tuple[int, int], tuple[int, bytes]]:
+        handle = create_file(
+            str(path),
+            (
+                generic_read
+                | delete_access
+                | read_control
+                | file_read_attributes
+            ),
+            file_share_read,
+            None,
+            open_existing,
+            file_flag_open_reparse_point | file_flag_sequential_scan,
+            None,
+        )
+        if handle_value(handle) is None:
+            raise ctypes.WinError(ctypes.get_last_error())
+        try:
+            before = query(handle)
+            byte_count = size(before)
+            file_identity = identity(before)
+            entry_identity = named_identity(path)
+            if (
+                byte_count > max_bytes
+                or file_identity[1] <= 0
+                or int(before.nNumberOfLinks) != 1
+                or before.dwFileAttributes
+                & (file_attribute_directory | file_attribute_reparse_point)
+                or entry_identity is None
+                or (
+                    entry_identity[1]
+                    and entry_identity[1] != file_identity[1]
+                )
+            ):
+                raise OSError(
+                    f"{error_prefix}_canonical_swap_file_unsafe"
+                )
+            exact_metadata = supported_metadata(handle, before)
+            chunks: list[bytes] = []
+            remaining = byte_count
+            while remaining:
+                requested = min(1024 * 1024, remaining)
+                buffer = ctypes.create_string_buffer(requested)
+                read_count = wintypes.DWORD()
+                if not read_file(
+                    handle,
+                    buffer,
+                    requested,
+                    ctypes.byref(read_count),
+                    None,
+                ):
+                    raise ctypes.WinError(ctypes.get_last_error())
+                if read_count.value <= 0 or read_count.value > requested:
+                    raise OSError(
+                        f"{error_prefix}_canonical_swap_read_incomplete"
+                    )
+                chunks.append(buffer.raw[: read_count.value])
+                remaining -= read_count.value
+            trailing = ctypes.create_string_buffer(1)
+            trailing_count = wintypes.DWORD()
+            if not read_file(
+                handle,
+                trailing,
+                1,
+                ctypes.byref(trailing_count),
+                None,
+            ) or int(trailing_count.value) != 0:
+                raise OSError(
+                    f"{error_prefix}_canonical_swap_read_incomplete"
+                )
+            raw = b"".join(chunks)
+            after = query(handle)
+            if (
+                identity(after) != file_identity
+                or size(after) != byte_count
+                or int(after.nNumberOfLinks) != 1
+                or (expected is not None and raw != expected)
+            ):
+                raise OSError(
+                    f"{error_prefix}_canonical_changed_before_swap"
+                )
+            return (
+                handle,
+                raw,
+                file_identity,
+                exact_metadata,
+            )
+        except BaseException:
+            close_handle(handle)
+            raise
+
+    def rename_exact_handle(
+        handle: Any,
+        source: Path,
+        destination: Path,
+        file_identity: tuple[int, int],
+    ) -> None:
+        from . import private_metadata_win32
+
+        rename_information = private_metadata_win32.file_rename_info_buffer(
+            destination,
+            replace_if_exists=False,
+        )
+        api_ok = bool(
+            set_information(
+                handle,
+                3,  # FileRenameInfo
+                rename_information.backing,
+                rename_information.api_buffer_size,
+            )
+        )
+        source_identity = named_identity(source)
+        destination_identity = named_identity(destination)
+        source_matches = bool(
+            source_identity is not None
+            and (
+                not source_identity[1]
+                or source_identity[1] == file_identity[1]
+            )
+        )
+        destination_matches = bool(
+            destination_identity is not None
+            and (
+                not destination_identity[1]
+                or destination_identity[1] == file_identity[1]
+            )
+        )
+        if destination_matches and not source_matches:
+            return
+        if not api_ok:
+            raise ctypes.WinError(ctypes.get_last_error())
+        raise OSError(f"{error_prefix}_canonical_swap_state_uncertain")
+
+    old_handle: Any = None
+    new_handle: Any = None
+    old_delete_marked = False
+    try:
+        # A prior process may have exited after the first no-replace move.  In
+        # that exact state the public name is absent and the approved old bytes
+        # are already held at the deterministic backup name.
+        try:
+            old_handle, old_raw, old_identity, old_metadata = open_exact(
+                replaced_path,
+                expected_replaced_bytes,
+            )
+            first_move_required = True
+        except FileNotFoundError:
+            old_handle, old_raw, old_identity, old_metadata = open_exact(
+                backup_path,
+                expected_replaced_bytes,
+            )
+            first_move_required = False
+        new_handle, new_raw, new_identity, new_metadata = open_exact(
+            replacement_path,
+            expected_replacement_bytes,
+        )
+        if (
+            expected_replaced_bytes is not None
+            and old_raw != expected_replaced_bytes
+        ):
+            raise OSError(f"{error_prefix}_canonical_changed_before_swap")
+        if (
+            expected_replacement_bytes is not None
+            and new_raw != expected_replacement_bytes
+        ):
+            raise OSError(
+                f"{error_prefix}_canonical_swap_evidence_changed"
+            )
+        if old_metadata != new_metadata:
+            raise OSError(
+                f"{error_prefix}_canonical_swap_metadata_mismatch"
+            )
+
+        if first_move_required:
+            rename_exact_handle(
+                old_handle,
+                replaced_path,
+                backup_path,
+                old_identity,
+            )
+            if _failpoint is not None:
+                _failpoint("canonical_moved_to_previous")
+        elif named_identity(replaced_path) is not None:
+            raise OSError(f"{error_prefix}_canonical_changed_during_swap")
+
+        rename_exact_handle(
+            new_handle,
+            replacement_path,
+            replaced_path,
+            new_identity,
+        )
+        if _failpoint is not None:
+            _failpoint("replacement_moved_to_canonical")
+
+        old_after = query(old_handle)
+        new_after = query(new_handle)
+        old_after_metadata = supported_metadata(old_handle, old_after)
+        new_after_metadata = supported_metadata(new_handle, new_after)
+        named_old = named_identity(backup_path)
+        named_new = named_identity(replaced_path)
+        if (
+            identity(old_after) != old_identity
+            or identity(new_after) != new_identity
+            or size(old_after) != len(old_raw)
+            or size(new_after) != len(new_raw)
+            or int(old_after.nNumberOfLinks) != 1
+            or int(new_after.nNumberOfLinks) != 1
+            or old_after_metadata != old_metadata
+            or new_after_metadata != new_metadata
+            or named_old is None
+            or named_new is None
+            or (named_old[1] and named_old[1] != old_identity[1])
+            or (named_new[1] and named_new[1] != new_identity[1])
+            or named_identity(replacement_path) is not None
+        ):
+            raise OSError(f"{error_prefix}_canonical_swap_state_uncertain")
+
+        # The canonical-new verification above is the CAS linearization point.
+        # Remove the obsolete namespace link with POSIX semantics only: a
+        # pre-existing, share-compatible handle may retain the now-detached old
+        # object, but must not keep ``backup_path`` visible or turn a successful
+        # disposition into a delayed-delete cleanup error.  Never fall back to
+        # ordinary delete disposition; if this filesystem cannot prove the
+        # immediate namespace contract, preserve ``backup_path`` for explicit
+        # reconciliation.
+        _windows_mark_handle_posix_delete(
+            old_handle,
+            error_prefix=error_prefix,
+        )
+        old_delete_marked = True
+        if _failpoint is not None:
+            _failpoint("previous_delete_marked")
+    finally:
+        close_error: OSError | None = None
+        if old_handle is not None:
+            try:
+                if not close_handle(old_handle):
+                    close_error = ctypes.WinError(ctypes.get_last_error())
+            except OSError as exc:
+                close_error = exc
+        if new_handle is not None:
+            try:
+                if not close_handle(new_handle) and close_error is None:
+                    close_error = ctypes.WinError(ctypes.get_last_error())
+            except OSError as exc:
+                if close_error is None:
+                    close_error = exc
+        if close_error is not None and sys.exc_info()[0] is None:
+            raise close_error
+    if not old_delete_marked:
+        raise OSError(f"{error_prefix}_canonical_swap_state_uncertain")
+    if backup_path.exists() or backup_path.is_symlink():
+        raise OSError(f"{error_prefix}_canonical_swap_cleanup_failed")
 
 
 def _activity_group_swap_residue_bytes(
     root: Path,
     binding: dict[str, Any],
     path: Path,
+    *,
+    max_bytes: int = ACTIVITY_GROUP_MEMBERSHIP_MAX_CANONICAL_FILE_BYTES,
 ) -> bytes | None:
     try:
         return _read_activity_group_regular_bytes_bound(
             root,
             binding,
             path,
-            max_bytes=(
-                ACTIVITY_GROUP_MEMBERSHIP_MAX_CANONICAL_FILE_BYTES
-            ),
+            max_bytes=max_bytes,
         )
     except FileNotFoundError:
         return None
+
+
+def _delete_cas_residue_while_canonical_stable(
+    root: Path,
+    binding: dict[str, Any],
+    canonical_path: Path,
+    residue_path: Path,
+    *,
+    expected_current_sha256: str,
+    expected_residue_sha256: str,
+    max_bytes: int,
+    error_prefix: str,
+) -> None:
+    """Delete one residue only while Windows keeps canonical bytes stable.
+
+    A detached pathname read followed by residue deletion is unsafe: another
+    process can change the canonical file in between and make the residue the
+    last durable copy of the prior bytes.  A Windows read handle opened with
+    only read sharing prevents compatible write/delete/rename opens until the
+    deletion and final verification finish.
+
+    Portable POSIX file descriptors do not reserve a pathname or deny writes
+    by an uncoordinated process.  An interrupted, already-installed CAS is
+    therefore preserved for explicit reconciliation instead of deleting its
+    last complementary residue on those platforms.
+    """
+
+    if os.name != "nt":
+        raise OSError(
+            f"{error_prefix}_canonical_swap_cleanup_stability_unsupported"
+        )
+    if binding.get("path") != canonical_path.parent or (
+        canonical_path.parent != residue_path.parent
+    ):
+        raise OSError("activity_group_bound_parent_mismatch")
+    for expected_sha256 in (
+        expected_current_sha256,
+        expected_residue_sha256,
+    ):
+        if not re.fullmatch(r"sha256:[0-9a-f]{64}", expected_sha256):
+            raise OSError(f"{error_prefix}_canonical_swap_sha256_invalid")
+
+    with _hold_activity_group_evidence_file(
+        root,
+        canonical_path,
+        max_bytes=max_bytes,
+    ) as held_canonical:
+        held_raw = held_canonical.get("raw")
+        if not isinstance(held_raw, bytes) or (
+            "sha256:" + hashlib.sha256(held_raw).hexdigest()
+            != expected_current_sha256
+        ):
+            raise OSError(
+                f"{error_prefix}_canonical_changed_before_swap_cleanup"
+            )
+        canonical_handle = held_canonical.get("windows_handle")
+        if canonical_handle is None:
+            raise OSError(
+                f"{error_prefix}_canonical_swap_cleanup_stability_unsupported"
+            )
+        canonical_metadata = _windows_regular_file_supported_metadata(
+            canonical_handle,
+            error_prefix=error_prefix,
+        )
+        with _hold_activity_group_evidence_file(
+            root,
+            residue_path,
+            max_bytes=max_bytes,
+        ) as held_residue:
+            residue_raw = held_residue.get("raw")
+            residue_handle = held_residue.get("windows_handle")
+            residue_identity = held_residue.get("identity")
+            if (
+                not isinstance(residue_raw, bytes)
+                or (
+                    "sha256:" + hashlib.sha256(residue_raw).hexdigest()
+                    != expected_residue_sha256
+                )
+                or residue_handle is None
+                or not isinstance(residue_identity, tuple)
+                or len(residue_identity) != 2
+            ):
+                raise OSError(
+                    f"{error_prefix}_canonical_swap_evidence_changed"
+                )
+            residue_metadata = _windows_regular_file_supported_metadata(
+                residue_handle,
+                error_prefix=error_prefix,
+            )
+            exact_residue_identity = (
+                int(residue_identity[0]),
+                int(residue_identity[1]),
+                len(residue_raw),
+            )
+        if residue_metadata != canonical_metadata:
+            raise OSError(
+                f"{error_prefix}_canonical_swap_metadata_mismatch"
+            )
+        _delete_activity_group_evidence_exact(
+            root,
+            residue_path,
+            expected_sha256=expected_residue_sha256,
+            max_bytes=max_bytes,
+            parent_binding=binding,
+            expected_identity=exact_residue_identity,
+            expected_windows_metadata=residue_metadata,
+            windows_cas_error_prefix=error_prefix,
+        )
+        final_bytes = _read_activity_group_regular_bytes_bound(
+            root,
+            binding,
+            canonical_path,
+            max_bytes=max_bytes,
+        )
+        if final_bytes != held_raw:
+            raise OSError(
+                f"{error_prefix}_canonical_changed_during_swap_cleanup"
+            )
+        if (
+            _windows_regular_file_supported_metadata(
+                canonical_handle,
+                error_prefix=error_prefix,
+            )
+            != canonical_metadata
+        ):
+            raise OSError(
+                f"{error_prefix}_canonical_changed_during_swap_cleanup"
+            )
 
 
 def _cleanup_activity_group_canonical_swap_residue(
@@ -40720,14 +41873,17 @@ def _cleanup_activity_group_canonical_swap_residue(
                 raise OSError(
                     "activity_group_canonical_swap_evidence_changed"
                 )
-            _delete_activity_group_evidence_exact(
+            _delete_cas_residue_while_canonical_stable(
                 root,
+                binding,
+                path,
                 residue,
-                expected_sha256=residue_sha256,
+                expected_current_sha256=expected_current_sha256,
+                expected_residue_sha256=residue_sha256,
                 max_bytes=(
                     ACTIVITY_GROUP_MEMBERSHIP_MAX_CANONICAL_FILE_BYTES
                 ),
-                parent_binding=binding,
+                error_prefix="activity_group",
             )
             removed += 1
         final_bytes = _read_activity_group_regular_bytes_bound(
@@ -40744,50 +41900,101 @@ def _cleanup_activity_group_canonical_swap_residue(
     return removed
 
 
-def _replace_activity_group_canonical_bytes_compare_and_swap(
+def _replace_regular_file_bytes_compare_and_swap(
     root: Path,
     path: Path,
     *,
     expected_bytes: bytes,
     replacement_bytes: bytes,
-    request_sha256: str,
+    transaction_sha256: str,
+    swap_suffix: str,
+    max_bytes: int,
+    error_prefix: str,
     allow_already_replacement: bool = False,
 ) -> bool:
-    """Replace exactly expected canonical bytes without overwriting unknown data."""
+    """Atomically compare-and-swap one regular file without hiding unknown data."""
 
     if (
-        len(expected_bytes)
-        > ACTIVITY_GROUP_MEMBERSHIP_MAX_CANONICAL_FILE_BYTES
-        or len(replacement_bytes)
-        > ACTIVITY_GROUP_MEMBERSHIP_MAX_CANONICAL_FILE_BYTES
+        not isinstance(max_bytes, int)
+        or isinstance(max_bytes, bool)
+        or max_bytes < 1
+        or len(expected_bytes) > max_bytes
+        or len(replacement_bytes) > max_bytes
     ):
-        raise OSError("activity_group_canonical_swap_bytes_too_large")
-    swap_path, previous_path = activity_group_canonical_swap_paths(
-        path,
-        request_sha256,
-    )
+        raise OSError(f"{error_prefix}_canonical_swap_bytes_too_large")
+    if not re.fullmatch(r"[a-z][a-z0-9_]{0,63}", error_prefix):
+        raise OSError("canonical_swap_error_prefix_invalid")
+    try:
+        swap_path, previous_path = regular_file_canonical_swap_paths(
+            path,
+            transaction_sha256,
+            swap_suffix=swap_suffix,
+        )
+    except ValueError:
+        raise OSError(f"{error_prefix}_canonical_swap_binding_invalid") from None
     with _activity_group_bound_directory_chain(
         root,
         path.parent,
     ) as binding:
-        current_bytes = _read_activity_group_regular_bytes_bound(
-            root,
-            binding,
-            path,
-            max_bytes=ACTIVITY_GROUP_MEMBERSHIP_MAX_CANONICAL_FILE_BYTES,
-        )
+        try:
+            current_bytes: bytes | None = (
+                _read_activity_group_regular_bytes_bound(
+                    root,
+                    binding,
+                    path,
+                    max_bytes=max_bytes,
+                )
+            )
+        except FileNotFoundError:
+            current_bytes = None
         swap_bytes = _activity_group_swap_residue_bytes(
             root,
             binding,
             swap_path,
+            max_bytes=max_bytes,
         )
         previous_bytes = _activity_group_swap_residue_bytes(
             root,
             binding,
             previous_path,
+            max_bytes=max_bytes,
         )
-        if swap_bytes is not None and previous_bytes is not None:
-            raise OSError("activity_group_canonical_swap_evidence_ambiguous")
+        windows_gap_resume = bool(
+            os.name == "nt"
+            and current_bytes is None
+            and swap_bytes == replacement_bytes
+            and previous_bytes == expected_bytes
+        )
+        if (
+            swap_bytes is not None
+            and previous_bytes is not None
+            and not windows_gap_resume
+        ):
+            raise OSError(f"{error_prefix}_canonical_swap_evidence_ambiguous")
+
+        if windows_gap_resume:
+            _replace_activity_group_file_with_backup_windows(
+                path,
+                swap_path,
+                previous_path,
+                expected_replaced_bytes=expected_bytes,
+                expected_replacement_bytes=replacement_bytes,
+                max_bytes=max_bytes,
+                error_prefix=error_prefix,
+            )
+            final_bytes = _read_activity_group_regular_bytes_bound(
+                root,
+                binding,
+                path,
+                max_bytes=max_bytes,
+            )
+            if final_bytes != replacement_bytes:
+                raise OSError(
+                    f"{error_prefix}_canonical_swap_verification_failed"
+                )
+            return True
+        if current_bytes is None:
+            raise OSError(f"{error_prefix}_canonical_changed_before_swap")
 
         residue_path: Path | None = None
         residue_bytes: bytes | None = None
@@ -40803,17 +42010,21 @@ def _replace_activity_group_canonical_bytes_compare_and_swap(
                 current_bytes == replacement_bytes
                 and residue_bytes == expected_bytes
             ):
-                _delete_activity_group_evidence_exact(
+                _delete_cas_residue_while_canonical_stable(
                     root,
+                    binding,
+                    path,
                     residue_path,
-                    expected_sha256=(
+                    expected_current_sha256=(
+                        "sha256:"
+                        + hashlib.sha256(current_bytes).hexdigest()
+                    ),
+                    expected_residue_sha256=(
                         "sha256:"
                         + hashlib.sha256(residue_bytes).hexdigest()
                     ),
-                    max_bytes=(
-                        ACTIVITY_GROUP_MEMBERSHIP_MAX_CANONICAL_FILE_BYTES
-                    ),
-                    parent_binding=binding,
+                    max_bytes=max_bytes,
+                    error_prefix=error_prefix,
                 )
                 return True
             if (
@@ -40827,30 +42038,26 @@ def _replace_activity_group_canonical_bytes_compare_and_swap(
                         "sha256:"
                         + hashlib.sha256(residue_bytes).hexdigest()
                     ),
-                    max_bytes=(
-                        ACTIVITY_GROUP_MEMBERSHIP_MAX_CANONICAL_FILE_BYTES
-                    ),
+                    max_bytes=max_bytes,
                     parent_binding=binding,
                 )
                 current_bytes = _read_activity_group_regular_bytes_bound(
                     root,
                     binding,
                     path,
-                    max_bytes=(
-                        ACTIVITY_GROUP_MEMBERSHIP_MAX_CANONICAL_FILE_BYTES
-                    ),
+                    max_bytes=max_bytes,
                 )
             else:
                 raise OSError(
-                    "activity_group_canonical_swap_evidence_changed"
+                    f"{error_prefix}_canonical_swap_evidence_changed"
                 )
 
         if current_bytes == replacement_bytes:
             if allow_already_replacement:
                 return False
-            raise OSError("activity_group_canonical_changed_before_swap")
+            raise OSError(f"{error_prefix}_canonical_changed_before_swap")
         if current_bytes != expected_bytes:
-            raise OSError("activity_group_canonical_changed_before_swap")
+            raise OSError(f"{error_prefix}_canonical_changed_before_swap")
         if expected_bytes == replacement_bytes:
             return False
 
@@ -40864,7 +42071,7 @@ def _replace_activity_group_canonical_bytes_compare_and_swap(
                 getattr(libc, "renameat2", None) is None
                 and getattr(libc, "renameatx_np", None) is None
             ):
-                raise OSError("activity_group_atomic_exchange_unsupported")
+                raise OSError(f"{error_prefix}_atomic_exchange_unsupported")
 
         _write_activity_group_bytes_new_file_bound(
             binding,
@@ -40879,8 +42086,23 @@ def _replace_activity_group_canonical_bytes_compare_and_swap(
                     path,
                     swap_path,
                     previous_path,
+                    expected_replaced_bytes=expected_bytes,
+                    expected_replacement_bytes=replacement_bytes,
+                    max_bytes=max_bytes,
+                    error_prefix=error_prefix,
                 )
-                capture_path = previous_path
+                swap_performed = True
+                final_bytes = _read_activity_group_regular_bytes_bound(
+                    root,
+                    binding,
+                    path,
+                    max_bytes=max_bytes,
+                )
+                if final_bytes != replacement_bytes:
+                    raise OSError(
+                        f"{error_prefix}_canonical_swap_verification_failed"
+                    )
+                return True
             else:
                 _exchange_activity_group_entries_posix(
                     binding,
@@ -40893,24 +42115,20 @@ def _replace_activity_group_canonical_bytes_compare_and_swap(
                 root,
                 binding,
                 capture_path,
-                max_bytes=(
-                    ACTIVITY_GROUP_MEMBERSHIP_MAX_CANONICAL_FILE_BYTES
-                ),
+                max_bytes=max_bytes,
             )
             installed_bytes = _read_activity_group_regular_bytes_bound(
                 root,
                 binding,
                 path,
-                max_bytes=(
-                    ACTIVITY_GROUP_MEMBERSHIP_MAX_CANONICAL_FILE_BYTES
-                ),
+                max_bytes=max_bytes,
             )
             if installed_bytes != replacement_bytes:
                 # An external edit arrived after the atomic swap. Keep that
                 # unknown occupant at the public canonical name and retain the
                 # captured entry as recovery evidence.
                 raise OSError(
-                    "activity_group_canonical_changed_during_swap"
+                    f"{error_prefix}_canonical_changed_during_swap"
                 )
             if captured_bytes != expected_bytes:
                 # The swap captured an edit that arrived before commit. First
@@ -40933,9 +42151,7 @@ def _replace_activity_group_canonical_bytes_compare_and_swap(
                         root,
                         binding,
                         replacement_capture_path,
-                        max_bytes=(
-                            ACTIVITY_GROUP_MEMBERSHIP_MAX_CANONICAL_FILE_BYTES
-                        ),
+                        max_bytes=max_bytes,
                     )
                 )
                 restore_source = capture_path
@@ -40955,7 +42171,7 @@ def _replace_activity_group_canonical_bytes_compare_and_swap(
                     # remains visible; all captured bytes remain private.
                     pass
                 raise OSError(
-                    "activity_group_canonical_changed_during_swap"
+                    f"{error_prefix}_canonical_changed_during_swap"
                 )
 
             _delete_activity_group_evidence_exact(
@@ -40965,33 +42181,45 @@ def _replace_activity_group_canonical_bytes_compare_and_swap(
                     "sha256:"
                     + hashlib.sha256(captured_bytes).hexdigest()
                 ),
-                max_bytes=(
-                    ACTIVITY_GROUP_MEMBERSHIP_MAX_CANONICAL_FILE_BYTES
-                ),
+                max_bytes=max_bytes,
                 parent_binding=binding,
             )
             final_bytes = _read_activity_group_regular_bytes_bound(
                 root,
                 binding,
                 path,
-                max_bytes=(
-                    ACTIVITY_GROUP_MEMBERSHIP_MAX_CANONICAL_FILE_BYTES
-                ),
+                max_bytes=max_bytes,
             )
             if final_bytes != replacement_bytes:
                 raise OSError(
-                    "activity_group_canonical_swap_verification_failed"
+                    f"{error_prefix}_canonical_swap_verification_failed"
                 )
             return True
         finally:
             if not swap_performed:
-                for candidate in (swap_path, previous_path):
+                # Once the first Windows move has happened, `.previous` is the
+                # only durable copy of the old occupant.  Never clean either
+                # residue from a failure path while that name exists.
+                try:
+                    preserve_residues = (
+                        _activity_group_swap_residue_bytes(
+                            root,
+                            binding,
+                            previous_path,
+                            max_bytes=max_bytes,
+                        )
+                        is not None
+                    )
+                except OSError:
+                    preserve_residues = True
+                for candidate in (() if preserve_residues else (swap_path,)):
                     try:
                         candidate_bytes = (
                             _activity_group_swap_residue_bytes(
                                 root,
                                 binding,
                                 candidate,
+                                max_bytes=max_bytes,
                             )
                         )
                         if candidate_bytes != replacement_bytes:
@@ -41005,13 +42233,35 @@ def _replace_activity_group_canonical_bytes_compare_and_swap(
                                     candidate_bytes
                                 ).hexdigest()
                             ),
-                            max_bytes=(
-                                ACTIVITY_GROUP_MEMBERSHIP_MAX_CANONICAL_FILE_BYTES
-                            ),
+                            max_bytes=max_bytes,
                             parent_binding=binding,
                         )
                     except OSError:
                         pass
+
+
+def _replace_activity_group_canonical_bytes_compare_and_swap(
+    root: Path,
+    path: Path,
+    *,
+    expected_bytes: bytes,
+    replacement_bytes: bytes,
+    request_sha256: str,
+    allow_already_replacement: bool = False,
+) -> bool:
+    """Preserve the activity-group CAS API over the shared safe primitive."""
+
+    return _replace_regular_file_bytes_compare_and_swap(
+        root,
+        path,
+        expected_bytes=expected_bytes,
+        replacement_bytes=replacement_bytes,
+        transaction_sha256=request_sha256,
+        swap_suffix=ACTIVITY_GROUP_MEMBERSHIP_CANONICAL_SWAP_SUFFIX,
+        max_bytes=ACTIVITY_GROUP_MEMBERSHIP_MAX_CANONICAL_FILE_BYTES,
+        error_prefix="activity_group",
+        allow_already_replacement=allow_already_replacement,
+    )
 
 
 def _activity_group_private_request(

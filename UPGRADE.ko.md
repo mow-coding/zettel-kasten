@@ -2,6 +2,80 @@
 
 [English Upgrade Guide](UPGRADE.md)
 
+## v0.4.1 긴급 전역 CLI 부트스트랩과 단일 link 적용
+
+v0.4.1은 범위가 좁은 긴급 복구 릴리스입니다. 아래 URL이 소스 문서에 있다는
+이유만으로 실행하지 마세요. 정확히 일치하는 공개 GitHub Release가 실제로
+존재하고 그 wheel을 자산으로 나열한 뒤에만 설치 명령이 됩니다.
+
+v0.4.0을 이미 `uv tool`로 설치했다면, 격리된 전역 CLI 환경을 공개된 정확한
+wheel로 교체합니다.
+
+```powershell
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.1/wom_kit-0.4.1-py3-none-any.whl"
+archive --version
+```
+
+`uv tool install`은 보통 `uv`가 관리하던 기존 도구를 교체합니다. `uv`가 관리하지
+않는 실행 파일 충돌을 명시적으로 보고한 경우가 아니면 `--force`를 붙이지 마세요.
+그 옵션은 기존 관리 도구 밖의 실행 파일도 교체할 수 있습니다.
+
+기존 WOM 프로세스를 먼저 닫고, 새 프로세스에서 `archive --version` 결과가
+정확히 `archive 0.4.1`인지 확인하세요. 이 명령은 `PATH`가 선택하는 전역 Python 도구만
+업데이트합니다. `.zettel-kasten/source`, project pin, archive, AI host에 별도로
+설치한 Agent Skill, 외부 provider는 바꾸지 않습니다.
+`project-version-update`, collision 변경, `project-bytecode-repair` 승인은
+v0.4.1에서도 고정 차단됩니다. 따라서 기존 project-local v0.4.0 mirror는 그대로
+남습니다. project mirror도 업데이트한 것처럼 보이게 pin을 손으로 고치지 마세요.
+
+### 다시 열린 작업
+
+구조화된 단일 `zettel-objet-link` 적용만 canonical fixed-close inventory에서
+빠졌습니다. 먼저 정확한 대상 하나를 미리 봅니다.
+
+```powershell
+archive zettel-objet-link <archive-root> `
+  --zettel-id <zettel-id> `
+  --object-id sha256:<64-lowercase-hex> `
+  --role <검토한-role> `
+  --dry-run `
+  --format json
+```
+
+본문을 노출하지 않는 반환 plan을 검토하세요. 그다음 같은 target·object·role과
+선택형 label, 반환된 정확한 plan digest, 사람 reviewer를 사용해 승인합니다.
+
+```powershell
+archive zettel-objet-link <archive-root> `
+  --zettel-id <zettel-id> `
+  --object-id sha256:<64-lowercase-hex> `
+  --role <검토한-role> `
+  --expected-plan-sha256 <64-lowercase-hex> `
+  --reviewed-by person:reviewer-id `
+  --approve `
+  --format json
+```
+
+미리보기에서 `--path`나 `--label`을 썼다면 승인할 때도 같은 값을 써야 합니다.
+로컬 대화형 Windows CLI가 native exact-human dialog를 표시합니다. binding은
+zettel 하나, manifest에 이미 등록된 Objet 하나, role과 선택형 label, 정확한
+plan·target set, snapshot·receipt effect, zettel별 고정 control artifact를
+묶습니다. writer는 변경 전에 이 사실을 다시 확인하고 durable readback까지
+검증합니다. MCP는 계속 plan/audit만 제공합니다.
+
+claim이 `started`에 남거나 effect를 확정할 수 없거나 approval reconciliation
+결과가 나오면 재시도하라는 뜻이 아닙니다. 멈추고 그 정확한 claim부터
+조사하세요. 두 번째 승인을 자동으로 만들지 마세요.
+
+### 계속 닫힌 작업
+
+`zettel-objet-link-revert`는 계속 preview-only입니다. enablement, selection,
+single capture, batch capture를 포함한 모든 objet-capture 승인도 고정 차단됩니다.
+따라서 v0.4.1의 현재 canonical fixed-close command는 78개입니다. v0.4.0
+목록에서 `zettel-objet-link` 하나만 빠졌습니다. 아래 v0.4.0 절과 정확히 79개인
+과거 릴리스 inventory는 변경하지 않습니다.
+[v0.4.1 릴리스 노트](wom-kit/docs/releases/v0.4.1.md)를 보세요.
+
 ## v0.4.0 정확한 사람 제어와 운영 마찰 개선
 
 정확한 v0.4.0 GitHub Release에 검증된 wheel이 있는 것을 확인한

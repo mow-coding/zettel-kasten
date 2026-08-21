@@ -406,12 +406,180 @@ def _validate_claim_document(
     return result
 
 
-def _read_claim(path: Path, *, archive_id: str, key: bytes | bytearray) -> dict[str, Any]:
+def _read_bound_claim_bytes(
+    path: Path,
+    *,
+    parent_binding: dict[str, Any],
+) -> bytes:
+    """Read one single-link claim through its already-bound parent."""
+
+    if parent_binding.get("path") != path.parent:
+        raise OSError("exact_human_approval_claim_parent_mismatch")
+    parent_descriptor = parent_binding.get("descriptor")
+    if isinstance(parent_descriptor, int):
+        flags = os.O_RDONLY | getattr(os, "O_BINARY", 0)
+        flags |= getattr(os, "O_NOFOLLOW", 0)
+        descriptor = os.open(path.name, flags, dir_fd=parent_descriptor)
+        try:
+            info = os.fstat(descriptor)
+            if (
+                not stat.S_ISREG(info.st_mode)
+                or info.st_nlink != 1
+                or info.st_size > _MAX_CLAIM_BYTES
+            ):
+                raise OSError("exact_human_approval_claim_file_unsafe")
+            chunks: list[bytes] = []
+            remaining = info.st_size
+            while remaining:
+                chunk = os.read(descriptor, min(remaining, 65536))
+                if not chunk:
+                    raise OSError("exact_human_approval_claim_read_incomplete")
+                chunks.append(chunk)
+                remaining -= len(chunk)
+            if os.read(descriptor, 1):
+                raise OSError("exact_human_approval_claim_file_changed")
+            return b"".join(chunks)
+        finally:
+            os.close(descriptor)
+
+    named_info = os.lstat(path)
+    if (
+        _is_reparse(named_info)
+        or not stat.S_ISREG(named_info.st_mode)
+        or named_info.st_nlink != 1
+        or named_info.st_size > _MAX_CLAIM_BYTES
+    ):
+        raise OSError("exact_human_approval_claim_file_unsafe")
+
+    import ctypes
+    from ctypes import wintypes
+
+    class ByHandleFileInformation(ctypes.Structure):
+        _fields_ = [
+            ("dwFileAttributes", wintypes.DWORD),
+            ("ftCreationTime", wintypes.FILETIME),
+            ("ftLastAccessTime", wintypes.FILETIME),
+            ("ftLastWriteTime", wintypes.FILETIME),
+            ("dwVolumeSerialNumber", wintypes.DWORD),
+            ("nFileSizeHigh", wintypes.DWORD),
+            ("nFileSizeLow", wintypes.DWORD),
+            ("nNumberOfLinks", wintypes.DWORD),
+            ("nFileIndexHigh", wintypes.DWORD),
+            ("nFileIndexLow", wintypes.DWORD),
+        ]
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    create_file = kernel32.CreateFileW
+    create_file.argtypes = [
+        wintypes.LPCWSTR,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.LPVOID,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.HANDLE,
+    ]
+    create_file.restype = wintypes.HANDLE
+    get_information = kernel32.GetFileInformationByHandle
+    get_information.argtypes = [
+        wintypes.HANDLE,
+        ctypes.POINTER(ByHandleFileInformation),
+    ]
+    get_information.restype = wintypes.BOOL
+    read_file = kernel32.ReadFile
+    read_file.argtypes = [
+        wintypes.HANDLE,
+        wintypes.LPVOID,
+        wintypes.DWORD,
+        ctypes.POINTER(wintypes.DWORD),
+        wintypes.LPVOID,
+    ]
+    read_file.restype = wintypes.BOOL
+    close_handle = kernel32.CloseHandle
+    close_handle.argtypes = [wintypes.HANDLE]
+    close_handle.restype = wintypes.BOOL
+
+    generic_read = 0x80000000
+    file_share_read = 0x00000001
+    open_existing = 3
+    file_flag_open_reparse_point = 0x00200000
+    file_attribute_directory = 0x00000010
+    file_attribute_reparse_point = 0x00000400
+    handle = create_file(
+        str(path),
+        generic_read,
+        file_share_read,
+        None,
+        open_existing,
+        file_flag_open_reparse_point,
+        None,
+    )
+    if handle == wintypes.HANDLE(-1).value:
+        raise ctypes.WinError(ctypes.get_last_error())
     try:
-        info = os.lstat(path)
-        if _is_reparse(info) or not stat.S_ISREG(info.st_mode):
+        information = ByHandleFileInformation()
+        if not get_information(handle, ctypes.byref(information)):
+            raise ctypes.WinError(ctypes.get_last_error())
+        size = (
+            int(information.nFileSizeHigh) << 32
+        ) | int(information.nFileSizeLow)
+        if (
+            information.dwFileAttributes
+            & (file_attribute_directory | file_attribute_reparse_point)
+            or information.nNumberOfLinks != 1
+            or size > _MAX_CLAIM_BYTES
+        ):
+            raise OSError("exact_human_approval_claim_file_unsafe")
+        chunks: list[bytes] = []
+        remaining = size
+        while remaining:
+            chunk_size = min(remaining, 65536)
+            buffer = ctypes.create_string_buffer(chunk_size)
+            read_count = wintypes.DWORD()
+            if not read_file(
+                handle,
+                buffer,
+                chunk_size,
+                ctypes.byref(read_count),
+                None,
+            ) or read_count.value == 0:
+                raise OSError("exact_human_approval_claim_read_incomplete")
+            chunks.append(buffer.raw[: read_count.value])
+            remaining -= read_count.value
+        return b"".join(chunks)
+    finally:
+        close_handle(handle)
+
+
+def _read_claim(
+    path: Path,
+    *,
+    archive_id: str,
+    key: bytes | bytearray,
+    bound_archive_root: Path | None = None,
+    claim_parent_binding: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    try:
+        if (
+            bound_archive_root is not None
+            and claim_parent_binding is not None
+        ):
+            if claim_parent_binding.get("path") != path.parent:
+                raise _fail("exact_human_approval_claim_path_unsafe")
+            raw = _read_bound_claim_bytes(
+                path,
+                parent_binding=claim_parent_binding,
+            )
+        elif (
+            bound_archive_root is not None
+            or claim_parent_binding is not None
+        ):
             raise _fail("exact_human_approval_claim_path_unsafe")
-        raw = path.read_bytes()
+        else:
+            info = os.lstat(path)
+            if _is_reparse(info) or not stat.S_ISREG(info.st_mode):
+                raise _fail("exact_human_approval_claim_path_unsafe")
+            raw = path.read_bytes()
     except FileNotFoundError:
         raise _fail("exact_human_approval_claim_missing") from None
     except ExactHumanApprovalError:
@@ -503,6 +671,11 @@ class _ClaimedExactHumanApproval:
     _context_sha256: str
     _authority_sha256: str
     _clock: Callable[[], datetime] = field(repr=False)
+    _bound_archive_root: Path | None = field(default=None, repr=False)
+    _claim_parent_binding: dict[str, Any] | None = field(
+        default=None,
+        repr=False,
+    )
     _status: str = field(default="started", init=False)
     _lock: Any = field(default_factory=threading.RLock, init=False, repr=False)
 
@@ -542,7 +715,11 @@ class _ClaimedExactHumanApproval:
         if self._status != "started":
             raise _fail("exact_human_approval_claim_state_invalid")
         current = _read_claim(
-            self._path, archive_id=self._archive_id, key=self._key
+            self._path,
+            archive_id=self._archive_id,
+            key=self._key,
+            bound_archive_root=self._bound_archive_root,
+            claim_parent_binding=self._claim_parent_binding,
         )
         if (
             current["status"] != "started"
@@ -654,6 +831,8 @@ class _ClaimedExactHumanApproval:
                     self._path.parent / f"{reference['approval_id']}.json",
                     archive_id=self._archive_id,
                     key=self._key,
+                    bound_archive_root=self._bound_archive_root,
+                    claim_parent_binding=self._claim_parent_binding,
                 )
             except ExactHumanApprovalError:
                 return None
@@ -787,9 +966,42 @@ class _ClaimedExactHumanApproval:
             _validate_claim_document(
                 finalized, archive_id=self._archive_id, key=self._key
             )
-            _atomic_replace(self._path, _canonical_bytes(finalized))
+            finalized_raw = _canonical_bytes(finalized)
+            if (
+                self._bound_archive_root is not None
+                and self._claim_parent_binding is not None
+            ):
+                from . import archive_services
+
+                current_raw = _canonical_bytes(current)
+                transaction_sha256 = "sha256:" + hashlib.sha256(
+                    b"wom-kit/exact-human-approval-claim-finalize/v0.1\x00"
+                    + current_raw
+                    + finalized_raw
+                ).hexdigest()
+                try:
+                    archive_services._replace_regular_file_bytes_compare_and_swap(
+                        self._bound_archive_root,
+                        self._path,
+                        expected_bytes=current_raw,
+                        replacement_bytes=finalized_raw,
+                        transaction_sha256=transaction_sha256,
+                        swap_suffix=".exact-human-approval-claim.swap",
+                        max_bytes=_MAX_CLAIM_BYTES,
+                        error_prefix="exact_human_approval",
+                    )
+                except OSError:
+                    raise _fail(
+                        "exact_human_approval_finalization_failed"
+                    ) from None
+            else:
+                _atomic_replace(self._path, finalized_raw)
             reread = _read_claim(
-                self._path, archive_id=self._archive_id, key=self._key
+                self._path,
+                archive_id=self._archive_id,
+                key=self._key,
+                bound_archive_root=self._bound_archive_root,
+                claim_parent_binding=self._claim_parent_binding,
             )
             if reread["status"] != status:
                 raise _fail("exact_human_approval_finalization_failed")
@@ -815,6 +1027,8 @@ def _claim_exact_human_approval_core(
     *,
     clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
     random_hex: Callable[[int], str] = secrets.token_hex,
+    bound_archive_root: Path | None = None,
+    claim_parent_binding: dict[str, Any] | None = None,
 ) -> _ClaimedExactHumanApproval:
     """Persist an authenticated started claim after an exact live decision."""
 
@@ -887,10 +1101,46 @@ def _claim_exact_human_approval_core(
             key,
         )
         _validate_claim_document(document, archive_id=archive_id, key=key)
-        claims_root = _claims_root(root, create=True)
+        if (
+            bound_archive_root is not None
+            and claim_parent_binding is not None
+        ):
+            claims_root = root.joinpath(*Path(CLAIMS_RELATIVE_ROOT).parts)
+            if (
+                root != bound_archive_root
+                or claim_parent_binding.get("path") != claims_root
+            ):
+                raise _fail("exact_human_approval_claim_path_unsafe")
+        elif (
+            bound_archive_root is not None
+            or claim_parent_binding is not None
+        ):
+            raise _fail("exact_human_approval_claim_path_unsafe")
+        else:
+            claims_root = _claims_root(root, create=True)
         claim_path = claims_root / f"{approval_id}.json"
-        _exclusive_create(claim_path, _canonical_bytes(document))
-        reread = _read_claim(claim_path, archive_id=archive_id, key=key)
+        if claim_parent_binding is not None:
+            from . import archive_services
+
+            try:
+                archive_services._write_activity_group_bytes_new_file_bound(
+                    claim_parent_binding,
+                    claim_path,
+                    _canonical_bytes(document),
+                )
+            except FileExistsError:
+                raise _fail("exact_human_approval_claim_replayed") from None
+            except OSError:
+                raise _fail("exact_human_approval_claim_commit_failed") from None
+        else:
+            _exclusive_create(claim_path, _canonical_bytes(document))
+        reread = _read_claim(
+            claim_path,
+            archive_id=archive_id,
+            key=key,
+            bound_archive_root=bound_archive_root,
+            claim_parent_binding=claim_parent_binding,
+        )
         if reread["status"] != "started":
             raise _fail("exact_human_approval_claim_commit_failed")
         return _ClaimedExactHumanApproval(
@@ -901,6 +1151,8 @@ def _claim_exact_human_approval_core(
             _context_sha256=context_sha256,
             _authority_sha256=authority_sha256,
             _clock=clock,
+            _bound_archive_root=bound_archive_root,
+            _claim_parent_binding=claim_parent_binding,
         )
     except BaseException:
         for index in range(len(key)):

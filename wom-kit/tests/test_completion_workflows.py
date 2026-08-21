@@ -2992,7 +2992,7 @@ class CompletionWorkflowTests(unittest.TestCase):
             )
             self.assertFalse(replay["ok"], replay)
 
-    def test_zettel_objet_link_and_revert_approve_fail_closed_without_writes(self) -> None:
+    def test_zettel_objet_link_exact_approval_writes_while_revert_stays_closed(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.fake_archive(Path(tmp) / "archive")
             zettel_id = "zet_20240504_fake_lunch_thought"
@@ -3025,62 +3025,87 @@ class CompletionWorkflowTests(unittest.TestCase):
             self.assertTrue(plan["summary"]["manifest_record_verified"])
             self.assertEqual(plan["summary"]["current_asset_count"], 0)
 
-            before_apply = {
-                path.relative_to(archive_root).as_posix(): path.read_bytes()
-                for path in archive_root.rglob("*")
-                if path.is_file()
-            }
-            apply_code, apply_output = self.run_cli(
-                [
-                    "zettel-objet-link",
-                    str(archive_root),
-                    "--zettel-id",
-                    zettel_id,
-                    "--object-id",
-                    object_id,
-                    "--role",
-                    "source_document",
-                    "--label",
-                    private_label,
-                    "--expected-plan-sha256",
-                    plan["summary"]["plan_sha256"],
-                    "--approve",
-                    "--reviewed-by",
-                    "person:test",
-                    "--format",
-                    "json",
-                ]
-            )
-            self.assertEqual(apply_code, 1, apply_output)
+            def execute_exact_approval(
+                root,
+                context,
+                writer,
+            ):
+                decision = ExactHumanApprovalDecision(
+                    approved=True,
+                    synthetic_acknowledged=False,
+                    reason_code="exact_human_approval_approved",
+                    plan_sha256=context.plan_sha256,
+                    target_binding_sha256=context.target_binding_sha256,
+                )
+                with archive_cli._zettel_objet_link_post_decision_boundary(
+                    root
+                ) as filesystem_boundary:
+                    claim = claim_exact_human_approval(
+                        root,
+                        context,
+                        decision,
+                        bytes(reversed(range(32))),
+                        bound_archive_root=filesystem_boundary[0],
+                        claim_parent_binding=filesystem_boundary[1],
+                    )
+                    try:
+                        result = writer(claim)
+                        if result.get("ok") is True:
+                            claim.finalize_succeeded()
+                        else:
+                            claim.finalize_failed("operation_blocked")
+                        return result
+                    finally:
+                        claim.close()
+
+            with mock.patch.object(
+                archive_cli,
+                "_execute_zettel_objet_link_exact_human_approved_write",
+                side_effect=execute_exact_approval,
+            ) as exact_workflow:
+                apply_code, apply_output = self.run_cli(
+                    [
+                        "zettel-objet-link",
+                        str(archive_root),
+                        "--zettel-id",
+                        zettel_id,
+                        "--object-id",
+                        object_id,
+                        "--role",
+                        "source_document",
+                        "--label",
+                        private_label,
+                        "--expected-plan-sha256",
+                        plan["summary"]["plan_sha256"],
+                        "--approve",
+                        "--reviewed-by",
+                        "person:test",
+                        "--format",
+                        "json",
+                    ]
+                )
+            exact_workflow.assert_called_once()
+            self.assertEqual(apply_code, 0, apply_output)
             self.assertNotIn(private_label, apply_output)
             applied = json.loads(apply_output)
-            self.assertEqual(applied["state"], "blocked")
-            self.assertEqual(
-                applied["blockers"],
-                ["compound_exact_human_approval_binding_required"],
+            self.assertTrue(applied["ok"], applied)
+            self.assertEqual(applied["state"], "written")
+            self.assertTrue(applied["approved"])
+            self.assertTrue(applied["privacy_guards"]["writes"])
+            self.assertNotEqual(zettel_path.read_bytes(), before_bytes)
+            self.assertIn(
+                "receipts/objects/zettel-links/.locks/",
+                applied["summary"]["control_artifact_path"],
             )
-            self.assertEqual(applied["files_written"], [])
-            self.assertFalse(applied["privacy_guards"]["writes"])
-            self.assertEqual(zettel_path.read_bytes(), before_bytes)
-            self.assertEqual(
-                {
-                    path.relative_to(archive_root).as_posix(): path.read_bytes()
-                    for path in archive_root.rglob("*")
-                    if path.is_file()
-                },
-                before_apply,
+            receipt_path = archive_root / applied["summary"]["receipt_path"]
+            self.assert_schema_instance(
+                "zettel-objet-link-receipt.schema.json",
+                json.loads(receipt_path.read_text(encoding="utf-8")),
             )
 
-            historical = self.install_historical_zettel_objet_link_fixture(
-                archive_root,
-                zettel_id=zettel_id,
-                object_id=object_id,
-                role="source_document",
-                label=private_label,
-            )
             revert_plan = completion_workflows.zettel_objet_link_revert_plan(
                 archive_root,
-                receipt=historical["summary"]["receipt_path"],
+                receipt=applied["summary"]["receipt_path"],
             )
             self.assertTrue(revert_plan["ok"], revert_plan)
             before_revert = {
@@ -3093,7 +3118,7 @@ class CompletionWorkflowTests(unittest.TestCase):
                     "zettel-objet-link-revert",
                     str(archive_root),
                     "--receipt",
-                    historical["summary"]["receipt_path"],
+                    applied["summary"]["receipt_path"],
                     "--expected-plan-sha256",
                     revert_plan["summary"]["plan_sha256"],
                     "--approve",

@@ -2,11 +2,19 @@
 
 상태: 공개 navigation baseline
 날짜: 2026-05-27
-갱신: 2026-08-20
+갱신: 2026-08-21
 철학 갱신: 2026-07-15
 하네스 호환 경계 갱신: 2026-07-16
 
-현재 v0.4.0 쓰기 경계: compound, batch, revert, archive-authority, durable,
+현재 v0.4.1 변경점: `zettel-objet-link --approve` 하나에 작업 전용 로컬
+exact-human binding이 생겼습니다. 대응하는 revert, 모든 Objet capture 쓰기,
+project updater/collision/bytecode 쓰기는 계속 고정 차단됩니다. `archive
+capabilities --machine`이 parser에서 직접 만든 현재 inventory에는 고정 차단
+canonical 실행 경로 78개가 있고, 제공된 고정 차단 항목은 모두 일치합니다.
+이 inventory는 archive별 선행 조건을 검사하지 않으며, `--approve`가 없다는
+사실만으로 read-only라고 단정할 수 없습니다.
+
+과거 v0.4.0 쓰기 경계: compound, batch, revert, archive-authority, durable,
 external 범주의 canonical top-level 명령 79개는 각 명령의 plan/dry-run/audit 동작만
 유지합니다. 승인 branch는 비공개 target, project, input, credential, provider를
 읽기 전에 `compound_exact_human_approval_binding_required`로 실패하며 아무것도
@@ -15,9 +23,10 @@ external 범주의 canonical top-level 명령 79개는 각 명령의 plan/dry-ru
 중첩 derive capture, exact AI 경로가 아닌 draft 생성, 실제 init,
 parcel/pack 생성은 별도로 고정 차단됩니다.
 
-Letter 138은 v0.4.0 기능이 아닌 긴급 후속 범위입니다. 현재 Notion recovery는
-page body 또는 location만 다루며 완전한 source mirror가 아니고, 과거
-typed-property 유실을 탐지하거나 복구하지 않습니다.
+과거 v0.4.0 범위 기록: Letter 138은 v0.4.0 기능이 아닌 긴급 후속
+범위입니다. 현재 Notion recovery는 page body 또는 location만 다루며 완전한
+source mirror가 아니고, 과거 typed-property 유실을 탐지하거나 복구하지
+않습니다.
 
 이 저장소는 공개 프로젝트 기록을 의도적으로 네 종류로 나눕니다.
 
@@ -77,6 +86,7 @@ typed-property 유실을 탐지하거나 복구하지 않습니다.
 - [Credential Capability Contract](credential-capability-contract.md)
 - [정확한 사람 승인 계약](exact-human-approval-contract.md)
 - [v0.4.0 정확한 사람 제어와 운영 마찰 개선 결정](archive-infra-decision-log-2026-08-20-v0400-letter136-operator-friction.md)
+- [v0.4.1 Letter 140 정확 링크 복구 결정](archive-infra-decision-log-2026-08-21-v041-letter140-exact-link-recovery.md)
 - [Human Artifact Store와 비공개 registry 계약](human-artifact-store-contract.md)
 - [프로젝트 버전 업데이트](project-version-update.md)
 - [Derived Text Capture와 paired batch 복구](derived-text.md)
@@ -438,6 +448,7 @@ local archive
 - [v0.2.11 Delegate Capability Contract Work Log](../plans/work-log-2026-05-23-delegate-capability-contract.md)
 - [Changelog](../../CHANGELOG.md)
 - [Release Notes](releases/)
+- [v0.4.1 릴리스 노트](releases/v0.4.1.md)
 - [v0.4.0 릴리스 노트](releases/v0.4.0.md)
 - [v0.3.320 릴리스 노트](releases/v0.3.320.md)
 - [v0.3.308 릴리스 노트](releases/v0.3.308.md)
@@ -479,6 +490,10 @@ Schemas:
 
 - [Schemas Directory](../schemas/)
 - [Source-Fidelity Draft Receipt Schema](../schemas/source-fidelity-draft-receipt.schema.json)
+- [Content-Free CLI Error Envelope Schema](../schemas/cli-error-v0.1.schema.json)
+- [Command Approval Status Inventory Schema](../schemas/command-approval-status-inventory-v0.1.schema.json)
+- [Exact-Human Operation Approval Schema](../schemas/operation-exact-human-approval-v0.1.schema.json)
+- [Zettel-Objet Link Receipt v0.1/v0.2 Reader Schema](../schemas/zettel-objet-link-receipt.schema.json)
 - [IMAP Mailbox Adapter Manifest Schema](../schemas/imap-mailbox-adapter-manifest.schema.json)
 - [Credential Capability v0.1 Schema](../schemas/credential-capability-v0.1.schema.json)
 
