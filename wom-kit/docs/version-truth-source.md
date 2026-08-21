@@ -1,8 +1,10 @@
 # WOM-kit Version Truth Source
 
-Status: v0.4.1 emergency exact Zettel–Objet link recovery and global CLI bootstrap
+Status: v0.4.2 read-only Git backup planning and global CLI bootstrap
 
-Current checkpoint: Status: v0.4.1 one exact link apply plus content-free operator recovery
+Current checkpoint: Status: v0.4.2 bounded Git plan/reconciliation with no writer
+
+Previous checkpoint: Status: v0.4.1 one exact link apply plus content-free operator recovery
 
 Previous checkpoint: Status: v0.4.0 exact human approval and operator-friction checkpoint
 
@@ -15,6 +17,21 @@ Previous checkpoint: Status: v0.3.291 read-only runtime alignment plus approval-
 WOM-kit has several places where a human or AI might see a version-like value:
 the installed CLI, the source checkout, and a project-local pin left by a setup
 or runtime workflow. This page defines the safe order for checking them.
+
+## Current Public Tool
+
+The v0.4.2 URL is a conditional release-artifact contract. Use it only after
+the matching public GitHub Release exists and lists the exact wheel:
+
+```powershell
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.2/wom_kit-0.4.2-py3-none-any.whl"
+archive --version
+```
+
+Require exactly `archive 0.4.2` from a new process. The installed runtime adds
+read-only `git-backup-plan` and `git-backup-reconcile-plan`; it adds no Git
+writer and does not update a project-local source mirror or pin. See [Git
+Backup Plan And Reconciliation Plan](git-backup-plan.md).
 
 ## Canonical Checks
 
@@ -196,7 +213,7 @@ The bridge runs the verified project source for one invocation. It does not:
 If source/pin metadata is incomplete or inconsistent, or any local release
 integrity check fails, the result fails closed and provides no executable
 bridge argv. A present but unverified mirror also makes the command nonzero.
-Preview a verified `project-version-update --dry-run` and stop. In v0.4.1
+Preview a verified `project-version-update --dry-run` and stop. In v0.4.2
 updater approval returns `compound_exact_human_approval_binding_required`
 before private project/source/Git/pin reads, fetch, or mutation and writes no
 source, pin, lock, or receipt.
@@ -262,7 +279,7 @@ checkout and keep the original checkout unchanged for diagnosis.
 
 ## Project Update Preview And Historical Contract
 
-The current v0.4.1 command provides the bounded preview only:
+The current v0.4.2 command provides the bounded preview only:
 
 ```powershell
 archive project-version-update <project-or-archive-root> `
@@ -276,7 +293,7 @@ archive project-version-update <project-or-archive-root> `
 Approval returns `compound_exact_human_approval_binding_required` before
 private project reads, fetch, materialization, pin mutation, lock creation, or
 receipt publication. The implementation details below describe historical
-v0.3.315 evidence only and grant no v0.4.1 write authority.
+v0.3.315 evidence only and grant no v0.4.2 write authority.
 
 From v0.3.315, a locally available exact target uses the same digest-bound
 materialization planner in preview and approval. Its cross-map covers the

@@ -6,13 +6,22 @@ Updated: 2026-08-21
 Philosophy clarified: 2026-07-15
 Harness compatibility clarified: 2026-07-16
 
-Current v0.4.1 delta: `zettel-objet-link --approve` now has an
+Current v0.4.2 delta: `git-backup-plan` and
+`git-backup-reconcile-plan` add bounded, content-free, CLI-only Git inspection
+and remote-ref reconciliation. They never add, commit, fetch, pull, push,
+delete, or change a ref; both keep `ready_for_write: false`,
+`writer_available: false`, and `would_change: []`. A matching `ls-remote`
+result is Git-transport evidence, not provider confirmation. v0.4.2 addresses
+only the read-only planning foundation of Letter 139, not its requested
+end-to-end backup writer.
+
+Previous v0.4.1 write boundary: `zettel-objet-link --approve` has an
 operation-specific local exact-human binding. Its matching revert, every Objet
 capture writer, and the project updater/collision/bytecode writers remain fixed
-closed. `archive capabilities --machine` reports the parser-derived current
-inventory: 78 fixed-closed canonical executable paths, with all supplied
-fixed-close entries matched. The inventory does not evaluate prerequisites,
-and lack of `--approve` is not proof that a command is read-only.
+closed. `archive capabilities --machine` reports the parser-derived inventory:
+78 fixed-closed canonical executable paths, with all supplied fixed-close
+entries matched. The inventory does not evaluate prerequisites, and lack of
+`--approve` is not proof that a command is read-only.
 
 Historical v0.4.0 write boundary: 79 canonical top-level compound, batch, revert,
 archive-authority, durable, and external commands remain available only for
@@ -89,6 +98,7 @@ Supporting philosophy and model docs:
 - [Exact Human Approval Contract](exact-human-approval-contract.md)
 - [v0.4.0 Exact Human Control And Operator Friction Decision](archive-infra-decision-log-2026-08-20-v0400-letter136-operator-friction.md)
 - [v0.4.1 Letter 140 Exact Link Recovery Decision](archive-infra-decision-log-2026-08-21-v041-letter140-exact-link-recovery.md)
+- [v0.4.2 Letter 139 Read-Only Git Backup Planning Decision](archive-infra-decision-log-2026-08-21-v042-letter139-read-only-git-backup-planning.md)
 - [Human Artifact Store And Private Registry Contract](human-artifact-store-contract.md)
 - [Project Version Update](project-version-update.md)
 - [Derived Text Capture And Paired-Batch Recovery](derived-text.md)
@@ -102,6 +112,7 @@ Supporting philosophy and model docs:
 - [Secret Signal Taxonomy](secret-signal-taxonomy.md)
 - [Local Sovereignty And Backup Authority](local-sovereignty-and-backup-authority.md)
 - [Backup Evidence Status](backup-evidence-status.md)
+- [Git Backup Plan And Reconciliation Plan](git-backup-plan.md)
 - [Observed Source-Reference Coverage And Recorded Storage Evidence](source-reference-coverage-audit.md)
 - [AI Start-Here Quick And Full Inspection](ai-start-here.md)
 - [Archive Identity Reconcile](archive-identity-reconcile.md)
@@ -462,6 +473,7 @@ These documents record public-safe work already performed.
 - [v0.2.11 Delegate Capability Contract Work Log](../plans/work-log-2026-05-23-delegate-capability-contract.md)
 - [Changelog](../../CHANGELOG.md)
 - [Release Notes](releases/)
+- [v0.4.2 Release Note](releases/v0.4.2.md)
 - [v0.4.1 Release Note](releases/v0.4.1.md)
 - [v0.4.0 Release Note](releases/v0.4.0.md)
 - [v0.3.320 Release Note](releases/v0.3.320.md)

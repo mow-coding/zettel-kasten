@@ -2,6 +2,51 @@
 
 [English Upgrade Guide](UPGRADE.md)
 
+## v0.4.2 읽기 전용 Git 백업 계획
+
+v0.4.2는 Letter 139의 읽기 전용 계획 기반입니다. 아래 URL이 소스 문서에
+있다는 이유만으로 실행하지 마세요. 정확히 일치하는 공개 GitHub Release가
+실제로 존재하고 그 wheel을 자산으로 나열한 뒤에만 설치 명령이 됩니다.
+
+기존 격리 `uv tool` 설치를 다음 정확한 wheel로 교체합니다.
+
+```powershell
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.2/wom_kit-0.4.2-py3-none-any.whl"
+archive --version
+```
+
+기존 WOM 프로세스를 먼저 닫고 새 프로세스에서 정확히 `archive 0.4.2`인지
+확인하세요. 이 명령은 `PATH`가 선택하는 전역 Python 도구만 교체합니다.
+project-local source mirror·pin, archive 내용, Agent Skill, Git worktree,
+remote ref, provider는 바꾸지 않습니다.
+
+새 명령은 다음과 같이 점검만 합니다.
+
+```powershell
+archive git-backup-plan <archive-root> `
+  --remote origin `
+  --dry-run `
+  --format json
+
+archive git-backup-reconcile-plan <archive-root> `
+  --expected-plan-sha256 sha256:<검토한-plan의-소문자-64자리-hex> `
+  --remote origin `
+  --dry-run `
+  --format json
+```
+
+두 명령은 `ready_for_write: false`, `writer_available: false`,
+`would_change: []`를 유지합니다. add, reset, checkout, commit, merge,
+rebase, delete, fetch, pull, push, remote ref 변경을 하지 않습니다. 초기 remote
+observer는 익명 HTTPS만 사용합니다. 인증이 필요한 private HTTPS는
+`unavailable`일 수 있고 SSH/scp-like 또는 credential-bearing remote는 고정
+차단됩니다. 이 경계를 우회하려고 URL에 token을 넣지 마세요.
+
+`inspection_complete`는 백업 완료가 아닙니다. v0.4.2는 file·commit group을
+고르거나 commit을 만들거나 push·provider API 재조회·완료 근거 발행을 하지
+않습니다. [Git 백업 계획](wom-kit/docs/git-backup-plan.md)과
+[v0.4.2 릴리스 노트](wom-kit/docs/releases/v0.4.2.md)를 보세요.
+
 ## v0.4.1 긴급 전역 CLI 부트스트랩과 단일 link 적용
 
 v0.4.1은 범위가 좁은 긴급 복구 릴리스입니다. 아래 URL이 소스 문서에 있다는

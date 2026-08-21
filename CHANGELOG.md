@@ -6,6 +6,34 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.4.2 - 2026-08-22
+
+- Added CLI-only `git-backup-plan` and `git-backup-reconcile-plan` as bounded,
+  content-free, read-only observations of one Git worktree and exact remote
+  branch ref. Both commands keep `ready_for_write: false`,
+  `writer_available: false`, and `would_change: []`; no commit, fetch, pull,
+  push, ref change, archive mutation, approval form, or MCP writer is exposed.
+- Bound the plan digest to stable HEAD/index/tree/worktree, relevant Git
+  configuration, receipt/handoff context, content evidence, and exact
+  anonymous HTTPS remote-ref observations with prompting and credential
+  helpers disabled. Drift, unsupported Git states,
+  unsafe path/index forms, ambiguous transport, and exceeded bounds fail
+  closed instead of producing a partial plan.
+- Kept private paths, bodies, archive identity, absolute local paths, remote
+  URLs, credentials, commit messages, and raw errors out of the response.
+  Ignored items remain exclusions rather than deletion advice, and historical
+  receipts/handoff records are context evidence rather than guessed file
+  provenance.
+- Hardened the public-release privacy gate to scan the exact regular blobs in
+  the Git index separately from the worktree, regardless of tracked filename
+  extension. The bounded checker now rejects non-plain and changing states,
+  rechecks the index snapshot, and reports fixed content-free diagnostics
+  without printing a matched credential, path value, URL, or raw error.
+- Recorded v0.4.2 as only the planning/reconciliation foundation of Letter
+  139. Exact file selection, commit grouping, commit creation, push,
+  provider-side re-query, completion evidence, and legacy batch recovery still
+  require a separately reviewed future writer.
+
 ## v0.4.1 - 2026-08-21
 
 - Reopened the single `zettel-objet-link` apply route under the native exact-
