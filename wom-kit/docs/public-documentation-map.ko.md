@@ -6,10 +6,19 @@
 철학 갱신: 2026-07-15
 하네스 호환 경계 갱신: 2026-07-16
 
-현재 v0.4.1 변경점: `zettel-objet-link --approve` 하나에 작업 전용 로컬
-exact-human binding이 생겼습니다. 대응하는 revert, 모든 Objet capture 쓰기,
+현재 v0.4.2 변경점: `git-backup-plan`과
+`git-backup-reconcile-plan`이 제한된 content-free CLI 전용 Git 점검과 remote
+ref 재조정 계획을 제공합니다. add, commit, fetch, pull, push, delete, ref
+변경은 전혀 하지 않으며 두 명령은 항상 `ready_for_write: false`,
+`writer_available: false`, `would_change: []`를 유지합니다. 일치한
+`ls-remote` 결과는 Git transport 근거일 뿐 provider 확인이 아닙니다.
+v0.4.2는 Letter 139의 read-only 계획 기반만 다루며, 요청된 end-to-end 백업
+writer를 구현하지 않습니다.
+
+이전 v0.4.1 쓰기 경계: `zettel-objet-link --approve` 하나에는 작업 전용 로컬
+exact-human binding이 있습니다. 대응하는 revert, 모든 Objet capture 쓰기,
 project updater/collision/bytecode 쓰기는 계속 고정 차단됩니다. `archive
-capabilities --machine`이 parser에서 직접 만든 현재 inventory에는 고정 차단
+capabilities --machine`이 parser에서 직접 만든 inventory에는 고정 차단
 canonical 실행 경로 78개가 있고, 제공된 고정 차단 항목은 모두 일치합니다.
 이 inventory는 archive별 선행 조건을 검사하지 않으며, `--approve`가 없다는
 사실만으로 read-only라고 단정할 수 없습니다.
@@ -87,6 +96,7 @@ source mirror가 아니고, 과거 typed-property 유실을 탐지하거나 복�
 - [정확한 사람 승인 계약](exact-human-approval-contract.md)
 - [v0.4.0 정확한 사람 제어와 운영 마찰 개선 결정](archive-infra-decision-log-2026-08-20-v0400-letter136-operator-friction.md)
 - [v0.4.1 Letter 140 정확 링크 복구 결정](archive-infra-decision-log-2026-08-21-v041-letter140-exact-link-recovery.md)
+- [v0.4.2 Letter 139 읽기 전용 Git 백업 계획 결정](archive-infra-decision-log-2026-08-21-v042-letter139-read-only-git-backup-planning.md)
 - [Human Artifact Store와 비공개 registry 계약](human-artifact-store-contract.md)
 - [프로젝트 버전 업데이트](project-version-update.md)
 - [Derived Text Capture와 paired batch 복구](derived-text.md)
@@ -100,6 +110,7 @@ source mirror가 아니고, 과거 typed-property 유실을 탐지하거나 복�
 - [Secret Signal Taxonomy](secret-signal-taxonomy.md)
 - [Local Sovereignty And Backup Authority](local-sovereignty-and-backup-authority.md)
 - [로컬 백업 근거 상태](backup-evidence-status.md)
+- [Git 백업 계획과 재조정 계획](git-backup-plan.md)
 - [AI 스타팅 메뉴얼 빠른 안내와 전체 검진](ai-start-here.md)
 - [아카이브 신원 일치 dry-run 점검과 v0.4.0 고정 차단](archive-identity-reconcile.md)
 - [빠른 인수인계 문서와 전체 검진](runtime-context-quick-and-full-inspection.md)
@@ -448,6 +459,7 @@ local archive
 - [v0.2.11 Delegate Capability Contract Work Log](../plans/work-log-2026-05-23-delegate-capability-contract.md)
 - [Changelog](../../CHANGELOG.md)
 - [Release Notes](releases/)
+- [v0.4.2 릴리스 노트](releases/v0.4.2.md)
 - [v0.4.1 릴리스 노트](releases/v0.4.1.md)
 - [v0.4.0 릴리스 노트](releases/v0.4.0.md)
 - [v0.3.320 릴리스 노트](releases/v0.3.320.md)

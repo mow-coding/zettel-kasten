@@ -1,6 +1,8 @@
 # Runtime Canonical Entry Points
 
-Status: v0.4.1 Letter 140 recovery and command-truth checkpoint
+Status: v0.4.2 Letter 139 read-only Git backup planning checkpoint
+
+Previous checkpoint: Status: v0.4.1 Letter 140 recovery and command-truth checkpoint
 
 Previous checkpoint: Status: v0.4.0 exact human approval and operator-friction checkpoint
 
@@ -26,7 +28,23 @@ The underlying raw context packet remains available through:
 archive runtime-context <archive-root> --format json
 ```
 
-## v0.4.1 Current Runtime Delta
+## v0.4.2 Current Runtime Delta
+
+Two new CLI-only commands provide a read-only Git backup review basis:
+
+```powershell
+archive git-backup-plan <archive-root> --remote origin --dry-run --format json
+archive git-backup-reconcile-plan <archive-root> --expected-plan-sha256 sha256:<64-lowercase-hex> --remote origin --dry-run --format json
+```
+
+They inspect only the currently checked-out symbolic branch and one anonymous
+HTTPS remote ref. Both expose no `--approve` or MCP writer, keep
+`ready_for_write: false`, `writer_available: false`, and `would_change: []`,
+and perform no add, reset, checkout, commit, merge, rebase, delete, fetch,
+pull, push, or ref change. Authenticated/private HTTPS may report unavailable;
+SSH/scp-like and credential-bearing remotes fail closed. `inspection_complete`
+is a planning result, not backup completion. See [Git Backup Plan And
+Reconciliation Plan](git-backup-plan.md).
 
 Start command planning from the parser-derived inventory instead of guessing
 from a command name or an older document:
@@ -37,12 +55,12 @@ archive capabilities --machine --format json
 
 Its `data.approval_status_inventory` distinguishes
 `approval_available`, `approval_fixed_closed`, and `approval_not_exposed` for
-every canonical executable command path and its aliases. In v0.4.1, the parser
+every canonical executable command path and its aliases. In v0.4.2, the parser
 matches all 78 supplied fixed-close entries and reports zero unmatched entries.
 This is parser evidence only: it does not evaluate archive prerequisites, and
 `approval_not_exposed` does not mean that a command is read-only.
 
-The one current writer change is
+The v0.4.1 writer change remains current:
 `zettel-objet-link --dry-run|--approve`. Approval requires the exact digest from
 a fresh private plan, reviewer attribution, a local native exact-human dialog,
 an authenticated durable claim, writer-side revalidation, and a v0.2 link
@@ -58,12 +76,12 @@ approval still returns `compound_exact_human_approval_binding_required`. The
 remaining historical fixed-close commands retain the same boundary, so the
 current parser count is 78 rather than v0.4.0's historical 79.
 
-When an installed v0.4.0 global CLI must be bootstrapped and the exact public
-v0.4.1 GitHub Release wheel has been independently confirmed, use the public
+When an older global CLI must be replaced and the exact public
+v0.4.2 GitHub Release wheel has been independently confirmed, use the public
 wheel directly:
 
 ```powershell
-uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.1/wom_kit-0.4.1-py3-none-any.whl"
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.2/wom_kit-0.4.2-py3-none-any.whl"
 archive --version
 ```
 

@@ -1,20 +1,20 @@
 # WOM-kit Python 도구 설치
 
-상태: v0.4.1 조건부 GitHub wheel 및 정확한 사람 제어 경계
+상태: v0.4.2 조건부 GitHub wheel 및 읽기 전용 Git 계획 경계
 
 WOM-kit은 명령줄 도구입니다. 일반 앱 프로젝트의 Python 의존성과 섞지 말고
 별도의 격리된 Python 환경에 설치하는 것이 좋습니다.
 
-아래 v0.4.1 URL은 조건부 계약이며 공개 자산이 실제로 존재한다는 증거가
+아래 v0.4.2 URL은 조건부 계약이며 공개 자산이 실제로 존재한다는 증거가
 아닙니다. 정확히 일치하는 GitHub Release가 존재하고 검증된 wheel을 자산으로
 나열한 뒤에만 사용하세요. 소스 상태와 릴리스 증거의 구분은
-[v0.4.1 릴리스 노트](releases/v0.4.1.md)를 보세요.
+[v0.4.2 릴리스 노트](releases/v0.4.2.md)를 보세요.
 
-이미 설치된 v0.4.0 client는 `zettel-objet-link`를 계속 고정 차단하며,
-v0.4.1의 exact binding, control artifact, 공통 CLI error envelope,
-parser-derived approval inventory가 없습니다. 저장소 파일만 업데이트해도
-분리된 `uv tool` 또는 가상환경 wheel은 바뀌지 않습니다. 검증된 v0.4.1
-자산이 실제로 생긴 뒤 그 정확한 wheel을 설치하고 새 프로세스를 시작하세요.
+이미 설치된 v0.4.1 client에는 exact link binding이 있지만 v0.4.2의
+`git-backup-plan`과 `git-backup-reconcile-plan`은 없습니다. 저장소 파일만
+업데이트해도 분리된 `uv tool` 또는 가상환경 wheel은 바뀌지 않습니다.
+검증된 v0.4.2 자산이 실제로 생긴 뒤 그 정확한 wheel을 설치하고 새
+프로세스를 시작하세요.
 
 ## 권장 설치
 
@@ -23,9 +23,20 @@ parser-derived approval inventory가 없습니다. 저장소 파일만 업데이
 증거가 되지는 않습니다.
 
 ```powershell
-uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.1/wom_kit-0.4.1-py3-none-any.whl"
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.2/wom_kit-0.4.2-py3-none-any.whl"
 archive --version
 ```
+
+새 프로세스가 정확히 `archive 0.4.2`를 보고한 뒤 다음 읽기 전용 planner를
+사용할 수 있습니다.
+
+```powershell
+archive git-backup-plan <archive-root> --remote origin --dry-run --format json
+```
+
+이 명령은 commit, fetch, pull, push 등 어떤 쓰기도 하지 않고 체크아웃된
+symbolic branch와 익명 HTTPS remote ref 하나를 관찰합니다. 결과를 해석하기
+전에 [Git 백업 계획과 재조정 계획](git-backup-plan.md)을 읽으세요.
 
 `uv tool install`은 도구 전용 환경을 만들고 패키지가 제공하는 명령을 꺼내
 줍니다. WOM-kit은 `archive`, `wom`, `archive-mcp`, `wom-mcp` 네 명령을
@@ -35,13 +46,13 @@ archive --version
 `pip install wom-kit`이 공식 명령이 아닙니다. 정확한 GitHub 릴리스 URL을
 사용하면 설치 파일을 검토된 저장소 태그에 묶을 수 있습니다.
 
-### 설치된 v0.4.0 전역 CLI 교체
+### 설치된 이전 전역 CLI 교체
 
-v0.4.1 Release와 wheel이 실제로 공개된 뒤, 격리된 `uv tool` 환경을 교체하고
+v0.4.2 Release와 wheel이 실제로 공개된 뒤, 격리된 `uv tool` 환경을 교체하고
 새 프로세스에서 결과를 확인합니다.
 
 ```powershell
-uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.1/wom_kit-0.4.1-py3-none-any.whl"
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.2/wom_kit-0.4.2-py3-none-any.whl"
 archive --version
 ```
 
@@ -51,11 +62,11 @@ archive --version
 옵션은 `uv`가 관리하지 않는 실행 파일도 교체할 수 있습니다. [공식 `uv tool
 install` 문서](https://docs.astral.sh/uv/reference/cli/#uv-tool-install)를 보세요.
 
-결과는 정확히 `archive 0.4.1`이어야 합니다. 이것은 전역 CLI만 바꾸는
+결과는 정확히 `archive 0.4.2`이어야 합니다. 이것은 전역 CLI만 바꾸는
 부트스트랩입니다. project-local `.zettel-kasten/source` mirror와 version pin은
 바꾸지 않습니다. project updater, collision 변경, bytecode-repair 승인은 계속
-고정 차단되므로 기존 v0.4.0 project mirror는 v0.4.0으로 남습니다. pin을 손으로
-고치지 마세요. [Project Version Update](project-version-update.md)와
+고정 차단되므로 이전 project mirror는 독립적으로 보고된 버전에 그대로
+남습니다. pin을 손으로 고치지 마세요. [Project Version Update](project-version-update.md)와
 [업그레이드 가이드](../../UPGRADE.ko.md)를 보세요.
 
 ## 일반 pip 대안
@@ -64,7 +75,7 @@ install` 문서](https://docs.astral.sh/uv/reference/cli/#uv-tool-install)를 �
 
 ```powershell
 py -m venv "$HOME\.wom-tools\wom-kit"
-& "$HOME\.wom-tools\wom-kit\Scripts\python.exe" -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.1/wom_kit-0.4.1-py3-none-any.whl"
+& "$HOME\.wom-tools\wom-kit\Scripts\python.exe" -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.2/wom_kit-0.4.2-py3-none-any.whl"
 & "$HOME\.wom-tools\wom-kit\Scripts\archive.exe" --version
 ```
 
@@ -136,7 +147,7 @@ filter를 사용하지 않습니다. 폴더 scan은 entry 수 상한을 둔 stre
 관찰한 변경을 감지하지만, 파일 단위의 원자적 compare-and-swap은 아닙니다.
 따라서 외부 writer가 파일을 절대 덮지 않는다고 보장하지 않습니다.
 
-v0.4.1에서는 dry-run 뒤에 멈춥니다. 승인 요청은 비공개 project를 읽거나
+v0.4.2에서는 dry-run 뒤에 멈춥니다. 승인 요청은 비공개 project를 읽거나
 fetch, tree materialization, pin 변경, lock 생성, receipt 발행을 하기 전에
 `compound_exact_human_approval_binding_required`로 실패합니다. 아래 transaction
 설명은 과거 v0.3 receipt 의미이며 현재 실행 절차가 아닙니다.
@@ -175,7 +186,7 @@ source/`.git`, pin, lock, receipt 경로의 검증된 폴더 handle을
 폴더와 최종 폴더가 없으면 한 단계씩 만들고 바로 hold하며, hold되지 않은
 receipt root에는 영수증을 쓰지 않습니다.
 
-v0.4.1에서도 읽기 전용 dry-run은 끝까지 실행됩니다. POSIX 결과 status는
+v0.4.2에서도 읽기 전용 dry-run은 끝까지 실행됩니다. POSIX 결과 status는
 `preview_only_platform_unsupported`이고
 `write_boundary.approval_platform_supported`는 `false`입니다. 모든 플랫폼의
 승인 요청은 비공개 project read/write 전에
@@ -191,7 +202,7 @@ Python CLI를 교체하지 않습니다.
 archive onboard --target-root <새-아카이브-폴더> --type personal --archive-id <아카이브-아이디> --principal-id <주체-아이디> --dry-run --format json
 ```
 
-v0.4.1에서는 미리보기에서 멈춥니다. 온보딩 승인은 대상·템플릿·제공자
+v0.4.2에서는 미리보기에서 멈춥니다. 온보딩 승인은 대상·템플릿·제공자
 정보를 읽기 전에 `compound_exact_human_approval_binding_required`로 차단되며
 아카이브를 만들지 않습니다.
 

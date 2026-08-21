@@ -61,6 +61,10 @@ Commands:
           Show the local-canonical and external-backup authority contract.
   backup-evidence
           Report current local backup evidence without checking remote services.
+  git-backup-plan
+          Build a read-only, content-free local and Git-transport backup plan.
+  git-backup-reconcile-plan
+          Re-observe a reviewed Git backup plan without enabling any writer.
   secret-signal-taxonomy
           Show how AI operators should distinguish secret concept words, safe refs, and secret-like values.
   ai-response-contract
@@ -398,6 +402,7 @@ from . import (
     command_status,
     completion_workflows,
     duplicate_object_reconciliation,
+    git_backup_plan as git_backup_planning,
     human_artifact_registry,
     legacy_coordination_cleanup as legacy_cleanup,
     operation_control,
@@ -6371,6 +6376,100 @@ def command_backup_evidence(args: argparse.Namespace) -> int:
         return 1
     print_json(result)
     return 0 if result.get("ok", True) else 1
+
+
+def _git_backup_cli_error(
+    *,
+    command: str,
+    reason_code: str,
+    dry_run: bool,
+    error_class: str = "precondition",
+) -> int:
+    """Print one fixed failure without reflecting private Git inputs."""
+
+    print_json(
+        {
+            "schema": "wom-kit/cli-error/v0.1",
+            "ok": False,
+            "state": "blocked",
+            "status_class": "blocked",
+            "command": command,
+            "dry_run": dry_run,
+            "lifecycle_action": command.replace("-", "_"),
+            "error_class": error_class,
+            "reason_codes": [reason_code],
+            "exit_code": 1,
+            "effects_state": "none",
+            "would_change": [],
+            "files_written": [],
+            "private_values_echoed": False,
+        }
+    )
+    return 1
+
+
+def command_git_backup_plan(args: argparse.Namespace) -> int:
+    if not args.dry_run:
+        return _git_backup_cli_error(
+            command="git-backup-plan",
+            reason_code="git_backup_plan_dry_run_required",
+            dry_run=False,
+        )
+    try:
+        result = git_backup_planning.git_backup_plan(
+            Path(args.archive_root),
+            remote_name=args.remote,
+            branch=args.branch,
+            max_changes=args.max_changes,
+            max_changed_bytes=args.max_changed_bytes,
+            dry_run=True,
+        )
+        if not isinstance(result, dict):
+            raise TypeError("git_backup_plan_result_invalid")
+    except Exception:  # noqa: BLE001 - private Git errors must never cross the CLI.
+        return _git_backup_cli_error(
+            command="git-backup-plan",
+            reason_code="git_backup_plan_inspection_unavailable",
+            dry_run=True,
+            error_class="inspection",
+        )
+    print_json(result)
+    return 0 if result.get("ok") is True else 1
+
+
+def command_git_backup_reconcile_plan(args: argparse.Namespace) -> int:
+    if not args.dry_run:
+        return _git_backup_cli_error(
+            command="git-backup-reconcile-plan",
+            reason_code="git_backup_reconcile_plan_dry_run_required",
+            dry_run=False,
+        )
+    try:
+        result = git_backup_planning.git_backup_reconcile_plan(
+            Path(args.archive_root),
+            expected_plan_sha256=args.expected_plan_sha256,
+            expected_hidden_effect_set_sha256=(
+                args.expected_hidden_effect_set_sha256
+            ),
+            expected_local_head_oid=args.expected_local_head_oid,
+            expected_remote_oid=args.expected_remote_oid,
+            remote_name=args.remote,
+            branch=args.branch,
+            max_changes=args.max_changes,
+            max_changed_bytes=args.max_changed_bytes,
+            dry_run=True,
+        )
+        if not isinstance(result, dict):
+            raise TypeError("git_backup_reconcile_plan_result_invalid")
+    except Exception:  # noqa: BLE001 - private Git errors must never cross the CLI.
+        return _git_backup_cli_error(
+            command="git-backup-reconcile-plan",
+            reason_code="git_backup_reconcile_plan_inspection_unavailable",
+            dry_run=True,
+            error_class="inspection",
+        )
+    print_json(result)
+    return 0 if result.get("ok") is True else 1
 
 
 def command_secret_signal_taxonomy(args: argparse.Namespace) -> int:
@@ -26874,6 +26973,118 @@ def build_parser() -> argparse.ArgumentParser:
     backup_evidence.add_argument("--dry-run", action="store_true", help="Required. Inspect local evidence only; write nothing.")
     backup_evidence.set_defaults(func=command_backup_evidence)
 
+    git_backup = subcommands.add_parser(
+        "git-backup-plan",
+        help=(
+            "Build a read-only, content-free plan from bounded local Git "
+            "inspection and exact-ref transport observation; no writer is available."
+        ),
+        description=(
+            "Build a read-only, content-free plan from bounded local Git "
+            "inspection and exact-ref transport observation; no writer is available."
+        ),
+    )
+    git_backup.add_argument("archive_root", help="Archive root to inspect privately.")
+    git_backup.add_argument(
+        "--remote",
+        default="origin",
+        help="Configured Git remote name to inspect privately (default: origin).",
+    )
+    git_backup.add_argument(
+        "--branch",
+        help="Optional target branch name; omitted means use the current symbolic branch.",
+    )
+    git_backup.add_argument(
+        "--max-changes",
+        type=int,
+        default=git_backup_planning.GIT_BACKUP_PLAN_DEFAULT_MAX_CHANGES,
+        help="Maximum changed paths to inspect before failing closed.",
+    )
+    git_backup.add_argument(
+        "--max-changed-bytes",
+        type=int,
+        default=git_backup_planning.GIT_BACKUP_PLAN_DEFAULT_MAX_CHANGED_BYTES,
+        help="Maximum aggregate changed-file bytes to hash before failing closed.",
+    )
+    git_backup.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Required. Inspect and query only the selected exact ref; write nothing.",
+    )
+    git_backup.add_argument(
+        "--format",
+        choices=["json"],
+        default="json",
+        help="Output format (JSON only).",
+    )
+    git_backup.set_defaults(func=command_git_backup_plan)
+
+    git_backup_reconcile = subcommands.add_parser(
+        "git-backup-reconcile-plan",
+        help=(
+            "Re-observe an exact reviewed Git backup plan without commit, push, "
+            "fetch, checkout, merge, reset, delete, or any other writer."
+        ),
+        description=(
+            "Re-observe an exact reviewed Git backup plan without commit, push, "
+            "fetch, checkout, merge, reset, delete, or any other writer."
+        ),
+    )
+    git_backup_reconcile.add_argument(
+        "archive_root",
+        help="Archive root to inspect privately.",
+    )
+    git_backup_reconcile.add_argument(
+        "--expected-plan-sha256",
+        required=True,
+        help="Exact plan SHA-256 from the reviewed git-backup-plan result.",
+    )
+    git_backup_reconcile.add_argument(
+        "--expected-hidden-effect-set-sha256",
+        help="Optional exact hidden-effect-set SHA-256 from the reviewed plan.",
+    )
+    git_backup_reconcile.add_argument(
+        "--expected-local-head-oid",
+        help="Optional exact reviewed local HEAD object id.",
+    )
+    git_backup_reconcile.add_argument(
+        "--expected-remote-oid",
+        help="Optional exact reviewed remote object id.",
+    )
+    git_backup_reconcile.add_argument(
+        "--remote",
+        default="origin",
+        help="Configured Git remote name to inspect privately (default: origin).",
+    )
+    git_backup_reconcile.add_argument(
+        "--branch",
+        help="Optional target branch name; omitted means use the current symbolic branch.",
+    )
+    git_backup_reconcile.add_argument(
+        "--max-changes",
+        type=int,
+        default=git_backup_planning.GIT_BACKUP_PLAN_DEFAULT_MAX_CHANGES,
+        help="Maximum changed paths to inspect before failing closed.",
+    )
+    git_backup_reconcile.add_argument(
+        "--max-changed-bytes",
+        type=int,
+        default=git_backup_planning.GIT_BACKUP_PLAN_DEFAULT_MAX_CHANGED_BYTES,
+        help="Maximum aggregate changed-file bytes to hash before failing closed.",
+    )
+    git_backup_reconcile.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Required. Re-observe only; write nothing.",
+    )
+    git_backup_reconcile.add_argument(
+        "--format",
+        choices=["json"],
+        default="json",
+        help="Output format (JSON only).",
+    )
+    git_backup_reconcile.set_defaults(func=command_git_backup_reconcile_plan)
+
     secret_signal_taxonomy = subcommands.add_parser(
         "secret-signal-taxonomy",
         aliases=["secret-taxonomy", "sensitive-signal-taxonomy"],
@@ -36387,6 +36598,8 @@ def main(argv: list[str] | None = None) -> int:
             "operator-feedback-compose",
             "operator-feedback-body-check",
             "project-version-update-collision",
+            "git-backup-plan",
+            "git-backup-reconcile-plan",
             "create-draft",
             "zettel-objet-link",
             "zet-objet-link",

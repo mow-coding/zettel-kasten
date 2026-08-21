@@ -54,43 +54,27 @@ CHANGED_SCHEMAS = (
 
 
 class V0401ReleaseDocsTests(unittest.TestCase):
-    def test_version_sources_and_wheel_contract_are_synchronized(self) -> None:
-        self.assertEqual(__version__, "0.4.1")
-        self.assertIn(
-            'version = "0.4.1"',
-            (KIT / "pyproject.toml").read_text(encoding="utf-8"),
-        )
-        for version_file in (
-            KIT / "src" / "wom_kit" / "__init__.py",
-            ROOT / "wom_kit" / "__init__.py",
-        ):
-            with self.subTest(version_file=version_file):
-                self.assertIn(
-                    '__version__ = "0.4.1"',
-                    version_file.read_text(encoding="utf-8"),
-                )
-        self.assertIn(
-            'PACKAGE_VERSION = "0.4.1"',
-            (KIT / "tests" / "test_wheel_install.py").read_text(
-                encoding="utf-8"
-            ),
+    def test_historical_release_source_is_preserved_byte_for_byte(self) -> None:
+        self.assertEqual(
+            hashlib.sha256(RELEASE_PATH.read_bytes()).hexdigest(),
+            "a5d3f506d93877768ecb9368e01a6e1581daa131287b392d6522a136f0d42704",
         )
 
-    def test_current_release_and_all_public_resources_are_exactly_packaged(self) -> None:
-        self.assertEqual(RELEASE_PATH.read_bytes(), PACKAGED_RELEASE_PATH.read_bytes())
+    def test_current_public_resources_remain_exactly_packaged(self) -> None:
+        self.assertFalse(PACKAGED_RELEASE_PATH.exists())
         release_names = sorted(
             path.name
             for path in (RESOURCE_ROOT / "release-notes").glob("v*.md")
         )
-        self.assertEqual(release_names, ["v0.4.1.md"])
+        self.assertEqual(release_names, [f"v{__version__}.md"])
 
         manifest = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
-        self.assertEqual(manifest["version"], "0.4.1")
-        self.assertEqual(manifest["file_count"], 158)
-        self.assertEqual(len(manifest["files"]), 158)
+        self.assertEqual(manifest["version"], __version__)
+        self.assertEqual(manifest["file_count"], len(manifest["files"]))
         packaged_paths = [row["packaged"] for row in manifest["files"]]
         self.assertEqual(len(packaged_paths), len(set(packaged_paths)))
-        self.assertIn("release-notes/v0.4.1.md", packaged_paths)
+        self.assertIn(f"release-notes/v{__version__}.md", packaged_paths)
+        self.assertNotIn("release-notes/v0.4.1.md", packaged_paths)
         self.assertNotIn("release-notes/v0.4.0.md", packaged_paths)
         for row in manifest["files"]:
             with self.subTest(packaged=row["packaged"]):
@@ -135,13 +119,13 @@ class V0401ReleaseDocsTests(unittest.TestCase):
             blocked,
         )
         counts = inventory["counts"]
-        self.assertEqual(counts["canonical_executable_command_count"], 313)
+        self.assertEqual(counts["canonical_executable_command_count"], 315)
         self.assertEqual(counts["alias_invocation_path_count"], 259)
-        self.assertEqual(counts["invocation_path_count"], 572)
+        self.assertEqual(counts["invocation_path_count"], 574)
         self.assertEqual(counts["approval_available_command_count"], 35)
         self.assertEqual(counts["approval_fixed_closed_command_count"], 78)
-        self.assertEqual(counts["approval_not_exposed_command_count"], 200)
-        self.assertEqual(counts["dry_run_exposed_command_count"], 268)
+        self.assertEqual(counts["approval_not_exposed_command_count"], 202)
+        self.assertEqual(counts["dry_run_exposed_command_count"], 270)
         self.assertEqual(counts["unmatched_fixed_closed_command_count"], 0)
         by_path = {
             row["canonical_path"]: row for row in inventory["commands"]
@@ -230,7 +214,7 @@ class V0401ReleaseDocsTests(unittest.TestCase):
             "Use `zettel-objet-link-revert` for exact-byte recovery",
             capture,
         )
-        self.assertIn("Current checkpoint: Status: v0.4.1", version_truth)
+        self.assertIn(f"Current checkpoint: Status: v{__version__}", version_truth)
         self.assertIn("exactly 78", runtime_layer)
         self.assertIn("single link apply", runtime_layer)
         self.assertIn("zettel-objet-link-revert` remains preview-only", runtime_layer)
