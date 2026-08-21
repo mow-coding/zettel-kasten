@@ -117,8 +117,35 @@ caches. No history rewrite was authorized or attempted in this release.
 
 The recommended non-destructive path is to keep the repository public, retain
 the strengthened release gate, and treat historical path removal as a separate
-human decision with a complete client-migration plan. Merge and release remain
-gated on the user's acceptance of that non-destructive choice.
+human decision with a complete client-migration plan. On 2026-08-22 KST, the
+user accepted that path for v0.4.2: keep the repository public, perform no
+history rewrite in this release, and retain the old-path cleanup as a future
+separately approved migration rather than forgetting or declaring it fixed.
+
+## Required CI timeout correction
+
+Pull request #75's first Required CI run used exact candidate head
+`d5db46fb7fc9c187852161504aa0381abe940243`. The release-readiness gate and
+seven of the eight platform/version shards passed. Windows Python 3.12 shard
+2/4 continued making successful test progress until GitHub cancelled the job
+at its configured limit. The exact GitHub annotation was
+`The job has exceeded the maximum execution time of 45m0s`; the unittest step
+ran for 44 minutes 33 seconds and reported no test failure before cancellation.
+The aggregate Required CI job failed only because that required shard was
+cancelled.
+
+A same-commit failed-job rerun was started before changing source. Independent
+comparison then showed that this was not a safe timeout margin: the equivalent
+v0.4.1 success consumed 44 minutes 16 seconds of a 45-minute job, and the
+current cancelled run was still progressing through the process-heavy MCP
+suite. Continuing to depend on runner-speed luck would make both this release
+and its records-only closeout flaky. The rerun was therefore intentionally
+superseded rather than presented as release evidence.
+
+The smallest correction changes only Windows shard 2/4 from a 45-minute job
+limit to 75 minutes, matching the existing long-shard headroom. It does not
+remove, skip, reorder, or weaken any test and does not change product runtime
+behavior. A new exact-head Required CI run remains mandatory before merge.
 
 ## Verification evidence before merge
 
