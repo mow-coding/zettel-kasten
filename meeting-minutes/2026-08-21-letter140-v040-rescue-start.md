@@ -1,13 +1,13 @@
 # Letter 140 v0.4.0 Rescue Start
 
 Date: 2026-08-21
-Status: v0.4.1 implementation and integration in progress; no commit, push, PR, tag, or release yet
+Status: v0.4.1 pull request correction in progress; no merge, tag, or release yet
 
 ## User intent
 
 The user asked for the GitHub repository to be restored to public visibility and then directed the team to begin resolving the accumulated beta-client letters immediately, completely, and efficiently. The temporary private state was motivated by embarrassment and concern that sensitive information might have entered WOM development history, not by a settled private-distribution strategy.
 
-The work must protect the read-only Basoon archive, avoid disturbing unfinished Letter 138 work, and use separate worktrees plus explicit verification gates.
+The work must protect the read-only beta archive, avoid disturbing unfinished Letter 138 work, and use separate worktrees plus explicit verification gates.
 
 ## Public visibility evidence
 
@@ -39,12 +39,12 @@ Broad test-directory allowlisting is not permitted because it could hide a later
 - Branch: `codex/letter140-v040-rescue`
 - Base: `origin/main` at `f24bfd262651f808e3c7dade5c476aea6f66d4ed`
 - Letter 138 candidate worktree remains separate and unreleased with its existing independent-review P1 unresolved.
-- The Basoon letter files remain immutable evidence and are not test fixtures.
+- The original beta letter files remain immutable evidence and are not test fixtures.
 
 ## Execution plan and feedback loop
 
 1. Trace three independent Letter 140 surfaces in parallel: the version-update escape, the single-target zettel-to-objet attachment path, and JSON/exit-code plus command-status behavior.
-2. Reproduce only with synthetic or repository fixtures; never run mutating commands against Basoon.
+2. Reproduce only with synthetic or repository fixtures; never run mutating commands against the protected beta archive.
 3. Convert trace results into the smallest safe P0 release slice. Reopening a command is permitted only when its effects are exact, inspectable, narrowly approved, and testable.
 4. Add focused regression tests first or alongside each code change, then run the relevant suites and the repository release-readiness gates.
 5. Request independent review and resolve every P0/P1 before release.
@@ -106,7 +106,7 @@ The service now:
 - writes v0.2 exact-human receipts while retaining strict v0.1 read and revert-plan compatibility;
 - preserves snapshot and receipt evidence when rollback cannot independently prove that the canonical zettel returned to its approved before bytes.
 
-The CLI end-to-end synthetic fixture passed the complete sequence `dry-run -> exact plan digest -> approved writer -> v0.2 receipt -> receipt lookup`. The private label was stored only in the target zettel and did not appear in stdout or stderr. No Basoon path was used.
+The CLI end-to-end synthetic fixture passed the complete sequence `dry-run -> exact plan digest -> approved writer -> v0.2 receipt -> receipt lookup`. The private label was stored only in the target zettel and did not appear in stdout or stderr. No protected archive path was used.
 
 Current focused verification evidence:
 
@@ -160,7 +160,7 @@ The compact public decision record is
 
 The Letter 139 source SHA-256 matched before and after inspection:
 `9a8b10a13bcd62dc6c4aec2a5763434e102203d6db7cfe11767b04218c02ccc9`.
-No Basoon, repository, Git, provider, or network mutation was performed by that
+No protected archive, repository, Git, provider, or network mutation was performed by that
 planning track.
 
 Letter 139 is not a v0.4.1 addition. Its requested local commit plus remote
@@ -525,3 +525,28 @@ replaced it and reported `archive 0.4.1`. This is pre-release upgrade evidence.
 After merge/tag/Release, the same test must be repeated using the anonymous
 public v0.4.1 asset URL. PR CI, merge, exact tag, public Release, anonymous
 download hash, public upgrade, and final cleanup remain pending.
+
+## First PR CI correction: public-record path subset
+
+Draft pull request #73 was opened at head
+`47fc7ef98c7ef62872ac76515f31fcffff48a317`. Its release-readiness job and
+Windows shard 3/4 passed, but Ubuntu Python 3.10 shard 2/2 failed the existing
+`sealed_occurrence_path_subset_hold` privacy assertion in
+`test_private_objet_metadata_index.py`. Required CI run
+`32475808521` therefore did not authorize a merge.
+
+The failure was deterministic and content-specific, not an operating-system or
+Python compatibility defect. The final public meeting minute had been added
+after the four-way executable test run. It repeated the protected archive's
+specific name five times in a newly added public file, while the sealed policy
+requires every such occurrence path to be inherited from its exact predecessor
+surface. The test correctly rejected that new public path.
+
+The five references were generalized to `beta archive`, `original beta letter
+files`, or `protected archive` without weakening the immutable-evidence
+boundary. A content-free diagnostic then reported zero new occurrence paths,
+and the exact previously failing test passed. The process correction is that a
+meeting-minute change is still a candidate-tree change: the whole-tree privacy
+gate must be rerun after the final record is added, even when no executable or
+packaged file changed. The corrected head still requires a fresh complete PR
+CI run before merge, tag, or Release.
