@@ -164,12 +164,20 @@ migration is required for the v0.4.1 CLI.
 
 ## Cleanup checkpoint
 
-The exact merged-commit artifact directory, anonymous-download directory,
-local and public upgrade roots, public fresh-install root, and detached exact-
-release worktree remain preserved until this first closeout commit is stored on
-the remote branch. Those task-owned artifacts and the detached release
-worktree will then be removed through exact, verified targets, and the results
-will be recorded in a follow-up closeout commit.
+The first closeout commit,
+`dd22d4d8bc773161bdf779db4f31a38e365a692e`, was stored on the remote
+closeout branch before cleanup. The exact merged-commit artifact directory,
+anonymous-download directory, local and public upgrade roots, and public
+fresh-install root were each verified as ordinary non-reparse directories
+under the operating-system temporary root and sent to the Windows Recycle Bin.
+All five are absent from their original locations and remain recoverable from
+the Recycle Bin.
+
+The detached exact-release worktree was separately verified clean at merge
+commit `f7b82c7bf16350d5e2ab0bc2cf9c53cef574b740`, removed through Git's worktree
+operation, and verified absent from both the filesystem and worktree registry.
+The public annotated tag, stable Release, and exact uploaded asset remain
+published with the recorded identities and digest.
 
 The merged implementation worktree and its local and remote branch, plus the
 closeout worktree and its local and remote branch, remain until the closeout
