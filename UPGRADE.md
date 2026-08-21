@@ -24,6 +24,52 @@ Before upgrading a real archive:
 
 The archive should never silently rewrite memory.
 
+## v0.4.2 Read-Only Git Backup Planning
+
+v0.4.2 is the read-only planning foundation for Letter 139. Do not run the URL
+below merely because it appears in source documentation. It becomes an install
+command only after the matching public GitHub Release exists and lists the
+exact wheel.
+
+Replace an older isolated `uv tool` installation with:
+
+```powershell
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.2/wom_kit-0.4.2-py3-none-any.whl"
+archive --version
+```
+
+Close older WOM processes first and require exactly `archive 0.4.2` from a new
+process. This replaces only the global Python tool selected by `PATH`; it does
+not update a project-local source mirror or pin, archive content, Agent Skill,
+Git worktree, remote ref, or provider.
+
+The new commands inspect only:
+
+```powershell
+archive git-backup-plan <archive-root> `
+  --remote origin `
+  --dry-run `
+  --format json
+
+archive git-backup-reconcile-plan <archive-root> `
+  --expected-plan-sha256 sha256:<64-lowercase-hex> `
+  --remote origin `
+  --dry-run `
+  --format json
+```
+
+Both keep `ready_for_write: false`, `writer_available: false`, and
+`would_change: []`. They do not add, reset, checkout, commit, merge, rebase,
+delete, fetch, pull, push, or change a remote ref. The initial remote observer
+uses anonymous HTTPS only; authenticated/private HTTPS can be unavailable, and
+SSH/scp-like or credential-bearing remotes fail closed. Do not put a token in
+the URL to bypass the boundary.
+
+`inspection_complete` is not backup completion. v0.4.2 does not choose files
+or commit groups, create commits, push, perform a provider API re-query, or
+publish completion evidence. See the [Git Backup Plan](wom-kit/docs/git-backup-plan.md)
+and [v0.4.2 release note](wom-kit/docs/releases/v0.4.2.md).
+
 ## v0.4.1 Emergency Global-CLI Bootstrap And One Link Apply
 
 v0.4.1 is a narrow recovery release. Do not run the URL below merely because

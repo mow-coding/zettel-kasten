@@ -6,7 +6,15 @@ The filesystem folder is `wom-kit/`, the Python import package is `wom_kit`, and
 
 See `wom-kit/docs/concepts/naming-and-terminology.md` for the naming baseline.
 
-v0.4.1 opens exactly one previously fixed-closed top-level writer:
+v0.4.2 adds `git-backup-plan` and `git-backup-reconcile-plan` as JSON-only,
+CLI-only read-only observers. They require `--dry-run`, inspect the currently
+checked-out symbolic branch plus one anonymous HTTPS remote ref, and always
+keep `ready_for_write: false`, `writer_available: false`, and
+`would_change: []`. They expose no `--approve` or MCP writer and do not add,
+reset, checkout, commit, merge, rebase, delete, fetch, pull, push, or change a
+ref. See `wom-kit/docs/git-backup-plan.md` and the v0.4.2 release note.
+
+The v0.4.1 checkpoint opened exactly one previously fixed-closed top-level writer:
 `zettel-objet-link --approve`. A fresh successful dry-run produces the exact
 service-plan digest required by `--expected-plan-sha256`; approval also requires
 `--reviewed-by` and the native local exact-human workflow. The writer binds and
