@@ -225,10 +225,28 @@ values themselves must not be repeated in new public records.
 
 ## Cleanup checkpoint
 
-At this first checkpoint, the verified wheel directory, anonymous-download
-evidence directory, isolated public-upgrade root, isolated public-fresh root,
-and detached exact-merge worktree still exist. They remain only until this
-closeout record's first commit is stored on the remote closeout branch.
+The first closeout commit,
+`171e59c5ddbbd6021748cb8a54a36dd1ec78f47c`, was stored on the remote
+closeout branch before cleanup.
+
+The first cleanup safety check stopped without deleting anything because the
+Git worktree registry used forward-slash path spelling while the resolved
+Windows path used backslashes. The target was normalized and reverified rather
+than weakening or bypassing the exact-path check.
+
+The exact-merge release worktree was then verified as an ordinary non-reparse
+directory, clean at
+`27593ccde79ff0efb47d40d390962acf85c062ad`, and registered at the normalized
+exact path. It was removed through Git's worktree operation and is absent from
+both the filesystem and worktree registry.
+
+The verified wheel directory, anonymous-download evidence directory, isolated
+public-upgrade root, and isolated public-fresh root were each verified as
+ordinary non-reparse directories under the operating-system temporary root
+and sent to the Windows Recycle Bin. All four are absent from their original
+paths and remain recoverable from the Recycle Bin. The public annotated tag,
+stable Release, and exact uploaded asset remain published with the recorded
+identities and digest.
 
 The implementation worktree and its local and remote branch, plus this
 closeout worktree and branch, also remain. They will be removed only after the
