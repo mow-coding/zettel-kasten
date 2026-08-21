@@ -1,8 +1,10 @@
 # Zettel Objet Links
 
-Status: v0.4.0 read-only preview; structured link apply/revert fail closed
+Status: v0.4.1 read-only discovery plus exact-human structured link apply;
+structured link revert remains fixed closed
+Previous checkpoint: v0.4.0 structured link apply/revert were both fixed closed
 Historical extension: v0.3.301 structured link receipts remain readable
-Date: 2026-08-20
+Date: 2026-08-21
 
 `zettel-objet-links` is the first small reading-side bridge between a human
 zettel and source objets referenced by content address.
@@ -53,10 +55,10 @@ Inputs:
 - `dry_run`, which must be true
 - optional `max_refs`
 
-## Plan A Structured Link
+## Plan And Apply One Structured Link
 
-The read-only preview remains unchanged. The singular command can still plan
-one reviewed asset entry:
+The read-only preview remains unchanged. The singular command plans one
+reviewed asset entry:
 
 ```text
 archive zettel-objet-link <archive-root> --zettel-id <id> \
@@ -66,14 +68,159 @@ archive zettel-objet-link <archive-root> --zettel-id <id> \
 The objet must already exist in `objects/manifests/files.jsonl`. A complete
 SHA-256 is mandatory. Truncated hashes are not guessed or expanded.
 
-The historical v0.3 writer affected canonical zettel bytes, private snapshot
-state, and receipt history together; its revert read those records before
-restoring bytes. v0.4.0 has no exact-human binding for either complete effect
-set. `zettel-objet-link --approve` and
-`zettel-objet-link-revert --approve` therefore stop before private target read
-or mutation with `compound_exact_human_approval_binding_required`. They write
-no zettel, snapshot, or receipt. Historical receipts remain readable and are
-never deleted or silently treated as new authority.
+In v0.4.1, copy the exact `summary.plan_sha256` from a fresh successful
+dry-run into the approval command:
+
+```text
+archive zettel-objet-link <archive-root> --zettel-id <id> \
+  --object-id sha256:<64-hex> --role source \
+  --expected-plan-sha256 <64-hex> --reviewed-by person:reviewer-id \
+  --approve --format json
+```
+
+Approval is available only in the local interactive Windows CLI. It presents
+the native exact-human TaskDialog and then uses one authenticated durable
+claim. MCP exposes no writer and a caller-supplied Boolean is never treated as
+human approval.
+
+The plan and operation-specific approval binding cover the complete effect
+set:
+
+- the exact current canonical zettel bytes and the one proposed
+  `frontmatter.assets` entry;
+- a strict, bounded, stable read of the complete object manifest and the exact
+  unique matching object-record set;
+- an exact before-zettel snapshot, created only when absent or reused only
+  when its existing regular-file bytes are exact;
+- the next create-only receipt generation and path;
+- one deterministic canonical compare-and-swap transaction and both of its
+  approved archive-relative private residue paths,
+  `<zettel-directory>/.<transaction-sha256>.<path-sha256-prefix>.zettel-objet-link.swap`
+  and the same path with `.previous` appended;
+- one support-effect-set digest tying the zettel, snapshot, receipt, and both
+  compare-and-swap coordinates together; and
+- the separately bound persistent per-zettel control artifact at
+  `receipts/objects/zettel-links/.locks/<sha256-of-zettel-id>.lock`, including
+  its absent or `existing_exact` state and exact bytes.
+
+The writer re-derives those bindings under the control artifact before the
+first canonical mutation. It holds every relevant parent-directory identity,
+uses an exact-byte compare-and-swap for both forward write and rollback, reads
+back the canonical zettel, snapshot, and v0.2 receipt, proves both transaction
+residue paths absent, and jointly revalidates the exact manifest target and
+unique Zettel authority at the final success point. A first approved use may
+create the fixed control
+artifact; later uses retain and reuse the exact artifact. A wrong, non-regular,
+replaced, ambiguous, incomplete, stale, or over-limit input fails closed.
+
+ID and path selection have the same uniqueness boundary. Either selector
+performs a bounded, handle-bound scan of both `zettels/` and `inbox/`, requires
+the selected Zettel id to occur exactly once, and for a path selector requires
+that unique match to retain the selected file identity and exact bytes. A
+direct canonical filename never bypasses duplicate-id detection. The writer
+repeats this proof under its control artifact before mutation and after final
+canonical/receipt/manifest readback; final uniqueness or identity drift raises
+inside the CAS rollback boundary and retains reconciliation evidence.
+
+The two-root scan is one stable namespace snapshot. On Windows, exact
+`ReadDirectoryChangesW` watches are armed before scanning: an archive-root name
+watch protects a missing `zettels/` or `inbox/` root, while subtree watches
+protect each existing root. WOM holds all discovered directory identities,
+records their complete entry inventories, and re-reads every Markdown file to
+verify identity, mode, link count, size, modification/change timestamps,
+platform attributes, and SHA-256. It then arms a full archive-root closing
+guard, repeats the complete revalidation, cancels the earlier watches under
+that guard, and cancels the guard last. `CancelIoEx` plus
+`GetOverlappedResult` must prove clean cancellation; a cross-root move,
+in-place rewrite, late root creation, overflow, unsupported watch, or ambiguous
+completion fails closed. POSIX retains every directory descriptor and performs
+the same directory and file version-token, inventory, identity, and digest
+revalidation. Restoring former content bytes does not restore the held file
+version token. POSIX records the archive-root inventory before probing
+potentially absent `zettels/` or `inbox/` roots; creating one after an absence
+result changes that existing baseline and fails instead of leaving an
+unscanned root in the snapshot.
+
+The final manifest proof shares that stability window. WOM holds the exact
+manifest parent and single-link file observation, validates its record set,
+revalidates the complete Zettel snapshot, and requires the same parent token,
+file identity, metadata, and exact bytes afterward. On Windows the archive-
+subtree closing guard remains armed across the interval. Therefore manifest
+provenance and Zettel uniqueness have one jointly valid point; alternating a
+duplicate and a missing manifest fails inside rollback instead of satisfying
+two separate checks at different times.
+
+`archive.yml` is parsed independently by both the operation core and the live
+CLI approval boundary from held bytes. The duplicate-key-rejecting approval
+YAML loader rejects duplicate mapping keys, then a bounded acyclic JSON-safe
+normalization and the exact-human archive-id validator reject ambiguous or
+unsupported identity trees before approval.
+
+On Windows, the compare-and-swap never uses a replacement API that can
+overwrite a concurrently created `.previous` file. WOM retains write- and
+delete-denying handles for the exact old and proposed files, moves the old file
+to `.previous` with `FileRenameInfo` replacement disabled, and then moves the
+proposed file to the now-absent canonical name with replacement disabled. The
+canonical name can therefore be briefly absent. A process exit in that gap
+leaves the exact `.previous` plus `.swap` pair for reconciliation; a concurrent
+canonical-name winner makes the second move refuse while preserving all three
+occupants.
+
+The held old and proposed files must also be single-link, non-reparse regular
+files with matching supported security descriptors and semantic attributes.
+A handle-bound `BackupRead` inventory permits only the unnamed default data
+stream, so alternate data streams, extended attributes, object IDs, sparse
+data, unknown backup streams, or unverifiable metadata block before the first
+move instead of being lost. After the new canonical identity, bytes, metadata,
+and namespace verify, `.previous` is unlinked with `FileDispositionInfoEx`
+using `FILE_DISPOSITION_DELETE`, `FILE_DISPOSITION_POSIX_SEMANTICS`, and
+`FILE_DISPOSITION_IGNORE_READONLY_ATTRIBUTE`. WOM never falls back to ordinary
+delayed deletion. If the filesystem cannot provide that immediate unlink,
+canonical-new and `.previous`-old remain as explicit reconciliation evidence.
+
+The v0.2 receipt embeds `wom-kit/operation-exact-human-approval/v0.1` with
+operation `zettel_objet_link`. It also records digests and safe archive-relative
+coordinates for the strict manifest set, snapshot, control artifact, both
+compare-and-swap paths, support effect set, transaction, and receipt
+generation. It does not include the optional label, zettel body, object bytes,
+provider values, or an absolute local path.
+
+The compare-and-swap files are private transaction artifacts, not disposable
+scratch outside the approved operation. During an interrupted or ambiguous
+swap, either deterministic path can retain full pre-write or proposed zettel
+bytes. WOM does not auto-delete an ambiguous residue, snapshot, or receipt.
+An error with `effects_state: unknown` therefore requires reconciliation of
+the exact started approval claim and all approved paths before any retry. A
+retained receipt alone is recovery evidence, not proof of committed success;
+readers require the current canonical zettel, exact snapshot, and for v0.2 the
+same exact manifest target before presenting an active link history.
+
+`zettel-objet-link-revert --approve` remains fixed closed in v0.4.1 with
+`compound_exact_human_approval_binding_required`. Historical link and revert
+receipts remain readable; neither kind is deleted or silently treated as new
+authority.
+
+Historical v0.4.0 boundary: the link writer affected canonical zettel bytes,
+private snapshot state, and receipt history together, while revert also read
+those records before restoring bytes. v0.4.0 had no exact-human binding for
+either complete effect set. Both approval branches therefore stopped before
+private target read or mutation and wrote no zettel, snapshot, or receipt.
+
+## Failure Contract
+
+For JSON mode, v0.4.1 uses `wom-kit/cli-error/v0.1` for the repaired usage,
+policy, and precondition paths:
+
+- malformed or missing command arguments return exit code `2`,
+  `error_class: usage`, and `effects_state: none`;
+- policy and precondition failures return exit code `1` and
+  `effects_state: none` when the exact-human workflow did not start; and
+- a caught failure after the exact-human workflow started returns exit code
+  `1` and `effects_state: unknown`.
+
+`effects_state: unknown` means the local approval claim must be reconciled. Do
+not auto-retry and do not interpret `files_written: []` as proof that no effect
+occurred. Every envelope keeps `private_values_echoed: false`.
 
 ## What It Scans
 
@@ -157,11 +304,11 @@ store_ref: notion-export-20260614
 
 ## Privacy And Safety Boundaries
 
-`zettel-objet-links` is read-only. The singular `zettel-objet-link` and its
-revert are CLI-only preview surfaces in v0.4.0; their approve branches fail
-closed as described above.
+`zettel-objet-links` is read-only. In v0.4.1, singular
+`zettel-objet-link --approve` is the only writer in this family;
+`zettel-objet-link-revert --approve` remains fixed closed.
 
-It does not:
+The discovery preview does not:
 
 - write files,
 - echo zettel body text,
@@ -176,6 +323,15 @@ It does not:
 - hash object bytes during link preview,
 - prove remote availability,
 - decide whether local originals can be deleted.
+
+The approved singular link operation reads the target zettel and strict
+manifest metadata. Its complete bound private effect set is the canonical
+zettel, exact before-snapshot, create-only receipt, persistent control
+artifact, and both deterministic compare-and-swap paths described above. On
+verified success the two swap paths are absent; on an uncertain failure they
+may remain with full private zettel bytes and must be reconciled rather than
+automatically deleted. The operation still reads no object bytes, calls no
+provider, checks no network, and echoes no label or zettel body.
 
 Redacted zettels are blocked before the frontmatter/body scan and do not expose
 a count, private relationship existence, or link previews. Redacted overview

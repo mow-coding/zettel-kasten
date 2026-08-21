@@ -4,6 +4,7 @@ from contextlib import redirect_stderr, redirect_stdout
 import io
 import json
 from pathlib import Path
+import shutil
 import tempfile
 import unittest
 from unittest import mock
@@ -14,7 +15,11 @@ from wom_kit import archive_cli, archive_services, completion_workflows
 REASON = "compound_exact_human_approval_binding_required"
 PRIVATE_LABEL = "PRIVATE reviewed label must never echo"
 PRIVATE_RECEIPT = "receipts/zettel-objet-links/PRIVATE-person-link.json"
-PRIVATE_OBJECT_ID = "sha256:" + "a" * 64
+PRIVATE_OBJECT_ID = (
+    "sha256:9dabf9b965a3f789b1b36100f3f70515ce8dfd81b411b1503e1e2c3304303647"
+)
+ZETTEL_ID = "zet_20240504_fake_lunch_thought"
+KIT_ROOT = Path(__file__).resolve().parents[1]
 
 
 class Letter137ZettelObjetLinkCompoundFailClosedTests(unittest.TestCase):
@@ -58,7 +63,7 @@ class Letter137ZettelObjetLinkCompoundFailClosedTests(unittest.TestCase):
         self.assertFalse(result["privacy_guards"]["writes"])
         self.assertFalse(result["privacy_guards"]["zettel_body_echoed"])
 
-    def test_service_apply_and_revert_block_before_any_read_or_writer(self) -> None:
+    def test_service_apply_requires_exact_human_inputs_while_revert_stays_fixed_closed(self) -> None:
         before = self._snapshot()
         with (
             mock.patch.object(
@@ -82,15 +87,19 @@ class Letter137ZettelObjetLinkCompoundFailClosedTests(unittest.TestCase):
                 side_effect=AssertionError("receipt writer entered"),
             ) as create_writer,
         ):
-            applied = completion_workflows.zettel_objet_link_apply(
-                self.root,
-                relative_path="zettels/PRIVATE-person-name.md",
-                object_id=PRIVATE_OBJECT_ID,
-                role="source_document",
-                label=PRIVATE_LABEL,
-                expected_plan_sha256="b" * 64,
-                reviewed_by="person:PRIVATE-reviewer",
-            )
+            with self.assertRaisesRegex(
+                archive_services.ArchiveServiceError,
+                "exact_human_approval_required",
+            ) as raised:
+                completion_workflows.zettel_objet_link_apply(
+                    self.root,
+                    relative_path="zettels/PRIVATE-person-name.md",
+                    object_id=PRIVATE_OBJECT_ID,
+                    role="source_document",
+                    label=PRIVATE_LABEL,
+                    expected_plan_sha256="b" * 64,
+                    reviewed_by="person:PRIVATE-reviewer",
+                )
             reverted = completion_workflows.zettel_objet_link_revert(
                 self.root,
                 receipt=PRIVATE_RECEIPT,
@@ -103,9 +112,11 @@ class Letter137ZettelObjetLinkCompoundFailClosedTests(unittest.TestCase):
         atomic_writer.assert_not_called()
         create_writer.assert_not_called()
         self.assertEqual(self._snapshot(), before)
-        self._assert_fixed_block(applied, "zettel_objet_link_apply")
         self._assert_fixed_block(reverted, "zettel_objet_link_revert")
-        rendered = json.dumps([applied, reverted], ensure_ascii=False)
+        rendered = (
+            str(raised.exception)
+            + json.dumps(reverted, ensure_ascii=False)
+        )
         for private in (
             PRIVATE_LABEL,
             PRIVATE_RECEIPT,
@@ -116,14 +127,58 @@ class Letter137ZettelObjetLinkCompoundFailClosedTests(unittest.TestCase):
         ):
             self.assertNotIn(private, rendered)
 
-    def test_cli_approve_blocks_without_calling_either_service(self) -> None:
+    def test_cli_apply_routes_through_exact_human_workflow_while_revert_stays_closed(self) -> None:
+        shutil.copytree(
+            KIT_ROOT / "examples" / "fake-life-archive",
+            self.root,
+            dirs_exist_ok=True,
+        )
+        preview = completion_workflows.zettel_objet_link_plan(
+            self.root,
+            zettel_id=ZETTEL_ID,
+            object_id=PRIVATE_OBJECT_ID,
+            role="source_document",
+            label=PRIVATE_LABEL,
+        )
+        self.assertTrue(preview["ok"], preview)
         before = self._snapshot()
+
+        successful_apply = {
+            "ok": True,
+            "state": "applied",
+            "dry_run": False,
+            "approved": True,
+            "lifecycle_action": "zettel_objet_link_apply",
+            "summary": {},
+            "blockers": [],
+            "warnings": [],
+            "would_change": [],
+            "files_written": [],
+            "private_values_echoed": False,
+            "privacy_guards": {
+                "writes": True,
+                "zettel_body_echoed": False,
+            },
+        }
+        approval_claim = object()
+        approval_contexts = []
+
+        def execute_exact_workflow(root, context, writer):
+            self.assertTrue(Path(root).samefile(self.root))
+            approval_contexts.append(context)
+            return writer(approval_claim)
+
         with (
             mock.patch.object(
                 completion_workflows,
                 "zettel_objet_link_apply",
-                side_effect=AssertionError("apply service called"),
+                return_value=successful_apply,
             ) as apply_service,
+            mock.patch.object(
+                archive_cli,
+                "_execute_zettel_objet_link_exact_human_approved_write",
+                side_effect=execute_exact_workflow,
+            ) as exact_workflow,
             mock.patch.object(
                 completion_workflows,
                 "zettel_objet_link_revert",
@@ -134,8 +189,8 @@ class Letter137ZettelObjetLinkCompoundFailClosedTests(unittest.TestCase):
                 [
                     "zettel-objet-link",
                     str(self.root),
-                    "--path",
-                    "zettels/PRIVATE-person-name.md",
+                    "--zettel-id",
+                    ZETTEL_ID,
                     "--object-id",
                     PRIVATE_OBJECT_ID,
                     "--role",
@@ -144,7 +199,7 @@ class Letter137ZettelObjetLinkCompoundFailClosedTests(unittest.TestCase):
                     PRIVATE_LABEL,
                     "--approve",
                     "--expected-plan-sha256",
-                    "b" * 64,
+                    preview["summary"]["plan_sha256"],
                     "--reviewed-by",
                     "person:PRIVATE-reviewer",
                     "--format",
@@ -167,12 +222,27 @@ class Letter137ZettelObjetLinkCompoundFailClosedTests(unittest.TestCase):
                 ]
             )
 
-        self.assertEqual(apply_code, 1, apply_error)
+        self.assertEqual(apply_code, 0, apply_error)
         self.assertEqual(revert_code, 1, revert_error)
-        apply_service.assert_not_called()
+        exact_workflow.assert_called_once()
+        apply_service.assert_called_once()
         revert_service.assert_not_called()
         self.assertEqual(self._snapshot(), before)
-        self._assert_fixed_block(applied, "zettel_objet_link_apply")
+        self.assertTrue(applied["ok"], applied)
+        self.assertEqual(len(approval_contexts), 1)
+        apply_kwargs = apply_service.call_args.kwargs
+        self.assertIs(
+            apply_kwargs["exact_human_approval_claim"],
+            approval_claim,
+        )
+        self.assertEqual(
+            apply_kwargs["expected_exact_approval_plan_sha256"],
+            approval_contexts[0].plan_sha256,
+        )
+        self.assertEqual(
+            apply_kwargs["expected_exact_approval_target_binding_sha256"],
+            approval_contexts[0].target_binding_sha256,
+        )
         self._assert_fixed_block(reverted, "zettel_objet_link_revert")
         rendered = json.dumps([applied, reverted], ensure_ascii=False)
         for private in (

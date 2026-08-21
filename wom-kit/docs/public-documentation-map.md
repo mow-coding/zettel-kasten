@@ -2,11 +2,19 @@
 
 Status: public navigation baseline
 Date: 2026-06-02
-Updated: 2026-08-20
+Updated: 2026-08-21
 Philosophy clarified: 2026-07-15
 Harness compatibility clarified: 2026-07-16
 
-Current v0.4.0 write boundary: 79 canonical top-level compound, batch, revert,
+Current v0.4.1 delta: `zettel-objet-link --approve` now has an
+operation-specific local exact-human binding. Its matching revert, every Objet
+capture writer, and the project updater/collision/bytecode writers remain fixed
+closed. `archive capabilities --machine` reports the parser-derived current
+inventory: 78 fixed-closed canonical executable paths, with all supplied
+fixed-close entries matched. The inventory does not evaluate prerequisites,
+and lack of `--approve` is not proof that a command is read-only.
+
+Historical v0.4.0 write boundary: 79 canonical top-level compound, batch, revert,
 archive-authority, durable, and external commands remain available only for
 their command-specific plan/dry-run/audit behavior. Their approval branches
 return `compound_exact_human_approval_binding_required` before private target,
@@ -16,9 +24,10 @@ historical receipts; they are not executable approval instructions.
 Nested derive capture, non-exact/non-AI draft creation, real init, and
 parcel/pack creation are separately fixed closed.
 
-Letter 138 is an urgent follow-on, not a v0.4.0 capability. Current Notion
-recovery covers page bodies or locations only; it is not a complete source
-mirror and does not detect or repair historical typed-property loss.
+Historical v0.4.0 scope note: Letter 138 is an urgent follow-on, not a v0.4.0
+capability. Current Notion recovery covers page bodies or locations only; it is
+not a complete source mirror and does not detect or repair historical
+typed-property loss.
 
 This repository intentionally separates four kinds of public project records:
 
@@ -79,6 +88,7 @@ Supporting philosophy and model docs:
 - [Credential Capability Contract](credential-capability-contract.md)
 - [Exact Human Approval Contract](exact-human-approval-contract.md)
 - [v0.4.0 Exact Human Control And Operator Friction Decision](archive-infra-decision-log-2026-08-20-v0400-letter136-operator-friction.md)
+- [v0.4.1 Letter 140 Exact Link Recovery Decision](archive-infra-decision-log-2026-08-21-v041-letter140-exact-link-recovery.md)
 - [Human Artifact Store And Private Registry Contract](human-artifact-store-contract.md)
 - [Project Version Update](project-version-update.md)
 - [Derived Text Capture And Paired-Batch Recovery](derived-text.md)
@@ -452,6 +462,7 @@ These documents record public-safe work already performed.
 - [v0.2.11 Delegate Capability Contract Work Log](../plans/work-log-2026-05-23-delegate-capability-contract.md)
 - [Changelog](../../CHANGELOG.md)
 - [Release Notes](releases/)
+- [v0.4.1 Release Note](releases/v0.4.1.md)
 - [v0.4.0 Release Note](releases/v0.4.0.md)
 - [v0.3.320 Release Note](releases/v0.3.320.md)
 - [v0.3.308 Release Note](releases/v0.3.308.md)
@@ -495,7 +506,10 @@ Schemas:
 - [Source-Fidelity Draft Receipt Schema](../schemas/source-fidelity-draft-receipt.schema.json)
 - [Source-Fidelity Draft Receipt v0.2 Schema](../schemas/source-fidelity-draft-receipt-v0.2.schema.json)
 - [Source-Fidelity Session-Evidence Receipt Schema](../schemas/source-fidelity-session-evidence-receipt-v0.1.schema.json)
+- [Content-Free CLI Error Envelope Schema](../schemas/cli-error-v0.1.schema.json)
+- [Command Approval Status Inventory Schema](../schemas/command-approval-status-inventory-v0.1.schema.json)
 - [Exact-Human Operation Approval Schema](../schemas/operation-exact-human-approval-v0.1.schema.json)
+- [Zettel-Objet Link Receipt v0.1/v0.2 Reader Schema](../schemas/zettel-objet-link-receipt.schema.json)
 - [Exact-Human Approval Link Schema](../schemas/exact-human-approval-link-receipt-v0.1.schema.json)
 - [Human-Artifact Registry Schema](../schemas/human-artifact-registry-v0.1.schema.json)
 - [Duplicate-Object Reconciliation Receipt Schema](../schemas/duplicate-object-reconciliation-receipt-v0.1.schema.json)

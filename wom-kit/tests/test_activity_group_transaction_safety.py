@@ -1922,8 +1922,15 @@ raise SystemExit(70)
                     )
 
             self.assertTrue(before_swap_injected)
-            self.assertTrue(before_restore_injected)
-            self.assertEqual(newer_foreign, canonical_path.read_bytes())
+            # Windows now opens the exact canonical file with write/delete
+            # sharing denied and validates its bytes before the first move, so
+            # this mismatch is refused without entering the older restore
+            # path. POSIX still exercises the exchange-back race below.
+            self.assertEqual(before_restore_injected, os.name != "nt")
+            self.assertEqual(
+                newer_foreign if os.name != "nt" else first_foreign,
+                canonical_path.read_bytes(),
+            )
 
     def test_writer_rollback_never_overwrites_unknown_participant_drift(
         self,

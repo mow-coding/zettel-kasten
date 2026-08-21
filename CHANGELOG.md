@@ -6,6 +6,58 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.4.1 - 2026-08-21
+
+- Reopened the single `zettel-objet-link` apply route under the native exact-
+  human approval workflow. The binding now covers the reviewed zettel and
+  manifested Objet, role and optional label, exact plan and target set,
+  canonical/snapshot/receipt effects, and a stable per-zettel control artifact;
+  the writer revalidates the bound state before mutation and verifies durable
+  readback.
+- Made ID and direct-path selection use the same bounded scan of `zettels/` and
+  `inbox/`, requiring one unique Zettel id and preventing a canonical filename
+  from bypassing duplicate detection. The writer repeats the proof before
+  mutation and after publication, rolling back and retaining evidence on final
+  identity drift.
+- Made that two-root proof one stable namespace observation. Windows arms
+  exact `ReadDirectoryChangesW` guards before scanning, revalidates every held
+  directory inventory plus each Markdown file's identity, version token, and
+  digest twice, and uses a final archive-root closing guard while the earlier
+  watches are cancelled. A cross-root move, in-place rewrite, missing-root
+  creation, notification overflow, or ambiguous cancellation fails closed
+  instead of producing a successful duplicate link. POSIX freezes the archive-
+  root inventory before probing potentially absent Zettel roots, so a root
+  created immediately after an absence result cannot enter the baseline
+  without also entering the scan.
+- Made final manifest provenance and final Zettel uniqueness one joint stable
+  authority proof. The resolver holds an exact manifest parent/file
+  observation across one complete Zettel snapshot revalidation while the
+  Windows archive-subtree closing guard remains armed; POSIX compares the held
+  parent token, file identity, metadata, and exact bytes before and after. A
+  coordinated manifest/duplicate interleaving now enters rollback instead of
+  returning success from two non-overlapping proofs.
+- Made both the link core and live approval boundary parse held `archive.yml`
+  bytes with duplicate-key rejection, bounded JSON-safe normalization, and the
+  exact-human archive-id validator, so ambiguous YAML cannot mint a plan.
+- Hardened Windows publication with held-handle, no-replace renames, complete
+  `BackupRead` stream/metadata fail-close checks, and immediate POSIX-semantics
+  removal of the verified prior name. Unsupported cleanup retains exact
+  canonical-new/previous-old evidence and never falls back to delayed deletion.
+- Kept `zettel-objet-link-revert`, objet capture, project version update and
+  collision mutation, and project bytecode repair fixed closed. Removing only
+  `zettel-objet-link` from the current canonical blocker changes the live count
+  from 79 to 78; the v0.4.0 79-command inventory below remains historical.
+- Added a parser-derived command approval-status inventory so operators can
+  distinguish approval available, approval fixed closed, and approval not
+  exposed without treating a missing `--approve` option as proof that a
+  command is read-only.
+- Added one content-free machine-readable CLI error envelope for covered usage,
+  validation, precondition, and fixed-policy failures, with usage failures on
+  exit code 2 and operational/policy failures on exit code 1.
+- Documented the exact v0.4.1 GitHub wheel bootstrap as a global CLI-only
+  escape from v0.4.0. It becomes valid only after the matching public Release
+  lists the wheel, and it does not update a project-local source mirror or pin.
+
 ## v0.4.0 - 2026-08-20
 
 - Added native Windows exact-human review for supported high-impact single

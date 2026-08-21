@@ -1,12 +1,12 @@
 # Project Version Update
 
-Status: read-only preview/inspection in v0.4.0; v0.3 mutation contract is historical
+Status: read-only preview/inspection in v0.4.1; v0.3 mutation contract is historical
 
 Current boundary: `project-version-update`, collision preserve-relocate, and
 `project-bytecode-repair` approval fail with
 `compound_exact_human_approval_binding_required` before private project read or
 mutation. The dry-runs and inspections below remain available; older approval
-examples describe historical receipts only and are not v0.4.0 run instructions.
+examples describe historical receipts only and are not v0.4.1 run instructions.
 
 ## Plain-Language Purpose
 
@@ -23,6 +23,30 @@ steps into one reviewed transaction with explicit evidence and rollback.
 It updates the tool around the archive. It does not rewrite the user's zets,
 objets, manifests, source material, or external database.
 
+## v0.4.1 Global CLI Escape Is Not A Project Update
+
+After the public v0.4.1 GitHub Release actually exists and lists the exact
+wheel, an operator with the v0.4.0 `uv tool` installation may replace only the
+isolated global CLI:
+
+```powershell
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.1/wom_kit-0.4.1-py3-none-any.whl"
+archive --version
+```
+
+Run the version check in a new process and require exactly `archive 0.4.1`. This does
+not touch `.zettel-kasten/source`, `installed-version.txt`, any other project
+pin, or the archive. A project-local mirror that was v0.4.0 therefore remains
+v0.4.0. The global v0.4.1 CLI can supply the newly exact-approved single
+`zettel-objet-link` apply route, but it does not make the project-local updater
+safe or authorized.
+
+`project-version-update`, collision preserve/relocate, and
+`project-bytecode-repair` approval remain fixed closed in v0.4.1. Keep using
+their read-only previews and inspections. Do not hand-edit a pin, copy global
+package files into the mirror, or describe the mirror as v0.4.1 without a
+future supported project-update transaction and its verification evidence.
+
 ## Safe Workflow
 
 First preview. This performs no fetch and writes nothing:
@@ -38,11 +62,11 @@ archive project-version-update <project-or-archive-root> `
 
 The target may not exist locally yet. In that case
 Windows may report the historical status `ready_to_fetch_on_approve`. In
-v0.4.0 that status is diagnostic only: approval is fixed fail-closed before
+v0.4.1 that status is diagnostic only: approval is fixed fail-closed before
 private project reads, fetch, or materialization. POSIX also remains preview
 only.
 
-After a human reviews the preview, stop. In v0.4.0 approval returns
+After a human reviews the preview, stop. In v0.4.1 approval returns
 `compound_exact_human_approval_binding_required` before reading the private
 project target, fetching refs, materializing a tree, changing a pin, creating
 a lock, or publishing a receipt.
@@ -139,7 +163,7 @@ archive project-version-update-collision <project-or-archive-root> `
   --format json
 ```
 
-Do not replay it as an approved preservation. In v0.4.0 approval returns
+Do not replay it as an approved preservation. In v0.4.1 approval returns
 `compound_exact_human_approval_binding_required` before private project reads
 or mutation and moves no payload or receipt. The detailed transaction below
 describes historical v0.3.315 evidence only.
@@ -217,9 +241,9 @@ held write-path directory behind the project root, `.zettel-kasten/source`,
 its `.git` tree, pins, lock, and receipts cannot be renamed, deleted, or
 replaced by a junction while the transaction resolves child paths.
 
-Every v0.4.0 platform can still run the useful read-only dry-run. POSIX result is
+Every v0.4.1 platform can still run the useful read-only dry-run. POSIX result is
 `status: preview_only_platform_unsupported`, includes a warning, and reports
-`write_boundary.approval_platform_supported: false`. v0.4.0 approval on every
+`write_boundary.approval_platform_supported: false`. v0.4.1 approval on every
 platform returns `compound_exact_human_approval_binding_required` before
 private project reads or writes. An open POSIX directory descriptor does not
 prevent another process from renaming that pathname, and the Git plus complete

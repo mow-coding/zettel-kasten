@@ -173,6 +173,13 @@ class ArchiveCliTests(unittest.TestCase):
         )
         exact_write_patcher.start()
         self.addCleanup(exact_write_patcher.stop)
+        link_exact_write_patcher = patch.object(
+            archive_cli,
+            "_execute_zettel_objet_link_exact_human_approved_write",
+            side_effect=self.execute_test_exact_human_write,
+        )
+        link_exact_write_patcher.start()
+        self.addCleanup(link_exact_write_patcher.stop)
         # Production approval intentionally fails closed outside Windows.
         # Cross-platform CI still exercises the approval transaction algorithm
         # under a test-only capability injection; the dedicated platform test
@@ -58898,7 +58905,7 @@ state:
         with tempfile.TemporaryDirectory() as tmp:
             missing_root = Path(tmp) / "misspelled-archive"
             with patch.object(archive_services, "index_archive") as rebuild:
-                code, _stdout, stderr = self.run_cli_split(
+                code, stdout, stderr = self.run_cli_split(
                     [
                         "index",
                         str(missing_root),
@@ -58909,8 +58916,16 @@ state:
                     ]
                 )
             self.assertEqual(code, 1)
-            self.assertIn("does not exist", stderr)
-            self.assertNotIn(str(missing_root), stderr)
+            self.assertEqual(stderr, "")
+            payload = json.loads(stdout)
+            self.assertEqual(payload["schema"], "wom-kit/cli-error/v0.1")
+            self.assertEqual(payload["command"], "index")
+            self.assertEqual(payload["error_class"], "precondition")
+            self.assertEqual(payload["reason_codes"], ["archive_root_invalid"])
+            self.assertEqual(payload["effects_state"], "none")
+            self.assertEqual(payload["files_written"], [])
+            self.assertFalse(payload["private_values_echoed"])
+            self.assertNotIn(str(missing_root), stdout)
             self.assertFalse(missing_root.exists())
             rebuild.assert_not_called()
 

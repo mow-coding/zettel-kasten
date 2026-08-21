@@ -1,6 +1,8 @@
 # Runtime Canonical Entry Points
 
-Status: v0.4.0 exact human approval and operator-friction checkpoint
+Status: v0.4.1 Letter 140 recovery and command-truth checkpoint
+
+Previous checkpoint: Status: v0.4.0 exact human approval and operator-friction checkpoint
 
 Previous checkpoint: Status: v0.3.320 one-use credential capability broker checkpoint
 
@@ -24,7 +26,60 @@ The underlying raw context packet remains available through:
 archive runtime-context <archive-root> --format json
 ```
 
-## v0.4.0 Exact Human Control Entry Points
+## v0.4.1 Current Runtime Delta
+
+Start command planning from the parser-derived inventory instead of guessing
+from a command name or an older document:
+
+```powershell
+archive capabilities --machine --format json
+```
+
+Its `data.approval_status_inventory` distinguishes
+`approval_available`, `approval_fixed_closed`, and `approval_not_exposed` for
+every canonical executable command path and its aliases. In v0.4.1, the parser
+matches all 78 supplied fixed-close entries and reports zero unmatched entries.
+This is parser evidence only: it does not evaluate archive prerequisites, and
+`approval_not_exposed` does not mean that a command is read-only.
+
+The one current writer change is
+`zettel-objet-link --dry-run|--approve`. Approval requires the exact digest from
+a fresh private plan, reviewer attribution, a local native exact-human dialog,
+an authenticated durable claim, writer-side revalidation, and a v0.2 link
+receipt. The binding covers the canonical zettel, a strict complete manifest
+read plus its exact unique matching record set,
+exact before snapshot, create-only receipt generation, and persistent
+per-zettel control artifact. MCP exposes no link writer.
+
+`zettel-objet-link-revert`, all Objet capture mutation routes, and
+`project-version-update` plus its collision/bytecode repair writers remain
+fixed closed. Their documented plans, previews, and audits remain available;
+approval still returns `compound_exact_human_approval_binding_required`. The
+remaining historical fixed-close commands retain the same boundary, so the
+current parser count is 78 rather than v0.4.0's historical 79.
+
+When an installed v0.4.0 global CLI must be bootstrapped and the exact public
+v0.4.1 GitHub Release wheel has been independently confirmed, use the public
+wheel directly:
+
+```powershell
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.1/wom_kit-0.4.1-py3-none-any.whl"
+archive --version
+```
+
+Run `archive --version` in a new process. This replaces only the global `uv`
+tool installation. It does not update the project-local WOM-kit source mirror,
+change a project pin, or make the fixed-closed `project-version-update` writer
+available.
+
+JSON usage and repaired high-risk command failures use
+`wom-kit/cli-error/v0.1`. Usage errors return exit code `2`; policy and
+precondition failures return `1`. `effects_state: none` means the protected
+workflow did not start. `effects_state: unknown` is reserved for a caught
+failure after the exact-human workflow began; inspect the durable claim and do
+not auto-retry.
+
+## Historical v0.4.0 Exact Human Control Entry Points
 
 An AI may prepare a dry-run, but it cannot assert that a person approved an
 exact write. Supported high-impact single writes must continue in the same

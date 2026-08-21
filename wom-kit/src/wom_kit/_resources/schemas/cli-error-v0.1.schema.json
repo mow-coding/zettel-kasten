@@ -1,0 +1,107 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "wom-kit/cli-error/v0.1",
+  "title": "WOM-kit content-free CLI error envelope v0.1",
+  "type": "object",
+  "required": [
+    "schema",
+    "ok",
+    "state",
+    "status_class",
+    "command",
+    "lifecycle_action",
+    "error_class",
+    "reason_codes",
+    "exit_code",
+    "effects_state",
+    "files_written",
+    "private_values_echoed"
+  ],
+  "properties": {
+    "schema": {"const": "wom-kit/cli-error/v0.1"},
+    "ok": {"const": false},
+    "state": {"enum": ["blocked", "state_unknown"]},
+    "status_class": {
+      "enum": ["blocked", "reconciliation_required"]
+    },
+    "command": {
+      "oneOf": [
+        {"type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$"},
+        {"type": "null"}
+      ]
+    },
+    "lifecycle_action": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]{0,95}$"
+    },
+    "error_class": {
+      "enum": ["execution", "policy", "precondition", "usage"]
+    },
+    "reason_codes": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "pattern": "^[a-z][a-z0-9_]{0,95}$"
+      }
+    },
+    "exit_code": {"enum": [1, 2]},
+    "effects_state": {
+      "enum": ["none", "unknown"]
+    },
+    "files_written": {
+      "oneOf": [
+        {"type": "array", "maxItems": 0},
+        {"type": "null"}
+      ]
+    },
+    "private_values_echoed": {"const": false},
+    "reconciliation_required": {"type": "boolean"},
+    "automatic_retry_allowed": {"type": "boolean"},
+    "missing_arguments": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "pattern": "^(?:--)?[A-Za-z0-9][A-Za-z0-9_-]*$"
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {"effects_state": {"const": "none"}},
+        "required": ["effects_state"]
+      },
+      "then": {
+        "properties": {
+          "state": {"const": "blocked"},
+          "status_class": {"const": "blocked"},
+          "files_written": {"type": "array", "maxItems": 0}
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {"effects_state": {"const": "unknown"}},
+        "required": ["effects_state"]
+      },
+      "then": {
+        "required": [
+          "reconciliation_required",
+          "automatic_retry_allowed"
+        ],
+        "properties": {
+          "state": {"const": "state_unknown"},
+          "status_class": {"const": "reconciliation_required"},
+          "error_class": {"const": "execution"},
+          "files_written": {"type": "null"},
+          "reconciliation_required": {"const": true},
+          "automatic_retry_allowed": {"const": false}
+        }
+      }
+    }
+  ],
+  "additionalProperties": true
+}
