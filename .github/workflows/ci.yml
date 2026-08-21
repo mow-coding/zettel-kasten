@@ -92,7 +92,9 @@ jobs:
           # deterministic source-balanced shards retain every module while
           # reducing wall-clock time. The deterministic zero shard receives
           # the monolithic test_cli.py module, so zero shards get the longer
-          # timeout on every interpreter/platform.
+          # timeout on every interpreter/platform. The second Windows shard
+          # contains process-heavy MCP subprocess suites and also needs full
+          # release-grade headroom instead of a near-zero 45-minute margin.
           - os: windows-latest
             python-version: '3.12'
             shard_index: 1
@@ -104,7 +106,7 @@ jobs:
             shard_index: 2
             shard_index_zero: 1
             shard_count: 4
-            timeout-minutes: 45
+            timeout-minutes: 75
           - os: windows-latest
             python-version: '3.12'
             shard_index: 3

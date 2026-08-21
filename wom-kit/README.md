@@ -10,23 +10,31 @@ It is not a website, SaaS app, dashboard, or visual note-taking product. The int
 
 ## Install The Command-Line Tool
 
-The exact v0.4.1 GitHub Release, when present, uses the self-contained wheel
+The exact v0.4.2 GitHub Release, when present, uses the self-contained wheel
 below. Confirm that the release exists and lists the wheel before installing
 it. The versioned URL alone is not proof that the asset is available.
 
 ```powershell
-uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.1/wom_kit-0.4.1-py3-none-any.whl"
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.2/wom_kit-0.4.2-py3-none-any.whl"
 archive --version
 ```
 
 Run the version check in a new process. The install replaces the existing
-`uv`-managed global tool, including a v0.4.0 installation. It does not update a
+`uv`-managed global tool, including a v0.4.1 installation. It does not update a
 project-local WOM-kit source mirror or its pin. The project updater remains
-fixed closed, so a global v0.4.1 runtime and an unchanged v0.4.0 project mirror
+fixed closed, so a global v0.4.2 runtime and an unchanged older project mirror
 must be reported as two different states rather than silently treated as one
 successful project update.
 
-v0.4.1 opens `zettel-objet-link --approve` through the same local exact-human
+v0.4.2 adds CLI-only `git-backup-plan` and `git-backup-reconcile-plan` for a
+bounded, content-free observation of the currently checked-out symbolic branch
+and one anonymous HTTPS remote ref. Both require `--dry-run`, expose no
+`--approve` or MCP writer, and do not add, reset, checkout, commit, merge,
+rebase, delete, fetch, pull, push, or change a ref. Authenticated/private HTTPS
+can report unavailable, while SSH/scp-like and credential-bearing remotes fail
+closed. This is only Letter 139's planning foundation, not backup completion.
+
+The v0.4.1 checkpoint opened `zettel-objet-link --approve` through the same local exact-human
 boundary. The command requires a fresh exact plan digest and reviewer, then
 binds the canonical zettel, a strict complete manifest read plus its exact
 unique matching record set, exact before
@@ -50,6 +58,8 @@ and repaired high-risk failures can use `wom-kit/cli-error/v0.1`: exit `2` is a
 usage failure, exit `1` is policy/precondition failure, and
 `effects_state: unknown` means an exact-human workflow had started and its
 durable claim requires reconciliation rather than automatic retry. See the
+[`v0.4.2 release note`](docs/releases/v0.4.2.md),
+[`Git Backup Plan`](docs/git-backup-plan.md),
 [`v0.4.1 release note`](docs/releases/v0.4.1.md),
 [`Zettel Objet Links`](docs/zettel-objet-links.md), and
 [`Agent Operator Capabilities Manifest`](docs/agent-operator-capabilities.md).

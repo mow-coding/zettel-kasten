@@ -1,6 +1,6 @@
 # Agent Operator Capabilities Manifest
 
-Status: v0.4.1 parser-derived approval-status inventory
+Status: v0.4.2 parser-derived approval-status inventory
 
 `archive capabilities --machine` lets an AI operator ask one practical question:
 
@@ -67,16 +67,16 @@ These are parser facts, not execution promises. `approval_available` does not
 mean that archive-specific prerequisites have passed. `approval_not_exposed`
 does not mean that the command is read-only.
 
-For the v0.4.1 parser, the inventory snapshot is:
+For the v0.4.2 parser, the inventory snapshot is:
 
 ```text
-canonical executable command paths: 313
+canonical executable command paths: 315
 alias invocation paths:              259
-all invocation paths:                572
+all invocation paths:                574
 approval_available:                   35
 approval_fixed_closed:                78
-approval_not_exposed:                200
-dry_run_exposed:                     268
+approval_not_exposed:                202
+dry_run_exposed:                     270
 unmatched fixed-close entries:         0
 ```
 
