@@ -9,7 +9,7 @@ from wom_kit import __version__
 
 KIT_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = KIT_ROOT.parent
-EXPECTED_CURRENT_VERSION = "0.4.0"
+EXPECTED_CURRENT_VERSION = "0.4.1"
 EXPECTED_CURRENT_TAG = f"v{EXPECTED_CURRENT_VERSION}"
 CURRENT_VERSION = f"v{__version__}"
 CURRENT_RELEASE_NOTE = f"{EXPECTED_CURRENT_TAG}.md"
@@ -20,7 +20,7 @@ CURRENT_WHEEL_URL = (
     f"wom_kit-{EXPECTED_CURRENT_VERSION}-py3-none-any.whl"
 )
 CURRENT_RUNTIME_STATUS = (
-    f"Status: {CURRENT_VERSION} exact human approval and operator-friction checkpoint"
+    f"Status: {CURRENT_VERSION} Letter 140 recovery and command-truth checkpoint"
 )
 CURRENT_MATRIX_VERSION = f"Version: {CURRENT_VERSION} implementation and release scope"
 MATRIX_PATH = KIT_ROOT / "docs" / "capability-matrix.md"
@@ -1607,7 +1607,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "writes no files, repairs no mirror, calls no providers, and reads no secrets",
             "Project WOM-kit version update",
             "project-version-update",
-            "read-only preview in v0.4.0",
+            "read-only preview in v0.4.1",
             "compound_exact_human_approval_binding_required",
             "write no source, pin, cache deletion, lock, or receipt",
         ):
@@ -1657,7 +1657,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, current_release_text)
         for phrase in (
-            "Status: read-only preview/inspection in v0.4.0",
+            "Status: read-only preview/inspection in v0.4.1",
             "compound_exact_human_approval_binding_required",
             "ready_to_fetch_on_approve",
             "non-force, atomic Git fetch",
@@ -4158,7 +4158,8 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         public_map_text = (KIT_ROOT / "docs" / "public-documentation-map.md").read_text(encoding="utf-8")
         public_map_ko_text = (KIT_ROOT / "docs" / "public-documentation-map.ko.md").read_text(encoding="utf-8")
         for phrase in (
-            "Status: v0.4.0 read-only preview; structured link apply/revert fail closed",
+            "Status: v0.4.1 read-only discovery plus exact-human structured link apply;",
+            "structured link revert remains fixed closed",
             "archive zettel-objet-links <archive-root>",
             "MCP:",
             "zettel_objet_links",
@@ -4172,6 +4173,12 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "Redacted zettels are blocked",
             "Provider-backed presigned URLs are separate future work",
             "archive notion-objet-link-plan --dry-run",
+            "archive zettel-objet-link <archive-root>",
+            "--expected-plan-sha256 <64-hex>",
+            "--reviewed-by person:reviewer-id",
+            "persistent per-zettel control artifact",
+            "`zettel-objet-link-revert --approve` remains fixed closed in v0.4.1",
+            "compound_exact_human_approval_binding_required",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, links_text)
@@ -4298,6 +4305,12 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "MCP `zettel_objet_links`",
             "echo no zettel body text or frontmatter values",
             "block redacted zettels",
+            "Structured zettel-objet link lifecycle",
+            "apply exact-human available in v0.4.1; revert fixed closed",
+            "v0.4.1 adds an operation-specific exact-human binding only for apply",
+            "Objet capture selection manifest",
+            "still fixed closed in v0.4.1",
+            "Bounded multi-item Objet capture",
             "Notion objet locator bridge",
             "read-only in v0.4.0",
             "index/plan/rewrite-plan, label preview, and conversion preview write nothing",
@@ -4321,6 +4334,8 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "[Notion Objet Link Convert](wom-kit/docs/notion-objet-link-convert.md)",
             "[Notion Objet Manifest Locator Label](wom-kit/docs/notion-objet-manifest-locator-label.md)",
             "zettel objet link previews",
+            "v0.4.1 reopens only one structured `zettel-objet-link` apply",
+            "`zettel-objet-link-revert`, every objet-capture write",
             "import material-clue auditing",
             "scaled source-map/ledger based Notion material-link planning",
             "dry-run Notion objet manifest locator fingerprint labeling",

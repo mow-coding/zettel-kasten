@@ -2,12 +2,16 @@
 
 Status: v0.3.313 runtime skill package with private source-fidelity guidance
 
-Current v0.4.0 boundary: the runtime exposes exactly 79 top-level compound/batch/revert,
-archive-authority, durable, and external commands as plan/dry-run/audit only.
-Their approval branches return
+Current v0.4.1 boundary: the parser-derived inventory has exactly 78
+fixed-closed canonical command paths. Their approval branches return
 `compound_exact_human_approval_binding_required` before private target/input,
-credential, or provider reads and write nothing. Historical workflow text must
-not be used to revive one of those writers.
+credential, or provider reads and write nothing. The one removal from the
+v0.4.0 fixed-close set is CLI `zettel-objet-link` apply, which is available only
+as a fresh plan-digest-bound replay with native exact-human approval.
+`zettel-objet-link-revert` remains preview-only and fixed closed, and MCP has no
+exact-human link writer. Historical workflow text must not be used to revive
+another writer. Except for that single link apply, the v0.4.0 fixed-close
+descriptions below remain current in v0.4.1.
 Nested derive capture, non-exact/non-AI draft creation, real init, and
 parcel/pack creation are separately fixed closed.
 

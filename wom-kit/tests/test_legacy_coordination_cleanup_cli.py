@@ -93,7 +93,7 @@ class LegacyCoordinationCleanupCliTests(unittest.TestCase):
             for action in command._actions
             if "--approve" in action.option_strings
         )
-        self.assertIn("unavailable in v0.4.0", approve_action.help.lower())
+        self.assertIn("unavailable in v0.4.1", approve_action.help.lower())
         self.assertIn("dry-run, plan, or audit", approve_action.help.lower())
 
         with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
@@ -187,8 +187,14 @@ class LegacyCoordinationCleanupCliTests(unittest.TestCase):
         self.assertEqual(
             json.loads(output),
             {
+                "schema": "wom-kit/cli-error/v0.1",
                 "ok": False,
                 "state": "blocked",
+                "command": "legacy-coordination-cleanup",
+                "error_class": "policy",
+                "status_class": "blocked",
+                "effects_state": "none",
+                "exit_code": 1,
                 "lifecycle_action": "legacy_coordination_cleanup",
                 "reason_codes": [
                     "compound_exact_human_approval_binding_required"
@@ -296,7 +302,7 @@ class LegacyCoordinationCleanupCliTests(unittest.TestCase):
         self.assertTrue(expected_options.issubset(set(command["options"])))
         self.assertNotIn("--target", command["options"])
         self.assertNotIn("--path", command["options"])
-        self.assertIn("unavailable in v0.4.0", command["help"].lower())
+        self.assertIn("unavailable in v0.4.1", command["help"].lower())
         self.assertIn("collab/ is never traversed or changed", command["help"].lower())
 
     @unittest.skipUnless(os.name == "nt", "approved apply is Windows-only")

@@ -146,11 +146,13 @@ CURRENT_DATABASE_CANONICAL_SHA256 = (
     "d9a42f08ee12a6d42e40214cfb12441e4077bf50c38c25b2692ec1344328294a"
 )
 RESOURCE_ADDITIONS = {
-    "release-notes/v0.4.0.md",
+    "release-notes/v0.4.1.md",
     "schemas/agent-instruction-policy-v0.1.schema.json",
     "schemas/approval-handoff-v0.1.schema.json",
     "schemas/approval-integrity-audit-result-v0.1.schema.json",
     "schemas/approval-integrity-overlay-entry-v0.1.schema.json",
+    "schemas/cli-error-v0.1.schema.json",
+    "schemas/command-approval-status-inventory-v0.1.schema.json",
     "schemas/credential-capability-v0.1.schema.json",
     "schemas/duplicate-object-reconciliation-receipt-v0.1.schema.json",
     "schemas/exact-human-approval-link-receipt-v0.1.schema.json",
@@ -194,9 +196,9 @@ RESOURCE_ADDITIONS = {
     "schemas/zettel-objet-link-revert-receipt.schema.json",
 }
 RESOURCE_REMOVALS = {"release-notes/v0.3.297.md"}
-CURRENT_RESOURCE_COUNT = 156
+CURRENT_RESOURCE_COUNT = 158
 CURRENT_RESOURCE_CANONICAL_SHA256 = (
-    "1b752d5d980d6bfa37024604a13dea1cf6316f4040fbbf695e64b8654c379df0"
+    "e91c801940e267d3b6aba9619c67f25283c5f9863c756ee58bf8069d5cce6099"
 )
 
 
@@ -524,7 +526,7 @@ class V03299PredecessorSurfaceTests(unittest.TestCase):
             "^sha256:[0-9a-f]{64}$",
         )
 
-    def test_resource_paths_are_v03297_plus_exact_v03298_v03318_delta(self) -> None:
+    def test_resource_paths_are_v03297_plus_exact_through_v0401_delta(self) -> None:
         predecessor_paths = set(self.fixture["package_resources"]["packaged_paths"])
         self.assertTrue(
             RESOURCE_REMOVALS <= predecessor_paths,
@@ -554,10 +556,10 @@ class V03299PredecessorSurfaceTests(unittest.TestCase):
             actual,
             expected,
             "Current package-resource paths must be the full v0.3.297 set plus "
-            "the exact cumulative v0.3.298 through v0.4.0 delta. "
+            "the exact cumulative v0.3.298 through v0.4.1 delta. "
             f"missing={compact(missing)}; extra={compact(extra)}",
         )
-        self.assertEqual(manifest["version"], "0.4.0")
+        self.assertEqual(manifest["version"], "0.4.1")
         self.assertEqual(len(actual), CURRENT_RESOURCE_COUNT)
         self.assertEqual(
             canonical_sha256(actual),
@@ -576,14 +578,14 @@ class V03299PredecessorSurfaceTests(unittest.TestCase):
         self.assertIn("does not undo", predecessor_flat)
         self.assertNotIn("C:\\Users\\", predecessor_text)
 
-    def test_v0400_release_note_is_public_and_synchronized(self) -> None:
-        current_source_release = KIT_ROOT / "docs" / "releases" / "v0.4.0.md"
+    def test_v0401_release_note_is_public_and_synchronized(self) -> None:
+        current_source_release = KIT_ROOT / "docs" / "releases" / "v0.4.1.md"
         current_packaged_release = (
             SRC_ROOT
             / "wom_kit"
             / "_resources"
             / "release-notes"
-            / "v0.4.0.md"
+            / "v0.4.1.md"
         )
         self.assertEqual(
             current_source_release.read_bytes(),
@@ -592,14 +594,14 @@ class V03299PredecessorSurfaceTests(unittest.TestCase):
         current_text = current_source_release.read_text(encoding="utf-8")
         current_flat = " ".join(current_text.split())
         for token in (
-            "Exact Human Control And Operator Friction",
-            "native Windows TaskDialog",
-            "authenticated durable claim in started state",
-            "effect=created",
-            "external_delivery",
-            "exactly 79 top-level commands",
-            "compound_exact_human_approval_binding_required",
-            "source-fidelity-session-evidence-receipt-v0.1.schema.json",
+            "Emergency Link Recovery And Global-CLI Escape",
+            "One exact Zettel–Objet link apply",
+            "authenticated exact-human reference",
+            "parser-derived approval-status inventory",
+            "wom-kit/cli-error/v0.1",
+            "78 commands",
+            "wom_kit-0.4.1-py3-none-any.whl",
+            "existing project-local v0.4.0 mirror remains v0.4.0",
         ):
             with self.subTest(token=token):
                 self.assertIn(token, current_flat)

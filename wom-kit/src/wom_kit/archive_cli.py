@@ -17,7 +17,7 @@ Commands:
   runtime-skill-uninstall
           Preview or approve removal of an unchanged WOM-kit-managed Agent Skill.
   legacy-coordination-cleanup
-          Preview retired local coordination state. The v0.4.0 write is
+          Preview retired local coordination state. The write is
           unavailable until an exact compound human-approval binding exists;
           collab/ is never traversed or changed.
   project-version-update
@@ -189,7 +189,7 @@ Commands:
   credential-secure-list
           List local receipt metadata, or explicitly verify it with the exact archive authentication key.
   credential-lifecycle
-          Plan one authenticated default/legacy decision; v0.4.0 approval is unavailable.
+          Plan one authenticated default/legacy decision; approval remains unavailable.
   credential-ref-inventory
           List known credential refs without echoing ref values or secrets.
   credential-store-recommendation
@@ -382,7 +382,7 @@ import subprocess
 import sys
 import threading
 import time
-from contextlib import redirect_stderr
+from contextlib import ExitStack, contextmanager, nullcontext, redirect_stderr
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 from fnmatch import fnmatchcase
@@ -395,6 +395,7 @@ from . import (
     approval_integrity,
     archive_services,
     artifact_lifecycle_inventory,
+    command_status,
     completion_workflows,
     duplicate_object_reconciliation,
     human_artifact_registry,
@@ -426,6 +427,7 @@ from .exact_human_approval_windows import (
 from .exact_human_approval_workflow import (
     ExactHumanApprovalWorkflowError,
     _execute_exact_human_approved_write,
+    _execute_exact_human_approved_write_core,
 )
 from .resource_paths import runtime_release_note_path, runtime_resource_root
 from .schema_validator import validate_schema
@@ -5725,14 +5727,27 @@ def parser_command_manifest(parser: argparse.ArgumentParser) -> list[dict[str, A
 def command_capabilities(args: argparse.Namespace) -> int:
     parser = build_parser()
     commands = parser_command_manifest(parser)
+    approval_inventory = command_status.build_command_status_inventory(
+        parser,
+        COMPOUND_APPROVAL_BLOCKED_COMMANDS,
+    )
+    approval_counts = approval_inventory["counts"]
+    if args.no_commands:
+        approval_inventory = {
+            **approval_inventory,
+            "commands": [],
+        }
     release = release_identity_probe()
     data = {
         "command_count": len(commands),
         "commands": [] if args.no_commands else commands,
+        "approval_status_inventory": approval_inventory,
         "agent_operator_notes": [
             "This manifest is generated from the actual local CLI parser.",
             "release_state is local-only and does not call GitHub or any provider.",
             "Use required_positionals and options for command planning; use each command's --help for full usage.",
+            "approval_status is parser-derived and does not claim that archive-specific prerequisites have passed.",
+            "approval_not_exposed does not claim that a command is read-only.",
         ],
         "recommended_agent_checks": [
             "Confirm release_state before assuming a feature exists in the public release.",
@@ -5751,6 +5766,15 @@ def command_capabilities(args: argparse.Namespace) -> int:
             "release_notes_present": release["release_notes_present"],
             "local_git_tag_present": release["local_git_tag_present"],
             "latest_local_release_tag": release["latest_local_release_tag"],
+            "approval_available_command_count": approval_counts[
+                "approval_available_command_count"
+            ],
+            "approval_fixed_closed_command_count": approval_counts[
+                "approval_fixed_closed_command_count"
+            ],
+            "approval_not_exposed_command_count": approval_counts[
+                "approval_not_exposed_command_count"
+            ],
         },
         "data": data,
         "blockers": [],
@@ -5771,6 +5795,12 @@ def command_capabilities(args: argparse.Namespace) -> int:
         print(f"Version: {summary['version_label']}")
         print(f"Release state: {summary['release_state']}")
         print(f"Commands: {summary['command_count']}")
+        print(
+            "Approval surface: "
+            f"{summary['approval_available_command_count']} available, "
+            f"{summary['approval_fixed_closed_command_count']} fixed closed, "
+            f"{summary['approval_not_exposed_command_count']} not exposed"
+        )
         print("Machine form: archive capabilities --machine")
     return 0
 
@@ -15434,17 +15464,28 @@ def _zettel_objet_link_compound_write_blocked(
 
     reason = "compound_exact_human_approval_binding_required"
     return {
+        "schema": "wom-kit/cli-error/v0.1",
         "ok": False,
         "state": "blocked",
+        "status_class": "blocked",
+        "command": (
+            "zettel-objet-link-revert"
+            if lifecycle_action == "zettel_objet_link_revert"
+            else "zettel-objet-link"
+        ),
         "dry_run": False,
         "approved": False,
         "lifecycle_action": lifecycle_action,
+        "error_class": "policy",
         "summary": {},
         "blockers": [reason],
         "reason_codes": [reason],
+        "exit_code": 1,
+        "effects_state": "none",
         "warnings": [],
         "would_change": [],
         "files_written": [],
+        "private_values_echoed": False,
         "privacy_guards": {
             "label_echoed": False,
             "zettel_body_echoed": False,
@@ -15458,29 +15499,316 @@ def _zettel_objet_link_compound_write_blocked(
     }
 
 
+@contextmanager
+def _zettel_objet_link_approval_read_boundary(
+    archive_root: Path,
+):
+    """Hold archive identity inputs fixed across review and execution."""
+
+    root = archive_services.require_existing_archive_root(archive_root)
+    with ExitStack() as stack:
+        held_archive = stack.enter_context(
+            archive_services._hold_activity_group_evidence_file(
+                root,
+                root / "archive.yml",
+                max_bytes=(
+                    completion_workflows.ZETTEL_OBJET_LINK_MAX_ARCHIVE_CONFIG_BYTES
+                ),
+            )
+        )
+        stack.enter_context(
+            archive_services._hold_activity_group_evidence_file(
+                root,
+                root / ".gitignore",
+                max_bytes=1024 * 1024,
+            )
+        )
+        try:
+            loaded = archive_services.load_approval_yaml_without_duplicate_keys(
+                held_archive["raw"].decode("utf-8")
+            )
+            document = archive_services.normalize_approval_json_tree(loaded)
+            archive_id = (
+                document.get("archive_id")
+                if isinstance(document, dict)
+                else None
+            )
+            exact_human_approval_archive_identity_sha256(archive_id)
+        except Exception:
+            raise archive_services.ArchiveServiceError(
+                "zettel_objet_link_archive_identity_unavailable"
+            ) from None
+        yield root, archive_id
+
+
+@contextmanager
+def _zettel_objet_link_post_decision_boundary(root: Path):
+    """Bind key-lock and exact-claim parents after live approval."""
+
+    credential_lock_parent = (
+        root / "profiles" / "local" / "credential-intake"
+    )
+    claims_parent = (
+        root
+        / "profiles"
+        / "local"
+        / "exact-human-approvals"
+        / "claims"
+    )
+    with ExitStack() as stack:
+        stack.enter_context(
+            archive_services._activity_group_bound_directory_chain(
+                root,
+                credential_lock_parent,
+                create=True,
+            )
+        )
+        claims_binding = stack.enter_context(
+            archive_services._activity_group_bound_directory_chain(
+                root,
+                claims_parent,
+                create=True,
+            )
+        )
+        yield root, claims_binding
+
+
+def _execute_zettel_objet_link_exact_human_approved_write(
+    archive_root: Path,
+    context: ExactHumanApprovalContext,
+    writer: Callable[[Any], Mapping[str, Any]],
+) -> dict[str, Any]:
+    """Run the link writer with its fixed, non-injectable filesystem guard."""
+
+    return _execute_exact_human_approved_write_core(
+        archive_root,
+        context,
+        writer,
+        native=None,
+        key_provider=None,
+        post_decision_boundary=lambda: (
+            _zettel_objet_link_post_decision_boundary(archive_root)
+        ),
+    )
+
+
 def command_zettel_objet_link(args: argparse.Namespace) -> int:
     if args.dry_run == args.approve:
-        print(
-            "zettel-objet-link requires exactly one of --dry-run or --approve.",
-            file=sys.stderr,
+        return _recognized_command_cli_error(
+            args,
+            command="zettel-objet-link",
+            lifecycle_action="zettel_objet_link",
+            error_class="usage",
+            reason_code="zettel_objet_link_mode_required",
+            text_message=(
+                "zettel-objet-link requires exactly one of --dry-run or "
+                "--approve."
+            ),
+            exit_code=2,
         )
-        return 1
+    if args.approve and not str(args.reviewed_by or "").strip():
+        return _recognized_command_cli_error(
+            args,
+            command="zettel-objet-link",
+            lifecycle_action="zettel_objet_link_apply",
+            error_class="precondition",
+            reason_code="zettel_objet_link_reviewer_required",
+            text_message="zettel-objet-link --approve requires --reviewed-by.",
+        )
+    if args.approve and not str(args.expected_plan_sha256 or "").strip():
+        return _recognized_command_cli_error(
+            args,
+            command="zettel-objet-link",
+            lifecycle_action="zettel_objet_link_apply",
+            error_class="precondition",
+            reason_code="zettel_objet_link_expected_plan_required",
+            text_message=(
+                "zettel-objet-link --approve requires the exact plan digest "
+                "from a fresh --dry-run."
+            ),
+        )
+    approval_workflow_started = False
     try:
-        if args.dry_run:
-            result = completion_workflows.zettel_objet_link_plan(
-                Path(args.archive_root),
+        archive_root = Path(args.archive_root)
+        approval_read_boundary = (
+            _zettel_objet_link_approval_read_boundary(archive_root)
+            if args.approve
+            else nullcontext((archive_root, None))
+        )
+        with approval_read_boundary as (
+            archive_root,
+            held_archive_id,
+        ):
+            preview = completion_workflows.zettel_objet_link_plan(
+                archive_root,
                 zettel_id=args.zettel_id,
                 relative_path=args.path,
                 object_id=args.object_id,
                 role=args.role,
                 label=args.label,
             )
-        else:
-            result = _zettel_objet_link_compound_write_blocked(
-                "zettel_objet_link_apply"
+            if args.dry_run:
+                result = preview
+                _print_zettel_objet_link_result(result, args.format)
+                return 0 if result.get("ok") else 1
+            else:
+                preview_archive_id = preview.get("archive_id")
+                if (
+                    type(preview_archive_id) is not str
+                    or type(held_archive_id) is not str
+                    or not secrets.compare_digest(
+                        preview_archive_id,
+                        held_archive_id,
+                    )
+                ):
+                    raise archive_services.ArchiveServiceError(
+                        "zettel_objet_link_archive_identity_changed"
+                    )
+                if preview.get("ok") is not True or preview.get("blockers"):
+                    return _recognized_command_cli_error(
+                        args,
+                        command="zettel-objet-link",
+                        lifecycle_action="zettel_objet_link_apply",
+                        error_class="precondition",
+                        reason_code="zettel_objet_link_preflight_blocked",
+                        text_message=(
+                            "zettel-objet-link approval was blocked by a fresh "
+                            "private preflight; no private values were echoed."
+                        ),
+                    )
+            summary = (
+                preview.get("summary")
+                if isinstance(preview.get("summary"), dict)
+                else {}
             )
-    except Exception:
-        print("zettel-objet-link failed safely.", file=sys.stderr)
+            service_plan_sha256 = str(summary.get("plan_sha256") or "")
+            expected_service_plan_sha256 = str(
+                args.expected_plan_sha256 or ""
+            ).strip().lower()
+            if (
+                SHA256_RE.fullmatch(expected_service_plan_sha256) is None
+                or SHA256_RE.fullmatch(service_plan_sha256) is None
+                or not secrets.compare_digest(
+                    expected_service_plan_sha256,
+                    service_plan_sha256,
+                )
+            ):
+                return _recognized_command_cli_error(
+                    args,
+                    command="zettel-objet-link",
+                    lifecycle_action="zettel_objet_link_apply",
+                    error_class="precondition",
+                    reason_code="zettel_objet_link_expected_plan_mismatch",
+                    text_message=(
+                        "zettel-objet-link plan changed or its expected "
+                        "digest is invalid; run a fresh --dry-run."
+                    ),
+                )
+            binding = (
+                operation_approval_binding.zettel_objet_link_approval_binding(
+                    preview
+                )
+            )
+            reviewer = str(args.reviewed_by).strip()
+            context = binding.context(
+                archive_id=preview_archive_id,
+                reviewer_claim=reviewer,
+            )
+
+            def _write_zettel_objet_link(claim) -> dict[str, Any]:
+                return completion_workflows.zettel_objet_link_apply(
+                    archive_root,
+                    zettel_id=args.zettel_id,
+                    relative_path=args.path,
+                    object_id=args.object_id,
+                    role=args.role,
+                    label=args.label,
+                    expected_plan_sha256=expected_service_plan_sha256,
+                    reviewed_by=reviewer,
+                    expected_exact_approval_plan_sha256=(
+                        binding.plan_sha256
+                    ),
+                    expected_exact_approval_target_binding_sha256=(
+                        binding.target_binding_sha256
+                    ),
+                    exact_human_approval_claim=claim,
+                )
+
+            approval_workflow_started = True
+            result = _execute_zettel_objet_link_exact_human_approved_write(
+                archive_root,
+                context,
+                _write_zettel_objet_link,
+            )
+    except ExactHumanApprovalWorkflowError as error:
+        no_archive_effect_codes = {
+            "exact_human_approval_cancelled",
+            "exact_human_approval_operation_failed",
+            "exact_human_approval_writer_result_invalid",
+        }
+        execution_state_unknown = error.code not in no_archive_effect_codes
+        return _recognized_command_cli_error(
+            args,
+            command="zettel-objet-link",
+            lifecycle_action="zettel_objet_link_apply",
+            error_class=(
+                "execution" if execution_state_unknown else "precondition"
+            ),
+            reason_code=(
+                "zettel_objet_link_execution_state_unknown"
+                if execution_state_unknown
+                else "zettel_objet_link_workflow_precondition_failed"
+            ),
+            text_message=(
+                "zettel-objet-link execution state is unknown; archive files "
+                "may have been written. Private values were not echoed. "
+                "Inspect the exact-human approval claim, if present, and do "
+                "not retry automatically."
+                if execution_state_unknown
+                else "zettel-objet-link did not reach the protected writer; "
+                "no archive files were written by this command and private "
+                "values were not echoed."
+            ),
+            effects_state=(
+                "unknown" if execution_state_unknown else "none"
+            ),
+        )
+    except (
+        archive_services.ArchiveServiceError,
+        operation_approval_binding.OperationApprovalBindingError,
+        ExactHumanApprovalError,
+        ExactHumanApprovalWindowsError,
+        OSError,
+        TypeError,
+        ValueError,
+    ):
+        return _recognized_command_cli_error(
+            args,
+            command="zettel-objet-link",
+            lifecycle_action="zettel_objet_link_apply",
+            error_class=(
+                "execution" if approval_workflow_started else "precondition"
+            ),
+            reason_code=(
+                "zettel_objet_link_execution_state_unknown"
+                if approval_workflow_started
+                else "zettel_objet_link_workflow_precondition_failed"
+            ),
+            text_message=(
+                "zettel-objet-link execution state is unknown; archive files "
+                "may have been written. Private values were not echoed. "
+                "Inspect the exact-human approval claim, if present, and do "
+                "not retry automatically."
+                if approval_workflow_started
+                else "zettel-objet-link did not reach the protected writer; "
+                "no archive files were written by this command and private "
+                "values were not echoed."
+            ),
+            effects_state=(
+                "unknown" if approval_workflow_started else "none"
+            ),
+        )
+    if args.format != "json" and _print_exact_human_reconciliation_notice(result):
         return 1
     _print_zettel_objet_link_result(result, args.format)
     return 0 if result.get("ok") else 1
@@ -16083,12 +16411,23 @@ def _exact_human_approval_cli_error(
         else "exact_human_approval_state_unknown"
     )
     if getattr(args, "format", None) == "json":
+        command = str(getattr(args, "command", "") or "")
         print_json(
             {
+                "schema": "wom-kit/cli-error/v0.1",
                 "ok": False,
                 "state": "blocked",
+                "status_class": "blocked",
+                "command": (
+                    command
+                    if re.fullmatch(r"[a-z0-9][a-z0-9-]*", command)
+                    else None
+                ),
                 "lifecycle_action": lifecycle_action,
+                "error_class": "policy",
                 "reason_codes": [safe_reason],
+                "exit_code": 1,
+                "effects_state": "none",
                 "files_written": [],
                 "private_values_echoed": False,
             }
@@ -16117,6 +16456,51 @@ def _exact_human_approval_cli_error(
             file=sys.stderr,
         )
     return 1
+
+
+def _recognized_command_cli_error(
+    args: argparse.Namespace,
+    *,
+    command: str,
+    lifecycle_action: str,
+    error_class: str,
+    reason_code: str,
+    text_message: str,
+    effects_state: str = "none",
+    exit_code: int = 1,
+) -> int:
+    """Emit one content-free failure contract for an already parsed command."""
+
+    safe_exit_code = exit_code if exit_code in {1, 2} else 1
+    state_unknown = effects_state == "unknown"
+    payload = {
+        "schema": "wom-kit/cli-error/v0.1",
+        "ok": False,
+        "state": "state_unknown" if state_unknown else "blocked",
+        "status_class": (
+            "reconciliation_required" if state_unknown else "blocked"
+        ),
+        "command": command,
+        "lifecycle_action": lifecycle_action,
+        "error_class": error_class,
+        "reason_codes": [reason_code],
+        "exit_code": safe_exit_code,
+        "effects_state": effects_state,
+        "files_written": None if state_unknown else [],
+        "private_values_echoed": False,
+    }
+    if state_unknown:
+        payload.update(
+            {
+                "reconciliation_required": True,
+                "automatic_retry_allowed": False,
+            }
+        )
+    if getattr(args, "format", None) == "json":
+        print_json(payload)
+    else:
+        print(text_message, file=sys.stderr)
+    return safe_exit_code
 
 
 def _print_exact_human_reconciliation_notice(
@@ -16298,11 +16682,16 @@ def command_facet_vocabulary(args: argparse.Namespace) -> int:
             Path(args.archive_root), dry_run=True
         )
     except (archive_services.ArchiveServiceError, OSError, ValueError):
-        print(
-            "facet-vocabulary could not read the bounded facet registry.",
-            file=sys.stderr,
+        return _recognized_command_cli_error(
+            args,
+            command="facet-vocabulary",
+            lifecycle_action="facet_vocabulary",
+            error_class="precondition",
+            reason_code="facet_vocabulary_unavailable",
+            text_message=(
+                "facet-vocabulary could not read the bounded facet registry."
+            ),
         )
-        return 1
     if args.format == "json":
         print_json(result)
     else:
@@ -16358,7 +16747,7 @@ def command_create_draft(args: argparse.Namespace) -> int:
             args,
             reason_code="compound_exact_human_approval_binding_required",
             message=(
-                "Human-declared create-draft writes are unavailable in v0.4.0; "
+                f"Human-declared create-draft writes are unavailable in v{__version__}; "
                 "the write did not start. Use --dry-run."
             ),
         )
@@ -19221,8 +19610,14 @@ def command_index(args: argparse.Namespace) -> int:
     try:
         archive_root = archive_services.require_existing_archive_root(Path(args.archive_root))
     except (archive_services.ArchiveServiceError, OSError):
-        print("Archive root does not exist or is not a directory.", file=sys.stderr, flush=True)
-        return 1
+        return _recognized_command_cli_error(
+            args,
+            command="index",
+            lifecycle_action="index",
+            error_class="precondition",
+            reason_code="archive_root_invalid",
+            text_message="Archive root does not exist or is not a directory.",
+        )
     reporter = CommandProgressReporter(
         bool(getattr(args, "progress", False)),
         label="index",
@@ -25692,9 +26087,19 @@ def add_runtime_skill_target_arguments(command: argparse.ArgumentParser) -> None
 
 
 COMPOUND_APPROVAL_BLOCKED_HELP = (
-    "Unavailable in v0.4.0: this write needs an exact compound human-approval "
-    "binding that is not implemented yet. Use the command's dry-run, plan, or "
-    "audit mode only."
+    f"Unavailable in v{__version__}: this write needs an operation-specific "
+    "exact compound human-approval binding that is not implemented yet. No "
+    "approval-mode substitute is supported. Use the command's dry-run, plan, "
+    "or audit mode and query `archive capabilities --machine` for installed "
+    "status."
+)
+
+PROJECT_VERSION_UPDATE_BLOCKED_HELP = (
+    f"Unavailable in v{__version__}: the project-mirror updater still needs a "
+    "complete exact compound human-approval binding. To leave v0.4.0, install "
+    f"the exact public v{__version__} wheel using the documented bootstrap, "
+    "start a new process, and use that global CLI. The bootstrap does not "
+    "change the project-local mirror."
 )
 
 
@@ -25777,7 +26182,6 @@ COMPOUND_APPROVAL_BLOCKED_COMMANDS = frozenset(
         "zet-title-remap-write",
         "zet-catalog-pass-cleanup",
         "zettel-edge-batch",
-        "zettel-objet-link",
         "zettel-objet-link-revert",
     }
 )
@@ -25803,7 +26207,11 @@ def _mark_compound_approval_help(
             raise RuntimeError(
                 "compound_approval_help_action_invalid:" + command_name
             )
-        approval_actions[0].help = COMPOUND_APPROVAL_BLOCKED_HELP
+        approval_actions[0].help = (
+            PROJECT_VERSION_UPDATE_BLOCKED_HELP
+            if command_name == "project-version-update"
+            else COMPOUND_APPROVAL_BLOCKED_HELP
+        )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -25960,7 +26368,7 @@ def build_parser() -> argparse.ArgumentParser:
     legacy_coordination_cleanup_parser = subcommands.add_parser(
         "legacy-coordination-cleanup",
         help=(
-            "Preview retired .mow-harness local state. Unavailable in v0.4.0: "
+            f"Preview retired .mow-harness local state. Unavailable in v{__version__}: "
             "the write needs an exact compound human-approval binding; "
             "collab/ is never traversed or changed."
         ),
@@ -28017,7 +28425,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     credential_lifecycle = subcommands.add_parser(
         "credential-lifecycle",
-        help="Plan one authenticated default/legacy decision; v0.4.0 approval is unavailable.",
+        help=f"Plan one authenticated default/legacy decision; v{__version__} approval is unavailable.",
     )
     credential_lifecycle.add_argument("archive_root", help="Archive root containing authenticated credential receipts.")
     credential_lifecycle.add_argument("--provider", default="notion", help="Safe provider label. Defaults to notion.")
@@ -28038,14 +28446,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     credential_lifecycle.add_argument(
         "--expected-plan-sha256",
-        help="Legacy compatibility input only; v0.4.0 approval is unavailable.",
+        help=f"Legacy compatibility input only; v{__version__} approval is unavailable.",
     )
     credential_lifecycle.add_argument(
         "--reviewed-by",
-        help="Legacy compatibility input only; a reviewer label is not v0.4.0 write authority.",
+        help=f"Legacy compatibility input only; a reviewer label is not v{__version__} write authority.",
     )
     credential_lifecycle.add_argument("--dry-run", action="store_true", help="Authenticate receipts and return the complete decision plan without writing it.")
-    credential_lifecycle.add_argument("--approve", action="store_true", help="Unavailable in v0.4.0; use the authenticated dry-run plan only.")
+    credential_lifecycle.add_argument("--approve", action="store_true", help=f"Unavailable in v{__version__}; use the authenticated dry-run plan only.")
     credential_lifecycle.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
     credential_lifecycle.set_defaults(func=command_credential_lifecycle)
 
@@ -30675,7 +31083,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="Optional human label. Stored in the zettel but never echoed by this command.",
     )
     zettel_objet_link.add_argument("--dry-run", action="store_true")
-    zettel_objet_link.add_argument("--approve", action="store_true")
+    zettel_objet_link.add_argument(
+        "--approve",
+        action="store_true",
+        help=(
+            "After a fresh --dry-run, require its exact plan digest plus a "
+            "native exact-human approval before writing one zettel, its exact "
+            "snapshot when absent, and one receipt."
+        ),
+    )
     zettel_objet_link.add_argument("--expected-plan-sha256")
     zettel_objet_link.add_argument("--reviewed-by")
     zettel_objet_link.add_argument("--format", choices=["text", "json"], default="text")
@@ -31608,7 +32024,7 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "Approve only an exact reviewed AI draft replay through the local "
             "TaskDialog and authenticated claim. Human-declared/non-AI writes "
-            "are unavailable in v0.4.0; use --dry-run."
+            f"are unavailable in v{__version__}; use --dry-run."
         ),
     )
     create_draft.add_argument("--expected-archive-id", help="Expected archive id; mismatch blocks.")
@@ -32698,11 +33114,11 @@ def build_parser() -> argparse.ArgumentParser:
         "parcel",
         aliases=["pack"],
         help=(
-            "Unavailable in v0.4.0: parcel/pack creation needs an exact "
+            f"Unavailable in v{__version__}: parcel/pack creation needs an exact "
             "compound human-approval binding."
         ),
         description=(
-            "Unavailable in v0.4.0: parcel/pack creation needs an exact "
+            f"Unavailable in v{__version__}: parcel/pack creation needs an exact "
             "compound human-approval binding. No view, zettel body, object "
             "manifest, or target path is read."
         ),
@@ -35834,11 +36250,11 @@ def build_parser() -> argparse.ArgumentParser:
         "init",
         help=(
             "Dry-run archive initialization only; real initialization is "
-            "unavailable in v0.4.0 pending exact compound human approval."
+            f"unavailable in v{__version__} pending exact compound human approval."
         ),
         description=(
             "Dry-run archive initialization only. Real initialization is "
-            "unavailable in v0.4.0 and is blocked before the target is read "
+            f"unavailable in v{__version__} and is blocked before the target is read "
             "or written."
         ),
     )
@@ -35857,7 +36273,7 @@ def build_parser() -> argparse.ArgumentParser:
     init.add_argument(
         "--dry-run",
         action="store_true",
-        help="Required in v0.4.0. Preview initialization without writing files.",
+        help=f"Required in v{__version__}. Preview initialization without writing files.",
     )
     init.set_defaults(func=command_init)
 
@@ -35972,6 +36388,8 @@ def main(argv: list[str] | None = None) -> int:
             "operator-feedback-body-check",
             "project-version-update-collision",
             "create-draft",
+            "zettel-objet-link",
+            "zet-objet-link",
         }
     )
     if raw_argv[:1] == ["credential-adopt"] and any(
@@ -35986,11 +36404,17 @@ def main(argv: list[str] | None = None) -> int:
         if json_requested:
             print_json(
                 {
+                    "schema": "wom-kit/cli-error/v0.1",
                     "ok": False,
                     "state": "blocked",
+                    "status_class": "blocked",
                     "lifecycle_action": "cli_argument_validation",
                     "command": "credential-adopt",
+                    "error_class": "usage",
                     "reason_codes": ["credential_secret_input_option_forbidden"],
+                    "exit_code": 2,
+                    "effects_state": "none",
+                    "files_written": [],
                     "private_values_echoed": False,
                 }
             )
@@ -36040,15 +36464,21 @@ def main(argv: list[str] | None = None) -> int:
         command = raw_argv[0] if raw_argv and re.fullmatch(r"[a-z0-9][a-z0-9-]*", raw_argv[0]) else None
         print_json(
             {
+                "schema": "wom-kit/cli-error/v0.1",
                 "ok": False,
                 "state": "blocked",
+                "status_class": "blocked",
                 "lifecycle_action": "cli_argument_validation",
                 "command": command,
+                "error_class": "usage",
                 "reason_codes": [
                     "cli_required_arguments_missing"
                     if missing_arguments
                     else "cli_arguments_invalid"
                 ],
+                "exit_code": exit_code,
+                "effects_state": "none",
+                "files_written": [],
                 "missing_arguments": missing_arguments,
                 "private_values_echoed": False,
             }

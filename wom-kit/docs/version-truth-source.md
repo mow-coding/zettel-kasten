@@ -1,8 +1,10 @@
 # WOM-kit Version Truth Source
 
-Status: v0.4.0 runtime alignment with exact human approval
+Status: v0.4.1 emergency exact Zettel–Objet link recovery and global CLI bootstrap
 
-Current checkpoint: Status: v0.4.0 exact human approval and operator-friction checkpoint
+Current checkpoint: Status: v0.4.1 one exact link apply plus content-free operator recovery
+
+Previous checkpoint: Status: v0.4.0 exact human approval and operator-friction checkpoint
 
 Previous checkpoint: Status: v0.3.320 one-use credential capability broker
 
@@ -194,7 +196,7 @@ The bridge runs the verified project source for one invocation. It does not:
 If source/pin metadata is incomplete or inconsistent, or any local release
 integrity check fails, the result fails closed and provides no executable
 bridge argv. A present but unverified mirror also makes the command nonzero.
-Preview a verified `project-version-update --dry-run` and stop. In v0.4.0
+Preview a verified `project-version-update --dry-run` and stop. In v0.4.1
 updater approval returns `compound_exact_human_approval_binding_required`
 before private project/source/Git/pin reads, fetch, or mutation and writes no
 source, pin, lock, or receipt.
@@ -260,7 +262,7 @@ checkout and keep the original checkout unchanged for diagnosis.
 
 ## Project Update Preview And Historical Contract
 
-The current v0.4.0 command provides the bounded preview only:
+The current v0.4.1 command provides the bounded preview only:
 
 ```powershell
 archive project-version-update <project-or-archive-root> `
@@ -274,7 +276,7 @@ archive project-version-update <project-or-archive-root> `
 Approval returns `compound_exact_human_approval_binding_required` before
 private project reads, fetch, materialization, pin mutation, lock creation, or
 receipt publication. The implementation details below describe historical
-v0.3.315 evidence only and grant no v0.4.0 write authority.
+v0.3.315 evidence only and grant no v0.4.1 write authority.
 
 From v0.3.315, a locally available exact target uses the same digest-bound
 materialization planner in preview and approval. Its cross-map covers the
