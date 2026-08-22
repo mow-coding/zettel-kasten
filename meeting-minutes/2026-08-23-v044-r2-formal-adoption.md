@@ -122,4 +122,3 @@ v0.4.4 recovery result. Remaining blockers are intentionally external:
 6. final receipt inspection and remote Git backup.
 
 No feedback letter is resolved by this development-only result.
-

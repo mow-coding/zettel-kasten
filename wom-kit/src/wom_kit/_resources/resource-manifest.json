@@ -289,8 +289,8 @@
     {
       "source": "schemas/object-storage-formal-adoption-receipt-v0.1.schema.json",
       "packaged": "schemas/object-storage-formal-adoption-receipt-v0.1.schema.json",
-      "bytes": 2769,
-      "sha256": "513035fc38b834fad177b038be907b180c241d2108bf3ffb208d74f70463980f"
+      "bytes": 2768,
+      "sha256": "9bb9cdb1b6481e597d6599223514131ab66ab3124db1aa9f40b3d8c8680471df"
     },
     {
       "source": "schemas/object-storage-manifest-reconcile-receipt.schema.json",
