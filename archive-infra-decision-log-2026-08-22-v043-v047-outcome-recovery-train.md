@@ -37,6 +37,10 @@ losslessly when their modern name/type meaning is unavailable.
 - v0.4.3 must include a real backfill outcome, not only infrastructure.
 - R2 byte preservation may precede semantic duplicate resolution, but it must
   be labelled `bytes_preserved`, never falsely reported as adopted or verified.
+- The emergency R2 target set is exactly 3,374: 3,376 unique local definitions
+  minus 2 with existing remote evidence.  The 1,149 conflicting definition
+  groups are a separate review population.  Immutable per-object receipts and
+  one final projection replace any O(n-squared) central-manifest rewrite loop.
 - Superseded Letters 141 and 143 remain immutable evidence.  Letter 144 supplies
   corrected current measurements.
 - See `meeting-minutes/2026-08-22-v043-v047-feedback-recovery-execution.md` for
