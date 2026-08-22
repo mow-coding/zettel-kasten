@@ -97,3 +97,31 @@ Letter 138 규모 결과:
 - Windows에서는 기존 정책대로 directory handle `fsync`가 no-op이다. 각 row의
   file `fsync`와 최초 파일 생성 시 호출 경계는 유지되지만, 디렉터리 내구성은
   NTFS/Windows의 파일 생성 semantics에 의존한다.
+
+## 독립 검토 후 P1 수정
+
+독립 검토는 checkpoint JSONL full scan 자체 외에 실제 apply 진행률 계산에
+남아 있던 O(n²) 순회를 발견했다. 각 item 상태를 발행할 때마다 모든
+`completed_fields`를 다시 합산했기 때문이다. `_CheckpointState`가 완료 field
+수를 한 번 계산하고 field checkpoint 성공 때 O(1)로 증가시키도록 수정했으며,
+100-item 회귀 테스트가 apply loop 안에서 completed-field mapping을 한 번도
+재순회하지 않고 최종 진행률 100을 발행함을 검증한다.
+
+같은 8,566-effect / 25,698-row 실제 파일 benchmark는 수정 뒤 40.797초,
+629.899 rows/초로 통과했다. full checkpoint scan 2회, checkpoint directory
+sync 1회, 첫 engine 상태 0.000초, 최대 상태 간격 1.407초를 유지했다.
+
+독립 검토는 POSIX directory `open/fsync` 실패를 기존 helper가 삼키는 문제도
+발견했다. directory sync helper는 이제 성공 여부를 반환하며, private
+directory·writer lock·최초 checkpoint 이름·최종 result receipt 생성 경계는
+실패를 성공으로 처리하지 않는다. 최초 checkpoint 이름 sync 실패 주입
+테스트는 content writer 전에 `exact_operation_checkpoint_write_failed`로
+차단되고 cached descriptor를 닫음을 검증한다.
+
+Windows에서 archive lock을 무시하는 외부 writer가 checkpoint의 앞쪽 byte를
+같은 길이로 바꾸고 timestamp까지 복원하는 공격은 다음 O(1) append guard를
+통과할 수 있다. 그러나 final full-chain scan은 result receipt를 차단한다.
+이 경계는 non-cooperative external tamper가 필요한 P2 residual로 기록하며,
+승인된 exact writer끼리는 archive-wide lock을 계속 강제한다. 또한 benchmark의
+0.000초 값은 apply engine 진입 이후 첫 상태만 증명한다. CLI 시작부터 2초 내
+첫 출력은 각 공개 writer의 end-to-end release gate에서 별도로 검증한다.

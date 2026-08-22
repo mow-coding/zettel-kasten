@@ -177,11 +177,11 @@ def run_benchmark(effect_count: int, max_elapsed_seconds: float) -> dict[str, ob
                     checkpoint_scan_count += 1
                 return original_read(path, *args, **kwargs)
 
-            def counted_directory_sync(path: Path) -> None:
+            def counted_directory_sync(path: Path) -> bool:
                 nonlocal checkpoint_directory_sync_count
                 if path == store.checkpoints_root:
                     checkpoint_directory_sync_count += 1
-                original_directory_sync(path)
+                return original_directory_sync(path)
 
             started = time.monotonic()
 

@@ -168,6 +168,21 @@ read-only plans or safety surfaces that leave historical data unrepaired.
   and a maximum progress gap of 1.375 seconds.  Focused integration reruns pass
   54 tests, and the changed Python tree compiles cleanly.  Independent review
   remains in progress before release acceptance.
+- Independent review then found two additional P1s before release: progress
+  events still recomputed all completed fields for every item, leaving the full
+  apply path quadratic, and POSIX directory fsync failure for the first
+  checkpoint name was not distinguished from success.  Both are corrected.
+  Completed-field progress now uses an O(1) state counter, durable name sync is
+  fail-closed, and targeted regression coverage passes 56 tests.  The repeated
+  8,566-effect / 25,698-checkpoint benchmark now finishes in 40.797 seconds
+  while retaining two full scans, one creation sync, first engine status at
+  zero, and a 1.407-second maximum progress gap.
+- The review also bounded two P2 residuals rather than hiding them.  A Windows
+  process that ignores the archive lock and restores both checkpoint length
+  and timestamp can evade the next O(1) append guard, but the final full-chain
+  scan still prohibits a result receipt.  The common benchmark's immediate
+  status measures apply-engine entry, so each public writer must separately
+  pass a CLI-start-to-first-output end-to-end gate before release.
 - The separate v0.4.3 release-preparation branch now contains the version,
   package, release-note, upgrade, capability, and resource changes.  Its initial
   161 release/capability/root checks and a further 35 approval-inventory checks
