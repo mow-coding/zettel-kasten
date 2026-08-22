@@ -104,6 +104,7 @@ class ExactHumanApprovalOperation(Enum):
     notion_property_backfill = "notion_property_backfill"
     notion_property_backfill_revert = "notion_property_backfill_revert"
     object_storage_bytes_preservation = "object_storage_bytes_preservation"
+    object_storage_formal_adoption = "object_storage_formal_adoption"
 
 
 def exact_human_approval_warning_codes(
@@ -158,6 +159,9 @@ _OPERATION_LABELS = {
     ExactHumanApprovalOperation.object_storage_bytes_preservation: (
         "오브제 원격 바이트 긴급 보존"
     ),
+    ExactHumanApprovalOperation.object_storage_formal_adoption: (
+        "오브제 원격 정식 채택"
+    ),
 }
 
 _OPERATION_QUESTIONS = {
@@ -194,6 +198,9 @@ _OPERATION_QUESTIONS = {
     ),
     ExactHumanApprovalOperation.object_storage_bytes_preservation: (
         "원격 사본이 확인되지 않은 오브제 바이트를 먼저 보존할까요?"
+    ),
+    ExactHumanApprovalOperation.object_storage_formal_adoption: (
+        "보존·검증된 오브제를 정식 원격 연결로 채택할까요?"
     ),
 }
 
@@ -249,6 +256,10 @@ _OPERATION_SUMMARIES = {
         "확인된 로컬 오브제 바이트만 content-addressed 원격 key에 보존하고 "
         "다시 내려받아 검증합니다. 정식 연결로 표시하지 않습니다."
     ),
+    ExactHumanApprovalOperation.object_storage_formal_adoption: (
+        "바이트와 원격 근거가 일치하는 항목만 정식 채택하고 "
+        "충돌 항목은 검토 상태로 남깁니다."
+    ),
 }
 
 _OPERATION_APPROVE_BUTTONS = {
@@ -268,6 +279,7 @@ _OPERATION_APPROVE_BUTTONS = {
     ExactHumanApprovalOperation.notion_property_backfill: "복구 실행",
     ExactHumanApprovalOperation.notion_property_backfill_revert: "복구 되돌리기",
     ExactHumanApprovalOperation.object_storage_bytes_preservation: "바이트 보존",
+    ExactHumanApprovalOperation.object_storage_formal_adoption: "정식 채택",
 }
 
 
