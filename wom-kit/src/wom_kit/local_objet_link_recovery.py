@@ -20,6 +20,7 @@ from typing import Any, Callable
 from . import archive_services, completion_workflows
 from .exact_operation_manifest import (
     ExactFieldEffect,
+    ExactOperationEvidence,
     ExactOperationItem,
     ExactOperationManifest,
     hash_field_value,
@@ -458,14 +459,94 @@ def zettel_objet_link_recovery_plan(
             "classification", "done", len(receipt_items), len(receipt_items)
         )
 
+    classified_count = sum(counts.values())
+    population_digests = {
+        "capture_item_set_sha256": _sha(
+            _canonical_bytes(
+                [item["item_ref_sha256"] for item in public_items]
+            )
+        ),
+        "classification_set_sha256": _sha(_canonical_bytes(public_items)),
+        "exact_link_ready_set_sha256": _sha(
+            _canonical_bytes(
+                [
+                    item["item_ref_sha256"]
+                    for item in public_items
+                    if item["state"] == "exact_link_ready"
+                ]
+            )
+        ),
+        "already_linked_set_sha256": _sha(
+            _canonical_bytes(
+                [
+                    item["item_ref_sha256"]
+                    for item in public_items
+                    if item["state"] == "already_linked"
+                ]
+            )
+        ),
+        "review_required_set_sha256": _sha(
+            _canonical_bytes(
+                [
+                    item["item_ref_sha256"]
+                    for item in public_items
+                    if item["state"] == "review_required"
+                ]
+            )
+        ),
+        "no_target_set_sha256": _sha(
+            _canonical_bytes(
+                [
+                    item["item_ref_sha256"]
+                    for item in public_items
+                    if item["state"] == "no_target"
+                ]
+            )
+        ),
+        "canonical_zettel_set_sha256": _sha(
+            _canonical_bytes(
+                sorted(
+                    _sha(
+                        _canonical_bytes(
+                            {
+                                "id": target["id"],
+                                "path": target["path"],
+                            }
+                        )
+                    )
+                    for target in targets
+                )
+            )
+        ),
+        "object_manifest_set_sha256": _sha(
+            _canonical_bytes(manifest_records)
+        ),
+        "capture_receipt_sha256": receipt_sha256,
+    }
+    evidence_counts = {
+        "already_linked_count": counts["already_linked"],
+        "canonical_zettel_count": len(targets),
+        "capture_item_count": len(receipt_items),
+        "classified_item_count": classified_count,
+        "exact_link_ready_count": counts["exact_link_ready"],
+        "no_target_count": counts["no_target"],
+        "object_manifest_row_count": len(manifest_records),
+        "review_required_count": counts["review_required"],
+        "unreadable_canonical_count": unreadable_count,
+    }
+    operation_evidence = ExactOperationEvidence(
+        schema="wom-kit/zettel-objet-link-recovery-evidence/v1",
+        counts=tuple(sorted(evidence_counts.items())),
+        digests=tuple(sorted(population_digests.items())),
+    )
     exact_manifest = None
     if exact_items and not blockers:
         exact_manifest = ExactOperationManifest.build(
             operation="zettel_objet_link_recovery",
             archive_identity_sha256=hash_field_value(archive_id.encode("utf-8")),
             items=exact_items,
+            operation_evidence=operation_evidence,
         ).document()
-    classified_count = sum(counts.values())
     if classified_count != len(receipt_items):
         blockers.append("zettel_objet_link_recovery_classification_incomplete")
     state = "blocked" if blockers else "classified"
@@ -484,7 +565,8 @@ def zettel_objet_link_recovery_plan(
             "canonical_zettel_count": len(targets),
             "unreadable_canonical_count": unreadable_count,
             "object_manifest_row_count": len(manifest_records),
-            "classification_set_sha256": _sha(_canonical_bytes(public_items)),
+            **population_digests,
+            "operation_evidence_sha256": operation_evidence.evidence_sha256,
         },
         "items": public_items,
         "exact_operation_manifest": exact_manifest,
