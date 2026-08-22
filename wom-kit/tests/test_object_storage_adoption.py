@@ -6,10 +6,60 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from wom_kit import archive_services
+from wom_kit.exact_operation_manifest import (
+    ExactOperationApprovalAuthority,
+    FileExactOperationCheckpointStore,
+    exact_operation_writer_lock,
+)
 from wom_kit.object_storage_adoption import (
     ObjectStorageAdoptionError,
+    _apply_with_store,
+    _persist_control,
+    load_object_storage_formal_adoption_plan,
     plan_object_storage_formal_adoption,
+    verify_object_storage_formal_adoption,
 )
+
+
+class _MemoryHeadTransport:
+    def __init__(self, objects: dict[str, int]) -> None:
+        self.objects = dict(objects)
+        self.head_calls = 0
+        self.put_calls = 0
+
+    def head_object(self, *, key: str, presence_only: bool = False):
+        self.head_calls += 1
+        if key not in self.objects:
+            return {
+                "present": False,
+                "size": None,
+                "presence_state": "absent",
+                "verification_state": "complete",
+            }
+        return {
+            "present": True,
+            "size": self.objects[key],
+            "checksum_sha256": None,
+            "presence_state": "present",
+            "verification_state": "complete",
+        }
+
+    def put_object(self, **_kwargs):
+        self.put_calls += 1
+        raise AssertionError("formal adoption must never PUT")
+
+
+def _authority() -> ExactOperationApprovalAuthority:
+    return ExactOperationApprovalAuthority.from_reference(
+        {
+            "schema_version": "wom-kit/exact-human-approval-reference/v0.1",
+            "approval_id": "approval_" + "a" * 32,
+            "context_sha256": "sha256:" + "b" * 64,
+            "approval_authority_sha256": "sha256:" + "c" * 64,
+            "one_use": True,
+        }
+    )
 
 
 class ObjectStorageFormalAdoptionPlanTests(unittest.TestCase):
@@ -189,6 +239,171 @@ class ObjectStorageFormalAdoptionPlanTests(unittest.TestCase):
                     store_ref="storage:account:test",
                 )
             self.assertEqual(captured.exception.code, "object_storage_adoption_judgment_invalid")
+
+    def test_exact_writer_heads_every_mapping_twice_and_rewrites_manifest_once(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            parent = Path(temporary)
+            root = self._root(parent)
+            pending = self._row(
+                b"pending",
+                logical_key="pending",
+                mime="application/octet-stream",
+                locations=[{"provider": "object_storage", "availability": "declared_uploaded"}],
+            )
+            existing = self._row(
+                b"existing",
+                logical_key="existing",
+                mime="application/octet-stream",
+                locations=[],
+            )
+            keys = {
+                pending["sha256"]: f"custom/{pending['sha256']}",
+                existing["sha256"]: f"custom/{existing['sha256']}",
+            }
+            existing["locations"].append(
+                archive_services.object_storage_wom_uploaded_location(
+                    digest=existing["sha256"],
+                    provider_kind="cloudflare-r2",
+                    store_ref="storage:account:test",
+                    execution_receipt_ref="receipts/providers/object-storage-executions/old.json",
+                    uploaded_at="2026-08-22T00:00:00Z",
+                    key_strategy="prefix",
+                    remote_key=keys[existing["sha256"]],
+                    remote_key_verification="presence_size",
+                    remote_size=len(b"existing"),
+                )
+            )
+            self._write_rows(root, [pending, existing])
+            key_map = self._write_map(
+                parent,
+                [
+                    {"sha256": digest, "remote_key": remote_key}
+                    for digest, remote_key in keys.items()
+                ],
+            )
+            plan = plan_object_storage_formal_adoption(
+                root, key_map_path=key_map, store_ref="storage:account:test"
+            )
+            transport = _MemoryHeadTransport(
+                {
+                    keys[pending["sha256"]]: len(b"pending"),
+                    keys[existing["sha256"]]: len(b"existing"),
+                }
+            )
+            with exact_operation_writer_lock(root) as lock:
+                checkpoints = FileExactOperationCheckpointStore(root, writer_lock=lock)
+                result = _apply_with_store(
+                    plan,
+                    _authority(),
+                    transport,
+                    checkpoints,
+                    resume=False,
+                    progress_hook=None,
+                )
+
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["remote_query_verified_count"], 2)
+            self.assertEqual(result["formal_adoption_count"], 1)
+            self.assertEqual(result["manifest_location_updates"], 1)
+            self.assertEqual(result["central_manifest_rewrite_count_ceiling"], 1)
+            self.assertEqual(transport.head_calls, 4)
+            self.assertEqual(transport.put_calls, 0)
+            rows = [
+                json.loads(line)
+                for line in (root / "objects" / "manifests" / "files.jsonl")
+                .read_text(encoding="utf-8")
+                .splitlines()
+            ]
+            pending_after = next(row for row in rows if row["object_id"] == pending["object_id"])
+            owned = [
+                item
+                for item in pending_after["locations"]
+                if item.get("execution_receipt_ref", "").startswith(
+                    "receipts/providers/object-storage-formal-adoption/"
+                )
+            ]
+            self.assertEqual(len(owned), 1)
+            self.assertFalse(owned[0]["byte_verification_by_wom_kit"])
+            self.assertFalse(owned[0]["provider_upload_time_known"])
+
+            # A wholly separate verifier performs fresh HEAD calls and accepts
+            # the immutable receipts plus the one aggregate manifest projection.
+            verified = verify_object_storage_formal_adoption(plan, transport=transport)
+            self.assertTrue(verified["ok"])
+            self.assertEqual(transport.head_calls, 6)
+
+    def test_control_resume_reloads_after_manifest_projection_without_source_drift(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            parent = Path(temporary)
+            root = self._root(parent)
+            row = self._row(
+                b"pending",
+                logical_key="pending",
+                mime="application/octet-stream",
+                locations=[{"provider": "object_storage", "availability": "declared_uploaded"}],
+            )
+            self._write_rows(root, [row])
+            remote_key = f"custom/{row['sha256']}"
+            key_map = self._write_map(
+                parent, [{"sha256": row["sha256"], "remote_key": remote_key}]
+            )
+            plan = plan_object_storage_formal_adoption(
+                root, key_map_path=key_map, store_ref="storage:account:test"
+            )
+            _persist_control(plan)
+            transport = _MemoryHeadTransport({remote_key: len(b"pending")})
+            with exact_operation_writer_lock(root) as lock:
+                result = _apply_with_store(
+                    plan,
+                    _authority(),
+                    transport,
+                    FileExactOperationCheckpointStore(root, writer_lock=lock),
+                    resume=False,
+                    progress_hook=None,
+                )
+            self.assertTrue(result["ok"])
+            loaded = load_object_storage_formal_adoption_plan(
+                root, manifest_sha256=plan.manifest.manifest_sha256
+            )
+            self.assertTrue(loaded.loaded_from_control)
+            self.assertEqual(loaded.manifest.document(), plan.manifest.document())
+
+    def test_remote_mismatch_fails_before_receipt_or_manifest_write(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            parent = Path(temporary)
+            root = self._root(parent)
+            row = self._row(
+                b"pending",
+                logical_key="pending",
+                mime="application/octet-stream",
+                locations=[{"provider": "object_storage", "availability": "declared_uploaded"}],
+            )
+            original_manifest = json.dumps(row, separators=(",", ":")) + "\n"
+            self._write_rows(root, [row])
+            remote_key = f"custom/{row['sha256']}"
+            key_map = self._write_map(
+                parent, [{"sha256": row["sha256"], "remote_key": remote_key}]
+            )
+            plan = plan_object_storage_formal_adoption(
+                root, key_map_path=key_map, store_ref="storage:account:test"
+            )
+            transport = _MemoryHeadTransport({remote_key: len(b"pending") + 1})
+            with exact_operation_writer_lock(root) as lock:
+                with self.assertRaises(Exception):
+                    _apply_with_store(
+                        plan,
+                        _authority(),
+                        transport,
+                        FileExactOperationCheckpointStore(root, writer_lock=lock),
+                        resume=False,
+                        progress_hook=None,
+                    )
+            self.assertFalse((root / plan.specs[0].receipt_relative).exists())
+            self.assertEqual(
+                (root / "objects" / "manifests" / "files.jsonl").read_text(encoding="utf-8"),
+                original_manifest,
+            )
+            self.assertEqual(transport.put_calls, 0)
 
 
 if __name__ == "__main__":

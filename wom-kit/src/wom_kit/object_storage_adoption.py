@@ -10,27 +10,54 @@ automatically.
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import re
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
 from . import archive_services
 from . import object_storage_preservation as preservation
-from .exact_human_approval import exact_human_approval_archive_identity_sha256
-from .exact_human_approval_windows import ExactHumanApprovalOperation
+from .exact_human_approval import (
+    ExactHumanApprovalError,
+    _ClaimedExactHumanApproval,
+    exact_human_approval_archive_identity_sha256,
+)
+from .exact_human_approval_workflow import (
+    _execute_exact_human_approved_write,
+    _resume_exact_human_approved_write_core,
+)
+from .exact_human_approval_windows import (
+    ExactHumanApprovalContext,
+    ExactHumanApprovalOperation,
+)
 from .exact_operation_manifest import (
     ExactFieldEffect,
+    ExactOperationApprovalAuthority,
     ExactOperationItem,
     ExactOperationManifest,
+    ExactOperationManifestError,
+    ExactOperationProgress,
+    FileExactOperationCheckpointStore,
+    apply_exact_operation,
+    exact_operation_execution_sha256,
+    exact_operation_writer_lock,
     hash_field_value,
+    verify_exact_operation,
+)
+from .operation_approval_binding import (
+    ExactOperationApprovalBinding,
+    exact_operation_manifest_approval_binding,
 )
 
 
 PLAN_SCHEMA = "wom-kit/object-storage-formal-adoption-plan/v0.1"
 CONTROL_SCHEMA = "wom-kit/object-storage-formal-adoption-control/v0.1"
 RECEIPT_SCHEMA = "wom-kit/object-storage-formal-adoption-receipt/v0.1"
+RESULT_SCHEMA = "wom-kit/object-storage-formal-adoption-result/v0.1"
+VERIFY_SCHEMA = "wom-kit/object-storage-formal-adoption-verification/v0.1"
 OPERATION = ExactHumanApprovalOperation.object_storage_formal_adoption.value
 RECEIPT_ROOT = "receipts/providers/object-storage-formal-adoption"
 CONTROL_ROOT = "profiles/local/exact-operations/manifests"
@@ -227,6 +254,7 @@ class ObjectStorageFormalAdoptionPlan:
     conflict_batches: tuple[ConflictBatch, ...]
     counts: Mapping[str, int]
     key_map_path: Path | None = None
+    judgment_path: Path | None = None
     loaded_from_control: bool = False
 
     @property
@@ -627,7 +655,876 @@ def plan_object_storage_formal_adoption(
         conflict_batches=batches,
         counts=counts,
         key_map_path=key_map_file,
+        judgment_path=Path(judgment_path) if judgment_path is not None else None,
     )
+
+
+def _manifest_source_token(specs: Sequence[FormalAdoptionSpec]) -> bytes:
+    return _canonical(
+        {
+            "schema_version": "wom-kit/object-storage-formal-adoption-manifest-source/v0.1",
+            "source_tokens": [_sha_bytes(item.source_token) for item in specs],
+        }
+    )
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _head_verify(
+    transport: archive_services.ObjectStorageTransport,
+    spec: FormalAdoptionSpec,
+    *,
+    heartbeat: Callable[[], None],
+) -> None:
+    heartbeat()
+    try:
+        result = transport.head_object(key=spec.remote_key, presence_only=True)
+    except Exception:
+        raise _fail("object_storage_adoption_remote_unavailable") from None
+    heartbeat()
+    if (
+        result.get("presence_state") == "unavailable"
+        or result.get("verification_state") == "unavailable"
+    ):
+        raise _fail("object_storage_adoption_remote_unavailable")
+    if result.get("present") is not True or result.get("size") != spec.size_bytes:
+        raise _fail("object_storage_adoption_remote_mismatch")
+
+
+def _receipt_document(
+    plan: ObjectStorageFormalAdoptionPlan,
+    spec: FormalAdoptionSpec,
+    *,
+    verified_at: str,
+) -> dict[str, Any]:
+    return {
+        "schema_version": RECEIPT_SCHEMA,
+        "object_id": spec.object_id,
+        "content_sha256": spec.object_id,
+        "size_bytes": spec.size_bytes,
+        "provider_kind": plan.provider_kind,
+        "store_ref": plan.store_ref,
+        "remote_key": spec.remote_key,
+        "remote_key_sha256": _sha(spec.remote_key),
+        "remote_key_verification": "presence_size",
+        "remote_key_verified": True,
+        "provider_confirmation_by_wom_kit": True,
+        "byte_verification_by_wom_kit": False,
+        "verification_scope": "remote_presence_and_size_not_content_hash",
+        "classification": spec.classification,
+        "formal_adoption_eligible": spec.formal_adoption_eligible,
+        "formal_adoption_status": (
+            "verified_pending_manifest_projection"
+            if spec.formal_adoption_eligible
+            else (
+                "already_adopted_verified"
+                if spec.classification == "existing_formal_adoption"
+                else "conflict_review_required_verified"
+            )
+        ),
+        "source_inventory_sha256": plan.source_inventory_sha256,
+        "receipt_state_sha256": _sha_bytes(spec.receipt_token),
+        "verified_at": verified_at,
+        "provider_put_called": False,
+        "automatic_conflict_merge": False,
+        "private_values_echoed": False,
+        "credential_values_echoed": False,
+        "provider_url_echoed": False,
+        "local_path_echoed": False,
+    }
+
+
+def _receipt_path(plan: ObjectStorageFormalAdoptionPlan, spec: FormalAdoptionSpec) -> Path:
+    return archive_services.archive_internal_path(plan.archive_root, spec.receipt_relative)
+
+
+def _read_receipt(
+    plan: ObjectStorageFormalAdoptionPlan, spec: FormalAdoptionSpec
+) -> dict[str, Any] | None:
+    path = _receipt_path(plan, spec)
+    if not path.exists():
+        return None
+    try:
+        raw = path.read_bytes()
+        if len(raw) > 64 * 1024:
+            raise ValueError("large")
+        document = preservation._strict_json(raw)
+        verified_at = document.get("verified_at")
+        datetime.fromisoformat(str(verified_at).replace("Z", "+00:00"))
+    except Exception:
+        raise _fail("object_storage_adoption_receipt_conflict") from None
+    expected = _receipt_document(plan, spec, verified_at=str(verified_at))
+    if document != expected:
+        raise _fail("object_storage_adoption_receipt_conflict")
+    return document
+
+
+def _create_receipt(
+    plan: ObjectStorageFormalAdoptionPlan, spec: FormalAdoptionSpec
+) -> dict[str, Any]:
+    existing = _read_receipt(plan, spec)
+    if existing is not None:
+        return existing
+    document = _receipt_document(plan, spec, verified_at=_now_iso())
+    raw = _canonical(document) + b"\n"
+    preservation._create_or_match_receipt(
+        plan.archive_root,
+        spec.receipt_relative,
+        raw,
+        max_bytes=64 * 1024,
+        failure_code="object_storage_adoption_receipt_conflict",
+    )
+    return document
+
+
+def _owned_location(
+    plan: ObjectStorageFormalAdoptionPlan,
+    spec: FormalAdoptionSpec,
+    receipt: Mapping[str, Any],
+) -> dict[str, Any]:
+    location = archive_services.object_storage_wom_uploaded_location(
+        digest=spec.object_id.removeprefix("sha256:"),
+        provider_kind=plan.provider_kind,
+        store_ref=plan.store_ref,
+        execution_receipt_ref=spec.receipt_relative,
+        uploaded_at=str(receipt["verified_at"]),
+        key_strategy=archive_services.OBJECT_STORAGE_UPLOAD_KEY_STRATEGY_PREFIX,
+        remote_key=spec.remote_key,
+        remote_key_verified=True,
+        remote_key_verification="presence_size",
+        remote_size=spec.size_bytes,
+    )
+    location["formal_adoption_verified_at"] = str(receipt["verified_at"])
+    location["provider_upload_time_known"] = False
+    location["byte_verification_by_wom_kit"] = False
+    return location
+
+
+def _location_owned_by_spec(
+    location: Mapping[str, Any],
+    plan: ObjectStorageFormalAdoptionPlan,
+    spec: FormalAdoptionSpec,
+) -> bool:
+    return (
+        location.get("provider") == "object_storage"
+        and location.get("availability") == "wom_uploaded"
+        and location.get("provider_kind") == plan.provider_kind
+        and location.get("store_ref") == plan.store_ref
+        and location.get("remote_key") == spec.remote_key
+        and location.get("execution_receipt_ref") == spec.receipt_relative
+        and location.get("remote_key_verified") is True
+        and location.get("remote_key_verification") == "presence_size"
+        and location.get("provider_confirmation_by_wom_kit") is True
+        and location.get("byte_verification_by_wom_kit") is False
+    )
+
+
+def _load_current_rows(plan: ObjectStorageFormalAdoptionPlan) -> list[dict[str, Any]]:
+    rows, _groups = preservation._read_manifest_groups(plan.archive_root, progress=None)
+    return rows
+
+
+def _batch_state(plan: ObjectStorageFormalAdoptionPlan) -> bytes | None:
+    specs = plan.adoption_specs
+    if not specs:
+        return None
+    by_id = {item.object_id: item for item in specs}
+    seen: dict[str, int] = {item.object_id: 0 for item in specs}
+    matched: dict[str, int] = {item.object_id: 0 for item in specs}
+    for row in _load_current_rows(plan):
+        object_id = _object_id(row.get("object_id"))
+        spec = by_id.get(object_id)
+        if spec is None:
+            continue
+        seen[object_id] += 1
+        matched[object_id] += sum(
+            1 for location in _locations(row) if _location_owned_by_spec(location, plan, spec)
+        )
+    if any(value != 1 for value in seen.values()) or any(value > 1 for value in matched.values()):
+        raise _fail("object_storage_adoption_plan_changed")
+    present = sum(value == 1 for value in matched.values())
+    if present == 0:
+        return None
+    if present != len(specs):
+        raise _fail("object_storage_adoption_plan_changed")
+    return _manifest_batch_token(specs)
+
+
+def _apply_manifest_batch(
+    plan: ObjectStorageFormalAdoptionPlan, *, destination_present: bool
+) -> int:
+    specs = plan.adoption_specs
+    if not specs:
+        return 0
+    by_id = {item.object_id: item for item in specs}
+    receipts = {item.object_id: _read_receipt(plan, item) for item in specs}
+    if destination_present and any(value is None for value in receipts.values()):
+        raise _fail("object_storage_adoption_plan_changed")
+    manifest_path = archive_services.archive_internal_path(
+        plan.archive_root, "objects/manifests/files.jsonl"
+    )
+    changed = 0
+    seen: dict[str, int] = {item.object_id: 0 for item in specs}
+    with archive_services._ObjetCaptureManifestLock(plan.archive_root):
+        rewritten: list[str] = []
+        try:
+            raw_lines = manifest_path.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            raise _fail("object_storage_adoption_plan_changed") from None
+        for raw_line in raw_lines:
+            if not raw_line.strip():
+                rewritten.append(raw_line)
+                continue
+            try:
+                row = json.loads(raw_line)
+                object_id = _object_id(row.get("object_id"))
+            except Exception:
+                raise _fail("object_storage_adoption_plan_changed") from None
+            spec = by_id.get(object_id)
+            if spec is None:
+                rewritten.append(raw_line)
+                continue
+            seen[object_id] += 1
+            current_source = _source_token(
+                object_id=object_id,
+                rows=[row],
+                remote_key=spec.remote_key,
+                key_map_sha256=plan.key_map_sha256,
+            )
+            if current_source != spec.source_token:
+                raise _fail("object_storage_adoption_plan_changed")
+            locations = _locations(row)
+            owned = [item for item in locations if _location_owned_by_spec(item, plan, spec)]
+            if len(owned) > 1:
+                raise _fail("object_storage_adoption_plan_changed")
+            if destination_present and not owned:
+                locations.append(_owned_location(plan, spec, receipts[object_id] or {}))
+                changed += 1
+            elif not destination_present and owned:
+                locations = [
+                    item for item in locations if not _location_owned_by_spec(item, plan, spec)
+                ]
+                changed += 1
+            row["locations"] = locations
+            rewritten.append(json.dumps(row, ensure_ascii=False, separators=(",", ":")))
+        if any(value != 1 for value in seen.values()):
+            raise _fail("object_storage_adoption_plan_changed")
+        if changed:
+            archive_services._atomic_write_text(manifest_path, "\n".join(rewritten) + "\n")
+    return changed
+
+
+class _Payloads:
+    def __init__(self, plan: ObjectStorageFormalAdoptionPlan) -> None:
+        self.values: dict[tuple[str, str], tuple[bytes | None, bytes, bytes]] = {}
+        if plan.manifest is None:
+            return
+        for item, spec in zip(plan.manifest.items, plan.specs):
+            self.values[(item.item_id, "remote_head_verification")] = (
+                None,
+                spec.receipt_token,
+                spec.source_token,
+            )
+        if plan.adoption_specs:
+            item = plan.manifest.items[-1]
+            self.values[(item.item_id, "verified_locations")] = (
+                None,
+                _manifest_batch_token(plan.adoption_specs),
+                _manifest_source_token(plan.adoption_specs),
+            )
+
+    def field_value(
+        self,
+        *,
+        item_id: str,
+        field_ref: str,
+        state: str,
+        heartbeat: Callable[[], None],
+    ) -> bytes | None:
+        heartbeat()
+        values = self.values.get((item_id, field_ref))
+        if values is None or state not in {"pre", "post", "source"}:
+            raise ValueError("payload boundary")
+        return values[{"pre": 0, "post": 1, "source": 2}[state]]
+
+
+class _Verifier:
+    def __init__(
+        self,
+        plan: ObjectStorageFormalAdoptionPlan,
+        transport: archive_services.ObjectStorageTransport,
+    ) -> None:
+        self.plan = plan
+        self.transport = transport
+        self.by_target = {item.receipt_relative: item for item in plan.specs}
+        self.remote_verified: set[str] = set()
+        _rows, self.groups = preservation._read_manifest_groups(plan.archive_root, progress=None)
+
+    def target_identity_sha256(
+        self,
+        *,
+        target_kind: str,
+        target_ref: str,
+        heartbeat: Callable[[], None],
+    ) -> str:
+        heartbeat()
+        if target_kind == "object_storage_formal_adoption_receipt":
+            spec = self.by_target.get(target_ref)
+            if spec is None:
+                raise ValueError("target boundary")
+            group = self.groups.get(spec.object_id)
+            if not group or _source_token(
+                object_id=spec.object_id,
+                rows=group,
+                remote_key=spec.remote_key,
+                key_map_sha256=self.plan.key_map_sha256,
+            ) != spec.source_token:
+                raise ValueError("source drift")
+            return spec.target_identity_sha256
+        if (
+            target_kind == "object_storage_formal_adoption_manifest_batch"
+            and target_ref == MANIFEST_TARGET_REF
+        ):
+            source = _manifest_source_token(self.plan.adoption_specs)
+            return _sha(
+                {
+                    "archive_id": self.plan.archive_id,
+                    "target_ref": MANIFEST_TARGET_REF,
+                    "source_sha256": _sha_bytes(source),
+                }
+            )
+        raise ValueError("target boundary")
+
+    def read_field(
+        self,
+        *,
+        target_kind: str,
+        target_ref: str,
+        field_ref: str,
+        heartbeat: Callable[[], None],
+    ) -> bytes | None:
+        if target_kind == "object_storage_formal_adoption_receipt":
+            spec = self.by_target.get(target_ref)
+            if spec is None or field_ref != "remote_head_verification":
+                raise ValueError("read boundary")
+            receipt = _read_receipt(self.plan, spec)
+            if receipt is None:
+                return None
+            if target_ref not in self.remote_verified:
+                _head_verify(self.transport, spec, heartbeat=heartbeat)
+                self.remote_verified.add(target_ref)
+            return spec.receipt_token
+        if (
+            target_kind == "object_storage_formal_adoption_manifest_batch"
+            and target_ref == MANIFEST_TARGET_REF
+            and field_ref == "verified_locations"
+        ):
+            return _batch_state(self.plan)
+        raise ValueError("read boundary")
+
+
+class _Writer:
+    def __init__(
+        self,
+        plan: ObjectStorageFormalAdoptionPlan,
+        transport: archive_services.ObjectStorageTransport,
+    ) -> None:
+        self.plan = plan
+        self.transport = transport
+        self.by_target = {item.receipt_relative: item for item in plan.specs}
+        self.remote_head_verified_count = 0
+        self.receipts_created_count = 0
+        self.manifest_update_count = 0
+
+    def write_field(
+        self,
+        *,
+        target_kind: str,
+        target_ref: str,
+        field_ref: str,
+        value: bytes | None,
+        heartbeat: Callable[[], None],
+    ) -> None:
+        if target_kind == "object_storage_formal_adoption_receipt":
+            spec = self.by_target.get(target_ref)
+            if spec is None or field_ref != "remote_head_verification":
+                raise ValueError("write boundary")
+            if value is None:
+                receipt = _read_receipt(self.plan, spec)
+                if receipt is not None:
+                    _receipt_path(self.plan, spec).unlink()
+                return
+            if value != spec.receipt_token:
+                raise ValueError("write boundary")
+            existing = _read_receipt(self.plan, spec)
+            if existing is None:
+                _head_verify(self.transport, spec, heartbeat=heartbeat)
+                self.remote_head_verified_count += 1
+                _create_receipt(self.plan, spec)
+                self.receipts_created_count += 1
+            return
+        if (
+            target_kind == "object_storage_formal_adoption_manifest_batch"
+            and target_ref == MANIFEST_TARGET_REF
+            and field_ref == "verified_locations"
+        ):
+            expected = _manifest_batch_token(self.plan.adoption_specs)
+            if value not in {None, expected}:
+                raise ValueError("write boundary")
+            self.manifest_update_count += _apply_manifest_batch(
+                self.plan, destination_present=value is not None
+            )
+            return
+        raise ValueError("write boundary")
+
+
+def _execution_adapters(
+    plan: ObjectStorageFormalAdoptionPlan,
+    transport: archive_services.ObjectStorageTransport,
+) -> tuple[_Payloads, _Writer, _Verifier]:
+    return _Payloads(plan), _Writer(plan, transport), _Verifier(plan, transport)
+
+
+def _approval_binding(plan: ObjectStorageFormalAdoptionPlan) -> ExactOperationApprovalBinding:
+    if plan.manifest is None:
+        raise _fail("object_storage_adoption_no_writes")
+    try:
+        return exact_operation_manifest_approval_binding(
+            plan.manifest,
+            operation=ExactHumanApprovalOperation.object_storage_formal_adoption,
+            archive_id=plan.archive_id,
+            warnings=(
+                "remote_presence_and_size_is_not_content_hash_verification",
+                "conflicting_definitions_are_review_only",
+                "provider_upload_time_is_unknown_for_formal_adoption",
+            ),
+        )
+    except Exception:
+        raise _fail("object_storage_adoption_plan_invalid") from None
+
+
+def object_storage_formal_adoption_context(
+    plan: ObjectStorageFormalAdoptionPlan, *, reviewer_claim: str
+) -> ExactHumanApprovalContext:
+    reviewer = str(reviewer_claim or "").strip()
+    if not reviewer or not plan.approveable:
+        raise _fail("object_storage_adoption_plan_invalid")
+    return _approval_binding(plan).context(
+        archive_id=plan.archive_id, reviewer_claim=reviewer
+    )
+
+
+def _assert_approved(
+    plan: ObjectStorageFormalAdoptionPlan,
+    claim: _ClaimedExactHumanApproval,
+    context: ExactHumanApprovalContext,
+) -> ExactOperationApprovalAuthority:
+    binding = _approval_binding(plan)
+    if (
+        type(claim) is not _ClaimedExactHumanApproval
+        or context.operation is not ExactHumanApprovalOperation.object_storage_formal_adoption
+        or context.plan_sha256 != binding.plan_sha256
+        or context.target_binding_sha256 != binding.target_binding_sha256
+    ):
+        raise _fail("object_storage_adoption_approval_required")
+    try:
+        reference = _ClaimedExactHumanApproval.assert_ready_for_context(claim, context)
+        return ExactOperationApprovalAuthority.from_reference(reference)
+    except (ExactHumanApprovalError, ExactOperationManifestError):
+        raise _fail("object_storage_adoption_approval_required") from None
+
+
+def _control_relative(manifest_sha256: str) -> str:
+    if _SHA256_RE.fullmatch(manifest_sha256) is None:
+        raise _fail("object_storage_adoption_control_invalid")
+    return (
+        f"{CONTROL_ROOT}/{manifest_sha256.removeprefix('sha256:')}"
+        ".object-storage-formal-adoption.json"
+    )
+
+
+def _control_document(plan: ObjectStorageFormalAdoptionPlan) -> dict[str, Any]:
+    if plan.manifest is None:
+        raise _fail("object_storage_adoption_no_writes")
+    basis = {
+        "schema_version": CONTROL_SCHEMA,
+        "archive_id": plan.archive_id,
+        "provider_kind": plan.provider_kind,
+        "store_ref": plan.store_ref,
+        "source_inventory_sha256": plan.source_inventory_sha256,
+        "key_map_sha256": plan.key_map_sha256,
+        "counts": dict(plan.counts),
+        "conflict_batches": [item.public_document() for item in plan.conflict_batches],
+        "manifest": plan.manifest.document(),
+        "specs": [
+            {
+                "object_id": item.object_id,
+                "size_bytes": item.size_bytes,
+                "remote_key": item.remote_key,
+                "classification": item.classification,
+                "receipt_relative": item.receipt_relative,
+                "receipt_token_sha256": _sha_bytes(item.receipt_token),
+                "source_token_sha256": _sha_bytes(item.source_token),
+                "target_identity_sha256": item.target_identity_sha256,
+            }
+            for item in plan.specs
+        ],
+        "private_control_document": True,
+    }
+    return {**basis, "control_sha256": _sha(basis)}
+
+
+def _persist_control(plan: ObjectStorageFormalAdoptionPlan) -> str:
+    if plan.manifest is None:
+        raise _fail("object_storage_adoption_no_writes")
+    relative = _control_relative(plan.manifest.manifest_sha256)
+    preservation._create_or_match_receipt(
+        plan.archive_root,
+        relative,
+        preservation._canonical_control_bytes(_control_document(plan)),
+        max_bytes=64 * 1024 * 1024,
+        failure_code="object_storage_adoption_control_invalid",
+    )
+    return relative
+
+
+def load_object_storage_formal_adoption_plan(
+    archive_root: Path | str, *, manifest_sha256: str
+) -> ObjectStorageFormalAdoptionPlan:
+    try:
+        root = archive_services.require_existing_archive_root(archive_root)
+        archive_id = archive_services.read_archive_id(root)
+        path = archive_services.archive_internal_path(root, _control_relative(manifest_sha256))
+        raw = path.read_bytes()
+        if len(raw) > 64 * 1024 * 1024:
+            raise ValueError("large")
+        document = preservation._strict_json(raw)
+    except Exception:
+        raise _fail("object_storage_adoption_control_invalid") from None
+    supplied = document.pop("control_sha256", None)
+    if (
+        document.get("schema_version") != CONTROL_SCHEMA
+        or document.get("private_control_document") is not True
+        or not isinstance(supplied, str)
+        or not hmac.compare_digest(supplied, _sha(document))
+        or document.get("archive_id") != archive_id
+    ):
+        raise _fail("object_storage_adoption_control_invalid")
+    try:
+        manifest = ExactOperationManifest.from_document(document["manifest"])
+        provider = document["provider_kind"]
+        store = document["store_ref"]
+        source_inventory_sha = document["source_inventory_sha256"]
+        key_map_sha = document["key_map_sha256"]
+        counts = document["counts"]
+        raw_specs = document["specs"]
+        _rows, groups = preservation._read_manifest_groups(root, progress=None)
+    except Exception:
+        raise _fail("object_storage_adoption_control_invalid") from None
+    if (
+        manifest.manifest_sha256 != manifest_sha256
+        or manifest.operation != OPERATION
+        or provider not in archive_services.OBJECT_STORAGE_ALLOWED_PROVIDERS
+        or not archive_services.safe_object_storage_ref(store)
+        or _SHA256_RE.fullmatch(str(source_inventory_sha)) is None
+        or _SHA256_RE.fullmatch(str(key_map_sha)) is None
+        or not isinstance(counts, dict)
+        or not isinstance(raw_specs, list)
+    ):
+        raise _fail("object_storage_adoption_control_invalid")
+    specs: list[FormalAdoptionSpec] = []
+    for raw_spec in raw_specs:
+        try:
+            object_id = _object_id(raw_spec["object_id"])
+            remote_key = raw_spec["remote_key"]
+            size = raw_spec["size_bytes"]
+            classification = raw_spec["classification"]
+            receipt_relative = raw_spec["receipt_relative"]
+            group = groups[object_id]
+        except Exception:
+            raise _fail("object_storage_adoption_control_invalid") from None
+        if (
+            type(remote_key) is not str
+            or not archive_services.safe_object_storage_remote_key(remote_key)
+            or not archive_services.object_storage_map_key_binds_digest_segment(
+                remote_key, object_id.removeprefix("sha256:")
+            )
+            or type(size) is not int
+            or {row.get("size_bytes") for row in group} != {size}
+            or classification
+            not in {
+                "pending_formal_adoption",
+                "existing_formal_adoption",
+                "conflicting_definition_review_required",
+            }
+        ):
+            raise _fail("object_storage_adoption_control_invalid")
+        source_token = _source_token(
+            object_id=object_id,
+            rows=group,
+            remote_key=remote_key,
+            key_map_sha256=key_map_sha,
+        )
+        receipt_token = _receipt_token(
+            object_id=object_id,
+            size_bytes=size,
+            provider_kind=provider,
+            store_ref=store,
+            remote_key=remote_key,
+            classification=classification,
+            source_inventory_sha256=source_inventory_sha,
+        )
+        identity = _target_identity(
+            archive_id=archive_id,
+            object_id=object_id,
+            receipt_relative=receipt_relative,
+            source_token=source_token,
+        )
+        if (
+            receipt_relative != _receipt_relative(object_id, source_inventory_sha)
+            or raw_spec.get("receipt_token_sha256") != _sha_bytes(receipt_token)
+            or raw_spec.get("source_token_sha256") != _sha_bytes(source_token)
+            or raw_spec.get("target_identity_sha256") != identity
+        ):
+            raise _fail("object_storage_adoption_plan_changed")
+        specs.append(
+            FormalAdoptionSpec(
+                object_id=object_id,
+                size_bytes=size,
+                remote_key=remote_key,
+                classification=classification,
+                receipt_relative=receipt_relative,
+                receipt_token=receipt_token,
+                source_token=source_token,
+                target_identity_sha256=identity,
+            )
+        )
+    batches: list[ConflictBatch] = []
+    for item in document.get("conflict_batches") or []:
+        batches.append(
+            ConflictBatch(
+                batch_fingerprint=item["batch_fingerprint"],
+                group_count=item["group_count"],
+                reason_codes=tuple(item["reason_codes"]),
+                judgment=item["judgment"],
+            )
+        )
+    rebuilt = _manifest_for_specs(archive_id, specs)
+    if rebuilt is None or rebuilt.document() != manifest.document():
+        raise _fail("object_storage_adoption_control_invalid")
+    return ObjectStorageFormalAdoptionPlan(
+        archive_root=root,
+        archive_id=archive_id,
+        provider_kind=provider,
+        store_ref=store,
+        source_inventory_sha256=source_inventory_sha,
+        key_map_sha256=key_map_sha,
+        manifest=manifest,
+        specs=tuple(specs),
+        conflict_batches=tuple(batches),
+        counts={str(key): int(value) for key, value in counts.items()},
+        loaded_from_control=True,
+    )
+
+
+def _fresh_revalidated(plan: ObjectStorageFormalAdoptionPlan) -> ObjectStorageFormalAdoptionPlan:
+    if plan.loaded_from_control:
+        return plan
+    if plan.key_map_path is None or plan.manifest is None:
+        raise _fail("object_storage_adoption_plan_changed")
+    current = plan_object_storage_formal_adoption(
+        plan.archive_root,
+        key_map_path=plan.key_map_path,
+        provider_kind=plan.provider_kind,
+        store_ref=plan.store_ref,
+        judgment_path=plan.judgment_path,
+    )
+    if current.manifest is None or current.manifest.document() != plan.manifest.document():
+        raise _fail("object_storage_adoption_plan_changed")
+    return current
+
+
+def _apply_with_store(
+    plan: ObjectStorageFormalAdoptionPlan,
+    authority: ExactOperationApprovalAuthority,
+    transport: archive_services.ObjectStorageTransport,
+    checkpoints: FileExactOperationCheckpointStore,
+    *,
+    resume: bool,
+    progress_hook: Callable[[ExactOperationProgress], None] | None,
+) -> dict[str, Any]:
+    if plan.manifest is None:
+        raise _fail("object_storage_adoption_no_writes")
+    payloads, writer, verifier = _execution_adapters(plan, transport)
+    core = apply_exact_operation(
+        plan.manifest,
+        payloads=payloads,
+        writer=writer,
+        verifier=verifier,
+        checkpoint_store=checkpoints,
+        approval_authority=authority,
+        resume=resume,
+        progress_hook=progress_hook,
+    )
+    return {
+        "schema_version": RESULT_SCHEMA,
+        "ok": core.get("status") == "completed",
+        "state": "formal_adoption_completed",
+        "manifest_sha256": plan.manifest.manifest_sha256,
+        "execution": core,
+        "remote_query_verified_count": len(plan.specs),
+        "formal_adoption_count": len(plan.adoption_specs),
+        "existing_adoption_reverified_count": int(
+            plan.counts["existing_formal_adoption_verification_count"]
+        ),
+        "conflict_review_verified_count": int(
+            plan.counts["mapped_conflicting_definition_count"]
+        ),
+        "manifest_location_updates": writer.manifest_update_count,
+        "central_manifest_rewrite_count_ceiling": 1,
+        "provider_head_called": True,
+        "provider_put_called": False,
+        "independent_head_verification": True,
+        "content_hash_verified": False,
+        "private_values_echoed": False,
+        "remote_keys_echoed": False,
+        "object_ids_echoed": False,
+    }
+
+
+def _apply_core(
+    plan: ObjectStorageFormalAdoptionPlan,
+    claim: _ClaimedExactHumanApproval,
+    *,
+    context: ExactHumanApprovalContext,
+    transport_factory: Callable[[], archive_services.ObjectStorageTransport],
+    resume: bool = False,
+    progress_hook: Callable[[ExactOperationProgress], None] | None = None,
+) -> dict[str, Any]:
+    current = _fresh_revalidated(plan)
+    authority = _assert_approved(current, claim, context)
+    with exact_operation_writer_lock(current.archive_root) as writer_lock:
+        _persist_control(current)
+        checkpoints = FileExactOperationCheckpointStore(
+            current.archive_root, writer_lock=writer_lock
+        )
+        try:
+            transport = transport_factory()
+        except Exception:
+            raise _fail("object_storage_adoption_remote_unavailable") from None
+        if transport is None:
+            raise _fail("object_storage_adoption_remote_unavailable")
+        return _apply_with_store(
+            current,
+            authority,
+            transport,
+            checkpoints,
+            resume=resume,
+            progress_hook=progress_hook,
+        )
+
+
+def execute_object_storage_formal_adoption(
+    plan: ObjectStorageFormalAdoptionPlan,
+    *,
+    reviewer_claim: str,
+    transport_factory: Callable[[], archive_services.ObjectStorageTransport],
+    progress_hook: Callable[[ExactOperationProgress], None] | None = None,
+) -> dict[str, Any]:
+    if not plan.approveable:
+        raise _fail("object_storage_adoption_no_writes")
+    context = object_storage_formal_adoption_context(plan, reviewer_claim=reviewer_claim)
+    return _execute_exact_human_approved_write(
+        plan.archive_root,
+        context,
+        lambda claim: _apply_core(
+            plan,
+            claim,
+            context=context,
+            transport_factory=transport_factory,
+            progress_hook=progress_hook,
+        ),
+    )
+
+
+def resume_object_storage_formal_adoption(
+    plan: ObjectStorageFormalAdoptionPlan,
+    *,
+    reviewer_claim: str,
+    approval_id: str,
+    execution_sha256: str,
+    transport_factory: Callable[[], archive_services.ObjectStorageTransport],
+    progress_hook: Callable[[ExactOperationProgress], None] | None = None,
+    key_provider: Any = None,
+) -> dict[str, Any]:
+    if (
+        not plan.loaded_from_control
+        or plan.manifest is None
+        or _SHA256_RE.fullmatch(str(execution_sha256 or "")) is None
+    ):
+        raise _fail("object_storage_adoption_resume_invalid")
+    context = object_storage_formal_adoption_context(plan, reviewer_claim=reviewer_claim)
+    with exact_operation_writer_lock(plan.archive_root) as writer_lock:
+        checkpoints = FileExactOperationCheckpointStore(
+            plan.archive_root, writer_lock=writer_lock
+        )
+
+        def writer(claim: _ClaimedExactHumanApproval) -> Mapping[str, Any]:
+            authority = _assert_approved(plan, claim, context)
+            actual = exact_operation_execution_sha256(
+                plan.manifest, approval_authority=authority
+            )
+            if not hmac.compare_digest(actual, execution_sha256):
+                raise _fail("object_storage_adoption_resume_invalid")
+            try:
+                transport = transport_factory()
+            except Exception:
+                raise _fail("object_storage_adoption_remote_unavailable") from None
+            return _apply_with_store(
+                plan,
+                authority,
+                transport,
+                checkpoints,
+                resume=True,
+                progress_hook=progress_hook,
+            )
+
+        return _resume_exact_human_approved_write_core(
+            plan.archive_root,
+            context,
+            approval_id,
+            lambda _claim: checkpoints.resume_checkpoint_present(execution_sha256),
+            writer,
+            key_provider=key_provider,
+        )
+
+
+def verify_object_storage_formal_adoption(
+    plan: ObjectStorageFormalAdoptionPlan,
+    *,
+    transport: archive_services.ObjectStorageTransport,
+    heartbeat: Callable[[], None] | None = None,
+) -> dict[str, Any]:
+    if plan.manifest is None:
+        raise _fail("object_storage_adoption_plan_invalid")
+    _payloads, _writer, verifier = _execution_adapters(plan, transport)
+    result = verify_exact_operation(
+        plan.manifest, verifier=verifier, state="post", heartbeat=heartbeat
+    )
+    return {
+        "schema_version": VERIFY_SCHEMA,
+        "ok": result["all_match"],
+        "manifest_sha256": plan.manifest.manifest_sha256,
+        "remote_query_verified_count": len(plan.specs) if result["all_match"] else 0,
+        "formal_adoption_count": len(plan.adoption_specs) if result["all_match"] else 0,
+        "verification": result,
+        "provider_head_called": True,
+        "provider_put_called": False,
+        "writes_performed": False,
+        "remote_keys_echoed": False,
+    }
 
 
 __all__ = [
@@ -635,5 +1532,10 @@ __all__ = [
     "FormalAdoptionSpec",
     "ObjectStorageAdoptionError",
     "ObjectStorageFormalAdoptionPlan",
+    "execute_object_storage_formal_adoption",
+    "load_object_storage_formal_adoption_plan",
+    "object_storage_formal_adoption_context",
     "plan_object_storage_formal_adoption",
+    "resume_object_storage_formal_adoption",
+    "verify_object_storage_formal_adoption",
 ]
