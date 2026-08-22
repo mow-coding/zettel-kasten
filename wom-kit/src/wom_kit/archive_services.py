@@ -9079,16 +9079,41 @@ def compact_zet_title_comparison_form(value: str) -> str:
     return re.sub(r"[\s._-]+", "", str(value).casefold())
 
 
+def zet_title_identifier_duplicate_suffix(value: Any) -> str | None:
+    """Return the identifier base for a standard duplicate `` (n)`` suffix.
+
+    Notion-style duplicate names append a single space plus a positive integer
+    in parentheses.  Only an already-valid bare identifier base is accepted;
+    arbitrary parenthesized titles therefore remain human-readable.
+    """
+
+    if not isinstance(value, str):
+        return None
+    match = re.fullmatch(r"(?s)(.+?)[ \t]+\([1-9][0-9]*\)", value)
+    if match is None:
+        return None
+    base = match.group(1)
+    compact = compact_zet_title_comparison_form(base)
+    if (
+        len(compact) < ZET_TITLE_IDENTIFIER_MIN_HEX_CHARS
+        or ZET_TITLE_HEX_RE.fullmatch(compact) is None
+    ):
+        return None
+    return base
+
+
 def zet_title_is_identifier_shaped(value: Any) -> bool:
-    """Whether a title is the house's separator-insensitive bare hex shape."""
+    """Whether a title is a bare identifier or its standard duplicate form."""
 
     if not isinstance(value, str):
         return False
     compact = compact_zet_title_comparison_form(value)
-    return bool(
+    if bool(
         len(compact) >= ZET_TITLE_IDENTIFIER_MIN_HEX_CHARS
         and ZET_TITLE_HEX_RE.match(compact)
-    )
+    ):
+        return True
+    return zet_title_identifier_duplicate_suffix(value) is not None
 
 
 def zet_title_reference_discloses_title(reference: Any, compact_title: str) -> bool:
