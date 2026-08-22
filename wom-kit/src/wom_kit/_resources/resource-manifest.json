@@ -967,8 +967,8 @@
     {
       "source": "docs/releases/v0.4.3.md",
       "packaged": "release-notes/v0.4.3.md",
-      "bytes": 8791,
-      "sha256": "d4387369fc5615ad3b46371f8c9bf9cb9bcd4829a68d46dea5f7919d95b913fe"
+      "bytes": 9381,
+      "sha256": "50a086c9b5856c1b25cf14f131bf48f402c3e9b05ebe843f2ba943a232a28bbb"
     }
   ]
 }

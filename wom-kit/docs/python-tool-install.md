@@ -5,6 +5,30 @@ Status: v0.4.3 conditional GitHub wheel and exact recovery boundary
 WOM-kit is a command-line tool. It should live in its own Python environment
 instead of being mixed into an application project's dependencies.
 
+## One Windows account with multiple client folders
+
+An isolated `uv tool` environment isolates Python dependencies; it does **not**
+make the exposed `archive.exe` private to the folder from which it is called.
+Every process under the same Windows account that resolves the same executable
+on PATH can see a replacement immediately on its next invocation. Therefore
+`archive --version` reports the running shared tool version, not proof that one
+client project was updated.
+
+For same-computer beta clients, inspect both layers:
+
+```powershell
+archive --version
+archive version <project-or-archive-root> --format json
+```
+
+Use the second result's project source, pin, and runtime-alignment evidence to
+decide whether that client project needs an update. During development and
+release verification, install the wheel in a dedicated temporary virtual
+environment and invoke its `Scripts\archive.exe` by explicit path; do not
+replace the user-shared PATH tool as a side effect of testing. Fully independent
+client execution requires a dedicated environment or OS account per client.
+WOM v0.4.3 does not claim a general-command per-folder sandbox.
+
 The v0.4.3 URL below is a conditional contract, not proof that an artifact is
 public. Use it only after the matching GitHub Release exists and lists the
 verified wheel. See the [v0.4.3 release note](releases/v0.4.3.md) for the
@@ -41,7 +65,8 @@ before interpreting or approving its result.
 
 `uv tool install` creates an isolated tool environment and exposes all commands
 provided by the package. WOM-kit installs `archive`, `wom`, `archive-mcp`, and
-`wom-mcp`.
+`wom-mcp`. The environment is dependency-isolated but its exposed commands are
+user-shared PATH entrypoints, not project-folder-local commands.
 
 This release does not publish WOM-kit to PyPI. Therefore
 `pip install wom-kit` is not the official command yet. The exact GitHub release
