@@ -27,6 +27,7 @@ from .exact_human_approval import (
     ExactHumanApprovalError,
     _ClaimedExactHumanApproval,
     _claim_exact_human_approval_core,
+    _rehydrate_exact_human_approval_core,
 )
 from .exact_human_approval_windows import (
     ExactHumanApprovalContext,
@@ -55,6 +56,8 @@ class ExactHumanApprovalWorkflowError(RuntimeError):
         "exact_human_approval_cancelled",
         "exact_human_approval_key_unavailable",
         "exact_human_approval_claim_failed",
+        "exact_human_approval_resume_claim_invalid",
+        "exact_human_approval_resume_checkpoint_invalid",
         "exact_human_approval_writer_result_invalid",
         "exact_human_approval_operation_failed",
         "exact_human_approval_state_unknown",
@@ -81,6 +84,49 @@ def _production_key_provider() -> _ArchiveAuthenticationKeyProvider:
         return _StableArchiveFingerprintKeyProvider(native)
     except BaseException:
         raise _fail("exact_human_approval_key_unavailable") from None
+
+
+def _run_started_claim_writer(
+    context: ExactHumanApprovalContext,
+    writer: Callable[[_ClaimedExactHumanApproval], Mapping[str, Any]],
+    claim: _ClaimedExactHumanApproval,
+) -> dict[str, Any]:
+    """Run and finalize one writer against an already-authenticated claim."""
+
+    try:
+        reference = claim.assert_ready_for_context(context)
+        try:
+            raw_result = writer(claim)
+        except BaseException:
+            # The writer is the mutation boundary.  Once it has been entered,
+            # an exception cannot prove whether zero, some, or all durable
+            # writes happened.  Preserve the authenticated claim in
+            # ``started`` for reconciliation.
+            raise _fail("exact_human_approval_state_unknown") from None
+        if not isinstance(raw_result, Mapping) or type(raw_result.get("ok")) is not bool:
+            # A malformed return has the same ambiguity as an exception: the
+            # writer may already have committed its mutation.
+            raise _fail("exact_human_approval_state_unknown")
+        result = dict(raw_result)
+        if result["ok"] is True:
+            try:
+                claim.finalize_succeeded()
+            except ExactHumanApprovalError:
+                raise _fail("exact_human_approval_state_unknown") from None
+        else:
+            # A writer-level ``ok: false`` cannot prove that zero durable
+            # effects occurred.  Keep the one-use claim ``started`` and
+            # require explicit reconciliation.
+            result["exact_human_approval_reconciliation"] = {
+                "required": True,
+                "reason_code": "approval_claim_reconciliation_required",
+                "automatic_retry_allowed": False,
+            }
+        result["exact_human_approval"] = claim.public_summary()
+        result["exact_human_approval_reference"] = reference
+        return result
+    finally:
+        claim.close()
 
 
 def _execute_exact_human_approved_write_core(
@@ -138,47 +184,7 @@ def _execute_exact_human_approved_write_core(
             )
         except ExactHumanApprovalError:
             raise _fail("exact_human_approval_claim_failed") from None
-        try:
-            reference = claim.assert_ready_for_context(context)
-            try:
-                raw_result = writer(claim)
-            except BaseException:
-                # The writer is the mutation boundary.  Once it has been
-                # entered, an exception cannot prove whether zero, some, or
-                # all durable writes happened.  Preserve the authenticated
-                # claim in ``started`` for reconciliation instead of making
-                # the false assertion that the operation failed cleanly.
-                raise _fail("exact_human_approval_state_unknown") from None
-            if not isinstance(raw_result, Mapping) or type(raw_result.get("ok")) is not bool:
-                # A malformed return has the same ambiguity as an exception:
-                # the writer may already have committed its mutation.
-                raise _fail("exact_human_approval_state_unknown")
-            result = dict(raw_result)
-            if result["ok"] is True:
-                try:
-                    claim.finalize_succeeded()
-                except ExactHumanApprovalError:
-                    raise _fail("exact_human_approval_state_unknown") from None
-            else:
-                # A writer-level ``ok: false`` cannot prove that zero durable
-                # effects occurred.  Several legitimate writers can commit
-                # their immutable operation receipt and then fail a derived
-                # index update or final verification.  Marking that claim
-                # ``failed`` would falsely detach the approved effect from its
-                # authority.  Keep the authenticated one-use claim ``started``
-                # and require explicit reconciliation.  A future terminal
-                # ``failed`` transition must be backed by verifiable
-                # before-mutation proof, not a generic result boolean.
-                result["exact_human_approval_reconciliation"] = {
-                    "required": True,
-                    "reason_code": "approval_claim_reconciliation_required",
-                    "automatic_retry_allowed": False,
-                }
-            result["exact_human_approval"] = claim.public_summary()
-            result["exact_human_approval_reference"] = reference
-            return result
-        finally:
-            claim.close()
+        return _run_started_claim_writer(context, writer, claim)
 
     try:
         boundary_context = (
@@ -218,6 +224,96 @@ def _execute_exact_human_approved_write(
         key_provider=None,
         post_decision_boundary=None,
     )
+
+
+def _resume_exact_human_approved_write_core(
+    archive_root: Path | str,
+    context: ExactHumanApprovalContext,
+    approval_id: str,
+    checkpoint_guard: Callable[[], bool],
+    writer: Callable[[_ClaimedExactHumanApproval], Mapping[str, Any]],
+    *,
+    key_provider: _ArchiveAuthenticationKeyProvider | None = None,
+    resume_boundary: (
+        Callable[
+            [],
+            AbstractContextManager[tuple[Path, dict[str, Any]] | None],
+        ]
+        | None
+    ) = None,
+) -> dict[str, Any]:
+    """Resume the same started claim without displaying a new native dialog.
+
+    ``checkpoint_guard`` is a fail-closed domain callback.  It must prove that
+    the durable checkpoint addressed by the exact approved execution exists
+    before the writer is entered.  The exact-operation runner performs the
+    full checkpoint-chain and target-state validation after that guard.
+    """
+
+    if (
+        type(context) is not ExactHumanApprovalContext
+        or type(approval_id) is not str
+        or not callable(checkpoint_guard)
+        or not callable(writer)
+    ):
+        raise _fail("exact_human_approval_writer_result_invalid")
+
+    def _with_key(
+        key: memoryview,
+        filesystem_boundary: tuple[Path, dict[str, Any]] | None,
+    ) -> dict[str, Any]:
+        try:
+            claim = _rehydrate_exact_human_approval_core(
+                archive_root,
+                context,
+                approval_id,
+                key,
+                bound_archive_root=(
+                    filesystem_boundary[0]
+                    if filesystem_boundary is not None
+                    else None
+                ),
+                claim_parent_binding=(
+                    filesystem_boundary[1]
+                    if filesystem_boundary is not None
+                    else None
+                ),
+            )
+        except ExactHumanApprovalError:
+            raise _fail("exact_human_approval_resume_claim_invalid") from None
+        try:
+            try:
+                checkpoint_matches = checkpoint_guard()
+            except BaseException:
+                raise _fail(
+                    "exact_human_approval_resume_checkpoint_invalid"
+                ) from None
+            if checkpoint_matches is not True:
+                raise _fail("exact_human_approval_resume_checkpoint_invalid")
+        except BaseException:
+            claim.close()
+            raise
+        return _run_started_claim_writer(context, writer, claim)
+
+    try:
+        boundary_context = (
+            resume_boundary() if resume_boundary is not None else nullcontext(None)
+        )
+        with boundary_context as filesystem_boundary:
+            selected = (
+                key_provider
+                if key_provider is not None
+                else _production_key_provider()
+            )
+            return selected.use_key(
+                archive_root,
+                lambda key: _with_key(key, filesystem_boundary),
+                create_if_missing=False,
+            )
+    except ExactHumanApprovalWorkflowError:
+        raise
+    except BaseException:
+        raise _fail("exact_human_approval_key_unavailable") from None
 
 
 __all__ = [

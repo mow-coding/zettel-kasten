@@ -14,8 +14,9 @@ import hmac
 import json
 import re
 from dataclasses import dataclass
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
+from .exact_operation_manifest import ExactOperationManifest
 from .exact_human_approval import (
     REFERENCE_SCHEMA_VERSION,
     exact_human_approval_archive_identity_sha256,
@@ -733,6 +734,55 @@ def retire_draft_approval_binding(
     )
 
 
+def exact_operation_manifest_approval_binding(
+    manifest: ExactOperationManifest,
+    *,
+    operation: ExactHumanApprovalOperation,
+    archive_id: str,
+    warnings: Sequence[str] = (),
+) -> ExactOperationApprovalBinding:
+    """Adapt a domain-neutral manifest to the existing native approval broker.
+
+    This helper deliberately creates no new approval authority.  It verifies
+    that the manifest's operation and archive digest match the already selected
+    native operation context, then reuses ``ExactOperationApprovalBinding`` and
+    its one-use exact-human workflow unchanged.
+    """
+
+    if (
+        type(manifest) is not ExactOperationManifest
+        or type(operation) is not ExactHumanApprovalOperation
+        or manifest.operation != operation.value
+        or type(warnings) not in {tuple, list}
+        or any(type(warning) is not str for warning in warnings)
+    ):
+        raise _fail("operation_approval_plan_invalid")
+    try:
+        archive_identity_sha256 = exact_human_approval_archive_identity_sha256(
+            archive_id
+        )
+        warning_codes = exact_human_approval_warning_codes(list(warnings))
+    except Exception:
+        raise _fail("operation_approval_plan_invalid") from None
+    if not hmac.compare_digest(
+        manifest.archive_identity_sha256,
+        archive_identity_sha256,
+    ):
+        raise _fail("operation_approval_binding_mismatch")
+    return ExactOperationApprovalBinding(
+        operation=operation,
+        plan_sha256=manifest.manifest_sha256,
+        target_binding_sha256=manifest.target_set_sha256,
+        warning_codes=warning_codes,
+        review_binding_codes=(
+            "exact_operation_effect_set",
+            "exact_operation_manifest",
+            "exact_operation_source_set",
+            "exact_operation_target_set",
+        ),
+    )
+
+
 def assert_same_binding(
     current: ExactOperationApprovalBinding,
     *,
@@ -815,6 +865,7 @@ __all__ = [
     "OperationApprovalBindingError",
     "assert_same_binding",
     "build_operation_exact_human_approval_receipt",
+    "exact_operation_manifest_approval_binding",
     "mint_zet_approval_binding",
     "promote_zet_approval_binding",
     "retire_draft_approval_binding",

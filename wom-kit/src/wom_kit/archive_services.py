@@ -102235,6 +102235,15 @@ def _wom_kit_project_update_run_capped(
     max_output_bytes: int,
     input_bytes: bytes | None = None,
 ) -> tuple[int, bytes] | None:
+    """Run one bounded process while draining stdin and stdout concurrently.
+
+    Git commands such as ``check-attr --stdin`` can emit more than one output
+    record for every input path.  On Windows, synchronously filling stdin
+    before reading stdout can therefore block both processes once the pipe
+    buffers fill.  The timeout starts before either worker and covers input,
+    output, and the child exit.
+    """
+
     if (
         max_output_bytes < 0
         or timeout_seconds <= 0
@@ -102251,26 +102260,20 @@ def _wom_kit_project_update_run_capped(
         )
     except (OSError, ValueError):
         return None
-    if process.stdout is None:
-        process.kill()
+    if process.stdout is None or (input_bytes is not None and process.stdin is None):
+        try:
+            process.kill()
+        except OSError:
+            pass
         process.wait()
-        return None
-    try:
-        if input_bytes is not None:
-            if process.stdin is None:
-                raise OSError("git_stdin_unavailable")
-            process.stdin.write(input_bytes)
-            process.stdin.close()
-    except (BrokenPipeError, OSError):
-        process.kill()
-        process.wait()
-        process.stdout.close()
         return None
 
     output_box: list[bytes] = []
     read_failed = threading.Event()
+    write_failed = threading.Event()
+    overflow = threading.Event()
 
-    def read_once() -> None:
+    def read_capped() -> None:
         try:
             chunks: list[bytes] = []
             total = 0
@@ -102284,49 +102287,117 @@ def _wom_kit_project_update_run_capped(
                 chunks.append(chunk)
                 total += len(chunk)
             output_box.append(b"".join(chunks))
+            if total > max_output_bytes:
+                overflow.set()
         except (OSError, ValueError):
             read_failed.set()
 
-    reader = threading.Thread(target=read_once, daemon=True)
-    reader.start()
+    def write_all() -> None:
+        assert input_bytes is not None
+        assert process.stdin is not None
+        try:
+            offset = 0
+            while offset < len(input_bytes):
+                written = os.write(
+                    process.stdin.fileno(),
+                    input_bytes[offset : offset + 64 * 1024],
+                )
+                if written <= 0:
+                    raise OSError("git_stdin_write_incomplete")
+                offset += written
+        except (BrokenPipeError, OSError, ValueError):
+            write_failed.set()
+        finally:
+            try:
+                process.stdin.close()
+            except OSError:
+                pass
+
     deadline = time.monotonic() + timeout_seconds
+    reader = threading.Thread(target=read_capped, daemon=True)
+    writer = (
+        threading.Thread(target=write_all, daemon=True)
+        if input_bytes is not None
+        else None
+    )
+    reader.start()
+    if writer is not None:
+        writer.start()
     timed_out = False
-    while reader.is_alive():
+    while reader.is_alive() or (writer is not None and writer.is_alive()):
         reader.join(timeout=0.02)
-        if time.monotonic() >= deadline:
-            timed_out = True
+        if writer is not None:
+            writer.join(timeout=0.02)
+        if (
+            overflow.is_set()
+            or read_failed.is_set()
+            or write_failed.is_set()
+            or time.monotonic() >= deadline
+        ):
+            timed_out = time.monotonic() >= deadline
             try:
                 process.kill()
             except OSError:
                 pass
             break
-    if timed_out:
+    failed = bool(
+        timed_out
+        or overflow.is_set()
+        or read_failed.is_set()
+        or write_failed.is_set()
+    )
+    if failed:
+        for stream in (process.stdin, process.stdout):
+            if stream is None:
+                continue
+            try:
+                stream.close()
+            except OSError:
+                pass
+    reader.join(timeout=1.0)
+    if writer is not None:
+        writer.join(timeout=1.0)
+    workers_alive = reader.is_alive() or bool(writer is not None and writer.is_alive())
+    if workers_alive:
         try:
-            process.stdout.close()
+            process.kill()
         except OSError:
             pass
-    reader.join(timeout=1.0)
     output = output_box[0] if output_box else b""
-    overflow = len(output) > max_output_bytes
-    if overflow or read_failed.is_set() or reader.is_alive():
+    if len(output) > max_output_bytes:
+        overflow.set()
+    if overflow.is_set() or read_failed.is_set() or write_failed.is_set():
         try:
             process.kill()
         except OSError:
             pass
     try:
-        return_code = process.wait(timeout=5)
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise subprocess.TimeoutExpired(command, timeout_seconds)
+        return_code = process.wait(timeout=remaining)
     except subprocess.TimeoutExpired:
+        timed_out = True
         try:
             process.kill()
         except OSError:
             pass
         process.wait()
         return_code = -1
-    try:
-        process.stdout.close()
-    except OSError:
-        pass
-    if timed_out or overflow or read_failed.is_set() or reader.is_alive():
+    for stream in (process.stdin, process.stdout):
+        if stream is None:
+            continue
+        try:
+            stream.close()
+        except OSError:
+            pass
+    if (
+        timed_out
+        or overflow.is_set()
+        or read_failed.is_set()
+        or write_failed.is_set()
+        or workers_alive
+    ):
         return None
     return return_code, output
 
