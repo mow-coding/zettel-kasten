@@ -38,6 +38,9 @@ _ZETTEL_OBJET_CONTROL_SHA256 = "sha256:" + hashlib.sha256(
     b"wom-kit/zettel-objet-link-lock/v0.1\n"
 ).hexdigest()
 _APPROVAL_ID_RE = re.compile(r"^approval_[0-9a-f]{32}$")
+_STABLE_VERSION_TAG_RE = re.compile(
+    r"^v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)$"
+)
 _MAX_CANONICAL_BYTES = 16 * 1024 * 1024
 OPERATION_RECEIPT_SCHEMA_VERSION = "wom-kit/operation-exact-human-approval/v0.1"
 
@@ -779,6 +782,99 @@ def exact_operation_manifest_approval_binding(
             "exact_operation_manifest",
             "exact_operation_source_set",
             "exact_operation_target_set",
+        ),
+    )
+
+
+def project_version_update_approval_binding(
+    dry_run: Mapping[str, Any],
+) -> ExactOperationApprovalBinding:
+    """Bind one exact project-mirror update preview without exposing paths."""
+
+    plan = _plain_mapping(dry_run)
+    if (
+        plan.get("ok") is not True
+        or plan.get("lifecycle_action") != "project_version_update"
+        or plan.get("mode") != "dry_run"
+        or plan.get("status")
+        not in {"ready_for_approval", "ready_to_fetch_on_approve"}
+    ):
+        raise _fail("operation_approval_plan_blocked")
+    target_plan = _plain_mapping(plan.get("target"))
+    source = _plain_mapping(plan.get("source_mirror"))
+    pins = _plain_mapping(plan.get("pins"))
+    fetch = _plain_mapping(plan.get("fetch"))
+    materialization = _plain_mapping(plan.get("materialization_preflight"))
+    write_boundary = _plain_mapping(plan.get("write_boundary"))
+    target_tag = target_plan.get("tag")
+    head_before = target_plan.get("target_commit")
+    source_head = source.get("head_commit_before")
+    if (
+        type(target_tag) is not str
+        or _STABLE_VERSION_TAG_RE.fullmatch(target_tag) is None
+        or type(source_head) is not str
+        or re.fullmatch(r"[0-9a-f]{40,64}", source_head) is None
+        or (
+            head_before is not None
+            and (
+                type(head_before) is not str
+                or re.fullmatch(r"[0-9a-f]{40,64}", head_before) is None
+            )
+        )
+        or fetch.get("attempted") is not False
+        or fetch.get("git_transport_called") is not False
+        or write_boundary.get("checkpointed_change_detection") is not True
+        or write_boundary.get("external_writer_quiescence_required") is not True
+        or not isinstance(pins.get("planned"), list)
+    ):
+        raise _fail("operation_approval_plan_invalid")
+
+    target = {
+        "target_tag": target_tag,
+        "target_version": target_plan.get("version"),
+        "target_commit": head_before,
+        "target_tag_available_locally": target_plan.get(
+            "tag_available_locally"
+        ),
+        "source_head_commit_before": source_head,
+        "source_mirror_path_digest": _sha256(source.get("path")),
+        "pins_digest": _sha256(pins.get("planned")),
+        "materialization_preflight_digest": _sha256(materialization),
+        "would_change_digest": _sha256(plan.get("would_change")),
+    }
+    basis = {
+        "schema_version": BINDING_SCHEMA_VERSION,
+        "operation": "project_version_update",
+        "target": target,
+        # The legacy preview is already content-free.  Binding the complete
+        # preview makes every current and future safe precondition part of the
+        # one-use approval without copying it into the native dialog.
+        "service_preview_digest": _sha256(
+            {
+                key: value
+                for key, value in plan.items()
+                if key != "exact_human_approval"
+            }
+        ),
+    }
+    return ExactOperationApprovalBinding(
+        operation=ExactHumanApprovalOperation.project_version_update,
+        plan_sha256=_sha256(basis),
+        target_binding_sha256=_sha256(target),
+        warning_codes=exact_human_approval_warning_codes(
+            tuple(
+                item
+                for item in plan.get("warnings", [])
+                if type(item) is str
+            )
+        ),
+        review_binding_codes=(
+            "external_writers_quiescent",
+            "forward_only",
+            "materialization_preflight",
+            "project_source_head",
+            "recognized_version_pins",
+            "target_release_tag",
         ),
     )
 

@@ -11,6 +11,7 @@ from wom_kit.operation_approval_binding import (
     assert_same_binding,
     build_operation_exact_human_approval_receipt,
     mint_zet_approval_binding,
+    project_version_update_approval_binding,
     retire_draft_approval_binding,
     zettel_edge_approval_binding,
 )
@@ -202,6 +203,69 @@ class OperationApprovalBindingTests(unittest.TestCase):
         binding = mint_zet_approval_binding(plan)
         self.assertEqual(binding.warning_codes, ("non_code_warning_present",))
         self.assertNotIn('"value"', json.dumps(binding.public_document()))
+
+    def test_project_version_update_binding_covers_head_target_pins_and_preflight(
+        self,
+    ) -> None:
+        plan = {
+            "ok": True,
+            "schema": "wom-kit/project-version-update/v0.1",
+            "lifecycle_action": "project_version_update",
+            "status": "ready_to_fetch_on_approve",
+            "mode": "dry_run",
+            "target": {
+                "tag": "v0.4.3",
+                "version": "0.4.3",
+                "target_commit": None,
+                "tag_available_locally": False,
+            },
+            "source_mirror": {
+                "path": "parent_of_archive/.zettel-kasten/source",
+                "head_commit_before": "a" * 40,
+            },
+            "pins": {
+                "planned": [
+                    {
+                        "path": "parent_of_archive/.zettel-kasten/installed-version.txt",
+                        "previous_version": "v0.4.0",
+                        "target_version": "v0.4.3",
+                    }
+                ]
+            },
+            "materialization_preflight": {
+                "state": "deferred_until_approval_fetch"
+            },
+            "fetch": {
+                "attempted": False,
+                "git_transport_called": False,
+            },
+            "write_boundary": {
+                "checkpointed_change_detection": True,
+                "external_writer_quiescence_required": True,
+            },
+            "warnings": ["private prose is digest-bound but never echoed"],
+            "would_change": ["logical project mirror and pins"],
+        }
+        first = project_version_update_approval_binding(plan)
+        self.assertIs(
+            first.operation,
+            ExactHumanApprovalOperation.project_version_update,
+        )
+        self.assertNotIn("private prose", json.dumps(first.public_document()))
+
+        changed_head = copy.deepcopy(plan)
+        changed_head["source_mirror"]["head_commit_before"] = "b" * 40
+        second = project_version_update_approval_binding(changed_head)
+        self.assertNotEqual(first.plan_sha256, second.plan_sha256)
+        self.assertNotEqual(
+            first.target_binding_sha256,
+            second.target_binding_sha256,
+        )
+
+        changed_pin = copy.deepcopy(plan)
+        changed_pin["pins"]["planned"][0]["previous_version"] = "v0.4.1"
+        third = project_version_update_approval_binding(changed_pin)
+        self.assertNotEqual(first.target_binding_sha256, third.target_binding_sha256)
 
 
 if __name__ == "__main__":

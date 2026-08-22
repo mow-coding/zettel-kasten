@@ -1,8 +1,10 @@
 # WOM-kit Version Truth Source
 
-Status: v0.4.2 read-only Git backup planning and global CLI bootstrap
+Status: v0.4.3 bounded Windows PATH/source provenance and exact project updater
 
-Current checkpoint: Status: v0.4.2 bounded Git plan/reconciliation with no writer
+Current checkpoint: Status: v0.4.3 PATH shadow diagnosis plus exact-human project update
+
+Previous checkpoint: Status: v0.4.2 bounded Git plan/reconciliation with no writer
 
 Previous checkpoint: Status: v0.4.1 one exact link apply plus content-free operator recovery
 
@@ -41,6 +43,7 @@ Use these commands before deciding which kit is current:
 archive --version
 archive version --format json
 archive version <project-or-archive-root> --format json
+archive version <project-or-archive-root> --progress --format json
 archive runtime-context <archive-root> --format json
 archive project-version-update <project-or-archive-root> --target vX.Y.Z --dry-run --format json
 ```
@@ -49,6 +52,28 @@ archive project-version-update <project-or-archive-root> --target vX.Y.Z --dry-r
 form is for AI runtimes and scripts. `runtime-context` includes the same
 version summary under `wom_kit_version`, so an agent can confirm archive identity
 and kit version in one read-only request.
+
+### Windows PATH shadow and bounded Git probes (v0.4.3)
+
+On Windows, `archive version` now returns `path_shadow_diagnostic`. A bounded
+system application-resolution probe enumerates at most 64 `archive` launcher
+candidates in actual selection order without executing any alternate. It
+reports candidate 1 as selected, compares that selection with the running
+process launcher when observable, and separately reports the imported WOM-kit
+module version/origin and inspected project source version. It explicitly does
+not claim that an unexecuted alternate launcher imports a particular module.
+
+Exact launcher and module paths remain redacted by default. Use
+`--no-redact-local-paths` only during attended local diagnosis. The report
+never edits PATH, replaces a launcher, installs Python, or changes a project.
+
+`--progress` writes an immediate content-free line to stderr before source and
+Git provenance work. All Git reads in one version inspection share a 12-second
+total budget, in addition to the existing per-child limits. Once that deadline
+is exhausted, later Git probes are skipped and the result reports
+`source_probe_budget.budget_exhausted: true`; no write process is started. This
+prevents a chain of stuck Git or credential-helper children from leaving the
+operator with indefinite silence.
 
 ## Source Of Truth
 
@@ -213,10 +238,12 @@ The bridge runs the verified project source for one invocation. It does not:
 If source/pin metadata is incomplete or inconsistent, or any local release
 integrity check fails, the result fails closed and provides no executable
 bridge argv. A present but unverified mirror also makes the command nonzero.
-Preview a verified `project-version-update --dry-run` and stop. In v0.4.2
-updater approval returns `compound_exact_human_approval_binding_required`
-before private project/source/Git/pin reads, fetch, or mutation and writes no
-source, pin, lock, or receipt.
+In v0.4.3, preview a verified `project-version-update --dry-run`, review its
+content-free exact-human binding, and use the Windows CLI approval route only
+when the target and complete-transaction quiescence are intentional. The
+service recomputes the same preview and authenticates the exact claim before
+the locked updater starts. Collision and bytecode-repair writers remain fixed
+closed. See [Project Version Update](project-version-update.md).
 
 ## Source Development Launcher
 
@@ -277,9 +304,10 @@ process, rerun `archive version <root> --format json`, and follow its
 `next_safe_actions`. For pristine recovery, use a separate exact tagged
 checkout and keep the original checkout unchanged for diagnosis.
 
-## Project Update Preview And Historical Contract
+## Project Update Preview And Exact-Human Contract
 
-The current v0.4.2 command provides the bounded preview only:
+The v0.4.3 command keeps the bounded preview and adds the Windows exact-human
+approval path described in the project-update guide:
 
 ```powershell
 archive project-version-update <project-or-archive-root> `
@@ -290,10 +318,11 @@ archive project-version-update <project-or-archive-root> `
   --format json
 ```
 
-Approval returns `compound_exact_human_approval_binding_required` before
-private project reads, fetch, materialization, pin mutation, lock creation, or
-receipt publication. The implementation details below describe historical
-v0.3.315 evidence only and grant no v0.4.2 write authority.
+An unbound direct writer returns `exact_human_approval_required` before private
+project reads. The bound CLI writer must rederive the same preview and target
+digests after approval before entering the updater. The implementation details
+below remain the updater's current lock, mutation, rollback, and receipt
+contract; collision and bytecode-repair mutation stay fixed closed.
 
 From v0.3.315, a locally available exact target uses the same digest-bound
 materialization planner in preview and approval. Its cross-map covers the
