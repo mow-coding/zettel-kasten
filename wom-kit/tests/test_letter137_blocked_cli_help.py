@@ -97,6 +97,7 @@ class Letter137BlockedCliHelpTests(unittest.TestCase):
             "project-version-update",
             "retire-draft",
             "source-fidelity-session-evidence",
+            "migrate",
             "zettel-edge",
             "zettel-objet-link",
         }
@@ -117,6 +118,11 @@ class Letter137BlockedCliHelpTests(unittest.TestCase):
                     "exact compound human-approval binding",
                     str(action.help),
                 )
+        migrate_help = self._approval_action(
+            self.subcommands.choices["migrate"]
+        ).help
+        self.assertIn("notion-source-properties", str(migrate_help))
+        self.assertIn("Every other migration target", str(migrate_help))
 
 
 if __name__ == "__main__":

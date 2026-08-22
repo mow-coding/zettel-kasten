@@ -43,7 +43,9 @@ return `1`. `effects_state: none` means the protected workflow did not start,
 while `effects_state: unknown` means an exact-human workflow had started and
 its durable claim must be reconciled without automatic retry. The related
 parser inventory contract is
-`wom-kit/command-approval-status-inventory/v0.1`.
+`wom-kit/command-approval-status-inventory/v0.2`; the prior v0.1 schema remains
+available for the historical v0.4.1 surface. v0.2 adds a content-free
+machine-readable approval scope when only selected argument values are bound.
 
 Historical v0.4.0 checkpoint:
 

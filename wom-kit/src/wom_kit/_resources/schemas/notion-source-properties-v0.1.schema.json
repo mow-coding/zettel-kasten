@@ -1,0 +1,150 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "notion-source-properties-v0.1.schema.json",
+  "title": "WOM-kit lossless Notion source properties",
+  "description": "A field-scoped, mirror-bound preservation envelope for one Notion page property set.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "source_system",
+    "source_format",
+    "semantics_unavailable",
+    "source_page_id",
+    "source_mirror_record_sha256",
+    "property_count",
+    "populated_property_count",
+    "empty_property_count",
+    "indeterminate_property_count",
+    "properties",
+    "opaque_property_count",
+    "opaque_properties"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "wom-kit/notion-source-properties/v0.1"
+    },
+    "source_system": {
+      "const": "notion"
+    },
+    "source_format": {
+      "type": "string",
+      "enum": ["notion_api_page", "legacy_record_map"]
+    },
+    "semantics_unavailable": {
+      "type": "boolean"
+    },
+    "source_page_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024
+    },
+    "source_mirror_record_sha256": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "property_count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "populated_property_count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "empty_property_count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "indeterminate_property_count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "properties": {
+      "type": "array",
+      "maxItems": 10000,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "property_id",
+          "property_name",
+          "property_type",
+          "population_state",
+          "raw_json_payload"
+        ],
+        "properties": {
+          "property_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "property_name": {
+            "type": "string"
+          },
+          "property_type": {
+            "type": "string",
+            "minLength": 1
+          },
+          "population_state": {
+            "type": "string",
+            "enum": ["populated", "empty", "review"]
+          },
+          "raw_json_payload": {
+            "type": "object"
+          }
+        }
+      }
+    },
+    "opaque_property_count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "opaque_properties": {
+      "type": "array",
+      "maxItems": 10000,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["property_id", "raw_json_value"],
+        "properties": {
+          "property_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "raw_json_value": {}
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "source_format": {"const": "notion_api_page"}
+        },
+        "required": ["source_format"]
+      },
+      "then": {
+        "properties": {
+          "semantics_unavailable": {"const": false},
+          "opaque_property_count": {"const": 0},
+          "opaque_properties": {"maxItems": 0}
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "source_format": {"const": "legacy_record_map"}
+        },
+        "required": ["source_format"]
+      },
+      "then": {
+        "properties": {
+          "semantics_unavailable": {"const": true},
+          "populated_property_count": {"const": 0},
+          "properties": {"maxItems": 0}
+        }
+      }
+    }
+  ]
+}

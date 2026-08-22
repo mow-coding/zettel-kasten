@@ -42,8 +42,10 @@ includes:
 - nested subcommands,
 - runnable status.
 
-v0.4.1 also returns `data.approval_status_inventory` with schema
-`wom-kit/command-approval-status-inventory/v0.1`. Unlike the legacy flattened
+v0.4.1 introduced `data.approval_status_inventory` with schema
+`wom-kit/command-approval-status-inventory/v0.1`. The v0.4.3 candidate returns
+the successor v0.2 shape, which adds machine-readable conditional
+approval scope. Unlike the legacy flattened
 command summary, this inventory walks canonical executable paths at every
 parser depth and keeps all accepted alias paths attached to their canonical
 record. Each record includes:
@@ -51,6 +53,8 @@ record. Each record includes:
 - `canonical_path` and `alias_paths`,
 - `approval_status`,
 - the fixed-close `approval_reason_code` when applicable,
+- `approval_scope` (`null` or an argument/value allowlist plus the fixed-close
+  status outside that allowlist),
 - whether `--dry-run` is exposed, and
 - `invocation_surface_available: true`.
 
@@ -80,7 +84,7 @@ dry_run_exposed:                     270
 unmatched fixed-close entries:         0
 ```
 
-The 78 current fixed-close entries preserve the v0.4.0 boundary except that
+The 78 v0.4.2 fixed-close entries preserve the v0.4.0 boundary except that
 `zettel-objet-link` is now operation-specifically bound and available for local
 exact-human approval. `zettel-objet-link-revert`, Objet capture writers, and
 the project update/collision/bytecode writers remain fixed closed. The
@@ -88,6 +92,18 @@ historical v0.4.0 release count was 79. The additional available path is the
 existing `git-backup-reconcile-plan` family, whose approval mode requires a
 complete private exact Git selection and stored non-interactive credentials;
 it does not add a new top-level command or an MCP writer.
+
+Candidate v0.4.3 changes this parser snapshot to 36 `approval_available` and 77
+`approval_fixed_closed`: top-level `migrate` leaves the fixed-close inventory
+because the single `notion-source-properties` target now has an
+operation-specific exact-human writer. This is conditional target availability,
+not global migration authority. The `migrate` handler still returns
+`compound_exact_human_approval_binding_required` before mutation for every
+other approved target. The earlier v0.1 inventory could not express that target
+choice; v0.2 records `approval_scope.argument: --target`, the sole
+allowed value `notion-source-properties`, and the fixed-close status/reason for
+every value outside that scope. The handler independently enforces the same
+boundary.
 
 The `summary` includes:
 

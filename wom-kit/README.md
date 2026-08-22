@@ -51,9 +51,11 @@ historical release evidence.
 
 `archive capabilities --machine` now exposes
 `data.approval_status_inventory` using
-`wom-kit/command-approval-status-inventory/v0.1`. It classifies each canonical
+`wom-kit/command-approval-status-inventory/v0.2` (v0.1 remains the historical
+v0.4.1 contract). It classifies each canonical
 executable path and aliases as `approval_available`, `approval_fixed_closed`,
-or `approval_not_exposed` without evaluating archive prerequisites. JSON usage
+or `approval_not_exposed`, and records any argument-value approval scope,
+without evaluating archive prerequisites. JSON usage
 and repaired high-risk failures can use `wom-kit/cli-error/v0.1`: exit `2` is a
 usage failure, exit `1` is policy/precondition failure, and
 `effects_state: unknown` means an exact-human workflow had started and its

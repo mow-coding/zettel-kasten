@@ -2,7 +2,7 @@
 
 Status: public navigation baseline
 Date: 2026-06-02
-Updated: 2026-08-21
+Updated: 2026-08-22
 Philosophy clarified: 2026-07-15
 Harness compatibility clarified: 2026-07-16
 
@@ -15,6 +15,29 @@ merges, rebases, resets, cleans, deletes, force-pushes, echoes a remote URL or
 credential, or exposes an MCP writer. Plain dry-run remains write-free, and a
 matching `ls-remote` result remains Git-transport evidence rather than account,
 branch-policy, or provider audit-log proof.
+
+The same v0.4.3 candidate also contains the Letter 138 delta (implemented in
+the working tree, not yet released):
+`archive migrate --target notion-source-properties` can now plan, apply,
+resume, independently verify, and field-revert the Letter 138 local Notion
+`source_properties` recovery. A first dry-run stages the exact aggregate
+acceptance bytes create-only under ignored `profiles/local/`; the later plan
+must bind that same file and complete local mirror. Direction-specific apply
+and revert approvals use the common exact-operation manifest, archive-wide
+writer lock, late canonical-projection recheck, durable checkpoints, and final
+result receipt. Parser inventory availability is conditional on this one
+target; every other approved migration target stays fixed closed. It does not
+call Notion or expose property values, source page ids, or local paths. See
+[Notion Source Properties Recovery](notion-source-properties-recovery.md).
+
+Previous v0.4.2 delta: `git-backup-plan` and
+`git-backup-reconcile-plan` add bounded, content-free, CLI-only Git inspection
+and remote-ref reconciliation. They never add, commit, fetch, pull, push,
+delete, or change a ref; both keep `ready_for_write: false`,
+`writer_available: false`, and `would_change: []`. A matching `ls-remote`
+result is Git-transport evidence, not provider confirmation. v0.4.2 addresses
+only the read-only planning foundation of Letter 139, not its requested
+end-to-end backup writer.
 
 Previous v0.4.1 write boundary: `zettel-objet-link --approve` has an
 operation-specific local exact-human binding. Its matching revert, every Objet
@@ -100,6 +123,7 @@ Supporting philosophy and model docs:
 - [v0.4.0 Exact Human Control And Operator Friction Decision](archive-infra-decision-log-2026-08-20-v0400-letter136-operator-friction.md)
 - [v0.4.1 Letter 140 Exact Link Recovery Decision](archive-infra-decision-log-2026-08-21-v041-letter140-exact-link-recovery.md)
 - [v0.4.2 Letter 139 Read-Only Git Backup Planning Decision](archive-infra-decision-log-2026-08-21-v042-letter139-read-only-git-backup-planning.md)
+- [v0.4.3 Letter 138 Notion Source Property Recovery Decision](archive-infra-decision-log-2026-08-22-v043-letter138-notion-source-properties-recovery.md)
 - [Human Artifact Store And Private Registry Contract](human-artifact-store-contract.md)
 - [Project Version Update](project-version-update.md)
 - [Derived Text Capture And Paired-Batch Recovery](derived-text.md)
@@ -166,6 +190,7 @@ Supporting philosophy and model docs:
 - [Derived Text Capture](derived-text.md)
 - [Derived Text Coverage And Toolchain](derived-text-coverage-and-toolchain.md)
 - [Notion Page Snapshot Model](notion-page-snapshot-model.md)
+- [Notion Source Properties Recovery](notion-source-properties-recovery.md)
 - [Objet Ref Resolution](objet-ref-resolution.md)
 - [Presigned URL Plan](presigned-url-plan.md)
 - [Zettel Objet Links](zettel-objet-links.md)
@@ -520,7 +545,8 @@ Schemas:
 - [Source-Fidelity Draft Receipt v0.2 Schema](../schemas/source-fidelity-draft-receipt-v0.2.schema.json)
 - [Source-Fidelity Session-Evidence Receipt Schema](../schemas/source-fidelity-session-evidence-receipt-v0.1.schema.json)
 - [Content-Free CLI Error Envelope Schema](../schemas/cli-error-v0.1.schema.json)
-- [Command Approval Status Inventory Schema](../schemas/command-approval-status-inventory-v0.1.schema.json)
+- [Command Approval Status Inventory v0.2 Schema](../schemas/command-approval-status-inventory-v0.2.schema.json)
+- [Historical Command Approval Status Inventory v0.1 Schema](../schemas/command-approval-status-inventory-v0.1.schema.json)
 - [Exact-Human Operation Approval Schema](../schemas/operation-exact-human-approval-v0.1.schema.json)
 - [Zettel-Objet Link Receipt v0.1/v0.2 Reader Schema](../schemas/zettel-objet-link-receipt.schema.json)
 - [Exact-Human Approval Link Schema](../schemas/exact-human-approval-link-receipt-v0.1.schema.json)
