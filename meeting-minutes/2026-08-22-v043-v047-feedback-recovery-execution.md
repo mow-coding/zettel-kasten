@@ -89,6 +89,17 @@ read-only plans or safety surfaces that leave historical data unrepaired.
   that walk is replaced by a bounded, cached projection and the existing Git
   command family exposes the two-second first-status/ten-second heartbeat
   contract.
+- The first complete Letter 138 actual-scale plan read 925 MB across all 11,585
+  mirror files in about 3 minutes 40 seconds.  Source-shape gates, historical
+  probe provenance, and populated-type omission accounting all passed.
+  However, it exposed a P1 classification defect: one 10 KB BOM Markdown file
+  with no `source_page_id` token was counted as an invalid canonical target and
+  globally changed all 11,585 source pages to review.  A malformed file that
+  cannot be a Notion target must instead be separately accounted as
+  `bom_non_candidate_no_source_page_id`; only malformed/unreadable files that
+  contain, or may contain, a source-page token can block the mapping.  The
+  planner must also publish its first status before acquisition rather than
+  after the multi-minute mirror read.
 
 ## v0.4.4 R2 evidence lock
 

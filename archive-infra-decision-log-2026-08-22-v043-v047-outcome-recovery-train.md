@@ -30,6 +30,12 @@ not semantic acceptance totals.  The full semantic typed counts are
 name, or raw-regex false positive.  Opaque legacy properties are preserved
 losslessly when their modern name/type meaning is unavailable.
 
+Malformed canonical documents affect Letter 138 only when they contain, or
+cannot be proven not to contain, a `source_page_id` candidate.  A known BOM
+document with no such token is an explicitly accounted non-candidate hygiene
+item for v0.4.7; it must not globally convert every mapped source page to
+review.
+
 ## Consequences
 
 - Release overhead increases slightly, but completed work is not held behind an
