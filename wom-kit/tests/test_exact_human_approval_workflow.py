@@ -269,9 +269,17 @@ class ExactHumanApprovalWorkflowTests(unittest.TestCase):
         guard_calls = 0
         writer_calls = 0
 
-        def checkpoint_guard() -> bool:
+        guarded_claim = None
+
+        def checkpoint_guard(claim) -> bool:
             nonlocal guard_calls
+            nonlocal guarded_claim
             guard_calls += 1
+            guarded_claim = claim
+            self.assertEqual(
+                claim.assert_ready_for_context(self.context)["approval_id"],
+                approval_id,
+            )
             return True
 
         def writer(claim):
@@ -296,6 +304,7 @@ class ExactHumanApprovalWorkflowTests(unittest.TestCase):
         self.assertEqual(resumed_provider.create_if_missing, [False])
         self.assertEqual(guard_calls, 1)
         self.assertEqual(writer_calls, 1)
+        self.assertIsNotNone(guarded_claim)
         self.assertEqual(resumed["exact_human_approval"]["status"], "succeeded")
 
         with self.assertRaises(ExactHumanApprovalWorkflowError) as terminal:
@@ -303,7 +312,7 @@ class ExactHumanApprovalWorkflowTests(unittest.TestCase):
                 self.root,
                 self.context,
                 approval_id,
-                lambda: True,
+                lambda _claim: True,
                 writer,
                 key_provider=_KeyProvider(),
             )
@@ -334,7 +343,7 @@ class ExactHumanApprovalWorkflowTests(unittest.TestCase):
                 self.root,
                 self.context,
                 approval_id,
-                lambda: False,
+                lambda _claim: False,
                 writer,
                 key_provider=_KeyProvider(),
             )
@@ -355,7 +364,7 @@ class ExactHumanApprovalWorkflowTests(unittest.TestCase):
                 self.root,
                 drifted_context,
                 approval_id,
-                lambda: True,
+                lambda _claim: True,
                 writer,
                 key_provider=_KeyProvider(),
             )
@@ -383,7 +392,7 @@ class ExactHumanApprovalWorkflowTests(unittest.TestCase):
                 self.root,
                 self.context,
                 approval_id,
-                lambda: True,
+                lambda _claim: True,
                 lambda _claim: {"ok": True},
                 key_provider=_KeyProvider(),
             )

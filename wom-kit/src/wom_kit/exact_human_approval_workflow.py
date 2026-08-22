@@ -230,7 +230,7 @@ def _resume_exact_human_approved_write_core(
     archive_root: Path | str,
     context: ExactHumanApprovalContext,
     approval_id: str,
-    checkpoint_guard: Callable[[], bool],
+    checkpoint_guard: Callable[[_ClaimedExactHumanApproval], bool],
     writer: Callable[[_ClaimedExactHumanApproval], Mapping[str, Any]],
     *,
     key_provider: _ArchiveAuthenticationKeyProvider | None = None,
@@ -244,10 +244,12 @@ def _resume_exact_human_approved_write_core(
 ) -> dict[str, Any]:
     """Resume the same started claim without displaying a new native dialog.
 
-    ``checkpoint_guard`` is a fail-closed domain callback.  It must prove that
-    the durable checkpoint addressed by the exact approved execution exists
-    before the writer is entered.  The exact-operation runner performs the
-    full checkpoint-chain and target-state validation after that guard.
+    ``checkpoint_guard`` is a fail-closed domain callback.  It receives the
+    reauthenticated started claim so it can derive the exact approval
+    authority and execution digest, then must prove that the corresponding
+    durable checkpoint exists before the writer is entered.  The
+    exact-operation runner performs the full checkpoint-chain and target-state
+    validation after that guard.
     """
 
     if (
@@ -283,7 +285,7 @@ def _resume_exact_human_approved_write_core(
             raise _fail("exact_human_approval_resume_claim_invalid") from None
         try:
             try:
-                checkpoint_matches = checkpoint_guard()
+                checkpoint_matches = checkpoint_guard(claim)
             except BaseException:
                 raise _fail(
                     "exact_human_approval_resume_checkpoint_invalid"
