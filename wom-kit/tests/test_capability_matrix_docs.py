@@ -20,7 +20,7 @@ CURRENT_WHEEL_URL = (
     f"wom_kit-{EXPECTED_CURRENT_VERSION}-py3-none-any.whl"
 )
 CURRENT_RUNTIME_STATUS = (
-    f"Status: {CURRENT_VERSION} Letter 139 read-only Git backup planning checkpoint"
+    "Status: v0.4.3 exact Git backup writer implementation candidate"
 )
 CURRENT_MATRIX_VERSION = f"Version: {CURRENT_VERSION} implementation and release scope"
 MATRIX_PATH = KIT_ROOT / "docs" / "capability-matrix.md"

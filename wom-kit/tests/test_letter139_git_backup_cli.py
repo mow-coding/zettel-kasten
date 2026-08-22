@@ -338,6 +338,185 @@ class Letter139GitBackupCliTests(unittest.TestCase):
         self.assertEqual(stderr, "")
         self.assertEqual(json.loads(stdout), result)
 
+    def test_existing_reconcile_family_routes_exact_approve_without_new_command(self) -> None:
+        parser = archive_cli.build_parser()
+        subparsers = next(
+            action
+            for action in parser._actions
+            if isinstance(action, archive_cli.argparse._SubParsersAction)
+        )
+        self.assertNotIn("git-backup-apply", subparsers.choices)
+        reconcile = subparsers.choices["git-backup-reconcile-plan"]
+        options = {
+            option
+            for action in reconcile._actions
+            for option in action.option_strings
+        }
+        self.assertTrue(
+            {
+                "--selection-manifest",
+                "--approve",
+                "--reviewed-by",
+                "--resume-approval-id",
+                "--expected-manifest-sha256",
+                "--progress",
+            }.issubset(options)
+        )
+
+        private_root = "C:/PRIVATE_WRITER_ROOT"
+        private_selection = "C:/PRIVATE_SELECTION.json"
+        prepared = object()
+        result = {
+            "schema": "wom-kit/exact-operation-result/v1",
+            "ok": True,
+            "lifecycle_action": "git_backup_exact_apply",
+            "private_values_echoed": False,
+        }
+        with (
+            mock.patch.object(
+                archive_cli.git_backup_writer,
+                "prepare_git_backup",
+                return_value=prepared,
+            ) as prepare,
+            mock.patch.object(
+                archive_cli.git_backup_writer,
+                "execute_git_backup",
+                return_value=result,
+            ) as execute,
+        ):
+            code, stdout, stderr = self.run_cli(
+                [
+                    "git-backup-reconcile-plan",
+                    private_root,
+                    "--expected-plan-sha256",
+                    PLAN_SHA256,
+                    "--selection-manifest",
+                    private_selection,
+                    "--credential-mode",
+                    "stored",
+                    "--approve",
+                    "--reviewed-by",
+                    "person:operator",
+                ]
+            )
+        self.assertEqual(code, 0, stdout)
+        self.assertEqual(stderr, "")
+        self.assertEqual(json.loads(stdout), result)
+        self.assertNotIn(private_root, stdout)
+        self.assertNotIn(private_selection, stdout)
+        prepare.assert_called_once_with(
+            Path(private_root),
+            expected_plan_sha256=PLAN_SHA256,
+            selection_manifest_path=Path(private_selection),
+            remote_name="origin",
+            branch=None,
+            credential_mode="stored",
+            max_changes=(
+                archive_cli.git_backup_planning.GIT_BACKUP_PLAN_DEFAULT_MAX_CHANGES
+            ),
+            max_changed_bytes=(
+                archive_cli.git_backup_planning.GIT_BACKUP_PLAN_DEFAULT_MAX_CHANGED_BYTES
+            ),
+            progress_hook=None,
+        )
+        execute.assert_called_once_with(
+            prepared,
+            selection_manifest_path=Path(private_selection),
+            reviewer_claim="person:operator",
+            progress_hook=None,
+        )
+
+    def test_reconcile_resume_loads_exact_private_bundle_and_reuses_started_claim(self) -> None:
+        manifest_sha256 = "sha256:" + "8" * 64
+
+        class Prepared:
+            expected_plan_sha256 = PLAN_SHA256
+
+        prepared = Prepared()
+        result = {
+            "ok": True,
+            "lifecycle_action": "git_backup_exact_apply",
+            "private_values_echoed": False,
+        }
+        with (
+            mock.patch.object(
+                archive_cli.git_backup_writer,
+                "load_private_git_backup_bundle",
+                return_value=prepared,
+            ) as load,
+            mock.patch.object(
+                archive_cli.git_backup_writer,
+                "resume_git_backup",
+                return_value=result,
+            ) as resume,
+        ):
+            code, stdout, stderr = self.run_cli(
+                [
+                    "git-backup-reconcile-plan",
+                    "C:/PRIVATE_RESUME_ROOT",
+                    "--expected-plan-sha256",
+                    PLAN_SHA256,
+                    "--expected-manifest-sha256",
+                    manifest_sha256,
+                    "--resume-approval-id",
+                    "approval_" + "a" * 32,
+                    "--reviewed-by",
+                    "person:operator",
+                ]
+            )
+        self.assertEqual(code, 0, stdout)
+        self.assertEqual(stderr, "")
+        self.assertEqual(json.loads(stdout), result)
+        load.assert_called_once_with(
+            Path("C:/PRIVATE_RESUME_ROOT"),
+            manifest_sha256=manifest_sha256,
+        )
+        resume.assert_called_once_with(
+            prepared,
+            reviewer_claim="person:operator",
+            approval_id="approval_" + "a" * 32,
+            progress_hook=None,
+        )
+
+    def test_writer_exception_is_private_and_reports_unknown_effects(self) -> None:
+        prepared = object()
+        private_canary = "C:/PRIVATE_WRITE_CANARY/secret-token"
+        with (
+            mock.patch.object(
+                archive_cli.git_backup_writer,
+                "prepare_git_backup",
+                return_value=prepared,
+            ),
+            mock.patch.object(
+                archive_cli.git_backup_writer,
+                "execute_git_backup",
+                side_effect=RuntimeError(private_canary),
+            ),
+        ):
+            code, stdout, stderr = self.run_cli(
+                [
+                    "git-backup-reconcile-plan",
+                    "C:/PRIVATE_ROOT",
+                    "--expected-plan-sha256",
+                    PLAN_SHA256,
+                    "--selection-manifest",
+                    "C:/PRIVATE_SELECTION.json",
+                    "--credential-mode",
+                    "stored",
+                    "--approve",
+                    "--reviewed-by",
+                    "person:operator",
+                ]
+            )
+        self.assertEqual(code, 1)
+        self.assertEqual(stderr, "")
+        self.assertNotIn(private_canary, stdout)
+        payload = json.loads(stdout)
+        self.assertEqual(payload["error_class"], "execution")
+        self.assertEqual(payload["effects_state"], "unknown")
+        self.assertEqual(payload["files_written"], [])
+        self.assertFalse(payload["private_values_echoed"])
+
 
 if __name__ == "__main__":
     unittest.main()

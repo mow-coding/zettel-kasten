@@ -1,6 +1,6 @@
 # Runtime Canonical Entry Points
 
-Status: v0.4.2 Letter 139 read-only Git backup planning checkpoint
+Status: v0.4.3 exact Git backup writer implementation candidate
 
 Previous checkpoint: Status: v0.4.1 Letter 140 recovery and command-truth checkpoint
 
@@ -28,23 +28,25 @@ The underlying raw context packet remains available through:
 archive runtime-context <archive-root> --format json
 ```
 
-## v0.4.2 Current Runtime Delta
+## v0.4.3 Current Runtime Delta
 
-Two new CLI-only commands provide a read-only Git backup review basis:
+The two-command CLI-only Git backup family now provides both read-only review
+and one exact native-approved writer route:
 
 ```powershell
 archive git-backup-plan <archive-root> --remote origin --dry-run --format json
 archive git-backup-reconcile-plan <archive-root> --expected-plan-sha256 sha256:<64-lowercase-hex> --remote origin --dry-run --format json
+archive git-backup-reconcile-plan <archive-root> --expected-plan-sha256 sha256:<64-lowercase-hex> --selection-manifest <private.json> --credential-mode stored --approve --reviewed-by person:<operator> --progress --format json
 ```
 
-They inspect only the currently checked-out symbolic branch and one anonymous
-HTTPS remote ref. Both expose no `--approve` or MCP writer, keep
-`ready_for_write: false`, `writer_available: false`, and `would_change: []`,
-and perform no add, reset, checkout, commit, merge, rebase, delete, fetch,
-pull, push, or ref change. Authenticated/private HTTPS may report unavailable;
-SSH/scp-like and credential-bearing remotes fail closed. `inspection_complete`
-is a planning result, not backup completion. See [Git Backup Plan And
-Reconciliation Plan](git-backup-plan.md).
+The plain plan and reconcile modes remain write-free. Only the reconcile
+command exposes `--approve`: it requires an exact private all-change
+classification, stored non-interactive credentials, one native digest-bound
+approval, fresh observation, literal bounded exact adds/commits, one ordinary
+non-force push, exact ref requery, checkpointed resume, and content-free
+receipts. It never pulls, fetches, merges, rebases, resets, cleans, deletes, or
+force-pushes. MCP exposes no Git writer. `inspection_complete` is still only a
+planning result. See [Git Backup Plan And Reconciliation Plan](git-backup-plan.md).
 
 Start command planning from the parser-derived inventory instead of guessing
 from a command name or an older document:
@@ -55,8 +57,9 @@ archive capabilities --machine --format json
 
 Its `data.approval_status_inventory` distinguishes
 `approval_available`, `approval_fixed_closed`, and `approval_not_exposed` for
-every canonical executable command path and its aliases. In v0.4.2, the parser
-matches all 78 supplied fixed-close entries and reports zero unmatched entries.
+every canonical executable command path and its aliases. In the v0.4.3
+candidate, the parser matches all 78 supplied fixed-close entries, reports zero
+unmatched entries, and adds the exact Git apply route to `approval_available`.
 This is parser evidence only: it does not evaluate archive prerequisites, and
 `approval_not_exposed` does not mean that a command is read-only.
 

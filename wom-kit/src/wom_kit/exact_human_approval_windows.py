@@ -70,6 +70,7 @@ class ExactHumanApprovalOperation(Enum):
     duplicate_object_reconcile = "duplicate_object_reconcile"
     integrity_repair = "integrity_repair"
     project_version_update = "project_version_update"
+    git_backup = "git_backup"
 
 
 def exact_human_approval_warning_codes(
@@ -118,6 +119,7 @@ _OPERATION_LABELS = {
     ExactHumanApprovalOperation.duplicate_object_reconcile: "중복 객체 정리",
     ExactHumanApprovalOperation.integrity_repair: "무결성 보충 또는 철회",
     ExactHumanApprovalOperation.project_version_update: "프로젝트 WOM-kit 버전 갱신",
+    ExactHumanApprovalOperation.git_backup: "Git 원격 백업",
 }
 
 
