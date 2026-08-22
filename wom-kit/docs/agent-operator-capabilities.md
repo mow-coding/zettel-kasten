@@ -1,6 +1,6 @@
 # Agent Operator Capabilities Manifest
 
-Status: v0.4.2 parser-derived approval-status inventory
+Status: v0.4.3 candidate parser-derived approval-status inventory
 
 `archive capabilities --machine` lets an AI operator ask one practical question:
 
@@ -67,15 +67,15 @@ These are parser facts, not execution promises. `approval_available` does not
 mean that archive-specific prerequisites have passed. `approval_not_exposed`
 does not mean that the command is read-only.
 
-For the v0.4.2 parser, the inventory snapshot is:
+For the v0.4.3 candidate parser, the inventory snapshot is:
 
 ```text
 canonical executable command paths: 315
 alias invocation paths:              259
 all invocation paths:                574
-approval_available:                   35
+approval_available:                   36
 approval_fixed_closed:                78
-approval_not_exposed:                202
+approval_not_exposed:                201
 dry_run_exposed:                     270
 unmatched fixed-close entries:         0
 ```
@@ -84,7 +84,10 @@ The 78 current fixed-close entries preserve the v0.4.0 boundary except that
 `zettel-objet-link` is now operation-specifically bound and available for local
 exact-human approval. `zettel-objet-link-revert`, Objet capture writers, and
 the project update/collision/bytecode writers remain fixed closed. The
-historical v0.4.0 release count was 79.
+historical v0.4.0 release count was 79. The additional available path is the
+existing `git-backup-reconcile-plan` family, whose approval mode requires a
+complete private exact Git selection and stored non-interactive credentials;
+it does not add a new top-level command or an MCP writer.
 
 The `summary` includes:
 

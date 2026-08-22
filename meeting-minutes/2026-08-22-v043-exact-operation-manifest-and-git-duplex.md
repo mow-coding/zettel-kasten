@@ -124,3 +124,47 @@ identity, exact field encoding, source acquisition, and operation-specific
 non-injectable approval wrapper. It must use the common lock/store and convert
 the live claim reference into `ExactOperationApprovalAuthority`; the common
 module deliberately does not guess those domain-specific policies.
+
+## Letter 139 exact Git writer follow-on
+
+The Git writer was implemented in a separate `codex/v043-git-backup`
+worktree and did not write the protected Basoon archive. It extends the
+existing `git-backup-reconcile-plan` family instead of adding a top-level
+command or MCP writer. A private selection must assign every opaque observed
+change reference to exactly one explicit commit group.
+
+Live read-only Basoon measurements changed the implementation order. Raw Git
+status/index/tree queries were each sub-second, while recursive attribute and
+historical receipt walks caused the old plan to exceed 180 seconds. The
+planner now uses bounded Git projections for attribute paths, inventories
+54,542 historical receipts by stable metadata without reopening every body,
+skips unrelated handoff scratch traversal, and emits immediate content-free
+status plus five-second heartbeats. The parent integration measured 31.72
+seconds end to end on the real archive, with the first event at 0.0 seconds;
+this was read-only and performed no Basoon mutation.
+
+The exact writer reuses the common manifest, writer lock, checkpoints, native
+approval, and same-started-claim resume. It proves each group in an isolated
+index, then uses only exact `git add -- <paths>` and a bounded literal
+`git commit --only`. It verifies parents, messages, path sets, and blob bytes,
+preserves staging outside the current group, pushes the privately bound exact
+HTTPS URL without force, and independently requeries the exact remote ref.
+No pull, fetch, merge, rebase, reset, clean, delete, or force-push route was
+added.
+
+Windows `git commit --only` cannot combine `--pathspec-from-file` with
+`--only`, so that proposed route was rejected after the real Git error was
+reproduced. Safe cross-platform paths are instead passed literally. The writer
+reserves over 8 KiB of the 32,767-character Windows process ceiling and blocks
+any group whose UTF-8 path bytes or Windows-quoted literal argv exceed 24 KiB.
+An 8,192-change fixture proves that multiple explicit bounded groups preserve
+complete one-time classification, while one oversized group stops before
+approval.
+
+Focused synthetic repositories prove normal commit/push/ref verification,
+selection and worktree drift rejection, remote race rejection before push,
+terminal replay rejection, exact-stage resume after commit failure,
+commit-after-crash reconciliation without duplicate commit,
+push-after-crash reconciliation without duplicate push, and preservation of a
+pre-staged later group. The domain receipt contains approval/manifest/execution
+and remote-ref commitments but no path, message, URL, credential, or file body.

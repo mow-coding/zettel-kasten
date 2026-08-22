@@ -6,14 +6,15 @@ Updated: 2026-08-21
 Philosophy clarified: 2026-07-15
 Harness compatibility clarified: 2026-07-16
 
-Current v0.4.2 delta: `git-backup-plan` and
-`git-backup-reconcile-plan` add bounded, content-free, CLI-only Git inspection
-and remote-ref reconciliation. They never add, commit, fetch, pull, push,
-delete, or change a ref; both keep `ready_for_write: false`,
-`writer_available: false`, and `would_change: []`. A matching `ls-remote`
-result is Git-transport evidence, not provider confirmation. v0.4.2 addresses
-only the read-only planning foundation of Letter 139, not its requested
-end-to-end backup writer.
+Current v0.4.3 candidate delta: `git-backup-plan` remains bounded and read-only.
+The existing `git-backup-reconcile-plan` family adds exact private all-change
+group validation, one native manifest-bound approval, literal bounded commits,
+an authenticated ordinary non-force push, exact ref requery, resumable
+checkpoints, and content-free completion receipts. It never pulls, fetches,
+merges, rebases, resets, cleans, deletes, force-pushes, echoes a remote URL or
+credential, or exposes an MCP writer. Plain dry-run remains write-free, and a
+matching `ls-remote` result remains Git-transport evidence rather than account,
+branch-policy, or provider audit-log proof.
 
 Previous v0.4.1 write boundary: `zettel-objet-link --approve` has an
 operation-specific local exact-human binding. Its matching revert, every Objet

@@ -403,6 +403,7 @@ from . import (
     completion_workflows,
     duplicate_object_reconciliation,
     git_backup_plan as git_backup_planning,
+    git_backup_writer,
     human_artifact_registry,
     legacy_coordination_cleanup as legacy_cleanup,
     operation_control,
@@ -6501,6 +6502,7 @@ def _git_backup_cli_error(
     reason_code: str,
     dry_run: bool,
     error_class: str = "precondition",
+    effects_state: str = "none",
 ) -> int:
     """Print one fixed failure without reflecting private Git inputs."""
 
@@ -6516,7 +6518,9 @@ def _git_backup_cli_error(
             "error_class": error_class,
             "reason_codes": [reason_code],
             "exit_code": 1,
-            "effects_state": "none",
+            "effects_state": (
+                effects_state if effects_state in {"none", "unknown"} else "unknown"
+            ),
             "would_change": [],
             "files_written": [],
             "private_values_echoed": False,
@@ -6532,14 +6536,22 @@ def command_git_backup_plan(args: argparse.Namespace) -> int:
             reason_code="git_backup_plan_dry_run_required",
             dry_run=False,
         )
+    progress = _git_backup_progress_printer if args.progress else None
     try:
+        plan_options: dict[str, Any] = {
+            "remote_name": args.remote,
+            "branch": args.branch,
+            "max_changes": args.max_changes,
+            "max_changed_bytes": args.max_changed_bytes,
+            "dry_run": True,
+        }
+        if args.credential_mode != "anonymous":
+            plan_options["credential_mode"] = args.credential_mode
+        if progress is not None:
+            plan_options["progress_hook"] = progress
         result = git_backup_planning.git_backup_plan(
             Path(args.archive_root),
-            remote_name=args.remote,
-            branch=args.branch,
-            max_changes=args.max_changes,
-            max_changed_bytes=args.max_changed_bytes,
-            dry_run=True,
+            **plan_options,
         )
         if not isinstance(result, dict):
             raise TypeError("git_backup_plan_result_invalid")
@@ -6554,36 +6566,139 @@ def command_git_backup_plan(args: argparse.Namespace) -> int:
     return 0 if result.get("ok") is True else 1
 
 
+def _git_backup_progress_printer(event: Any) -> None:
+    if isinstance(event, Mapping):
+        document = dict(event)
+    elif callable(getattr(event, "public_document", None)):
+        document = {
+            "schema": "wom-kit/git-backup-progress/v1",
+            **event.public_document(),
+        }
+    else:
+        return
+    print(
+        json.dumps(document, ensure_ascii=True, sort_keys=True),
+        file=sys.stderr,
+        flush=True,
+    )
+
+
 def command_git_backup_reconcile_plan(args: argparse.Namespace) -> int:
-    if not args.dry_run:
+    resume_requested = bool(args.resume_approval_id)
+    mode_count = int(bool(args.dry_run)) + int(bool(args.approve)) + int(
+        resume_requested
+    )
+    if mode_count != 1:
         return _git_backup_cli_error(
             command="git-backup-reconcile-plan",
-            reason_code="git_backup_reconcile_plan_dry_run_required",
+            reason_code=(
+                "git_backup_reconcile_plan_dry_run_required"
+                if mode_count == 0
+                else "git_backup_reconcile_plan_mode_required"
+            ),
             dry_run=False,
         )
-    try:
-        result = git_backup_planning.git_backup_reconcile_plan(
-            Path(args.archive_root),
-            expected_plan_sha256=args.expected_plan_sha256,
-            expected_hidden_effect_set_sha256=(
-                args.expected_hidden_effect_set_sha256
-            ),
-            expected_local_head_oid=args.expected_local_head_oid,
-            expected_remote_oid=args.expected_remote_oid,
-            remote_name=args.remote,
-            branch=args.branch,
-            max_changes=args.max_changes,
-            max_changed_bytes=args.max_changed_bytes,
-            dry_run=True,
-        )
-        if not isinstance(result, dict):
-            raise TypeError("git_backup_reconcile_plan_result_invalid")
-    except Exception:  # noqa: BLE001 - private Git errors must never cross the CLI.
+    if (args.approve or resume_requested) and not str(args.reviewed_by or "").strip():
         return _git_backup_cli_error(
             command="git-backup-reconcile-plan",
-            reason_code="git_backup_reconcile_plan_inspection_unavailable",
-            dry_run=True,
-            error_class="inspection",
+            reason_code="git_backup_reviewer_required",
+            dry_run=False,
+        )
+    if args.approve and not args.selection_manifest:
+        return _git_backup_cli_error(
+            command="git-backup-reconcile-plan",
+            reason_code="git_backup_selection_manifest_required",
+            dry_run=False,
+        )
+    if resume_requested and not args.expected_manifest_sha256:
+        return _git_backup_cli_error(
+            command="git-backup-reconcile-plan",
+            reason_code="git_backup_resume_manifest_required",
+            dry_run=False,
+        )
+
+    progress = _git_backup_progress_printer if args.progress else None
+    approval_workflow_started = False
+
+    try:
+        if resume_requested:
+            prepared = git_backup_writer.load_private_git_backup_bundle(
+                Path(args.archive_root),
+                manifest_sha256=args.expected_manifest_sha256,
+            )
+            if prepared.expected_plan_sha256 != args.expected_plan_sha256:
+                raise git_backup_writer.GitBackupWriterError(
+                    "git_backup_selection_plan_mismatch"
+                )
+            approval_workflow_started = True
+            result = git_backup_writer.resume_git_backup(
+                prepared,
+                reviewer_claim=args.reviewed_by,
+                approval_id=args.resume_approval_id,
+                progress_hook=progress,
+            )
+        elif args.selection_manifest:
+            prepared = git_backup_writer.prepare_git_backup(
+                Path(args.archive_root),
+                expected_plan_sha256=args.expected_plan_sha256,
+                selection_manifest_path=Path(args.selection_manifest),
+                remote_name=args.remote,
+                branch=args.branch,
+                credential_mode=args.credential_mode,
+                max_changes=args.max_changes,
+                max_changed_bytes=args.max_changed_bytes,
+                progress_hook=progress,
+            )
+            if args.dry_run:
+                result = prepared.public_plan()
+            else:
+                approval_workflow_started = True
+                result = git_backup_writer.execute_git_backup(
+                    prepared,
+                    selection_manifest_path=Path(args.selection_manifest),
+                    reviewer_claim=args.reviewed_by,
+                    progress_hook=progress,
+                )
+        else:
+            reconcile_options: dict[str, Any] = {
+                "expected_plan_sha256": args.expected_plan_sha256,
+                "expected_hidden_effect_set_sha256": (
+                    args.expected_hidden_effect_set_sha256
+                ),
+                "expected_local_head_oid": args.expected_local_head_oid,
+                "expected_remote_oid": args.expected_remote_oid,
+                "remote_name": args.remote,
+                "branch": args.branch,
+                "max_changes": args.max_changes,
+                "max_changed_bytes": args.max_changed_bytes,
+                "dry_run": True,
+            }
+            if args.credential_mode != "anonymous":
+                reconcile_options["credential_mode"] = args.credential_mode
+            if progress is not None:
+                reconcile_options["progress_hook"] = progress
+            result = git_backup_planning.git_backup_reconcile_plan(
+                Path(args.archive_root),
+                **reconcile_options,
+            )
+        if not isinstance(result, dict):
+            raise TypeError("git_backup_reconcile_plan_result_invalid")
+    except Exception as exc:  # noqa: BLE001 - private Git errors never cross CLI.
+        reason_code = getattr(exc, "code", None)
+        if type(reason_code) is not str or re.fullmatch(
+            r"[a-z][a-z0-9_]{0,95}", reason_code
+        ) is None:
+            reason_code = "git_backup_reconcile_plan_inspection_unavailable"
+        return _git_backup_cli_error(
+            command="git-backup-reconcile-plan",
+            reason_code=reason_code,
+            dry_run=bool(args.dry_run),
+            error_class=(
+                "execution"
+                if approval_workflow_started
+                else ("inspection" if args.dry_run else "precondition")
+            ),
+            effects_state=("unknown" if approval_workflow_started else "none"),
         )
     print_json(result)
     return 0 if result.get("ok") is True else 1
@@ -27128,6 +27243,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="Optional target branch name; omitted means use the current symbolic branch.",
     )
     git_backup.add_argument(
+        "--credential-mode",
+        choices=git_backup_planning.GIT_BACKUP_CREDENTIAL_MODES,
+        default="anonymous",
+        help=(
+            "Remote observation mode. 'stored' permits an existing non-interactive "
+            "credential helper without echoing credentials."
+        ),
+    )
+    git_backup.add_argument(
         "--max-changes",
         type=int,
         default=git_backup_planning.GIT_BACKUP_PLAN_DEFAULT_MAX_CHANGES,
@@ -27145,6 +27269,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Required. Inspect and query only the selected exact ref; write nothing.",
     )
     git_backup.add_argument(
+        "--progress",
+        action="store_true",
+        help="Stream content-free stages immediately and heartbeats at most 10 seconds apart.",
+    )
+    git_backup.add_argument(
         "--format",
         choices=["json"],
         default="json",
@@ -27155,12 +27284,13 @@ def build_parser() -> argparse.ArgumentParser:
     git_backup_reconcile = subcommands.add_parser(
         "git-backup-reconcile-plan",
         help=(
-            "Re-observe an exact reviewed Git backup plan without commit, push, "
-            "fetch, checkout, merge, reset, delete, or any other writer."
+            "Re-observe a Git backup plan or apply/resume one exact private "
+            "selection through native approval."
         ),
         description=(
-            "Re-observe an exact reviewed Git backup plan without commit, push, "
-            "fetch, checkout, merge, reset, delete, or any other writer."
+            "Dry-run re-observes without writes. --approve commits only the "
+            "explicit bounded groups, performs a non-force fast-forward push, "
+            "and independently requeries the exact remote ref."
         ),
     )
     git_backup_reconcile.add_argument(
@@ -27194,6 +27324,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="Optional target branch name; omitted means use the current symbolic branch.",
     )
     git_backup_reconcile.add_argument(
+        "--credential-mode",
+        choices=git_backup_planning.GIT_BACKUP_CREDENTIAL_MODES,
+        default="anonymous",
+        help=(
+            "Remote mode. Exact apply requires 'stored' and reuses existing "
+            "non-interactive credentials without exposing values."
+        ),
+    )
+    git_backup_reconcile.add_argument(
         "--max-changes",
         type=int,
         default=git_backup_planning.GIT_BACKUP_PLAN_DEFAULT_MAX_CHANGES,
@@ -27208,7 +27347,36 @@ def build_parser() -> argparse.ArgumentParser:
     git_backup_reconcile.add_argument(
         "--dry-run",
         action="store_true",
-        help="Required. Re-observe only; write nothing.",
+        help="Re-observe or validate an exact private selection; write nothing.",
+    )
+    git_backup_reconcile.add_argument(
+        "--selection-manifest",
+        help=(
+            "Private JSON manifest assigning every ordinal change_ref to exactly "
+            "one commit group; never echoed."
+        ),
+    )
+    git_backup_reconcile.add_argument(
+        "--approve",
+        action="store_true",
+        help="Request native exact-human approval, then commit, push, and requery.",
+    )
+    git_backup_reconcile.add_argument(
+        "--reviewed-by",
+        help="Safe reviewer claim required for approve or resume.",
+    )
+    git_backup_reconcile.add_argument(
+        "--resume-approval-id",
+        help="Resume one existing authenticated started approval without a new prompt.",
+    )
+    git_backup_reconcile.add_argument(
+        "--expected-manifest-sha256",
+        help="Exact manifest SHA-256 required to load a private resume bundle.",
+    )
+    git_backup_reconcile.add_argument(
+        "--progress",
+        action="store_true",
+        help="Stream content-free stages immediately and heartbeats at most 10 seconds apart.",
     )
     git_backup_reconcile.add_argument(
         "--format",

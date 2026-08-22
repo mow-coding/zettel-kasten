@@ -6,14 +6,15 @@
 철학 갱신: 2026-07-15
 하네스 호환 경계 갱신: 2026-07-16
 
-현재 v0.4.2 변경점: `git-backup-plan`과
-`git-backup-reconcile-plan`이 제한된 content-free CLI 전용 Git 점검과 remote
-ref 재조정 계획을 제공합니다. add, commit, fetch, pull, push, delete, ref
-변경은 전혀 하지 않으며 두 명령은 항상 `ready_for_write: false`,
-`writer_available: false`, `would_change: []`를 유지합니다. 일치한
-`ls-remote` 결과는 Git transport 근거일 뿐 provider 확인이 아닙니다.
-v0.4.2는 Letter 139의 read-only 계획 기반만 다루며, 요청된 end-to-end 백업
-writer를 구현하지 않습니다.
+현재 v0.4.3 후보 변경점: `git-backup-plan`은 제한된 read-only 점검으로
+유지됩니다. 기존 `git-backup-reconcile-plan` 명령군에는 모든 변경을 정확히
+한 번 분류하는 비공개 그룹 manifest 검증, manifest SHA-256에 묶인 네이티브
+사람 승인, literal 경로 상한을 지키는 commit, 저장된 비대화형 인증을 쓰는
+일반 non-force push, 정확한 remote ref 재조회, checkpoint resume, content-free
+완료 receipt가 추가됩니다. pull, fetch, merge, rebase, reset, clean, delete,
+force-push, remote URL/credential 노출, MCP writer는 없습니다. dry-run은 계속
+아무것도 쓰지 않으며, 일치한 `ls-remote` 결과는 계정 소유권이나 branch
+policy/provider audit log가 아니라 Git transport 근거입니다.
 
 이전 v0.4.1 쓰기 경계: `zettel-objet-link --approve` 하나에는 작업 전용 로컬
 exact-human binding이 있습니다. 대응하는 revert, 모든 Objet capture 쓰기,

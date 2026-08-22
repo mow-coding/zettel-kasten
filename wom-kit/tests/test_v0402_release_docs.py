@@ -75,7 +75,7 @@ class V0402ReleaseDocsTests(unittest.TestCase):
                 self.assertEqual(row["bytes"], len(source_bytes))
                 self.assertEqual(row["sha256"], hashlib.sha256(source_bytes).hexdigest())
 
-    def test_two_planners_are_cli_only_read_only_surfaces(self) -> None:
+    def test_plan_stays_read_only_and_reconcile_family_hosts_exact_writer(self) -> None:
         parser = archive_cli.build_parser()
         subcommands = next(
             action
@@ -91,7 +91,12 @@ class V0402ReleaseDocsTests(unittest.TestCase):
                     for option in action.option_strings
                 }
                 self.assertIn("--dry-run", options)
-                self.assertNotIn("--approve", options)
+                if command == "git-backup-plan":
+                    self.assertNotIn("--approve", options)
+                else:
+                    self.assertIn("--approve", options)
+                    self.assertIn("--selection-manifest", options)
+                    self.assertIn("--resume-approval-id", options)
 
         mcp_source = (KIT / "src" / "wom_kit" / "mcp_server.py").read_text(
             encoding="utf-8"
@@ -106,9 +111,9 @@ class V0402ReleaseDocsTests(unittest.TestCase):
         self.assertEqual(counts["canonical_executable_command_count"], 315)
         self.assertEqual(counts["alias_invocation_path_count"], 259)
         self.assertEqual(counts["invocation_path_count"], 574)
-        self.assertEqual(counts["approval_available_command_count"], 35)
+        self.assertEqual(counts["approval_available_command_count"], 36)
         self.assertEqual(counts["approval_fixed_closed_command_count"], 78)
-        self.assertEqual(counts["approval_not_exposed_command_count"], 202)
+        self.assertEqual(counts["approval_not_exposed_command_count"], 201)
         self.assertEqual(counts["dry_run_exposed_command_count"], 270)
 
     def test_public_contract_is_narrow_and_letter139_remains_partial(self) -> None:
@@ -139,7 +144,7 @@ class V0402ReleaseDocsTests(unittest.TestCase):
         ):
             with self.subTest(token=token):
                 self.assertIn(token, combined)
-        for path in (RELEASE_PATH, PLAN_GUIDE, DECISION_PATH):
+        for path in (RELEASE_PATH, DECISION_PATH):
             normalized = " ".join(path.read_text(encoding="utf-8").split()).lower()
             with self.subTest(path=path):
                 self.assertIn("read-only", normalized)
@@ -149,6 +154,15 @@ class V0402ReleaseDocsTests(unittest.TestCase):
                     or "partial response" in normalized
                     or "only the read-only" in normalized
                 )
+        current_guide = " ".join(PLAN_GUIDE.read_text(encoding="utf-8").split()).lower()
+        for token in (
+            "private exact selection",
+            "git add -- <paths>",
+            "non-force push",
+            "resume",
+            "24 kib",
+        ):
+            self.assertIn(token, current_guide)
 
         public_map_text = public_map.read_text(encoding="utf-8")
         self.assertIn("git-backup-plan.md", public_map_text)

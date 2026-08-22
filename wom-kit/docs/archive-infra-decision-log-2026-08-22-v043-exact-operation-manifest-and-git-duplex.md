@@ -63,3 +63,30 @@ Large bidirectional Git requests no longer depend on pipe-buffer size or on the
 platform scheduler draining one side first. Version and project-source checks
 continue to use the same capped helper, so the concurrency fix applies there
 without adding a new command surface.
+
+## Letter 139 exact Git writer decision
+
+- Extend `git-backup-reconcile-plan`; add no top-level command and no MCP
+  writer.
+- Require a private exact manifest that classifies every observed change ref
+  once and only once into explicit commit groups.
+- Bind group source, paths, commit message, initial HEAD, approved HTTPS URL,
+  initial remote object id, and target ref through `ExactOperationManifest`.
+- Reuse one native approval and the authenticated same-claim resume path.
+- Prove exact selected bytes through an isolated index, then use only literal
+  `git add -- <paths>` and `git commit --only`; never use `add -A`, reset, or a
+  temporary commit that bypasses the user's index.
+- Preserve stage entries outside the current group and independently verify
+  each created commit.
+- Push the exact private URL through existing non-interactive credentials,
+  never force, and require an exact remote-ref requery to equal the terminal
+  commit. Any remote advance blocks.
+- Cap each group's literal Windows path argv at 24 KiB beneath the 32,767
+  character platform ceiling. Large selections use multiple complete explicit
+  groups; an oversized group blocks before approval.
+- Inventory historical receipt metadata once and do not hash every unchanged
+  receipt body. Use bounded Git projections instead of recursive archive-wide
+  attribute walks, and publish immediate status plus bounded heartbeats.
+- Treat an exact staged group, verified commit, or already-matching remote ref
+  as resumable evidence only when the authenticated checkpoint and original
+  started claim also match. Terminal replay and drift remain closed.
