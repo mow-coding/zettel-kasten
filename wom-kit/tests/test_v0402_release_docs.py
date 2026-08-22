@@ -111,8 +111,8 @@ class V0402ReleaseDocsTests(unittest.TestCase):
         self.assertEqual(counts["canonical_executable_command_count"], 315)
         self.assertEqual(counts["alias_invocation_path_count"], 259)
         self.assertEqual(counts["invocation_path_count"], 574)
-        self.assertEqual(counts["approval_available_command_count"], 36)
-        self.assertEqual(counts["approval_fixed_closed_command_count"], 78)
+        self.assertEqual(counts["approval_available_command_count"], 37)
+        self.assertEqual(counts["approval_fixed_closed_command_count"], 77)
         self.assertEqual(counts["approval_not_exposed_command_count"], 201)
         self.assertEqual(counts["dry_run_exposed_command_count"], 270)
 
