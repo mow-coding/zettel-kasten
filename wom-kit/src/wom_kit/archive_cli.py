@@ -16804,6 +16804,101 @@ def command_zettel_objet_link(args: argparse.Namespace) -> int:
             ),
             exit_code=2,
         )
+    if args.capture_receipt:
+        mixed_single_arguments = any(
+            (
+                args.zettel_id,
+                args.path,
+                args.object_id,
+                args.label,
+                args.expected_plan_sha256,
+                args.reviewed_by,
+            )
+        )
+        if mixed_single_arguments:
+            return _recognized_command_cli_error(
+                args,
+                command="zettel-objet-link",
+                lifecycle_action="zettel_objet_link_recovery_plan",
+                error_class="usage",
+                reason_code="zettel_objet_link_recovery_mode_mixed",
+                text_message=(
+                    "zettel-objet-link --capture-receipt cannot be combined "
+                    "with single-link target, object, label, or approval arguments."
+                ),
+                exit_code=2,
+            )
+        if args.approve:
+            return _recognized_command_cli_error(
+                args,
+                command="zettel-objet-link",
+                lifecycle_action="zettel_objet_link_recovery_apply",
+                error_class="precondition",
+                reason_code=(
+                    "compound_exact_human_approval_binding_required"
+                ),
+                text_message=(
+                    "zettel-objet-link receipt recovery is read-only until its "
+                    "ExactOperationManifest writer is independently reviewed."
+                ),
+            )
+        try:
+            from .local_objet_link_recovery import (
+                zettel_objet_link_recovery_plan,
+            )
+
+            reporter = CommandProgressReporter(
+                bool(getattr(args, "progress", False)),
+                label="zettel-objet-link-recovery",
+                stage_order=(
+                    "capture-receipt",
+                    "object-manifest",
+                    "canonical-index",
+                    "classification",
+                ),
+            )
+            try:
+                result = zettel_objet_link_recovery_plan(
+                    Path(args.archive_root),
+                    capture_receipt=args.capture_receipt,
+                    role=args.role or "source_document",
+                    dry_run=True,
+                    max_items=args.max_items,
+                    progress_callback=reporter.progress,
+                )
+            finally:
+                reporter.close()
+        except (OSError, TypeError, ValueError):
+            return _recognized_command_cli_error(
+                args,
+                command="zettel-objet-link",
+                lifecycle_action="zettel_objet_link_recovery_plan",
+                error_class="precondition",
+                reason_code="zettel_objet_link_recovery_plan_failed",
+                text_message=(
+                    "zettel-objet-link receipt recovery failed safely; no "
+                    "private values were echoed and no archive files were written."
+                ),
+            )
+        _print_zettel_objet_link_result(result, args.format)
+        return 0 if result.get("ok") else 1
+    if (
+        bool(args.zettel_id) == bool(args.path)
+        or not str(args.object_id or "").strip()
+        or not str(args.role or "").strip()
+    ):
+        return _recognized_command_cli_error(
+            args,
+            command="zettel-objet-link",
+            lifecycle_action="zettel_objet_link",
+            error_class="usage",
+            reason_code="zettel_objet_link_single_target_required",
+            text_message=(
+                "zettel-objet-link single mode requires exactly one of "
+                "--zettel-id/--path plus --object-id and --role."
+            ),
+            exit_code=2,
+        )
     if args.approve and not str(args.reviewed_by or "").strip():
         return _recognized_command_cli_error(
             args,
@@ -32629,18 +32724,19 @@ def build_parser() -> argparse.ArgumentParser:
         help="Preview or approve one structured frontmatter.assets link to a manifested Objet.",
     )
     zettel_objet_link.add_argument("archive_root", help="Archive root to update.")
-    zettel_objet_target = zettel_objet_link.add_mutually_exclusive_group(required=True)
+    zettel_objet_target = zettel_objet_link.add_mutually_exclusive_group()
     zettel_objet_target.add_argument("--zettel-id", help="Target zettel id.")
     zettel_objet_target.add_argument("--path", help="Archive-relative inbox/ or zettels/ path.")
     zettel_objet_link.add_argument(
         "--object-id",
-        required=True,
         help="Manifested sha256:<64 hex> Objet identity.",
     )
     zettel_objet_link.add_argument(
         "--role",
-        required=True,
-        help="Stable lowercase role such as source_document or evidence.",
+        help=(
+            "Stable lowercase role such as source_document or evidence; "
+            "receipt recovery defaults to source_document."
+        ),
     )
     zettel_objet_link.add_argument(
         "--label",
@@ -32658,6 +32754,27 @@ def build_parser() -> argparse.ArgumentParser:
     )
     zettel_objet_link.add_argument("--expected-plan-sha256")
     zettel_objet_link.add_argument("--reviewed-by")
+    zettel_objet_link.add_argument(
+        "--capture-receipt",
+        help=(
+            "Read-only batch recovery mode using one archive-relative "
+            "receipts/objet-capture/*.json authority."
+        ),
+    )
+    zettel_objet_link.add_argument(
+        "--max-items",
+        type=int,
+        default=10_000,
+        help="Receipt recovery safety bound (1-10000).",
+    )
+    zettel_objet_link.add_argument(
+        "--progress",
+        action="store_true",
+        help=(
+            "In receipt recovery mode, print content-free stages immediately "
+            "and heartbeats no more than 10 seconds apart."
+        ),
+    )
     zettel_objet_link.add_argument("--format", choices=["text", "json"], default="text")
     zettel_objet_link.set_defaults(func=command_zettel_objet_link)
 
