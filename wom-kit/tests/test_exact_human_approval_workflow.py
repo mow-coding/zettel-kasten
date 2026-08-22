@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, Callable
 
@@ -14,9 +15,11 @@ from wom_kit.exact_human_approval_windows import (
     ExactHumanApprovalContext,
     ExactHumanApprovalOperation,
 )
+from wom_kit import exact_human_approval_workflow as workflow_module
 from wom_kit.exact_human_approval_workflow import (
     ExactHumanApprovalWorkflowError,
     _execute_exact_human_approved_write_core as execute_exact_human_approved_write,
+    _resume_exact_human_approved_write_core as resume_exact_human_approved_write,
 )
 
 
@@ -72,6 +75,15 @@ class ExactHumanApprovalWorkflowTests(unittest.TestCase):
 
     def tearDown(self) -> None:
         self.temporary.cleanup()
+
+    def test_generic_resume_writer_injection_is_not_public(self) -> None:
+        self.assertNotIn(
+            "resume_exact_human_approved_write",
+            workflow_module.__all__,
+        )
+        self.assertFalse(
+            hasattr(workflow_module, "resume_exact_human_approved_write")
+        )
 
     def test_cancel_touches_no_key_claim_or_writer(self) -> None:
         native = _Native((2, False))
@@ -242,6 +254,143 @@ class ExactHumanApprovalWorkflowTests(unittest.TestCase):
         self.assertEqual(captured.exception.code, "exact_human_approval_state_unknown")
         claim_path = next((self.root / CLAIMS_RELATIVE_ROOT).glob("*.json"))
         self.assertIn('"status":"started"', claim_path.read_text(encoding="utf-8"))
+
+    def test_resume_reauthenticates_same_started_claim_without_new_prompt(self) -> None:
+        initial_provider = _KeyProvider()
+        started = execute_exact_human_approved_write(
+            self.root,
+            self.context,
+            lambda _claim: {"ok": False, "reason_code": "process_interrupted"},
+            native=_Native((APPROVE_BUTTON_ID, True)),
+            key_provider=initial_provider,
+        )
+        approval_id = started["exact_human_approval"]["approval_id"]
+        resumed_provider = _KeyProvider()
+        guard_calls = 0
+        writer_calls = 0
+
+        def checkpoint_guard() -> bool:
+            nonlocal guard_calls
+            guard_calls += 1
+            return True
+
+        def writer(claim):
+            nonlocal writer_calls
+            writer_calls += 1
+            self.assertEqual(
+                claim.assert_ready_for_context(self.context)["approval_id"],
+                approval_id,
+            )
+            return {"ok": True, "lifecycle_action": "resumed_test_write"}
+
+        resumed = resume_exact_human_approved_write(
+            self.root,
+            self.context,
+            approval_id,
+            checkpoint_guard,
+            writer,
+            key_provider=resumed_provider,
+        )
+
+        self.assertEqual(initial_provider.create_if_missing, [True])
+        self.assertEqual(resumed_provider.create_if_missing, [False])
+        self.assertEqual(guard_calls, 1)
+        self.assertEqual(writer_calls, 1)
+        self.assertEqual(resumed["exact_human_approval"]["status"], "succeeded")
+
+        with self.assertRaises(ExactHumanApprovalWorkflowError) as terminal:
+            resume_exact_human_approved_write(
+                self.root,
+                self.context,
+                approval_id,
+                lambda: True,
+                writer,
+                key_provider=_KeyProvider(),
+            )
+        self.assertEqual(
+            terminal.exception.code,
+            "exact_human_approval_resume_claim_invalid",
+        )
+        self.assertEqual(writer_calls, 1)
+
+    def test_resume_blocks_missing_checkpoint_and_context_drift(self) -> None:
+        started = execute_exact_human_approved_write(
+            self.root,
+            self.context,
+            lambda _claim: {"ok": False, "reason_code": "process_interrupted"},
+            native=_Native((APPROVE_BUTTON_ID, True)),
+            key_provider=_KeyProvider(),
+        )
+        approval_id = started["exact_human_approval"]["approval_id"]
+        writer_calls = 0
+
+        def writer(_claim):
+            nonlocal writer_calls
+            writer_calls += 1
+            return {"ok": True}
+
+        with self.assertRaises(ExactHumanApprovalWorkflowError) as missing:
+            resume_exact_human_approved_write(
+                self.root,
+                self.context,
+                approval_id,
+                lambda: False,
+                writer,
+                key_provider=_KeyProvider(),
+            )
+        self.assertEqual(
+            missing.exception.code,
+            "exact_human_approval_resume_checkpoint_invalid",
+        )
+        self.assertEqual(writer_calls, 0)
+        claim_path = next((self.root / CLAIMS_RELATIVE_ROOT).glob("*.json"))
+        self.assertIn('"status":"started"', claim_path.read_text(encoding="utf-8"))
+
+        drifted_context = replace(
+            self.context,
+            plan_sha256="sha256:" + "c" * 64,
+        )
+        with self.assertRaises(ExactHumanApprovalWorkflowError) as drifted:
+            resume_exact_human_approved_write(
+                self.root,
+                drifted_context,
+                approval_id,
+                lambda: True,
+                writer,
+                key_provider=_KeyProvider(),
+            )
+        self.assertEqual(
+            drifted.exception.code,
+            "exact_human_approval_resume_claim_invalid",
+        )
+        self.assertEqual(writer_calls, 0)
+
+    def test_resume_blocks_tampered_authenticated_claim(self) -> None:
+        started = execute_exact_human_approved_write(
+            self.root,
+            self.context,
+            lambda _claim: {"ok": False, "reason_code": "process_interrupted"},
+            native=_Native((APPROVE_BUTTON_ID, True)),
+            key_provider=_KeyProvider(),
+        )
+        approval_id = started["exact_human_approval"]["approval_id"]
+        claim_path = next((self.root / CLAIMS_RELATIVE_ROOT).glob("*.json"))
+        raw = claim_path.read_bytes()
+        claim_path.write_bytes(raw.replace(b'"started"', b'"failed"', 1))
+
+        with self.assertRaises(ExactHumanApprovalWorkflowError) as tampered:
+            resume_exact_human_approved_write(
+                self.root,
+                self.context,
+                approval_id,
+                lambda: True,
+                lambda _claim: {"ok": True},
+                key_provider=_KeyProvider(),
+            )
+        self.assertEqual(
+            tampered.exception.code,
+            "exact_human_approval_resume_claim_invalid",
+        )
 
 
 if __name__ == "__main__":

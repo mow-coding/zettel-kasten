@@ -1160,6 +1160,89 @@ def _claim_exact_human_approval_core(
         raise
 
 
+def _rehydrate_exact_human_approval_core(
+    archive_root: Path | str,
+    context: ExactHumanApprovalContext,
+    approval_id: str,
+    receipt_authentication_key: bytes | bytearray | memoryview,
+    *,
+    clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
+    bound_archive_root: Path | None = None,
+    claim_parent_binding: dict[str, Any] | None = None,
+) -> _ClaimedExactHumanApproval:
+    """Reauthenticate one existing started claim for its exact same context.
+
+    This private core never displays or synthesizes a second approval.  It can
+    only reconstruct the in-process capability from the fixed approval id,
+    archive key, authenticated claim bytes, and byte-identical context.
+    """
+
+    root, archive_id = _archive_identity(archive_root)
+    if (
+        type(context) is not ExactHumanApprovalContext
+        or type(approval_id) is not str
+        or _APPROVAL_ID_RE.fullmatch(approval_id) is None
+    ):
+        raise _fail("exact_human_approval_binding_mismatch")
+    if not hmac.compare_digest(
+        context.archive_identity_sha256,
+        exact_human_approval_archive_identity_sha256(archive_id),
+    ):
+        raise _fail("exact_human_approval_binding_mismatch")
+    key = _validated_key(receipt_authentication_key)
+    try:
+        if bound_archive_root is not None and claim_parent_binding is not None:
+            claims_root = root.joinpath(*Path(CLAIMS_RELATIVE_ROOT).parts)
+            if (
+                root != bound_archive_root
+                or claim_parent_binding.get("path") != claims_root
+            ):
+                raise _fail("exact_human_approval_claim_path_unsafe")
+        elif bound_archive_root is not None or claim_parent_binding is not None:
+            raise _fail("exact_human_approval_claim_path_unsafe")
+        else:
+            claims_root = _claims_root(root, create=False)
+        document = _read_claim(
+            claims_root / f"{approval_id}.json",
+            archive_id=archive_id,
+            key=key,
+            bound_archive_root=bound_archive_root,
+            claim_parent_binding=claim_parent_binding,
+        )
+        expected_context = _context_document(context)
+        expected_context_sha256 = exact_human_approval_context_sha256(context)
+        if not (
+            document["status"] == "started"
+            and hmac.compare_digest(document["approval_id"], approval_id)
+            and hmac.compare_digest(
+                document["context_sha256"],
+                expected_context_sha256,
+            )
+            and hmac.compare_digest(
+                _canonical_bytes(document["context"]),
+                _canonical_bytes(expected_context),
+            )
+        ):
+            raise _fail("exact_human_approval_claim_state_invalid")
+        claim = _ClaimedExactHumanApproval(
+            _path=claims_root / f"{approval_id}.json",
+            _archive_id=archive_id,
+            _key=key,
+            _approval_id=approval_id,
+            _context_sha256=expected_context_sha256,
+            _authority_sha256=document["approval_authority_sha256"],
+            _clock=clock,
+            _bound_archive_root=bound_archive_root,
+            _claim_parent_binding=claim_parent_binding,
+        )
+        claim.assert_ready_for_context(context)
+        return claim
+    except BaseException:
+        for index in range(len(key)):
+            key[index] = 0
+        raise
+
+
 __all__ = [
     "APPROVAL_INTEGRITY_MAC_DOMAIN",
     "APPROVAL_INTEGRITY_MAC_MAX_PAYLOAD_BYTES",
