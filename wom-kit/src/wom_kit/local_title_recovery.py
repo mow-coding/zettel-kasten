@@ -1,0 +1,898 @@
+"""Field-local title receipt audit and source-id-bound title recovery plans."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import re
+import unicodedata
+from pathlib import Path, PurePosixPath
+from typing import Any, Callable
+
+from . import archive_services
+from .exact_operation_manifest import (
+    ExactFieldEffect,
+    ExactOperationEvidence,
+    ExactOperationItem,
+    ExactOperationManifest,
+    hash_field_value,
+)
+
+
+FIELD_AUDIT_SCHEMA = "wom-kit/zet-title-field-local-audit/v0.1"
+IDENTIFIER_RECOVERY_SCHEMA = (
+    "wom-kit/zet-identifier-title-recovery-plan/v0.1"
+)
+MAX_SOURCE_INDEX_BYTES = 64 * 1024 * 1024
+MAX_SOURCE_INDEX_ROWS = 10_000
+MAX_RETURNED_ITEMS = 10_000
+_RECEIPT_NAME_RE = re.compile(
+    r"[0-9a-f]{64}\.zet-title-remap\.json"
+)
+
+
+class _DuplicateKey(ValueError):
+    pass
+
+
+def _reject_duplicate_pairs(
+    pairs: list[tuple[str, Any]],
+) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise _DuplicateKey(key)
+        result[key] = value
+    return result
+
+
+def _reject_nonfinite(value: str) -> Any:
+    raise ValueError(value)
+
+
+def _canonical_bytes(value: Any) -> bytes:
+    return json.dumps(
+        value,
+        ensure_ascii=True,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("ascii")
+
+
+def _sha(value: bytes) -> str:
+    return "sha256:" + hashlib.sha256(value).hexdigest()
+
+
+def _title_sha(value: str) -> str:
+    return _sha(value.encode("utf-8"))
+
+
+def _safe_max_items(value: int) -> int:
+    return max(0, min(int(value), MAX_RETURNED_ITEMS))
+
+
+def _read_current_title(
+    root: Path,
+    relative: str,
+) -> tuple[bytes, str, dict[str, Any], str]:
+    path = archive_services.archive_internal_path(root, relative)
+    raw, reason = archive_services._bounded_stable_regular_file_read(
+        path,
+        max_bytes=archive_services.ZET_TITLE_REMAP_MAX_CANONICAL_FILE_BYTES,
+    )
+    if raw is None or reason is not None:
+        raise archive_services.ArchiveServiceError(
+            "title_field_current_canonical_invalid"
+        )
+    try:
+        text = raw.decode("utf-8-sig")
+        boundary = archive_services.parse_approval_zettel_content_boundary(text)
+    except (UnicodeError, RecursionError, ValueError) as exc:
+        raise archive_services.ArchiveServiceError(
+            "title_field_current_canonical_invalid"
+        ) from exc
+    frontmatter = boundary.get("frontmatter")
+    title = frontmatter.get("title") if isinstance(frontmatter, dict) else None
+    if (
+        boundary.get("state") == "blocked"
+        or not isinstance(frontmatter, dict)
+        or frontmatter.get("status") != "canonical"
+        or not isinstance(title, str)
+    ):
+        raise archive_services.ArchiveServiceError(
+            "title_field_current_canonical_invalid"
+        )
+    return raw, title, frontmatter, str(boundary.get("body") or "")
+
+
+def _read_before_title(
+    root: Path,
+    item: dict[str, Any],
+) -> tuple[bytes, str]:
+    snapshot = item.get("before_snapshot")
+    if not isinstance(snapshot, dict):
+        raise archive_services.ArchiveServiceError(
+            "title_field_snapshot_invalid"
+        )
+    logical_key = snapshot.get("logical_key")
+    if not isinstance(logical_key, str):
+        raise archive_services.ArchiveServiceError(
+            "title_field_snapshot_invalid"
+        )
+    path = root.joinpath(*PurePosixPath(logical_key).parts)
+    raw, reason = archive_services._bounded_stable_regular_file_read(
+        path,
+        max_bytes=archive_services.ZET_TITLE_REMAP_MAX_CANONICAL_FILE_BYTES,
+    )
+    if (
+        raw is None
+        or reason is not None
+        or _sha(raw) != item.get("before_file_sha256")
+    ):
+        raise archive_services.ArchiveServiceError(
+            "title_field_snapshot_invalid"
+        )
+    try:
+        text = raw.decode("utf-8-sig")
+        boundary = archive_services.parse_approval_zettel_content_boundary(text)
+    except (UnicodeError, RecursionError, ValueError) as exc:
+        raise archive_services.ArchiveServiceError(
+            "title_field_snapshot_invalid"
+        ) from exc
+    frontmatter = boundary.get("frontmatter")
+    title = frontmatter.get("title") if isinstance(frontmatter, dict) else None
+    if (
+        boundary.get("state") == "blocked"
+        or not isinstance(title, str)
+        or _title_sha(title) != item.get("before_title_sha256")
+    ):
+        raise archive_services.ArchiveServiceError(
+            "title_field_snapshot_invalid"
+        )
+    return raw, title
+
+
+def _receipt_paths(
+    root: Path,
+    receipt_path: str | None,
+) -> list[Path]:
+    receipt_root = archive_services.archive_internal_path(
+        root, archive_services.ZET_TITLE_REMAP_RECEIPTS_DIR
+    )
+    if receipt_path is None:
+        return sorted(receipt_root.glob("*.zet-title-remap.json"))
+    try:
+        normalized = archive_services.normalize_archive_relative_path(
+            receipt_path
+        )
+    except (archive_services.ArchivePathError, TypeError, ValueError) as exc:
+        raise archive_services.ArchiveServiceError(
+            "title_field_receipt_invalid"
+        ) from exc
+    if (
+        not normalized.startswith(
+            archive_services.ZET_TITLE_REMAP_RECEIPTS_DIR + "/"
+        )
+        or _RECEIPT_NAME_RE.fullmatch(PurePosixPath(normalized).name) is None
+    ):
+        raise archive_services.ArchiveServiceError(
+            "title_field_receipt_invalid"
+        )
+    return [archive_services.archive_internal_path(root, normalized)]
+
+
+def zet_title_field_local_recovery_plan(
+    archive_root: Path | str,
+    *,
+    receipt_path: str | None = None,
+    expected_receipt_sha256: str | None = None,
+    dry_run: bool = True,
+    max_items: int = 200,
+    build_revert_manifest: bool = False,
+    progress_callback: Callable[[str, str, int | None, int | None], None]
+    | None = None,
+) -> dict[str, Any]:
+    """Audit title fields independently of unrelated later body/file changes."""
+
+    root = archive_services.require_existing_archive_root(archive_root)
+    archive_id = archive_services.read_archive_id(root)
+    blockers: list[str] = []
+    warnings: list[str] = []
+    if not dry_run:
+        blockers.append("title_field_audit_dry_run_required")
+    try:
+        returned_limit = _safe_max_items(max_items)
+    except (TypeError, ValueError, OverflowError):
+        returned_limit = 200
+        blockers.append("title_field_audit_max_items_invalid")
+    if build_revert_manifest and receipt_path is None:
+        blockers.append("title_field_revert_receipt_required")
+    try:
+        paths = _receipt_paths(root, receipt_path)
+    except archive_services.ArchiveServiceError:
+        paths = []
+        blockers.append("title_field_receipt_invalid")
+    if not paths:
+        blockers.append("title_field_receipt_missing")
+
+    public_items: list[dict[str, Any]] = []
+    exact_items: list[ExactOperationItem] = []
+    receipt_refs: list[str] = []
+    receipt_item_count = 0
+    states = {
+        "applied_title_matches": 0,
+        "reverted_title_matches": 0,
+        "title_divergent": 0,
+        "missing_or_unreadable": 0,
+    }
+    receipt_documents: list[tuple[str, dict[str, Any]]] = []
+    try:
+        for path in paths:
+            raw, document, _proposal = (
+                archive_services.read_zet_title_remap_receipt_for_audit(
+                    root,
+                    path,
+                    archive_id=archive_id,
+                )
+            )
+            receipt_sha256 = _sha(raw)
+            receipt_refs.append(receipt_sha256)
+            receipt_documents.append((receipt_sha256, document))
+            receipt_item_count += len(document["items"])
+    except archive_services.ArchiveServiceError:
+        blockers.append("title_field_receipt_invalid")
+        receipt_documents = []
+    normalized_expected = str(expected_receipt_sha256 or "").strip().lower()
+    if expected_receipt_sha256 is not None:
+        if re.fullmatch(r"(?:sha256:)?[0-9a-f]{64}", normalized_expected) is None:
+            blockers.append("title_field_expected_receipt_sha256_invalid")
+        else:
+            if not normalized_expected.startswith("sha256:"):
+                normalized_expected = "sha256:" + normalized_expected
+            if len(receipt_refs) != 1 or receipt_refs[0] != normalized_expected:
+                blockers.append("title_field_receipt_sha256_mismatch")
+
+    if progress_callback is not None:
+        progress_callback("title-field-audit", "start", 0, receipt_item_count)
+    seen_targets: set[str] = set()
+    scanned = 0
+    for receipt_sha256, document in receipt_documents:
+        for item in document["items"]:
+            scanned += 1
+            blocker_codes: list[str] = []
+            current_raw: bytes | None = None
+            current_title: str | None = None
+            before_title: str | None = None
+            try:
+                current_raw, current_title, _frontmatter, _body = (
+                    _read_current_title(root, item["canonical_path"])
+                )
+                _snapshot_raw, before_title = _read_before_title(root, item)
+            except (archive_services.ArchiveServiceError, OSError, ValueError):
+                blocker_codes.append("title_field_evidence_unreadable")
+            target_ref = _sha(
+                _canonical_bytes(
+                    {
+                        "archive_id": archive_id,
+                        "zettel_id": item.get("zettel_id"),
+                        "canonical_path": item.get("canonical_path"),
+                    }
+                )
+            )
+            if target_ref in seen_targets:
+                blocker_codes.append("title_field_target_repeated")
+            seen_targets.add(target_ref)
+            if current_title is None or before_title is None:
+                state = "missing_or_unreadable"
+            elif _title_sha(current_title) == item.get("after_title_sha256"):
+                state = "applied_title_matches"
+            elif _title_sha(current_title) == item.get("before_title_sha256"):
+                state = "reverted_title_matches"
+            else:
+                state = "title_divergent"
+                blocker_codes.append("current_title_diverged")
+            states[state] += 1
+            item_ref = _sha(
+                _canonical_bytes(
+                    {
+                        "receipt_sha256": receipt_sha256,
+                        "row_index": item.get("row_index"),
+                        "target_ref": target_ref,
+                    }
+                )
+            )
+            public_items.append(
+                {
+                    "ordinal": len(public_items),
+                    "item_ref_sha256": item_ref,
+                    "state": state,
+                    "blocker_codes": blocker_codes,
+                }
+            )
+            if (
+                build_revert_manifest
+                and state == "applied_title_matches"
+                and not blocker_codes
+                and current_raw is not None
+                and before_title is not None
+            ):
+                exact_items.append(
+                    ExactOperationItem(
+                        ordinal=len(exact_items),
+                        item_id=f"item:{int(item['row_index']):06d}",
+                        target_kind="zettel",
+                        target_ref=target_ref,
+                        target_identity_sha256=_sha(current_raw),
+                        fields=(
+                            ExactFieldEffect(
+                                field_ref="frontmatter.title",
+                                pre_sha256=hash_field_value(
+                                    current_title.encode("utf-8")
+                                ),
+                                post_sha256=hash_field_value(
+                                    before_title.encode("utf-8")
+                                ),
+                                source_sha256=_sha(
+                                    _canonical_bytes(
+                                        {
+                                            "receipt_sha256": receipt_sha256,
+                                            "row_index": item.get("row_index"),
+                                            "before_title_sha256": item.get(
+                                                "before_title_sha256"
+                                            ),
+                                            "after_title_sha256": item.get(
+                                                "after_title_sha256"
+                                            ),
+                                        }
+                                    )
+                                ),
+                            ),
+                        ),
+                    )
+                )
+            if progress_callback is not None and (
+                scanned == 1
+                or scanned == receipt_item_count
+                or scanned % 100 == 0
+            ):
+                progress_callback(
+                    "title-field-audit", "scanned", scanned, receipt_item_count
+                )
+    if progress_callback is not None:
+        progress_callback(
+            "title-field-audit", "done", scanned, receipt_item_count
+        )
+
+    classified_count = sum(states.values())
+    if classified_count != receipt_item_count:
+        blockers.append("title_field_classification_incomplete")
+    if states["missing_or_unreadable"]:
+        blockers.append("title_field_evidence_unreadable")
+    digests = {
+        "title_receipt_set_sha256": _sha(
+            _canonical_bytes(sorted(receipt_refs))
+        ),
+        "title_receipt_item_set_sha256": _sha(
+            _canonical_bytes(
+                [item["item_ref_sha256"] for item in public_items]
+            )
+        ),
+        "title_field_classification_set_sha256": _sha(
+            _canonical_bytes(public_items)
+        ),
+        "applied_title_match_set_sha256": _sha(
+            _canonical_bytes(
+                [
+                    item["item_ref_sha256"]
+                    for item in public_items
+                    if item["state"] == "applied_title_matches"
+                ]
+            )
+        ),
+        "reverted_title_match_set_sha256": _sha(
+            _canonical_bytes(
+                [
+                    item["item_ref_sha256"]
+                    for item in public_items
+                    if item["state"] == "reverted_title_matches"
+                ]
+            )
+        ),
+        "title_divergent_set_sha256": _sha(
+            _canonical_bytes(
+                [
+                    item["item_ref_sha256"]
+                    for item in public_items
+                    if item["state"] == "title_divergent"
+                ]
+            )
+        ),
+        "title_missing_set_sha256": _sha(
+            _canonical_bytes(
+                [
+                    item["item_ref_sha256"]
+                    for item in public_items
+                    if item["state"] == "missing_or_unreadable"
+                ]
+            )
+        ),
+    }
+    counts = {
+        "title_receipt_count": len(receipt_refs),
+        "title_receipt_item_count": receipt_item_count,
+        "classified_title_item_count": classified_count,
+        **{f"{key}_count": value for key, value in states.items()},
+    }
+    operation_evidence = ExactOperationEvidence(
+        schema="wom-kit/zet-title-field-local-evidence/v1",
+        counts=tuple(sorted(counts.items())),
+        digests=tuple(sorted(digests.items())),
+    )
+    exact_manifest = None
+    if build_revert_manifest and exact_items and not blockers:
+        exact_manifest = ExactOperationManifest.build(
+            operation="zet_title_field_revert",
+            archive_identity_sha256=hash_field_value(
+                archive_id.encode("utf-8")
+            ),
+            items=exact_items,
+            operation_evidence=operation_evidence,
+        ).document()
+    returned_items = public_items[:returned_limit]
+    if len(returned_items) < len(public_items):
+        warnings.append("title_field_items_truncated")
+    return {
+        "ok": not blockers,
+        "schema": FIELD_AUDIT_SCHEMA,
+        "lifecycle_action": (
+            "zet_title_field_local_revert_plan"
+            if build_revert_manifest
+            else "zet_title_field_local_audit"
+        ),
+        "state": "blocked" if blockers else "classified",
+        "dry_run": True,
+        "summary": {
+            **counts,
+            **digests,
+            "operation_evidence_sha256": operation_evidence.evidence_sha256,
+            "exact_manifest_item_count": len(exact_items),
+            "returned_item_count": len(returned_items),
+            "truncated_item_count": len(public_items) - len(returned_items),
+        },
+        "items": returned_items,
+        "exact_operation_manifest": exact_manifest,
+        "blockers": archive_services.unique_preserve_order(blockers),
+        "warnings": archive_services.unique_preserve_order(warnings),
+        "would_change": (
+            ["frontmatter.title"] if exact_manifest is not None else []
+        ),
+        "privacy_guards": _privacy_guards(),
+    }
+
+
+def _normalize_title(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    text = " ".join(unicodedata.normalize("NFKC", value).split())
+    return text.casefold() or None
+
+
+def _first_body_paragraph(body: str) -> str | None:
+    for raw_line in body.splitlines():
+        line = raw_line.strip()
+        if not line or re.match(r"^#{1,6}\s+", line):
+            continue
+        return line
+    return None
+
+
+def _source_title_index(
+    source_mirror: Path | str,
+    *,
+    progress_callback: Callable[[str, str, int | None, int | None], None]
+    | None = None,
+) -> tuple[bytes, dict[str, dict[str, Any]], int]:
+    path = Path(source_mirror)
+    if path.name != "pages.markdown.jsonl":
+        raise archive_services.ArchiveServiceError(
+            "identifier_title_source_index_invalid"
+        )
+    raw, reason = archive_services._bounded_stable_regular_file_read(
+        path,
+        max_bytes=MAX_SOURCE_INDEX_BYTES,
+    )
+    if raw is None or reason is not None:
+        raise archive_services.ArchiveServiceError(
+            "identifier_title_source_index_invalid"
+        )
+    lines = raw.splitlines()
+    if not lines or len(lines) > MAX_SOURCE_INDEX_ROWS:
+        raise archive_services.ArchiveServiceError(
+            "identifier_title_source_index_invalid"
+        )
+    index: dict[str, dict[str, Any]] = {}
+    if progress_callback is not None:
+        progress_callback("title-source-index", "start", 0, len(lines))
+    for ordinal, line in enumerate(lines, start=1):
+        try:
+            row = json.loads(
+                line.decode("utf-8-sig" if ordinal == 1 else "utf-8"),
+                object_pairs_hook=_reject_duplicate_pairs,
+                parse_constant=_reject_nonfinite,
+            )
+        except (
+            UnicodeError,
+            json.JSONDecodeError,
+            RecursionError,
+            ValueError,
+        ) as exc:
+            raise archive_services.ArchiveServiceError(
+                "identifier_title_source_index_invalid"
+            ) from exc
+        if not isinstance(row, dict):
+            raise archive_services.ArchiveServiceError(
+                "identifier_title_source_index_invalid"
+            )
+        source_id = archive_services._normalize_notion_locator_source_page_id(
+            row.get("page_id")
+        )
+        markdown = row.get("markdown")
+        if (
+            source_id is None
+            or not isinstance(markdown, str)
+            or source_id in index
+        ):
+            raise archive_services.ArchiveServiceError(
+                "identifier_title_source_index_invalid"
+            )
+        index[source_id] = {
+            "lines": [
+                line.strip()
+                for line in markdown.splitlines()
+                if line.strip()
+            ],
+            "row_sha256": _sha(line),
+        }
+        if progress_callback is not None and (
+            ordinal == 1 or ordinal == len(lines) or ordinal % 250 == 0
+        ):
+            progress_callback(
+                "title-source-index", "scanned", ordinal, len(lines)
+            )
+    if progress_callback is not None:
+        progress_callback(
+            "title-source-index", "done", len(lines), len(lines)
+        )
+    return raw, index, len(lines)
+
+
+def zet_identifier_title_recovery_plan(
+    archive_root: Path | str,
+    *,
+    source_mirror: Path | str,
+    dry_run: bool = True,
+    max_items: int = 200,
+    expected_identifier_title_count: int | None = None,
+    progress_callback: Callable[[str, str, int | None, int | None], None]
+    | None = None,
+) -> dict[str, Any]:
+    """Plan replacements only from each zettel's own exact source page id."""
+
+    root = archive_services.require_existing_archive_root(archive_root)
+    archive_id = archive_services.read_archive_id(root)
+    blockers: list[str] = []
+    warnings: list[str] = []
+    if not dry_run:
+        blockers.append("identifier_title_recovery_dry_run_required")
+    try:
+        returned_limit = _safe_max_items(max_items)
+        source_raw, source_index, source_row_count = _source_title_index(
+            source_mirror,
+            progress_callback=progress_callback,
+        )
+    except (
+        archive_services.ArchiveServiceError,
+        OSError,
+        TypeError,
+        ValueError,
+        OverflowError,
+    ):
+        return {
+            "ok": False,
+            "schema": IDENTIFIER_RECOVERY_SCHEMA,
+            "lifecycle_action": "zet_identifier_title_recovery_plan",
+            "state": "blocked",
+            "dry_run": True,
+            "summary": {
+                "identifier_title_count": 0,
+                "classified_identifier_title_count": 0,
+            },
+            "items": [],
+            "exact_operation_manifest": None,
+            "blockers": ["identifier_title_recovery_evidence_invalid"],
+            "warnings": [],
+            "would_change": [],
+            "privacy_guards": _privacy_guards(),
+        }
+
+    public_items: list[dict[str, Any]] = []
+    exact_items: list[ExactOperationItem] = []
+    states = {
+        "exact_recovery_ready": 0,
+        "review_required": 0,
+        "source_title_unavailable": 0,
+    }
+    paths = sorted((root / "zettels").glob("*.md"))
+    if progress_callback is not None:
+        progress_callback("identifier-title-scan", "start", 0, len(paths))
+    unreadable = 0
+    for path_ordinal, path in enumerate(paths, start=1):
+        try:
+            relative = archive_services.archive_relative_path(path, root)
+            raw, current_title, frontmatter, body = _read_current_title(
+                root, relative
+            )
+        except archive_services.ArchiveServiceError:
+            unreadable += 1
+            continue
+        if not archive_services.zet_title_is_identifier_shaped(current_title):
+            continue
+        blocker_codes: list[str] = []
+        source_page_id, source_state, _candidates = (
+            archive_services._notion_locator_exact_source_page_id(frontmatter)
+        )
+        source = (
+            source_index.get(source_page_id)
+            if source_page_id is not None
+            else None
+        )
+        first_paragraph = _first_body_paragraph(body)
+        replacement = first_paragraph
+        source_lines = source.get("lines") if source is not None else None
+        source_line_match = bool(
+            isinstance(source_lines, list)
+            and isinstance(replacement, str)
+            and any(
+                _normalize_title(re.sub(r"^#{1,6}\s+", "", line))
+                == _normalize_title(replacement)
+                for line in source_lines
+                if isinstance(line, str)
+            )
+        )
+        if (
+            source is None
+            or not isinstance(replacement, str)
+            or not replacement.strip()
+        ):
+            state = "source_title_unavailable"
+            blocker_codes.append("own_source_page_title_unavailable")
+        else:
+            title_blockers: list[str] = []
+            normalized_candidate = archive_services.normalized_zet_title_candidate(
+                replacement,
+                title_blockers,
+                basis="source_export_property",
+            )
+            if title_blockers or normalized_candidate is None:
+                blocker_codes.append("source_title_not_safe_for_remap")
+            if not source_line_match:
+                blocker_codes.append(
+                    "body_first_paragraph_disagrees_with_source_mirror"
+                )
+            if source_state != "exact":
+                blocker_codes.append("own_source_page_id_not_exact")
+            state = (
+                "exact_recovery_ready" if not blocker_codes else "review_required"
+            )
+        states[state] += 1
+        target_ref = _sha(
+            _canonical_bytes(
+                {
+                    "archive_id": archive_id,
+                    "zettel_id": frontmatter.get("id"),
+                    "path": relative,
+                }
+            )
+        )
+        item_ref = _sha(
+            _canonical_bytes(
+                {
+                    "target_ref": target_ref,
+                    "current_title_sha256": _title_sha(current_title),
+                    "source_row_sha256": (
+                        source.get("row_sha256") if source is not None else None
+                    ),
+                }
+            )
+        )
+        public_items.append(
+            {
+                "ordinal": len(public_items),
+                "item_ref_sha256": item_ref,
+                "state": state,
+                "detected_duplicate_suffix": bool(
+                    archive_services.zet_title_identifier_duplicate_suffix(
+                        current_title
+                    )
+                ),
+                "blocker_codes": blocker_codes,
+            }
+        )
+        if state == "exact_recovery_ready" and isinstance(replacement, str):
+            exact_items.append(
+                ExactOperationItem(
+                    ordinal=len(exact_items),
+                    item_id=f"item:{len(public_items) - 1:06d}",
+                    target_kind="zettel",
+                    target_ref=target_ref,
+                    target_identity_sha256=_sha(raw),
+                    fields=(
+                        ExactFieldEffect(
+                            field_ref="frontmatter.title",
+                            pre_sha256=hash_field_value(
+                                current_title.encode("utf-8")
+                            ),
+                            post_sha256=hash_field_value(
+                                replacement.encode("utf-8")
+                            ),
+                            source_sha256=_sha(
+                                _canonical_bytes(
+                                    {
+                                        "source_page_id": source_page_id,
+                                        "source_row_sha256": source[
+                                            "row_sha256"
+                                        ],
+                                        "body_first_paragraph_sha256": _sha(
+                                            first_paragraph.encode("utf-8")
+                                        ),
+                                    }
+                                )
+                            ),
+                        ),
+                    ),
+                )
+            )
+        if progress_callback is not None and (
+            path_ordinal == 1
+            or path_ordinal == len(paths)
+            or path_ordinal % 250 == 0
+        ):
+            progress_callback(
+                "identifier-title-scan", "scanned", path_ordinal, len(paths)
+            )
+    if progress_callback is not None:
+        progress_callback(
+            "identifier-title-scan", "done", len(paths), len(paths)
+        )
+    identifier_count = len(public_items)
+    if (
+        expected_identifier_title_count is not None
+        and int(expected_identifier_title_count) != identifier_count
+    ):
+        blockers.append("identifier_title_expected_count_mismatch")
+    if sum(states.values()) != identifier_count:
+        blockers.append("identifier_title_classification_incomplete")
+    if unreadable:
+        blockers.append("identifier_title_canonical_scan_incomplete")
+
+    digests = {
+        "source_index_sha256": _sha(source_raw),
+        "source_index_row_set_sha256": _sha(
+            _canonical_bytes(
+                sorted(row["row_sha256"] for row in source_index.values())
+            )
+        ),
+        "identifier_title_set_sha256": _sha(
+            _canonical_bytes(
+                [item["item_ref_sha256"] for item in public_items]
+            )
+        ),
+        "identifier_title_classification_set_sha256": _sha(
+            _canonical_bytes(public_items)
+        ),
+        "exact_recovery_ready_set_sha256": _sha(
+            _canonical_bytes(
+                [
+                    item["item_ref_sha256"]
+                    for item in public_items
+                    if item["state"] == "exact_recovery_ready"
+                ]
+            )
+        ),
+        "review_required_set_sha256": _sha(
+            _canonical_bytes(
+                [
+                    item["item_ref_sha256"]
+                    for item in public_items
+                    if item["state"] == "review_required"
+                ]
+            )
+        ),
+        "source_title_unavailable_set_sha256": _sha(
+            _canonical_bytes(
+                [
+                    item["item_ref_sha256"]
+                    for item in public_items
+                    if item["state"] == "source_title_unavailable"
+                ]
+            )
+        ),
+    }
+    counts = {
+        "source_index_row_count": source_row_count,
+        "canonical_zettel_count": len(paths),
+        "unreadable_canonical_count": unreadable,
+        "identifier_title_count": identifier_count,
+        "classified_identifier_title_count": sum(states.values()),
+        "exact_recovery_ready_count": states["exact_recovery_ready"],
+        "review_required_count": states["review_required"],
+        "source_title_unavailable_count": states["source_title_unavailable"],
+        "duplicate_suffix_identifier_title_count": sum(
+            1
+            for item in public_items
+            if item["detected_duplicate_suffix"]
+        ),
+    }
+    operation_evidence = ExactOperationEvidence(
+        schema="wom-kit/zet-identifier-title-recovery-evidence/v1",
+        counts=tuple(sorted(counts.items())),
+        digests=tuple(sorted(digests.items())),
+    )
+    exact_manifest = None
+    if exact_items and not blockers:
+        exact_manifest = ExactOperationManifest.build(
+            operation="zet_identifier_title_recovery",
+            archive_identity_sha256=hash_field_value(
+                archive_id.encode("utf-8")
+            ),
+            items=exact_items,
+            operation_evidence=operation_evidence,
+        ).document()
+    returned_items = public_items[:returned_limit]
+    if len(returned_items) < identifier_count:
+        warnings.append("identifier_title_items_truncated")
+    return {
+        "ok": not blockers,
+        "schema": IDENTIFIER_RECOVERY_SCHEMA,
+        "lifecycle_action": "zet_identifier_title_recovery_plan",
+        "state": "blocked" if blockers else "classified",
+        "dry_run": True,
+        "summary": {
+            **counts,
+            **digests,
+            "operation_evidence_sha256": operation_evidence.evidence_sha256,
+            "exact_manifest_item_count": len(exact_items),
+            "returned_item_count": len(returned_items),
+            "truncated_item_count": identifier_count - len(returned_items),
+            "expected_identifier_title_count": expected_identifier_title_count,
+        },
+        "items": returned_items,
+        "exact_operation_manifest": exact_manifest,
+        "blockers": archive_services.unique_preserve_order(blockers),
+        "warnings": archive_services.unique_preserve_order(warnings),
+        "would_change": (
+            ["frontmatter.title"] if exact_manifest is not None else []
+        ),
+        "privacy_guards": _privacy_guards(),
+    }
+
+
+def _privacy_guards() -> dict[str, bool]:
+    return {
+        "title_echoed": False,
+        "source_page_id_echoed": False,
+        "zettel_id_echoed": False,
+        "body_echoed": False,
+        "filename_or_path_echoed": False,
+        "absolute_local_path_echoed": False,
+        "source_snapshot_contents_echoed": False,
+        "provider_api_called": False,
+        "writes": False,
+    }
+
+
+__all__ = [
+    "zet_identifier_title_recovery_plan",
+    "zet_title_field_local_recovery_plan",
+]

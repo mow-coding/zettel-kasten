@@ -14473,23 +14473,79 @@ def command_zet_title_remap_receipt_audit(
             file=sys.stderr,
         )
         return 1
+    if (
+        getattr(args, "expected_identifier_title_count", None) is not None
+        and not getattr(args, "source_mirror", None)
+    ):
+        print(
+            "--expected-identifier-title-count requires --source-mirror.",
+            file=sys.stderr,
+        )
+        return 1
     reporter = CommandProgressReporter(
         bool(getattr(args, "progress", False)),
         label="zet-title-remap-receipt-audit",
         stage_order=(
+            "title-field-audit",
+            "title-source-index",
+            "identifier-title-scan",
             "title-remap-receipt-audit",
             "title-remap-journal-audit",
         ),
     )
     try:
-        result = archive_services.zet_title_remap_receipt_audit(
-            Path(args.archive_root),
-            dry_run=True,
-            max_receipts=int(args.max_receipts),
-            max_journals=int(args.max_journals),
-            max_problems=int(args.max_problems),
-            progress_callback=reporter.progress,
-        )
+        if getattr(args, "field_local", False) or getattr(
+            args, "source_mirror", None
+        ):
+            from .local_title_recovery import (
+                zet_identifier_title_recovery_plan,
+                zet_title_field_local_recovery_plan,
+            )
+
+            result = zet_title_field_local_recovery_plan(
+                Path(args.archive_root),
+                dry_run=True,
+                max_items=int(args.max_problems),
+                progress_callback=reporter.progress,
+            )
+            source_index_mirror = getattr(
+                args, "source_mirror", None
+            )
+            if source_index_mirror:
+                identifier_recovery = (
+                    zet_identifier_title_recovery_plan(
+                        Path(args.archive_root),
+                        source_mirror=Path(source_index_mirror),
+                        dry_run=True,
+                        max_items=int(args.max_problems),
+                        expected_identifier_title_count=getattr(
+                            args,
+                            "expected_identifier_title_count",
+                            None,
+                        ),
+                        progress_callback=reporter.progress,
+                    )
+                )
+                result["identifier_title_recovery"] = identifier_recovery
+                if not identifier_recovery.get("ok"):
+                    result["ok"] = False
+                    result["blockers"] = (
+                        archive_services.unique_preserve_order(
+                            [
+                                *(result.get("blockers") or []),
+                                "identifier_title_recovery_blocked",
+                            ]
+                        )
+                    )
+        else:
+            result = archive_services.zet_title_remap_receipt_audit(
+                Path(args.archive_root),
+                dry_run=True,
+                max_receipts=int(args.max_receipts),
+                max_journals=int(args.max_journals),
+                max_problems=int(args.max_problems),
+                progress_callback=reporter.progress,
+            )
     except archive_services.ArchiveServiceError:
         print(
             "zet-title-remap-receipt-audit could not inspect the private title evidence safely.",
@@ -14540,6 +14596,24 @@ def command_zet_title_remap_receipt_audit(
             "WOM zet title remap receipt audit: "
             f"{result.get('status') or 'unknown'}"
         )
+        if result.get("lifecycle_action") == "zet_title_field_local_audit":
+            print(
+                "Field-local title items applied/reverted/divergent: "
+                f"{summary.get('applied_title_matches_count', 0)}/"
+                f"{summary.get('reverted_title_matches_count', 0)}/"
+                f"{summary.get('title_divergent_count', 0)}"
+            )
+            identifier_recovery = result.get("identifier_title_recovery")
+            if isinstance(identifier_recovery, dict):
+                identifier_summary = identifier_recovery.get("summary") or {}
+                print(
+                    "Identifier titles ready/review/missing: "
+                    f"{identifier_summary.get('exact_recovery_ready_count', 0)}/"
+                    f"{identifier_summary.get('review_required_count', 0)}/"
+                    f"{identifier_summary.get('source_title_unavailable_count', 0)}"
+                )
+            print("Writes: none")
+            return 0 if result.get("ok") else 1
         print(f"Receipts: {summary.get('receipt_count', 0)}")
         print(
             "Verified receipts: "
@@ -14576,6 +14650,7 @@ def command_zet_title_remap_revert_plan(
         bool(getattr(args, "progress", False)),
         label="zet-title-remap-revert-plan",
         stage_order=(
+            "title-field-audit",
             "title-revert-receipt",
             "title-remap-receipt-audit",
             "title-remap-journal-audit",
@@ -14584,16 +14659,33 @@ def command_zet_title_remap_revert_plan(
         ),
     )
     try:
-        result = archive_services.zet_title_remap_revert_plan(
-            Path(args.archive_root),
-            receipt_path=str(args.receipt),
-            expected_receipt_sha256=str(
-                args.expected_receipt_sha256
-            ),
-            max_items=int(args.max_items),
-            dry_run=True,
-            progress_callback=reporter.progress,
-        )
+        if getattr(args, "field_local", False):
+            from .local_title_recovery import (
+                zet_title_field_local_recovery_plan,
+            )
+
+            result = zet_title_field_local_recovery_plan(
+                Path(args.archive_root),
+                receipt_path=str(args.receipt),
+                expected_receipt_sha256=str(
+                    args.expected_receipt_sha256
+                ),
+                dry_run=True,
+                max_items=int(args.max_items),
+                build_revert_manifest=True,
+                progress_callback=reporter.progress,
+            )
+        else:
+            result = archive_services.zet_title_remap_revert_plan(
+                Path(args.archive_root),
+                receipt_path=str(args.receipt),
+                expected_receipt_sha256=str(
+                    args.expected_receipt_sha256
+                ),
+                max_items=int(args.max_items),
+                dry_run=True,
+                progress_callback=reporter.progress,
+            )
     except archive_services.ArchiveServiceError:
         print(
             "zet-title-remap-revert-plan could not inspect the private completed-title evidence safely.",
@@ -16492,6 +16584,16 @@ def command_notion_import_locator_loss_audit(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         return 1
+    if (
+        getattr(args, "expected_orphan_row_count", None) is not None
+        and not getattr(args, "markup_receipt", None)
+    ):
+        print(
+            "--expected-orphan-row-count requires at least one "
+            "--markup-receipt.",
+            file=sys.stderr,
+        )
+        return 1
     progress_callback = _make_stage_progress_callback(
         bool(getattr(args, "progress", False)),
         label="notion-locator-loss-audit",
@@ -16504,6 +16606,33 @@ def command_notion_import_locator_loss_audit(args: argparse.Namespace) -> int:
             max_items=args.max_items,
             progress_callback=progress_callback,
         )
+        markup_receipts = list(
+            getattr(args, "markup_receipt", None) or []
+        )
+        if markup_receipts:
+            from .local_locator_recovery import (
+                notion_locator_orphan_recovery_plan,
+            )
+
+            orphan = notion_locator_orphan_recovery_plan(
+                Path(args.archive_root),
+                markup_receipts=markup_receipts,
+                dry_run=True,
+                max_items=args.max_items,
+                expected_orphan_row_count=getattr(
+                    args, "expected_orphan_row_count", None
+                ),
+                progress_callback=progress_callback,
+            )
+            result["orphan_recovery"] = orphan
+            if not orphan.get("ok"):
+                result["ok"] = False
+                result["blockers"] = archive_services.unique_preserve_order(
+                    [
+                        *(result.get("blockers") or []),
+                        "notion_locator_orphan_recovery_blocked",
+                    ]
+                )
     except (archive_services.ArchiveServiceError, OSError) as exc:
         print(str(exc), file=sys.stderr)
         return 1
@@ -16532,6 +16661,21 @@ def command_notion_import_locator_loss_audit(args: argparse.Namespace) -> int:
             f"{summary.get('source_page_id_present_count', 0)}/"
             f"{summary.get('source_page_id_missing_count', 0)}"
         )
+        orphan = result.get("orphan_recovery")
+        if isinstance(orphan, dict):
+            orphan_summary = (
+                orphan.get("summary")
+                if isinstance(orphan.get("summary"), dict)
+                else {}
+            )
+            print(
+                "- transaction-created orphan rows "
+                "maintain/restore/review: "
+                f"{orphan_summary.get('orphan_row_count', 0)} "
+                f"{orphan_summary.get('normal_maintain_count', 0)}/"
+                f"{orphan_summary.get('restore_ready_count', 0)}/"
+                f"{orphan_summary.get('review_pending_count', 0)}"
+            )
         for item in result.get("items", []):
             if not isinstance(item, dict):
                 continue
@@ -16567,13 +16711,51 @@ def command_notion_import_locator_evidence_plan(
             file=sys.stderr,
         )
         return 1
-    try:
-        result = archive_services.notion_import_locator_evidence_plan(
-            Path(args.archive_root),
-            evidence_path=args.evidence,
-            dry_run=True,
-            max_items=args.max_items,
+    if not getattr(args, "source_mirror", None) and (
+        getattr(args, "expected_zettel_count", None) is not None
+        or getattr(args, "expected_pair_count", None) is not None
+    ):
+        print(
+            "--expected-zettel-count and --expected-pair-count require "
+            "--source-mirror.",
+            file=sys.stderr,
         )
+        return 1
+    reporter = CommandProgressReporter(
+        bool(getattr(args, "progress", False)),
+        label="notion-import-locator-evidence-plan",
+        stage_order=(
+            "source-mirror",
+            "canonical-locators",
+            "locator-classification",
+        ),
+    )
+    try:
+        if getattr(args, "source_mirror", None):
+            from .local_locator_recovery import (
+                notion_locator_mirror_recovery_plan,
+            )
+
+            result = notion_locator_mirror_recovery_plan(
+                Path(args.archive_root),
+                source_mirror=Path(args.source_mirror),
+                dry_run=True,
+                max_items=args.max_items,
+                expected_zettel_count=getattr(
+                    args, "expected_zettel_count", None
+                ),
+                expected_pair_count=getattr(
+                    args, "expected_pair_count", None
+                ),
+                progress_callback=reporter.progress,
+            )
+        else:
+            result = archive_services.notion_import_locator_evidence_plan(
+                Path(args.archive_root),
+                evidence_path=args.evidence,
+                dry_run=True,
+                max_items=args.max_items,
+            )
     except Exception:
         # Final privacy boundary: an unexpected service failure must never
         # stringify a private path, source id, locator, or parser value.
@@ -16582,12 +16764,34 @@ def command_notion_import_locator_evidence_plan(
             file=sys.stderr,
         )
         return 1
+    finally:
+        reporter.close()
 
     if args.format == "json":
         print_json(result)
     else:
         print("Notion import locator evidence plan:")
         print(f"- state: {result.get('state') or 'blocked'}")
+        summary = (
+            result.get("summary")
+            if isinstance(result.get("summary"), dict)
+            else result
+        )
+        if result.get("lifecycle_action") == (
+            "notion_locator_mirror_recovery_plan"
+        ):
+            print(
+                "- target zettels / locator pairs: "
+                f"{summary.get('target_zettel_count', 0)}/"
+                f"{summary.get('locator_pair_count', 0)}"
+            )
+            print(
+                "- exact/review pairs: "
+                f"{summary.get('exact_record_ready_pair_count', 0)}/"
+                f"{summary.get('review_required_pair_count', 0)}"
+            )
+            print("- writes: none")
+            return 0 if result.get("ok") else 1
         print(
             f"- affected canonical: "
             f"{result.get('affected_canonical_count', 0)}"
@@ -31263,6 +31467,27 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     zet_title_remap_receipt_audit.add_argument(
+        "--field-local",
+        action="store_true",
+        help=(
+            "Audit each frontmatter.title independently of unrelated later "
+            "body or whole-file changes."
+        ),
+    )
+    zet_title_remap_receipt_audit.add_argument(
+        "--source-mirror",
+        help=(
+            "Optional private pages.markdown.jsonl used to plan identifier-title "
+            "recovery from the first body paragraph joined by each zettel's "
+            "own source page id."
+        ),
+    )
+    zet_title_remap_receipt_audit.add_argument(
+        "--expected-identifier-title-count",
+        type=int,
+        help="Optional reviewed identifier-title inventory bound to the plan.",
+    )
+    zet_title_remap_receipt_audit.add_argument(
         "--progress",
         action="store_true",
         help="Stream content-free receipt and journal counts plus 10-second heartbeats to stderr.",
@@ -31303,6 +31528,14 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "Maximum source-receipt participants to inspect "
             f"(1-{archive_services.ZET_TITLE_REMAP_MAX_ITEMS})."
+        ),
+    )
+    zet_title_remap_revert_plan.add_argument(
+        "--field-local",
+        action="store_true",
+        help=(
+            "Bind only frontmatter.title so unrelated later body changes do "
+            "not globally block clean participants."
         ),
     )
     zet_title_remap_revert_plan.add_argument(
@@ -32666,6 +32899,19 @@ def build_parser() -> argparse.ArgumentParser:
         help="Print content-free scan progress to stderr.",
     )
     notion_import_locator_loss_audit.add_argument(
+        "--markup-receipt",
+        action="append",
+        help=(
+            "Optional archive-relative markup-normalization receipt; repeat "
+            "to classify transaction-created orphan rows without writing."
+        ),
+    )
+    notion_import_locator_loss_audit.add_argument(
+        "--expected-orphan-row-count",
+        type=int,
+        help="Optional reviewed orphan-row inventory bound to the plan.",
+    )
+    notion_import_locator_loss_audit.add_argument(
         "--format",
         choices=["text", "json"],
         default="text",
@@ -32686,12 +32932,24 @@ def build_parser() -> argparse.ArgumentParser:
         "archive_root",
         help="Archive root to inspect.",
     )
-    notion_import_locator_evidence_plan.add_argument(
+    notion_locator_evidence_source = (
+        notion_import_locator_evidence_plan.add_mutually_exclusive_group(
+            required=True
+        )
+    )
+    notion_locator_evidence_source.add_argument(
         "--evidence",
-        required=True,
         help=(
             "Archive-relative private JSONL under "
             ".wom-scratch/notion-locator-evidence/."
+        ),
+    )
+    notion_locator_evidence_source.add_argument(
+        "--source-mirror",
+        help=(
+            "Private local pages.markdown.jsonl mirror used to construct one "
+            "content-free batch recovery manifest. The path and values are "
+            "never echoed."
         ),
     )
     notion_import_locator_evidence_plan.add_argument(
@@ -32707,6 +32965,21 @@ def build_parser() -> argparse.ArgumentParser:
             "Maximum content-free row summaries to return; all rows are "
             "still validated and counted."
         ),
+    )
+    notion_import_locator_evidence_plan.add_argument(
+        "--expected-zettel-count",
+        type=int,
+        help="Optional reviewed target-zettel inventory bound to mirror mode.",
+    )
+    notion_import_locator_evidence_plan.add_argument(
+        "--expected-pair-count",
+        type=int,
+        help="Optional reviewed unique locator-pair inventory bound to mirror mode.",
+    )
+    notion_import_locator_evidence_plan.add_argument(
+        "--progress",
+        action="store_true",
+        help="Stream content-free mirror, canonical, and classification progress.",
     )
     notion_import_locator_evidence_plan.add_argument(
         "--format",
