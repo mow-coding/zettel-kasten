@@ -409,6 +409,7 @@ from . import (
     notion_property_backfill,
     operation_control,
     operation_approval_binding,
+    object_storage_preservation,
     project_runtime,
     runtime_guidance,
     runtime_skill_install,
@@ -438,7 +439,7 @@ from .exact_human_approval_workflow import (
     _execute_exact_human_approved_write_core,
     _resume_exact_human_approved_transaction_core,
 )
-from .exact_operation_manifest import ExactOperationProgress
+from .exact_operation_manifest import ExactOperationManifestError, ExactOperationProgress
 from .resource_paths import runtime_release_note_path, runtime_resource_root
 from .schema_validator import validate_schema
 
@@ -10918,7 +10919,224 @@ def command_object_storage_upload(args: argparse.Namespace) -> int:
     return 0 if result.get("ok", True) else 1
 
 
+def _object_storage_preservation_cli_error(
+    args: argparse.Namespace,
+    reason_code: str,
+) -> int:
+    return _exact_human_approval_cli_error(
+        args,
+        lifecycle_action="object_storage_bytes_preservation",
+        reason_code=reason_code,
+    )
+
+
+def _object_storage_preservation_progress_hooks(
+    args: argparse.Namespace,
+) -> tuple[ProgressCallback | None, Callable[[ExactOperationProgress], None] | None]:
+    stage_progress = _make_stage_progress_callback(
+        bool(getattr(args, "progress", False)),
+        label="object-storage-bytes-preservation",
+        detail="aggregate",
+    )
+    if stage_progress is None:
+        return None, None
+
+    def exact_progress(event: ExactOperationProgress) -> None:
+        document = event.public_document()
+        stage_progress(
+            "exact-operation-" + str(document["stage"]),
+            str(document["mode"]),
+            int(document["completed_items"]),
+            int(document["total_items"]),
+        )
+
+    return stage_progress, exact_progress
+
+
+def _object_storage_preservation_transport_factory(
+    args: argparse.Namespace,
+) -> Callable[[], archive_services.ObjectStorageTransport]:
+    blockers: list[str] = []
+    access_ref = str(getattr(args, "access_key_id_ref", None) or "").strip()
+    secret_ref = str(getattr(args, "secret_access_key_ref", None) or "").strip()
+    archive_services._object_storage_validate_credential_refs(
+        access_key_id_ref=access_ref,
+        secret_access_key_ref=secret_ref,
+        blockers=blockers,
+    )
+    endpoint_host = str(getattr(args, "endpoint_host", None) or "").strip()
+    bucket = str(getattr(args, "bucket", None) or "").strip()
+    provider_kind = str(getattr(args, "provider_kind", None) or "").strip().lower()
+    region = str(getattr(args, "region", None) or "").strip()
+    if provider_kind == "cloudflare-r2" and not region:
+        region = archive_services.R2_DEFAULT_REGION
+    if (
+        not endpoint_host
+        or not endpoint_host.isascii()
+        or len(endpoint_host) > 253
+        or re.fullmatch(
+            r"(?=.{1,253}\Z)(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+"
+            r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?",
+            endpoint_host,
+        )
+        is None
+    ):
+        blockers.append("endpoint_host_invalid")
+    if not archive_services.safe_object_storage_bucket_name(bucket):
+        blockers.append("bucket_invalid")
+    if not archive_services.safe_object_storage_region(region):
+        blockers.append("region_invalid")
+    if blockers:
+        raise object_storage_preservation.ObjectStoragePreservationError(
+            "object_storage_preservation_plan_invalid"
+        )
+
+    def resolve() -> archive_services.ObjectStorageTransport:
+        try:
+            access_value, _ = archive_services._resolve_credential_value(
+                access_ref,
+                archive_services.credential_ref_store(access_ref),
+            )
+            secret_value, _ = archive_services._resolve_credential_value(
+                secret_ref,
+                archive_services.credential_ref_store(secret_ref),
+            )
+            if not access_value or not secret_value:
+                raise ValueError("unresolved")
+            transport = archive_services._object_storage_resolve_transport(
+                provider_kind,
+                send=archive_services._default_urllib_sender(),
+                credential={
+                    "endpoint_host": endpoint_host,
+                    "bucket": bucket,
+                    "access_key_id": access_value,
+                    "secret_access_key": secret_value,
+                    "region": region,
+                },
+            )
+            if transport is None:
+                raise ValueError("unavailable")
+            return transport
+        except Exception:
+            raise object_storage_preservation.ObjectStoragePreservationError(
+                "object_storage_preservation_remote_unavailable"
+            ) from None
+
+    return resolve
+
+
+def _command_object_storage_preserve_local_only(args: argparse.Namespace) -> int:
+    if bool(args.dry_run) == bool(args.approve):
+        return _object_storage_preservation_cli_error(
+            args, "object_storage_preservation_plan_invalid"
+        )
+    reviewer = str(getattr(args, "reviewed_by", None) or "").strip()
+    resume_approval_id = str(
+        getattr(args, "resume_approval_id", None) or ""
+    ).strip()
+    resume_execution_sha256 = str(
+        getattr(args, "resume_execution_sha256", None) or ""
+    ).strip().lower()
+    expected_manifest_sha256 = str(
+        getattr(args, "expected_manifest_sha256", None) or ""
+    ).strip().lower()
+    resume_requested = bool(resume_approval_id or resume_execution_sha256)
+    if resume_requested and not (resume_approval_id and resume_execution_sha256):
+        return _object_storage_preservation_cli_error(
+            args, "object_storage_preservation_resume_invalid"
+        )
+    if resume_requested and (
+        not args.approve
+        or getattr(args, "only", None)
+        or getattr(args, "max_objects", None) is not None
+    ):
+        return _object_storage_preservation_cli_error(
+            args, "object_storage_preservation_resume_invalid"
+        )
+    incompatible = bool(
+        getattr(args, "key_map", None)
+        or getattr(args, "accept_unverified_adopt", False)
+        or getattr(args, "content_hash_verify", False)
+        or getattr(args, "skip_existing_wom_uploaded", False)
+        or getattr(args, "stop_after_plan", False)
+        or getattr(args, "key_append_extension", False)
+        or getattr(args, "key_prefix", None)
+        or getattr(args, "key_strategy", archive_services.OBJECT_STORAGE_UPLOAD_KEY_STRATEGY_PREFIX)
+        != archive_services.OBJECT_STORAGE_UPLOAD_KEY_STRATEGY_PREFIX
+    )
+    if incompatible:
+        return _object_storage_preservation_cli_error(
+            args, "object_storage_preservation_plan_invalid"
+        )
+    if args.approve and (
+        not reviewer
+        or re.fullmatch(r"sha256:[0-9a-f]{64}", expected_manifest_sha256) is None
+    ):
+        return _object_storage_preservation_cli_error(
+            args, "object_storage_preservation_approval_required"
+        )
+    plan_progress, exact_progress = _object_storage_preservation_progress_hooks(args)
+    try:
+        if resume_requested:
+            plan = object_storage_preservation.load_object_storage_bytes_preservation_plan(
+                Path(args.archive_root),
+                manifest_sha256=expected_manifest_sha256,
+            )
+        else:
+            plan = object_storage_preservation._plan_core(
+                Path(args.archive_root),
+                provider_kind=args.provider_kind,
+                store_ref=args.store_ref,
+                only=args.only,
+                max_objects=args.max_objects,
+                progress=plan_progress,
+            )
+        if args.dry_run:
+            result = plan.public_document()
+        else:
+            if plan.manifest is None or not secrets.compare_digest(
+                plan.manifest.manifest_sha256,
+                expected_manifest_sha256,
+            ):
+                return _object_storage_preservation_cli_error(
+                    args, "object_storage_preservation_plan_changed"
+                )
+            transport_factory = _object_storage_preservation_transport_factory(args)
+            if resume_requested:
+                result = object_storage_preservation.resume_object_storage_bytes_preservation(
+                    plan,
+                    reviewer_claim=reviewer,
+                    approval_id=resume_approval_id,
+                    execution_sha256=resume_execution_sha256,
+                    transport_factory=transport_factory,
+                    progress_hook=exact_progress,
+                )
+            else:
+                result = object_storage_preservation.execute_object_storage_bytes_preservation(
+                    plan,
+                    reviewer_claim=reviewer,
+                    transport_factory=transport_factory,
+                    progress_hook=exact_progress,
+                )
+    except object_storage_preservation.ObjectStoragePreservationError as exc:
+        return _object_storage_preservation_cli_error(args, exc.code)
+    except (
+        ExactHumanApprovalError,
+        ExactHumanApprovalWindowsError,
+        ExactHumanApprovalWorkflowError,
+        ExactOperationManifestError,
+    ) as exc:
+        return _object_storage_preservation_cli_error(
+            args,
+            str(getattr(exc, "code", "object_storage_preservation_remote_unavailable")),
+        )
+    print_object_storage_bytes_preservation_result(result, args.format)
+    return 0 if result.get("ok", False) else 1
+
+
 def command_object_storage_adopt_existing(args: argparse.Namespace) -> int:
+    if bool(getattr(args, "preserve_local_only", False)):
+        return _command_object_storage_preserve_local_only(args)
     if args.approve:
         return _exact_human_approval_cli_error(
             args,
@@ -13188,6 +13406,29 @@ def print_object_storage_adopt_existing_result(result: dict[str, Any], output_fo
         print("Blockers:")
         for blocker in result["blockers"]:
             print(f"- {blocker}")
+
+
+def print_object_storage_bytes_preservation_result(
+    result: dict[str, Any], output_format: str
+) -> None:
+    if output_format == "json":
+        print_json(result)
+        return
+    print(f"Object storage bytes preservation: {result.get('state') or '-'}")
+    print(f"Exact manifest: {result.get('manifest_sha256') or result.get('plan_sha256') or '-'}")
+    print(
+        "Planned/preserved objects: "
+        f"{result.get('preservation_planned_count', result.get('item_count', 0))}"
+    )
+    metrics = result.get("remote_evidence_metrics")
+    if isinstance(metrics, dict):
+        print(
+            "Remote evidence (manifest scope / official deduplicated): "
+            f"{metrics.get('manifest_scope_remote_key_verified_object_count', 0)} / "
+            f"{metrics.get('official_deduplicated_wom_uploaded_evidence_object_count', 0)}"
+        )
+    print("Preservation status: bytes_preserved (not formal adoption)")
+    print("Manifest location updates: 0")
 
 
 def print_object_storage_wom_location_reconcile_result(result: dict[str, Any], output_format: str) -> None:
@@ -29234,9 +29475,51 @@ def build_parser() -> argparse.ArgumentParser:
     object_storage_adopt_existing.add_argument("--skip-existing-wom-uploaded", action="store_true", help="Resume helper: skip remote HEAD for objects that already have a matching wom_uploaded manifest location for this provider/store/key.")
     object_storage_adopt_existing.add_argument("--stop-after-plan", action="store_true", help="Diagnostic mode: resolve the adopt plan and summaries, then stop before credential value reads, provider HEADs, manifest updates, or receipt writes. The final JSON/text result is still written to stdout.")
     object_storage_adopt_existing.add_argument("--progress", action="store_true", help="Stream adopt planning and remote-HEAD progress to stderr; stdout remains reserved for the final --format result.")
-    object_storage_adopt_existing.add_argument("--reviewed-by", help="Safe reviewer id required when --approve is used.")
-    object_storage_adopt_existing.add_argument("--dry-run", action="store_true", help="Preview the adopt plan without provider calls, byte reads, or secret reads.")
-    object_storage_adopt_existing.add_argument("--approve", action="store_true", help="Perform the adopt. Verified adopt HEADs each key presence-only (presence+size, no download); a bulk first-live adopt refuses until a tiny-first --only object proves the store; declared adopt needs --accept-unverified-adopt.")
+    object_storage_adopt_existing.add_argument(
+        "--preserve-local-only",
+        action="store_true",
+        help=(
+            "Emergency mode: hash local-only Objet bytes, bind them to one exact manifest, "
+            "and preserve them at content-addressed remote keys. This records bytes_preserved "
+            "receipts but does NOT perform formal adoption or update manifest locations."
+        ),
+    )
+    object_storage_adopt_existing.add_argument(
+        "--expected-manifest-sha256",
+        help=(
+            "Exact plan_sha256 from the preceding --preserve-local-only --dry-run; "
+            "required for approve and resume."
+        ),
+    )
+    object_storage_adopt_existing.add_argument(
+        "--resume-approval-id",
+        help="Resume an interrupted preservation run using its one-use approval id.",
+    )
+    object_storage_adopt_existing.add_argument(
+        "--resume-execution-sha256",
+        help="Resume the exact checkpoint execution bound to --resume-approval-id.",
+    )
+    object_storage_adopt_existing.add_argument(
+        "--reviewed-by",
+        help="Safe reviewer id required when --approve is used.",
+    )
+    object_storage_adopt_existing.add_argument(
+        "--dry-run",
+        action="store_true",
+        help=(
+            "Preview the adopt plan without provider calls or secret reads. "
+            "--preserve-local-only additionally hashes local bytes to bind the exact plan."
+        ),
+    )
+    object_storage_adopt_existing.add_argument(
+        "--approve",
+        action="store_true",
+        help=(
+            "Perform the selected operation. Standard adopt remains closed pending "
+            "compound approval; --preserve-local-only uses its exact native approval "
+            "and records bytes_preserved without formal adoption."
+        ),
+    )
     object_storage_adopt_existing.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
     object_storage_adopt_existing.set_defaults(func=command_object_storage_adopt_existing)
 
