@@ -159,6 +159,26 @@ read-only plans or safety surfaces that leave historical data unrepaired.
   crash-durable, fail-closed implementation whose total work is linear in the
   final checkpoint size, plus an actual 8,566-effect benchmark and the existing
   tamper, resume, and concurrent-writer regressions.
+- The checkpoint blocker is now implemented and integrated.  The legacy JSONL
+  format remains byte-compatible, each append validates only a bounded tail,
+  every row is file-fsynced, and the complete hash chain is read once at start
+  or resume and once before the final receipt.  The final actual-file synthetic
+  benchmark processed 8,566 effects and 25,698 durable rows in 53.391 seconds,
+  with two full scans, one creation-time directory fsync, first status at zero,
+  and a maximum progress gap of 1.375 seconds.  Focused integration reruns pass
+  54 tests, and the changed Python tree compiles cleanly.  Independent review
+  remains in progress before release acceptance.
+- The separate v0.4.3 release-preparation branch now contains the version,
+  package, release-note, upgrade, capability, and resource changes.  Its initial
+  161 release/capability/root checks and a further 35 approval-inventory checks
+  pass.  It remains separate until both new writers are integrated, because
+  their final command inventory must be measured from code rather than guessed.
+- Privacy inspection finds zero current tracked files containing the operator's
+  personal Windows user name.  Eighteen tracked files contain only generic
+  `C:\\Users\\...` documentation or test examples.  Historical Git search finds
+  five commits that once added or removed the personal user name; rewriting
+  public history would invalidate existing clones and therefore requires an
+  explicit later hygiene decision rather than being folded into this release.
 
 ## v0.4.4 R2 evidence lock
 
@@ -213,6 +233,33 @@ be installed through the supported project update, execute against the intended
 real data, produce durable receipts, pass an independent re-read, and finish
 with a verified remote Git backup.  Feedback records receive `resolved_in` only
 after that chain is complete.
+
+## User-requested pause checkpoint
+
+The user asked to stop immediately because the current Codex usage allowance
+was exhausted and to resume next week. All active subagents were interrupted.
+No release, installation, native approval, Basoon data write, provider call,
+feedback resolution, or remote backup write was started as part of the pause.
+
+- Integration remains on `codex/v0.4.3-recovery` at `8759f640`, with the
+  linear checkpoint implementation committed and its focused tests passing.
+- The Letter 138 implementation remains intentionally uncommitted in the
+  dedicated `codex/v043-letter138` worktree. Its modified and untracked files
+  are preserved in place; do not clean or reset that worktree on resume.
+- The exact Git writer remains intentionally uncommitted in the dedicated
+  `codex/v043-git-backup` worktree. Its modified and untracked files are
+  preserved in place; do not clean or reset that worktree on resume.
+- Release preparation is safely committed on `codex/v043-release-prep` through
+  `155c7b0f` and its worktree is clean.
+- v0.4.4 R2 read-only product/evidence commits remain separately preserved as
+  `1a57848c` and `eb25d048`; they have not been released or applied.
+
+Resume in this order: restore the interrupted independent checkpoint review;
+finish, test, and commit Letter 138 and the Git writer in their existing
+worktrees; integrate those commits; measure the final command inventory; then
+integrate release preparation and run the full v0.4.3 release gates. Only
+after a green public release and supported Basoon installation may the native
+approval and real Letter 138 recovery sequence begin.
 
 ## Safety and privacy boundaries
 
