@@ -78,6 +78,14 @@ read-only plans or safety surfaces that leave historical data unrepaired.
 - `project-version-update` is reopened behind the existing exact-human broker.
   The durable v0.2 update receipt now contains the exact approval reference;
   the update, rollback, receipt, and replay test suite passes.
+- A live read-only Basoon version inspection confirms the project mirror is a
+  clean, integrity-verified annotated v0.4.0 checkout with configured origin;
+  its latest fetched tag is v0.4.2 and the project pin is v0.4.0.  The Windows
+  PATH diagnostic sees one candidate and no shadow.  A source-built v0.4.3
+  updater dry-run toward the already-fetched v0.4.2 tag completed in 10.75
+  seconds with `ready_for_approval`, verified tag/commit evidence, and zero
+  files written.  The same path will be repeated for v0.4.3 only after its
+  release artifact exists.
 - Draft-only same-ID feedback revision is implemented with CAS evidence.
   Delivered or later records remain immutable and require a new superseding
   feedback id.
