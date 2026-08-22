@@ -183,6 +183,17 @@ read-only plans or safety surfaces that leave historical data unrepaired.
   scan still prohibits a result receipt.  The common benchmark's immediate
   status measures apply-engine entry, so each public writer must separately
   pass a CLI-start-to-first-output end-to-end gate before release.
+- Letter 138 review found that the 2,882 unresolved classification and its set
+  digests were returned after the generic final receipt had already been
+  finalized.  A field write could therefore have a durable completion receipt
+  while the complete-source accounting remained only in volatile CLI output.
+  The common manifest now accepts one optional, strictly content-free
+  `operation_evidence` document containing only bounded named counts and
+  SHA-256 digests.  It is manifest- and approval-bound and is copied into the
+  stable result/final receipt.  Legacy manifests omit the field and retain
+  their prior hash contract.  Manifest/evidence tamper, reflective shapes, and
+  durable receipt round-trip tests pass together with the common Git writer
+  regressions.
 - The separate v0.4.3 release-preparation branch now contains the version,
   package, release-note, upgrade, capability, and resource changes.  Its initial
   161 release/capability/root checks and a further 35 approval-inventory checks

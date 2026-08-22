@@ -29,6 +29,7 @@ from wom_kit.exact_operation_manifest import (  # noqa: E402
     HEARTBEAT_INTERVAL_SECONDS,
     ExactFieldEffect,
     ExactOperationApprovalAuthority,
+    ExactOperationEvidence,
     ExactOperationWriterLock,
     FileExactOperationCheckpointStore,
     ExactOperationItem,
@@ -235,6 +236,104 @@ class ExactOperationManifestTests(unittest.TestCase):
             mismatch.exception.code,
             "operation_approval_binding_mismatch",
         )
+
+    def test_operation_evidence_is_manifest_bound_and_durable(self) -> None:
+        legacy, payloads, target, verifier = self.fixture(
+            item_fields=(("item:one", ("title",)),)
+        )
+        evidence_document = {
+            "schema": "wom-kit/notion-property-backfill-evidence/v1",
+            "counts": {
+                "backfill": 1,
+                "mapped": 1,
+                "review": 137,
+                "total": 11585,
+                "unmapped": 2882,
+            },
+            "digests": {
+                "classification_set_sha256": "sha256:" + "a" * 64,
+                "mirror_snapshot_sha256": "sha256:" + "b" * 64,
+                "unmapped_set_sha256": "sha256:" + "c" * 64,
+            },
+            "private_values_echoed": False,
+        }
+        manifest = ExactOperationManifest.build(
+            operation=legacy.operation,
+            archive_identity_sha256=legacy.archive_identity_sha256,
+            items=legacy.items,
+            operation_evidence=evidence_document,
+        )
+        self.assertNotIn("operation_evidence", legacy.document())
+        self.assertNotEqual(manifest.manifest_sha256, legacy.manifest_sha256)
+        self.assertEqual(
+            ExactOperationManifest.from_document(manifest.document()),
+            manifest,
+        )
+        self.assertEqual(
+            manifest.operation_evidence,
+            ExactOperationEvidence.from_document(evidence_document),
+        )
+        self.assertEqual(
+            manifest.approval_digest_context()["operation_evidence_sha256"],
+            manifest.operation_evidence.evidence_sha256,
+        )
+
+        with tempfile.TemporaryDirectory() as temporary:
+            archive_root = Path(temporary) / "archive"
+            archive_root.mkdir()
+            with exact_operation_writer_lock(archive_root) as writer_lock:
+                store = FileExactOperationCheckpointStore(
+                    archive_root,
+                    writer_lock=writer_lock,
+                )
+                result = apply_exact_operation(
+                    manifest,
+                    payloads=payloads,
+                    writer=_Writer(target),
+                    verifier=verifier,
+                    checkpoint_store=store,
+                )
+                receipt = store.load_final_receipt(result["execution_sha256"])
+        self.assertEqual(result["operation_evidence"], evidence_document)
+        self.assertEqual(receipt["result"]["operation_evidence"], evidence_document)
+
+        tampered = manifest.document()
+        tampered["operation_evidence"]["counts"]["unmapped"] = 2881
+        with self.assertRaises(ExactOperationManifestError) as mismatch:
+            ExactOperationManifest.from_document(tampered)
+        self.assertEqual(
+            mismatch.exception.code,
+            "exact_operation_manifest_digest_mismatch",
+        )
+
+    def test_operation_evidence_rejects_reflective_or_unbounded_shapes(self) -> None:
+        base = {
+            "schema": "wom-kit/synthetic-evidence/v1",
+            "counts": {"total": 1},
+            "digests": {"set_sha256": "sha256:" + "d" * 64},
+            "private_values_echoed": False,
+        }
+        invalid_documents = []
+        private = copy.deepcopy(base)
+        private["private_values_echoed"] = True
+        invalid_documents.append(private)
+        reflective = copy.deepcopy(base)
+        reflective["private_path"] = "private/value"
+        invalid_documents.append(reflective)
+        boolean_count = copy.deepcopy(base)
+        boolean_count["counts"]["total"] = True
+        invalid_documents.append(boolean_count)
+        bad_digest = copy.deepcopy(base)
+        bad_digest["digests"]["set_sha256"] = "private/value"
+        invalid_documents.append(bad_digest)
+        bad_schema = copy.deepcopy(base)
+        bad_schema["schema"] = "private/value"
+        invalid_documents.append(bad_schema)
+
+        for document in invalid_documents:
+            with self.subTest(document_keys=tuple(sorted(document))):
+                with self.assertRaises(ExactOperationManifestError):
+                    ExactOperationEvidence.from_document(document)
 
     def test_apply_writes_hash_chained_field_receipts_and_heartbeats(self) -> None:
         manifest, payloads, target, verifier = self.fixture()
