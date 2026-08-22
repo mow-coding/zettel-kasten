@@ -11,6 +11,7 @@ request path, or matched private value is never copied into a result or error.
 
 from __future__ import annotations
 
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import hashlib
@@ -30,6 +31,10 @@ import yaml
 REQUEST_SCHEMA = "wom-kit/operator-feedback-body-request/v0.1"
 PLAN_SCHEMA = "wom-kit/operator-feedback-body-plan/v0.1"
 RECEIPT_SCHEMA = "wom-kit/operator-feedback-body-receipt/v0.1"
+REVISION_RECEIPT_SCHEMA = "wom-kit/operator-feedback-body-revision-receipt/v0.1"
+SUPERSESSION_RECEIPT_SCHEMA = (
+    "wom-kit/operator-feedback-body-supersession-receipt/v0.1"
+)
 RESULT_SCHEMA = "wom-kit/operator-feedback-body-result/v0.1"
 CLI_REQUIRE_ARCHIVE_MARKER = True
 
@@ -37,6 +42,8 @@ REQUEST_PREFIX = "profiles/local/operator-feedback/requests"
 REQUEST_PATH_PATTERN = "profiles/local/operator-feedback/requests/<name>.json"
 BODY_PREFIX = "ops/feedback/letters"
 RECEIPT_PREFIX = "receipts/operator-feedback/body"
+REVISION_PREFIX = f"{RECEIPT_PREFIX}/revisions"
+SUPERSESSION_PREFIX = f"{RECEIPT_PREFIX}/supersessions"
 RECORD_PREFIX = "ops/feedback"
 
 MAX_REQUEST_BYTES = 256 * 1024
@@ -66,6 +73,37 @@ RECEIPT_KEYS = {
     "reviewed_by",
     "approved_at",
 }
+REVISION_RECEIPT_KEYS = {
+    "schema",
+    "feedback_id",
+    "prior_feedback_ref",
+    "revised_feedback_ref",
+    "body_path",
+    "prior_body_snapshot_path",
+    "prior_record_sha256",
+    "plan_sha256",
+    "request_sha256",
+    "reviewed_by",
+    "approved_at",
+}
+SUPERSESSION_RECEIPT_KEYS = {
+    "schema",
+    "superseded_feedback_id",
+    "superseding_feedback_id",
+    "superseded_feedback_ref",
+    "superseding_feedback_ref",
+    "superseded_status",
+    "superseded_record_sha256",
+    "superseding_body_path",
+    "plan_sha256",
+    "request_sha256",
+    "reviewed_by",
+    "approved_at",
+}
+COMPOSE_INTENTS = ("create", "revise", "supersede")
+IMMUTABLE_FEEDBACK_STATUSES = frozenset(
+    {"delivered", "acknowledged", "resolved", "archived"}
+)
 
 FEEDBACK_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{2,120}$")
 REQUEST_FILE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}\.json$")
@@ -147,6 +185,13 @@ class _PreparedPlan:
     feedback_ref: str
     proposed_relative_path: str
     plan_sha256: str
+    intent: str = "create"
+    expected_body_sha256: str | None = None
+    prior_body_bytes: bytes | None = field(default=None, repr=False)
+    prior_record_sha256: str | None = None
+    prior_status: str | None = None
+    supersedes_feedback_id: str | None = None
+    revision_resume_pending: bool = False
 
 
 def _is_reparse(info: os.stat_result) -> bool:
@@ -525,6 +570,9 @@ def _empty_result(action: str, *, dry_run: bool) -> dict[str, Any]:
         "approved": False,
         "lifecycle_action": action,
         "feedback_id": None,
+        "intent": None,
+        "expected_body_sha256": None,
+        "supersedes_feedback_id": None,
         "feedback_ref": None,
         "plan_sha256": None,
         "request_sha256": None,
@@ -549,6 +597,8 @@ def _empty_result(action: str, *, dry_run: bool) -> dict[str, Any]:
             "request_path_scope": "archive_relative",
             "request_path_pattern": REQUEST_PATH_PATTERN,
             "request_must_be_private_and_git_ignored": True,
+            "same_id_revision_status": "draft_only",
+            "immutable_statuses": sorted(IMMUTABLE_FEEDBACK_STATUSES),
         },
         "external_delivery_performed": False,
         "privacy_guards": {
@@ -568,14 +618,83 @@ def _blocked(action: str, code: str, *, dry_run: bool) -> dict[str, Any]:
     return result
 
 
+def _feedback_record_state(root: Path, feedback_id: str) -> dict[str, Any]:
+    """Read the exact lifecycle authority needed by revise/supersede planning."""
+
+    relative = f"{RECORD_PREFIX}/{feedback_id}.yml"
+    raw = _read_optional_exact(
+        root,
+        _archive_path(root, relative),
+        maximum=MAX_RECORD_BYTES,
+        invalid_code="feedback_record_binding_invalid",
+    )
+    if raw is None:
+        raise _fail("feedback_record_binding_missing")
+    try:
+        document = yaml.load(raw.decode("utf-8"), Loader=_UniqueYamlLoader)
+    except Exception:
+        raise _fail("feedback_record_binding_invalid") from None
+    if not isinstance(document, Mapping):
+        raise _fail("feedback_record_binding_invalid")
+    status = document.get("status")
+    feedback_ref = document.get("feedback_ref")
+    if (
+        document.get("feedback_id") != feedback_id
+        or status not in {"draft", *IMMUTABLE_FEEDBACK_STATUSES}
+        or not isinstance(feedback_ref, str)
+        or FEEDBACK_REF_RE.fullmatch(feedback_ref) is None
+    ):
+        raise _fail("feedback_record_binding_invalid")
+    return {
+        "status": status,
+        "feedback_ref": feedback_ref,
+        "record_sha256": hashlib.sha256(raw).hexdigest(),
+    }
+
+
 def _prepare_plan(
     archive_root: Path | str,
     request_path: Path | str,
     *,
     action: str,
     dry_run: bool,
+    intent: str = "create",
+    expected_body_sha256: str | None = None,
+    supersedes_feedback_id: str | None = None,
     require_archive_marker: bool = False,
 ) -> tuple[dict[str, Any], _PreparedPlan | None]:
+    normalized_intent = str(intent or "").strip().lower()
+    if normalized_intent not in COMPOSE_INTENTS:
+        return _blocked(
+            action,
+            "feedback_body_intent_invalid",
+            dry_run=dry_run,
+        ), None
+    normalized_expected = (
+        expected_body_sha256.strip().lower()
+        if isinstance(expected_body_sha256, str)
+        else None
+    )
+    if normalized_intent in {"revise", "supersede"}:
+        if normalized_expected is None:
+            return _blocked(
+                action,
+                "feedback_body_expected_sha256_required",
+                dry_run=dry_run,
+            ), None
+        if SHA256_RE.fullmatch(normalized_expected) is None:
+            return _blocked(
+                action,
+                "feedback_body_expected_sha256_invalid",
+                dry_run=dry_run,
+            ), None
+    elif expected_body_sha256 is not None:
+        return _blocked(
+            action,
+            "feedback_body_expected_sha256_not_allowed",
+            dry_run=dry_run,
+        ), None
+
     try:
         root = _validated_root(
             archive_root,
@@ -610,6 +729,8 @@ def _prepare_plan(
         )
 
     result = _empty_result(action, dry_run=dry_run)
+    result["intent"] = normalized_intent
+    result["expected_body_sha256"] = normalized_expected
     result["request_sha256"] = request_sha256
     blockers: list[str] = []
     if set(document) != REQUEST_KEYS:
@@ -628,6 +749,22 @@ def _prepare_plan(
     else:
         result["feedback_id"] = safe_id
         result["proposed_relative_path"] = f"{BODY_PREFIX}/{safe_id}.md"
+
+    safe_supersedes_id: str | None = None
+    if normalized_intent == "supersede":
+        if (
+            not isinstance(supersedes_feedback_id, str)
+            or FEEDBACK_ID_RE.fullmatch(supersedes_feedback_id) is None
+            or _contains_private_or_secret_value(supersedes_feedback_id)
+        ):
+            blockers.append("feedback_body_supersedes_id_invalid")
+        elif supersedes_feedback_id == safe_id:
+            blockers.append("feedback_body_supersession_same_id_forbidden")
+        else:
+            safe_supersedes_id = supersedes_feedback_id
+            result["supersedes_feedback_id"] = safe_supersedes_id
+    elif supersedes_feedback_id is not None:
+        blockers.append("feedback_body_supersedes_id_not_allowed")
 
     title = _safe_canonical_text(document.get("title"), maximum=240)
     if title is None or "\n" in title:
@@ -667,6 +804,82 @@ def _prepare_plan(
     body_digest = hashlib.sha256(body_bytes).hexdigest()
     feedback_ref = f"feedback-body-sha256:{body_digest}"
     proposed_relative = f"{BODY_PREFIX}/{safe_id}.md"
+    prior_body_bytes: bytes | None = None
+    prior_record_sha256: str | None = None
+    prior_status: str | None = None
+    revision_resume_pending = False
+    lifecycle_id = (
+        safe_supersedes_id if normalized_intent == "supersede" else safe_id
+    )
+    if normalized_intent in {"revise", "supersede"}:
+        assert lifecycle_id is not None
+        assert normalized_expected is not None
+        lifecycle_body_relative = f"{BODY_PREFIX}/{lifecycle_id}.md"
+        try:
+            current_body = _read_optional_exact(
+                root,
+                _archive_path(root, lifecycle_body_relative),
+                maximum=MAX_BODY_BYTES,
+                invalid_code="feedback_body_existing_body_unsafe",
+            )
+            record_state = _feedback_record_state(root, lifecycle_id)
+        except _BodyContractError as exc:
+            result["blockers"] = [exc.code]
+            return result, None
+        if current_body is None:
+            result["blockers"] = ["feedback_body_existing_body_missing"]
+            return result, None
+        current_digest = hashlib.sha256(current_body).hexdigest()
+        expected_ref = f"feedback-body-sha256:{normalized_expected}"
+        if record_state["feedback_ref"] != expected_ref:
+            result["blockers"] = ["feedback_record_binding_mismatch"]
+            return result, None
+        prior_record_sha256 = str(record_state["record_sha256"])
+        prior_status = str(record_state["status"])
+        if normalized_intent == "revise":
+            if prior_status != "draft":
+                result["blockers"] = [
+                    "feedback_body_revision_status_immutable"
+                ]
+                return result, None
+            if current_digest != normalized_expected:
+                snapshot_relative = (
+                    f"{REVISION_PREFIX}/{safe_id}/{normalized_expected}.md"
+                )
+                try:
+                    snapshot = _read_optional_exact(
+                        root,
+                        _archive_path(root, snapshot_relative),
+                        maximum=MAX_BODY_BYTES,
+                        invalid_code="feedback_body_prior_snapshot_invalid",
+                    )
+                except _BodyContractError as exc:
+                    result["blockers"] = [exc.code]
+                    return result, None
+                if (
+                    current_digest == body_digest
+                    and snapshot is not None
+                    and hashlib.sha256(snapshot).hexdigest()
+                    == normalized_expected
+                ):
+                    prior_body_bytes = snapshot
+                    revision_resume_pending = True
+                else:
+                    result["blockers"] = ["feedback_body_compare_and_swap_changed"]
+                    return result, None
+            else:
+                prior_body_bytes = current_body
+        else:
+            if prior_status not in IMMUTABLE_FEEDBACK_STATUSES:
+                result["blockers"] = [
+                    "feedback_body_supersession_requires_immutable_source"
+                ]
+                return result, None
+            if current_digest != normalized_expected:
+                result["blockers"] = ["feedback_body_compare_and_swap_changed"]
+                return result, None
+            prior_body_bytes = current_body
+
     section_hashes = {
         name: hashlib.sha256(normalized_sections[name].encode("utf-8")).hexdigest()
         for name in REQUIRED_SECTIONS
@@ -684,6 +897,16 @@ def _prepare_plan(
         "body_utf8_bytes": len(body_bytes),
         "proposed_relative_path": proposed_relative,
     }
+    if normalized_intent != "create":
+        plan_material.update(
+            {
+                "intent": normalized_intent,
+                "expected_body_sha256": normalized_expected,
+                "prior_record_sha256": prior_record_sha256,
+                "prior_status": prior_status,
+                "supersedes_feedback_id": safe_supersedes_id,
+            }
+        )
     plan_sha256 = hashlib.sha256(_canonical_json_bytes(plan_material)).hexdigest()
     prepared = _PreparedPlan(
         root=root,
@@ -698,17 +921,39 @@ def _prepare_plan(
         feedback_ref=feedback_ref,
         proposed_relative_path=proposed_relative,
         plan_sha256=plan_sha256,
+        intent=normalized_intent,
+        expected_body_sha256=normalized_expected,
+        prior_body_bytes=prior_body_bytes,
+        prior_record_sha256=prior_record_sha256,
+        prior_status=prior_status,
+        supersedes_feedback_id=safe_supersedes_id,
+        revision_resume_pending=revision_resume_pending,
     )
+    would_change = [
+        f"write {proposed_relative}",
+        f"write {RECEIPT_PREFIX}/{safe_id}.{body_digest[:16]}.json",
+    ]
+    if normalized_intent == "revise":
+        assert normalized_expected is not None
+        would_change.extend(
+            [
+                f"preserve {REVISION_PREFIX}/{safe_id}/{normalized_expected}.md",
+                (
+                    f"write {REVISION_PREFIX}/{safe_id}/"
+                    f"{normalized_expected[:16]}-to-{body_digest[:16]}.json"
+                ),
+            ]
+        )
+    elif normalized_intent == "supersede":
+        would_change.append(f"write {SUPERSESSION_PREFIX}/<binding>.json")
     result.update(
         {
             "ok": True,
             "state": "preview" if dry_run else "ready",
             "feedback_ref": feedback_ref,
             "plan_sha256": plan_sha256,
-            "would_change": [
-                f"write {proposed_relative}",
-                f"write {RECEIPT_PREFIX}/{safe_id}.{body_digest[:16]}.json",
-            ],
+            "would_change": would_change,
+            "revision_resume_pending": revision_resume_pending,
         }
     )
     return result, prepared
@@ -718,6 +963,9 @@ def plan_operator_feedback_body(
     archive_root: Path | str,
     request_path: Path | str,
     *,
+    intent: str = "create",
+    expected_body_sha256: str | None = None,
+    supersedes_feedback_id: str | None = None,
     require_archive_marker: bool = False,
 ) -> dict[str, Any]:
     """Return a content-free, write-free plan for one reviewed body request."""
@@ -727,6 +975,9 @@ def plan_operator_feedback_body(
         request_path,
         action="operator_feedback_body_plan",
         dry_run=True,
+        intent=intent,
+        expected_body_sha256=expected_body_sha256,
+        supersedes_feedback_id=supersedes_feedback_id,
         require_archive_marker=require_archive_marker,
     )
     return result
@@ -912,12 +1163,481 @@ def _thread_lock(root: Path, feedback_id: str) -> threading.RLock:
         return _THREAD_LOCKS.setdefault(key, threading.RLock())
 
 
+@contextmanager
+def _feedback_writer_lock(root: Path, feedback_id: str):
+    """Share the same cross-process lock family as the metadata writer."""
+
+    lock_directory = _archive_path(
+        root,
+        "receipts/operator-feedback/.locks",
+    )
+    _ensure_directory_chain(root, lock_directory)
+    lock_name = hashlib.sha256(feedback_id.encode("utf-8")).hexdigest()
+    handle = (lock_directory / f"{lock_name}.lock").open("a+b")
+    try:
+        handle.seek(0, os.SEEK_END)
+        if handle.tell() == 0:
+            handle.write(b"\0")
+            handle.flush()
+            os.fsync(handle.fileno())
+        handle.seek(0)
+        if os.name == "nt":
+            import msvcrt
+
+            while True:
+                try:
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
+                    break
+                except OSError:
+                    continue
+        else:
+            import fcntl
+
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        yield
+    finally:
+        try:
+            handle.seek(0)
+            if os.name == "nt":
+                import msvcrt
+
+                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        finally:
+            handle.close()
+
+
+@contextmanager
+def _feedback_writer_locks(root: Path, feedback_ids: list[str]):
+    """Acquire multiple feedback locks in stable order to avoid deadlock."""
+
+    with ExitStack() as stack:
+        for feedback_id in sorted(set(feedback_ids)):
+            stack.enter_context(_feedback_writer_lock(root, feedback_id))
+        yield
+
+
+def _replace_exact_body(root: Path, path: Path, value: bytes) -> None:
+    """Publish complete revised bytes atomically inside the existing parent."""
+
+    _ensure_directory_chain(root, path.parent)
+    temporary = path.parent / f".{path.name}.{secrets.token_hex(8)}.revise.tmp"
+    descriptor: int | None = None
+    try:
+        flags = (
+            os.O_WRONLY
+            | os.O_CREAT
+            | os.O_EXCL
+            | getattr(os, "O_BINARY", 0)
+            | getattr(os, "O_NOFOLLOW", 0)
+        )
+        descriptor = os.open(temporary, flags, 0o600)
+        opened = os.fstat(descriptor)
+        if _is_reparse(opened) or not stat.S_ISREG(opened.st_mode):
+            raise OSError("temporary file is unsafe")
+        _write_all(descriptor, value)
+        os.fsync(descriptor)
+        os.close(descriptor)
+        descriptor = None
+        os.replace(temporary, path)
+        _fsync_directory(path.parent)
+    finally:
+        if descriptor is not None:
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+        temporary.unlink(missing_ok=True)
+
+
+def _revision_receipt_relative(prepared: _PreparedPlan) -> str:
+    assert prepared.expected_body_sha256 is not None
+    return (
+        f"{REVISION_PREFIX}/{prepared.feedback_id}/"
+        f"{prepared.expected_body_sha256[:16]}-to-{prepared.body_digest[:16]}.json"
+    )
+
+
+def _revision_receipt_document(
+    prepared: _PreparedPlan,
+    reviewer: str,
+    approved_at: str,
+) -> dict[str, Any]:
+    assert prepared.expected_body_sha256 is not None
+    assert prepared.prior_record_sha256 is not None
+    return {
+        "schema": REVISION_RECEIPT_SCHEMA,
+        "feedback_id": prepared.feedback_id,
+        "prior_feedback_ref": (
+            f"feedback-body-sha256:{prepared.expected_body_sha256}"
+        ),
+        "revised_feedback_ref": prepared.feedback_ref,
+        "body_path": prepared.proposed_relative_path,
+        "prior_body_snapshot_path": (
+            f"{REVISION_PREFIX}/{prepared.feedback_id}/"
+            f"{prepared.expected_body_sha256}.md"
+        ),
+        "prior_record_sha256": prepared.prior_record_sha256,
+        "plan_sha256": prepared.plan_sha256,
+        "request_sha256": prepared.request_sha256,
+        "reviewed_by": reviewer,
+        "approved_at": approved_at,
+    }
+
+
+def _revision_receipt_matches(
+    raw: bytes,
+    prepared: _PreparedPlan,
+    reviewer: str,
+) -> bool:
+    try:
+        document = _parse_json_mapping(raw, "feedback_body_revision_receipt_invalid")
+    except _BodyContractError:
+        return False
+    expected = _revision_receipt_document(
+        prepared,
+        reviewer,
+        str(document.get("approved_at") or ""),
+    )
+    return (
+        set(document) == REVISION_RECEIPT_KEYS
+        and document == expected
+        and _valid_timestamp(document.get("approved_at"))
+    )
+
+
+def _approve_operator_feedback_revision(
+    prepared: _PreparedPlan,
+    result: dict[str, Any],
+    reviewer: str,
+) -> dict[str, Any]:
+    assert prepared.expected_body_sha256 is not None
+    assert prepared.prior_body_bytes is not None
+    body_path = _archive_path(prepared.root, prepared.proposed_relative_path)
+    ordinary_receipt_relative = (
+        f"{RECEIPT_PREFIX}/{prepared.feedback_id}.{prepared.body_digest[:16]}.json"
+    )
+    ordinary_receipt_path = _archive_path(
+        prepared.root,
+        ordinary_receipt_relative,
+    )
+    snapshot_relative = (
+        f"{REVISION_PREFIX}/{prepared.feedback_id}/"
+        f"{prepared.expected_body_sha256}.md"
+    )
+    snapshot_path = _archive_path(prepared.root, snapshot_relative)
+    revision_relative = _revision_receipt_relative(prepared)
+    revision_path = _archive_path(prepared.root, revision_relative)
+    files_written: list[str] = []
+    result["proposed_receipt_relative_path"] = ordinary_receipt_relative
+
+    with _thread_lock(prepared.root, prepared.feedback_id), _feedback_writer_lock(
+        prepared.root,
+        prepared.feedback_id,
+    ):
+        try:
+            record_state = _feedback_record_state(
+                prepared.root,
+                prepared.feedback_id,
+            )
+            current_body = _read_optional_exact(
+                prepared.root,
+                body_path,
+                maximum=MAX_BODY_BYTES,
+                invalid_code="feedback_body_existing_body_unsafe",
+            )
+        except _BodyContractError as exc:
+            result.update({"ok": False, "state": "blocked", "blockers": [exc.code]})
+            return result
+        if (
+            record_state["status"] != "draft"
+            or record_state["record_sha256"] != prepared.prior_record_sha256
+            or record_state["feedback_ref"]
+            != f"feedback-body-sha256:{prepared.expected_body_sha256}"
+        ):
+            result.update(
+                {
+                    "ok": False,
+                    "state": "blocked",
+                    "blockers": ["feedback_body_revision_lifecycle_changed"],
+                }
+            )
+            return result
+        if current_body is None:
+            result.update(
+                {
+                    "ok": False,
+                    "state": "blocked",
+                    "blockers": ["feedback_body_existing_body_missing"],
+                }
+            )
+            return result
+        current_digest = hashlib.sha256(current_body).hexdigest()
+        if current_digest not in {
+            prepared.expected_body_sha256,
+            prepared.body_digest,
+        }:
+            result.update(
+                {
+                    "ok": False,
+                    "state": "blocked",
+                    "blockers": ["feedback_body_compare_and_swap_changed"],
+                }
+            )
+            return result
+
+        existing_snapshot = _read_optional_exact(
+            prepared.root,
+            snapshot_path,
+            maximum=MAX_BODY_BYTES,
+            invalid_code="feedback_body_prior_snapshot_invalid",
+        )
+        if existing_snapshot is None:
+            if current_digest != prepared.expected_body_sha256:
+                result.update(
+                    {
+                        "ok": False,
+                        "state": "partial",
+                        "blockers": ["feedback_body_prior_snapshot_missing"],
+                    }
+                )
+                return result
+            _write_create_if_absent(
+                prepared.root,
+                snapshot_path,
+                prepared.prior_body_bytes,
+            )
+            files_written.append(snapshot_relative)
+        elif existing_snapshot != prepared.prior_body_bytes:
+            result.update(
+                {
+                    "ok": False,
+                    "state": "blocked",
+                    "blockers": ["feedback_body_prior_snapshot_conflict"],
+                }
+            )
+            return result
+
+        ordinary_receipt = _read_optional_exact(
+            prepared.root,
+            ordinary_receipt_path,
+            maximum=MAX_RECEIPT_BYTES,
+            invalid_code="feedback_body_existing_receipt_unsafe",
+        )
+        if ordinary_receipt is None:
+            receipt_bytes = _canonical_json_bytes(
+                _receipt_document(prepared, reviewer, _approved_at())
+            ) + b"\n"
+            _write_create_if_absent(
+                prepared.root,
+                ordinary_receipt_path,
+                receipt_bytes,
+            )
+            files_written.append(ordinary_receipt_relative)
+        elif not _receipt_matches(ordinary_receipt, prepared, reviewer):
+            result.update(
+                {
+                    "ok": False,
+                    "state": "blocked",
+                    "blockers": ["feedback_body_existing_receipt_conflict"],
+                }
+            )
+            return result
+
+        if current_digest == prepared.expected_body_sha256:
+            try:
+                _replace_exact_body(prepared.root, body_path, prepared.body_bytes)
+            except OSError:
+                result.update(
+                    {
+                        "ok": False,
+                        "state": "partial",
+                        "blockers": ["feedback_body_revision_write_failed"],
+                        "files_written": files_written,
+                    }
+                )
+                return result
+            files_written.append(prepared.proposed_relative_path)
+
+        revision_receipt = _read_optional_exact(
+            prepared.root,
+            revision_path,
+            maximum=MAX_RECEIPT_BYTES,
+            invalid_code="feedback_body_revision_receipt_invalid",
+        )
+        if revision_receipt is None:
+            revision_bytes = _canonical_json_bytes(
+                _revision_receipt_document(
+                    prepared,
+                    reviewer,
+                    _approved_at(),
+                )
+            ) + b"\n"
+            try:
+                _write_create_if_absent(
+                    prepared.root,
+                    revision_path,
+                    revision_bytes,
+                )
+            except (OSError, _BodyContractError):
+                result.update(
+                    {
+                        "ok": False,
+                        "state": "partial",
+                        "blockers": ["feedback_body_revision_receipt_write_failed"],
+                        "files_written": files_written,
+                        "next_safe_actions": [
+                            "rerun the unchanged revision request with the same expected body SHA-256"
+                        ],
+                    }
+                )
+                return result
+            files_written.append(revision_relative)
+            revision_receipt = revision_bytes
+        if not _revision_receipt_matches(
+            revision_receipt,
+            prepared,
+            reviewer,
+        ):
+            result.update(
+                {
+                    "ok": False,
+                    "state": "partial",
+                    "blockers": ["feedback_body_revision_receipt_invalid"],
+                    "files_written": files_written,
+                }
+            )
+            return result
+
+        final_body = _read_optional_exact(
+            prepared.root,
+            body_path,
+            maximum=MAX_BODY_BYTES,
+            invalid_code="feedback_body_existing_body_unsafe",
+        )
+        final_snapshot = _read_optional_exact(
+            prepared.root,
+            snapshot_path,
+            maximum=MAX_BODY_BYTES,
+            invalid_code="feedback_body_prior_snapshot_invalid",
+        )
+        if final_body != prepared.body_bytes or final_snapshot != prepared.prior_body_bytes:
+            result.update(
+                {
+                    "ok": False,
+                    "state": "partial",
+                    "blockers": ["feedback_body_revision_final_verification_failed"],
+                    "files_written": files_written,
+                }
+            )
+            return result
+
+    result.update(
+        {
+            "ok": True,
+            "state": "already_written" if not files_written else "revised",
+            "approved": True,
+            "dry_run": False,
+            "body_persisted": True,
+            "receipt_persisted": True,
+            "blockers": [],
+            "would_change": [],
+            "files_written": files_written,
+            "revision_evidence": {
+                "prior_body_snapshot_path": snapshot_relative,
+                "revision_receipt_path": revision_relative,
+                "prior_body_sha256": prepared.expected_body_sha256,
+                "revised_body_sha256": prepared.body_digest,
+                "immutable": True,
+            },
+            "record_binding": {
+                "record_present": True,
+                "feedback_ref_bound": False,
+            },
+            "next_safe_actions": [
+                "use operator-feedback-record update with the fresh current record SHA-256 to bind this revised feedback_ref while status remains draft"
+            ],
+        }
+    )
+    return result
+
+
+def _supersession_receipt_relative(prepared: _PreparedPlan) -> str:
+    binding = hashlib.sha256(
+        _canonical_json_bytes(
+            {
+                "plan_sha256": prepared.plan_sha256,
+                "superseded_feedback_id": prepared.supersedes_feedback_id,
+                "superseding_feedback_id": prepared.feedback_id,
+            }
+        )
+    ).hexdigest()
+    return f"{SUPERSESSION_PREFIX}/{binding[:32]}.json"
+
+
+def _supersession_receipt_document(
+    prepared: _PreparedPlan,
+    reviewer: str,
+    approved_at: str,
+) -> dict[str, Any]:
+    assert prepared.supersedes_feedback_id is not None
+    assert prepared.expected_body_sha256 is not None
+    assert prepared.prior_status is not None
+    assert prepared.prior_record_sha256 is not None
+    return {
+        "schema": SUPERSESSION_RECEIPT_SCHEMA,
+        "superseded_feedback_id": prepared.supersedes_feedback_id,
+        "superseding_feedback_id": prepared.feedback_id,
+        "superseded_feedback_ref": (
+            f"feedback-body-sha256:{prepared.expected_body_sha256}"
+        ),
+        "superseding_feedback_ref": prepared.feedback_ref,
+        "superseded_status": prepared.prior_status,
+        "superseded_record_sha256": prepared.prior_record_sha256,
+        "superseding_body_path": prepared.proposed_relative_path,
+        "plan_sha256": prepared.plan_sha256,
+        "request_sha256": prepared.request_sha256,
+        "reviewed_by": reviewer,
+        "approved_at": approved_at,
+    }
+
+
+def _supersession_receipt_matches(
+    raw: bytes,
+    prepared: _PreparedPlan,
+    reviewer: str,
+) -> bool:
+    try:
+        document = _parse_json_mapping(
+            raw,
+            "feedback_body_supersession_receipt_invalid",
+        )
+    except _BodyContractError:
+        return False
+    expected = _supersession_receipt_document(
+        prepared,
+        reviewer,
+        str(document.get("approved_at") or ""),
+    )
+    return (
+        set(document) == SUPERSESSION_RECEIPT_KEYS
+        and document == expected
+        and _valid_timestamp(document.get("approved_at"))
+    )
+
+
 def approve_operator_feedback_body(
     archive_root: Path | str,
     request_path: Path | str,
     *,
     expected_plan_sha256: str,
     reviewed_by: str,
+    intent: str = "create",
+    expected_body_sha256: str | None = None,
+    supersedes_feedback_id: str | None = None,
     require_archive_marker: bool = False,
 ) -> dict[str, Any]:
     """Write the exact reviewed body and receipt without touching metadata."""
@@ -927,6 +1647,9 @@ def approve_operator_feedback_body(
         request_path,
         action="operator_feedback_body_approve",
         dry_run=False,
+        intent=intent,
+        expected_body_sha256=expected_body_sha256,
+        supersedes_feedback_id=supersedes_feedback_id,
         require_archive_marker=require_archive_marker,
     )
     if prepared is None:
@@ -947,6 +1670,9 @@ def approve_operator_feedback_body(
         result.update({"ok": False, "state": "blocked", "blockers": ["feedback_body_reviewer_invalid"]})
         return result
 
+    if prepared.intent == "revise":
+        return _approve_operator_feedback_revision(prepared, result, reviewer)
+
     body_path = _archive_path(prepared.root, prepared.proposed_relative_path)
     receipt_relative = (
         f"{RECEIPT_PREFIX}/{prepared.feedback_id}.{prepared.body_digest[:16]}.json"
@@ -955,7 +1681,53 @@ def approve_operator_feedback_body(
     result["proposed_receipt_relative_path"] = receipt_relative
     files_written: list[str] = []
 
-    with _thread_lock(prepared.root, prepared.feedback_id):
+    lock_ids = [prepared.feedback_id]
+    if prepared.supersedes_feedback_id is not None:
+        lock_ids.append(prepared.supersedes_feedback_id)
+    with _thread_lock(
+        prepared.root,
+        prepared.feedback_id,
+    ), _feedback_writer_locks(prepared.root, lock_ids):
+        if prepared.intent == "supersede":
+            assert prepared.supersedes_feedback_id is not None
+            assert prepared.expected_body_sha256 is not None
+            try:
+                superseded_state = _feedback_record_state(
+                    prepared.root,
+                    prepared.supersedes_feedback_id,
+                )
+                superseded_body = _read_optional_exact(
+                    prepared.root,
+                    _archive_path(
+                        prepared.root,
+                        f"{BODY_PREFIX}/{prepared.supersedes_feedback_id}.md",
+                    ),
+                    maximum=MAX_BODY_BYTES,
+                    invalid_code="feedback_body_existing_body_unsafe",
+                )
+            except _BodyContractError as exc:
+                result.update(
+                    {"ok": False, "state": "blocked", "blockers": [exc.code]}
+                )
+                return result
+            if (
+                superseded_state["status"] not in IMMUTABLE_FEEDBACK_STATUSES
+                or superseded_state["record_sha256"]
+                != prepared.prior_record_sha256
+                or superseded_state["feedback_ref"]
+                != f"feedback-body-sha256:{prepared.expected_body_sha256}"
+                or superseded_body is None
+                or hashlib.sha256(superseded_body).hexdigest()
+                != prepared.expected_body_sha256
+            ):
+                result.update(
+                    {
+                        "ok": False,
+                        "state": "blocked",
+                        "blockers": ["feedback_body_supersession_source_changed"],
+                    }
+                )
+                return result
         try:
             existing_body = _read_optional_exact(
                 prepared.root,
@@ -1116,7 +1888,88 @@ def approve_operator_feedback_body(
             )
             return result
 
-    state = "already_written" if not files_written else "written"
+        if prepared.intent == "supersede":
+            supersession_relative = _supersession_receipt_relative(prepared)
+            supersession_path = _archive_path(
+                prepared.root,
+                supersession_relative,
+            )
+            try:
+                supersession_receipt = _read_optional_exact(
+                    prepared.root,
+                    supersession_path,
+                    maximum=MAX_RECEIPT_BYTES,
+                    invalid_code="feedback_body_supersession_receipt_invalid",
+                )
+            except _BodyContractError as exc:
+                result.update(
+                    {
+                        "ok": False,
+                        "state": "partial",
+                        "blockers": [exc.code],
+                        "files_written": files_written,
+                    }
+                )
+                return result
+            if supersession_receipt is None:
+                supersession_bytes = _canonical_json_bytes(
+                    _supersession_receipt_document(
+                        prepared,
+                        reviewer,
+                        _approved_at(),
+                    )
+                ) + b"\n"
+                try:
+                    _write_create_if_absent(
+                        prepared.root,
+                        supersession_path,
+                        supersession_bytes,
+                    )
+                except (OSError, _BodyContractError):
+                    result.update(
+                        {
+                            "ok": False,
+                            "state": "partial",
+                            "blockers": [
+                                "feedback_body_supersession_receipt_write_failed"
+                            ],
+                            "files_written": files_written,
+                        }
+                    )
+                    return result
+                files_written.append(supersession_relative)
+                supersession_receipt = supersession_bytes
+            if not _supersession_receipt_matches(
+                supersession_receipt,
+                prepared,
+                reviewer,
+            ):
+                result.update(
+                    {
+                        "ok": False,
+                        "state": "partial",
+                        "blockers": [
+                            "feedback_body_supersession_receipt_invalid"
+                        ],
+                        "files_written": files_written,
+                    }
+                )
+                return result
+            result["supersession_evidence"] = {
+                "superseded_feedback_id": prepared.supersedes_feedback_id,
+                "superseding_feedback_id": prepared.feedback_id,
+                "supersession_receipt_path": supersession_relative,
+                "superseded_body_modified": False,
+                "immutable": True,
+            }
+
+    state = (
+        "already_written"
+        if not files_written
+        else "superseding_body_written"
+        if prepared.intent == "supersede"
+        else "written"
+    )
     result.update(
         {
             "ok": True,

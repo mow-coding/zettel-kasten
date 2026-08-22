@@ -1607,9 +1607,9 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "writes no files, repairs no mirror, calls no providers, and reads no secrets",
             "Project WOM-kit version update",
             "project-version-update",
-            f"read-only preview in {CURRENT_VERSION}",
+            "exact-human single project transaction in v0.4.3",
             "compound_exact_human_approval_binding_required",
-            "write no source, pin, cache deletion, lock, or receipt",
+            "Collision preserve-relocate and bytecode repair approval remain",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
@@ -1657,9 +1657,10 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, current_release_text)
         for phrase in (
-            f"Status: read-only preview/inspection in {CURRENT_VERSION}",
+            "Status: v0.4.3 exact-human project-mirror writer",
             "compound_exact_human_approval_binding_required",
             "ready_to_fetch_on_approve",
+            "requires the same plan",
             "non-force, atomic Git fetch",
             "failed_rollback_incomplete",
             "New Process Required",

@@ -42,7 +42,7 @@ PROMOTION_CHECKLIST_IDS = [
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
-from wom_kit import archive_cli, archive_services
+from wom_kit import archive_cli, archive_services, operator_feedback_body
 from wom_kit.exact_human_approval import (
     _claim_exact_human_approval_core as claim_exact_human_approval,
 )
@@ -1429,19 +1429,21 @@ class ArchiveCliTests(unittest.TestCase):
         }
         arguments.update(overrides)
         before = self.archive_tree_snapshot(fixture["project_root"])
-        result = archive_services.wom_kit_project_version_update(
-            inspection_root or fixture["archive_root"],
-            **arguments,
-        )
-        self.assert_compound_revision_write_blocked(
-            result,
-            lifecycle_action="project_version_update",
-        )
+        with self.assertRaises(archive_services.ArchiveServiceError) as captured:
+            archive_services.wom_kit_project_version_update(
+                inspection_root or fixture["archive_root"],
+                **arguments,
+            )
+        self.assertEqual(captured.exception.args, ("exact_human_approval_required",))
         self.assertEqual(
             self.archive_tree_snapshot(fixture["project_root"]),
             before,
         )
-        return result
+        return {
+            "ok": False,
+            "lifecycle_action": "project_version_update",
+            "reason_codes": ["exact_human_approval_required"],
+        }
 
     def assert_import_external_fails_closed(
         self,
@@ -5073,6 +5075,166 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertEqual(rebind_code, 1, rebind_output)
             self.assertIn("feedback_ref_rebind_forbidden", rebind["blocker_codes"])
 
+    def test_operator_feedback_draft_revision_rebinds_same_record_vertically(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            feedback_id = "synthetic_feedback_draft_revision_144"
+            request_relative = (
+                "profiles/local/operator-feedback/requests/"
+                "synthetic-draft-revision.json"
+            )
+            request_path = archive_root.joinpath(*request_relative.split("/"))
+            request_path.parent.mkdir(parents=True, exist_ok=True)
+            request = {
+                "schema": operator_feedback_body.REQUEST_SCHEMA,
+                "feedback_id": feedback_id,
+                "title": "Synthetic draft revision",
+                "sections": {
+                    "environment": "Synthetic v0.4.3 acceptance fixture.",
+                    "task": "Preserve a draft correction under the same id.",
+                    "observed_failure": "One synthetic fact needed correction.",
+                    "suspected_cause": "The draft predated the corrected evidence.",
+                    "requested_resolution": "Revise only with exact body CAS.",
+                    "reproduction": "Create, bind, revise, and rebind the draft.",
+                },
+            }
+            request_path.write_text(
+                json.dumps(request, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            compose_base = [
+                "operator-feedback-compose",
+                str(archive_root),
+                "--request",
+                request_relative,
+                "--format",
+                "json",
+            ]
+            initial_preview_code, initial_preview_output = self.run_cli(
+                [*compose_base, "--dry-run"]
+            )
+            initial_preview = json.loads(initial_preview_output)
+            self.assertEqual(initial_preview_code, 0, initial_preview_output)
+            initial_code, initial_output = self.run_cli(
+                [
+                    *compose_base,
+                    "--approve",
+                    "--expected-plan-sha256",
+                    initial_preview["plan_sha256"],
+                    "--reviewed-by",
+                    "person:synthetic-reviewer",
+                ]
+            )
+            initial = json.loads(initial_output)
+            self.assertEqual(initial_code, 0, initial_output)
+            initial_ref = initial["feedback_ref"]
+            initial_body_sha = initial_ref.rsplit(":", 1)[-1]
+
+            record_base = [
+                "operator-feedback-record",
+                str(archive_root),
+                "--feedback-id",
+                feedback_id,
+                "--status",
+                "draft",
+                "--format",
+                "json",
+            ]
+            create_record_code, create_record_output = self.run_cli(
+                [
+                    *record_base,
+                    "--feedback-ref",
+                    initial_ref,
+                    "--approve",
+                    "--reviewed-by",
+                    "person:synthetic-reviewer",
+                ]
+            )
+            self.assertEqual(create_record_code, 0, create_record_output)
+
+            request["sections"]["observed_failure"] = (
+                "The corrected synthetic fact is now confirmed before delivery."
+            )
+            request_path.write_text(
+                json.dumps(request, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            revision_args = [
+                *compose_base,
+                "--intent",
+                "revise",
+                "--expected-body-sha256",
+                initial_body_sha,
+            ]
+            revision_preview_code, revision_preview_output = self.run_cli(
+                [*revision_args, "--dry-run"]
+            )
+            revision_preview = json.loads(revision_preview_output)
+            self.assertEqual(
+                revision_preview_code,
+                0,
+                revision_preview_output,
+            )
+            revision_code, revision_output = self.run_cli(
+                [
+                    *revision_args,
+                    "--approve",
+                    "--expected-plan-sha256",
+                    revision_preview["plan_sha256"],
+                    "--reviewed-by",
+                    "person:synthetic-reviewer",
+                ]
+            )
+            revision = json.loads(revision_output)
+            self.assertEqual(revision_code, 0, revision_output)
+            revised_ref = revision["feedback_ref"]
+            self.assertNotEqual(revised_ref, initial_ref)
+            self.assertTrue(revision["revision_evidence"]["immutable"])
+
+            rebind_preview_code, rebind_preview_output = self.run_cli(
+                [
+                    *record_base,
+                    "--feedback-ref",
+                    revised_ref,
+                    "--intent",
+                    "update",
+                    "--dry-run",
+                ]
+            )
+            rebind_preview = json.loads(rebind_preview_output)
+            self.assertEqual(rebind_preview_code, 0, rebind_preview_output)
+            self.assertTrue(
+                rebind_preview["summary"]["feedback_body_authority_verified"]
+            )
+            self.assertEqual(
+                rebind_preview["data"]["feedback_ref_rebinding_scope"],
+                "draft_only_managed_body_cas",
+            )
+            rebind_code, rebind_output = self.run_cli(
+                [
+                    *record_base,
+                    "--feedback-ref",
+                    revised_ref,
+                    "--intent",
+                    "update",
+                    "--expected-record-sha256",
+                    rebind_preview["summary"]["current_record_sha256"],
+                    "--approve",
+                    "--reviewed-by",
+                    "person:synthetic-reviewer",
+                ]
+            )
+            rebind = json.loads(rebind_output)
+            self.assertEqual(rebind_code, 0, rebind_output)
+            self.assertTrue(rebind["approved"])
+            verified = operator_feedback_body.check_operator_feedback_body(
+                archive_root,
+                feedback_id,
+                require_archive_marker=True,
+            )
+            self.assertTrue(verified["ok"], verified)
+            self.assertTrue(verified["record_binding"]["feedback_ref_bound"])
+
     def test_operator_feedback_record_two_process_create_has_one_winner(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")
@@ -5976,6 +6138,137 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertFalse(result["privacy_guards"]["tokens_or_secrets_echoed"])
             self.assertFalse(result["privacy_guards"]["writes"])
             self.assertEqual(before, self.archive_tree_snapshot(archive_root))
+
+    def test_version_windows_path_shadow_diagnostic_is_ordered_and_redacted(self) -> None:
+        first_launcher = r"C:\\WOM-SYNTHETIC\\archive.exe"
+        stale_launcher = r"D:\\PRIVATE-PATH-COMPONENT\\archive.cmd"
+
+        redacted = archive_services.wom_kit_windows_path_shadow_info(
+            redact_local_paths=True,
+            platform_name="nt",
+            candidate_paths=[first_launcher, stale_launcher, first_launcher],
+            launcher_argv0=stale_launcher,
+        )
+
+        self.assertTrue(redacted["checked"])
+        self.assertEqual(redacted["status"], "shadowed")
+        self.assertEqual(redacted["candidate_count"], 2)
+        self.assertEqual(redacted["selected_candidate_ordinal"], 1)
+        self.assertEqual(redacted["shadowed_candidate_count"], 1)
+        self.assertFalse(redacted["running_launcher_matches_selected"])
+        self.assertIn(
+            "multiple_archive_launchers_on_windows_path",
+            redacted["reason_codes"],
+        )
+        self.assertIn(
+            "running_archive_launcher_differs_from_windows_path_selection",
+            redacted["reason_codes"],
+        )
+        serialized = json.dumps(redacted, ensure_ascii=False)
+        self.assertNotIn("PRIVATE-PATH-COMPONENT", serialized)
+        self.assertNotIn("WOM-SYNTHETIC", serialized)
+        self.assertFalse(redacted["closed_actions"]["path_changed"])
+
+        visible = archive_services.wom_kit_windows_path_shadow_info(
+            redact_local_paths=False,
+            platform_name="nt",
+            candidate_paths=[first_launcher, stale_launcher],
+            launcher_argv0=first_launcher,
+        )
+        self.assertEqual(visible["candidates"][0]["path"], first_launcher)
+        self.assertEqual(visible["candidates"][1]["path"], stale_launcher)
+        self.assertTrue(visible["running_launcher_matches_selected"])
+
+    def test_version_reports_path_module_and_project_source_provenance_boundary(self) -> None:
+        injected_path_diagnostic = {
+            "schema": "wom-kit/windows-path-shadow-diagnostic/v0.1",
+            "checked": True,
+            "status": "shadowed",
+            "candidate_count": 2,
+            "running_launcher_matches_selected": True,
+            "reason_codes": ["multiple_archive_launchers_on_windows_path"],
+        }
+        with patch.object(
+            archive_services,
+            "wom_kit_windows_path_shadow_info",
+            return_value=injected_path_diagnostic,
+        ):
+            result = archive_services.wom_kit_version_info(None)
+
+        diagnostic = result["path_shadow_diagnostic"]
+        comparison = diagnostic["provenance_comparison"]
+        self.assertEqual(
+            comparison["selected_launcher_is_running_launcher"],
+            True,
+        )
+        self.assertEqual(
+            comparison["selected_launcher_to_imported_module_binding"],
+            "not_verified",
+        )
+        self.assertEqual(comparison["imported_module_version"], result["version"])
+        self.assertIsNone(comparison["project_source_version"])
+        self.assertIsNone(
+            comparison["project_source_matches_imported_module_version"]
+        )
+        self.assertTrue(comparison["imported_module_path_redacted"])
+        self.assertNotIn("imported_module_path", comparison)
+        self.assertFalse(result["closed_actions"]["windows_path_changed"])
+        self.assertIn(
+            "--no-redact-local-paths",
+            result["next_safe_actions"][0],
+        )
+
+    def test_version_progress_is_immediate_and_stdout_remains_json(self) -> None:
+        code, stdout, stderr = self.run_cli_split(
+            ["version", "--progress", "--format", "json"]
+        )
+
+        result = json.loads(stdout)
+        self.assertIn(code, {0, 1}, stdout)
+        self.assertEqual(result["lifecycle_action"], "wom_kit_version")
+        progress_lines = [line for line in stderr.splitlines() if line.strip()]
+        self.assertGreaterEqual(len(progress_lines), 2, stderr)
+        self.assertTrue(
+            progress_lines[0].startswith(
+                "[version] version-inspection: start"
+            ),
+            stderr,
+        )
+        self.assertIn("[version] source-provenance: start", stderr)
+        self.assertNotIn("archive_services.py", stderr)
+        self.assertIn("source_probe_budget", result)
+
+    def test_version_git_probe_budget_skips_calls_after_deadline(self) -> None:
+        with archive_services._wom_kit_git_probe_budget(0.05) as budget:
+            # Set the injected test budget deterministically in the past;
+            # scheduler/timer granularity must not make this regression flaky.
+            budget["deadline"] = time.monotonic() - 1.0
+            started = time.monotonic()
+            ok, output = archive_services._wom_kit_project_update_git(
+                Path("unused-mirror"),
+                ["status", "--porcelain"],
+            )
+            elapsed = time.monotonic() - started
+
+        self.assertFalse(ok)
+        self.assertEqual(output, "")
+        self.assertTrue(budget["exhausted"])
+        self.assertEqual(budget["git_calls_started"], 0)
+        self.assertEqual(budget["git_calls_skipped"], 1)
+        self.assertLess(elapsed, 0.25)
+
+    def test_project_update_capped_runner_terminates_silent_child_at_timeout(self) -> None:
+        started = time.monotonic()
+        completed = archive_services._wom_kit_project_update_run_capped(
+            [sys.executable, "-c", "import time; time.sleep(30)"],
+            environment=os.environ.copy(),
+            timeout_seconds=0.1,
+            max_output_bytes=1024,
+        )
+        elapsed = time.monotonic() - started
+
+        self.assertIsNone(completed)
+        self.assertLess(elapsed, 3.0)
 
     def test_version_command_reports_project_source_mirror_drift(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -8603,36 +8896,77 @@ class ArchiveCliTests(unittest.TestCase):
         self.assertIsNotNone(shutil.which("git"))
         with tempfile.TemporaryDirectory() as tmp:
             fixture = self.create_project_version_update_fixture(Path(tmp))
-            before = self.archive_tree_snapshot(fixture["project_root"])
-            code, stdout, stderr = self.run_cli_split(
-                [
-                    "project-version-update",
-                    str(fixture["project_root"]),
-                    "--target",
-                    fixture["target_tag"],
-                    "--approve",
-                    "--affirm-external-writers-quiescent",
-                    "--reviewed-by",
-                    "person:project-version-fixed-gate-reviewer",
-                    "--progress",
-                    "--format",
-                    "json",
-                ]
-            )
-            self.assertEqual(code, 1, stdout + stderr)
+            command = [
+                "project-version-update",
+                str(fixture["project_root"]),
+                "--target",
+                fixture["target_tag"],
+                "--approve",
+                "--affirm-external-writers-quiescent",
+                "--reviewed-by",
+                "person:project-version-reviewer",
+                "--progress",
+                "--format",
+                "json",
+            ]
+            code, stdout, stderr = self.run_cli_split(command)
+            self.assertEqual(code, 0, stdout + stderr)
             result = json.loads(stdout)
-            self.assertEqual(result["state"], "blocked")
-            self.assertEqual(result["lifecycle_action"], "project_version_update")
-            self.assertEqual(
-                result["reason_codes"],
-                ["compound_exact_human_approval_binding_required"],
+            self.assertEqual(result["status"], "updated_restart_required")
+            self.assertTrue(result["fetch"]["attempted"])
+            self.assertTrue(result["fetch"]["succeeded"])
+            self.assertTrue(result["target"]["annotated_tag_verified"])
+            self.assertTrue(
+                result["target"]["configured_origin_main_ancestry_verified"]
             )
-            self.assertFalse(result["private_values_echoed"])
             self.assertEqual(
-                self.archive_tree_snapshot(fixture["project_root"]),
-                before,
+                result["source_mirror"]["head_commit_after"],
+                fixture["target_commit"],
             )
-            self.assertNotIn(fixture["target_commit"], stdout)
+            self.assertEqual(
+                result["operation_exact_human_approval"]["operation"],
+                "project_version_update",
+            )
+            self.assertEqual(
+                result["exact_human_approval"]["status"],
+                "succeeded",
+            )
+            self.assertIn("project-preflight: start", stderr)
+            self.assertIn("fetch-release: start", stderr)
+            self.assertIn("write-receipt: done", stderr)
+            self.assertEqual(
+                self.git_fixture_command(fixture["mirror"], "rev-parse", "HEAD"),
+                fixture["target_commit"],
+            )
+            receipts = list(
+                (
+                    fixture["metadata_root"]
+                    / "receipts"
+                    / "version-updates"
+                ).glob("*.json")
+            )
+            self.assertEqual(len(receipts), 1)
+            self.assertFalse(
+                (fixture["metadata_root"] / "version-update.lock").exists()
+            )
+
+            replay_code, replay_stdout, replay_stderr = self.run_cli_split(command)
+            replay = json.loads(replay_stdout)
+            self.assertEqual(replay_code, 0, replay_stdout + replay_stderr)
+            self.assertEqual(replay["status"], "no_change")
+            self.assertEqual(replay["files_written"], [])
+            self.assertEqual(
+                len(
+                    list(
+                        (
+                            fixture["metadata_root"]
+                            / "receipts"
+                            / "version-updates"
+                        ).glob("*.json")
+                    )
+                ),
+                1,
+            )
 
     def test_project_version_update_rematerializes_crlf_runtime_sources_after_lf_attribute_transition(
         self,
@@ -10026,7 +10360,7 @@ class ArchiveCliTests(unittest.TestCase):
                 affirm_external_writers_quiescent=False
             )
 
-    def test_project_version_update_platform_capability_keeps_preview_but_blocks_approval(
+    def test_project_version_update_platform_preview_keeps_unbound_writer_closed(
         self,
     ) -> None:
         self.assertIsNotNone(shutil.which("git"))
@@ -10045,17 +10379,17 @@ class ArchiveCliTests(unittest.TestCase):
                 "WOM_KIT_PROJECT_UPDATE_APPROVAL_PLATFORM_SUPPORTED",
                 False,
             ):
-                result = archive_services.wom_kit_project_version_update(
-                    fixture["archive_root"],
-                    target=fixture["target_tag"],
-                    approve=True,
-                    reviewed_by="person:platform-fixed-gate-reviewer",
-                    affirm_external_writers_quiescent=True,
-                )
-            self.assert_compound_revision_write_blocked(
-                result,
-                lifecycle_action="project_version_update",
-            )
+                with self.assertRaisesRegex(
+                    archive_services.ArchiveServiceError,
+                    "exact_human_approval_required",
+                ):
+                    archive_services.wom_kit_project_version_update(
+                        fixture["archive_root"],
+                        target=fixture["target_tag"],
+                        approve=True,
+                        reviewed_by="person:platform-fixed-gate-reviewer",
+                        affirm_external_writers_quiescent=True,
+                    )
             self.assertEqual(
                 self.archive_tree_snapshot(fixture["project_root"]),
                 before,

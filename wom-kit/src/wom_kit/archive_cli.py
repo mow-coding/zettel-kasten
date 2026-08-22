@@ -4400,10 +4400,25 @@ def command_doctor(args: argparse.Namespace) -> int:
 
 
 def command_version(args: argparse.Namespace) -> int:
-    result = archive_services.wom_kit_version_info(
-        Path(args.inspection_root) if args.inspection_root else None,
-        redact_local_paths=args.redact_local_paths,
+    reporter = CommandProgressReporter(
+        bool(getattr(args, "progress", False)),
+        label="version",
+        heartbeat_interval_seconds=5.0,
+        stage_order=(
+            "windows-path-resolution",
+            "project-pin",
+            "source-provenance",
+            "runtime-alignment",
+        ),
     )
+    try:
+        result = archive_services.wom_kit_version_info(
+            Path(args.inspection_root) if args.inspection_root else None,
+            redact_local_paths=args.redact_local_paths,
+            progress_callback=reporter.progress,
+        )
+    finally:
+        reporter.close()
     if args.format == "json":
         print_json(result)
     else:
@@ -4416,6 +4431,29 @@ def command_version(args: argparse.Namespace) -> int:
             print(f"Import module: {module_path}")
         elif import_origin.get("module_path_redacted"):
             print("Import module: redacted (pass --no-redact-local-paths to inspect)")
+        path_shadow = (
+            result.get("path_shadow_diagnostic")
+            if isinstance(result.get("path_shadow_diagnostic"), dict)
+            else {}
+        )
+        if path_shadow.get("checked"):
+            print(
+                "Windows PATH launcher: "
+                f"{path_shadow.get('status') or '-'} "
+                f"(candidates={path_shadow.get('candidate_count', 0)})"
+            )
+            selected_candidate = (
+                path_shadow.get("selected_candidate")
+                if isinstance(path_shadow.get("selected_candidate"), dict)
+                else {}
+            )
+            if selected_candidate.get("path"):
+                print(f"Selected launcher: {selected_candidate['path']}")
+            elif selected_candidate.get("file_name"):
+                print(
+                    "Selected launcher: "
+                    f"{selected_candidate['file_name']} (path redacted)"
+                )
         project_pin = result.get("project_pin") if isinstance(result.get("project_pin"), dict) else {}
         if project_pin.get("checked"):
             installed = project_pin.get("installed_version") or "-"
@@ -5503,12 +5541,6 @@ def command_project_version_update_collision(
 
 
 def command_project_version_update(args: argparse.Namespace) -> int:
-    if args.approve:
-        return _exact_human_approval_cli_error(
-            args,
-            lifecycle_action="project_version_update",
-            reason_code="compound_exact_human_approval_binding_required",
-        )
     reporter = CommandProgressReporter(
         bool(getattr(args, "progress", False)),
         label="project-version-update",
@@ -5537,21 +5569,84 @@ def command_project_version_update(args: argparse.Namespace) -> int:
                 f"[project-version-update] result pending: {capture.metadata['path']}",
                 file=sys.stderr,
             )
-        result = archive_services.wom_kit_project_version_update(
-            Path(args.inspection_root),
-            target=args.target,
-            dry_run=bool(args.dry_run),
-            approve=bool(args.approve),
-            reviewed_by=args.reviewed_by,
-            affirm_external_writers_quiescent=bool(
-                args.affirm_external_writers_quiescent
-            ),
-            progress_callback=operation_progress_callback(
-                reporter,
-                operation_journal,
-            ),
+        inspection_root = Path(args.inspection_root)
+        progress_callback = operation_progress_callback(
+            reporter,
+            operation_journal,
         )
-    except (operation_control.OperationControlError, OSError, ValueError) as exc:
+        if args.approve:
+            if not str(args.reviewed_by or "").strip():
+                raise ValueError("project_version_update_reviewer_required")
+            if not bool(args.affirm_external_writers_quiescent):
+                raise ValueError("project_version_update_quiescence_required")
+            preview = archive_services.wom_kit_project_version_update(
+                inspection_root,
+                target=args.target,
+                dry_run=True,
+                approve=False,
+                reviewed_by=args.reviewed_by,
+                progress_callback=progress_callback,
+            )
+            if preview.get("ok") is not True:
+                result = preview
+            else:
+                binding = (
+                    operation_approval_binding
+                    .project_version_update_approval_binding(preview)
+                )
+                approval_root = (
+                    archive_services
+                    .wom_kit_project_version_update_approval_archive_root(
+                        inspection_root
+                    )
+                )
+                context = binding.context(
+                    archive_id=archive_services.read_archive_id(approval_root),
+                    reviewer_claim=str(args.reviewed_by).strip(),
+                )
+
+                def _write_project_version_update(claim) -> dict[str, Any]:
+                    return archive_services.wom_kit_project_version_update(
+                        inspection_root,
+                        target=args.target,
+                        dry_run=False,
+                        approve=True,
+                        reviewed_by=args.reviewed_by,
+                        affirm_external_writers_quiescent=True,
+                        expected_exact_approval_plan_sha256=(
+                            binding.plan_sha256
+                        ),
+                        expected_exact_approval_target_binding_sha256=(
+                            binding.target_binding_sha256
+                        ),
+                        exact_human_approval_claim=claim,
+                        progress_callback=progress_callback,
+                    )
+
+                result = _execute_exact_human_approved_write(
+                    approval_root,
+                    context,
+                    _write_project_version_update,
+                )
+        else:
+            result = archive_services.wom_kit_project_version_update(
+                inspection_root,
+                target=args.target,
+                dry_run=True,
+                approve=False,
+                reviewed_by=args.reviewed_by,
+                progress_callback=progress_callback,
+            )
+    except (
+        operation_control.OperationControlError,
+        operation_approval_binding.OperationApprovalBindingError,
+        archive_services.ArchiveServiceError,
+        ExactHumanApprovalError,
+        ExactHumanApprovalWindowsError,
+        ExactHumanApprovalWorkflowError,
+        OSError,
+        ValueError,
+    ) as exc:
         failure_result_written = False
         if capture is not None:
             try:
@@ -6002,6 +6097,17 @@ def command_operator_feedback_compose(args: argparse.Namespace) -> int:
             result = api.plan_operator_feedback_body(
                 Path(args.archive_root),
                 args.request,
+                intent=getattr(args, "intent", "create"),
+                expected_body_sha256=getattr(
+                    args,
+                    "expected_body_sha256",
+                    None,
+                ),
+                supersedes_feedback_id=getattr(
+                    args,
+                    "supersedes_feedback_id",
+                    None,
+                ),
                 **strict_root_kwargs,
             )
         else:
@@ -6010,6 +6116,17 @@ def command_operator_feedback_compose(args: argparse.Namespace) -> int:
                 args.request,
                 expected_plan_sha256=args.expected_plan_sha256,
                 reviewed_by=args.reviewed_by,
+                intent=getattr(args, "intent", "create"),
+                expected_body_sha256=getattr(
+                    args,
+                    "expected_body_sha256",
+                    None,
+                ),
+                supersedes_feedback_id=getattr(
+                    args,
+                    "supersedes_feedback_id",
+                    None,
+                ),
                 **strict_root_kwargs,
             )
         if not isinstance(result, dict):
@@ -26193,15 +26310,6 @@ COMPOUND_APPROVAL_BLOCKED_HELP = (
     "status."
 )
 
-PROJECT_VERSION_UPDATE_BLOCKED_HELP = (
-    f"Unavailable in v{__version__}: the project-mirror updater still needs a "
-    "complete exact compound human-approval binding. To leave v0.4.0, install "
-    f"the exact public v{__version__} wheel using the documented bootstrap, "
-    "start a new process, and use that global CLI. The bootstrap does not "
-    "change the project-local mirror."
-)
-
-
 COMPOUND_APPROVAL_BLOCKED_COMMANDS = frozenset(
     {
         "activity-group-membership-recover",
@@ -26249,7 +26357,6 @@ COMPOUND_APPROVAL_BLOCKED_COMMANDS = frozenset(
         "principal-register",
         "principal-unregister",
         "project-bytecode-repair",
-        "project-version-update",
         "project-version-update-collision",
         "repair-gitignore",
         "quarantine-foreign-block",
@@ -26306,11 +26413,7 @@ def _mark_compound_approval_help(
             raise RuntimeError(
                 "compound_approval_help_action_invalid:" + command_name
             )
-        approval_actions[0].help = (
-            PROJECT_VERSION_UPDATE_BLOCKED_HELP
-            if command_name == "project-version-update"
-            else COMPOUND_APPROVAL_BLOCKED_HELP
-        )
+        approval_actions[0].help = COMPOUND_APPROVAL_BLOCKED_HELP
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -26360,6 +26463,14 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_false",
         default=True,
         help="Include local module and inspection paths in JSON output.",
+    )
+    version.add_argument(
+        "--progress",
+        action="store_true",
+        help=(
+            "Write immediate content-free version inspection progress and bounded "
+            "heartbeats to stderr."
+        ),
     )
     version.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     version.set_defaults(func=command_version)
@@ -26771,6 +26882,28 @@ def build_parser() -> argparse.ArgumentParser:
         "--request",
         required=True,
         help="Archive-relative private request at profiles/local/operator-feedback/requests/<name>.json.",
+    )
+    operator_feedback_compose.add_argument(
+        "--intent",
+        choices=["create", "revise", "supersede"],
+        default="create",
+        help=(
+            "Create a new body, revise the same-id draft with body-hash CAS, "
+            "or create a new body that explicitly supersedes an immutable record."
+        ),
+    )
+    operator_feedback_compose.add_argument(
+        "--expected-body-sha256",
+        help=(
+            "Required for revise/supersede: exact current body SHA-256 from "
+            "operator-feedback-body-check."
+        ),
+    )
+    operator_feedback_compose.add_argument(
+        "--supersedes-feedback-id",
+        help=(
+            "Required only with --intent supersede: immutable prior feedback id."
+        ),
     )
     operator_feedback_compose_action = operator_feedback_compose.add_mutually_exclusive_group(required=True)
     operator_feedback_compose_action.add_argument("--dry-run", action="store_true", help="Plan only; write nothing.")

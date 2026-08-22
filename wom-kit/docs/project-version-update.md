@@ -1,12 +1,14 @@
 # Project Version Update
 
-Status: read-only preview/inspection in v0.4.2; v0.3 mutation contract is historical
+Status: v0.4.3 exact-human project-mirror writer; collision and bytecode repair writers remain closed
 
-Current boundary: `project-version-update`, collision preserve-relocate, and
-`project-bytecode-repair` approval fail with
-`compound_exact_human_approval_binding_required` before private project read or
-mutation. The dry-runs and inspections below remain available; older approval
-examples describe historical receipts only and are not v0.4.2 run instructions.
+Current boundary: `project-version-update` is reopened only through the native
+exact-human approval broker. The CLI derives a content-free dry-run digest and
+target binding, a person approves that exact context, and the service derives
+the preview again and authenticates the one-use claim before the existing
+locked updater may fetch or write. Direct unbound service calls fail before a
+private project read. Collision preserve-relocate and `project-bytecode-repair`
+approval remain fixed closed.
 
 ## Plain-Language Purpose
 
@@ -60,16 +62,29 @@ archive project-version-update <project-or-archive-root> `
   --format json
 ```
 
-The target may not exist locally yet. In that case
-Windows may report the historical status `ready_to_fetch_on_approve`. In
-v0.4.2 that status is diagnostic only: approval is fixed fail-closed before
-private project reads, fetch, or materialization. POSIX also remains preview
-only.
+The target may not exist locally yet. In that case Windows may report
+`ready_to_fetch_on_approve`. In v0.4.3 this is an eligible exact-human preview,
+not permission by itself. Approval must be invoked from the CLI with a safe
+reviewer and the complete-transaction quiescence affirmation:
 
-After a human reviews the preview, stop. In v0.4.2 approval returns
-`compound_exact_human_approval_binding_required` before reading the private
-project target, fetching refs, materializing a tree, changing a pin, creating
-a lock, or publishing a receipt.
+```powershell
+archive project-version-update <project-or-archive-root> `
+  --target vX.Y.Z `
+  --approve `
+  --reviewed-by person:me `
+  --affirm-external-writers-quiescent `
+  --progress `
+  --format json
+```
+
+The native dialog binds the exact content-free preview, source HEAD, target
+release tag and locally known target commit, recognized pin set,
+materialization preflight, warnings, and proposed effect set. Immediately
+after approval, the service recomputes that preview and requires the same plan
+and target digests plus the authenticated claim. The legacy updater then keeps
+its own lock, checkpointed change detection, exact tag/origin verification,
+materialization verification, rollback, pin, and receipt checks. A mismatch or
+stale claim fails before the updater starts. POSIX remains preview-only.
 
 These project-local output paths opt into v0.3.314 operation observation. When
 the command is started from an archive root, use a fresh
@@ -241,13 +256,14 @@ held write-path directory behind the project root, `.zettel-kasten/source`,
 its `.git` tree, pins, lock, and receipts cannot be renamed, deleted, or
 replaced by a junction while the transaction resolves child paths.
 
-Every v0.4.2 platform can still run the useful read-only dry-run. POSIX result is
-`status: preview_only_platform_unsupported`, includes a warning, and reports
-`write_boundary.approval_platform_supported: false`. v0.4.2 approval on every
-platform returns `compound_exact_human_approval_binding_required` before
-private project reads or writes. An open POSIX directory descriptor does not
-prevent another process from renaming that pathname, and the Git plus complete
-tree update is not descriptor-relative end to end.
+Every v0.4.3 platform can still run the useful read-only dry-run. POSIX result
+is `status: preview_only_platform_unsupported`, includes a warning, and reports
+`write_boundary.approval_platform_supported: false`; the exact-human writer is
+Windows-only. On Windows, an unbound direct approval call returns
+`exact_human_approval_required` before private project reads, and the bound CLI
+route must authenticate the exact preview and target. An open POSIX directory
+descriptor does not prevent another process from renaming that pathname, and
+the Git plus complete-tree update is not descriptor-relative end to end.
 
 ## What Approval Verifies
 

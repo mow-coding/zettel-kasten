@@ -96,6 +96,7 @@ from .operation_approval_binding import (
     assert_same_binding,
     build_operation_exact_human_approval_receipt,
     mint_zet_approval_binding,
+    project_version_update_approval_binding,
     promote_zet_approval_binding,
     retire_draft_approval_binding,
     warning_override_approval_binding,
@@ -5287,6 +5288,15 @@ def operator_feedback_record(
     current_record_sha256: str | None = None
     current_record: dict[str, Any] | None = None
 
+    def draft_ref_rebind_requested() -> bool:
+        return bool(
+            normalized_intent == "update"
+            and isinstance(current_record, dict)
+            and current_record.get("status") == "draft"
+            and normalized_status == "draft"
+            and current_record.get("feedback_ref") != safe_ref
+        )
+
     def inspect_feedback_body_authority() -> None:
         nonlocal feedback_body_reference_kind
         nonlocal feedback_body_preflight_performed
@@ -5294,11 +5304,9 @@ def operator_feedback_record(
         nonlocal feedback_body_receipt_path
         nonlocal feedback_body_receipt_sha256
 
-        if (
-            normalized_intent != "create"
-            or safe_id is None
-            or safe_ref is None
-        ):
+        if safe_id is None or safe_ref is None:
+            return
+        if normalized_intent != "create" and not draft_ref_rebind_requested():
             return
         if not safe_ref.startswith("feedback-body-sha256:"):
             feedback_body_reference_kind = "legacy_or_external"
@@ -5354,17 +5362,26 @@ def operator_feedback_record(
                 if isinstance(value.get("blockers"), list)
                 else []
             )
-            record_binding_valid_for_preflight = bool(
-                (
-                    record_binding.get("record_present") is False
-                    and inspection_blockers == ["feedback_record_binding_missing"]
-                )
-                or (
+            if draft_ref_rebind_requested():
+                record_binding_valid_for_preflight = bool(
                     record_binding.get("record_present") is True
-                    and record_binding.get("feedback_ref_bound") is True
-                    and inspection_blockers == []
+                    and record_binding.get("feedback_ref_bound") is False
+                    and inspection_blockers
+                    == ["feedback_record_binding_mismatch"]
                 )
-            )
+            else:
+                record_binding_valid_for_preflight = bool(
+                    (
+                        record_binding.get("record_present") is False
+                        and inspection_blockers
+                        == ["feedback_record_binding_missing"]
+                    )
+                    or (
+                        record_binding.get("record_present") is True
+                        and record_binding.get("feedback_ref_bound") is True
+                        and inspection_blockers == []
+                    )
+                )
             return bool(
                 value.get("feedback_ref") == safe_ref
                 and value.get("body_persisted") is True
@@ -5482,10 +5499,16 @@ def operator_feedback_record(
                 "feedback_record_identity_mismatch",
                 "the existing feedback record identity does not match the requested id.",
             )
-        if current_record.get("feedback_ref") != safe_ref:
+        if (
+            current_record.get("feedback_ref") != safe_ref
+            and not draft_ref_rebind_requested()
+        ):
             block(
                 "feedback_ref_rebind_forbidden",
-                "update intent cannot change the existing feedback_ref.",
+                (
+                    "feedback_ref can change only while both the current and "
+                    "requested status are draft, after a managed body revision."
+                ),
             )
         current_record_sha256 = hashlib.sha256(current_bytes).hexdigest()
         if approve and expected_digest and current_record_sha256 != expected_digest:
@@ -5495,8 +5518,8 @@ def operator_feedback_record(
             )
 
     if safe_id and safe_ref and normalized_intent in OPERATOR_FEEDBACK_RECORD_INTENTS:
-        inspect_feedback_body_authority()
         inspect_current_record()
+        inspect_feedback_body_authority()
 
     updating = normalized_intent == "update" and current_record is not None
     record = {
@@ -5568,8 +5591,8 @@ def operator_feedback_record(
             # Re-evaluate the create/update precondition while holding the same
             # cross-process lock used by every sanctioned writer.
             before_commit_blocker_count = len(blockers)
-            inspect_feedback_body_authority()
             inspect_current_record()
+            inspect_feedback_body_authority()
             if len(blockers) == before_commit_blocker_count:
                 try:
                     _write_bytes_create_if_absent(receipt_path, receipt_bytes)
@@ -5611,10 +5634,10 @@ def operator_feedback_record(
     if normalized_status == "draft" or normalized_intent == "create":
         next_safe_actions.append(
             (
-                "If a created draft record is wrong, preserve its feedback_ref, "
-                "preview an update to status archived with the current record "
-                "SHA-256, and approve only that fresh withdrawal before creating "
-                "a corrected record under a new id."
+                "A draft body may be revised under the same id with "
+                "operator-feedback-compose --intent revise and exact body SHA-256; "
+                "then rebind this draft record with a fresh record SHA-256. "
+                "Delivered, acknowledged, resolved, and archived bodies remain immutable."
             )
         )
     return {
@@ -5647,7 +5670,8 @@ def operator_feedback_record(
             "status_lifecycle": list(OPERATOR_FEEDBACK_STATUSES),
             "record_intents": list(OPERATOR_FEEDBACK_RECORD_INTENTS),
             "update_requires_expected_record_sha256": True,
-            "feedback_ref_rebinding_allowed": False,
+            "feedback_ref_rebinding_allowed": True,
+            "feedback_ref_rebinding_scope": "draft_only_managed_body_cas",
             "title_policy": {
                 "max_length": 240,
                 "descriptive_security_words_allowed": True,
@@ -98021,6 +98045,43 @@ def read_pyproject_version_text(text: str) -> str | None:
 
 WOM_KIT_VERSION_METADATA_MAX_BYTES = 64 * 1024
 WOM_KIT_VERSION_PIN_MAX_BYTES = 1024
+WOM_KIT_VERSION_GIT_PROBE_BUDGET_SECONDS = 12.0
+WOM_KIT_WINDOWS_PATH_PROBE_TIMEOUT_SECONDS = 2.0
+WOM_KIT_WINDOWS_PATH_MAX_CANDIDATES = 64
+_WOM_KIT_GIT_PROBE_BUDGET_LOCAL = threading.local()
+
+
+@contextmanager
+def _wom_kit_git_probe_budget(
+    seconds: float,
+) -> Iterator[dict[str, Any]]:
+    """Apply one total deadline to all Git reads in a version inspection.
+
+    Individual Git calls were already capped.  A project with a stuck helper
+    could nevertheless consume that cap repeatedly.  The shared deadline keeps
+    the complete read-only provenance inspection bounded without weakening the
+    longer limits used by the separately approved project update writer.
+    """
+
+    prior = getattr(_WOM_KIT_GIT_PROBE_BUDGET_LOCAL, "state", None)
+    state: dict[str, Any] = {
+        "budget_seconds": max(0.05, float(seconds)),
+        "deadline": time.monotonic() + max(0.05, float(seconds)),
+        "git_calls_started": 0,
+        "git_calls_skipped": 0,
+        "exhausted": False,
+    }
+    _WOM_KIT_GIT_PROBE_BUDGET_LOCAL.state = state
+    try:
+        yield state
+    finally:
+        if prior is None:
+            try:
+                delattr(_WOM_KIT_GIT_PROBE_BUDGET_LOCAL, "state")
+            except AttributeError:
+                pass
+        else:
+            _WOM_KIT_GIT_PROBE_BUDGET_LOCAL.state = prior
 
 
 def wom_kit_real_path_kind(root: Path, path: Path) -> str:
@@ -100119,11 +100180,209 @@ def wom_kit_runtime_alignment(
     return runtime_alignment, next_safe_actions
 
 
+def _wom_kit_windows_archive_path_candidates() -> tuple[list[str], str, bool]:
+    """Resolve Windows application candidates through the system `where.exe`.
+
+    The probe runs in a capped child process because directly statting every
+    PATH entry can block on an unavailable network drive.  Only the resulting
+    executable paths are parsed; callers decide whether those paths may be
+    displayed.
+    """
+
+    system_root = os.environ.get("SystemRoot") or os.environ.get("WINDIR")
+    if not system_root:
+        return [], "windows_system_root_unavailable", False
+    where_executable = Path(system_root) / "System32" / "where.exe"
+    if not where_executable.is_file():
+        return [], "windows_where_unavailable", False
+    environment = {
+        "PATH": os.environ.get("PATH", ""),
+        "PATHEXT": os.environ.get("PATHEXT", ".COM;.EXE;.BAT;.CMD"),
+        "SystemRoot": system_root,
+        "WINDIR": os.environ.get("WINDIR", system_root),
+    }
+    completed = _wom_kit_project_update_run_capped(
+        [str(where_executable), "archive"],
+        environment=environment,
+        timeout_seconds=WOM_KIT_WINDOWS_PATH_PROBE_TIMEOUT_SECONDS,
+        max_output_bytes=256 * 1024,
+    )
+    if completed is None:
+        return [], "windows_where_probe_timed_out_or_failed", False
+    return_code, stdout = completed
+    if return_code not in {0, 1}:
+        return [], "windows_where_probe_failed", False
+    try:
+        decoded = os.fsdecode(stdout)
+    except (TypeError, UnicodeError):
+        return [], "windows_where_output_unreadable", False
+    candidates: list[str] = []
+    seen: set[str] = set()
+    truncated = False
+    for line in decoded.splitlines():
+        candidate = line.strip().strip('"')
+        if not candidate:
+            continue
+        key = candidate.replace("/", "\\").rstrip("\\").casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        if len(candidates) >= WOM_KIT_WINDOWS_PATH_MAX_CANDIDATES:
+            truncated = True
+            break
+        candidates.append(candidate)
+    return candidates, "windows_where_probe_complete", truncated
+
+
+def wom_kit_windows_path_shadow_info(
+    *,
+    redact_local_paths: bool = True,
+    platform_name: str | None = None,
+    candidate_paths: Iterable[str] | None = None,
+    launcher_argv0: str | None = None,
+) -> dict[str, Any]:
+    """Describe Windows `archive` launcher precedence without changing PATH.
+
+    ``candidate_paths`` and ``platform_name`` are dependency-injection seams
+    for deterministic tests.  Production callers omit both and use the bounded
+    system resolver above.
+    """
+
+    effective_platform = os.name if platform_name is None else platform_name
+    summary: dict[str, Any] = {
+        "schema": "wom-kit/windows-path-shadow-diagnostic/v0.1",
+        "checked": effective_platform == "nt",
+        "status": "not_windows",
+        "probe_reason_code": "not_windows",
+        "candidate_count": 0,
+        "candidate_count_is_lower_bound": False,
+        "selected_candidate_ordinal": None,
+        "selected_candidate": None,
+        "shadowed_candidate_count": 0,
+        "running_launcher_observed": False,
+        "running_launcher_matches_selected": None,
+        "candidates": [],
+        "reason_codes": [],
+        "path_order_contract": (
+            "candidate ordinal 1 is the launcher selected first by the bounded "
+            "Windows application-resolution probe"
+        ),
+        "redaction": {"local_paths_redacted": bool(redact_local_paths)},
+        "closed_actions": {
+            "path_changed": False,
+            "launcher_replaced": False,
+            "files_written": False,
+        },
+    }
+    if effective_platform != "nt":
+        return summary
+
+    if candidate_paths is None:
+        resolved_candidates, probe_reason_code, truncated = (
+            _wom_kit_windows_archive_path_candidates()
+        )
+    else:
+        resolved_candidates = [str(value) for value in candidate_paths]
+        probe_reason_code = "injected_candidate_probe_complete"
+        truncated = False
+
+    candidates: list[str] = []
+    seen: set[str] = set()
+    for raw_candidate in resolved_candidates:
+        candidate = raw_candidate.strip().strip('"')
+        if not candidate:
+            continue
+        key = candidate.replace("/", "\\").rstrip("\\").casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        if len(candidates) >= WOM_KIT_WINDOWS_PATH_MAX_CANDIDATES:
+            truncated = True
+            break
+        candidates.append(candidate)
+
+    summary["probe_reason_code"] = probe_reason_code
+    summary["candidate_count"] = len(candidates)
+    summary["candidate_count_is_lower_bound"] = bool(truncated)
+    summary["shadowed_candidate_count"] = max(0, len(candidates) - 1)
+    if probe_reason_code not in {
+        "windows_where_probe_complete",
+        "injected_candidate_probe_complete",
+    }:
+        summary["status"] = "probe_unavailable"
+        summary["reason_codes"] = [probe_reason_code]
+        return summary
+    if not candidates:
+        summary["status"] = "archive_launcher_not_found"
+        summary["reason_codes"] = ["archive_launcher_not_found_on_windows_path"]
+        return summary
+
+    candidate_summaries: list[dict[str, Any]] = []
+    for ordinal, candidate in enumerate(candidates, start=1):
+        file_name = re.split(r"[\\/]", candidate)[-1]
+        candidate_summary: dict[str, Any] = {
+            "ordinal": ordinal,
+            "file_name": file_name,
+            "selected": ordinal == 1,
+            "path_redacted": bool(redact_local_paths),
+        }
+        if not redact_local_paths:
+            candidate_summary["path"] = candidate
+        candidate_summaries.append(candidate_summary)
+    summary["candidates"] = candidate_summaries
+    summary["selected_candidate_ordinal"] = 1
+    summary["selected_candidate"] = dict(candidate_summaries[0])
+    summary["status"] = "shadowed" if len(candidates) > 1 else "single_candidate"
+    if len(candidates) > 1:
+        summary["reason_codes"].append("multiple_archive_launchers_on_windows_path")
+    if truncated:
+        summary["reason_codes"].append("archive_launcher_candidates_truncated")
+
+    observed_argv0 = str(sys.argv[0] if launcher_argv0 is None else launcher_argv0).strip()
+    observed_name = re.split(r"[\\/]", observed_argv0.strip('"'))[-1].casefold()
+    running_launcher_observed = bool(
+        observed_name == "archive"
+        or observed_name.startswith("archive.")
+    )
+    summary["running_launcher_observed"] = running_launcher_observed
+    if running_launcher_observed:
+        selected_key = candidates[0].replace("/", "\\").rstrip("\\").casefold()
+        if "\\" not in observed_argv0 and "/" not in observed_argv0:
+            running_key = selected_key
+        else:
+            running_key = observed_argv0.strip('"').replace("/", "\\").rstrip("\\").casefold()
+        matches_selected = running_key == selected_key
+        summary["running_launcher_matches_selected"] = matches_selected
+        running_summary: dict[str, Any] = {
+            "file_name": re.split(r"[\\/]", observed_argv0.strip('"'))[-1],
+            "path_redacted": bool(redact_local_paths),
+        }
+        if not redact_local_paths:
+            running_summary["path"] = observed_argv0.strip('"')
+        summary["running_launcher"] = running_summary
+        if not matches_selected:
+            summary["reason_codes"].append(
+                "running_archive_launcher_differs_from_windows_path_selection"
+            )
+    return summary
+
+
 def wom_kit_version_info(
     inspection_root: Path | str | None = None,
     *,
     redact_local_paths: bool = True,
+    progress_callback: Callable[[str, str, int | None, int | None], None] | None = None,
 ) -> dict[str, Any]:
+    def progress(stage: str, event: str) -> None:
+        if progress_callback is None:
+            return
+        try:
+            progress_callback(stage, event, None, None)
+        except (OSError, UnicodeError, ValueError):
+            # Progress is observational and must not change inspection truth.
+            return
+
+    progress("version-inspection", "start")
     service_path = Path(__file__).resolve()
     kit_root = service_path.parents[2]
     raw_pyproject_version = read_wom_kit_pyproject_version()
@@ -100147,6 +100406,13 @@ def wom_kit_version_info(
     if pyproject_matches is False:
         warnings.append("WOM-kit package version and pyproject.toml version differ.")
 
+    progress("windows-path-resolution", "start")
+    path_shadow_diagnostic = wom_kit_windows_path_shadow_info(
+        redact_local_paths=redact_local_paths,
+    )
+    progress("windows-path-resolution", "done")
+
+    progress("project-pin", "start")
     pin_summary: dict[str, Any] = {
         "checked": False,
         "status": "not_checked",
@@ -100233,19 +100499,42 @@ def wom_kit_version_info(
                     break
             else:
                 pin_summary["status"] = "missing"
+    progress("project-pin", "done")
 
-    source_mirror = wom_kit_project_source_mirror_info(
-        root,
-        normalized_package=normalized_package,
-        warnings=warnings,
-    )
-    runtime_alignment, next_safe_actions = wom_kit_runtime_alignment(
-        root,
-        package_version=package_version,
-        project_pin=pin_summary,
-        project_source_mirror=source_mirror,
-        redact_local_paths=redact_local_paths,
-    )
+    with _wom_kit_git_probe_budget(
+        WOM_KIT_VERSION_GIT_PROBE_BUDGET_SECONDS
+    ) as git_probe_budget:
+        progress("source-provenance", "start")
+        source_mirror = wom_kit_project_source_mirror_info(
+            root,
+            normalized_package=normalized_package,
+            warnings=warnings,
+        )
+        progress("source-provenance", "done")
+        progress("runtime-alignment", "start")
+        runtime_alignment, next_safe_actions = wom_kit_runtime_alignment(
+            root,
+            package_version=package_version,
+            project_pin=pin_summary,
+            project_source_mirror=source_mirror,
+            redact_local_paths=redact_local_paths,
+        )
+        progress("runtime-alignment", "done")
+    git_probe_summary = {
+        "budget_seconds": git_probe_budget["budget_seconds"],
+        "git_calls_started": git_probe_budget["git_calls_started"],
+        "git_calls_skipped": git_probe_budget["git_calls_skipped"],
+        "budget_exhausted": bool(git_probe_budget["exhausted"]),
+        "write_process_started": False,
+    }
+    if git_probe_summary["budget_exhausted"]:
+        warnings.append(
+            "WOM-kit stopped project Git provenance inspection at its total read-only time budget; no project update was attempted."
+        )
+        next_safe_actions.insert(
+            0,
+            "Retry archive version --progress after checking for a stuck Git credential helper or unavailable project source path; the bounded inspection did not write files.",
+        )
     if (
         runtime_alignment["status"] == "project_source_update_required"
         and source_mirror.get("status")
@@ -100267,6 +100556,48 @@ def wom_kit_version_info(
         consistency_state = "project_source_mirror_mismatch"
     if source_mirror.get("mirror_behind_latest_fetched_tag") is True:
         consistency_state = "project_source_mirror_behind_latest_fetched_tag"
+
+    path_shadow_diagnostic["provenance_comparison"] = {
+        "selected_launcher_is_running_launcher": path_shadow_diagnostic.get(
+            "running_launcher_matches_selected"
+        ),
+        "selected_launcher_to_imported_module_binding": "not_verified",
+        "imported_module_version": package_version,
+        "imported_module_path_redacted": bool(redact_local_paths),
+        "project_source_version": source_mirror.get("source_version"),
+        "project_source_matches_imported_module_version": source_mirror.get(
+            "source_matches_running_version"
+        ),
+        "comparison_boundary": (
+            "The running process can compare the selected PATH launcher, its own "
+            "argv0, imported module origin/version, and project source version, but "
+            "does not execute alternate launchers or infer their imported modules."
+        ),
+    }
+    if not redact_local_paths:
+        path_shadow_diagnostic["provenance_comparison"][
+            "imported_module_path"
+        ] = str(service_path)
+
+    path_reason_codes = path_shadow_diagnostic.get("reason_codes")
+    if isinstance(path_reason_codes, list):
+        if "multiple_archive_launchers_on_windows_path" in path_reason_codes:
+            path_action = (
+                "Run archive version --no-redact-local-paths --format json to inspect "
+                "the exact Windows launcher order, then keep the intended launcher first "
+                "and remove or de-prioritize stale PATH entries."
+                if redact_local_paths
+                else "Keep the intended archive launcher first on Windows PATH, remove or de-prioritize stale launcher entries, then open a new terminal and rerun archive version --progress."
+            )
+            next_safe_actions.insert(0, path_action)
+        if (
+            "running_archive_launcher_differs_from_windows_path_selection"
+            in path_reason_codes
+        ):
+            next_safe_actions.insert(
+                0,
+                "Close the current terminal, open a new terminal, and rerun archive version --progress; the running archive launcher did not match the launcher currently selected first on Windows PATH.",
+            )
 
     result: dict[str, Any] = {
         "ok": not warnings,
@@ -100290,11 +100621,14 @@ def wom_kit_version_info(
         "project_pin": pin_summary,
         "project_source_mirror": source_mirror,
         "runtime_alignment": runtime_alignment,
+        "path_shadow_diagnostic": path_shadow_diagnostic,
+        "source_probe_budget": git_probe_summary,
         "consistency_state": consistency_state,
         "canonical_checks": {
             "human_readable": "archive --version",
             "structured": "archive version --format json",
             "runtime_context": "archive runtime-context <archive-root> --format json",
+            "windows_path_provenance": "archive version --no-redact-local-paths --format json",
         },
         "paths": {
             "pyproject": "wom-kit/pyproject.toml" if pyproject_version is not None else None,
@@ -100310,6 +100644,8 @@ def wom_kit_version_info(
             "secrets_read": False,
             "global_path_or_python_installation_changed": False,
             "runtime_skill_installation_changed": False,
+            "windows_path_changed": False,
+            "launcher_replaced": False,
         },
         "next_safe_actions": next_safe_actions,
         "warnings": unique_preserve_order(warnings),
@@ -100325,6 +100661,7 @@ def wom_kit_version_info(
         if inspection_root is not None:
             local_paths["inspection_root"] = str(Path(inspection_root).expanduser().resolve())
         result["local_paths"] = local_paths
+    progress("version-inspection", "done")
     return result
 
 
@@ -102231,7 +102568,7 @@ def _wom_kit_project_update_run_capped(
     command: list[str],
     *,
     environment: dict[str, str],
-    timeout_seconds: int,
+    timeout_seconds: float,
     max_output_bytes: int,
     input_bytes: bytes | None = None,
 ) -> tuple[int, bytes] | None:
@@ -102406,25 +102743,47 @@ def _wom_kit_project_update_git(
     mirror_path: Path,
     args: list[str],
     *,
-    timeout_seconds: int = 10,
+    timeout_seconds: float = 10,
     input_text: str | None = None,
     max_output_bytes: int = WOM_KIT_PROJECT_UPDATE_MAX_GIT_OUTPUT_BYTES,
     allow_transport_environment: bool = False,
     extra_environment: dict[str, str] | None = None,
 ) -> tuple[bool, str]:
+    effective_timeout_seconds = float(timeout_seconds)
+    probe_budget = getattr(_WOM_KIT_GIT_PROBE_BUDGET_LOCAL, "state", None)
+    if isinstance(probe_budget, dict):
+        remaining_seconds = float(probe_budget["deadline"]) - time.monotonic()
+        if remaining_seconds <= 0:
+            probe_budget["exhausted"] = True
+            probe_budget["git_calls_skipped"] = int(
+                probe_budget["git_calls_skipped"]
+            ) + 1
+            return False, ""
+        effective_timeout_seconds = min(
+            effective_timeout_seconds,
+            max(0.05, remaining_seconds),
+        )
+        probe_budget["git_calls_started"] = int(
+            probe_budget["git_calls_started"]
+        ) + 1
     completed = _wom_kit_project_update_run_capped(
         wom_kit_project_update_git_command(mirror_path, args),
         environment=wom_kit_project_update_git_environment(
             allow_transport_environment=allow_transport_environment,
             extra_environment=extra_environment,
         ),
-        timeout_seconds=timeout_seconds,
+        timeout_seconds=effective_timeout_seconds,
         max_output_bytes=max_output_bytes,
         input_bytes=(
             input_text.encode("utf-8") if input_text is not None else None
         ),
     )
     if completed is None:
+        if (
+            isinstance(probe_budget, dict)
+            and time.monotonic() >= float(probe_budget["deadline"])
+        ):
+            probe_budget["exhausted"] = True
         return False, ""
     return_code, stdout = completed
     if return_code != 0:
@@ -108387,22 +108746,100 @@ def wom_kit_project_version_update(
     approve: bool = False,
     reviewed_by: str | None = None,
     affirm_external_writers_quiescent: bool = False,
+    expected_exact_approval_plan_sha256: str | None = None,
+    expected_exact_approval_target_binding_sha256: str | None = None,
+    exact_human_approval_claim: _ClaimedExactHumanApproval | None = None,
     progress_callback: Callable[[str, str, int | None, int | None], None] | None = None,
 ) -> dict[str, Any]:
-    if type(dry_run) is not bool or type(approve) is not bool or approve:
+    if type(dry_run) is not bool or type(approve) is not bool:
         return _compound_exact_human_approval_blocked(
             lifecycle_action="project_version_update",
         )
+    if approve:
+        _require_exact_human_approval_inputs_before_archive_read(
+            claim=exact_human_approval_claim,
+            expected_plan_sha256=expected_exact_approval_plan_sha256,
+            expected_target_binding_sha256=(
+                expected_exact_approval_target_binding_sha256
+            ),
+        )
 
-    return _wom_kit_project_version_update_legacy_core(
+    preview = _wom_kit_project_version_update_legacy_core(
         inspection_root,
         target=target,
-        dry_run=dry_run,
-        approve=approve,
+        dry_run=True,
+        approve=False,
         reviewed_by=reviewed_by,
-        affirm_external_writers_quiescent=affirm_external_writers_quiescent,
+        affirm_external_writers_quiescent=False,
         progress_callback=progress_callback,
     )
+    try:
+        binding = project_version_update_approval_binding(preview)
+    except OperationApprovalBindingError:
+        return preview
+    preview["exact_human_approval"] = binding.public_document()
+    if dry_run:
+        return preview
+
+    if not approve:
+        return _compound_exact_human_approval_blocked(
+            lifecycle_action="project_version_update",
+        )
+    reviewer = safe_foreign_quarantine_actor_id(reviewed_by)
+    if reviewer is None:
+        raise ArchiveServiceError("project_version_update_reviewer_invalid")
+    approval_root = wom_kit_project_version_update_approval_archive_root(
+        inspection_root
+    )
+    exact_operation_approval = _require_exact_human_operation_approval(
+        approval_root,
+        binding,
+        reviewer_claim=reviewer,
+        expected_plan_sha256=expected_exact_approval_plan_sha256,
+        expected_target_binding_sha256=(
+            expected_exact_approval_target_binding_sha256
+        ),
+        claim=exact_human_approval_claim,
+    )
+    result = _wom_kit_project_version_update_legacy_core(
+        inspection_root,
+        target=target,
+        dry_run=False,
+        approve=True,
+        reviewed_by=reviewer,
+        affirm_external_writers_quiescent=(
+            affirm_external_writers_quiescent
+        ),
+        progress_callback=progress_callback,
+    )
+    result["operation_exact_human_approval"] = exact_operation_approval
+    return result
+
+
+def wom_kit_project_version_update_approval_archive_root(
+    inspection_root: Path | str,
+) -> Path:
+    """Resolve the bounded archive authority used for the one-use claim."""
+
+    inspection = Path(os.path.abspath(str(Path(inspection_root).expanduser())))
+    candidates = [inspection, inspection / "archive"]
+    valid: list[Path] = []
+    for candidate in candidates:
+        if (
+            wom_kit_real_path_kind(candidate, candidate) == "directory"
+            and wom_kit_real_path_kind(candidate, candidate / "archive.yml")
+            == "file"
+        ):
+            try:
+                read_archive_id(candidate)
+            except (ArchiveServiceError, OSError, ValueError):
+                continue
+            valid.append(candidate)
+    if len(valid) != 1:
+        raise ArchiveServiceError(
+            "project_version_update_exact_approval_archive_required"
+        )
+    return valid[0]
 
 
 def _wom_kit_project_version_update_legacy_core(
