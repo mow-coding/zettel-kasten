@@ -142,6 +142,23 @@ read-only plans or safety surfaces that leave historical data unrepaired.
   blockers, a present remote ref, and an `equal` local/remote relation.  It
   reused the configured credential helper without prompting or exposing a
   credential, remote URL, or path.
+- Independent pre-release review found three Letter 138 release blockers that
+  must be closed rather than waived.  The runtime parser accepted 10,001
+  properties while the public schema caps the array at 10,000; the parser will
+  now classify an over-cap page for review so an approved run cannot emit a
+  schema-invalid canonical file.  The approved planning/writer path also needs
+  the same content-free progress stream as the read-only plan, and an
+  indeterminate native-approval result must preserve
+  `effects_state: unknown`, require reconciliation, and prohibit automatic
+  retry instead of collapsing to a generic message.
+- The same review measured an O(n-squared) defect in the shared checkpoint
+  store: every appended row re-read the entire growing JSONL before and after
+  the fsynced append.  A complete 8,566-effect run produces 25,698 rows and an
+  approximately 17.4 MB final checkpoint, but the old algorithm can read about
+  447 GB cumulatively.  v0.4.3 is therefore blocked on an append-compatible,
+  crash-durable, fail-closed implementation whose total work is linear in the
+  final checkpoint size, plus an actual 8,566-effect benchmark and the existing
+  tamper, resume, and concurrent-writer regressions.
 
 ## v0.4.4 R2 evidence lock
 
@@ -157,7 +174,7 @@ read-only plans or safety surfaces that leave historical data unrepaired.
   deliberately distinct from formal adoption.  Per-item progress is
   append-only and the aggregate projection is built once, avoiding a central
   manifest rewrite after every object.
-- On the separate v0.4.4 branch, the adapter/writer and 70 focused/common
+- On the separate v0.4.4 branch, the adapter/writer and 72 focused/common
   tests now pass.  The existing `object-storage-adopt-existing` family gains a
   `--preserve-local-only` route; it uses a content-addressed key, HEAD plus
   complete GET rehash, mismatch-without-PUT fail-close behavior, common exact
@@ -170,6 +187,11 @@ read-only plans or safety surfaces that leave historical data unrepaired.
   about 45 seconds and cached runtime about 11 seconds.  It made no provider,
   credential, remote, or Basoon write.  Live HEAD/PUT remains an explicit
   post-v0.4.4-release acceptance blocker.
+- This v0.4.4 slice is committed separately as product commit `1a57848c` and
+  evidence-record commit `eb25d048`.  It deliberately does not claim the
+  existing 19,055 remote objects formally adopted, does not auto-decide the
+  1,149 conflict groups, and identifies two legacy WOM-evidence rows without a
+  remote key for receipt-based recovery or review during formal adoption.
 
 ## Release sequence
 
