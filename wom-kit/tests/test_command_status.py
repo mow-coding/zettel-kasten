@@ -108,6 +108,9 @@ class CommandStatusSyntheticParserTests(unittest.TestCase):
             command_status.APPROVAL_NOT_EXPOSED,
         )
         self.assertIsNone(commands["plain"]["approval_reason_code"])
+        self.assertTrue(
+            all(command["approval_scope"] is None for command in commands.values())
+        )
         self.assertTrue(commands["inspect"]["dry_run_exposed"])
         self.assertFalse(commands["plain"]["dry_run_exposed"])
         self.assertTrue(
@@ -135,6 +138,58 @@ class CommandStatusSyntheticParserTests(unittest.TestCase):
             ["d s", "d status", "derive s"],
         )
         self.assertEqual(commands["write"]["alias_paths"], ["w"])
+
+    def test_parser_declared_approval_scope_is_bounded_and_content_free(self) -> None:
+        parser = self._parser()
+        write_parser = command_status._subparser_actions(parser)[0].choices[
+            "write"
+        ]
+        write_parser.set_defaults(
+            _wom_approval_scope={
+                "kind": "argument_value_allowlist",
+                "argument": "--target",
+                "allowed_values": ["safe-target"],
+                "outside_scope_status": "approval_fixed_closed",
+                "outside_scope_reason_code": (
+                    command_status.COMPOUND_APPROVAL_REASON_CODE
+                ),
+            }
+        )
+        inventory = command_status.build_command_status_inventory(
+            parser,
+            frozenset(),
+        )
+        commands = {
+            row["canonical_path"]: row for row in inventory["commands"]
+        }
+        self.assertEqual(
+            commands["write"]["approval_scope"]["allowed_values"],
+            ["safe-target"],
+        )
+        self.assertEqual(
+            inventory["counts"]["conditional_approval_command_count"],
+            1,
+        )
+
+        write_parser.set_defaults(
+            _wom_approval_scope={
+                "kind": "argument_value_allowlist",
+                "argument": "--target",
+                "allowed_values": ["C:/PRIVATE/not-a-safe-code"],
+                "outside_scope_status": "approval_fixed_closed",
+                "outside_scope_reason_code": (
+                    command_status.COMPOUND_APPROVAL_REASON_CODE
+                ),
+            }
+        )
+        with self.assertRaisesRegex(
+            ValueError,
+            "command_approval_scope_invalid",
+        ):
+            command_status.build_command_status_inventory(
+                parser,
+                frozenset(),
+            )
 
     def test_counts_are_complete_and_output_is_deterministic_json(self) -> None:
         first = command_status.build_command_status_inventory(
@@ -167,6 +222,7 @@ class CommandStatusSyntheticParserTests(unittest.TestCase):
         self.assertEqual(counts["approval_available_command_count"], 1)
         self.assertEqual(counts["approval_fixed_closed_command_count"], 2)
         self.assertEqual(counts["approval_not_exposed_command_count"], 3)
+        self.assertEqual(counts["conditional_approval_command_count"], 0)
         self.assertEqual(
             counts["approval_available_command_count"]
             + counts["approval_fixed_closed_command_count"]
@@ -256,7 +312,7 @@ class CommandStatusArchiveParserTests(unittest.TestCase):
         schema_path = (
             Path(__file__).resolve().parents[1]
             / "schemas"
-            / "command-approval-status-inventory-v0.1.schema.json"
+            / "command-approval-status-inventory-v0.2.schema.json"
         )
         schema = json.loads(schema_path.read_text(encoding="utf-8"))
         Draft202012Validator.check_schema(schema)
@@ -285,6 +341,22 @@ class CommandStatusArchiveParserTests(unittest.TestCase):
         self.assertEqual(
             by_path["project-version-update"]["approval_status"],
             command_status.APPROVAL_FIXED_CLOSED,
+        )
+        self.assertEqual(
+            by_path["migrate"]["approval_scope"],
+            {
+                "kind": "argument_value_allowlist",
+                "argument": "--target",
+                "allowed_values": ["notion-source-properties"],
+                "outside_scope_status": "approval_fixed_closed",
+                "outside_scope_reason_code": (
+                    "compound_exact_human_approval_binding_required"
+                ),
+            },
+        )
+        self.assertEqual(
+            exposed["counts"]["conditional_approval_command_count"],
+            1,
         )
 
 

@@ -406,6 +406,7 @@ from . import (
     git_backup_writer,
     human_artifact_registry,
     legacy_coordination_cleanup as legacy_cleanup,
+    notion_property_backfill,
     operation_control,
     operation_approval_binding,
     runtime_guidance,
@@ -435,6 +436,7 @@ from .exact_human_approval_workflow import (
     _execute_exact_human_approved_write,
     _execute_exact_human_approved_write_core,
 )
+from .exact_operation_manifest import ExactOperationProgress
 from .resource_paths import runtime_release_note_path, runtime_resource_root
 from .schema_validator import validate_schema
 
@@ -6814,7 +6816,313 @@ def command_repair_gitignore(args: argparse.Namespace) -> int:
     return 0 if result.get("ok") else 1
 
 
+class _NotionPropertyBackfillCliProgress:
+    """Throttle content-free plan/write status and retain a resume locator."""
+
+    def __init__(self) -> None:
+        self._last_execution_emit: float | None = None
+        self._last_execution_sha256: str | None = None
+        self.resume_locator: dict[str, Any] | None = None
+
+    @staticmethod
+    def _emit(prefix: str, document: Mapping[str, Any]) -> None:
+        print(
+            prefix
+            + json.dumps(
+                dict(document),
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ),
+            file=sys.stderr,
+            flush=True,
+        )
+
+    def planning(self, event: Mapping[str, Any], *, phase: str) -> None:
+        self._emit("WOM-PROGRESS ", {**dict(event), "phase": phase})
+
+    def initial_plan(self, event: Mapping[str, Any]) -> None:
+        self.planning(event, phase="initial_plan")
+
+    def revalidation(self, event: Mapping[str, Any]) -> None:
+        self.planning(event, phase="approved_revalidation")
+
+    def execution(self, event: ExactOperationProgress) -> None:
+        if type(event) is not ExactOperationProgress:
+            return
+        now = time.monotonic()
+        execution_changed = (
+            event.execution_sha256 is not None
+            and event.execution_sha256 != self._last_execution_sha256
+        )
+        if not (
+            self._last_execution_emit is None
+            or execution_changed
+            or event.stage == "completed"
+            or now - self._last_execution_emit >= 1.0
+        ):
+            return
+        document = event.public_document()
+        document.update(
+            {
+                "schema_version": (
+                    "wom-kit/notion-property-backfill-execution-progress/v0.1"
+                ),
+                "phase": "field_execution",
+                "paths_echoed": False,
+                "source_page_ids_echoed": False,
+                "property_values_echoed": False,
+            }
+        )
+        self._emit("WOM-PROGRESS ", document)
+        self._last_execution_emit = now
+        if event.execution_sha256 is not None:
+            self._last_execution_sha256 = event.execution_sha256
+
+    def locator(self, document: Mapping[str, Any]) -> None:
+        candidate = dict(document)
+        if (
+            candidate.get("schema_version")
+            != "wom-kit/notion-property-backfill-execution-locator/v0.1"
+        ):
+            return
+        self.resume_locator = candidate
+        self._emit("WOM-RESUME ", candidate)
+
+
+def command_migrate_notion_source_properties(args: argparse.Namespace) -> int:
+    if bool(args.dry_run) == bool(args.approve):
+        print(
+            "notion-source-properties migration requires exactly one of --dry-run or --approve.",
+            file=sys.stderr,
+        )
+        return 1
+    acceptance_bootstrap = bool(
+        getattr(args, "acceptance_bootstrap", False)
+    )
+    if not args.source_mirror:
+        print(
+            "notion-source-properties migration requires --source-mirror.",
+            file=sys.stderr,
+        )
+        return 1
+    if acceptance_bootstrap and (
+        not args.dry_run
+        or args.approve
+        or args.revert
+        or args.acceptance_file
+        or getattr(args, "resume", False)
+        or not getattr(args, "acceptance_output", None)
+    ):
+        print(
+            "--acceptance-bootstrap requires --dry-run and forbids "
+            "--approve, --revert, --resume, and --acceptance-file; it also "
+            "requires --acceptance-output.",
+            file=sys.stderr,
+        )
+        return 1
+    if not acceptance_bootstrap and getattr(args, "acceptance_output", None):
+        print(
+            "--acceptance-output is valid only with --acceptance-bootstrap.",
+            file=sys.stderr,
+        )
+        return 1
+    if not acceptance_bootstrap and not args.acceptance_file:
+        print(
+            "notion-source-properties migration requires --acceptance-file "
+            "after the reviewed bootstrap step.",
+            file=sys.stderr,
+        )
+        return 1
+    if getattr(args, "link_type", None):
+        print(
+            "--link-type is not valid for notion-source-properties migration.",
+            file=sys.stderr,
+        )
+        return 1
+    reviewed_by = getattr(args, "reviewed_by", None)
+    resume = bool(getattr(args, "resume", False))
+    approval_id = getattr(args, "approval_id", None)
+    execution_sha256 = getattr(args, "execution_sha256", None)
+    if args.approve and not reviewed_by:
+        print(
+            "notion-source-properties approved writes require --reviewed-by.",
+            file=sys.stderr,
+        )
+        return 1
+    if resume and (
+        not args.approve or not approval_id or not execution_sha256
+    ):
+        print(
+            "notion-source-properties --resume requires --approve, --approval-id, and --execution-sha256.",
+            file=sys.stderr,
+        )
+        return 1
+    if not resume and (approval_id or execution_sha256):
+        print(
+            "--approval-id and --execution-sha256 are valid only with --resume.",
+            file=sys.stderr,
+        )
+        return 1
+    progress = _NotionPropertyBackfillCliProgress()
+    try:
+        acceptance = (
+            notion_property_backfill.load_notion_property_backfill_acceptance(
+                args.acceptance_file
+            )
+            if args.acceptance_file
+            else None
+        )
+        plan = notion_property_backfill._plan_notion_property_backfill_core(
+            Path(args.archive_root),
+            Path(args.source_mirror),
+            acceptance=acceptance,
+            progress=progress.initial_plan,
+        )
+        if acceptance_bootstrap:
+            result = (
+                notion_property_backfill.persist_notion_property_backfill_acceptance_candidate(
+                    plan,
+                    args.acceptance_output,
+                )
+            )
+        elif args.dry_run:
+            result = (
+                notion_property_backfill.plan_notion_property_backfill_revert(
+                    plan
+                )
+                if args.revert
+                else plan.public_document()
+            )
+        elif resume:
+            resume_writer = (
+                notion_property_backfill.resume_notion_property_backfill_revert
+                if args.revert
+                else notion_property_backfill.resume_notion_property_backfill
+            )
+            result = resume_writer(
+                plan,
+                reviewer_claim=reviewed_by,
+                approval_id=approval_id,
+                execution_sha256=execution_sha256,
+                progress_hook=progress.execution,
+                planning_progress=progress.revalidation,
+                execution_locator_hook=progress.locator,
+            )
+        else:
+            fresh_writer = (
+                notion_property_backfill.execute_notion_property_backfill_revert
+                if args.revert
+                else notion_property_backfill.execute_notion_property_backfill
+            )
+            result = fresh_writer(
+                plan,
+                reviewer_claim=reviewed_by,
+                progress_hook=progress.execution,
+                planning_progress=progress.revalidation,
+                execution_locator_hook=progress.locator,
+            )
+    except ExactHumanApprovalWorkflowError as exc:
+        state_unknown = exc.code == "exact_human_approval_state_unknown"
+        return _recognized_command_cli_error(
+            args,
+            command="migrate",
+            lifecycle_action="notion_source_properties_migration",
+            error_class="execution" if state_unknown else "precondition",
+            reason_code=exc.code,
+            text_message=(
+                "Notion source-properties write state is uncertain; do not "
+                "retry automatically. Use the emitted WOM-RESUME locator "
+                "only after reconciliation."
+                if state_unknown
+                else "Notion source-properties migration was blocked before "
+                "a protected write completed."
+            ),
+            effects_state="unknown" if state_unknown else "none",
+            reconciliation_locator=(
+                progress.resume_locator if state_unknown else None
+            ),
+        )
+    except (
+        notion_property_backfill.NotionPropertyBackfillError,
+        RuntimeError,
+    ) as exc:
+        # ExactOperationManifestError and other domain-safe runtime failures
+        # carry fixed codes.  Never reflect paths or private field values.
+        reason_code = getattr(exc, "code", "operation_failed")
+        state_unknown = (
+            reason_code
+            == "notion_property_backfill_acceptance_output_outcome_unknown"
+        )
+        return _recognized_command_cli_error(
+            args,
+            command="migrate",
+            lifecycle_action="notion_source_properties_migration",
+            error_class="execution" if state_unknown else "precondition",
+            reason_code=reason_code,
+            text_message=(
+                "Acceptance staging outcome is uncertain; inspect the exact "
+                "private output before retrying."
+                if state_unknown
+                else "Notion source-properties migration failed closed "
+                "before a protected write completed."
+            ),
+            effects_state="unknown" if state_unknown else "none",
+        )
+
+    if args.format == "json":
+        print_json(result)
+    elif acceptance_bootstrap:
+        print(
+            "Notion source-properties acceptance candidate was staged "
+            "create-only below the ignored private profile. Review that "
+            "exact file, then pass it back with --acceptance-file."
+        )
+    else:
+        print(
+            "Notion source-properties migration: "
+            + str(result.get("reason_code") or result.get("status") or "unknown")
+        )
+        if "mirror_page_count" in result:
+            print(f"Mirror pages: {result['mirror_page_count']}")
+        if "category_counts" in result:
+            counts = result["category_counts"]
+            print(
+                "Classification: "
+                f"mapped={counts.get('mapped', 0)} "
+                f"already_equal={counts.get('already_equal', 0)} "
+                f"unmapped={counts.get('unmapped', 0)} "
+                f"review={counts.get('review', 0)}"
+            )
+        print(
+            "Writes performed: "
+            + ("yes" if result.get("writes_performed") else "no")
+        )
+    return 0 if acceptance_bootstrap or result.get("ok") else 1
+
+
 def command_migrate(args: argparse.Namespace) -> int:
+    if (
+        args.target
+        == notion_property_backfill.NOTION_SOURCE_PROPERTIES_MIGRATION_TARGET
+    ):
+        return command_migrate_notion_source_properties(args)
+    if any(
+        (
+            getattr(args, "source_mirror", None),
+            getattr(args, "acceptance_file", None),
+            getattr(args, "acceptance_bootstrap", False),
+            getattr(args, "acceptance_output", None),
+            getattr(args, "resume", False),
+            getattr(args, "approval_id", None),
+            getattr(args, "execution_sha256", None),
+        )
+    ):
+        print(
+            "Notion source-property options require --target notion-source-properties.",
+            file=sys.stderr,
+        )
+        return 1
     if args.approve:
         return _exact_human_approval_cli_error(
             args,
@@ -16799,6 +17107,7 @@ def _recognized_command_cli_error(
     text_message: str,
     effects_state: str = "none",
     exit_code: int = 1,
+    reconciliation_locator: Mapping[str, Any] | None = None,
 ) -> int:
     """Emit one content-free failure contract for an already parsed command."""
 
@@ -16827,6 +17136,21 @@ def _recognized_command_cli_error(
                 "automatic_retry_allowed": False,
             }
         )
+        if isinstance(reconciliation_locator, Mapping):
+            locator = dict(reconciliation_locator)
+            if (
+                locator.get("schema_version")
+                == "wom-kit/notion-property-backfill-execution-locator/v0.1"
+                and re.fullmatch(
+                    r"approval_[0-9a-f]{32}",
+                    str(locator.get("approval_id") or ""),
+                )
+                and re.fullmatch(
+                    r"sha256:[0-9a-f]{64}",
+                    str(locator.get("execution_sha256") or ""),
+                )
+            ):
+                payload["resume_locator"] = locator
     if getattr(args, "format", None) == "json":
         print_json(payload)
     else:
@@ -26450,7 +26774,6 @@ COMPOUND_APPROVAL_BLOCKED_COMMANDS = frozenset(
         "markup-normalization",
         "markup-normalization-recovery",
         "markup-normalization-revert",
-        "migrate",
         "mint-zet-batch",
         "notion-ancestor-fetch-adapter-run",
         "notion-objet-manifest-locator-label",
@@ -27477,12 +27800,76 @@ def build_parser() -> argparse.ArgumentParser:
             archive_services.FRONTMATTER_V03_TARGET,
             archive_services.LINK_TYPES_V03_TARGET,
             archive_services.BASE_LINK_TYPES_TARGET,
+            notion_property_backfill.NOTION_SOURCE_PROPERTIES_MIGRATION_TARGET,
         ],
         help="Migration target.",
     )
-    migrate.add_argument("--dry-run", action="store_true", help="Preview migration changes without writing files.")
-    migrate.add_argument("--approve", action="store_true", help="Apply the reviewed migration changes.")
+    migrate.add_argument(
+        "--dry-run",
+        action="store_true",
+        help=(
+            "Preview migration changes without canonical writes. With "
+            "--acceptance-bootstrap only, it stages one create-only private "
+            "acceptance artifact."
+        ),
+    )
+    migrate.add_argument(
+        "--approve",
+        action="store_true",
+        help=(
+            "Apply only the operation-specifically bound "
+            "notion-source-properties target. Every other migration target "
+            "remains fixed closed."
+        ),
+    )
     migrate.add_argument("--revert", action="store_true", help="Preview or apply a safe migration rollback where the target supports it.")
+    migrate.add_argument(
+        "--source-mirror",
+        help=(
+            "Local raw-page JSONL or block-mirror directory; required only "
+            "for the notion-source-properties target and never echoed."
+        ),
+    )
+    migrate.add_argument(
+        "--acceptance-file",
+        help=(
+            "Bounded local JSON completeness profile; required only for the "
+            "notion-source-properties target and never echoed."
+        ),
+    )
+    migrate.add_argument(
+        "--acceptance-bootstrap",
+        action="store_true",
+        help=(
+            "For notion-source-properties dry-run only, stage the exact "
+            "content-free source-inventory candidate create-only at "
+            "--acceptance-output before supplying --acceptance-file."
+        ),
+    )
+    migrate.add_argument(
+        "--acceptance-output",
+        help=(
+            "Create-only archive-relative JSON below "
+            "profiles/local/notion-property-backfill/; required only with "
+            "--acceptance-bootstrap and never echoed."
+        ),
+    )
+    migrate.add_argument(
+        "--resume",
+        action="store_true",
+        help=(
+            "Resume only the same authenticated notion-source-properties "
+            "execution from its durable exact-operation checkpoint."
+        ),
+    )
+    migrate.add_argument(
+        "--approval-id",
+        help="Authenticated started approval id required with --resume.",
+    )
+    migrate.add_argument(
+        "--execution-sha256",
+        help="Exact authority-bound execution digest required with --resume.",
+    )
     migrate.add_argument(
         "--link-type",
         action="append",
@@ -27491,9 +27878,28 @@ def build_parser() -> argparse.ArgumentParser:
             "link type. May be repeated."
         ),
     )
-    migrate.add_argument("--reviewed-by", help="Reviewer id required with --approve for the base-link-types target.")
+    migrate.add_argument(
+        "--reviewed-by",
+        help=(
+            "Reviewer claim required with --approve for base-link-types and "
+            "notion-source-properties."
+        ),
+    )
     migrate.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
-    migrate.set_defaults(func=command_migrate)
+    migrate.set_defaults(
+        func=command_migrate,
+        _wom_approval_scope={
+            "kind": "argument_value_allowlist",
+            "argument": "--target",
+            "allowed_values": [
+                notion_property_backfill.NOTION_SOURCE_PROPERTIES_MIGRATION_TARGET
+            ],
+            "outside_scope_status": "approval_fixed_closed",
+            "outside_scope_reason_code": (
+                command_status.COMPOUND_APPROVAL_REASON_CODE
+            ),
+        },
+    )
 
     profile_list_parser = subcommands.add_parser(
         "profile-list",
@@ -36904,6 +37310,7 @@ def main(argv: list[str] | None = None) -> int:
             "create-draft",
             "zettel-objet-link",
             "zet-objet-link",
+            "migrate",
         }
     )
     if raw_argv[:1] == ["credential-adopt"] and any(

@@ -295,7 +295,7 @@ class Letter137AdditionalPublicCliBoundaryTests(_CliAssertions):
             ],
             "parcel": ["pack"],
         }
-        self.assertEqual(len(archive_cli.COMPOUND_APPROVAL_BLOCKED_COMMANDS), 78)
+        self.assertEqual(len(archive_cli.COMPOUND_APPROVAL_BLOCKED_COMMANDS), 77)
         self.assertNotIn(
             "zettel-objet-link",
             archive_cli.COMPOUND_APPROVAL_BLOCKED_COMMANDS,

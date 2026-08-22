@@ -63,6 +63,13 @@ unmatched entries, and adds the exact Git apply route to `approval_available`.
 This is parser evidence only: it does not evaluate archive prerequisites, and
 `approval_not_exposed` does not mean that a command is read-only.
 
+In the v0.4.3 Letter 138 candidate, `migrate` becomes parser-level
+`approval_available` only because `--target notion-source-properties` has an
+operation-specific binding. The v0.2 inventory does not execute or evaluate a
+chosen target, but its machine-readable `approval_scope` says that only this
+`--target` value is allowed and that every value outside the allowlist remains
+fixed closed with `compound_exact_human_approval_binding_required`.
+
 The v0.4.1 writer change remains current:
 `zettel-objet-link --dry-run|--approve`. Approval requires the exact digest from
 a fresh private plan, reviewer attribution, a local native exact-human dialog,

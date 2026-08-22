@@ -104,9 +104,12 @@ class V0402ReleaseDocsTests(unittest.TestCase):
         self.assertNotIn('"git-backup-plan"', mcp_source)
         self.assertNotIn('"git-backup-reconcile-plan"', mcp_source)
 
+        historical_blocked = frozenset(
+            {*archive_cli.COMPOUND_APPROVAL_BLOCKED_COMMANDS, "migrate"}
+        )
         counts = command_status.build_command_status_inventory(
             parser,
-            archive_cli.COMPOUND_APPROVAL_BLOCKED_COMMANDS,
+            historical_blocked,
         )["counts"]
         self.assertEqual(counts["canonical_executable_command_count"], 315)
         self.assertEqual(counts["alias_invocation_path_count"], 259)

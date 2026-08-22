@@ -2,7 +2,7 @@
   "schema": "wom-kit/package-resource-manifest/v0.1",
   "version": "0.4.2",
   "source_of_truth": "wom-kit source resource directories",
-  "file_count": 158,
+  "file_count": 161,
   "files": [
     {
       "source": "schemas/activity-group-membership-receipt.schema.json",
@@ -105,6 +105,12 @@
       "packaged": "schemas/command-approval-status-inventory-v0.1.schema.json",
       "bytes": 4776,
       "sha256": "55c35d576eade85702072e8e67774650df4162d1c9307c7fa13306d7a30e15c1"
+    },
+    {
+      "source": "schemas/command-approval-status-inventory-v0.2.schema.json",
+      "packaged": "schemas/command-approval-status-inventory-v0.2.schema.json",
+      "bytes": 6270,
+      "sha256": "a304fdf0f521834bcc6359235a21154d7ad9964555b6b0587d0c5ba4ad5b9002"
     },
     {
       "source": "schemas/credential-adapter-manifest.schema.json",
@@ -255,6 +261,18 @@
       "packaged": "schemas/notion-locator-occurrence-evidence.schema.json",
       "bytes": 1626,
       "sha256": "6e8c561d02c4741cf8628ab8690b7d53c84ef914ca6653e178f49dd000a8bcb5"
+    },
+    {
+      "source": "schemas/notion-property-backfill-acceptance-v0.1.schema.json",
+      "packaged": "schemas/notion-property-backfill-acceptance-v0.1.schema.json",
+      "bytes": 2435,
+      "sha256": "51bfff12ecc67d95e3330f0f38baf6d9a30ed3bb0efed2e0340663e21f00a6d8"
+    },
+    {
+      "source": "schemas/notion-source-properties-v0.1.schema.json",
+      "packaged": "schemas/notion-source-properties-v0.1.schema.json",
+      "bytes": 3632,
+      "sha256": "a06165650be6df9865d46fe4e1a3b7ff31989674131241f1cc428f1ba211f1e8"
     },
     {
       "source": "schemas/object-manifest-entry.schema.json",
@@ -613,8 +631,8 @@
     {
       "source": "schemas/zettel-frontmatter.schema.json",
       "packaged": "schemas/zettel-frontmatter.schema.json",
-      "bytes": 4752,
-      "sha256": "acf9715ed4b0ab9e71ff112462da4a8096eca9ee47184ef2d3e627a67a60049d"
+      "bytes": 4844,
+      "sha256": "62da314d3036596a2907e3fef986e239c2e7377d477f24e4e05ea7c11f822bbf"
     },
     {
       "source": "schemas/zettel-kasten-actions.schema.json",

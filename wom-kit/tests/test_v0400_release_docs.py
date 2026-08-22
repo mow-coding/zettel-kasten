@@ -122,12 +122,14 @@ class V0400ReleaseDocsTests(unittest.TestCase):
         historical_blocked = frozenset(
             {
                 *current_blocked,
+                "migrate",
                 "zettel-objet-link",
                 "project-version-update",
             }
         )
-        self.assertEqual(len(current_blocked), 77)
+        self.assertEqual(len(current_blocked), 76)
         self.assertEqual(len(historical_blocked), 79)
+        self.assertNotIn("migrate", current_blocked)
         self.assertNotIn("zettel-objet-link", current_blocked)
         self.assertNotIn("project-version-update", current_blocked)
         self.assertIn("zettel-objet-link-revert", current_blocked)
