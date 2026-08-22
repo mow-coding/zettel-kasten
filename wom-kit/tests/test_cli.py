@@ -8946,6 +8946,19 @@ class ArchiveCliTests(unittest.TestCase):
                 ).glob("*.json")
             )
             self.assertEqual(len(receipts), 1)
+            receipt_document = json.loads(
+                receipts[0].read_text(encoding="utf-8")
+            )
+            self.assertEqual(
+                receipt_document["operation_exact_human_approval"],
+                result["operation_exact_human_approval"],
+            )
+            self.assertEqual(
+                receipt_document["operation_exact_human_approval"][
+                    "exact_human_approval"
+                ]["approval_id"],
+                result["exact_human_approval"]["approval_id"],
+            )
             self.assertFalse(
                 (fixture["metadata_root"] / "version-update.lock").exists()
             )

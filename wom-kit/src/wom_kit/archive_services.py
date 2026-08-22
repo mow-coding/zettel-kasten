@@ -36,7 +36,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path, PurePosixPath
-from typing import Any, Callable, Iterable, Iterator, Protocol
+from typing import Any, Callable, Iterable, Iterator, Mapping, Protocol
 
 from . import __version__ as WOM_KIT_VERSION
 from .paths import (
@@ -108810,6 +108810,7 @@ def wom_kit_project_version_update(
         affirm_external_writers_quiescent=(
             affirm_external_writers_quiescent
         ),
+        operation_exact_human_approval=exact_operation_approval,
         progress_callback=progress_callback,
     )
     result["operation_exact_human_approval"] = exact_operation_approval
@@ -108850,6 +108851,7 @@ def _wom_kit_project_version_update_legacy_core(
     approve: bool = False,
     reviewed_by: str | None = None,
     affirm_external_writers_quiescent: bool = False,
+    operation_exact_human_approval: Mapping[str, Any] | None = None,
     progress_callback: Callable[[str, str, int | None, int | None], None] | None = None,
 ) -> dict[str, Any]:
     """Exercise the pre-v0.4 project updater in historical tests only."""
@@ -110162,6 +110164,15 @@ def _wom_kit_project_version_update_legacy_core(
                 "running_process_reloaded": False,
                 "restart_required": True,
             },
+            **(
+                {
+                    "operation_exact_human_approval": dict(
+                        operation_exact_human_approval
+                    )
+                }
+                if isinstance(operation_exact_human_approval, Mapping)
+                else {}
+            ),
             "privacy_guards": {
                 "local_absolute_paths_echoed": False,
                 "remote_urls_echoed": False,
