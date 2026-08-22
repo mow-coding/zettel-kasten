@@ -108,6 +108,17 @@ read-only plans or safety surfaces that leave historical data unrepaired.
   contain, or may contain, a source-page token can block the mapping.  The
   planner must also publish its first status before acquisition rather than
   after the multi-minute mirror read.
+- Re-testing after the first Git planner optimization reduced initial
+  preflight/projection to 6.89 seconds, confirming that Git itself is not the
+  remaining bottleneck.  The run then stayed in `context_initial` for more than
+  70 seconds and was deliberately interrupted.  Basoon has 54,542 receipt
+  files totaling 131,235,335 bytes; simple metadata enumeration takes only
+  1.843 seconds, while the old planner opens and hashes every receipt before
+  and after the plan.  Tracked receipt contents are already bound by the Git
+  tree/index projection, and changed/untracked receipts by changed-content
+  observation.  The planner will therefore cache one bounded metadata
+  inventory and perform a final identity/CAS recheck rather than rehashing 131
+  MB across 54,542 generic historical files twice.
 
 ## v0.4.4 R2 evidence lock
 
