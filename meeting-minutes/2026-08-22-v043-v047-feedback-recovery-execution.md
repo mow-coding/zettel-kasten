@@ -125,6 +125,11 @@ read-only plans or safety surfaces that leave historical data unrepaired.
   had zero changes.  The remaining anonymous-transport blockers are expected
   for the private remote and belong to the stored-credential v0.4.3 writer
   verification, not to planner performance.
+- The stored-credential read-only route then completed against the actual
+  private Basoon remote in 32.02 seconds with `plan_ready`, zero changes, no
+  blockers, a present remote ref, and an `equal` local/remote relation.  It
+  reused the configured credential helper without prompting or exposing a
+  credential, remote URL, or path.
 
 ## v0.4.4 R2 evidence lock
 
