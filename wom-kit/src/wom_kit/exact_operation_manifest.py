@@ -676,21 +676,24 @@ def _plain_directory(path: Path) -> bool:
     )
 
 
-def _fsync_directory(path: Path) -> None:
+def _fsync_directory(path: Path) -> bool:
     if os.name == "nt":
-        return
+        # Windows does not expose a portable directory fsync through os.open.
+        # File fsync boundaries remain mandatory there.
+        return True
     descriptor = -1
     try:
         descriptor = os.open(path, os.O_RDONLY)
         os.fsync(descriptor)
     except OSError:
-        return
+        return False
     finally:
         if descriptor >= 0:
             try:
                 os.close(descriptor)
             except OSError:
                 pass
+    return True
 
 
 def _exact_operation_archive_root(value: Path | str) -> Path:
@@ -709,7 +712,8 @@ def _ensure_private_directory(root: Path, parts: tuple[str, ...]) -> Path:
         current = current / part
         try:
             os.mkdir(current, 0o700)
-            _fsync_directory(current.parent)
+            if not _fsync_directory(current.parent):
+                raise OSError("exact_operation_directory_sync_failed")
         except FileExistsError:
             pass
         except OSError:
@@ -870,7 +874,8 @@ class ExactOperationWriterLock:
                     heartbeat=self.heartbeat,
                 )
                 os.fsync(descriptor)
-                _fsync_directory(self.private_root)
+                if not _fsync_directory(self.private_root):
+                    raise OSError("exact_operation_directory_sync_failed")
             opened = os.fstat(descriptor)
             named = os.lstat(self.path)
             if not (
@@ -1390,7 +1395,12 @@ class FileExactOperationCheckpointStore:
                 raise _fail("exact_operation_checkpoint_write_failed") from None
 
             if created:
-                _fsync_directory(self.checkpoints_root)
+                if not _fsync_directory(self.checkpoints_root):
+                    self._close_append_descriptor(
+                        execution_sha256,
+                        suppress_errors=True,
+                    )
+                    raise _fail("exact_operation_checkpoint_write_failed")
             assert final_info is not None
             try:
                 named_final = os.lstat(path)
@@ -1468,7 +1478,8 @@ class FileExactOperationCheckpointStore:
         finally:
             if descriptor >= 0:
                 os.close(descriptor)
-        _fsync_directory(self.results_root)
+        if not _fsync_directory(self.results_root):
+            raise _fail("exact_operation_result_receipt_failed")
         try:
             reread = _read_plain_file(
                 path,
@@ -1709,6 +1720,7 @@ class _CheckpointState:
     rows: list[dict[str, Any]]
     started_items: set[int]
     completed_fields: dict[int, set[str]]
+    completed_field_count: int
     verified_items: set[int]
     last_checkpoint_sha256: str | None
 
@@ -2171,7 +2183,14 @@ def _load_checkpoint_state(
             raise _fail("exact_operation_checkpoint_invalid")
         previous = checkpoint_sha256
         rows.append(row)
-    return _CheckpointState(rows, started, completed_fields, verified, previous)
+    return _CheckpointState(
+        rows,
+        started,
+        completed_fields,
+        sum(len(value) for value in completed_fields.values()),
+        verified,
+        previous,
+    )
 
 
 def _append_checkpoint(
@@ -2233,6 +2252,7 @@ def _append_checkpoint(
         state.started_items.add(item.ordinal)
     elif stage == "field_verified" and field_ref is not None:
         state.completed_fields[item.ordinal].add(field_ref)
+        state.completed_field_count += 1
     elif stage == "item_verified":
         state.verified_items.add(item.ordinal)
 
@@ -2484,24 +2504,13 @@ def _run_exact_operation(
             "preflight",
             len(checkpoint_state.verified_items),
             len(selection),
-            sum(
-                len(fields)
-                for item, fields in selection
-                if item.ordinal in checkpoint_state.verified_items
-            )
-            + sum(
-                len(value)
-                for key, value in checkpoint_state.completed_fields.items()
-                if key not in checkpoint_state.verified_items
-            ),
+            checkpoint_state.completed_field_count,
             total_fields,
         )
     )
 
     written_fields = 0
-    resumed_fields = sum(
-        len(value) for value in checkpoint_state.completed_fields.values()
-    )
+    resumed_fields = checkpoint_state.completed_field_count
     for item, fields in selection:
         if item.ordinal in checkpoint_state.verified_items:
             for field in fields:
@@ -2538,10 +2547,7 @@ def _run_exact_operation(
                     "item_started",
                     len(checkpoint_state.verified_items),
                     len(selection),
-                    sum(
-                        len(value)
-                        for value in checkpoint_state.completed_fields.values()
-                    ),
+                    checkpoint_state.completed_field_count,
                     total_fields,
                     item.ordinal,
                 )
@@ -2616,10 +2622,7 @@ def _run_exact_operation(
                     "field_verified",
                     len(checkpoint_state.verified_items),
                     len(selection),
-                    sum(
-                        len(value)
-                        for value in checkpoint_state.completed_fields.values()
-                    ),
+                    checkpoint_state.completed_field_count,
                     total_fields,
                     item.ordinal,
                 )
@@ -2645,10 +2648,7 @@ def _run_exact_operation(
                 "item_verified",
                 len(checkpoint_state.verified_items),
                 len(selection),
-                sum(
-                    len(value)
-                    for value in checkpoint_state.completed_fields.values()
-                ),
+                checkpoint_state.completed_field_count,
                 total_fields,
                 item.ordinal,
             )

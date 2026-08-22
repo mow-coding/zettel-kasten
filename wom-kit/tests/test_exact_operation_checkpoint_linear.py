@@ -131,6 +131,30 @@ def _one_effect_manifest() -> ExactOperationManifest:
     )
 
 
+def _many_effect_manifest(effect_count: int) -> ExactOperationManifest:
+    field = ExactFieldEffect(
+        field_ref="source_properties",
+        pre_sha256=hash_field_value(b"before"),
+        post_sha256=hash_field_value(b"after"),
+        source_sha256=hash_field_value(b"source"),
+    )
+    return ExactOperationManifest.build(
+        operation="checkpoint_progress_test",
+        archive_identity_sha256=hash_field_value(b"archive"),
+        items=(
+            ExactOperationItem(
+                ordinal=ordinal,
+                item_id=f"item:{ordinal}",
+                target_kind="zettel",
+                target_ref=f"synthetic/{ordinal}.json",
+                target_identity_sha256=hash_field_value(b"identity"),
+                fields=(field,),
+            )
+            for ordinal in range(effect_count)
+        ),
+    )
+
+
 class ExactOperationCheckpointLinearTests(unittest.TestCase):
     def test_benchmark_harness_proves_linear_scan_and_progress_contract(self) -> None:
         completed = subprocess.run(
@@ -218,6 +242,92 @@ class ExactOperationCheckpointLinearTests(unittest.TestCase):
                 self.assertEqual(resume_scans.call_count, 1)
                 self.assertEqual(len(rows), 500)
                 self.assertEqual(rows[-1], {"sequence": 499})
+
+    def test_apply_progress_uses_constant_time_completed_field_counter(self) -> None:
+        effect_count = 100
+        manifest = _many_effect_manifest(effect_count)
+        target = _OneEffectTarget()
+        observed_mappings = []
+        events = []
+        original_load = manifest_module._load_checkpoint_state
+
+        class _CountingCompletedFields(dict):
+            def __init__(self, value):
+                super().__init__(value)
+                self.iterated_entries = 0
+
+            def items(self):
+                for key, value in super().items():
+                    self.iterated_entries += 1
+                    yield key, value
+
+            def values(self):
+                for value in super().values():
+                    self.iterated_entries += 1
+                    yield value
+
+        def counted_load(*args, **kwargs):
+            state = original_load(*args, **kwargs)
+            counted = _CountingCompletedFields(state.completed_fields)
+            state.completed_fields = counted
+            observed_mappings.append(counted)
+            return state
+
+        with tempfile.TemporaryDirectory() as temporary:
+            archive_root = Path(temporary) / "archive"
+            archive_root.mkdir()
+            with exact_operation_writer_lock(archive_root) as writer_lock:
+                store = FileExactOperationCheckpointStore(
+                    archive_root,
+                    writer_lock=writer_lock,
+                )
+                with patch.object(
+                    manifest_module,
+                    "_load_checkpoint_state",
+                    side_effect=counted_load,
+                ):
+                    result = apply_exact_operation(
+                        manifest,
+                        payloads=_OneEffectPayloads(),
+                        writer=_OneEffectWriter(target),
+                        verifier=_OneEffectVerifier(target),
+                        checkpoint_store=store,
+                        progress_hook=events.append,
+                    )
+
+        self.assertEqual(result["field_count"], effect_count)
+        self.assertEqual(len(observed_mappings), 1)
+        self.assertEqual(observed_mappings[0].iterated_entries, 0)
+        item_events = [event for event in events if event.stage == "item_verified"]
+        self.assertEqual(len(item_events), effect_count)
+        self.assertEqual(item_events[-1].completed_fields, effect_count)
+
+    def test_checkpoint_creation_directory_sync_failure_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            archive_root = Path(temporary) / "archive"
+            archive_root.mkdir()
+            with exact_operation_writer_lock(archive_root) as writer_lock:
+                store = FileExactOperationCheckpointStore(
+                    archive_root,
+                    writer_lock=writer_lock,
+                )
+                with patch.object(
+                    manifest_module,
+                    "_fsync_directory",
+                    return_value=False,
+                ):
+                    with self.assertRaises(ExactOperationManifestError) as blocked:
+                        store.append(
+                            EXECUTION_SHA256,
+                            {"sequence": 0},
+                            heartbeat=lambda: None,
+                        )
+                self.assertEqual(
+                    blocked.exception.code,
+                    "exact_operation_checkpoint_write_failed",
+                )
+                self.assertNotIn(EXECUTION_SHA256, store._append_descriptors)
+                self.assertFalse(store._append_cursors[EXECUTION_SHA256].exists)
 
     def test_existing_canonical_jsonl_is_extended_without_rewrite(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
