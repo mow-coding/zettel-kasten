@@ -5,6 +5,29 @@
 WOM-kit은 명령줄 도구입니다. 일반 앱 프로젝트의 Python 의존성과 섞지 말고
 별도의 격리된 Python 환경에 설치하는 것이 좋습니다.
 
+## 한 Windows 계정에서 여러 클라이언트 폴더를 쓸 때
+
+`uv tool`의 격리 환경은 Python 의존성을 다른 앱과 분리하지만, PATH에 노출한
+`archive.exe`를 현재 폴더 전용으로 만들지는 않습니다. 같은 Windows 계정에서
+같은 실행 파일을 찾는 모든 프로세스는 다음 명령 실행부터 교체된 버전을 볼 수
+있습니다. 따라서 `archive --version`은 현재 실행한 공용 도구 버전일 뿐, 특정
+클라이언트 프로젝트가 업데이트됐다는 증거가 아닙니다.
+
+같은 컴퓨터의 베타 클라이언트는 두 층을 함께 확인해야 합니다.
+
+```powershell
+archive --version
+archive version <project-or-archive-root> --format json
+```
+
+두 번째 결과의 project source, pin, runtime alignment를 보고 그 클라이언트의
+업데이트 필요 여부를 결정합니다. 개발·릴리스 검증 때는 별도 임시 가상환경에
+wheel을 설치하고 그 환경의 `Scripts\archive.exe`를 정확한 경로로 실행해야
+합니다. 테스트 과정에서 사용자 공용 PATH 도구를 교체하지 않습니다. 같은
+컴퓨터에서 클라이언트 실행까지 완전히 분리하려면 클라이언트별 전용 환경 또는
+OS 사용자 계정이 필요합니다. WOM v0.4.3은 일반 명령 전체의 폴더별 자동
+샌드박스를 제공한다고 주장하지 않습니다.
+
 아래 v0.4.3 URL은 조건부 계약이며 공개 자산이 실제로 존재한다는 증거가
 아닙니다. 정확히 일치하는 GitHub Release가 존재하고 검증된 wheel을 자산으로
 나열한 뒤에만 사용하세요. 소스 상태와 릴리스 증거의 구분은
@@ -41,7 +64,8 @@ archive git-backup-plan <archive-root> --remote origin --dry-run --format json
 
 `uv tool install`은 도구 전용 환경을 만들고 패키지가 제공하는 명령을 꺼내
 줍니다. WOM-kit은 `archive`, `wom`, `archive-mcp`, `wom-mcp` 네 명령을
-설치합니다.
+설치합니다. 이 환경은 의존성 면에서는 격리되지만, 밖으로 꺼낸 명령은 사용자
+PATH가 공유하는 실행점이지 프로젝트 폴더 전용 명령이 아닙니다.
 
 이번 릴리스는 WOM-kit을 PyPI에 공개하지 않습니다. 따라서 아직은
 `pip install wom-kit`이 공식 명령이 아닙니다. 정확한 GitHub 릴리스 URL을

@@ -237,6 +237,22 @@ The bridge runs the verified project source for one invocation. It does not:
 - change an already imported Python process; or
 - install or update the separate `wom-archive` runtime Agent Skill.
 
+### Same-account multi-project boundary
+
+Multiple project folders under one Windows account may resolve the same
+user-level `archive.exe`. Replacing that executable changes the running tool
+seen by every such folder on its next invocation; the current working directory
+does not sandbox it. Conversely, a project source mirror and pin may remain on
+an older version because project update is a separate transaction.
+
+For that reason, `archive --version` alone is never project-update evidence.
+Use `archive version <project-or-archive-root> --format json` and compare the
+running import, project source, pin, PATH selection, and runtime alignment.
+The read-only project bridge remains version-command-only and does not claim to
+isolate general commands per folder. Release verification should use an
+explicit executable inside a dedicated temporary environment when replacing a
+same-account shared PATH tool is not intended.
+
 If source/pin metadata is incomplete or inconsistent, or any local release
 integrity check fails, the result fails closed and provides no executable
 bridge argv. A present but unverified mirror also makes the command nonzero.

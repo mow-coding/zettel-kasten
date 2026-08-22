@@ -23,6 +23,26 @@ WHEEL_URL = (
 
 
 class V0403ReleaseDocsTests(unittest.TestCase):
+    def test_same_account_client_scope_is_explicit(self) -> None:
+        surfaces = (
+            KIT / "docs" / "python-tool-install.md",
+            KIT / "docs" / "python-tool-install.ko.md",
+            KIT / "docs" / "version-truth-source.md",
+            RELEASE_PATH,
+        )
+        combined = "\n".join(
+            path.read_text(encoding="utf-8") for path in surfaces
+        )
+        for token in (
+            "archive --version",
+            "archive version <project-or-archive-root> --format json",
+            "PATH",
+            "per-folder sandbox",
+            "temporary virtual environment",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, combined)
+
     def test_version_sources_and_wheel_contract_are_synchronized(self) -> None:
         self.assertEqual(__version__, "0.4.3")
         self.assertIn(
