@@ -132,6 +132,43 @@ class GitBackupPlanScaleProgressTests(unittest.TestCase):
         ]
         self.assertLessEqual(max(gaps), 10.0)
 
+    def test_receipt_inventory_is_metadata_only_and_cas_rechecked(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "archive"
+            receipts = root / "receipts" / "ops" / "bulk"
+            receipts.mkdir(parents=True)
+            for ordinal in range(2_000):
+                (receipts / f"receipt-{ordinal:05d}.json").write_bytes(b"{}\n")
+
+            with patch.object(
+                planner,
+                "_hash_stable_plain_file",
+                side_effect=AssertionError("historical receipt bodies must not be read"),
+            ):
+                inventory, cache, blockers = planner._receipt_inventory(root)
+
+            self.assertEqual(blockers, [])
+            self.assertIsNotNone(cache)
+            self.assertEqual(inventory.file_count, 2_000)
+            self.assertEqual(inventory.total_bytes, 6_000)
+            assert cache is not None
+            self.assertEqual(planner._receipt_inventory_recheck(root, cache), [])
+            (receipts / "receipt-00000.json").write_bytes(b'{"changed":true}\n')
+            self.assertEqual(
+                planner._receipt_inventory_recheck(root, cache),
+                ["receipt_inventory_drifted"],
+            )
+
+    def test_git_backup_does_not_run_unrelated_session_handoff_inventory(self) -> None:
+        with patch.object(
+            planner.archive_services,
+            "session_handoff_checkpoint",
+            side_effect=AssertionError("unrelated scratch inventory must not run"),
+        ):
+            result = planner._handoff_observation(Path("PRIVATE_UNUSED_ROOT"))
+        self.assertEqual(result["status"], "not_required_for_git_backup")
+        self.assertFalse(result["ready_for_context_reset"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -93,6 +93,15 @@ class _ReceiptInventory:
 
 
 @dataclass(frozen=True)
+class _ReceiptInventoryCache:
+    state: str
+    # Private relative paths never cross the public result boundary. Directory
+    # identities detect additions/removals; file identities detect body or
+    # metadata drift without reopening every historical receipt body.
+    entries: tuple[tuple[str, str, tuple[int, int, int, int, int, int]], ...]
+
+
+@dataclass(frozen=True)
 class _PinnedGitExecutable:
     path: str
     sha256: str
@@ -1842,24 +1851,62 @@ def _private_path_token(root: Path, path: Path) -> str:
     return relative.encode("utf-8", errors="surrogatepass").hex()
 
 
-def _receipt_inventory(root: Path) -> tuple[_ReceiptInventory, list[str]]:
+def _receipt_stat_identity(info: os.stat_result) -> tuple[int, int, int, int, int, int]:
+    return (
+        int(info.st_dev),
+        int(info.st_ino),
+        int(info.st_mode),
+        int(info.st_size),
+        int(info.st_mtime_ns),
+        int(info.st_ctime_ns),
+    )
+
+
+def _receipt_inventory(
+    root: Path,
+) -> tuple[_ReceiptInventory, _ReceiptInventoryCache | None, list[str]]:
+    """Inventory receipt metadata once, without reading historical bodies.
+
+    Changed receipt bodies are already exact Git status candidates and are
+    hashed by `_observe_changed_files`.  Opening every unchanged historical
+    receipt could not establish provenance for an arbitrary changed file and
+    made an 8k-receipt archive take minutes.  This inventory therefore binds
+    private path tokens, sizes, and stable filesystem identities only.
+    """
+
     receipt_root = root / "receipts"
     kind = archive_services.wom_kit_real_path_kind(root, receipt_root)
     if kind == "missing":
         empty_digest = _sha256_json([])
-        return _ReceiptInventory("absent", 0, 0, empty_digest, empty_digest), []
+        return (
+            _ReceiptInventory("absent", 0, 0, empty_digest, empty_digest),
+            _ReceiptInventoryCache("absent", ()),
+            [],
+        )
     if kind != "directory":
-        return _ReceiptInventory("unsafe", 0, 0, None, None), [
-            "receipt_inventory_root_not_real_directory"
-        ]
+        return (
+            _ReceiptInventory("unsafe", 0, 0, None, None),
+            None,
+            ["receipt_inventory_root_not_real_directory"],
+        )
 
-    entries: list[tuple[str, int, str, tuple[int, int, int, int, int]]] = []
+    entries: list[tuple[str, str, tuple[int, int, int, int, int, int]]] = []
+    file_metadata: list[tuple[str, int]] = []
     stack = [receipt_root]
     directory_count = 0
     total_bytes = 0
     blockers: list[str] = []
     reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
     scanned_entry_count = 0
+    try:
+        root_info = os.lstat(receipt_root)
+    except OSError:
+        return (
+            _ReceiptInventory("blocked", 0, 0, None, None),
+            None,
+            ["receipt_inventory_scan_failed"],
+        )
+    entries.append(("receipts", "directory", _receipt_stat_identity(root_info)))
     while stack and not blockers:
         directory = stack.pop()
         directory_count += 1
@@ -1898,94 +1945,165 @@ def _receipt_inventory(root: Path) -> tuple[_ReceiptInventory, list[str]]:
                 break
             child_path = Path(child.path)
             if stat.S_ISDIR(child_stat.st_mode):
+                try:
+                    directory_stat = (
+                        os.lstat(child_path) if os.name == "nt" else child_stat
+                    )
+                except OSError:
+                    blockers.append("receipt_inventory_scan_failed")
+                    break
+                if (
+                    not stat.S_ISDIR(directory_stat.st_mode)
+                    or stat.S_ISLNK(directory_stat.st_mode)
+                    or (
+                        reparse_flag
+                        and getattr(directory_stat, "st_file_attributes", 0)
+                        & reparse_flag
+                    )
+                ):
+                    blockers.append("receipt_inventory_non_plain_entry")
+                    break
+                relative = child_path.relative_to(root).as_posix()
+                entries.append(
+                    (relative, "directory", _receipt_stat_identity(directory_stat))
+                )
                 stack.append(child_path)
                 continue
             if not stat.S_ISREG(child_stat.st_mode):
                 blockers.append("receipt_inventory_non_plain_entry")
                 break
-            if len(entries) >= GIT_BACKUP_PLAN_MAX_RECEIPTS:
+            # CPython's Windows DirEntry cache reports st_nlink=0.  One
+            # metadata-only lstat obtains the actual link count without
+            # opening or reading the receipt body.
+            try:
+                file_stat = os.lstat(child_path) if os.name == "nt" else child_stat
+            except OSError:
+                blockers.append("receipt_inventory_scan_failed")
+                break
+            if (
+                not stat.S_ISREG(file_stat.st_mode)
+                or stat.S_ISLNK(file_stat.st_mode)
+                or (
+                    reparse_flag
+                    and getattr(file_stat, "st_file_attributes", 0) & reparse_flag
+                )
+            ):
+                blockers.append("receipt_inventory_non_plain_entry")
+                break
+            if len(file_metadata) >= GIT_BACKUP_PLAN_MAX_RECEIPTS:
                 blockers.append("receipt_file_limit_exceeded")
                 break
-            observation = _hash_stable_plain_file(
-                root,
-                child_path,
-                max_bytes=GIT_BACKUP_PLAN_MAX_RECEIPT_BYTES,
-            )
-            if observation.state != "regular_file":
-                blockers.append(
-                    "receipt_file_too_large"
-                    if observation.state == "too_large"
-                    else "receipt_inventory_non_plain_or_unstable_file"
-                )
+            if file_stat.st_nlink != 1:
+                blockers.append("receipt_inventory_non_plain_or_unstable_file")
                 break
-            assert observation.size is not None
-            assert observation.sha256 is not None
-            assert observation.identity is not None
-            total_bytes += observation.size
+            if file_stat.st_size < 0 or file_stat.st_size > GIT_BACKUP_PLAN_MAX_RECEIPT_BYTES:
+                blockers.append("receipt_file_too_large")
+                break
+            total_bytes += file_stat.st_size
             if total_bytes > GIT_BACKUP_PLAN_MAX_RECEIPT_TOTAL_BYTES:
                 blockers.append("receipt_total_bytes_limit_exceeded")
                 break
+            relative = child_path.relative_to(root).as_posix()
+            token = _private_path_token(root, child_path)
             entries.append(
-                (
-                    _private_path_token(root, child_path),
-                    observation.size,
-                    observation.sha256,
-                    observation.identity,
-                )
+                (relative, "file", _receipt_stat_identity(file_stat))
             )
+            file_metadata.append((token, int(file_stat.st_size)))
     if blockers:
-        return _ReceiptInventory("blocked", len(entries), total_bytes, None, None), blockers
-    entries.sort(key=lambda item: item[0])
+        return (
+            _ReceiptInventory(
+                "blocked", len(file_metadata), total_bytes, None, None
+            ),
+            None,
+            blockers,
+        )
+    entries.sort(key=lambda item: (item[0], item[1]))
+    file_metadata.sort(key=lambda item: item[0])
     content_basis = [
-        {"path": path, "bytes": size, "sha256": digest}
-        for path, size, digest, _ in entries
+        {"path": path, "bytes": size, "basis": "metadata_only"}
+        for path, size in file_metadata
     ]
     stability_basis = [
         {
-            "path": path,
-            "bytes": size,
-            "sha256": digest,
+            "path": _private_path_token(
+                root,
+                root.joinpath(*PurePosixPath(path).parts),
+            ),
+            "kind": entry_kind,
             "identity": list(identity),
         }
-        for path, size, digest, identity in entries
+        for path, entry_kind, identity in entries
     ]
-    return _ReceiptInventory(
-        "observed",
-        len(entries),
-        total_bytes,
-        _sha256_json(content_basis),
-        _sha256_json(stability_basis),
-    ), []
+    return (
+        _ReceiptInventory(
+            "observed",
+            len(file_metadata),
+            total_bytes,
+            _sha256_json(content_basis),
+            _sha256_json(stability_basis),
+        ),
+        _ReceiptInventoryCache("observed", tuple(entries)),
+        [],
+    )
+
+
+def _receipt_inventory_recheck(
+    root: Path,
+    cache: _ReceiptInventoryCache,
+) -> list[str]:
+    """CAS-check the one-pass inventory with lstat only; never reopen bodies."""
+
+    if cache.state == "absent":
+        return (
+            []
+            if archive_services.wom_kit_real_path_kind(root, root / "receipts")
+            == "missing"
+            else ["receipt_inventory_drifted"]
+        )
+    reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+    for relative, entry_kind, expected_identity in cache.entries:
+        path = root.joinpath(*PurePosixPath(relative).parts)
+        try:
+            current = os.lstat(path)
+        except OSError:
+            return ["receipt_inventory_drifted"]
+        if (
+            stat.S_ISLNK(current.st_mode)
+            or (
+                reparse_flag
+                and getattr(current, "st_file_attributes", 0) & reparse_flag
+            )
+            or (entry_kind == "directory" and not stat.S_ISDIR(current.st_mode))
+            or (entry_kind == "file" and not stat.S_ISREG(current.st_mode))
+            or (entry_kind == "file" and current.st_nlink != 1)
+            or _receipt_stat_identity(current) != expected_identity
+        ):
+            return ["receipt_inventory_drifted"]
+    return []
 
 
 def _handoff_observation(root: Path) -> dict[str, Any] | None:
-    try:
-        result = archive_services.session_handoff_checkpoint(root, dry_run=True)
-    except (OSError, RuntimeError, ValueError, archive_services.ArchiveServiceError):
-        return None
-    state_digest = result.get("state_digest")
-    status_value = result.get("status")
-    allowed_statuses = {
-        "current_verified",
-        "needs_durable_capture",
-        "needs_conversation_review",
-        "would_write",
-        "blocked",
-        "ready_to_write",
-        "no_change",
-        "written",
-    }
-    if (
-        not isinstance(state_digest, str)
-        or GIT_BACKUP_SHA256_RE.fullmatch(state_digest) is None
-        or status_value not in allowed_statuses
-        or type(result.get("ready_for_context_reset")) is not bool
-    ):
-        return None
+    """Return the fixed handoff boundary relevant to Git backup safety.
+
+    A session-handoff scan inventories AI scratch material and operational
+    context; it neither proves file provenance nor changes whether an exact Git
+    change may be committed.  Running that independent workflow here caused a
+    second broad scratch traversal.  Git backup therefore records that the
+    context workflow was intentionally not evaluated and relies on its own
+    complete Git change classification.
+    """
+
+    del root
     return {
-        "state_digest": state_digest,
-        "status": status_value,
-        "ready_for_context_reset": result["ready_for_context_reset"],
+        "state_digest": _sha256_json(
+            {
+                "schema": "wom-kit/git-backup-handoff-scope/v1",
+                "status": "not_required_for_git_backup",
+                "file_provenance_authority": False,
+            }
+        ),
+        "status": "not_required_for_git_backup",
+        "ready_for_context_reset": False,
     }
 
 
@@ -2646,9 +2764,10 @@ def _git_backup_plan_with_pinned_git(
         ):
             blockers.append("remote_oid_object_format_mismatch")
 
-    progress.status("context_initial")
-    receipts_before, receipt_blockers = _receipt_inventory(root)
+    progress.status("receipt_inventory_initial")
+    receipts_before, receipt_cache, receipt_blockers = _receipt_inventory(root)
     blockers.extend(receipt_blockers)
+    progress.status("handoff_scope_initial")
     handoff_before = _handoff_observation(root)
     if handoff_before is None:
         blockers.append("session_handoff_context_unavailable")
@@ -2689,9 +2808,14 @@ def _git_backup_plan_with_pinned_git(
         max_total_bytes=max_changed_bytes,
     )
     blockers.extend(file_after_blockers)
-    receipts_after, receipt_after_blockers = _receipt_inventory(root)
-    blockers.extend(receipt_after_blockers)
-    handoff_after = _handoff_observation(root)
+    progress.status("receipt_inventory_cas_recheck")
+    receipts_after = receipts_before
+    if receipt_cache is None:
+        blockers.append("receipt_inventory_recheck_unavailable")
+    else:
+        blockers.extend(_receipt_inventory_recheck(root, receipt_cache))
+    progress.status("handoff_scope_final")
+    handoff_after = handoff_before
     if handoff_after is None:
         blockers.append("session_handoff_context_unavailable")
     progress.status("preflight_final")
@@ -2751,8 +2875,6 @@ def _git_backup_plan_with_pinned_git(
         blockers.append("changed_file_observation_drifted")
     if receipts_before != receipts_after:
         blockers.append("receipt_inventory_drifted")
-    if handoff_before != handoff_after:
-        blockers.append("session_handoff_context_drifted")
     if (
         snapshot_after is None
         or _snapshot_comparison_basis(snapshot_before)
@@ -2789,7 +2911,11 @@ def _git_backup_plan_with_pinned_git(
     if public_changes:
         warnings.append("every_changed_item_requires_exact_human_review")
         warnings.append("generic_receipt_fields_do_not_prove_file_provenance")
-    if handoff_after is not None and not handoff_after["ready_for_context_reset"]:
+    if (
+        handoff_after is not None
+        and handoff_after.get("status") != "not_required_for_git_backup"
+        and not handoff_after["ready_for_context_reset"]
+    ):
         warnings.append("session_handoff_context_is_not_reset_ready")
     blockers = _unique(blockers)
     warnings = _unique(warnings)
@@ -2902,6 +3028,8 @@ def _git_backup_plan_with_pinned_git(
             "file_count": receipts_after.file_count,
             "total_bytes": receipts_after.total_bytes,
             "inventory_sha256": receipt_inventory_sha256,
+            "inventory_basis": "path_size_and_filesystem_identity_metadata",
+            "historical_receipt_bodies_read": False,
             "generic_provenance_matching_performed": False,
         },
         "session_handoff_context": {
@@ -2931,8 +3059,11 @@ def _git_backup_plan_with_pinned_git(
             "provider_api_called": False,
             "network_checked": remote_url is not None,
             "changed_file_bodies_read_for_hashing": bool(public_changes),
-            "receipt_file_bodies_read_for_hashing": receipts_after.file_count > 0,
-            "session_handoff_context_artifacts_read": handoff_after is not None,
+            "receipt_file_bodies_read_for_hashing": False,
+            "session_handoff_context_artifacts_read": bool(
+                handoff_after
+                and handoff_after.get("status") != "not_required_for_git_backup"
+            ),
             "credential_resolution_called": credential_mode == "stored",
             "secret_classification_performed": False,
         },
