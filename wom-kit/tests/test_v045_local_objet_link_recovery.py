@@ -118,6 +118,13 @@ class V045LocalObjetLinkRecoveryTests(unittest.TestCase):
             self.assertIsInstance(manifest, dict)
             self.assertEqual(manifest["operation"], "zettel_objet_link_recovery")
             self.assertEqual(manifest["item_count"], 1)
+            evidence = manifest["operation_evidence"]
+            self.assertEqual(evidence["counts"]["capture_item_count"], 1)
+            self.assertEqual(evidence["counts"]["classified_item_count"], 1)
+            self.assertEqual(evidence["counts"]["exact_link_ready_count"], 1)
+            self.assertIn("capture_item_set_sha256", evidence["digests"])
+            self.assertIn("classification_set_sha256", evidence["digests"])
+            self.assertFalse(evidence["private_values_echoed"])
             self.assertNotIn(PRIVATE_TITLE, json.dumps(result))
             self.assertNotIn(SOURCE_ID, json.dumps(result))
             self.assertNotIn(SOURCE_ID.replace("-", ""), json.dumps(result))
