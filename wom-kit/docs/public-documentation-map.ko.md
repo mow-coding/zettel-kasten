@@ -6,7 +6,15 @@
 철학 갱신: 2026-07-15
 하네스 호환 경계 갱신: 2026-07-16
 
-현재 v0.4.3 후보 변경점: `git-backup-plan`은 제한된 read-only 점검으로
+현재 v0.4.3 변경점: `ExactOperationManifest v1`이 정확한 승인, checkpoint,
+resume, 독립 검증, 필드 단위 revert를 위한 공통 기반을 제공합니다. 기존 Git
+계획 계열은 정확한 commit·non-force push·원격 ref 재조회를 추가하고,
+`archive migrate`는 Letter 138의 손실 없는 `source_properties` 보강을,
+`project-version-update`는 승인에 결속된 영수증을, feedback draft는 CAS
+개정과 delivered 이후 새 ID supersession을 제공합니다. 공개 기능의 존재만으로
+비공개 보관함의 실제 결과가 증명되지는 않습니다.
+
+Git 백업의 상세 경계: `git-backup-plan`은 제한된 read-only 점검으로
 유지됩니다. 기존 `git-backup-reconcile-plan` 명령군에는 모든 변경을 정확히
 한 번 분류하는 비공개 그룹 manifest 검증, manifest SHA-256에 묶인 네이티브
 사람 승인, literal 경로 상한을 지키는 commit, 저장된 비대화형 인증을 쓰는
@@ -40,12 +48,11 @@ v0.4.2는 Letter 139의 read-only 계획 기반만 다루며, 요청된 end-to-e
 writer를 구현하지 않습니다.
 
 이전 v0.4.1 쓰기 경계: `zettel-objet-link --approve` 하나에는 작업 전용 로컬
-exact-human binding이 있습니다. 대응하는 revert, 모든 Objet capture 쓰기,
-project updater/collision/bytecode 쓰기는 계속 고정 차단됩니다. `archive
-capabilities --machine`이 parser에서 직접 만든 inventory에는 고정 차단
-canonical 실행 경로 78개가 있고, 제공된 고정 차단 항목은 모두 일치합니다.
-이 inventory는 archive별 선행 조건을 검사하지 않으며, `--approve`가 없다는
-사실만으로 read-only라고 단정할 수 없습니다.
+exact-human binding이 있습니다. v0.4.3에서도 대응하는 revert, Objet capture,
+project collision, bytecode 쓰기는 계속 고정 차단됩니다. `archive
+capabilities --machine`이 parser에서 직접 만든 inventory는 제공된 모든 고정
+차단 항목과 일치해야 합니다. 이 inventory는 archive별 선행 조건을 검사하지
+않으며, `--approve`가 없다는 사실만으로 read-only라고 단정할 수 없습니다.
 
 과거 v0.4.0 쓰기 경계: compound, batch, revert, archive-authority, durable,
 external 범주의 canonical top-level 명령 79개는 각 명령의 plan/dry-run/audit 동작만
@@ -485,6 +492,7 @@ local archive
 - [v0.2.11 Delegate Capability Contract Work Log](../plans/work-log-2026-05-23-delegate-capability-contract.md)
 - [Changelog](../../CHANGELOG.md)
 - [Release Notes](releases/)
+- [v0.4.3 릴리스 노트](releases/v0.4.3.md)
 - [v0.4.2 릴리스 노트](releases/v0.4.2.md)
 - [v0.4.1 릴리스 노트](releases/v0.4.1.md)
 - [v0.4.0 릴리스 노트](releases/v0.4.0.md)

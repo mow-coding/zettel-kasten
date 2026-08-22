@@ -6,6 +6,37 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.4.3 - 2026-08-22
+
+- Added `ExactOperationManifest v1` as the common exact-approved multi-item
+  execution contract: target/source/effect digests, one archive-wide writer
+  lock, append-only hash-chained checkpoints, same-claim resume, content-free
+  progress and receipts, independent verification, and field-scoped revert.
+- Fixed the common checkpoint journal so total validation and append work is
+  linear in the final evidence size rather than re-reading the growing JSONL
+  before and after every row, while retaining fsynced durability, strict
+  existing-file validation, tamper detection, and fail-closed concurrent use.
+- Reopened bounded Git commit and non-force push through the v0.4.2 planning
+  family. The writer proves exact trees with an isolated index, preserves
+  unrelated staged state, validates literal path groups below the Windows
+  command-line ceiling, supports interruption/resume, independently checks
+  commit contents, and re-queries the exact remote ref before completion.
+- Added the Letter 138 `notion-source-properties` migration target for a
+  lossless local-mirror audit and exact backfill. Every source page is bound to
+  a backfill, already-equal, no-canonical-target, or human-review class;
+  populated evidence cannot disappear into an unexplained omission, and
+  unmapped source evidence is never mislabeled as dropped or repaired.
+- Reopened `project-version-update` through native exact-human approval with an
+  approval-bound durable receipt, rollback/replay checks, and content-free
+  Windows PATH/source shadow diagnosis.
+- Added draft-only compare-and-swap operator-feedback revision. Delivered
+  records remain immutable and corrections use a new explicitly superseding
+  feedback ID.
+- Fixed the capped Git runner to drain both output pipes concurrently and
+  replaced whole-archive receipt/body rescans with bounded Git and metadata/CAS
+  projections, keeping the first status immediate and heartbeats bounded on a
+  private-scale worktree.
+
 ## v0.4.2 - 2026-08-22
 
 - Added CLI-only `git-backup-plan` and `git-backup-reconcile-plan` as bounded,

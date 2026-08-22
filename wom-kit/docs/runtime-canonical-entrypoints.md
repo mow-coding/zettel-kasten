@@ -1,6 +1,8 @@
 # Runtime Canonical Entry Points
 
-Status: v0.4.3 exact Git backup writer implementation candidate
+Status: v0.4.3 exact recovery, project update, and Git backup checkpoint
+
+Previous checkpoint: Status: v0.4.2 Letter 139 read-only Git backup planning checkpoint
 
 Previous checkpoint: Status: v0.4.1 Letter 140 recovery and command-truth checkpoint
 
@@ -30,8 +32,8 @@ archive runtime-context <archive-root> --format json
 
 ## v0.4.3 Current Runtime Delta
 
-The two-command CLI-only Git backup family now provides both read-only review
-and one exact native-approved writer route:
+The existing Git command family retains its read-only review basis and adds an
+exact-approved commit/non-force-push writer:
 
 ```powershell
 archive git-backup-plan <archive-root> --remote origin --dry-run --format json
@@ -48,6 +50,21 @@ receipts. It never pulls, fetches, merges, rebases, resets, cleans, deletes, or
 force-pushes. MCP exposes no Git writer. `inspection_complete` is still only a
 planning result. See [Git Backup Plan And Reconciliation Plan](git-backup-plan.md).
 
+The current runtime also provides:
+
+```powershell
+archive migrate <archive-root> --target notion-source-properties --dry-run --progress --format json
+archive project-version-update <project-or-archive-root> --target vX.Y.Z --dry-run --format json
+```
+
+The migration target accounts for every preserved source page and writes only
+an exact lossless `source_properties` field manifest after native approval.
+The project updater binds the inspected current source, pin, target annotated
+tag and commit, rollback state, and approval receipt. Neither dry-run, an
+installed wheel, nor a started claim is completion evidence. Both live writers
+reuse [ExactOperationManifest v1](exact-operation-manifest-v1.md) or its exact
+domain binding and remain CLI-only.
+
 Start command planning from the parser-derived inventory instead of guessing
 from a command name or an older document:
 
@@ -57,9 +74,10 @@ archive capabilities --machine --format json
 
 Its `data.approval_status_inventory` distinguishes
 `approval_available`, `approval_fixed_closed`, and `approval_not_exposed` for
-every canonical executable command path and its aliases. In the v0.4.3
-candidate, the parser matches all 78 supplied fixed-close entries, reports zero
-unmatched entries, and adds the exact Git apply route to `approval_available`.
+every canonical executable command path and its aliases. In v0.4.3 the parser
+matches all 76 supplied fixed-close entries, reports zero unmatched entries,
+and exposes 38 operation-specific approval routes. The generated inventory,
+rather than a copied historical number, is authoritative.
 This is parser evidence only: it does not evaluate archive prerequisites, and
 `approval_not_exposed` does not mean that a command is read-only.
 
@@ -79,26 +97,25 @@ read plus its exact unique matching record set,
 exact before snapshot, create-only receipt generation, and persistent
 per-zettel control artifact. MCP exposes no link writer.
 
-`zettel-objet-link-revert`, all Objet capture mutation routes, and
-`project-version-update` plus its collision/bytecode repair writers remain
-fixed closed. Their documented plans, previews, and audits remain available;
-approval still returns `compound_exact_human_approval_binding_required`. The
-remaining historical fixed-close commands retain the same boundary, so the
-current parser count is 78 rather than v0.4.0's historical 79.
+`zettel-objet-link-revert`, all Objet capture mutation routes, and project
+collision/bytecode-repair writers remain fixed closed. Their documented plans,
+previews, and audits remain available; approval still returns
+`compound_exact_human_approval_binding_required`. `project-version-update`
+itself is separately reopened with an exact target/tag/source/rollback binding.
 
 When an older global CLI must be replaced and the exact public
-v0.4.2 GitHub Release wheel has been independently confirmed, use the public
+v0.4.3 GitHub Release wheel has been independently confirmed, use the public
 wheel directly:
 
 ```powershell
-uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.2/wom_kit-0.4.2-py3-none-any.whl"
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.3/wom_kit-0.4.3-py3-none-any.whl"
 archive --version
 ```
 
 Run `archive --version` in a new process. This replaces only the global `uv`
-tool installation. It does not update the project-local WOM-kit source mirror,
-change a project pin, or make the fixed-closed `project-version-update` writer
-available.
+tool installation. It does not update the project-local WOM-kit source mirror
+or change a project pin. Those effects require a separate reviewed
+`project-version-update` plan and native approval.
 
 JSON usage and repaired high-risk command failures use
 `wom-kit/cli-error/v0.1`. Usage errors return exit code `2`; policy and
