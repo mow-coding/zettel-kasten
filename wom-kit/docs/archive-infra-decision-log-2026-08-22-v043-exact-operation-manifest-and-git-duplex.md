@@ -90,3 +90,18 @@ without adding a new command surface.
 - Treat an exact staged group, verified commit, or already-matching remote ref
   as resumable evidence only when the authenticated checkpoint and original
   started claim also match. Terminal replay and drift remain closed.
+
+## Durable operation-specific accounting
+
+The generic final receipt must preserve the content-free accounting needed to
+decide whether a domain recovery actually covered its complete source set. A
+manifest may therefore carry one optional `operation_evidence` document with
+only a bounded schema code, non-negative named counts, named SHA-256 digests,
+and `private_values_echoed: false`.
+
+The exact manifest SHA-256 and approval context bind this evidence, and the
+stable result plus final receipt preserve the same document. Legacy manifests
+omit the field and retain their existing bytes and digest. Paths, identifiers,
+source values, review prose, and arbitrary nested JSON are not accepted at this
+boundary. This prevents a writer from completing field effects while leaving
+unresolved/category totals only in volatile CLI output.

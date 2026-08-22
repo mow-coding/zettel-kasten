@@ -51,6 +51,9 @@ ABSENT_FIELD_SHA256 = "sha256:" + hashlib.sha256(
 
 _SHA256_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 _CODE_RE = re.compile(r"^[a-z][a-z0-9_]{0,79}$")
+_EVIDENCE_SCHEMA_RE = re.compile(
+    r"^wom-kit/[a-z0-9][a-z0-9-]{0,79}/v[0-9]{1,3}$"
+)
 _ITEM_ID_RE = re.compile(r"^item:[A-Za-z0-9][A-Za-z0-9._:-]{0,126}$")
 _APPROVAL_ID_RE = re.compile(r"^approval_[0-9a-f]{32}$")
 _EXACT_HUMAN_APPROVAL_REFERENCE_SCHEMA = (
@@ -63,6 +66,7 @@ _MAX_TEXT_BYTES = 4_096
 _MAX_FIELD_VALUE_BYTES = 64 * 1024 * 1024
 _MAX_CANONICAL_BYTES = 64 * 1024 * 1024
 _MAX_CHECKPOINT_FILE_BYTES = 256 * 1024 * 1024
+_MAX_OPERATION_EVIDENCE_ENTRIES = 256
 _LOCK_BYTES = b"wom-kit/exact-operation-writer-lock/v1\n"
 
 FieldValue = bytes | None
@@ -307,6 +311,86 @@ class ExactOperationItem:
 
 
 @dataclass(frozen=True)
+class ExactOperationEvidence:
+    """Bounded content-free operation accounting carried into the receipt."""
+
+    schema: str
+    counts: tuple[tuple[str, int], ...]
+    digests: tuple[tuple[str, str], ...]
+
+    def __post_init__(self) -> None:
+        _bounded_text(self.schema, code_pattern=_EVIDENCE_SCHEMA_RE)
+        if (
+            type(self.counts) is not tuple
+            or type(self.digests) is not tuple
+            or not self.counts
+            or not self.digests
+            or len(self.counts) > _MAX_OPERATION_EVIDENCE_ENTRIES
+            or len(self.digests) > _MAX_OPERATION_EVIDENCE_ENTRIES
+        ):
+            raise _fail("exact_operation_manifest_invalid")
+        count_keys: list[str] = []
+        for row in self.counts:
+            if type(row) is not tuple or len(row) != 2:
+                raise _fail("exact_operation_manifest_invalid")
+            key, value = row
+            _bounded_text(key, code_pattern=_CODE_RE)
+            if type(value) is not int or value < 0:
+                raise _fail("exact_operation_manifest_invalid")
+            count_keys.append(key)
+        digest_keys: list[str] = []
+        for row in self.digests:
+            if type(row) is not tuple or len(row) != 2:
+                raise _fail("exact_operation_manifest_invalid")
+            key, value = row
+            _bounded_text(key, code_pattern=_CODE_RE)
+            _digest(value)
+            digest_keys.append(key)
+        if (
+            count_keys != sorted(count_keys)
+            or len(count_keys) != len(set(count_keys))
+            or digest_keys != sorted(digest_keys)
+            or len(digest_keys) != len(set(digest_keys))
+        ):
+            raise _fail("exact_operation_manifest_invalid")
+
+    @classmethod
+    def from_document(cls, value: Mapping[str, Any]) -> "ExactOperationEvidence":
+        if not isinstance(value, Mapping) or set(value) != {
+            "schema",
+            "counts",
+            "digests",
+            "private_values_echoed",
+        }:
+            raise _fail("exact_operation_manifest_invalid")
+        counts = value.get("counts")
+        digests = value.get("digests")
+        if (
+            type(counts) is not dict
+            or type(digests) is not dict
+            or value.get("private_values_echoed") is not False
+        ):
+            raise _fail("exact_operation_manifest_invalid")
+        return cls(
+            schema=value.get("schema"),
+            counts=tuple(sorted(counts.items())),
+            digests=tuple(sorted(digests.items())),
+        )
+
+    def document(self) -> dict[str, Any]:
+        return {
+            "schema": self.schema,
+            "counts": dict(self.counts),
+            "digests": dict(self.digests),
+            "private_values_echoed": False,
+        }
+
+    @property
+    def evidence_sha256(self) -> str:
+        return _digest_document(self.document())
+
+
+@dataclass(frozen=True)
 class ExactOperationManifest:
     operation: str
     archive_identity_sha256: str
@@ -315,12 +399,17 @@ class ExactOperationManifest:
     source_set_sha256: str
     effect_set_sha256: str
     manifest_sha256: str
+    operation_evidence: ExactOperationEvidence | None = None
 
     def __post_init__(self) -> None:
         """Reject forged direct construction as strictly as JSON loading."""
 
         operation = _bounded_text(self.operation, code_pattern=_CODE_RE)
         archive_identity_sha256 = _digest(self.archive_identity_sha256)
+        if self.operation_evidence is not None and type(
+            self.operation_evidence
+        ) is not ExactOperationEvidence:
+            raise _fail("exact_operation_manifest_invalid")
         if type(self.items) is not tuple:
             raise _fail("exact_operation_manifest_invalid")
         _validate_item_set(self.items)
@@ -333,6 +422,7 @@ class ExactOperationManifest:
             operation=operation,
             archive_identity_sha256=archive_identity_sha256,
             items=self.items,
+            operation_evidence=self.operation_evidence,
             **component_digests,
         )
         supplied_manifest = _digest(self.manifest_sha256)
@@ -346,16 +436,28 @@ class ExactOperationManifest:
         operation: str,
         archive_identity_sha256: str,
         items: Iterable[ExactOperationItem],
+        operation_evidence: Mapping[str, Any] | ExactOperationEvidence | None = None,
     ) -> "ExactOperationManifest":
         normalized_operation = _bounded_text(operation, code_pattern=_CODE_RE)
         normalized_archive = _digest(archive_identity_sha256)
         normalized_items = tuple(items)
+        if operation_evidence is None:
+            normalized_evidence = None
+        elif type(operation_evidence) is ExactOperationEvidence:
+            normalized_evidence = operation_evidence
+        elif isinstance(operation_evidence, Mapping):
+            normalized_evidence = ExactOperationEvidence.from_document(
+                operation_evidence
+            )
+        else:
+            raise _fail("exact_operation_manifest_invalid")
         _validate_item_set(normalized_items)
         digests = _manifest_component_digests(normalized_items)
         basis = _manifest_basis(
             operation=normalized_operation,
             archive_identity_sha256=normalized_archive,
             items=normalized_items,
+            operation_evidence=normalized_evidence,
             **digests,
         )
         return cls(
@@ -363,12 +465,13 @@ class ExactOperationManifest:
             archive_identity_sha256=normalized_archive,
             items=normalized_items,
             manifest_sha256=_digest_document(basis),
+            operation_evidence=normalized_evidence,
             **digests,
         )
 
     @classmethod
     def from_document(cls, value: Mapping[str, Any]) -> "ExactOperationManifest":
-        if not isinstance(value, Mapping) or set(value) != {
+        required_keys = {
             "schema",
             "operation",
             "archive_identity_sha256",
@@ -379,6 +482,10 @@ class ExactOperationManifest:
             "effect_set_sha256",
             "items",
             "manifest_sha256",
+        }
+        if not isinstance(value, Mapping) or frozenset(value) not in {
+            frozenset(required_keys),
+            frozenset(required_keys | {"operation_evidence"}),
         }:
             raise _fail("exact_operation_manifest_invalid")
         if value.get("schema") != MANIFEST_SCHEMA or type(value.get("items")) is not list:
@@ -431,6 +538,7 @@ class ExactOperationManifest:
             operation=value.get("operation"),
             archive_identity_sha256=value.get("archive_identity_sha256"),
             items=parsed_items,
+            operation_evidence=value.get("operation_evidence"),
         )
         expected_counts = (
             len(rebuilt.items),
@@ -458,6 +566,7 @@ class ExactOperationManifest:
             operation=self.operation,
             archive_identity_sha256=self.archive_identity_sha256,
             items=self.items,
+            operation_evidence=self.operation_evidence,
             target_set_sha256=self.target_set_sha256,
             source_set_sha256=self.source_set_sha256,
             effect_set_sha256=self.effect_set_sha256,
@@ -467,7 +576,7 @@ class ExactOperationManifest:
     def approval_digest_context(self) -> dict[str, Any]:
         """Return only the digest context consumed by the existing broker."""
 
-        return {
+        context = {
             "schema": MANIFEST_SCHEMA,
             "operation": self.operation,
             "manifest_sha256": self.manifest_sha256,
@@ -480,6 +589,11 @@ class ExactOperationManifest:
             "target_refs_echoed": False,
             "field_refs_echoed": False,
         }
+        if self.operation_evidence is not None:
+            context["operation_evidence_sha256"] = (
+                self.operation_evidence.evidence_sha256
+            )
+        return context
 
 
 def _validate_item_set(items: tuple[ExactOperationItem, ...]) -> None:
@@ -549,11 +663,12 @@ def _manifest_basis(
     operation: str,
     archive_identity_sha256: str,
     items: tuple[ExactOperationItem, ...],
+    operation_evidence: ExactOperationEvidence | None,
     target_set_sha256: str,
     source_set_sha256: str,
     effect_set_sha256: str,
 ) -> dict[str, Any]:
-    return {
+    basis = {
         "schema": MANIFEST_SCHEMA,
         "operation": operation,
         "archive_identity_sha256": archive_identity_sha256,
@@ -564,6 +679,9 @@ def _manifest_basis(
         "effect_set_sha256": effect_set_sha256,
         "items": [item.document() for item in items],
     }
+    if operation_evidence is not None:
+        basis["operation_evidence"] = operation_evidence.document()
+    return basis
 
 
 class ExactOperationPayloadProvider(Protocol):
@@ -1948,7 +2066,7 @@ def _validate_stable_result_document(value: Mapping[str, Any]) -> dict[str, Any]
     if not isinstance(value, Mapping):
         raise _fail("exact_operation_result_receipt_failed")
     result = dict(value)
-    if set(result) != {
+    required_keys = {
         "schema",
         "status",
         "mode",
@@ -1963,6 +2081,10 @@ def _validate_stable_result_document(value: Mapping[str, Any]) -> dict[str, Any]
         "independent_verification_sha256",
         "private_values_echoed",
         "result_sha256",
+    }
+    if frozenset(result) not in {
+        frozenset(required_keys),
+        frozenset(required_keys | {"operation_evidence"}),
     }:
         raise _fail("exact_operation_result_receipt_failed")
     if (
@@ -1986,6 +2108,11 @@ def _validate_stable_result_document(value: Mapping[str, Any]) -> dict[str, Any]
             approval_binding_sha256,
             code="exact_operation_result_receipt_failed",
         )
+    if "operation_evidence" in result:
+        try:
+            ExactOperationEvidence.from_document(result["operation_evidence"])
+        except ExactOperationManifestError:
+            raise _fail("exact_operation_result_receipt_failed") from None
     for name in (
         "item_count",
         "field_count",
@@ -2695,6 +2822,10 @@ def _run_exact_operation(
         "independent_verification_sha256": verification["verification_sha256"],
         "private_values_echoed": False,
     }
+    if manifest.operation_evidence is not None:
+        stable_result_basis["operation_evidence"] = (
+            manifest.operation_evidence.document()
+        )
     stable_result = {
         **stable_result_basis,
         "result_sha256": _digest_document(stable_result_basis),
@@ -2806,6 +2937,7 @@ __all__ = [
     "ExactFieldEffect",
     "ExactOperationApprovalAuthority",
     "ExactOperationCheckpointStore",
+    "ExactOperationEvidence",
     "ExactOperationIndependentVerifier",
     "ExactOperationItem",
     "ExactOperationManifest",
