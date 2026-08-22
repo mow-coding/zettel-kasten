@@ -23,9 +23,11 @@ Letter 138 recovery is bound to the complete 11,585-file sharded
 `block-mirror`, not the narrower 3,605-row Database 3.0 JSONL mirror.  Its
 4,034 direct `object_record` and 7,551 legacy `recordMap` files are both source
 evidence.  The source snapshot count is a pre-write invariant.  The client's
-51/904/2,810 populated email/URL/date counts and the independently observed
-51/917/3,439 raw-type counts must be reconciled by an explicit semantic rule;
-neither set may be forced to fit.  Opaque legacy properties are preserved
+51/904/2,810 populated email/URL/date counts are retained as provenance for the
+historical first-40,000-character, exact-property-name regex probe.  They are
+not semantic acceptance totals.  The full semantic typed counts are
+51/917/3,439, with every difference classified as truncation, alternate property
+name, or raw-regex false positive.  Opaque legacy properties are preserved
 losslessly when their modern name/type meaning is unavailable.
 
 ## Consequences

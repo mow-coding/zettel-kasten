@@ -41,13 +41,24 @@ read-only plans or safety surfaces that leave historical data unrepaired.
   `object_record`, while 7,551 expose the older `recordMap` envelope.  Of the
   latter, 7,441 have a root properties dictionary and 110 do not.  A recovery
   that reads only `object_record` would therefore silently omit most pages.
-- A deliberately simple raw-type census currently observes 51 populated-email
-  pages, 917 populated-URL pages, and 3,439 populated-date pages.  Letter 138
-  reports 51, 904, and 2,810.  The URL difference of 13 and date difference of
-  629 must be decomposed and the client's semantic counting rule reproduced;
-  the implementation must not force the data to match either count.  No write
-  can be approved until the manifest records the source-shape provenance and
-  explains the acceptance classification.
+- A deliberately simple semantic typed census observes 51 populated-email
+  pages, 917 populated-URL pages, and 3,439 populated-date pages.  Letter 138's
+  51/904/2,810 values were reproduced exactly and identified as a historical
+  probe rather than the semantic source total: the 2026-08-20 command searched
+  only the first 40,000 characters of each raw JSON file and required the exact
+  Korean property names `이메일`, `URL`, and `날짜`.
+- For URL, the historical head probe's 904 consists of 901 semantic matches
+  and 3 raw-regex false positives.  Three additional exact-name matches occur
+  after character 40,000, and 13 populated URL properties use another name,
+  producing the semantic total 917.  For date, 17 exact-name matches occur
+  after character 40,000 and 612 populated date properties use another name,
+  producing 3,439.  Full-file raw regex totals are 51/907/2,827.  These source
+  properties are in direct `object_record` files; normalized source page ids
+  have no duplicates.
+- The implementation therefore preserves 51/904/2,810 as content-free
+  historical-probe provenance, not as a value to force during recovery.  The
+  write gate is the complete 11,585-file/source-shape accounting and exact
+  source-id mapping, with explicit reason counts for all exclusions.
 - Canonical matching is based on the canonical zet's `source_page_id`, with
   only dashed/compact UUID normalization.  Legacy `recordMap` property bytes
   are preserved as opaque source evidence when name/type semantics cannot be
@@ -70,6 +81,14 @@ read-only plans or safety surfaces that leave historical data unrepaired.
 - Draft-only same-ID feedback revision is implemented with CAS evidence.
   Delivered or later records remain immutable and require a new superseding
   feedback id.
+- A first actual-scale read-only `git-backup-plan` run against the clean Basoon
+  archive exceeded an external 180-second hard timeout.  Direct measurements
+  show the five main Git projections each complete in 0.139-0.347 seconds; the
+  dominant defect is the repeated whole-archive `_archive_attribute_preflight`
+  walk through ignored scratch and Objet trees.  v0.4.3 is not releasable until
+  that walk is replaced by a bounded, cached projection and the existing Git
+  command family exposes the two-second first-status/ten-second heartbeat
+  contract.
 
 ## Release sequence
 
