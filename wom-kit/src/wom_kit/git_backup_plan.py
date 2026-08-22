@@ -23,7 +23,7 @@ import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable, Mapping
 from urllib.parse import urlsplit
 
 from . import archive_services
@@ -63,6 +63,7 @@ GIT_BACKUP_OPERATION_MARKERS = (
     "index.lock",
 )
 GIT_BACKUP_TRANSPORT_PROTOCOLS = ("https",)
+GIT_BACKUP_CREDENTIAL_MODES = ("anonymous", "stored")
 
 
 @dataclass(frozen=True)
@@ -101,6 +102,88 @@ class _PinnedGitExecutable:
 _PINNED_GIT_EXECUTABLE: contextvars.ContextVar[_PinnedGitExecutable | None] = (
     contextvars.ContextVar("wom_git_backup_pinned_git", default=None)
 )
+
+
+class _GitBackupPlanProgress:
+    """Publish content-free planner stages and bounded heartbeats.
+
+    Progress is deliberately outside the deterministic plan document.  A
+    broken observer must not change a read-only inspection result, so callback
+    failures are counted and suppressed.
+    """
+
+    def __init__(
+        self,
+        hook: Callable[[Mapping[str, Any]], None] | None,
+        *,
+        operation: str,
+    ) -> None:
+        self.hook = hook
+        self.operation = operation
+        self.started = time.monotonic()
+        self.stage = "starting"
+        self.sequence = 0
+        self.failure_count = 0
+        self._lock = threading.Lock()
+
+    def _publish(self, event_kind: str, stage: str) -> None:
+        with self._lock:
+            self.stage = stage
+            self.sequence += 1
+            document = {
+                "schema": "wom-kit/git-backup-progress/v1",
+                "operation": self.operation,
+                "event": event_kind,
+                "stage": stage,
+                "sequence": self.sequence,
+                "elapsed_seconds": round(max(0.0, time.monotonic() - self.started), 3),
+                "private_values_echoed": False,
+            }
+            if self.hook is None:
+                return
+            try:
+                self.hook(document)
+            except Exception:  # noqa: BLE001 - observability cannot alter the plan.
+                self.failure_count += 1
+
+    def status(self, stage: str) -> None:
+        self._publish("status", stage)
+
+    def heartbeat(self) -> None:
+        self._publish("heartbeat", self.stage)
+
+
+def _run_plan_with_heartbeats(
+    progress: _GitBackupPlanProgress,
+    operation: Callable[[], dict[str, Any]],
+) -> dict[str, Any]:
+    """Run one planner call while emitting at least one event every 5 seconds."""
+
+    if progress.hook is None:
+        return operation()
+    context = contextvars.copy_context()
+    completed = threading.Event()
+    result_box: list[dict[str, Any]] = []
+    failure_box: list[BaseException] = []
+
+    def run() -> None:
+        try:
+            result_box.append(context.run(operation))
+        except BaseException as exc:  # preserve the original in-process failure
+            failure_box.append(exc)
+        finally:
+            completed.set()
+
+    worker = threading.Thread(target=run, daemon=True)
+    worker.start()
+    while not completed.wait(timeout=5.0):
+        progress.heartbeat()
+    worker.join()
+    if failure_box:
+        raise failure_box[0]
+    if not result_box:
+        raise RuntimeError("git_backup_progress_worker_failed")
+    return result_box[0]
 
 
 def _sha256_bytes(value: bytes) -> str:
@@ -726,6 +809,73 @@ def _query_remote_ref(url: str, full_ref: str) -> tuple[str, str | None]:
     return "present", fields[0].lower()
 
 
+def _query_remote_ref_with_stored_credentials(
+    root: Path,
+    remote_name: str,
+    full_ref: str,
+) -> tuple[str, str | None]:
+    """Query one exact HTTPS ref through already configured local credentials.
+
+    The remote name and ref are validated before this boundary.  Interactive
+    prompts remain disabled, stdout is bounded, stderr is discarded, and no
+    configured URL or credential value crosses the result boundary.  Unlike
+    the anonymous observer, this route intentionally permits the user's
+    existing global credential helper so private repositories remain usable.
+    """
+
+    pinned = _PINNED_GIT_EXECUTABLE.get()
+    if pinned is None:
+        return "unavailable", None
+    command = _git_command(
+        root,
+        [
+            "-c",
+            "protocol.allow=never",
+            "-c",
+            "protocol.https.allow=always",
+            "-c",
+            "credential.interactive=never",
+            "ls-remote",
+            "--quiet",
+            "--refs",
+            "--exit-code",
+            remote_name,
+            full_ref,
+        ],
+    )
+    environment = _local_git_environment()
+    environment["GIT_TERMINAL_PROMPT"] = "0"
+    environment["GCM_INTERACTIVE"] = "never"
+    result = _run_transport_capped(
+        command,
+        environment=environment,
+        timeout_seconds=GIT_BACKUP_REMOTE_TIMEOUT_SECONDS,
+        max_output_bytes=64 * 1024,
+    )
+    if result is None:
+        return "unavailable", None
+    return_code, raw = result
+    if return_code == 2 and raw == b"":
+        return "target_ref_missing", None
+    if return_code != 0:
+        return "unavailable", None
+    try:
+        text = raw.decode("utf-8", errors="strict")
+    except UnicodeError:
+        return "invalid_response", None
+    rows = [row for row in text.splitlines() if row]
+    if len(rows) != 1:
+        return "invalid_response", None
+    fields = rows[0].split("\t")
+    if (
+        len(fields) != 2
+        or fields[1] != full_ref
+        or re.fullmatch(r"[0-9a-fA-F]{40}|[0-9a-fA-F]{64}", fields[0]) is None
+    ):
+        return "invalid_response", None
+    return "present", fields[0].lower()
+
+
 def _decode_git_path(raw: bytes, *, directory_summary: bool = False) -> str | None:
     try:
         value = raw.decode("utf-8", errors="strict")
@@ -1089,9 +1239,17 @@ def _resolve_target_ref(root: Path, branch: str | None) -> tuple[str | None, str
 
 
 def _archive_attribute_preflight(root: Path) -> list[str]:
-    """Fail before status when any archive-controlled attributes may apply."""
+    """Detect relevant attribute files without walking the whole archive.
 
-    blockers: list[str] = []
+    The former implementation recursively ``scandir``/``lstat``-ed every
+    ignored object and scratch artifact, twice per plan.  On real archives
+    that turned a sub-second Git projection into a multi-minute preflight.
+    ``git ls-files`` can inventory the exact tracked, untracked, and ignored
+    attribute filename set without invoking content filters or reading file
+    bodies, so the safety check remains fail-closed and bounded by Git's one
+    index/worktree projection.
+    """
+
     git_dir = root / ".git"
     try:
         git_stat = os.lstat(git_dir)
@@ -1104,71 +1262,42 @@ def _archive_attribute_preflight(root: Path) -> list[str]:
         or (reparse_flag and getattr(git_stat, "st_file_attributes", 0) & reparse_flag)
     ):
         return ["git_metadata_boundary_not_local_or_real"]
-    stack = [root]
-    seen = 0
-    while stack:
-        directory = stack.pop()
-        try:
-            with os.scandir(directory) as scanner:
-                children = scanner
-                for child in children:
-                    seen += 1
-                    if seen > GIT_BACKUP_PLAN_MAX_PREFLIGHT_ENTRIES:
-                        return ["archive_attribute_preflight_entry_limit_exceeded"]
-                    child_path = Path(child.path)
-                    if directory == root and child.name.casefold() == ".git":
-                        if os.path.normcase(os.path.abspath(child_path)) == os.path.normcase(
-                            os.path.abspath(git_dir)
-                        ):
-                            continue
-                    if child.name.casefold() == ".git":
-                        return ["nested_repository_not_supported"]
-                    if child.name.casefold() == ".gitattributes":
-                        return ["repository_attributes_not_supported"]
-                    try:
-                        child_stat = child.stat(follow_symlinks=False)
-                    except OSError:
-                        return ["archive_attribute_preflight_scan_failed"]
-                    if (
-                        child.is_symlink()
-                        or (
-                            reparse_flag
-                            and getattr(child_stat, "st_file_attributes", 0)
-                            & reparse_flag
-                        )
-                    ):
-                        return ["archive_attribute_preflight_non_plain_entry"]
-                    if stat.S_ISDIR(child_stat.st_mode):
-                        stack.append(child_path)
-                    elif not stat.S_ISREG(child_stat.st_mode):
-                        return ["archive_attribute_preflight_non_plain_entry"]
-        except OSError:
-            return ["archive_attribute_preflight_scan_failed"]
-    return blockers
-
-
-def _tracked_attribute_preflight(root: Path) -> list[str]:
     try:
-        if os.path.lexists(root / ".git" / "info" / "attributes"):
+        if os.path.lexists(git_dir / "info" / "attributes"):
             return ["git_info_attributes_not_supported"]
     except OSError:
         return ["git_info_attributes_state_unavailable"]
-    tracked_attributes = _local_git_raw(
-        root,
-        [
-            "ls-files",
-            "--cached",
-            "-z",
-            "--",
-            ".gitattributes",
-            ":(glob)**/.gitattributes",
-        ],
-        max_output_bytes=GIT_BACKUP_PLAN_MAX_GIT_OUTPUT_BYTES,
+    pathspecs = [".gitattributes", ":(glob)**/.gitattributes"]
+    projections = (
+        (
+            ["ls-files", "--cached", "-z", "--", *pathspecs],
+            "tracked_repository_attributes_not_supported",
+        ),
+        (
+            ["ls-files", "--others", "--exclude-standard", "-z", "--", *pathspecs],
+            "repository_attributes_not_supported",
+        ),
+        (
+            ["ls-files", "--others", "--ignored", "--exclude-standard", "-z", "--", *pathspecs],
+            "repository_attributes_not_supported",
+        ),
     )
-    if tracked_attributes is None or tracked_attributes[0] != 0:
-        return ["tracked_attribute_inventory_unavailable"]
-    if tracked_attributes[1]:
-        return ["tracked_repository_attributes_not_supported"]
+    for args, blocker in projections:
+        result = _local_git_raw(
+            root,
+            args,
+            max_output_bytes=GIT_BACKUP_PLAN_MAX_GIT_OUTPUT_BYTES,
+        )
+        if result is None or result[0] != 0:
+            return ["archive_attribute_preflight_scan_failed"]
+        if result[1]:
+            return [blocker]
+    return []
+
+
+def _tracked_attribute_preflight(root: Path) -> list[str]:
+    # Consolidated into `_archive_attribute_preflight` so one projection
+    # covers tracked, untracked, ignored, and .git/info attribute sources.
     return []
 
 
@@ -1283,9 +1412,6 @@ def _git_lock_inventory(root: Path) -> tuple[dict[str, Any] | None, list[str]]:
 def _safe_git_preflight(
     root: Path,
 ) -> tuple[dict[str, Any] | None, list[str]]:
-    worktree_attribute_blockers = _archive_attribute_preflight(root)
-    if worktree_attribute_blockers:
-        return None, worktree_attribute_blockers
     if not _git_metadata_is_local_real(root):
         return None, ["git_metadata_boundary_not_local_or_real"]
     locks, lock_blockers = _git_lock_inventory(root)
@@ -1308,9 +1434,13 @@ def _safe_git_preflight(
         != "missing"
     ):
         return locks, ["archive_git_backup_lock_present"]
-    tracked_attribute_blockers = _tracked_attribute_preflight(root)
-    if tracked_attribute_blockers:
-        return locks, tracked_attribute_blockers
+    # Only after the local metadata boundary and operation markers are proven
+    # safe may Git inspect the bounded attribute pathspec.  This preserves the
+    # fail-fast rule: a malformed repository or active writer never starts a
+    # status/index subprocess.
+    attribute_blockers = _archive_attribute_preflight(root)
+    if attribute_blockers:
+        return locks, attribute_blockers
     return locks, []
 
 
@@ -1370,6 +1500,7 @@ def _structural_snapshot(
     *,
     branch: str | None,
     preflight_verified: bool = False,
+    max_status_records: int = GIT_BACKUP_PLAN_MAX_CHANGES,
 ) -> tuple[dict[str, Any] | None, list[str]]:
     blockers: list[str] = []
 
@@ -1506,6 +1637,8 @@ def _structural_snapshot(
     flags = _parse_flags(raw_values["flags"])
     if status is None or ignored_status is None or tree is None or index is None or flags is None:
         return None, ["git_machine_output_invalid_or_unsafe"]
+    if len(status) > max_status_records:
+        return None, ["requested_changed_item_limit_exceeded"]
     if any(record.record_kind == "ignored" for record in status):
         return None, ["git_status_candidate_inventory_invalid"]
     ignored_items = [
@@ -2376,9 +2509,12 @@ def _git_backup_plan_with_pinned_git(
     *,
     remote_name: str = "origin",
     branch: str | None = None,
+    credential_mode: str = "anonymous",
     max_changes: int = GIT_BACKUP_PLAN_DEFAULT_MAX_CHANGES,
     max_changed_bytes: int = GIT_BACKUP_PLAN_DEFAULT_MAX_CHANGED_BYTES,
     dry_run: bool = True,
+    _private_capture: dict[str, Any] | None = None,
+    _progress: _GitBackupPlanProgress | None = None,
 ) -> dict[str, Any]:
     """Return a deterministic, read-only Git backup review plan.
 
@@ -2386,6 +2522,11 @@ def _git_backup_plan_with_pinned_git(
     only inside cryptographic commitments.  They are never returned.
     """
 
+    progress = _progress or _GitBackupPlanProgress(
+        None,
+        operation="git_backup_plan",
+    )
+    progress.status("validating_parameters")
     parameter_blockers: list[str] = []
     if type(dry_run) is not bool or not dry_run:
         parameter_blockers.append("read_only_command_requires_dry_run")
@@ -2396,6 +2537,8 @@ def _git_backup_plan_with_pinned_git(
         parameter_blockers.append("remote_name_invalid")
     if branch is not None and not isinstance(branch, str):
         parameter_blockers.append("branch_invalid")
+    if credential_mode not in GIT_BACKUP_CREDENTIAL_MODES:
+        parameter_blockers.append("credential_mode_invalid")
     if not _valid_limit(
         max_changes,
         minimum=1,
@@ -2411,6 +2554,7 @@ def _git_backup_plan_with_pinned_git(
     if parameter_blockers:
         return _empty_plan_result(blockers=parameter_blockers)
 
+    progress.status("resolving_archive")
     try:
         supplied_root = Path(archive_root)
         supplied_absolute = Path(os.path.abspath(str(supplied_root)))
@@ -2437,6 +2581,7 @@ def _git_backup_plan_with_pinned_git(
     pinned_git = _PINNED_GIT_EXECUTABLE.get()
     if pinned_git is None:
         return _empty_plan_result(blockers=["git_executable_not_pinned"])
+    progress.status("preflight_initial")
     locks_before, preflight_blockers = _safe_git_preflight(root)
     if locks_before is None:
         return _empty_plan_result(blockers=preflight_blockers)
@@ -2456,10 +2601,12 @@ def _git_backup_plan_with_pinned_git(
         }
         return blocked
 
+    progress.status("git_projection_initial")
     snapshot_before, blockers = _structural_snapshot(
         root,
         branch=branch,
         preflight_verified=True,
+        max_status_records=max_changes,
     )
     if snapshot_before is None:
         return _empty_plan_result(blockers=blockers)
@@ -2470,15 +2617,24 @@ def _git_backup_plan_with_pinned_git(
     if not _status_records_are_supported(snapshot_before["status"]):
         blockers.append("changed_status_semantics_invalid_or_ambiguous")
 
+    progress.status("remote_ref_initial")
     remote_url = _configured_remote_url(root, remote_name)
     remote_before: tuple[str, str | None]
     if remote_url is None:
         remote_before = ("not_configured_or_unsafe", None)
         blockers.append("configured_remote_unavailable_or_unsafe")
     else:
-        remote_before = _query_remote_ref(
-            remote_url,
-            snapshot_before["target_ref"],
+        remote_before = (
+            _query_remote_ref_with_stored_credentials(
+                root,
+                remote_name,
+                snapshot_before["target_ref"],
+            )
+            if credential_mode == "stored"
+            else _query_remote_ref(
+                remote_url,
+                snapshot_before["target_ref"],
+            )
         )
         if remote_before[0] not in {"present", "target_ref_missing"}:
             blockers.append("git_transport_ref_observation_unavailable")
@@ -2490,12 +2646,14 @@ def _git_backup_plan_with_pinned_git(
         ):
             blockers.append("remote_oid_object_format_mismatch")
 
+    progress.status("context_initial")
     receipts_before, receipt_blockers = _receipt_inventory(root)
     blockers.extend(receipt_blockers)
     handoff_before = _handoff_observation(root)
     if handoff_before is None:
         blockers.append("session_handoff_context_unavailable")
 
+    progress.status("changed_content_observation")
     files_before, worktree_bytes, file_blockers = _observe_changed_files(
         root,
         snapshot_before["status"],
@@ -2504,6 +2662,7 @@ def _git_backup_plan_with_pinned_git(
     blockers.extend(file_blockers)
     if file_blockers:
         return _empty_plan_result(blockers=blockers)
+    progress.status("git_blob_observation")
     blobs, git_blob_bytes, blob_blockers = _git_blob_inventory(
         root,
         snapshot_before,
@@ -2513,6 +2672,7 @@ def _git_backup_plan_with_pinned_git(
     if blob_blockers:
         return _empty_plan_result(blockers=blockers)
 
+    progress.status("building_change_inventory")
     public_changes, private_changes, change_blockers = _change_inventory(
         snapshot_before,
         files_before,
@@ -2522,6 +2682,7 @@ def _git_backup_plan_with_pinned_git(
 
     # Observe the same evidence a second time after hashing every changed file.
     # No lock is created: drift is reported, never papered over.
+    progress.status("drift_reobservation")
     files_after, worktree_bytes_after, file_after_blockers = _observe_changed_files(
         root,
         snapshot_before["status"],
@@ -2533,6 +2694,7 @@ def _git_backup_plan_with_pinned_git(
     handoff_after = _handoff_observation(root)
     if handoff_after is None:
         blockers.append("session_handoff_context_unavailable")
+    progress.status("preflight_final")
     locks_after, preflight_after_blockers = _safe_git_preflight(root)
     blockers.extend(preflight_after_blockers)
     if locks_after is None:
@@ -2556,12 +2718,15 @@ def _git_backup_plan_with_pinned_git(
     if preflight_after_blockers:
         snapshot_after = None
     else:
+        progress.status("git_projection_final")
         snapshot_after, snapshot_after_blockers = _structural_snapshot(
             root,
             branch=branch,
             preflight_verified=True,
+            max_status_records=max_changes,
         )
         blockers.extend(snapshot_after_blockers)
+    progress.status("remote_ref_final")
     remote_url_after = _configured_remote_url(root, remote_name)
     if remote_url_after != remote_url:
         blockers.append("configuration_drifted")
@@ -2569,9 +2734,17 @@ def _git_backup_plan_with_pinned_git(
     elif remote_url_after is None:
         remote_after = remote_before
     else:
-        remote_after = _query_remote_ref(
-            remote_url_after,
-            snapshot_before["target_ref"],
+        remote_after = (
+            _query_remote_ref_with_stored_credentials(
+                root,
+                remote_name,
+                snapshot_before["target_ref"],
+            )
+            if credential_mode == "stored"
+            else _query_remote_ref(
+                remote_url_after,
+                snapshot_before["target_ref"],
+            )
         )
 
     if files_before != files_after or worktree_bytes != worktree_bytes_after:
@@ -2602,6 +2775,7 @@ def _git_backup_plan_with_pinned_git(
         and snapshot_before["target_ref_source"] != "explicit_other_branch"
         and "unborn_head_not_supported" not in blockers
     )
+    progress.status("repository_relation")
     relation, relation_blockers = _repository_relation(
         root,
         local_oid=snapshot_before["local_head"],
@@ -2630,6 +2804,7 @@ def _git_backup_plan_with_pinned_git(
         "git_executable_path": pinned_git.path,
         "git_executable_sha256": pinned_git.sha256,
         "git_executable_identity": list(pinned_git.identity),
+        "credential_mode": credential_mode,
     }
     hidden_effect_set_sha256 = _sha256_json(
         {
@@ -2653,6 +2828,7 @@ def _git_backup_plan_with_pinned_git(
         if receipts_after.inventory_sha256 is not None
         else None
     )
+    progress.status("finalizing_plan")
     plan_sha256 = _sha256_json(
         {
             "schema": GIT_BACKUP_PLAN_SCHEMA,
@@ -2661,6 +2837,7 @@ def _git_backup_plan_with_pinned_git(
                 "max_changes": max_changes,
                 "max_changed_bytes": max_changed_bytes,
                 "dry_run": True,
+                "credential_mode": credential_mode,
             },
             "snapshot": _snapshot_comparison_basis(snapshot_before),
             "remote_before": remote_before,
@@ -2756,12 +2933,38 @@ def _git_backup_plan_with_pinned_git(
             "changed_file_bodies_read_for_hashing": bool(public_changes),
             "receipt_file_bodies_read_for_hashing": receipts_after.file_count > 0,
             "session_handoff_context_artifacts_read": handoff_after is not None,
-            "credential_resolution_called": False,
+            "credential_resolution_called": credential_mode == "stored",
             "secret_classification_performed": False,
         },
         "blockers": blockers,
         "warnings": warnings,
     }
+    if _private_capture is not None and not blockers:
+        # This is an in-process handoff to the exact Git writer.  It is never
+        # serialized or returned by the public planner.  Keeping the ordinal
+        # change-to-path map here means the writer reuses the planner's exact
+        # observation instead of reconstructing a weaker parallel inventory.
+        _private_capture.clear()
+        _private_capture.update(
+            {
+                "root": root,
+                "archive_id": archive_id,
+                "remote_name": remote_name,
+                "credential_mode": credential_mode,
+                "remote_url": remote_url_after,
+                "target_ref": snapshot_before["target_ref"],
+                "local_head_oid": snapshot_before["local_head"],
+                "remote_state": remote_after[0],
+                "remote_oid": remote_after[1],
+                "private_changes": private_changes,
+                "public_changes": public_changes,
+                "git_executable_sha256": pinned_git.sha256,
+                "git_executable_identity": list(pinned_git.identity),
+                "git_config_trust_sha256": snapshot_before[
+                    "git_config_trust_sha256"
+                ],
+            }
+        )
     # A final serialization check is part of the public contract.  It also
     # prevents accidental leakage through a non-JSON Python object repr.
     try:
@@ -2776,35 +2979,61 @@ def git_backup_plan(
     *,
     remote_name: str = "origin",
     branch: str | None = None,
+    credential_mode: str = "anonymous",
     max_changes: int = GIT_BACKUP_PLAN_DEFAULT_MAX_CHANGES,
     max_changed_bytes: int = GIT_BACKUP_PLAN_DEFAULT_MAX_CHANGED_BYTES,
     dry_run: bool = True,
+    _private_capture: dict[str, Any] | None = None,
+    progress_hook: Callable[[Mapping[str, Any]], None] | None = None,
+    _progress_operation: str = "git_backup_plan",
 ) -> dict[str, Any]:
     """Pin one Git executable, run the planner, then verify the same bytes."""
 
-    pinned = _pin_git_executable()
-    if pinned is None:
-        return _empty_plan_result(blockers=["git_executable_unavailable_or_unsafe"])
-    token = _PINNED_GIT_EXECUTABLE.set(pinned)
-    try:
-        result = _git_backup_plan_with_pinned_git(
-            archive_root,
-            remote_name=remote_name,
-            branch=branch,
-            max_changes=max_changes,
-            max_changed_bytes=max_changed_bytes,
-            dry_run=dry_run,
-        )
-        final_observation = _pin_git_at(Path(pinned.path))
-        if final_observation != pinned:
-            return _empty_plan_result(blockers=["git_executable_drifted"])
-        executable_evidence = result.get("git_executable")
-        if isinstance(executable_evidence, dict):
-            executable_evidence["sha256"] = pinned.sha256
-            executable_evidence["stability_verified"] = True
-        return result
-    finally:
-        _PINNED_GIT_EXECUTABLE.reset(token)
+    progress = _GitBackupPlanProgress(
+        progress_hook,
+        operation=_progress_operation,
+    )
+    # This synchronous first event precedes executable hashing, filesystem
+    # inspection, Git subprocesses, network access, and archive body reads.
+    progress.status("starting")
+
+    def inspect() -> dict[str, Any]:
+        progress.status("pinning_git")
+        pinned = _pin_git_executable()
+        if pinned is None:
+            return _empty_plan_result(
+                blockers=["git_executable_unavailable_or_unsafe"]
+            )
+        token = _PINNED_GIT_EXECUTABLE.set(pinned)
+        try:
+            result = _git_backup_plan_with_pinned_git(
+                archive_root,
+                remote_name=remote_name,
+                branch=branch,
+                credential_mode=credential_mode,
+                max_changes=max_changes,
+                max_changed_bytes=max_changed_bytes,
+                dry_run=dry_run,
+                _private_capture=_private_capture,
+                _progress=progress,
+            )
+            progress.status("verifying_git_pin")
+            final_observation = _pin_git_at(Path(pinned.path))
+            if final_observation != pinned:
+                if _private_capture is not None:
+                    _private_capture.clear()
+                return _empty_plan_result(blockers=["git_executable_drifted"])
+            executable_evidence = result.get("git_executable")
+            if isinstance(executable_evidence, dict):
+                executable_evidence["sha256"] = pinned.sha256
+                executable_evidence["stability_verified"] = True
+            return result
+        finally:
+            _PINNED_GIT_EXECUTABLE.reset(token)
+
+    result = _run_plan_with_heartbeats(progress, inspect)
+    progress.status("completed")
+    return result
 
 
 def _empty_reconcile_result(*, blockers: Iterable[str]) -> dict[str, Any]:
@@ -2877,9 +3106,11 @@ def git_backup_reconcile_plan(
     expected_remote_oid: str | None = None,
     remote_name: str = "origin",
     branch: str | None = None,
+    credential_mode: str = "anonymous",
     max_changes: int = GIT_BACKUP_PLAN_DEFAULT_MAX_CHANGES,
     max_changed_bytes: int = GIT_BACKUP_PLAN_DEFAULT_MAX_CHANGED_BYTES,
     dry_run: bool = True,
+    progress_hook: Callable[[Mapping[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     """Re-observe a plan and compare only explicit cryptographic bindings."""
 
@@ -2908,9 +3139,12 @@ def git_backup_reconcile_plan(
         archive_root,
         remote_name=remote_name,
         branch=branch,
+        credential_mode=credential_mode,
         max_changes=max_changes,
         max_changed_bytes=max_changed_bytes,
         dry_run=dry_run,
+        progress_hook=progress_hook,
+        _progress_operation="git_backup_reconcile_plan",
     )
     current_plan = current.get("plan_sha256")
     current_effects = current.get("hidden_effect_set_sha256")
