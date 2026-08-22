@@ -261,6 +261,14 @@ integrate release preparation and run the full v0.4.3 release gates. Only
 after a green public release and supported Basoon installation may the native
 approval and real Letter 138 recovery sequence begin.
 
+### Pause cancelled by the user
+
+The user immediately cancelled the pause and directed work to continue from
+the preserved checkpoint. The three interrupted tasks were resumed in their
+existing worktrees: independent checkpoint review, Letter 138 writer closure,
+and exact Git writer closure. The pause caused no reset, cleanup, release,
+installation, provider action, or Basoon data write.
+
 ## Safety and privacy boundaries
 
 - Real Basoon content, credentials, URLs, and user-profile paths remain private.
