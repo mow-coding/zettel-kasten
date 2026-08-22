@@ -420,7 +420,10 @@ def _manifest_batch_token(specs: Sequence[FormalAdoptionSpec]) -> bytes:
 
 
 def _manifest_for_specs(
-    archive_id: str, specs: Sequence[FormalAdoptionSpec]
+    archive_id: str,
+    specs: Sequence[FormalAdoptionSpec],
+    *,
+    operation_evidence: Mapping[str, Any] | None = None,
 ) -> ExactOperationManifest | None:
     items: list[ExactOperationItem] = []
     for ordinal, spec in enumerate(specs):
@@ -479,7 +482,47 @@ def _manifest_for_specs(
         operation=OPERATION,
         archive_identity_sha256=exact_human_approval_archive_identity_sha256(archive_id),
         items=items,
+        operation_evidence=operation_evidence,
     )
+
+
+def _operation_evidence(
+    *,
+    counts: Mapping[str, int],
+    source_inventory_sha256: str,
+    key_map_sha256: str,
+    conflict_batches: Sequence[ConflictBatch],
+) -> dict[str, Any]:
+    return {
+        "schema": "wom-kit/r2-formal-adoption-evidence/v1",
+        "counts": {
+            "bytes_preservation_candidate_count": int(
+                counts["bytes_preservation_candidate_count"]
+            ),
+            "conflicting_definition_count": int(counts["conflicting_definition_count"]),
+            "existing_formal_adoption_verification_count": int(
+                counts["existing_formal_adoption_verification_count"]
+            ),
+            "formal_adoption_planned_count": int(counts["formal_adoption_planned_count"]),
+            "manifest_row_count": int(counts["manifest_row_count"]),
+            "manifest_scope_remote_key_verified_object_count": int(
+                counts["manifest_scope_remote_key_verified_object_count"]
+            ),
+            "official_deduplicated_wom_uploaded_evidence_object_count": int(
+                counts["official_deduplicated_wom_uploaded_evidence_object_count"]
+            ),
+            "remote_query_planned_count": int(counts["remote_query_planned_count"]),
+            "unique_object_count": int(counts["unique_object_count"]),
+        },
+        "digests": {
+            "conflict_batch_set_sha256": _sha(
+                [item.public_document() for item in conflict_batches]
+            ),
+            "key_map_sha256": key_map_sha256,
+            "source_inventory_sha256": source_inventory_sha256,
+        },
+        "private_values_echoed": False,
+    }
 
 
 def plan_object_storage_formal_adoption(
@@ -642,7 +685,16 @@ def plan_object_storage_formal_adoption(
         "official_deduplicated_wom_uploaded_evidence_object_count": int(
             inventory["official_deduplicated_wom_uploaded_evidence_object_count"]
         ),
+        "bytes_preservation_candidate_count": int(
+            inventory["unique_local_without_remote_record_count"]
+        ),
     }
+    operation_evidence = _operation_evidence(
+        counts=counts,
+        source_inventory_sha256=source_inventory_sha,
+        key_map_sha256=key_map_sha,
+        conflict_batches=batches,
+    )
     return ObjectStorageFormalAdoptionPlan(
         archive_root=root,
         archive_id=archive_id,
@@ -650,7 +702,9 @@ def plan_object_storage_formal_adoption(
         store_ref=store,
         source_inventory_sha256=source_inventory_sha,
         key_map_sha256=key_map_sha,
-        manifest=_manifest_for_specs(archive_id, final_specs),
+        manifest=_manifest_for_specs(
+            archive_id, final_specs, operation_evidence=operation_evidence
+        ),
         specs=final_specs,
         conflict_batches=batches,
         counts=counts,
@@ -1311,7 +1365,15 @@ def load_object_storage_formal_adoption_plan(
                 judgment=item["judgment"],
             )
         )
-    rebuilt = _manifest_for_specs(archive_id, specs)
+    rebuilt = _manifest_for_specs(
+        archive_id,
+        specs,
+        operation_evidence=(
+            manifest.operation_evidence.document()
+            if manifest.operation_evidence is not None
+            else None
+        ),
+    )
     if rebuilt is None or rebuilt.document() != manifest.document():
         raise _fail("object_storage_adoption_control_invalid")
     return ObjectStorageFormalAdoptionPlan(
