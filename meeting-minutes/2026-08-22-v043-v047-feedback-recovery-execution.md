@@ -108,6 +108,18 @@ read-only plans or safety surfaces that leave historical data unrepaired.
   contain, or may contain, a source-page token can block the mapping.  The
   planner must also publish its first status before acquisition rather than
   after the multi-minute mirror read.
+- After the P1 and performance fixes, the actual read-only plan completed in
+  240.563 seconds.  First status was at 0.000 seconds and the maximum progress
+  publication gap was 1.109 seconds.  A bounded four-worker canonical scan
+  finished in 30.17 seconds, the one-pass 925 MB mirror scan in 174.27 seconds,
+  the indexed join in 33.66 seconds, and finalization in 0.72 seconds.
+- Final accounting is exact: 8,566 pages map to backfill effects, 2,882 have no
+  canonical target, and 137 require review, totaling 11,585.  The review set is
+  110 legacy roots with no properties and 27 typed-indeterminate cases.
+  Direct/legacy source shapes remain 4,034/7,551, with 7,441/110 legacy
+  property-present/absent.  All 11,585 normalized source ids are unique, with
+  zero duplicate or invalid ids, zero unexplained populated property/type
+  omissions, one separately accounted BOM non-candidate, and zero writes.
 - Re-testing after the first Git planner optimization reduced initial
   preflight/projection to 6.89 seconds, confirming that Git itself is not the
   remaining bottleneck.  The run then stayed in `context_initial` for more than
