@@ -403,8 +403,8 @@
     {
       "source": "schemas/project-version-update-receipt-v0.2.schema.json",
       "packaged": "schemas/project-version-update-receipt-v0.2.schema.json",
-      "bytes": 4663,
-      "sha256": "e435bcf8548a27c1fa7758e0996d622b9df7d512a5a9817513b40b47beb4f25e"
+      "bytes": 6368,
+      "sha256": "e818c9c463e86e43b3c25f2f9e503233759fc08e79c58430f62b7e0c696b3f71"
     },
     {
       "source": "schemas/project-version-update-receipt.schema.json",
