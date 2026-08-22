@@ -119,6 +119,12 @@ read-only plans or safety surfaces that leave historical data unrepaired.
   observation.  The planner will therefore cache one bounded metadata
   inventory and perform a final identity/CAS recheck rather than rehashing 131
   MB across 54,542 generic historical files twice.
+- The revised implementation completed the same real Basoon read-only plan in
+  31.72 seconds, down from more than 180 seconds.  It published the first state
+  at 0.0 seconds and heartbeats no more than five seconds apart.  The archive
+  had zero changes.  The remaining anonymous-transport blockers are expected
+  for the private remote and belong to the stored-credential v0.4.3 writer
+  verification, not to planner performance.
 
 ## v0.4.4 R2 evidence lock
 
