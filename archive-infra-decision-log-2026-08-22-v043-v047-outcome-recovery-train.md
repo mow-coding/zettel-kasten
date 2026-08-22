@@ -36,6 +36,17 @@ document with no such token is an explicitly accounted non-candidate hygiene
 item for v0.4.7; it must not globally convert every mapped source page to
 review.
 
+Letter 138 may apply the exact mapped recovery set while source pages without
+a canonical target remain preserved and explicitly unresolved.  This is not a
+drop decision.  Approval must bind the deterministic count and set digest for
+every `backfill`, `already_equal`, `unmapped_no_canonical_target`, and
+`human_review` class, including populated-unmapped reason aggregates.  Apply is
+available only when all 11,585 source pages and every populated property are
+accounted and the unexplained omission count is zero.  The earlier populated-
+unmapped fail-closed rule continues to prohibit a migration from silently
+discarding such values; it does not require withholding 8,566 unambiguous
+repairs after the human reviews the exact unresolved projection.
+
 ## Consequences
 
 - Release overhead increases slightly, but completed work is not held behind an
