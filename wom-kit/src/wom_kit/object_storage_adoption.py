@@ -726,24 +726,73 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
+@dataclass(frozen=True, repr=False)
+class ObjectStorageHeadQueryResult:
+    state: str
+    present: bool
+    size_match: bool
+    observed_size: int | None
+
+    def public_document(self) -> dict[str, Any]:
+        return {
+            "schema_version": "wom-kit/object-storage-head-query-result/v0.1",
+            "state": self.state,
+            "present": self.present,
+            "size_match": self.size_match,
+            "observed_size": self.observed_size,
+            "verification_scope": "remote_presence_and_size_not_content_hash",
+            "remote_key_echoed": False,
+            "provider_body_echoed": False,
+        }
+
+
+class ObjectStorageHeadQueryAdapter:
+    """Privacy-safe R2/S3 HEAD classification without provider-body reflection."""
+
+    def __init__(self, transport: archive_services.ObjectStorageTransport) -> None:
+        self.transport = transport
+
+    def query(
+        self,
+        *,
+        remote_key: str,
+        expected_size: int,
+        heartbeat: Callable[[], None],
+    ) -> ObjectStorageHeadQueryResult:
+        heartbeat()
+        try:
+            result = self.transport.head_object(key=remote_key, presence_only=True)
+        except Exception:
+            return ObjectStorageHeadQueryResult("unavailable", False, False, None)
+        heartbeat()
+        if (
+            result.get("presence_state") == "unavailable"
+            or result.get("verification_state") == "unavailable"
+        ):
+            return ObjectStorageHeadQueryResult("unavailable", False, False, None)
+        present = result.get("present") is True
+        observed = result.get("size") if type(result.get("size")) is int else None
+        if not present:
+            return ObjectStorageHeadQueryResult("absent", False, False, observed)
+        if observed != expected_size:
+            return ObjectStorageHeadQueryResult("size_mismatch", True, False, observed)
+        return ObjectStorageHeadQueryResult("verified_match", True, True, observed)
+
+
 def _head_verify(
     transport: archive_services.ObjectStorageTransport,
     spec: FormalAdoptionSpec,
     *,
     heartbeat: Callable[[], None],
 ) -> None:
-    heartbeat()
-    try:
-        result = transport.head_object(key=spec.remote_key, presence_only=True)
-    except Exception:
-        raise _fail("object_storage_adoption_remote_unavailable") from None
-    heartbeat()
-    if (
-        result.get("presence_state") == "unavailable"
-        or result.get("verification_state") == "unavailable"
-    ):
+    result = ObjectStorageHeadQueryAdapter(transport).query(
+        remote_key=spec.remote_key,
+        expected_size=spec.size_bytes,
+        heartbeat=heartbeat,
+    )
+    if result.state == "unavailable":
         raise _fail("object_storage_adoption_remote_unavailable")
-    if result.get("present") is not True or result.get("size") != spec.size_bytes:
+    if result.state != "verified_match":
         raise _fail("object_storage_adoption_remote_mismatch")
 
 
@@ -1594,6 +1643,8 @@ __all__ = [
     "FormalAdoptionSpec",
     "ObjectStorageAdoptionError",
     "ObjectStorageFormalAdoptionPlan",
+    "ObjectStorageHeadQueryAdapter",
+    "ObjectStorageHeadQueryResult",
     "execute_object_storage_formal_adoption",
     "load_object_storage_formal_adoption_plan",
     "object_storage_formal_adoption_context",

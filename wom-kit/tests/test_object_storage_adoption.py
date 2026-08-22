@@ -16,10 +16,13 @@ from wom_kit.exact_operation_manifest import (
     ExactOperationApprovalAuthority,
     FileExactOperationCheckpointStore,
     exact_operation_writer_lock,
+    revert_exact_operation_fields,
 )
 from wom_kit.object_storage_adoption import (
     ObjectStorageAdoptionError,
+    ObjectStorageHeadQueryAdapter,
     _apply_with_store,
+    _execution_adapters,
     _persist_control,
     load_object_storage_formal_adoption_plan,
     plan_object_storage_formal_adoption,
@@ -186,6 +189,33 @@ class ObjectStorageFormalAdoptionPlanTests(unittest.TestCase):
             self.assertNotIn(pending["sha256"], serialized)
             self.assertNotIn("private-a", serialized)
             self.assertNotIn("custom/", serialized)
+
+    def test_head_adapter_distinguishes_match_absence_mismatch_and_unavailable(self):
+        key = "custom/" + "a" * 64
+        transport = _MemoryHeadTransport({key: 7})
+        adapter = ObjectStorageHeadQueryAdapter(transport)
+        matched = adapter.query(remote_key=key, expected_size=7, heartbeat=lambda: None)
+        mismatch = adapter.query(remote_key=key, expected_size=8, heartbeat=lambda: None)
+        absent = adapter.query(
+            remote_key="custom/" + "b" * 64,
+            expected_size=7,
+            heartbeat=lambda: None,
+        )
+        self.assertEqual(matched.state, "verified_match")
+        self.assertEqual(mismatch.state, "size_mismatch")
+        self.assertEqual(absent.state, "absent")
+        self.assertFalse(matched.public_document()["remote_key_echoed"])
+
+        class Unavailable:
+            @staticmethod
+            def head_object(**_kwargs):
+                raise RuntimeError("private provider body")
+
+        unavailable = ObjectStorageHeadQueryAdapter(Unavailable()).query(
+            remote_key=key, expected_size=7, heartbeat=lambda: None
+        )
+        self.assertEqual(unavailable.state, "unavailable")
+        self.assertNotIn("private provider body", json.dumps(unavailable.public_document()))
 
     def test_batch_judgment_is_fingerprint_bound_and_never_enables_merge_or_adopt(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -358,6 +388,44 @@ class ObjectStorageFormalAdoptionPlanTests(unittest.TestCase):
             verified = verify_object_storage_formal_adoption(plan, transport=transport)
             self.assertTrue(verified["ok"])
             self.assertEqual(transport.head_calls, 6)
+
+            with exact_operation_writer_lock(root) as lock:
+                payloads, writer, verifier = _execution_adapters(plan, transport)
+                reverted = revert_exact_operation_fields(
+                    plan.manifest,
+                    selected_fields=tuple(
+                        (item.item_id, field.field_ref)
+                        for item in plan.manifest.items
+                        for field in item.fields
+                    ),
+                    payloads=payloads,
+                    writer=writer,
+                    verifier=verifier,
+                    checkpoint_store=FileExactOperationCheckpointStore(
+                        root, writer_lock=lock
+                    ),
+                    approval_authority=_authority(),
+                )
+            self.assertEqual(reverted["status"], "completed")
+            self.assertEqual(reverted["mode"], "revert")
+            self.assertFalse((root / plan.specs[0].receipt_relative).exists())
+            reverted_rows = [
+                json.loads(line)
+                for line in (root / "objects" / "manifests" / "files.jsonl")
+                .read_text(encoding="utf-8")
+                .splitlines()
+            ]
+            pending_reverted = next(
+                row for row in reverted_rows if row["object_id"] == pending["object_id"]
+            )
+            self.assertFalse(
+                any(
+                    item.get("execution_receipt_ref", "").startswith(
+                        "receipts/providers/object-storage-formal-adoption/"
+                    )
+                    for item in pending_reverted["locations"]
+                )
+            )
 
     def test_control_resume_reloads_after_manifest_projection_without_source_drift(self):
         with tempfile.TemporaryDirectory() as temporary:
