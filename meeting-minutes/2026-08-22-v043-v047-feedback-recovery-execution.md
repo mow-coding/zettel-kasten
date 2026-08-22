@@ -90,6 +90,21 @@ read-only plans or safety surfaces that leave historical data unrepaired.
   command family exposes the two-second first-status/ten-second heartbeat
   contract.
 
+## v0.4.4 R2 evidence lock
+
+- The current adoption evidence has 23,580 manifest rows and 22,431 unique
+  Objet identities.  The 1,149-row difference is exactly the set of duplicate
+  definition groups and remains a conflict population, not an auto-merge
+  target.
+- There are 4,525 local-location rows: 1,149 belong to those conflict groups
+  and 3,376 are unique local-only definitions.  Two of the latter already have
+  remote evidence, leaving exactly 3,374 emergency byte-preservation targets.
+- The existing SigV4 HEAD/GET verification spine is reused.  Emergency PUT is
+  content-addressed and produces an immutable `bytes_preserved` receipt; it is
+  deliberately distinct from formal adoption.  Per-item progress is
+  append-only and the aggregate projection is built once, avoiding a central
+  manifest rewrite after every object.
+
 ## Release sequence
 
 1. v0.4.3: shared exact-operation execution, Git/update/feedback revision, and
