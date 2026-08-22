@@ -46,7 +46,11 @@ class Letter137BlockedCliHelpTests(unittest.TestCase):
         }
         self.assertEqual(
             len(archive_cli.COMPOUND_APPROVAL_BLOCKED_COMMANDS),
-            77,
+            76,
+        )
+        self.assertNotIn(
+            "migrate",
+            archive_cli.COMPOUND_APPROVAL_BLOCKED_COMMANDS,
         )
         self.assertNotIn(
             "zettel-objet-link",

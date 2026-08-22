@@ -340,7 +340,11 @@ class CommandStatusArchiveParserTests(unittest.TestCase):
         )
         self.assertEqual(
             by_path["project-version-update"]["approval_status"],
-            command_status.APPROVAL_FIXED_CLOSED,
+            command_status.APPROVAL_AVAILABLE,
+        )
+        self.assertEqual(
+            by_path["git-backup-reconcile-plan"]["approval_status"],
+            command_status.APPROVAL_AVAILABLE,
         )
         self.assertEqual(
             by_path["migrate"]["approval_scope"],
