@@ -21,6 +21,7 @@ import json
 import os
 import re
 import stat
+import threading
 import time
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -735,12 +736,19 @@ def _safe_regular_stat(info: os.stat_result, *, max_bytes: int) -> bool:
     )
 
 
-def _read_plain_file(
+def _read_plain_file_snapshot(
     path: Path,
     *,
     max_bytes: int,
     heartbeat: Callable[[], None],
-) -> bytes:
+) -> tuple[bytes, os.stat_result]:
+    """Read one stable plain file and return its verified final identity.
+
+    The checkpoint appender needs the final stat from the *same* descriptor it
+    read.  Taking a new path stat after ``_read_plain_file`` returned would
+    leave a replacement race between those two operations.
+    """
+
     before = os.lstat(path)
     if not _safe_regular_stat(before, max_bytes=max_bytes):
         raise OSError("exact_operation_file_unsafe")
@@ -779,7 +787,21 @@ def _read_plain_file(
         and before.st_mtime_ns == after.st_mtime_ns == named_after.st_mtime_ns
     ):
         raise OSError("exact_operation_file_changed")
-    return b"".join(chunks)
+    return b"".join(chunks), named_after
+
+
+def _read_plain_file(
+    path: Path,
+    *,
+    max_bytes: int,
+    heartbeat: Callable[[], None],
+) -> bytes:
+    raw, _ = _read_plain_file_snapshot(
+        path,
+        max_bytes=max_bytes,
+        heartbeat=heartbeat,
+    )
+    return raw
 
 
 def _write_descriptor_all(
@@ -821,8 +843,10 @@ class ExactOperationWriterLock:
         self.path = self.private_root / ".writer.lock"
         self.timeout_seconds = float(timeout_seconds)
         self.heartbeat = heartbeat or (lambda: None)
+        self._operation_mutex = threading.RLock()
         self._handle: Any = None
         self._identity: tuple[int, int] | None = None
+        self._dependent_descriptors: set[int] = set()
         self.held = False
 
     def _open(self) -> Any:
@@ -927,11 +951,45 @@ class ExactOperationWriterLock:
         ):
             raise _fail("exact_operation_writer_lock_invalid")
 
+    def _track_dependent_descriptor(self, descriptor: int) -> None:
+        """Keep an append handle inside this writer-lock lifetime."""
+
+        self.verify_held()
+        if type(descriptor) is not int or descriptor < 0:
+            raise OSError("exact_operation_writer_descriptor_invalid")
+        self._dependent_descriptors.add(descriptor)
+
+    def _dependent_descriptor_is_tracked(self, descriptor: int) -> bool:
+        return bool(self.held and descriptor in self._dependent_descriptors)
+
+    def _close_dependent_descriptor(
+        self,
+        descriptor: int,
+        *,
+        suppress_errors: bool,
+    ) -> None:
+        if descriptor not in self._dependent_descriptors:
+            return
+        self._dependent_descriptors.discard(descriptor)
+        try:
+            os.close(descriptor)
+        except OSError:
+            if not suppress_errors:
+                raise
+
     def __exit__(self, *_exc_info: Any) -> bool:
         if self._handle is None:
             return False
         try:
             if self.held:
+                # Checkpoint append handles never outlive the archive-wide
+                # writer lock.  Closing them before unlock prevents a later
+                # writer from racing stale cached descriptors after failures.
+                for descriptor in tuple(self._dependent_descriptors):
+                    self._close_dependent_descriptor(
+                        descriptor,
+                        suppress_errors=True,
+                    )
                 self._handle.seek(0)
                 if os.name == "nt":
                     import msvcrt
@@ -977,6 +1035,75 @@ def _strict_json_document(raw: bytes) -> dict[str, Any]:
     return parsed
 
 
+@dataclass(frozen=True)
+class _CheckpointAppendCursor:
+    """Verified file state from the one linear checkpoint scan.
+
+    A missing file is represented by ``stat_result=None``.  Existing empty
+    files remain distinguishable from missing files so a crash-created or
+    colliding empty path is never silently adopted as a new checkpoint.
+    """
+
+    stat_result: os.stat_result | None
+
+    @property
+    def exists(self) -> bool:
+        return self.stat_result is not None
+
+    @property
+    def size(self) -> int:
+        if self.stat_result is None:
+            return 0
+        return self.stat_result.st_size
+
+
+def _checkpoint_cursor_matches(
+    expected: _CheckpointAppendCursor,
+    observed: os.stat_result,
+    *,
+    compare_change_time: bool = False,
+) -> bool:
+    prior = expected.stat_result
+    return bool(
+        prior is not None
+        and _safe_regular_stat(
+            observed,
+            max_bytes=_MAX_CHECKPOINT_FILE_BYTES,
+        )
+        and _same_file_identity(prior, observed)
+        and prior.st_size == observed.st_size
+        and prior.st_mtime_ns == observed.st_mtime_ns
+        and (
+            not compare_change_time
+            or prior.st_ctime_ns == observed.st_ctime_ns
+        )
+    )
+
+
+def _read_descriptor_range(
+    descriptor: int,
+    *,
+    offset: int,
+    size: int,
+    heartbeat: Callable[[], None],
+) -> bytes:
+    """Read one bounded range from an already verified read/write handle."""
+
+    if offset < 0 or size < 0 or size > 64 * 1024:
+        raise OSError("exact_operation_checkpoint_range_invalid")
+    os.lseek(descriptor, offset, os.SEEK_SET)
+    chunks: list[bytes] = []
+    remaining = size
+    while remaining:
+        heartbeat()
+        chunk = os.read(descriptor, remaining)
+        if not chunk:
+            raise OSError("exact_operation_checkpoint_range_incomplete")
+        chunks.append(chunk)
+        remaining -= len(chunk)
+    return b"".join(chunks)
+
+
 class FileExactOperationCheckpointStore:
     """Durable private JSONL checkpoints and create-or-match final receipts."""
 
@@ -1006,9 +1133,29 @@ class FileExactOperationCheckpointStore:
             self.archive_root,
             tuple(Path(EXACT_OPERATION_RECEIPTS_ROOT).parts),
         )
+        # All stores that share this held archive writer lock share one mutex.
+        # This makes accidental same-process concurrent use deterministic
+        # instead of allowing callers to race append cursors or finalization.
+        self._checkpoint_mutex = writer_lock._operation_mutex
+        self._append_cursors: dict[str, _CheckpointAppendCursor] = {}
+        self._append_descriptors: dict[str, int] = {}
 
     def _assert_lock(self) -> None:
         self.writer_lock.verify_held()
+
+    def _close_append_descriptor(
+        self,
+        execution_sha256: str,
+        *,
+        suppress_errors: bool,
+    ) -> None:
+        descriptor = self._append_descriptors.pop(execution_sha256, None)
+        if descriptor is None:
+            return
+        self.writer_lock._close_dependent_descriptor(
+            descriptor,
+            suppress_errors=suppress_errors,
+        )
 
     @staticmethod
     def _filename(execution_sha256: str, suffix: str) -> str:
@@ -1023,21 +1170,22 @@ class FileExactOperationCheckpointStore:
     def _result_path(self, execution_sha256: str) -> Path:
         return self.results_root / self._filename(execution_sha256, ".json")
 
-    def _load_raw(
+    def _load_raw_with_cursor(
         self,
         execution_sha256: str,
         *,
         heartbeat: Callable[[], None],
-    ) -> bytes:
+    ) -> tuple[bytes, _CheckpointAppendCursor]:
         path = self._checkpoint_path(execution_sha256)
         try:
-            return _read_plain_file(
+            raw, info = _read_plain_file_snapshot(
                 path,
                 max_bytes=_MAX_CHECKPOINT_FILE_BYTES,
                 heartbeat=heartbeat,
             )
+            return raw, _CheckpointAppendCursor(info)
         except FileNotFoundError:
-            return b""
+            return b"", _CheckpointAppendCursor(None)
         except OSError:
             raise _fail("exact_operation_checkpoint_store_invalid") from None
 
@@ -1047,22 +1195,38 @@ class FileExactOperationCheckpointStore:
         *,
         heartbeat: Callable[[], None],
     ) -> Sequence[Mapping[str, Any]]:
-        self._assert_lock()
-        raw = self._load_raw(execution_sha256, heartbeat=heartbeat)
-        if not raw:
-            return []
-        if not raw.endswith(b"\n"):
-            raise _fail("exact_operation_checkpoint_store_invalid")
-        rows: list[dict[str, Any]] = []
-        try:
-            for line in raw.splitlines(keepends=True):
-                heartbeat()
-                if not line.endswith(b"\n") or line == b"\n":
-                    raise ValueError("invalid_jsonl_record")
-                rows.append(_strict_json_document(line[:-1]))
-        except (UnicodeError, ValueError, json.JSONDecodeError):
-            raise _fail("exact_operation_checkpoint_store_invalid") from None
-        return rows
+        with self._checkpoint_mutex:
+            self._assert_lock()
+            try:
+                self._close_append_descriptor(
+                    execution_sha256,
+                    suppress_errors=False,
+                )
+            except OSError:
+                raise _fail("exact_operation_checkpoint_store_invalid") from None
+            raw, cursor = self._load_raw_with_cursor(
+                execution_sha256,
+                heartbeat=heartbeat,
+            )
+            if not raw:
+                self._append_cursors[execution_sha256] = cursor
+                return []
+            if not raw.endswith(b"\n"):
+                raise _fail("exact_operation_checkpoint_store_invalid")
+            rows: list[dict[str, Any]] = []
+            try:
+                for line in raw.splitlines(keepends=True):
+                    heartbeat()
+                    if not line.endswith(b"\n") or line == b"\n":
+                        raise ValueError("invalid_jsonl_record")
+                    rows.append(_strict_json_document(line[:-1]))
+            except (UnicodeError, ValueError, json.JSONDecodeError):
+                raise _fail("exact_operation_checkpoint_store_invalid") from None
+            # Publish the cursor only after every existing row passed strict
+            # canonical JSON validation.  A resumed process therefore pays one
+            # O(n) scan, while all following appends are bounded O(1).
+            self._append_cursors[execution_sha256] = cursor
+            return rows
 
     def resume_checkpoint_present(
         self,
@@ -1086,57 +1250,177 @@ class FileExactOperationCheckpointStore:
         *,
         heartbeat: Callable[[], None],
     ) -> None:
-        self._assert_lock()
-        if not isinstance(checkpoint, Mapping):
-            raise _fail("exact_operation_checkpoint_store_invalid")
-        line = _canonical_json_bytes(dict(checkpoint)) + b"\n"
-        if len(line) > 64 * 1024:
-            raise _fail("exact_operation_checkpoint_store_invalid")
-        path = self._checkpoint_path(execution_sha256)
-        before = self._load_raw(execution_sha256, heartbeat=heartbeat)
-        if len(before) + len(line) > _MAX_CHECKPOINT_FILE_BYTES:
-            raise _fail("exact_operation_checkpoint_store_invalid")
-        flags = os.O_WRONLY | os.O_APPEND | getattr(os, "O_BINARY", 0)
-        flags |= getattr(os, "O_NOFOLLOW", 0)
-        try:
-            if before:
-                descriptor = os.open(path, flags)
-            else:
-                descriptor = os.open(
-                    path,
-                    flags | os.O_CREAT | os.O_EXCL,
-                    0o600,
+        with self._checkpoint_mutex:
+            self._assert_lock()
+            if not isinstance(checkpoint, Mapping):
+                raise _fail("exact_operation_checkpoint_store_invalid")
+            line = _canonical_json_bytes(dict(checkpoint)) + b"\n"
+            if len(line) > 64 * 1024:
+                raise _fail("exact_operation_checkpoint_store_invalid")
+            path = self._checkpoint_path(execution_sha256)
+            cursor = self._append_cursors.get(execution_sha256)
+            if cursor is None:
+                # Direct store users may call append() without load().  Scan
+                # once here so legacy v1 JSONL remains compatible and corrupt
+                # prefixes are never extended.
+                self.load(execution_sha256, heartbeat=heartbeat)
+                cursor = self._append_cursors[execution_sha256]
+            if cursor.size + len(line) > _MAX_CHECKPOINT_FILE_BYTES:
+                raise _fail("exact_operation_checkpoint_store_invalid")
+            # An existing zero-byte checkpoint is a collision or a prior crash
+            # before the first durable row.  Preserve the former fail-closed
+            # behavior instead of treating it as a missing path.
+            if cursor.exists and cursor.size == 0:
+                raise _fail("exact_operation_checkpoint_write_failed")
+
+            flags = os.O_RDWR | os.O_APPEND | getattr(os, "O_BINARY", 0)
+            flags |= getattr(os, "O_NOFOLLOW", 0)
+            created = not cursor.exists
+            descriptor = self._append_descriptors.get(execution_sha256)
+            if (
+                descriptor is not None
+                and not self.writer_lock._dependent_descriptor_is_tracked(
+                    descriptor
                 )
-        except OSError:
-            raise _fail("exact_operation_checkpoint_write_failed") from None
-        try:
-            opened = os.fstat(descriptor)
-            named = os.lstat(path)
-            if not (
-                _safe_regular_stat(
-                    opened,
-                    max_bytes=_MAX_CHECKPOINT_FILE_BYTES,
-                )
-                and _safe_regular_stat(
-                    named,
-                    max_bytes=_MAX_CHECKPOINT_FILE_BYTES,
-                )
-                and _same_file_identity(opened, named)
-                and opened.st_size == len(before)
             ):
-                raise OSError("exact_operation_checkpoint_changed")
-            _write_descriptor_all(descriptor, line, heartbeat=heartbeat)
-            os.fsync(descriptor)
-        except OSError:
-            raise _fail("exact_operation_checkpoint_write_failed") from None
-        finally:
-            os.close(descriptor)
-        _fsync_directory(self.checkpoints_root)
-        after = self._load_raw(execution_sha256, heartbeat=heartbeat)
-        if after != before + line:
-            raise _fail("exact_operation_checkpoint_write_failed")
+                self._append_descriptors.pop(execution_sha256, None)
+                descriptor = None
+            if descriptor is None:
+                try:
+                    descriptor = os.open(
+                        path,
+                        (
+                            flags | os.O_CREAT | os.O_EXCL
+                            if created
+                            else flags
+                        ),
+                        0o600,
+                    )
+                except OSError:
+                    raise _fail("exact_operation_checkpoint_write_failed") from None
+                try:
+                    self.writer_lock._track_dependent_descriptor(descriptor)
+                    self._append_descriptors[execution_sha256] = descriptor
+                except BaseException:
+                    try:
+                        os.close(descriptor)
+                    except OSError:
+                        pass
+                    raise
+            final_info: os.stat_result | None = None
+            try:
+                opened = os.fstat(descriptor)
+                named = os.lstat(path)
+                valid_start = bool(
+                    _safe_regular_stat(
+                        opened,
+                        max_bytes=_MAX_CHECKPOINT_FILE_BYTES,
+                    )
+                    and _safe_regular_stat(
+                        named,
+                        max_bytes=_MAX_CHECKPOINT_FILE_BYTES,
+                    )
+                    and _same_file_identity(opened, named)
+                )
+                if created:
+                    valid_start = valid_start and opened.st_size == named.st_size == 0
+                else:
+                    valid_start = bool(
+                        valid_start
+                        and _checkpoint_cursor_matches(cursor, opened)
+                        and _checkpoint_cursor_matches(
+                            cursor,
+                            named,
+                            compare_change_time=True,
+                        )
+                    )
+                if not valid_start:
+                    raise OSError("exact_operation_checkpoint_changed")
+
+                _write_descriptor_all(descriptor, line, heartbeat=heartbeat)
+                # Every row remains its own crash-durability boundary.  The
+                # containing directory only needs a durability sync when this
+                # call created the name; file growth is covered by this fsync.
+                os.fsync(descriptor)
+                after_write = os.fstat(descriptor)
+                named_after_write = os.lstat(path)
+                expected_size = cursor.size + len(line)
+                if not (
+                    _safe_regular_stat(
+                        after_write,
+                        max_bytes=_MAX_CHECKPOINT_FILE_BYTES,
+                    )
+                    and _safe_regular_stat(
+                        named_after_write,
+                        max_bytes=_MAX_CHECKPOINT_FILE_BYTES,
+                    )
+                    and _same_file_identity(opened, after_write)
+                    and _same_file_identity(after_write, named_after_write)
+                    and after_write.st_size
+                    == named_after_write.st_size
+                    == expected_size
+                    and _read_descriptor_range(
+                        descriptor,
+                        offset=cursor.size,
+                        size=len(line),
+                        heartbeat=heartbeat,
+                    )
+                    == line
+                ):
+                    raise OSError("exact_operation_checkpoint_changed")
+                after_verify = os.fstat(descriptor)
+                named_after_verify = os.lstat(path)
+                if not (
+                    _same_file_identity(after_write, after_verify)
+                    and _same_file_identity(after_verify, named_after_verify)
+                    and after_verify.st_size
+                    == named_after_verify.st_size
+                    == expected_size
+                    and after_write.st_mtime_ns
+                    == after_verify.st_mtime_ns
+                    == named_after_verify.st_mtime_ns
+                ):
+                    raise OSError("exact_operation_checkpoint_changed")
+                final_info = after_verify
+            except OSError:
+                self._close_append_descriptor(
+                    execution_sha256,
+                    suppress_errors=True,
+                )
+                raise _fail("exact_operation_checkpoint_write_failed") from None
+
+            if created:
+                _fsync_directory(self.checkpoints_root)
+            assert final_info is not None
+            try:
+                named_final = os.lstat(path)
+            except OSError:
+                self._close_append_descriptor(
+                    execution_sha256,
+                    suppress_errors=True,
+                )
+                raise _fail("exact_operation_checkpoint_write_failed") from None
+            final_cursor = _CheckpointAppendCursor(final_info)
+            if not _checkpoint_cursor_matches(final_cursor, named_final):
+                self._close_append_descriptor(
+                    execution_sha256,
+                    suppress_errors=True,
+                )
+                raise _fail("exact_operation_checkpoint_write_failed")
+            self._append_cursors[execution_sha256] = _CheckpointAppendCursor(
+                named_final
+            )
 
     def finalize(
+        self,
+        result: Mapping[str, Any],
+        *,
+        heartbeat: Callable[[], None],
+    ) -> str:
+        with self._checkpoint_mutex:
+            return self._finalize_locked(result, heartbeat=heartbeat)
+
+    def _finalize_locked(
         self,
         result: Mapping[str, Any],
         *,
@@ -1198,6 +1482,18 @@ class FileExactOperationCheckpointStore:
         return receipt_sha256
 
     def load_final_receipt(
+        self,
+        execution_sha256: str,
+        *,
+        heartbeat: Callable[[], None] | None = None,
+    ) -> dict[str, Any] | None:
+        with self._checkpoint_mutex:
+            return self._load_final_receipt_locked(
+                execution_sha256,
+                heartbeat=heartbeat,
+            )
+
+    def _load_final_receipt_locked(
         self,
         execution_sha256: str,
         *,
