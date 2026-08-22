@@ -148,7 +148,7 @@ CURRENT_DATABASE_CANONICAL_SHA256 = (
     "d9a42f08ee12a6d42e40214cfb12441e4077bf50c38c25b2692ec1344328294a"
 )
 RESOURCE_ADDITIONS = {
-    "release-notes/v0.4.2.md",
+    "release-notes/v0.4.3.md",
     "schemas/agent-instruction-policy-v0.1.schema.json",
     "schemas/approval-handoff-v0.1.schema.json",
     "schemas/approval-integrity-audit-result-v0.1.schema.json",
@@ -558,10 +558,10 @@ class V03299PredecessorSurfaceTests(unittest.TestCase):
             actual,
             expected,
             "Current package-resource paths must be the full v0.3.297 set plus "
-            "the exact cumulative v0.3.298 through v0.4.2 delta. "
+            "the exact cumulative v0.3.298 through v0.4.3 delta. "
             f"missing={compact(missing)}; extra={compact(extra)}",
         )
-        self.assertEqual(manifest["version"], "0.4.2")
+        self.assertEqual(manifest["version"], "0.4.3")
         self.assertEqual(len(actual), CURRENT_RESOURCE_COUNT)
         self.assertEqual(
             canonical_sha256(actual),
@@ -581,13 +581,13 @@ class V03299PredecessorSurfaceTests(unittest.TestCase):
         self.assertNotIn("C:\\Users\\", predecessor_text)
 
     def test_v0402_release_note_is_current_and_v0401_remains_historical(self) -> None:
-        current_source_release = KIT_ROOT / "docs" / "releases" / "v0.4.2.md"
+        current_source_release = KIT_ROOT / "docs" / "releases" / "v0.4.3.md"
         current_packaged_release = (
             SRC_ROOT
             / "wom_kit"
             / "_resources"
             / "release-notes"
-            / "v0.4.2.md"
+            / "v0.4.3.md"
         )
         self.assertEqual(
             current_source_release.read_bytes(),
@@ -601,7 +601,7 @@ class V03299PredecessorSurfaceTests(unittest.TestCase):
             "git-backup-reconcile-plan",
             "ready_for_write",
             "anonymous HTTPS",
-            "wom_kit-0.4.2-py3-none-any.whl",
+            "wom_kit-0.4.3-py3-none-any.whl",
         ):
             with self.subTest(token=token):
                 self.assertIn(token, current_flat)

@@ -6,13 +6,21 @@ The filesystem folder is `wom-kit/`, the Python import package is `wom_kit`, and
 
 See `wom-kit/docs/concepts/naming-and-terminology.md` for the naming baseline.
 
-v0.4.2 adds `git-backup-plan` and `git-backup-reconcile-plan` as JSON-only,
-CLI-only read-only observers. They require `--dry-run`, inspect the currently
-checked-out symbolic branch plus one anonymous HTTPS remote ref, and always
-keep `ready_for_write: false`, `writer_available: false`, and
-`would_change: []`. They expose no `--approve` or MCP writer and do not add,
-reset, checkout, commit, merge, rebase, delete, fetch, pull, push, or change a
-ref. See `wom-kit/docs/git-backup-plan.md` and the v0.4.2 release note.
+v0.4.3 retains the JSON-only `git-backup-plan` and
+`git-backup-reconcile-plan` review surfaces and adds a CLI-only exact-approved
+commit/non-force-push path to that existing family. The writer binds exact
+selected paths, blobs, commit groups, parents, branch, and remote ref;
+preserves unrelated staged entries; re-queries the exact remote ref; and
+supports same-claim resume after an interruption. No Git writer is exposed
+through MCP. See `wom-kit/docs/git-backup-plan.md` and the v0.4.3 release note.
+
+The existing `archive migrate` family also gains the
+`notion-source-properties` target for Letter 138. It accounts for the complete
+preserved source mirror, emits a lossless field manifest, and runs apply,
+resume, verify, and field-scoped revert through `ExactOperationManifest v1`.
+The reopened `project-version-update` route uses the same native exact-human
+boundary. Neither command treats a dry-run or installed wheel as proof of a
+real private-archive result.
 
 The v0.4.1 checkpoint opened exactly one previously fixed-closed top-level writer:
 `zettel-objet-link --approve`. A fresh successful dry-run produces the exact
@@ -27,10 +35,9 @@ network is called. `zettel-objet-link-revert` remains fixed closed, and MCP
 exposes no link writer. See `wom-kit/docs/zettel-objet-links.md` and the
 v0.4.1 release note.
 
-The current parser-derived approval inventory contains 78 fixed-closed command
-paths, down from the historical v0.4.0 count of 79 because link apply is now
-operation-specifically bound. Revert, Objet capture enable/selection/single/
-batch, `project-version-update`, collision preservation, and project bytecode
+The current parser-derived approval inventory remains authoritative for all
+approval-available, fixed-closed, and not-exposed paths. Revert, Objet capture
+enable/selection/single/batch, collision preservation, and project bytecode
 repair remain fixed closed. `archive capabilities --machine` publishes the
 full status inventory under `data.approval_status_inventory`; the result is
 parser evidence only and does not claim that archive-specific prerequisites

@@ -6,7 +6,15 @@ Updated: 2026-08-22
 Philosophy clarified: 2026-07-15
 Harness compatibility clarified: 2026-07-16
 
-Current v0.4.3 candidate delta: `git-backup-plan` remains bounded and read-only.
+Current v0.4.3 delta: `ExactOperationManifest v1` supplies one exact-approved,
+checkpointed, resumable, independently verified, field-scoped-revert base.
+The existing Git planning family adds exact commit/non-force-push and remote-ref
+re-query, `archive migrate` adds Letter 138 lossless `source_properties`
+backfill, `project-version-update` is reopened with an approval-bound receipt,
+and feedback drafts gain CAS revision and immutable delivered supersession.
+None of these public capabilities alone proves a private archive result.
+
+Detailed Git backup boundary: `git-backup-plan` remains bounded and read-only.
 The existing `git-backup-reconcile-plan` family adds exact private all-change
 group validation, one native manifest-bound approval, literal bounded commits,
 an authenticated ordinary non-force push, exact ref requery, resumable
@@ -40,12 +48,11 @@ only the read-only planning foundation of Letter 139, not its requested
 end-to-end backup writer.
 
 Previous v0.4.1 write boundary: `zettel-objet-link --approve` has an
-operation-specific local exact-human binding. Its matching revert, every Objet
-capture writer, and the project updater/collision/bytecode writers remain fixed
-closed. `archive capabilities --machine` reports the parser-derived inventory:
-78 fixed-closed canonical executable paths, with all supplied fixed-close
-entries matched. The inventory does not evaluate prerequisites, and lack of
-`--approve` is not proof that a command is read-only.
+operation-specific local exact-human binding. In v0.4.3 its matching revert,
+Objet capture, project collision, and bytecode writers remain fixed closed.
+`archive capabilities --machine` reports the parser-derived inventory and must
+match every supplied fixed-close entry. The inventory does not evaluate
+prerequisites, and lack of `--approve` is not proof that a command is read-only.
 
 Historical v0.4.0 write boundary: 79 canonical top-level compound, batch, revert,
 archive-authority, durable, and external commands remain available only for
@@ -499,6 +506,7 @@ These documents record public-safe work already performed.
 - [v0.2.11 Delegate Capability Contract Work Log](../plans/work-log-2026-05-23-delegate-capability-contract.md)
 - [Changelog](../../CHANGELOG.md)
 - [Release Notes](releases/)
+- [v0.4.3 Release Note](releases/v0.4.3.md)
 - [v0.4.2 Release Note](releases/v0.4.2.md)
 - [v0.4.1 Release Note](releases/v0.4.1.md)
 - [v0.4.0 Release Note](releases/v0.4.0.md)

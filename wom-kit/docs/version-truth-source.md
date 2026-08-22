@@ -22,18 +22,20 @@ or runtime workflow. This page defines the safe order for checking them.
 
 ## Current Public Tool
 
-The v0.4.2 URL is a conditional release-artifact contract. Use it only after
+The v0.4.3 URL is a conditional release-artifact contract. Use it only after
 the matching public GitHub Release exists and lists the exact wheel:
 
 ```powershell
-uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.2/wom_kit-0.4.2-py3-none-any.whl"
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.3/wom_kit-0.4.3-py3-none-any.whl"
 archive --version
 ```
 
-Require exactly `archive 0.4.2` from a new process. The installed runtime adds
-read-only `git-backup-plan` and `git-backup-reconcile-plan`; it adds no Git
-writer and does not update a project-local source mirror or pin. See [Git
-Backup Plan And Reconciliation Plan](git-backup-plan.md).
+Require exactly `archive 0.4.3` from a new process. The installed runtime adds
+the exact-approved Git writer and Letter 138 source-property backfill, but an
+install alone changes no archive, remote ref, project-local source mirror, or
+pin. Project update is a separate native exact-human workflow with its own
+receipt. See [Git Backup Plan And Reconciliation Plan](git-backup-plan.md) and
+[ExactOperationManifest v1](exact-operation-manifest-v1.md).
 
 ## Canonical Checks
 
