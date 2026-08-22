@@ -737,21 +737,33 @@ class OperatorFeedbackBodyTests(unittest.TestCase):
     ) -> None:
         # No real client ids, titles, or bodies are used.  This fixture only
         # preserves the corrected lifecycle relationships requested for v0.4.3.
-        statuses = {
-            "synthetic-feedback-141": "archived",
-            "synthetic-feedback-142": "draft",
-            "synthetic-feedback-143": "archived",
-            "synthetic-feedback-144": "delivered",
-        }
-        for feedback_id, status in statuses.items():
+        def create_feedback(
+            feedback_id: str,
+            status: str,
+            *,
+            supersedes_feedback_id: str | None = None,
+            superseded_body_sha256: str | None = None,
+        ) -> dict[str, object]:
             request = valid_request()
             request["feedback_id"] = feedback_id
             request["title"] = "Synthetic lifecycle fixture"
+            request["sections"]["task"] = f"Synthetic task for {feedback_id}."
             self.write_request(request)
-            plan = plan_operator_feedback_body(self.root, self.request_path)
+            intent = "supersede" if supersedes_feedback_id is not None else "create"
+            plan = plan_operator_feedback_body(
+                self.root,
+                self.request_path,
+                intent=intent,
+                expected_body_sha256=superseded_body_sha256,
+                supersedes_feedback_id=supersedes_feedback_id,
+            )
+            self.assertTrue(plan["ok"], plan)
             written = approve_operator_feedback_body(
                 self.root,
                 self.request_path,
+                intent=intent,
+                expected_body_sha256=superseded_body_sha256,
+                supersedes_feedback_id=supersedes_feedback_id,
                 expected_plan_sha256=str(plan["plan_sha256"]),
                 reviewed_by="operator:fixture-reviewer",
             )
@@ -762,6 +774,22 @@ class OperatorFeedbackBodyTests(unittest.TestCase):
                 status=status,
                 external_submission_performed=False,
             )
+            return written
+
+        report_141 = create_feedback("synthetic-feedback-141", "archived")
+        report_142 = create_feedback("synthetic-feedback-142", "draft")
+        report_143 = create_feedback(
+            "synthetic-feedback-143",
+            "archived",
+            supersedes_feedback_id="synthetic-feedback-141",
+            superseded_body_sha256=str(report_141["feedback_ref"]).rsplit(":", 1)[-1],
+        )
+        report_144 = create_feedback(
+            "synthetic-feedback-144",
+            "delivered",
+            supersedes_feedback_id="synthetic-feedback-143",
+            superseded_body_sha256=str(report_143["feedback_ref"]).rsplit(":", 1)[-1],
+        )
 
         independent = self.root / "ops/feedback/letters/synthetic-feedback-142.md"
         independent_sha = hashlib.sha256(independent.read_bytes()).hexdigest()
@@ -779,6 +807,22 @@ class OperatorFeedbackBodyTests(unittest.TestCase):
             hashlib.sha256(independent.read_bytes()).hexdigest(),
             independent_sha,
         )
+        self.assertEqual(
+            report_143["supersession_evidence"]["superseded_feedback_id"],
+            "synthetic-feedback-141",
+        )
+        self.assertEqual(
+            report_144["supersession_evidence"]["superseded_feedback_id"],
+            "synthetic-feedback-143",
+        )
+        supersession_receipts = list(
+            (self.root / "receipts/operator-feedback/body/supersessions").glob("*.json")
+        )
+        self.assertEqual(len(supersession_receipts), 2)
+        serialized_receipts = "\n".join(
+            path.read_text(encoding="utf-8") for path in supersession_receipts
+        )
+        self.assertNotIn(str(report_142["feedback_ref"]), serialized_receipts)
 
 
 if __name__ == "__main__":
