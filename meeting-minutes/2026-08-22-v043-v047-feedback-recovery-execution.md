@@ -145,6 +145,19 @@ read-only plans or safety surfaces that leave historical data unrepaired.
   deliberately distinct from formal adoption.  Per-item progress is
   append-only and the aggregate projection is built once, avoiding a central
   manifest rewrite after every object.
+- On the separate v0.4.4 branch, the adapter/writer and 70 focused/common
+  tests now pass.  The existing `object-storage-adopt-existing` family gains a
+  `--preserve-local-only` route; it uses a content-addressed key, HEAD plus
+  complete GET rehash, mismatch-without-PUT fail-close behavior, common exact
+  checkpoints/resume, and immutable `bytes_preserved` receipts.  It performs
+  zero formal adoption or central manifest updates.
+- An actual Basoon read-only run reproduced all locked counts: 23,580 rows,
+  22,431 unique Objet, 1,149 conflicts, 3,374 preservation targets, 597 strict
+  remote-key evidence rows, and 560 official deduplicated evidence rows.  The
+  classification sum is complete; first status was immediate, cold runtime
+  about 45 seconds and cached runtime about 11 seconds.  It made no provider,
+  credential, remote, or Basoon write.  Live HEAD/PUT remains an explicit
+  post-v0.4.4-release acceptance blocker.
 
 ## Release sequence
 
