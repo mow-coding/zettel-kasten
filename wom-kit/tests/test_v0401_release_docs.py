@@ -101,12 +101,12 @@ class V0401ReleaseDocsTests(unittest.TestCase):
                 self.assertEqual(source.read_bytes(), packaged.read_bytes())
                 self.assertIn(f"schemas/{name}", packaged_paths)
 
-    def test_current_parser_has_exact_78_boundary_and_two_reopened_writers(self) -> None:
+    def test_current_parser_combines_project_update_and_git_writers(self) -> None:
         blocked = archive_cli.COMPOUND_APPROVAL_BLOCKED_COMMANDS
-        self.assertEqual(len(blocked), 78)
+        self.assertEqual(len(blocked), 77)
         self.assertNotIn("zettel-objet-link", blocked)
         self.assertIn("zettel-objet-link-revert", blocked)
-        self.assertIn("project-version-update", blocked)
+        self.assertNotIn("project-version-update", blocked)
         for command in (
             "objet-capture",
             "objet-capture-selection",
@@ -122,8 +122,8 @@ class V0401ReleaseDocsTests(unittest.TestCase):
         self.assertEqual(counts["canonical_executable_command_count"], 315)
         self.assertEqual(counts["alias_invocation_path_count"], 259)
         self.assertEqual(counts["invocation_path_count"], 574)
-        self.assertEqual(counts["approval_available_command_count"], 36)
-        self.assertEqual(counts["approval_fixed_closed_command_count"], 78)
+        self.assertEqual(counts["approval_available_command_count"], 37)
+        self.assertEqual(counts["approval_fixed_closed_command_count"], 77)
         self.assertEqual(counts["approval_not_exposed_command_count"], 201)
         self.assertEqual(counts["dry_run_exposed_command_count"], 270)
         self.assertEqual(counts["unmatched_fixed_closed_command_count"], 0)
@@ -144,7 +144,7 @@ class V0401ReleaseDocsTests(unittest.TestCase):
         )
         self.assertEqual(
             by_path["project-version-update"]["approval_status"],
-            "approval_fixed_closed",
+            "approval_available",
         )
 
     def test_public_docs_separate_global_bootstrap_from_project_update(self) -> None:
