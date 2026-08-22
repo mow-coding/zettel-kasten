@@ -1,12 +1,17 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import tempfile
 import unittest
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 
+from jsonschema import Draft202012Validator
+
 from wom_kit import archive_services
+from wom_kit.archive_cli import main as cli_main
 from wom_kit.exact_operation_manifest import (
     ExactOperationApprovalAuthority,
     FileExactOperationCheckpointStore,
@@ -171,6 +176,12 @@ class ObjectStorageFormalAdoptionPlanTests(unittest.TestCase):
             self.assertEqual(result["per_object_manifest_rewrite_planned_count"], 0)
             self.assertEqual(len(plan.manifest.items), 4)
             self.assertEqual(result["conflict_classification"]["automatic_merge_count"], 0)
+            evidence = plan.manifest.operation_evidence.document()
+            self.assertEqual(evidence["counts"]["manifest_row_count"], 4)
+            self.assertEqual(evidence["counts"]["unique_object_count"], 3)
+            self.assertEqual(evidence["counts"]["conflicting_definition_count"], 1)
+            self.assertEqual(evidence["counts"]["remote_query_planned_count"], 3)
+            self.assertFalse(evidence["private_values_echoed"])
             serialized = json.dumps(result)
             self.assertNotIn(pending["sha256"], serialized)
             self.assertNotIn("private-a", serialized)
@@ -306,6 +317,12 @@ class ObjectStorageFormalAdoptionPlanTests(unittest.TestCase):
             self.assertEqual(result["formal_adoption_count"], 1)
             self.assertEqual(result["manifest_location_updates"], 1)
             self.assertEqual(result["central_manifest_rewrite_count_ceiling"], 1)
+            self.assertEqual(
+                result["execution"]["operation_evidence"]["counts"][
+                    "remote_query_planned_count"
+                ],
+                2,
+            )
             self.assertEqual(transport.head_calls, 4)
             self.assertEqual(transport.put_calls, 0)
             rows = [
@@ -325,6 +342,16 @@ class ObjectStorageFormalAdoptionPlanTests(unittest.TestCase):
             self.assertEqual(len(owned), 1)
             self.assertFalse(owned[0]["byte_verification_by_wom_kit"])
             self.assertFalse(owned[0]["provider_upload_time_known"])
+            receipt = json.loads((root / plan.specs[0].receipt_relative).read_text(encoding="utf-8"))
+            schema_path = (
+                Path(__file__).resolve().parents[1]
+                / "schemas"
+                / "object-storage-formal-adoption-receipt-v0.1.schema.json"
+            )
+            Draft202012Validator(
+                json.loads(schema_path.read_text(encoding="utf-8")),
+                format_checker=Draft202012Validator.FORMAT_CHECKER,
+            ).validate(receipt)
 
             # A wholly separate verifier performs fresh HEAD calls and accepts
             # the immutable receipts plus the one aggregate manifest projection.
@@ -404,6 +431,50 @@ class ObjectStorageFormalAdoptionPlanTests(unittest.TestCase):
                 original_manifest,
             )
             self.assertEqual(transport.put_calls, 0)
+
+    def test_cli_extends_existing_adopt_family_without_provider_or_writes(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            parent = Path(temporary)
+            root = self._root(parent)
+            row = self._row(
+                b"pending",
+                logical_key="pending",
+                mime="application/octet-stream",
+                locations=[{"provider": "object_storage", "availability": "declared_uploaded"}],
+            )
+            self._write_rows(root, [row])
+            key_map = self._write_map(
+                parent,
+                [{"sha256": row["sha256"], "remote_key": f"custom/{row['sha256']}"}],
+            )
+            stdout, stderr = io.StringIO(), io.StringIO()
+            with redirect_stdout(stdout), redirect_stderr(stderr):
+                status = cli_main(
+                    [
+                        "object-storage-adopt-existing",
+                        str(root),
+                        "--formal-adoption",
+                        "--key-map",
+                        str(key_map),
+                        "--store-ref",
+                        "storage:account:test",
+                        "--dry-run",
+                        "--format",
+                        "json",
+                    ]
+                )
+            result = json.loads(stdout.getvalue())
+            serialized = json.dumps(result)
+            self.assertEqual(status, 0)
+            self.assertEqual(result["remote_query_planned_count"], 1)
+            self.assertEqual(result["formal_adoption_planned_count"], 1)
+            self.assertFalse(result["provider_api_called"])
+            self.assertFalse(result["writes_performed"])
+            self.assertNotIn(str(root), serialized)
+            self.assertNotIn(row["sha256"], serialized)
+            self.assertNotIn("custom/", serialized)
+            self.assertEqual(stderr.getvalue(), "")
+            self.assertFalse((root / "profiles" / "local" / "exact-operations").exists())
 
 
 if __name__ == "__main__":
