@@ -296,3 +296,24 @@ provider 호출과 공용 `archive.exe` 교체는 계속 금지한다.
 privacy 회귀 테스트가 해당 이름이 직렬화 결과에 없음을 검증하는 부정 assertion이다.
 privacy gate는 그대로 통과했다. 이 wheel은 로컬 후보 근거이며 아직 GitHub Release
 asset이 아니다.
+
+## PR 재실행의 Linux test-helper 경로 교정
+
+수정 커밋 `24182942`로 시작한 GitHub Actions run `32650396904`에서 release
+readiness, Ubuntu Python 3.10 shard 2/2와 Windows Python 3.12 shard 3/4는
+먼저 통과했다. Ubuntu Python 3.12 shard 1/2는 1,944 tests를 실행한 뒤
+14 errors로 실패했지만 assertion failure는 없었다. 14건의 traceback은 모두
+`ArchiveCliTests.project_runtime_candidate_artifact_fixture`의
+`from tests.test_project_runtime import ...` 한 줄에서 같은
+`ModuleNotFoundError: No module named 'tests'`로 귀결됐다.
+
+CI는 repository root에서 test file path를 직접 unittest에 전달하므로 Linux에서는
+`wom-kit/tests`가 `tests` namespace package로 고정되지 않는다. 테스트 파일 자신의
+절대 parent를 `TESTS_ROOT`로 계산해 `sys.path` 뒤에 추가하고,
+`test_project_runtime` 보조 모듈을 직접 import하도록 교정했다. Production source,
+runtime writer, 승인 경계와 wheel payload는 바꾸지 않았다.
+
+GitHub와 같은 file-path unittest 호출 형태로 대표 cleanup uncertainty 테스트와
+전체 approve/fetch/verify/replay 테스트를 재실행해 각각 11.091초와 49.748초에
+통과했다. 남은 첫 run job 결과도 확인하되, 이 교정을 새 커밋으로 push한 뒤 새
+전체 CI run을 기준으로 병합 가능 여부를 다시 판정한다.
