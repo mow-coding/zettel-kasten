@@ -579,7 +579,7 @@ class Letter129BoundRepairCanaryTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.fixture_case.tearDown()
 
-    def test_historical_repair_preserves_planner_but_public_update_fails_closed(self) -> None:
+    def test_historical_repair_preserves_planner_but_public_update_requires_durable_runtime_supply(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             fixture, _private_markers = self.fixture_case.runtime_shadow_fixture(
                 Path(tmp),
@@ -637,19 +637,35 @@ class Letter129BoundRepairCanaryTests(unittest.TestCase):
                 ],
                 0,
             )
-            updated = completion_workflows.archive_services.wom_kit_project_version_update(
-                fixture["project_root"],
-                target=target,
-                approve=True,
-                reviewed_by="person:letter-129-canary",
-                affirm_external_writers_quiescent=True,
+            update_code, update_output = self.fixture_case.fixture_case.run_cli(
+                [
+                    "project-version-update",
+                    str(fixture["project_root"]),
+                    "--target",
+                    target,
+                    "--approve",
+                    "--reviewed-by",
+                    "person:letter-129-canary",
+                    "--affirm-external-writers-quiescent",
+                    "--format",
+                    "json",
+                ]
             )
+            self.assertEqual(update_code, 1, update_output)
+            updated = json.loads(update_output)
             self.assertFalse(updated["ok"], updated)
-            self.assertEqual(
+            self.assertEqual(updated["status"], "blocked")
+            self.assertIn(
+                "project_version_update_durable_transaction_inputs_invalid",
                 updated["blockers"],
-                ["compound_exact_human_approval_binding_required"],
             )
             self.assertEqual(updated["files_written"], [])
+            self.assertEqual(
+                (fixture["metadata_root"] / "installed-version.txt").read_text(
+                    encoding="utf-8"
+                ).strip(),
+                fixture["old_tag"],
+            )
 
     def test_collision_set_name_drift_blocks_bound_repair_plan(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -754,6 +770,9 @@ class Letter129BoundRepairCanaryTests(unittest.TestCase):
             target = str(fixture["target_tag"])
             project_root = str(fixture["project_root"])
             run_cli = self.fixture_case.fixture_case.run_cli
+            (
+                fixture["metadata_root"] / "installed-version.txt"
+            ).write_text(target + "\n", encoding="utf-8")
 
             inspect_code, inspect_output = run_cli(
                 [

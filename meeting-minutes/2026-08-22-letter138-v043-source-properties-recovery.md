@@ -195,8 +195,8 @@ published here.
 - public operator guide, decision log, navigation, and capability record
 
 The shared exact-operation infrastructure came from separately reviewed core
-commits and was integrated before the domain wrapper. The private Client
-archive and mirror were inspected read-only only. Actual Client apply, public
+commits and was integrated before the domain wrapper. The private acceptance
+archive and mirror were inspected read-only only. Actual archive apply, public
 release, tester upgrade, and post-apply verification remain pending and must
 not be reported as completed.
 

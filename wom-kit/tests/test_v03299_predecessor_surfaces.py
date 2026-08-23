@@ -155,6 +155,7 @@ RESOURCE_ADDITIONS = {
     "schemas/approval-integrity-overlay-entry-v0.1.schema.json",
     "schemas/cli-error-v0.1.schema.json",
     "schemas/command-approval-status-inventory-v0.1.schema.json",
+    "schemas/command-approval-status-inventory-v0.2.schema.json",
     "schemas/credential-capability-v0.1.schema.json",
     "schemas/duplicate-object-reconciliation-receipt-v0.1.schema.json",
     "schemas/exact-human-approval-link-receipt-v0.1.schema.json",
@@ -173,6 +174,8 @@ RESOURCE_ADDITIONS = {
     "schemas/markup-normalization-recovery-receipt.schema.json",
     "schemas/markup-normalization-revert-receipt.schema.json",
     "schemas/markup-reference-binding-manifest.schema.json",
+    "schemas/notion-property-backfill-acceptance-v0.1.schema.json",
+    "schemas/notion-source-properties-v0.1.schema.json",
     "schemas/objet-capture-batch-receipt.schema.json",
     "schemas/objet-capture-batch-request.schema.json",
     "schemas/principal-record.schema.json",
@@ -181,6 +184,8 @@ RESOURCE_ADDITIONS = {
     "schemas/private-objet-finder-request-v0.1.schema.json",
     "schemas/private-objet-finder-result-v0.1.schema.json",
     "schemas/project-bytecode-repair-receipt.schema.json",
+    "schemas/project-runtime-receipt-v0.1.schema.json",
+    "schemas/project-version-update-receipt-v0.3.schema.json",
     "schemas/relation-candidate-plan.schema.json",
     "schemas/relation-judgment-receipt.schema.json",
     "schemas/relation-judgment.schema.json",
@@ -198,9 +203,9 @@ RESOURCE_ADDITIONS = {
     "schemas/zettel-objet-link-revert-receipt.schema.json",
 }
 RESOURCE_REMOVALS = {"release-notes/v0.3.297.md"}
-CURRENT_RESOURCE_COUNT = 158
+CURRENT_RESOURCE_COUNT = 163
 CURRENT_RESOURCE_CANONICAL_SHA256 = (
-    "1d2b80de5e19389f77b5b4262f6a53b0438f75f804c4c3a61a1105bde769887c"
+    "7e1239073019e24b370d84ccc918ebc43ad17f8016b631cfdc9da8dd12429552"
 )
 
 
@@ -580,7 +585,7 @@ class V03299PredecessorSurfaceTests(unittest.TestCase):
         self.assertIn("does not undo", predecessor_flat)
         self.assertNotIn("C:\\Users\\", predecessor_text)
 
-    def test_v0402_release_note_is_current_and_v0401_remains_historical(self) -> None:
+    def test_v0403_release_note_is_current_and_v0402_remains_historical(self) -> None:
         current_source_release = KIT_ROOT / "docs" / "releases" / "v0.4.3.md"
         current_packaged_release = (
             SRC_ROOT
@@ -596,11 +601,9 @@ class V03299PredecessorSurfaceTests(unittest.TestCase):
         current_text = current_source_release.read_text(encoding="utf-8")
         current_flat = " ".join(current_text.split())
         for token in (
-            "Read-Only Git Backup Planning",
-            "git-backup-plan",
-            "git-backup-reconcile-plan",
-            "ready_for_write",
-            "anonymous HTTPS",
+            "ExactOperationManifest v1",
+            "notion-source-properties",
+            "Verified Git backup writer",
             "wom_kit-0.4.3-py3-none-any.whl",
         ):
             with self.subTest(token=token):
@@ -613,6 +616,20 @@ class V03299PredecessorSurfaceTests(unittest.TestCase):
         ):
             with self.subTest(forbidden=forbidden):
                 self.assertNotIn(forbidden, current_text)
+
+        v0402_source_release = KIT_ROOT / "docs" / "releases" / "v0.4.2.md"
+        v0402_packaged_release = current_packaged_release.with_name("v0.4.2.md")
+        v0402_flat = " ".join(v0402_source_release.read_text(encoding="utf-8").split())
+        self.assertTrue(v0402_source_release.is_file())
+        self.assertFalse(v0402_packaged_release.exists())
+        for token in (
+            "Read-Only Git Backup Planning",
+            "git-backup-plan",
+            "git-backup-reconcile-plan",
+            "ready_for_write",
+        ):
+            with self.subTest(historical_token=token):
+                self.assertIn(token, v0402_flat)
 
         historical_source_release = KIT_ROOT / "docs" / "releases" / "v0.4.1.md"
         historical_packaged_release = current_packaged_release.with_name("v0.4.1.md")

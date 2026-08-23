@@ -2,7 +2,7 @@
   "schema": "wom-kit/package-resource-manifest/v0.1",
   "version": "0.4.3",
   "source_of_truth": "wom-kit source resource directories",
-  "file_count": 161,
+  "file_count": 163,
   "files": [
     {
       "source": "schemas/activity-group-membership-receipt.schema.json",
@@ -419,10 +419,22 @@
       "sha256": "7edeeded93e1eebb3f942ce4d7aeaf72cf7d0975c38c6a774b695b4b7671c030"
     },
     {
+      "source": "schemas/project-runtime-receipt-v0.1.schema.json",
+      "packaged": "schemas/project-runtime-receipt-v0.1.schema.json",
+      "bytes": 3806,
+      "sha256": "917c013535b8b11000c543ae0b00b20fe93d4631bf805d9d93f812f2a5f66999"
+    },
+    {
       "source": "schemas/project-version-update-receipt-v0.2.schema.json",
       "packaged": "schemas/project-version-update-receipt-v0.2.schema.json",
       "bytes": 6368,
       "sha256": "e818c9c463e86e43b3c25f2f9e503233759fc08e79c58430f62b7e0c696b3f71"
+    },
+    {
+      "source": "schemas/project-version-update-receipt-v0.3.schema.json",
+      "packaged": "schemas/project-version-update-receipt-v0.3.schema.json",
+      "bytes": 10013,
+      "sha256": "49655e44fdf32cdaf82e51a642a1e3a40f6d57344652c9f94abcf688fcb03cf4"
     },
     {
       "source": "schemas/project-version-update-receipt.schema.json",
@@ -967,8 +979,8 @@
     {
       "source": "docs/releases/v0.4.3.md",
       "packaged": "release-notes/v0.4.3.md",
-      "bytes": 9381,
-      "sha256": "50a086c9b5856c1b25cf14f131bf48f402c3e9b05ebe843f2ba943a232a28bbb"
+      "bytes": 11578,
+      "sha256": "d011af6206ef7a0f177be2612d45fda27f710cf96801516e8a3e4e370f914cb4"
     }
   ]
 }

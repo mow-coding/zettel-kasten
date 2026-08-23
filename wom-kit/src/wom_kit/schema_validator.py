@@ -2,8 +2,8 @@
 
 The checked schemas use standard JSON Schema 2020-12 keywords, but the runtime
 intentionally supports only the small subset needed for local archive health
-checks: type, required, properties, items, enum, const, allOf, and simple
-if/then conditionals.
+checks: type, required, properties, additionalProperties, items, enum, const,
+allOf, and simple if/then conditionals.
 """
 
 from __future__ import annotations
@@ -100,6 +100,37 @@ def validate_value(data: Any, schema: dict[str, Any], data_path: str) -> list[Sc
             for key, child_schema in properties.items():
                 if key in data and isinstance(child_schema, dict):
                     issues.extend(validate_value(data[key], child_schema, f"{data_path}.{key}"))
+
+            additional = schema.get("additionalProperties", True)
+            unknown_keys = [key for key in data if key not in properties]
+            if additional is False:
+                for key in unknown_keys:
+                    issues.append(
+                        SchemaIssue(
+                            "schema_additional_property",
+                            f"{data_path}.{key} is not an allowed property.",
+                            f"{data_path}.{key}",
+                        )
+                    )
+            elif isinstance(additional, dict):
+                for key in unknown_keys:
+                    issues.extend(
+                        validate_value(
+                            data[key],
+                            additional,
+                            f"{data_path}.{key}",
+                        )
+                    )
+            elif additional is not True:
+                # A malformed or unsupported schema declaration must not be
+                # interpreted as permission to accept arbitrary properties.
+                issues.append(
+                    SchemaIssue(
+                        "schema_unsupported",
+                        f"{data_path} has an unsupported additionalProperties declaration.",
+                        data_path,
+                    )
+                )
 
     if isinstance(data, list):
         item_schema = schema.get("items")
