@@ -143,6 +143,9 @@ class TrustedProjectUpdateGitRunnerTests(unittest.TestCase):
             ],
             ["hash-object", "--stdin"],
             ["hash-object", "--no-filters", "--", "wom-kit/src/example.py"],
+            ["describe", "--tags", "--exact-match", "HEAD"],
+            ["tag", "--list", "v*"],
+            ["show", "-s", "--format=%s", "HEAD"],
             ["read-tree", "a" * 40],
             ["update-ref", "--no-deref", "HEAD", "a" * 40],
         )
@@ -162,6 +165,9 @@ class TrustedProjectUpdateGitRunnerTests(unittest.TestCase):
             ["hash-object", "--no-filters", "--", "../outside.py"],
             ["hash-object", "--no-filters", "--", "C:/outside.py"],
             ["hash-object", "--no-filters", "--", "dir\\outside.py"],
+            ["describe", "--all", "HEAD"],
+            ["tag", "--delete", "v0.4.3"],
+            ["show", "--stat", "HEAD"],
             ["read-tree", "-u", "HEAD"],
         )
         for command in rejected_commands:

@@ -159,7 +159,8 @@ and completion still requires a fresh-process `archive version` check.
 
 The ordinary preflight retains the bounded materialization planner whenever
 the exact target commit is locally available. Historical approved updater
-evidence used the same planner.
+evidence used the same planner. Every follow-up collision inspection
+requires the same plan digest rather than silently binding a new local set.
 The public plan reports only fixed reason codes, counts, a
 `materialization_plan_sha256`, and sorted ordinal references such as
 `update-entry:0001`. An ordinal is meaningful only together with that exact
