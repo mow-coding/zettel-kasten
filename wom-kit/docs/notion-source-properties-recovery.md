@@ -214,7 +214,7 @@ or get erased. Drift in `source_properties` does block.
 
 ## What the 2026-08-22 read-only run proved
 
-The full private source was read once without writing the Basoon archive:
+The full private source was read once without writing the acceptance archive:
 
 - source pages: 11,585;
 - classified: 8,566 mapped, 0 already equal, 2,882 unmapped, 137 review;

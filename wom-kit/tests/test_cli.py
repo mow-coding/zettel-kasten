@@ -18,9 +18,9 @@ import time
 import unittest
 import unicodedata
 import uuid
-from contextlib import redirect_stderr, redirect_stdout
+from contextlib import ExitStack, redirect_stderr, redirect_stdout
 from pathlib import Path, PurePosixPath
-from typing import Any
+from typing import Any, Mapping
 from unittest.mock import patch
 
 
@@ -42,7 +42,12 @@ PROMOTION_CHECKLIST_IDS = [
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
-from wom_kit import archive_cli, archive_services, operator_feedback_body
+from wom_kit import (
+    archive_cli,
+    archive_services,
+    exact_human_approval as exact_human_approval_module,
+    operator_feedback_body,
+)
 from wom_kit.exact_human_approval import (
     _claim_exact_human_approval_core as claim_exact_human_approval,
 )
@@ -164,7 +169,48 @@ _FAKE_SHA_A = "acc6e73fb84988ecb538dfc0ceb883b88694e469a05172a5aeb0cce8902ce136"
 _FAKE_SHA_B = "9dabf9b965a3f789b1b36100f3f70515ce8dfd81b411b1503e1e2c3304303647"
 
 
+class _SyntheticPreparedRuntimeBundle:
+    def __init__(self, summary: dict[str, Any]) -> None:
+        self._summary = copy.deepcopy(summary)
+
+    def public_summary(self) -> dict[str, Any]:
+        return copy.deepcopy(self._summary)
+
+
+class _ProjectUpdateResumeKeyProvider:
+    """Reopen the test-only claims created by execute_test_exact_human_write."""
+
+    def use_key(
+        self,
+        _root: Path | str,
+        consumer: Any,
+        *,
+        create_if_missing: bool = False,
+    ) -> Any:
+        if create_if_missing:
+            raise AssertionError("resume must not create approval key material")
+        key = bytearray(b"c" * 32)
+        try:
+            return consumer(memoryview(key))
+        finally:
+            key[:] = b"\0" * len(key)
+
+
 class ArchiveCliTests(unittest.TestCase):
+    def trusted_project_update_git_runner(self):
+        """One explicit local-only runner for direct helper seams in a test."""
+
+        runner = getattr(self, "_trusted_project_update_git_runner", None)
+        if runner is None:
+            runner = (
+                archive_services.project_update_git_runner
+                .TrustedProjectUpdateGitRunner.resolve_preapproval()
+            )
+            runner.close_transport_boundary()
+            self._trusted_project_update_git_runner = runner
+            self.addCleanup(runner.close)
+        return runner
+
     def setUp(self) -> None:
         exact_write_patcher = patch.object(
             archive_cli,
@@ -173,6 +219,13 @@ class ArchiveCliTests(unittest.TestCase):
         )
         exact_write_patcher.start()
         self.addCleanup(exact_write_patcher.stop)
+        project_update_exact_write_patcher = patch.object(
+            archive_cli,
+            "_execute_project_version_update_exact_human_approved_write",
+            side_effect=self.execute_test_exact_human_write,
+        )
+        project_update_exact_write_patcher.start()
+        self.addCleanup(project_update_exact_write_patcher.stop)
         link_exact_write_patcher = patch.object(
             archive_cli,
             "_execute_zettel_objet_link_exact_human_approved_write",
@@ -206,7 +259,13 @@ class ArchiveCliTests(unittest.TestCase):
             sys.stdin = old_stdin
 
     @staticmethod
-    def execute_test_exact_human_write(root, context, writer):
+    def execute_test_exact_human_write(
+        root,
+        context,
+        writer,
+        *,
+        claim_succeeded_finalizer=None,
+    ):
         """Exercise a CLI writer through a real authenticated claim, without UI."""
 
         claim = claim_exact_human_approval(
@@ -226,6 +285,8 @@ class ArchiveCliTests(unittest.TestCase):
             result = dict(writer(claim))
             if result.get("ok") is True:
                 claim.finalize_succeeded()
+                if claim_succeeded_finalizer is not None:
+                    claim_succeeded_finalizer(claim)
             else:
                 result["exact_human_approval_reconciliation"] = {
                     "required": True,
@@ -244,6 +305,321 @@ class ArchiveCliTests(unittest.TestCase):
         with redirect_stdout(stdout), redirect_stderr(stderr):
             code = archive_cli.main(args)
         return code, stdout.getvalue(), stderr.getvalue()
+
+    @staticmethod
+    def synthetic_prepared_runtime_bundle(
+        *,
+        target: str,
+        target_commit: str,
+        bootstrap: Any,
+        supply: Any,
+        progress_callback: Any = None,
+    ) -> _SyntheticPreparedRuntimeBundle:
+        version = str(target).removeprefix("v")
+        inventory = [
+            {
+                "role": "runtime",
+                "distribution": "wom-kit",
+                "version": version,
+                "file_name": bootstrap.file_name,
+                "size_bytes": 1,
+                "sha256": "sha256:" + bootstrap.sha256,
+            },
+            *[
+                {
+                    "role": item.role,
+                    "distribution": item.distribution,
+                    "version": item.version,
+                    "file_name": item.file_name,
+                    "size_bytes": item.size_bytes,
+                    "sha256": "sha256:" + item.sha256,
+                }
+                for item in supply.artifacts
+            ],
+        ]
+        inventory.sort(
+            key=lambda item: (
+                str(item["file_name"]).casefold(),
+                str(item["file_name"]),
+            )
+        )
+        return _SyntheticPreparedRuntimeBundle(
+            {
+                "schema": "wom-kit/project-runtime-prepared-bundle/v0.1",
+                "status": "prepared",
+                "target_tag": "v" + version,
+                "target_version": version,
+                "target_commit": target_commit,
+                "bundle_sha256": "sha256:" + "7" * 64,
+                "wheel_sha256": "sha256:" + bootstrap.sha256,
+                "supply_lock_sha256": "sha256:" + supply.sha256,
+                "artifact_inventory": inventory,
+                "network_complete": True,
+                "post_approval_network_allowed": False,
+                "cleanup_required": True,
+                "cleanup_contract": "exact_owned_tree_and_absence_verified",
+                "download_urls_echoed": False,
+                "private_values_echoed": False,
+                "absolute_paths_echoed": False,
+            }
+        )
+
+    @staticmethod
+    def verify_synthetic_prepared_runtime_bundle(
+        bundle: _SyntheticPreparedRuntimeBundle,
+        **_kwargs: Any,
+    ) -> dict[str, Any]:
+        summary = bundle.public_summary()
+        summary["live_reverified"] = True
+        return summary
+
+    def project_runtime_candidate_artifact_fixture(
+        self,
+        root: Path,
+        fixture: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Build exact local wheels for a network-free runtime candidate."""
+
+        from tests.test_project_runtime import (
+            _supply_for_dependency,
+            _write_dependency_wheel,
+            _write_minimal_wheel,
+        )
+
+        artifact_root = root / "runtime-artifacts"
+        artifact_root.mkdir()
+        main_wheel = _write_minimal_wheel(
+            artifact_root,
+            fixture["target_version"],
+        )
+        dependency_wheel = _write_dependency_wheel(artifact_root)
+        supply = _supply_for_dependency(
+            dependency_wheel,
+            target=fixture["target_tag"],
+        )
+        bootstrap = archive_services.project_runtime.BootstrapWheel(
+            version=fixture["target_version"],
+            tag=fixture["target_tag"],
+            url=(
+                "https://example.invalid/releases/"
+                + fixture["target_tag"]
+                + "/"
+                + main_wheel.name
+            ),
+            sha256=hashlib.sha256(main_wheel.read_bytes()).hexdigest(),
+            file_name=main_wheel.name,
+        )
+        policy = {
+            "state": "required",
+            "required": True,
+            "schema": (
+                archive_services.project_runtime
+                .PROJECT_RUNTIME_POLICY_SCHEMA
+            ),
+            "policy_sha256": "sha256:" + "8" * 64,
+            "source_path": "wom-kit/project-runtime-policy.json",
+            "supply_lock_path": "wom-kit/synthetic-runtime-supply.json",
+            "supply_lock_sha256": "sha256:" + supply.sha256,
+        }
+        source_by_name = {
+            main_wheel.name: main_wheel,
+            dependency_wheel.name: dependency_wheel,
+        }
+
+        def download_exact_artifact(**kwargs: Any) -> int:
+            destination = Path(kwargs["destination"])
+            source = source_by_name[destination.name]
+            payload = source.read_bytes()
+            self.assertEqual(
+                hashlib.sha256(payload).hexdigest(),
+                kwargs["expected_sha256"],
+            )
+            expected_size = kwargs.get("expected_size")
+            if expected_size is not None:
+                self.assertEqual(len(payload), expected_size)
+            callback = kwargs.get("callback")
+            stage = kwargs.get("stage", "runtime-artifact")
+            if callback is not None:
+                callback(stage, "start", 0, len(payload))
+            destination.write_bytes(payload)
+            if callback is not None:
+                callback(stage, "done", len(payload), len(payload))
+            return len(payload)
+
+        return {
+            "bootstrap": bootstrap,
+            "bootstrap_summary": bootstrap.public_summary(),
+            "supply": supply,
+            "policy": policy,
+            "download": download_exact_artifact,
+        }
+
+    @staticmethod
+    def initialize_fast_runtime_candidate(
+        runtime: Path,
+        *,
+        bootstrap: Any,
+        supply: Any,
+        progress_callback: Any = None,
+        stage_prefix: str,
+        **_kwargs: Any,
+    ) -> tuple[dict[str, bool], list[dict[str, str]], str]:
+        """Create deterministic inert bytes while leaving candidate/core real."""
+
+        scripts = runtime / "Scripts"
+        site_packages = runtime / "Lib" / "site-packages"
+        scripts.mkdir(parents=True, exist_ok=True)
+        site_packages.mkdir(parents=True, exist_ok=True)
+        (scripts / "python.exe").write_bytes(b"inert-test-python\n")
+        package = site_packages / "wom_kit"
+        package.mkdir()
+        (package / "__init__.py").write_text(
+            f'__version__ = "{bootstrap.version}"\n',
+            encoding="utf-8",
+        )
+        if progress_callback is not None:
+            progress_callback(stage_prefix + "-fast", "done", 1, 1)
+        verification = {
+            "wheel_sha256": True,
+            "pip_check": True,
+            "version": True,
+            "package_resources": True,
+            "new_process": True,
+            "supply_lock": True,
+            "artifact_hashes": True,
+            "artifact_sizes": True,
+            "artifact_inventory": True,
+            "installed_payload": True,
+            "live_process": True,
+        }
+        packages = sorted(
+            [
+                {"name": "wom-kit", "version": bootstrap.version},
+                *[
+                    {
+                        "name": item.distribution,
+                        "version": item.version,
+                    }
+                    for item in supply.artifacts
+                ],
+                {"name": "pip", "version": "24.0"},
+            ],
+            key=lambda item: (item["name"].casefold(), item["version"]),
+        )
+        return verification, packages, "3.12.10"
+
+    @staticmethod
+    def verify_fast_retained_runtime_artifacts(
+        final: Path,
+        *,
+        bootstrap: Any,
+        supply: Any,
+        receipt_inventory: Any,
+    ) -> tuple[tuple[dict[str, Any], ...], list[Path], set[str]]:
+        """Verify retained wheel bytes without inspecting inert site-packages."""
+
+        if not isinstance(receipt_inventory, list):
+            raise archive_services.project_runtime.ProjectRuntimeError(
+                "project_runtime_artifact_inventory_invalid"
+            )
+        artifacts_root = (
+            final
+            / archive_services.project_runtime.PROJECT_RUNTIME_ARTIFACTS_NAME
+        )
+        expected = {
+            bootstrap.file_name: bootstrap.sha256,
+            **{
+                item.file_name: item.sha256
+                for item in supply.artifacts
+            },
+        }
+        observed: list[dict[str, Any]] = []
+        paths: list[Path] = []
+        for item in receipt_inventory:
+            if not isinstance(item, dict):
+                raise archive_services.project_runtime.ProjectRuntimeError(
+                    "project_runtime_artifact_inventory_invalid"
+                )
+            file_name = item.get("file_name")
+            path = artifacts_root / str(file_name)
+            if (
+                file_name not in expected
+                or not path.is_file()
+                or hashlib.sha256(path.read_bytes()).hexdigest()
+                != expected[file_name]
+                or item.get("sha256") != "sha256:" + expected[file_name]
+                or item.get("size_bytes") != path.stat().st_size
+            ):
+                raise archive_services.project_runtime.ProjectRuntimeError(
+                    "project_runtime_retained_artifact_mismatch"
+                )
+            observed.append(dict(item))
+            paths.append(path)
+        if set(expected) != {item["file_name"] for item in observed}:
+            raise archive_services.project_runtime.ProjectRuntimeError(
+                "project_runtime_artifact_inventory_mismatch"
+            )
+        return tuple(observed), paths, {"wom_kit"}
+
+    def fast_project_runtime_candidate_patches(
+        self,
+        artifacts: Mapping[str, Any],
+        *,
+        initializer: Any = None,
+    ) -> ExitStack:
+        """Patch only external/toolchain seams; candidate/txn logic stays real."""
+
+        stack = ExitStack()
+        stack.enter_context(
+            patch.object(
+                archive_services,
+                "wom_kit_project_update_runtime_policy",
+                return_value=artifacts["policy"],
+            )
+        )
+        stack.enter_context(
+            patch.object(
+                archive_services,
+                "wom_kit_project_update_runtime_supply",
+                return_value=artifacts["supply"],
+            )
+        )
+        stack.enter_context(
+            patch.object(
+                archive_services.project_runtime,
+                "bootstrap_wheel_for_target",
+                return_value=(
+                    artifacts["bootstrap"],
+                    artifacts["bootstrap_summary"],
+                ),
+            )
+        )
+        stack.enter_context(
+            patch.object(
+                archive_services.project_runtime,
+                "_download_exact_artifact",
+                side_effect=artifacts["download"],
+            )
+        )
+        stack.enter_context(
+            patch.object(
+                archive_services.project_runtime,
+                "_initialize_runtime_payload",
+                side_effect=(
+                    initializer
+                    if initializer is not None
+                    else self.initialize_fast_runtime_candidate
+                ),
+            )
+        )
+        stack.enter_context(
+            patch.object(
+                archive_services.project_runtime,
+                "_verify_retained_artifacts",
+                side_effect=self.verify_fast_retained_runtime_artifacts,
+            )
+        )
+        return stack
 
     def manifest_source_fidelity_fixture(
         self,
@@ -1274,6 +1650,8 @@ class ArchiveCliTests(unittest.TestCase):
         invalid_target_metadata: bool = False,
         ignored_checkout_collision: bool = False,
         crlf_runtime_transition: bool = False,
+        project_runtime_policy: bool = False,
+        malicious_filter_attribute: bool = False,
     ) -> dict[str, Any]:
         version_parts = [int(part) for part in archive_cli.__version__.split(".")]
         self.assertEqual(len(version_parts), 3)
@@ -1314,6 +1692,11 @@ class ArchiveCliTests(unittest.TestCase):
             b"    raise SystemExit(main())\n"
         )
         self.write_project_update_fixture_version(upstream, old_version)
+        if malicious_filter_attribute:
+            (upstream / ".gitattributes").write_text(
+                "*.py filter=wom-test\n",
+                encoding="utf-8",
+            )
         collision_name = "future-ignored-tool.txt"
         if ignored_checkout_collision:
             (upstream / ".gitignore").write_text(collision_name + "\n", encoding="utf-8")
@@ -1379,6 +1762,20 @@ class ArchiveCliTests(unittest.TestCase):
             target_version,
             root_shim_version=old_version if invalid_target_metadata else target_version,
         )
+        if project_runtime_policy:
+            (upstream / "wom-kit" / "project-runtime-policy.json").write_bytes(
+                (KIT_ROOT / "project-runtime-policy.json").read_bytes()
+            )
+            (
+                upstream
+                / "wom-kit"
+                / "project-runtime-supply-lock-v0.4.3.json"
+            ).write_bytes(
+                (
+                    KIT_ROOT
+                    / "project-runtime-supply-lock-v0.4.3.json"
+                ).read_bytes()
+            )
         if ignored_checkout_collision:
             (upstream / collision_name).write_text("target release file\n", encoding="utf-8")
         self.git_fixture_command(upstream, "add", ".")
@@ -6247,6 +6644,7 @@ class ArchiveCliTests(unittest.TestCase):
             ok, output = archive_services._wom_kit_project_update_git(
                 Path("unused-mirror"),
                 ["status", "--porcelain"],
+                runner=self.trusted_project_update_git_runner(),
             )
             elapsed = time.monotonic() - started
 
@@ -7632,7 +8030,8 @@ class ArchiveCliTests(unittest.TestCase):
                 target_relative = target_path.relative_to(mirror_root).as_posix()
                 clean_snapshot = (
                     archive_services._wom_kit_project_update_git_snapshot(
-                        mirror_root.resolve()
+                        mirror_root.resolve(),
+                        runner=self.trusted_project_update_git_runner(),
                     )
                 )
                 self.assertIsNotNone(clean_snapshot)
@@ -7695,7 +8094,8 @@ class ArchiveCliTests(unittest.TestCase):
             )
             clean_snapshot = (
                 archive_services._wom_kit_project_update_git_snapshot(
-                    mirror_root.resolve()
+                    mirror_root.resolve(),
+                    runner=self.trusted_project_update_git_runner(),
                 )
             )
             self.assertIsNotNone(clean_snapshot)
@@ -7756,7 +8156,8 @@ class ArchiveCliTests(unittest.TestCase):
                 )
                 clean_snapshot = (
                     archive_services._wom_kit_project_update_git_snapshot(
-                        fixture["mirror_root"].resolve()
+                        fixture["mirror_root"].resolve(),
+                        runner=self.trusted_project_update_git_runner(),
                     )
                 )
                 self.assertIsNotNone(clean_snapshot)
@@ -7803,7 +8204,8 @@ class ArchiveCliTests(unittest.TestCase):
                 target_path = fixture[target_key]
                 clean_snapshot = (
                     archive_services._wom_kit_project_update_git_snapshot(
-                        fixture["mirror_root"].resolve()
+                        fixture["mirror_root"].resolve(),
+                        runner=self.trusted_project_update_git_runner(),
                     )
                 )
                 self.assertIsNotNone(clean_snapshot)
@@ -8792,19 +9194,39 @@ class ArchiveCliTests(unittest.TestCase):
             metadata_root = fixture["metadata_root"]
             before_pin = (metadata_root / "installed-version.txt").read_bytes()
             before_head = self.git_fixture_command(fixture["mirror"], "rev-parse", "HEAD")
+            original_git = archive_services._wom_kit_project_update_git
+            transport_calls: list[list[str]] = []
 
-            code, stdout, stderr = self.run_cli_split(
-                [
-                    "project-version-update",
-                    str(fixture["archive_root"]),
-                    "--target",
-                    fixture["target_tag"],
-                    "--dry-run",
-                    "--progress",
-                    "--format",
-                    "json",
-                ]
-            )
+            def observe_git(
+                root: Path,
+                arguments: list[str],
+                **kwargs: Any,
+            ) -> tuple[bool, str]:
+                if (
+                    arguments
+                    and arguments[0] == "fetch"
+                    or kwargs.get("allow_transport_environment") is True
+                ):
+                    transport_calls.append(list(arguments))
+                return original_git(root, arguments, **kwargs)
+
+            with patch.object(
+                archive_services,
+                "_wom_kit_project_update_git",
+                side_effect=observe_git,
+            ):
+                code, stdout, stderr = self.run_cli_split(
+                    [
+                        "project-version-update",
+                        str(fixture["archive_root"]),
+                        "--target",
+                        fixture["target_tag"],
+                        "--dry-run",
+                        "--progress",
+                        "--format",
+                        "json",
+                    ]
+                )
             result = json.loads(stdout)
 
             self.assertEqual(code, 0, stdout + stderr)
@@ -8818,6 +9240,7 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertEqual((metadata_root / "installed-version.txt").read_bytes(), before_pin)
             self.assertFalse((metadata_root / "receipts" / "version-updates").exists())
             self.assertFalse((metadata_root / "version-update.lock").exists())
+            self.assertEqual(transport_calls, [])
             self.assertNotIn(str(fixture["project_root"]), stdout + stderr)
             self.assertNotIn(str(fixture["upstream"]), stdout + stderr)
 
@@ -8890,12 +9313,974 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertFalse(result["fetch"]["attempted"])
             self.assertNotIn(str(fixture["project_root"]), output)
 
+    @unittest.skipUnless(
+        os.name == "nt" and sys.version_info[:2] == (3, 12),
+        "the production runtime supply is Windows CPython 3.12",
+    )
+    def test_project_version_update_durable_candidate_static_receipt_and_claim_finalizer(
+        self,
+    ) -> None:
+        """The complete real candidate reaches claim success, unlock, and cleanup."""
+
+        self.assertIsNotNone(shutil.which("git"))
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_root = Path(tmp)
+            fixture = self.create_project_version_update_fixture(
+                tmp_root,
+                project_runtime_policy=True,
+                malicious_filter_attribute=True,
+            )
+            artifacts = self.project_runtime_candidate_artifact_fixture(
+                tmp_root,
+                fixture,
+            )
+            callback_root = tmp_root / "malicious-git-callbacks"
+            callback_root.mkdir()
+            hook_sentinel = callback_root / "reference-transaction-ran"
+            filter_sentinel = callback_root / "smudge-filter-ran"
+            hook = callback_root / "reference-transaction"
+            hook.write_text(
+                "#!/bin/sh\n"
+                f"printf invoked > '{hook_sentinel.as_posix()}'\n"
+                "exit 97\n",
+                encoding="utf-8",
+            )
+            smudge = callback_root / "smudge-filter"
+            smudge.write_text(
+                "#!/bin/sh\n"
+                f"printf invoked > '{filter_sentinel.as_posix()}'\n"
+                "exit 97\n",
+                encoding="utf-8",
+            )
+            os.chmod(hook, 0o755)
+            os.chmod(smudge, 0o755)
+            self.git_fixture_command(
+                fixture["mirror"],
+                "config",
+                "core.hooksPath",
+                str(callback_root),
+            )
+            self.git_fixture_command(
+                fixture["mirror"],
+                "config",
+                "filter.wom-test.smudge",
+                str(smudge),
+            )
+            runner_resolutions = 0
+            original_resolve = (
+                archive_services.project_update_git_runner
+                .TrustedProjectUpdateGitRunner.resolve_preapproval
+            )
+
+            def resolve_once(*args: Any, **kwargs: Any) -> Any:
+                nonlocal runner_resolutions
+                runner_resolutions += 1
+                return original_resolve(*args, **kwargs)
+
+            with patch.object(
+                archive_services,
+                "wom_kit_project_update_runtime_policy",
+                return_value=artifacts["policy"],
+            ), patch.object(
+                archive_services,
+                "wom_kit_project_update_runtime_supply",
+                return_value=artifacts["supply"],
+            ), patch.object(
+                archive_services.project_runtime,
+                "bootstrap_wheel_for_target",
+                return_value=(
+                    artifacts["bootstrap"],
+                    artifacts["bootstrap_summary"],
+                ),
+            ), patch.object(
+                archive_services.project_runtime,
+                "_download_exact_artifact",
+                side_effect=artifacts["download"],
+            ), patch.object(
+                archive_services.project_update_git_runner
+                .TrustedProjectUpdateGitRunner,
+                "resolve_preapproval",
+                side_effect=resolve_once,
+            ):
+                code, stdout, stderr = self.run_cli_split(
+                    [
+                        "project-version-update",
+                        str(fixture["project_root"]),
+                        "--target",
+                        fixture["target_tag"],
+                        "--approve",
+                        "--affirm-external-writers-quiescent",
+                        "--reviewed-by",
+                        "person:durable-runtime-reviewer",
+                        "--progress",
+                        "--format",
+                        "json",
+                    ]
+                )
+
+            self.assertEqual(code, 0, stdout + stderr)
+            result = json.loads(stdout)
+            self.assertEqual(result["status"], "updated_restart_required")
+            self.assertEqual(result["exact_human_approval"]["status"], "succeeded")
+            self.assertEqual(runner_resolutions, 1)
+            self.assertFalse(hook_sentinel.exists())
+            self.assertFalse(filter_sentinel.exists())
+            self.assertIn("starting: start", stderr)
+            self.assertEqual(
+                self.git_fixture_command(fixture["mirror"], "rev-parse", "HEAD"),
+                fixture["target_commit"],
+            )
+            self.assertFalse(
+                (fixture["metadata_root"] / "version-update.lock").exists()
+            )
+            runtime_root = (
+                fixture["project_root"]
+                / archive_services.project_runtime.PROJECT_RUNTIME_RELATIVE_ROOT
+                / fixture["target_tag"]
+            )
+            self.assertTrue(runtime_root.is_dir())
+            self.assertTrue(
+                (runtime_root / "Scripts" / "python.exe").is_file()
+            )
+            self.assertTrue(
+                (
+                    fixture["project_root"]
+                    / ".zettel-kasten"
+                    / "bin"
+                    / "archive.cmd"
+                ).is_file()
+            )
+            self.assertEqual(
+                (fixture["metadata_root"] / "installed-version.txt").read_text(
+                    encoding="utf-8"
+                ),
+                fixture["target_tag"] + "\n",
+            )
+
+            receipts = list(
+                (
+                    fixture["metadata_root"]
+                    / "receipts"
+                    / "version-updates"
+                ).glob("*.json")
+            )
+            self.assertEqual(len(receipts), 1)
+            receipt = json.loads(receipts[0].read_text(encoding="utf-8"))
+            self.assertEqual(
+                receipt["schema"],
+                "wom-kit/project-version-update-receipt/v0.3",
+            )
+            self.assertNotIn("operation_exact_human_approval", receipt)
+            self.assertNotIn("exact_human_approval", receipt)
+            self.assertNotIn("approval_id", receipt)
+            self.assertNotIn("claim", receipt)
+            self.assertEqual(
+                receipt["approval_evidence_contract"],
+                {
+                    "embedded_dynamic_claim_reference": False,
+                    "authenticated_succeeded_claim_required": True,
+                    "transaction_journal_checkpoint": "claim_succeeded",
+                    "domain_writer_reentry_on_succeeded_tail_allowed": False,
+                },
+            )
+            self.assertEqual(
+                archive_services.validate_schema(
+                    receipt,
+                    "project-version-update-receipt-v0.3.schema.json",
+                ),
+                [],
+            )
+            self.assertRegex(receipt["transaction_ref"], r"^update_[0-9a-f]{32}$")
+            self.assertEqual(
+                receipts[0].name,
+                receipt["transaction_ref"] + ".json",
+            )
+            transaction_parent = (
+                fixture["project_root"]
+                / archive_services.project_update_transaction
+                .TRANSACTION_ROOT_LOGICAL
+            )
+            self.assertFalse(
+                (transaction_parent / receipt["transaction_ref"]).exists()
+            )
+            self.assertTrue(
+                (
+                    transaction_parent
+                    / f".cleanup-proof_{receipt['transaction_ref']}.json"
+                ).is_file()
+            )
+            self.assertFalse(
+                result["write_boundary"][
+                    "runtime_postapproval_child_process_allowed"
+                ]
+            )
+            self.assertTrue(
+                result["write_boundary"][
+                    "project_update_postapproval_local_git_allowed"
+                ]
+            )
+            self.assertFalse(
+                result["write_boundary"][
+                    "postapproval_git_transport_allowed"
+                ]
+            )
+
+    def test_project_version_update_hard_exit_subprocess_worker(self) -> None:
+        """Private subprocess worker; the matrix test supplies its crash point."""
+
+        boundary = os.environ.get("WOM_TEST_PROJECT_UPDATE_HARD_EXIT_BOUNDARY")
+        root_value = os.environ.get("WOM_TEST_PROJECT_UPDATE_HARD_EXIT_ROOT")
+        if not boundary or not root_value:
+            self.skipTest("invoked only by the hard-exit matrix")
+        if boundary not in {
+            "lock_acquired",
+            "candidate_sealed",
+            "approval_bound",
+            "component_intent",
+            "domain_committed",
+            "claim_succeeded",
+            "lock_unlinked",
+        }:
+            self.fail("unknown hard-exit boundary")
+
+        tmp_root = Path(root_value)
+        fixture = self.create_project_version_update_fixture(
+            tmp_root,
+            project_runtime_policy=True,
+        )
+        artifacts = self.project_runtime_candidate_artifact_fixture(
+            tmp_root,
+            fixture,
+        )
+        control = {
+            key: str(fixture[key])
+            for key in (
+                "project_root",
+                "archive_root",
+                "metadata_root",
+                "mirror",
+                "old_commit",
+                "target_tag",
+                "target_version",
+                "target_commit",
+            )
+        }
+        (tmp_root / "hard-exit-control.json").write_text(
+            json.dumps(control, sort_keys=True),
+            encoding="utf-8",
+        )
+
+        transaction_type = (
+            archive_services.project_update_transaction
+            .ProjectUpdateTransaction
+        )
+        reservation_type = (
+            archive_services.project_update_transaction
+            .ReservedProjectUpdateTransaction
+        )
+        original_acquire_lock = reservation_type.acquire_lock
+        original_seal_intent = reservation_type.seal_intent
+        original_append = transaction_type.append
+        original_release_lock = transaction_type.release_lock_exact
+        original_claim_succeeded = (
+            exact_human_approval_module
+            ._ClaimedExactHumanApproval.finalize_succeeded
+        )
+
+        def crash_after_lock(instance: Any, **kwargs: Any) -> Any:
+            result = original_acquire_lock(instance, **kwargs)
+            os._exit(86)
+
+        def crash_after_seal(instance: Any, **kwargs: Any) -> Any:
+            result = original_seal_intent(instance, **kwargs)
+            os._exit(86)
+
+        def crash_after_checkpoint(instance: Any, **kwargs: Any) -> Any:
+            result = original_append(instance, **kwargs)
+            phase = kwargs.get("phase")
+            stage = kwargs.get("stage")
+            if (
+                boundary == "approval_bound"
+                and phase == "approval_bound"
+                and stage == "verified"
+            ) or (
+                boundary == "component_intent"
+                and stage == "intent"
+                and phase
+                in {
+                    "source",
+                    "runtime",
+                    "launcher",
+                    "non_active_pin",
+                    "receipt",
+                    "active_pin",
+                }
+            ) or (
+                boundary == "domain_committed"
+                and phase == "domain_committed"
+                and stage == "verified"
+            ):
+                os._exit(86)
+            return result
+
+        def crash_after_claim_succeeded(instance: Any) -> None:
+            original_claim_succeeded(instance)
+            os._exit(86)
+
+        def crash_after_lock_unlinked(instance: Any, **kwargs: Any) -> Any:
+            result = original_release_lock(instance, **kwargs)
+            os._exit(86)
+
+        boundary_patcher = None
+        if boundary == "lock_acquired":
+            boundary_patcher = patch.object(
+                reservation_type,
+                "acquire_lock",
+                new=crash_after_lock,
+            )
+        elif boundary == "candidate_sealed":
+            boundary_patcher = patch.object(
+                reservation_type,
+                "seal_intent",
+                new=crash_after_seal,
+            )
+        elif boundary in {
+            "approval_bound",
+            "component_intent",
+            "domain_committed",
+        }:
+            boundary_patcher = patch.object(
+                transaction_type,
+                "append",
+                new=crash_after_checkpoint,
+            )
+        elif boundary == "claim_succeeded":
+            boundary_patcher = patch.object(
+                exact_human_approval_module._ClaimedExactHumanApproval,
+                "finalize_succeeded",
+                new=crash_after_claim_succeeded,
+            )
+        else:
+            boundary_patcher = patch.object(
+                transaction_type,
+                "release_lock_exact",
+                new=crash_after_lock_unlinked,
+            )
+
+        with patch.object(
+            archive_services,
+            "wom_kit_project_update_runtime_policy",
+            return_value=artifacts["policy"],
+        ), patch.object(
+            archive_services,
+            "wom_kit_project_update_runtime_supply",
+            return_value=artifacts["supply"],
+        ), patch.object(
+            archive_services.project_runtime,
+            "bootstrap_wheel_for_target",
+            return_value=(
+                artifacts["bootstrap"],
+                artifacts["bootstrap_summary"],
+            ),
+        ), patch.object(
+            archive_services.project_runtime,
+            "_download_exact_artifact",
+            side_effect=artifacts["download"],
+        ), patch.object(
+            archive_services.project_runtime,
+            "_initialize_runtime_payload",
+            side_effect=self.initialize_fast_runtime_candidate,
+        ), patch.object(
+            archive_services.project_runtime,
+            "_verify_retained_artifacts",
+            side_effect=self.verify_fast_retained_runtime_artifacts,
+        ), boundary_patcher:
+            code, output = self.run_cli(
+                [
+                    "project-version-update",
+                    str(fixture["project_root"]),
+                    "--target",
+                    fixture["target_tag"],
+                    "--approve",
+                    "--affirm-external-writers-quiescent",
+                    "--reviewed-by",
+                    "person:hard-exit-reviewer",
+                    "--format",
+                    "json",
+                ]
+            )
+        self.fail(
+            f"worker did not hard-exit at {boundary}: code={code} output={output}"
+        )
+
+    @unittest.skipUnless(
+        os.name == "nt" and sys.version_info[:2] == (3, 12),
+        "the production runtime supply is Windows CPython 3.12",
+    )
+    def test_project_version_update_hard_exit_matrix_resumes_exact_next_stage(
+        self,
+    ) -> None:
+        """Seven real process losses recover without a second native approval."""
+
+        self.assertIsNotNone(shutil.which("git"))
+        boundaries = (
+            "lock_acquired",
+            "candidate_sealed",
+            "approval_bound",
+            "component_intent",
+            "domain_committed",
+            "claim_succeeded",
+            "lock_unlinked",
+        )
+        for boundary in boundaries:
+            with self.subTest(boundary=boundary), tempfile.TemporaryDirectory() as tmp:
+                tmp_root = Path(tmp)
+                environment = dict(os.environ)
+                environment.update(
+                    {
+                        "PYTHONPATH": str(SRC_ROOT),
+                        "PYTHONUTF8": "1",
+                        "WOM_TEST_PROJECT_UPDATE_HARD_EXIT_BOUNDARY": boundary,
+                        "WOM_TEST_PROJECT_UPDATE_HARD_EXIT_ROOT": str(tmp_root),
+                    }
+                )
+                crashed = subprocess.run(
+                    [
+                        sys.executable,
+                        "-m",
+                        "unittest",
+                        (
+                            "tests.test_cli.ArchiveCliTests."
+                            "test_project_version_update_hard_exit_subprocess_worker"
+                        ),
+                    ],
+                    cwd=KIT_ROOT,
+                    env=environment,
+                    capture_output=True,
+                    text=True,
+                    timeout=60,
+                    check=False,
+                )
+                self.assertEqual(
+                    crashed.returncode,
+                    86,
+                    crashed.stdout + crashed.stderr,
+                )
+                control = json.loads(
+                    (tmp_root / "hard-exit-control.json").read_text(
+                        encoding="utf-8"
+                    )
+                )
+                project_root = Path(control["project_root"])
+                archive_root = Path(control["archive_root"])
+                metadata_root = Path(control["metadata_root"])
+                mirror = Path(control["mirror"])
+                transaction_parent = (
+                    project_root
+                    / archive_services.project_update_transaction
+                    .TRANSACTION_ROOT_LOGICAL
+                )
+                transactions = [
+                    path
+                    for path in transaction_parent.iterdir()
+                    if path.is_dir() and path.name.startswith("update_")
+                ]
+                self.assertEqual(len(transactions), 1)
+                transaction_ref = transactions[0].name
+                lock_path = (
+                    project_root
+                    / archive_services.project_update_transaction
+                    .PROJECT_UPDATE_LOCK_LOGICAL
+                )
+                if boundary == "lock_unlinked":
+                    self.assertFalse(lock_path.exists())
+                else:
+                    self.assertTrue(lock_path.is_file())
+
+                if boundary == "lock_acquired":
+                    reserved = (
+                        archive_services.project_update_transaction
+                        .ReservedProjectUpdateTransaction.open(
+                            project_root,
+                            transaction_ref,
+                        )
+                    )
+                    expected_lock_bytes = reserved.acquire_lock()
+                    aborted = reserved.abort_before_intent_seal(
+                        expected_lock_bytes=expected_lock_bytes,
+                    )
+                    self.assertEqual(
+                        aborted["state"],
+                        "aborted_before_intent_seal",
+                    )
+                    self.assertIsNotNone(reserved.inspect_abort_receipt())
+                    self.assertFalse(lock_path.exists())
+                    self.assertFalse(
+                        (
+                            project_root
+                            / archive_services.project_runtime
+                            .PROJECT_RUNTIME_RELATIVE_ROOT
+                        ).exists()
+                    )
+                    self.assertEqual(
+                        self.git_fixture_command(mirror, "rev-parse", "HEAD"),
+                        control["old_commit"],
+                    )
+                    continue
+
+                if boundary == "candidate_sealed":
+                    transaction = (
+                        archive_services.project_update_transaction
+                        .ProjectUpdateTransaction.open(
+                            project_root,
+                            transaction_ref,
+                        )
+                    )
+                    transaction.bind_sealed_intent_to_lock(
+                        lock_path.read_bytes()
+                    )
+                    with patch.object(
+                        archive_services.project_runtime,
+                        "_verify_retained_artifacts",
+                        side_effect=(
+                            self.verify_fast_retained_runtime_artifacts
+                        ),
+                    ):
+                        state, lifetime = (
+                            archive_services
+                            ._project_update_reopen_durable_state(
+                                project_root,
+                                target=control["target_tag"],
+                                reviewed_by="person:hard-exit-reviewer",
+                                transaction_ref=transaction_ref,
+                                expected_approval_root=archive_root,
+                                expected_archive_id=(
+                                    archive_services.read_archive_id(
+                                        archive_root
+                                    )
+                                ),
+                            )
+                        )
+                        try:
+                            state.transaction.append(
+                                phase="lock_backlinked",
+                                stage="verified",
+                                live_component_sha256=(
+                                    archive_services
+                                    ._project_update_live_component_sha256(
+                                        state
+                                    )
+                                ),
+                            )
+                            archive_services._project_update_cancel_before_native(
+                                state
+                            )
+                        finally:
+                            state.directory_guard.close()
+                            lifetime.close_after_service_transaction()
+                    self.assertFalse(lock_path.exists())
+                    self.assertFalse(transactions[0].exists())
+                    self.assertTrue(
+                        (
+                            transaction_parent
+                            / f".cleanup-proof_{transaction_ref}.json"
+                        ).is_file()
+                    )
+                    self.assertFalse(
+                        (
+                            project_root
+                            / archive_services.project_runtime
+                            .PROJECT_RUNTIME_RELATIVE_ROOT
+                        ).exists()
+                    )
+                    continue
+
+                sealed_transaction = (
+                    archive_services.project_update_transaction
+                    .ProjectUpdateTransaction.open(
+                        project_root,
+                        transaction_ref,
+                    )
+                )
+                sealed_private_plan = (
+                    archive_services._project_update_parse_private_plan(
+                        sealed_transaction.private_binding_bytes(
+                            "project-update-domain-plan"
+                        )
+                    )
+                )
+                sealed_runtime_policy = sealed_private_plan[
+                    "runtime_policy"
+                ]
+                sealed_runtime_supply = (
+                    archive_services.project_runtime
+                    .project_runtime_supply_lock(
+                        sealed_transaction.private_binding_bytes(
+                            "runtime-supply-lock"
+                        ),
+                        expected_target=control["target_tag"],
+                    )
+                )
+                self.assertIsNotNone(sealed_runtime_supply)
+                claims_root = (
+                    archive_root
+                    / exact_human_approval_module.CLAIMS_RELATIVE_ROOT
+                )
+                claims_before = list(claims_root.glob("approval_*.json"))
+                self.assertEqual(len(claims_before), 1)
+                approval_id = claims_before[0].stem
+                original_resume = (
+                    archive_cli._resume_exact_human_approved_transaction_core
+                )
+                original_perform = (
+                    archive_services._project_update_perform_component
+                )
+                performed_roles: list[str] = []
+
+                def resume_with_test_key(*args: Any, **kwargs: Any) -> Any:
+                    kwargs["key_provider"] = _ProjectUpdateResumeKeyProvider()
+                    return original_resume(*args, **kwargs)
+
+                def observe_component(
+                    state: Any,
+                    component: Any,
+                ) -> None:
+                    performed_roles.append(component.role)
+                    original_perform(state, component)
+
+                with patch.object(
+                    archive_cli,
+                    "_resume_exact_human_approved_transaction_core",
+                    side_effect=resume_with_test_key,
+                ), patch.object(
+                    archive_services,
+                    "wom_kit_project_update_runtime_policy",
+                    return_value=sealed_runtime_policy,
+                ), patch.object(
+                    archive_services,
+                    "wom_kit_project_update_runtime_supply",
+                    return_value=sealed_runtime_supply,
+                ), patch.object(
+                    archive_services.project_runtime,
+                    "_verify_retained_artifacts",
+                    side_effect=self.verify_fast_retained_runtime_artifacts,
+                ), patch.object(
+                    archive_services,
+                    "_project_update_perform_component",
+                    side_effect=observe_component,
+                ):
+                    code, output = self.run_cli(
+                        [
+                            "project-version-update",
+                            str(project_root),
+                            "--target",
+                            control["target_tag"],
+                            "--resume",
+                            "--transaction-ref",
+                            transaction_ref,
+                            "--approval-id",
+                            approval_id,
+                            "--affirm-external-writers-quiescent",
+                            "--reviewed-by",
+                            "person:hard-exit-reviewer",
+                            "--format",
+                            "json",
+                        ]
+                    )
+
+                self.assertEqual(code, 0, output)
+                result = json.loads(output)
+                self.assertFalse(result["native_approval_redisplayed"])
+                if boundary in {"claim_succeeded", "lock_unlinked"}:
+                    self.assertEqual(
+                        result["exact_human_approval_resume_branch"],
+                        "succeeded_tail",
+                    )
+                    self.assertFalse(result["domain_writer_reentered"])
+                    self.assertEqual(performed_roles, [])
+                else:
+                    self.assertEqual(
+                        result["exact_human_approval_resume_branch"],
+                        "started_writer",
+                    )
+                    if boundary == "domain_committed":
+                        self.assertEqual(performed_roles, [])
+                self.assertFalse(lock_path.exists())
+                self.assertFalse(transactions[0].exists())
+                self.assertTrue(
+                    (
+                        transaction_parent
+                        / f".cleanup-proof_{transaction_ref}.json"
+                    ).is_file()
+                )
+                self.assertEqual(
+                    self.git_fixture_command(mirror, "rev-parse", "HEAD"),
+                    control["target_commit"],
+                )
+                self.assertEqual(
+                    (metadata_root / "installed-version.txt").read_text(
+                        encoding="utf-8"
+                    ),
+                    control["target_tag"] + "\n",
+                )
+                self.assertEqual(
+                    len(list(claims_root.glob("approval_*.json"))),
+                    1,
+                )
+                receipts = list(
+                    (metadata_root / "receipts" / "version-updates").glob(
+                        "*.json"
+                    )
+                )
+                self.assertEqual(len(receipts), 1)
+                receipt = json.loads(
+                    receipts[0].read_text(encoding="utf-8")
+                )
+                self.assertNotIn("operation_exact_human_approval", receipt)
+                self.assertNotIn("approval_id", receipt)
+
+    def test_project_version_update_progress_starts_before_preflight_and_heartbeats_under_ten_seconds(
+        self,
+    ) -> None:
+        """A fake clock fixes the first-state and heartbeat timing contract."""
+
+        with tempfile.TemporaryDirectory() as tmp:
+            project_root = Path(tmp) / "project"
+            archive_root = project_root / "archive"
+            archive_root.mkdir(parents=True)
+            (archive_root / "archive.yml").write_text(
+                "archive_id: archive:personal:progress-timing-test\n",
+                encoding="utf-8",
+            )
+            clock = [100.0]
+            events: list[tuple[float, str, str]] = []
+            threads: list[Any] = []
+
+            class FakeEvent:
+                def __init__(self) -> None:
+                    self.stopped = False
+                    self.waits = 0
+
+                def wait(self, timeout: float) -> bool:
+                    if self.stopped:
+                        return True
+                    self.waits += 1
+                    if self.waits > 2:
+                        return True
+                    clock[0] += timeout
+                    return False
+
+                def set(self) -> None:
+                    self.stopped = True
+
+            class FakeThread:
+                def __init__(self, *, target: Any, **_kwargs: Any) -> None:
+                    self.target = target
+                    threads.append(self)
+
+                def start(self) -> None:
+                    return None
+
+                def join(self, timeout: float | None = None) -> None:
+                    return None
+
+            class FakeBoundary:
+                def __enter__(self) -> tuple[Path, str]:
+                    return archive_root, "archive:personal:progress-timing-test"
+
+                def __exit__(self, *_args: Any) -> None:
+                    return None
+
+            def callback_factory(*_args: Any, **_kwargs: Any) -> Any:
+                def record(
+                    stage: str,
+                    message: str,
+                    _current: int | None,
+                    _total: int | None,
+                ) -> None:
+                    events.append((clock[0], stage, message))
+
+                return record
+
+            def fake_live_transaction(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
+                self.assertEqual(
+                    events,
+                    [(100.0, "starting", "start")],
+                )
+                self.assertEqual(len(threads), 1)
+                threads[0].target()
+                return {
+                    "ok": True,
+                    "status": "progress_timing_verified",
+                }
+
+            with patch.object(
+                archive_cli,
+                "_make_stage_progress_callback",
+                side_effect=callback_factory,
+            ), patch.object(
+                archive_cli.threading,
+                "Event",
+                side_effect=FakeEvent,
+            ), patch.object(
+                archive_cli.threading,
+                "Thread",
+                side_effect=FakeThread,
+            ), patch.object(
+                archive_cli,
+                "_project_version_update_approval_read_boundary",
+                return_value=FakeBoundary(),
+            ), patch.object(
+                archive_services,
+                "_wom_kit_project_version_update_live_approval_transaction",
+                side_effect=fake_live_transaction,
+            ):
+                code, output = self.run_cli(
+                    [
+                        "project-version-update",
+                        str(project_root),
+                        "--target",
+                        "v0.4.3",
+                        "--approve",
+                        "--affirm-external-writers-quiescent",
+                        "--reviewed-by",
+                        "person:progress-timing-reviewer",
+                        "--progress",
+                        "--format",
+                        "json",
+                    ]
+                )
+
+            self.assertEqual(code, 0, output)
+            self.assertEqual(
+                [event[1:] for event in events],
+                [
+                    ("starting", "start"),
+                    ("starting", "heartbeat"),
+                    ("starting", "heartbeat"),
+                ],
+            )
+            first_delay = events[0][0] - 100.0
+            gaps = [
+                current[0] - previous[0]
+                for previous, current in zip(events, events[1:])
+            ]
+            self.assertLessEqual(first_delay, 2.0)
+            self.assertTrue(gaps)
+            self.assertLessEqual(max(gaps), 10.0)
+            self.assertEqual(gaps, [9.0, 9.0])
+
     def test_project_version_update_approve_fetches_verifies_updates_and_is_replay_safe(
         self,
     ) -> None:
         self.assertIsNotNone(shutil.which("git"))
         with tempfile.TemporaryDirectory() as tmp:
-            fixture = self.create_project_version_update_fixture(Path(tmp))
+            tmp_root = Path(tmp)
+            fixture = self.create_project_version_update_fixture(
+                tmp_root,
+                project_runtime_policy=True,
+            )
+            artifacts = self.project_runtime_candidate_artifact_fixture(
+                tmp_root,
+                fixture,
+            )
+            original_git = archive_services._wom_kit_project_update_git
+            original_run_capped = (
+                archive_services._wom_kit_project_update_run_capped
+            )
+            original_binding = (
+                archive_cli.operation_approval_binding
+                .project_version_update_approval_binding
+            )
+            approval_started = False
+            transport_phases: list[str] = []
+            prepared_plans: list[dict[str, Any]] = []
+            observed_git_commands: list[tuple[bool, list[str]]] = []
+            forged_bin = Path(tmp) / "forged-git-bin"
+            forged_bin.mkdir()
+            forged_log = forged_bin / "forged.log"
+            (forged_bin / "git.cmd").write_text(
+                "@echo forged>>\"%~dp0forged.log\"\r\n@exit /b 97\r\n",
+                encoding="ascii",
+            )
+            resolved_runners: list[Any] = []
+            original_resolve = (
+                archive_services.project_update_git_runner
+                .TrustedProjectUpdateGitRunner.resolve_preapproval
+            )
+
+            def observe_resolve(*args: Any, **kwargs: Any) -> Any:
+                runner = original_resolve(*args, **kwargs)
+                resolved_runners.append(runner)
+                return runner
+
+            def observe_git(
+                root: Path,
+                arguments: list[str],
+                **kwargs: Any,
+            ) -> tuple[bool, str]:
+                if (
+                    arguments
+                    and arguments[0] == "fetch"
+                    or kwargs.get("allow_transport_environment") is True
+                ):
+                    transport_phases.append(
+                        "after_approval"
+                        if approval_started
+                        else "before_approval"
+                    )
+                return original_git(root, arguments, **kwargs)
+
+            def observe_git_command(
+                command: list[str],
+                **kwargs: Any,
+            ) -> tuple[int, bytes] | None:
+                if "--no-optional-locks" in command and "-C" in command:
+                    observed_git_commands.append(
+                        (approval_started, list(command))
+                    )
+                return original_run_capped(command, **kwargs)
+
+            def capture_binding(plan: Any) -> Any:
+                prepared_plans.append(copy.deepcopy(dict(plan)))
+                return original_binding(plan)
+
+            def execute_approval(
+                root: Path,
+                context: Any,
+                writer: Any,
+                *,
+                claim_succeeded_finalizer: Any = None,
+            ) -> Any:
+                nonlocal approval_started
+                self.assertTrue(
+                    (fixture["metadata_root"] / "version-update.lock").is_file()
+                )
+                approval_started = True
+                previous_path = os.environ.get("PATH")
+                os.environ["PATH"] = str(forged_bin)
+                try:
+                    result = self.execute_test_exact_human_write(
+                        root,
+                        context,
+                        writer,
+                        claim_succeeded_finalizer=(
+                            claim_succeeded_finalizer
+                        ),
+                    )
+                    self.assertEqual(len(resolved_runners), 1)
+                    self.assertTrue(
+                        resolved_runners[0].public_summary()[
+                            "executable_handle_held"
+                        ]
+                    )
+                    return result
+                finally:
+                    if previous_path is None:
+                        os.environ.pop("PATH", None)
+                    else:
+                        os.environ["PATH"] = previous_path
+
             command = [
                 "project-version-update",
                 str(fixture["project_root"]),
@@ -8909,7 +10294,56 @@ class ArchiveCliTests(unittest.TestCase):
                 "--format",
                 "json",
             ]
-            code, stdout, stderr = self.run_cli_split(command)
+            with patch.object(
+                archive_services,
+                "_wom_kit_project_update_git",
+                side_effect=observe_git,
+            ), patch.object(
+                archive_services,
+                "wom_kit_project_update_runtime_policy",
+                return_value=artifacts["policy"],
+            ), patch.object(
+                archive_services,
+                "wom_kit_project_update_runtime_supply",
+                return_value=artifacts["supply"],
+            ), patch.object(
+                archive_services.project_runtime,
+                "bootstrap_wheel_for_target",
+                return_value=(
+                    artifacts["bootstrap"],
+                    artifacts["bootstrap_summary"],
+                ),
+            ), patch.object(
+                archive_services.project_runtime,
+                "_download_exact_artifact",
+                side_effect=artifacts["download"],
+            ), patch.object(
+                archive_services.project_runtime,
+                "_initialize_runtime_payload",
+                side_effect=self.initialize_fast_runtime_candidate,
+            ), patch.object(
+                archive_services.project_runtime,
+                "_verify_retained_artifacts",
+                side_effect=self.verify_fast_retained_runtime_artifacts,
+            ), patch.object(
+                archive_services,
+                "_wom_kit_project_update_run_capped",
+                side_effect=observe_git_command,
+            ), patch.object(
+                archive_cli.operation_approval_binding,
+                "project_version_update_approval_binding",
+                side_effect=capture_binding,
+            ), patch.object(
+                archive_cli,
+                "_execute_project_version_update_exact_human_approved_write",
+                side_effect=execute_approval,
+            ), patch.object(
+                archive_services.project_update_git_runner
+                .TrustedProjectUpdateGitRunner,
+                "resolve_preapproval",
+                side_effect=observe_resolve,
+            ):
+                code, stdout, stderr = self.run_cli_split(command)
             self.assertEqual(code, 0, stdout + stderr)
             result = json.loads(stdout)
             self.assertEqual(result["status"], "updated_restart_required")
@@ -8933,7 +10367,7 @@ class ArchiveCliTests(unittest.TestCase):
             )
             self.assertIn("project-preflight: start", stderr)
             self.assertIn("fetch-release: start", stderr)
-            self.assertIn("write-receipt: done", stderr)
+            self.assertIn("project-runtime-candidate-fast", stderr)
             self.assertEqual(
                 self.git_fixture_command(fixture["mirror"], "rev-parse", "HEAD"),
                 fixture["target_commit"],
@@ -8949,23 +10383,127 @@ class ArchiveCliTests(unittest.TestCase):
             receipt_document = json.loads(
                 receipts[0].read_text(encoding="utf-8")
             )
-            self.assertEqual(
-                receipt_document["operation_exact_human_approval"],
-                result["operation_exact_human_approval"],
+            self.assertNotIn(
+                "operation_exact_human_approval",
+                receipt_document,
             )
+            self.assertNotIn("approval_id", receipt_document)
             self.assertEqual(
-                receipt_document["operation_exact_human_approval"][
-                    "exact_human_approval"
-                ]["approval_id"],
-                result["exact_human_approval"]["approval_id"],
+                receipt_document["transaction_ref"] + ".json",
+                receipts[0].name,
             )
             self.assertFalse(
                 (fixture["metadata_root"] / "version-update.lock").exists()
             )
+            self.assertTrue(approval_started)
+            self.assertEqual(len(resolved_runners), 1)
+            self.assertFalse(
+                resolved_runners[0].public_summary()[
+                    "executable_handle_held"
+                ]
+            )
+            self.assertFalse(forged_log.exists())
+            self.assertEqual(transport_phases, ["before_approval"])
+            postapproval_git_commands = [
+                command
+                for after_approval, command in observed_git_commands
+                if after_approval
+            ]
+            self.assertTrue(postapproval_git_commands)
+            for git_command in postapproval_git_commands:
+                self.assertTrue(Path(git_command[0]).is_absolute())
+                self.assertNotEqual(git_command[0].casefold(), "git")
+                command_root_index = git_command.index("-C")
+                self.assertNotIn(
+                    git_command[command_root_index + 2],
+                    {"fetch", "ls-remote"},
+                )
+            self.assertEqual(len(prepared_plans), 1)
+            prepared = prepared_plans[0]
+            self.assertEqual(prepared["mode"], "approval_prepared")
+            self.assertEqual(prepared["status"], "ready_for_approval")
+            self.assertEqual(
+                prepared["target"]["target_commit"],
+                fixture["target_commit"],
+            )
+            self.assertTrue(
+                prepared["approval_preparation"]["lock_held"]
+            )
+            self.assertTrue(
+                prepared["approval_preparation"]["network_complete"]
+            )
+            self.assertFalse(
+                prepared["approval_preparation"][
+                    "post_approval_network_allowed"
+                ]
+            )
+            self.assertTrue(
+                prepared["approval_preparation"][
+                    "preapproval_control_writes_completed"
+                ]
+            )
+            self.assertFalse(
+                prepared["approval_preparation"][
+                    "preapproval_domain_writes_completed"
+                ]
+            )
+            self.assertTrue(
+                prepared["approval_preparation"][
+                    "fetched_refs_may_change"
+                ]
+            )
+            self.assertNotIn(
+                "durable_project_writes_completed",
+                prepared["approval_preparation"],
+            )
+            trusted_runner = prepared["approval_preparation"][
+                "trusted_git_runner"
+            ]
+            self.assertEqual(trusted_runner["phase"], "local_only")
+            self.assertFalse(trusted_runner["absolute_path_echoed"])
+            self.assertFalse(
+                trusted_runner["path_lookup_after_resolution"]
+            )
+            self.assertTrue(trusted_runner["executable_handle_held"])
+            self.assertFalse(
+                trusted_runner["postapproval_transport_allowed"]
+            )
+            self.assertNotIn("executable_path", trusted_runner)
+            self.assertNotIn(str(forged_bin), json.dumps(trusted_runner))
 
-            replay_code, replay_stdout, replay_stderr = self.run_cli_split(command)
-            replay = json.loads(replay_stdout)
+            with patch.object(
+                archive_services,
+                "wom_kit_project_update_runtime_policy",
+                return_value=artifacts["policy"],
+            ), patch.object(
+                archive_services,
+                "wom_kit_project_update_runtime_supply",
+                return_value=artifacts["supply"],
+            ), patch.object(
+                archive_services.project_runtime,
+                "bootstrap_wheel_for_target",
+                return_value=(
+                    artifacts["bootstrap"],
+                    artifacts["bootstrap_summary"],
+                ),
+            ), patch.object(
+                archive_services.project_runtime,
+                "_download_exact_artifact",
+                side_effect=artifacts["download"],
+            ), patch.object(
+                archive_services.project_runtime,
+                "_initialize_runtime_payload",
+                side_effect=self.initialize_fast_runtime_candidate,
+            ), patch.object(
+                archive_services.project_runtime,
+                "_verify_retained_artifacts",
+                side_effect=self.verify_fast_retained_runtime_artifacts,
+            ):
+                replay_code, replay_stdout, replay_stderr = (
+                    self.run_cli_split(command)
+                )
             self.assertEqual(replay_code, 0, replay_stdout + replay_stderr)
+            replay = json.loads(replay_stdout)
             self.assertEqual(replay["status"], "no_change")
             self.assertEqual(replay["files_written"], [])
             self.assertEqual(
@@ -8980,6 +10518,1755 @@ class ArchiveCliTests(unittest.TestCase):
                 ),
                 1,
             )
+
+    def test_project_version_update_cancel_after_preparation_releases_lock_without_project_write(
+        self,
+    ) -> None:
+        self.assertIsNotNone(shutil.which("git"))
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_root = Path(tmp)
+            fixture = self.create_project_version_update_fixture(
+                tmp_root,
+                project_runtime_policy=True,
+            )
+            artifacts = self.project_runtime_candidate_artifact_fixture(
+                tmp_root,
+                fixture,
+            )
+            metadata_root = fixture["metadata_root"]
+            pin_before = (metadata_root / "installed-version.txt").read_bytes()
+            head_before = self.git_fixture_command(
+                fixture["mirror"],
+                "rev-parse",
+                "HEAD",
+            )
+            status_before = self.git_fixture_command(
+                fixture["mirror"],
+                "status",
+                "--porcelain=v1",
+                "--untracked-files=all",
+            )
+            approval_observed = False
+            resolved_runners: list[Any] = []
+            original_resolve = (
+                archive_services.project_update_git_runner
+                .TrustedProjectUpdateGitRunner.resolve_preapproval
+            )
+
+            def observe_resolve(*args: Any, **kwargs: Any) -> Any:
+                runner = original_resolve(*args, **kwargs)
+                resolved_runners.append(runner)
+                return runner
+
+            def cancel_after_preparation(
+                _root: Path,
+                _context: Any,
+                _writer: Any,
+                **_kwargs: Any,
+            ) -> Any:
+                nonlocal approval_observed
+                approval_observed = True
+                self.assertTrue(
+                    (metadata_root / "version-update.lock").is_file()
+                )
+                raise archive_cli.ExactHumanApprovalWorkflowError(
+                    "exact_human_approval_cancelled"
+                )
+
+            with patch.object(
+                archive_cli,
+                "_execute_project_version_update_exact_human_approved_write",
+                side_effect=cancel_after_preparation,
+            ), patch.object(
+                archive_services,
+                "wom_kit_project_update_runtime_policy",
+                return_value=artifacts["policy"],
+            ), patch.object(
+                archive_services,
+                "wom_kit_project_update_runtime_supply",
+                return_value=artifacts["supply"],
+            ), patch.object(
+                archive_services.project_runtime,
+                "bootstrap_wheel_for_target",
+                return_value=(
+                    artifacts["bootstrap"],
+                    artifacts["bootstrap_summary"],
+                ),
+            ), patch.object(
+                archive_services.project_runtime,
+                "_download_exact_artifact",
+                side_effect=artifacts["download"],
+            ), patch.object(
+                archive_services.project_runtime,
+                "_initialize_runtime_payload",
+                side_effect=self.initialize_fast_runtime_candidate,
+            ), patch.object(
+                archive_services.project_runtime,
+                "_verify_retained_artifacts",
+                side_effect=self.verify_fast_retained_runtime_artifacts,
+            ), patch.object(
+                archive_services.project_update_git_runner
+                .TrustedProjectUpdateGitRunner,
+                "resolve_preapproval",
+                side_effect=observe_resolve,
+            ):
+                code, stdout, stderr = self.run_cli_split(
+                    [
+                        "project-version-update",
+                        str(fixture["project_root"]),
+                        "--target",
+                        fixture["target_tag"],
+                        "--approve",
+                        "--affirm-external-writers-quiescent",
+                        "--reviewed-by",
+                        "person:cancelled-update-reviewer",
+                        "--format",
+                        "json",
+                    ]
+                )
+
+            self.assertEqual(code, 1, stdout + stderr)
+            self.assertTrue(approval_observed)
+            self.assertEqual(stdout, "")
+            self.assertIn(
+                "failed before a privacy-safe result",
+                stderr,
+            )
+            self.assertEqual(
+                self.git_fixture_command(fixture["mirror"], "rev-parse", "HEAD"),
+                head_before,
+            )
+            self.assertEqual(
+                self.git_fixture_command(
+                    fixture["mirror"],
+                    "status",
+                    "--porcelain=v1",
+                    "--untracked-files=all",
+                ),
+                status_before,
+            )
+            self.assertEqual(
+                (metadata_root / "installed-version.txt").read_bytes(),
+                pin_before,
+            )
+            self.assertFalse((metadata_root / "version-update.lock").exists())
+            self.assertFalse(
+                (metadata_root / "receipts" / "version-updates").exists()
+            )
+            self.assertFalse(
+                (
+                    fixture["project_root"]
+                    / archive_services.project_runtime.PROJECT_RUNTIME_RELATIVE_ROOT
+                ).exists()
+            )
+            self.assertEqual(len(resolved_runners), 1)
+            self.assertFalse(
+                resolved_runners[0].public_summary()[
+                    "executable_handle_held"
+                ]
+            )
+
+    def test_project_version_update_fetch_preparation_failure_never_opens_approval_or_writes(
+        self,
+    ) -> None:
+        self.assertIsNotNone(shutil.which("git"))
+        with tempfile.TemporaryDirectory() as tmp:
+            fixture = self.create_project_version_update_fixture(Path(tmp))
+            metadata_root = fixture["metadata_root"]
+            pin_before = (metadata_root / "installed-version.txt").read_bytes()
+            head_before = self.git_fixture_command(
+                fixture["mirror"],
+                "rev-parse",
+                "HEAD",
+            )
+            original_git = archive_services._wom_kit_project_update_git
+            resolved_runners: list[Any] = []
+            original_resolve = (
+                archive_services.project_update_git_runner
+                .TrustedProjectUpdateGitRunner.resolve_preapproval
+            )
+
+            def observe_resolve(*args: Any, **kwargs: Any) -> Any:
+                runner = original_resolve(*args, **kwargs)
+                resolved_runners.append(runner)
+                return runner
+
+            def fail_fetch(
+                root: Path,
+                arguments: list[str],
+                **kwargs: Any,
+            ) -> tuple[bool, str]:
+                if arguments and arguments[0] == "fetch":
+                    return False, ""
+                return original_git(root, arguments, **kwargs)
+
+            with patch.object(
+                archive_services,
+                "_wom_kit_project_update_git",
+                side_effect=fail_fetch,
+            ), patch.object(
+                archive_cli,
+                "_execute_project_version_update_exact_human_approved_write",
+            ) as approval, patch.object(
+                archive_services.project_update_git_runner
+                .TrustedProjectUpdateGitRunner,
+                "resolve_preapproval",
+                side_effect=observe_resolve,
+            ):
+                code, output = self.run_cli(
+                    [
+                        "project-version-update",
+                        str(fixture["project_root"]),
+                        "--target",
+                        fixture["target_tag"],
+                        "--approve",
+                        "--affirm-external-writers-quiescent",
+                        "--reviewed-by",
+                        "person:fetch-failure-reviewer",
+                        "--format",
+                        "json",
+                    ]
+                )
+
+            approval.assert_not_called()
+            self.assertEqual(code, 1, output)
+            result = json.loads(output)
+            self.assertEqual(result["status"], "blocked")
+            self.assertTrue(result["fetch"]["attempted"])
+            self.assertFalse(result["fetch"]["succeeded"])
+            self.assertEqual(result["files_written"], [])
+            self.assertEqual(
+                self.git_fixture_command(fixture["mirror"], "rev-parse", "HEAD"),
+                head_before,
+            )
+            self.assertEqual(
+                (metadata_root / "installed-version.txt").read_bytes(),
+                pin_before,
+            )
+            self.assertFalse((metadata_root / "version-update.lock").exists())
+            self.assertFalse(
+                (metadata_root / "receipts" / "version-updates").exists()
+            )
+            self.assertEqual(len(resolved_runners), 1)
+            self.assertFalse(
+                resolved_runners[0].public_summary()[
+                    "executable_handle_held"
+                ]
+            )
+
+    def test_project_version_update_postapproval_ref_pin_and_policy_drift_block_before_writer(
+        self,
+    ) -> None:
+        self.assertIsNotNone(shutil.which("git"))
+        for drift_kind in ("ref", "pin", "policy"):
+            with self.subTest(drift_kind=drift_kind), tempfile.TemporaryDirectory() as tmp:
+                fixture = self.create_project_version_update_fixture(
+                    Path(tmp),
+                    project_runtime_policy=True,
+                )
+                artifacts = self.project_runtime_candidate_artifact_fixture(
+                    Path(tmp),
+                    fixture,
+                )
+                metadata_root = fixture["metadata_root"]
+                head_before = self.git_fixture_command(
+                    fixture["mirror"],
+                    "rev-parse",
+                    "HEAD",
+                )
+                pin_before = (
+                    metadata_root / "installed-version.txt"
+                ).read_bytes()
+                policy_drifted = False
+                approval_started = False
+                original_git = archive_services._wom_kit_project_update_git
+                transport_after_approval: list[list[str]] = []
+
+                def observe_git(
+                    root: Path,
+                    arguments: list[str],
+                    **kwargs: Any,
+                ) -> tuple[bool, str]:
+                    if (
+                        approval_started
+                        and (
+                            arguments
+                            and arguments[0] == "fetch"
+                            or kwargs.get("allow_transport_environment") is True
+                        )
+                    ):
+                        transport_after_approval.append(list(arguments))
+                    return original_git(root, arguments, **kwargs)
+
+                def policy_with_drift(
+                    *args: Any,
+                    **kwargs: Any,
+                ) -> dict[str, Any]:
+                    del args, kwargs
+                    result = dict(artifacts["policy"])
+                    if policy_drifted:
+                        result["policy_sha256"] = "sha256:" + "9" * 64
+                    return result
+
+                def approve_after_drift(
+                    root: Path,
+                    context: Any,
+                    writer: Any,
+                    *,
+                    claim_succeeded_finalizer: Any = None,
+                ) -> Any:
+                    nonlocal approval_started, policy_drifted
+                    approval_started = True
+                    self.assertTrue(
+                        (metadata_root / "version-update.lock").is_file()
+                    )
+                    if drift_kind == "ref":
+                        self.git_fixture_command(
+                            fixture["mirror"],
+                            "update-ref",
+                            f"refs/tags/{fixture['target_tag']}",
+                            fixture["old_commit"],
+                        )
+                    elif drift_kind == "pin":
+                        (metadata_root / "installed-version.txt").write_bytes(
+                            (fixture["target_tag"] + "\n").encode("utf-8")
+                        )
+                    else:
+                        policy_drifted = True
+                    return self.execute_test_exact_human_write(
+                        root,
+                        context,
+                        writer,
+                        claim_succeeded_finalizer=(
+                            claim_succeeded_finalizer
+                        ),
+                    )
+
+                with self.fast_project_runtime_candidate_patches(
+                    artifacts
+                ), patch.object(
+                    archive_services,
+                    "_wom_kit_project_update_git",
+                    side_effect=observe_git,
+                ), patch.object(
+                    archive_services,
+                    "wom_kit_project_update_runtime_policy",
+                    side_effect=policy_with_drift,
+                ), patch.object(
+                    archive_cli,
+                    "_execute_project_version_update_exact_human_approved_write",
+                    side_effect=approve_after_drift,
+                ):
+                    code, stdout, stderr = self.run_cli_split(
+                        [
+                            "project-version-update",
+                            str(fixture["project_root"]),
+                            "--target",
+                            fixture["target_tag"],
+                            "--approve",
+                            "--affirm-external-writers-quiescent",
+                            "--reviewed-by",
+                            f"person:{drift_kind}-drift-reviewer",
+                            "--format",
+                            "json",
+                        ]
+                    )
+
+                self.assertEqual(code, 1, stdout + stderr)
+                self.assertEqual(stdout, "")
+                self.assertIn("failed before a privacy-safe result", stderr)
+                self.assertEqual(transport_after_approval, [])
+                self.assertEqual(
+                    self.git_fixture_command(
+                        fixture["mirror"],
+                        "rev-parse",
+                        "HEAD",
+                    ),
+                    head_before,
+                )
+                expected_pin = (
+                    (fixture["target_tag"] + "\n").encode("utf-8")
+                    if drift_kind == "pin"
+                    else pin_before
+                )
+                self.assertEqual(
+                    (metadata_root / "installed-version.txt").read_bytes(),
+                    expected_pin,
+                )
+                self.assertTrue(
+                    (metadata_root / "version-update.lock").is_file()
+                )
+                self.assertFalse(
+                    (
+                        metadata_root
+                        / "receipts"
+                        / "version-updates"
+                    ).exists()
+                )
+                self.assertFalse(
+                    archive_services.project_runtime.runtime_path(
+                        fixture["project_root"],
+                        fixture["target_version"],
+                    ).exists()
+                )
+
+    def test_project_version_update_bundle_progress_drift_blocks_before_native_approval(
+        self,
+    ) -> None:
+        self.assertIsNotNone(shutil.which("git"))
+        for drift_kind in ("ref", "pin", "policy"):
+            with self.subTest(drift_kind=drift_kind), tempfile.TemporaryDirectory() as tmp:
+                fixture = self.create_project_version_update_fixture(
+                    Path(tmp),
+                    project_runtime_policy=True,
+                )
+                artifacts = self.project_runtime_candidate_artifact_fixture(
+                    Path(tmp),
+                    fixture,
+                )
+                metadata_root = fixture["metadata_root"]
+                head_before = self.git_fixture_command(
+                    fixture["mirror"],
+                    "rev-parse",
+                    "HEAD",
+                )
+                pin_before = (
+                    metadata_root / "installed-version.txt"
+                ).read_bytes()
+                policy_drifted = False
+
+                def policy_with_drift(
+                    *args: Any,
+                    **kwargs: Any,
+                ) -> dict[str, Any]:
+                    del args, kwargs
+                    result = dict(artifacts["policy"])
+                    if policy_drifted:
+                        result["policy_sha256"] = "sha256:" + "9" * 64
+                    return result
+
+                def drift_progress(
+                    stage: str,
+                    _event: str,
+                    _current: int | None,
+                    _total: int | None,
+                ) -> None:
+                    nonlocal policy_drifted
+                    if stage != "project-runtime-test-bundle-complete":
+                        return
+                    if drift_kind == "ref":
+                        self.git_fixture_command(
+                            fixture["mirror"],
+                            "update-ref",
+                            f"refs/tags/{fixture['target_tag']}",
+                            fixture["old_commit"],
+                        )
+                    elif drift_kind == "pin":
+                        (metadata_root / "installed-version.txt").write_bytes(
+                            (fixture["target_tag"] + "\n").encode("utf-8")
+                        )
+                    else:
+                        policy_drifted = True
+
+                def initialize_with_progress(*args: Any, **kwargs: Any) -> Any:
+                    initialized = self.initialize_fast_runtime_candidate(
+                        *args,
+                        **kwargs,
+                    )
+                    progress_callback = kwargs.get("progress_callback")
+                    self.assertIsNotNone(progress_callback)
+                    progress_callback(
+                        "project-runtime-test-bundle-complete",
+                        "done",
+                        1,
+                        1,
+                    )
+                    return initialized
+
+                command = [
+                    "project-version-update",
+                    str(fixture["project_root"]),
+                    "--target",
+                    fixture["target_tag"],
+                    "--approve",
+                    "--affirm-external-writers-quiescent",
+                    "--reviewed-by",
+                    f"person:preapproval-{drift_kind}-reviewer",
+                    "--format",
+                    "json",
+                ]
+                with self.fast_project_runtime_candidate_patches(
+                    artifacts,
+                    initializer=initialize_with_progress,
+                ), patch.object(
+                    archive_cli,
+                    "operation_progress_callback",
+                    return_value=drift_progress,
+                ), patch.object(
+                    archive_services,
+                    "wom_kit_project_update_runtime_policy",
+                    side_effect=policy_with_drift,
+                ), patch.object(
+                    archive_services.project_runtime,
+                    "promote_runtime_candidate",
+                ) as materialize, patch.object(
+                    archive_cli,
+                    "_execute_project_version_update_exact_human_approved_write",
+                ) as approval:
+                    code, output = self.run_cli(command)
+
+                approval.assert_not_called()
+                materialize.assert_not_called()
+                self.assertEqual(code, 1, output)
+                result = json.loads(output)
+                self.assertEqual(result["status"], "blocked")
+                self.assertIn(
+                    "project_version_update_state_changed_during_runtime_preparation",
+                    result["blockers"],
+                )
+                self.assertEqual(result["files_written"], [])
+                self.assertEqual(result["pins"]["written_paths"], [])
+                self.assertFalse(result["receipt"]["written"])
+                self.assertTrue(
+                    result["rollback"]["prepared_runtime_bundle_removed"]
+                )
+                self.assertFalse(
+                    (metadata_root / "version-update.lock").exists()
+                )
+                self.assertEqual(
+                    self.git_fixture_command(
+                        fixture["mirror"],
+                        "rev-parse",
+                        "HEAD",
+                    ),
+                    head_before,
+                )
+                expected_pin = (
+                    (fixture["target_tag"] + "\n").encode("utf-8")
+                    if drift_kind == "pin"
+                    else pin_before
+                )
+                self.assertEqual(
+                    (metadata_root / "installed-version.txt").read_bytes(),
+                    expected_pin,
+                )
+                self.assertFalse(
+                    (metadata_root / "receipts" / "version-updates").exists()
+                )
+
+    def test_project_version_update_policy_materializes_and_activates_project_runtime(
+        self,
+    ) -> None:
+        # Runtime activation is exercised by the durable end-to-end test.  This
+        # focused contract test keeps the transaction-owned v0.3 disk receipt
+        # deterministic and closed to every dynamic approval/claim field.
+        schema_document = json.loads(
+            (
+                KIT_ROOT
+                / "schemas"
+                / "project-version-update-receipt-v0.3.schema.json"
+            ).read_text(encoding="utf-8")
+        )
+        packaged_schema_document = json.loads(
+            (
+                KIT_ROOT
+                / "src"
+                / "wom_kit"
+                / "_resources"
+                / "schemas"
+                / "project-version-update-receipt-v0.3.schema.json"
+            ).read_text(encoding="utf-8")
+        )
+        self.assertEqual(schema_document, packaged_schema_document)
+
+        digest_a = "sha256:" + ("a" * 64)
+        digest_b = "sha256:" + ("b" * 64)
+        digest_c = "sha256:" + ("c" * 64)
+        digest_d = "sha256:" + ("d" * 64)
+        commit_before = "1" * 40
+        commit_after = "2" * 40
+        receipt = {
+            "schema": "wom-kit/project-version-update-receipt/v0.3",
+            "action": "project_version_update",
+            "status": "updated_restart_required",
+            "timestamp": "2026-08-23T12:34:56Z",
+            "reviewed_by": "person:project-runtime-reviewer",
+            "target_tag": "v0.4.3",
+            "target_version": "0.4.3",
+            "source_mirror": ".zettel-kasten/source",
+            "head_commit_before": commit_before,
+            "head_commit_after": commit_after,
+            "source_checkout_changed": True,
+            "runtime_source_materialization": {
+                "attempted": True,
+                "succeeded": True,
+                "target_integrity_verified": True,
+            },
+            "external_writer_quiescence": {
+                "affirmed": True,
+                "scope": "complete_project_version_update_transaction",
+            },
+            "pins_written": [
+                ".zettel-kasten/installed-version.txt",
+                ".zettel-kasten/source/installed-version.txt",
+            ],
+            "pin_transitions": [
+                {
+                    "path": ".zettel-kasten/installed-version.txt",
+                    "previous_version": "v0.4.2",
+                    "new_version": "v0.4.3",
+                    "written": True,
+                },
+                {
+                    "path": ".zettel-kasten/source/installed-version.txt",
+                    "previous_version": "v0.4.2",
+                    "new_version": "v0.4.3",
+                    "written": True,
+                },
+            ],
+            "configured_origin": {
+                "remote_name": "origin",
+                "atomic_fetch_succeeded": True,
+                "target_reachable_from_origin_main": True,
+                "annotated_tag_verified": True,
+                "cryptographic_tag_signature_verified": False,
+                "remote_url_echoed": False,
+            },
+            "project_runtime": {
+                "policy_schema": "wom-kit/project-runtime-policy/v0.1",
+                "policy_sha256": digest_a,
+                "path": ".zettel-kasten/runtimes/v0.4.3",
+                "launcher_path": ".zettel-kasten/bin/archive.cmd",
+                "project_runtime_argv": [r".\.zettel-kasten\bin\archive.cmd"],
+                "target_tag": "v0.4.3",
+                "target_version": "0.4.3",
+                "target_commit": commit_after,
+                "wheel_sha256": digest_b,
+                "supply_lock_sha256": digest_c,
+                "runtime_receipt_sha256": digest_d,
+                "artifact_inventory": [
+                    {
+                        "role": "runtime",
+                        "distribution": "wom-kit",
+                        "version": "0.4.3",
+                        "file_name": "wom_kit-0.4.3-py3-none-any.whl",
+                        "size_bytes": 123,
+                        "sha256": digest_b,
+                    },
+                    {
+                        "role": "dependency",
+                        "distribution": "dependency",
+                        "version": "1.2.3",
+                        "file_name": "dependency-1.2.3-py3-none-any.whl",
+                        "size_bytes": 456,
+                        "sha256": digest_c,
+                    },
+                ],
+                "installed_payload_sha256": digest_a,
+                "python_version": "3.12.10",
+                "created": True,
+                "launcher_written": True,
+                "verification": {
+                    "wheel_sha256": True,
+                    "pip_check": True,
+                    "version": True,
+                    "package_resources": True,
+                    "new_process": True,
+                    "supply_lock": True,
+                    "artifact_hashes": True,
+                    "artifact_sizes": True,
+                    "artifact_inventory": True,
+                    "installed_payload": True,
+                    "live_process": True,
+                },
+                "new_process_verified": True,
+                "global_path_mutation": False,
+                "previous_runtime_deleted": False,
+            },
+            "runtime": {
+                "running_version_before": "0.4.2",
+                "running_process_reloaded": False,
+                "restart_required": True,
+            },
+            "transaction_ref": "update_" + ("3" * 32),
+            # These are acyclic domain manifest/target-set digests.  They are
+            # deliberately not the final native approval binding digests.
+            "plan_sha256": digest_b,
+            "target_binding_sha256": digest_c,
+            "approval_evidence_contract": {
+                "embedded_dynamic_claim_reference": False,
+                "authenticated_succeeded_claim_required": True,
+                "transaction_journal_checkpoint": "claim_succeeded",
+                "domain_writer_reentry_on_succeeded_tail_allowed": False,
+            },
+            "privacy_guards": {
+                "local_absolute_paths_echoed": False,
+                "remote_urls_echoed": False,
+                "credential_values_echoed": False,
+                "archive_body_text_read": False,
+                "objet_bytes_read": False,
+            },
+        }
+
+        from jsonschema import Draft202012Validator
+
+        validator = Draft202012Validator(schema_document)
+
+        def assert_rejected(value: Mapping[str, Any]) -> None:
+            self.assertTrue(list(validator.iter_errors(value)))
+            self.assertTrue(
+                archive_services.validate_schema(
+                    value,
+                    "project-version-update-receipt-v0.3.schema.json",
+                )
+            )
+
+        self.assertEqual(list(validator.iter_errors(receipt)), [])
+        self.assertEqual(
+            archive_services.validate_schema(
+                receipt,
+                "project-version-update-receipt-v0.3.schema.json",
+            ),
+            [],
+        )
+        canonical_once = archive_services._project_update_canonical_bytes(
+            receipt
+        )
+        canonical_twice = archive_services._project_update_canonical_bytes(
+            copy.deepcopy(receipt)
+        )
+        self.assertEqual(canonical_once, canonical_twice)
+        self.assertNotIn("operation_exact_human_approval", receipt)
+        self.assertNotIn("approval_id", receipt)
+        self.assertNotIn("final_approval_plan_sha256", receipt)
+
+        for dynamic_field in (
+            "operation_exact_human_approval",
+            "approval_id",
+            "final_approval_plan_sha256",
+            "final_approval_target_binding_sha256",
+        ):
+            with self.subTest(dynamic_field=dynamic_field):
+                broken = copy.deepcopy(receipt)
+                broken[dynamic_field] = "forbidden"
+                assert_rejected(broken)
+
+        for required_field in (
+            "transaction_ref",
+            "plan_sha256",
+            "target_binding_sha256",
+            "approval_evidence_contract",
+        ):
+            with self.subTest(missing=required_field):
+                broken = copy.deepcopy(receipt)
+                del broken[required_field]
+                assert_rejected(broken)
+
+        invalid_values = (
+            ("transaction_ref", False),
+            ("plan_sha256", None),
+            ("target_binding_sha256", 7),
+        )
+        for field, invalid in invalid_values:
+            with self.subTest(invalid=field):
+                broken = copy.deepcopy(receipt)
+                broken[field] = invalid
+                assert_rejected(broken)
+
+        for field, invalid in (
+            ("embedded_dynamic_claim_reference", True),
+            ("authenticated_succeeded_claim_required", False),
+            ("transaction_journal_checkpoint", "approval_bound"),
+            ("domain_writer_reentry_on_succeeded_tail_allowed", True),
+        ):
+            with self.subTest(contract_mutation=field):
+                broken = copy.deepcopy(receipt)
+                broken["approval_evidence_contract"][field] = invalid
+                assert_rejected(broken)
+
+        closed_world_targets = (
+            (),
+            ("runtime_source_materialization",),
+            ("external_writer_quiescence",),
+            ("pin_transitions", 0),
+            ("configured_origin",),
+            ("project_runtime",),
+            ("project_runtime", "verification"),
+            ("runtime",),
+            ("approval_evidence_contract",),
+            ("privacy_guards",),
+        )
+        for path in closed_world_targets:
+            with self.subTest(closed_world=path):
+                broken = copy.deepcopy(receipt)
+                target = broken
+                for part in path:
+                    target = target[part]
+                target["unapproved_extra"] = True
+                assert_rejected(broken)
+
+    def test_project_version_update_holds_archive_root_file_and_claim_parent_before_claim(
+        self,
+    ) -> None:
+        self.assertIsNotNone(shutil.which("git"))
+        for attack_kind in (
+            "same_id_archive_file_replace",
+            "archive_root_rename",
+            "claims_parent_rename",
+        ):
+            with self.subTest(attack_kind=attack_kind), tempfile.TemporaryDirectory() as tmp:
+                fixture = self.create_project_version_update_fixture(
+                    Path(tmp),
+                    project_runtime_policy=True,
+                )
+                artifacts = self.project_runtime_candidate_artifact_fixture(
+                    Path(tmp),
+                    fixture,
+                )
+                metadata_root = fixture["metadata_root"]
+                archive_root = fixture["archive_root"]
+                head_before = self.git_fixture_command(
+                    fixture["mirror"],
+                    "rev-parse",
+                    "HEAD",
+                )
+                pin_before = (
+                    metadata_root / "installed-version.txt"
+                ).read_bytes()
+                archive_bytes = (archive_root / "archive.yml").read_bytes()
+                replacement = archive_root / "same-id-replacement.yml"
+                replacement.write_bytes(archive_bytes)
+                approval_reached = False
+
+                def attack_before_claim(
+                    root: Path,
+                    _context: Any,
+                    _writer: Any,
+                    *,
+                    claim_succeeded_finalizer: Any = None,
+                ) -> Any:
+                    del claim_succeeded_finalizer
+                    nonlocal approval_reached
+                    approval_reached = True
+                    try:
+                        if attack_kind == "same_id_archive_file_replace":
+                            os.replace(replacement, root / "archive.yml")
+                        elif attack_kind == "archive_root_rename":
+                            moved = root.with_name(root.name + "-moved")
+                            os.replace(root, moved)
+                            os.replace(moved, root)
+                        else:
+                            with (
+                                archive_cli
+                                ._project_version_update_post_decision_boundary(
+                                    root
+                                )
+                            ):
+                                claims_parent = (
+                                    root
+                                    / "profiles"
+                                    / "local"
+                                    / "exact-human-approvals"
+                                    / "claims"
+                                )
+                                self.assertTrue(claims_parent.is_dir())
+                                moved = claims_parent.with_name(
+                                    "claims-moved"
+                                )
+                                os.replace(claims_parent, moved)
+                                os.replace(moved, claims_parent)
+                    except OSError:
+                        pass
+                    else:
+                        self.fail("a held approval authority was replaceable")
+                    raise archive_cli.ExactHumanApprovalWorkflowError(
+                        "exact_human_approval_cancelled"
+                    )
+
+                command = [
+                    "project-version-update",
+                    str(fixture["project_root"]),
+                    "--target",
+                    fixture["target_tag"],
+                    "--approve",
+                    "--affirm-external-writers-quiescent",
+                    "--reviewed-by",
+                    f"person:{attack_kind}-reviewer",
+                    "--format",
+                    "json",
+                ]
+                with self.fast_project_runtime_candidate_patches(
+                    artifacts
+                ), patch.object(
+                    archive_services.project_runtime,
+                    "promote_runtime_candidate",
+                ) as materialize, patch.object(
+                    archive_cli,
+                    "_execute_project_version_update_exact_human_approved_write",
+                    side_effect=attack_before_claim,
+                ):
+                    code, stdout, stderr = self.run_cli_split(command)
+
+                self.assertEqual(code, 1, stdout + stderr)
+                self.assertEqual(stdout, "")
+                self.assertTrue(approval_reached)
+                self.assertIn(
+                    "failed before a privacy-safe result",
+                    stderr,
+                )
+                materialize.assert_not_called()
+                self.assertFalse(
+                    (metadata_root / "version-update.lock").exists()
+                )
+                self.assertEqual(
+                    self.git_fixture_command(
+                        fixture["mirror"],
+                        "rev-parse",
+                        "HEAD",
+                    ),
+                    head_before,
+                )
+                self.assertEqual(
+                    (metadata_root / "installed-version.txt").read_bytes(),
+                    pin_before,
+                )
+                self.assertEqual(
+                    (archive_root / "archive.yml").read_bytes(),
+                    archive_bytes,
+                )
+                self.assertFalse(
+                    (
+                        metadata_root
+                        / "receipts"
+                        / "version-updates"
+                    ).exists()
+                )
+                self.assertFalse(
+                    (
+                        fixture["project_root"]
+                        / archive_services.project_runtime.PROJECT_RUNTIME_RELATIVE_ROOT
+                    ).exists()
+                )
+
+    def test_project_version_update_continuation_rejects_same_id_different_approval_root(
+        self,
+    ) -> None:
+        self.assertIsNotNone(shutil.which("git"))
+        with tempfile.TemporaryDirectory() as tmp:
+            fixture = self.create_project_version_update_fixture(
+                Path(tmp),
+                project_runtime_policy=True,
+            )
+            artifacts = self.project_runtime_candidate_artifact_fixture(
+                Path(tmp),
+                fixture,
+            )
+            metadata_root = fixture["metadata_root"]
+            head_before = self.git_fixture_command(
+                fixture["mirror"],
+                "rev-parse",
+                "HEAD",
+            )
+            pin_before = (
+                metadata_root / "installed-version.txt"
+            ).read_bytes()
+            alternate_root = fixture["project_root"] / "alternate-archive"
+            alternate_root.mkdir()
+            (alternate_root / "archive.yml").write_bytes(
+                (fixture["archive_root"] / "archive.yml").read_bytes()
+            )
+            original_resolver = (
+                archive_services
+                .wom_kit_project_version_update_approval_archive_root
+            )
+            resolver_calls = 0
+
+            def change_root_for_continuation(
+                inspection_root: Path | str,
+            ) -> Path:
+                nonlocal resolver_calls
+                resolver_calls += 1
+                if approval_started:
+                    return alternate_root
+                return original_resolver(inspection_root)
+
+            approval_started = False
+
+            def execute_approval(
+                root: Path,
+                context: Any,
+                writer: Any,
+                *,
+                claim_succeeded_finalizer: Any = None,
+            ) -> Any:
+                nonlocal approval_started
+                approval_started = True
+                return self.execute_test_exact_human_write(
+                    root,
+                    context,
+                    writer,
+                    claim_succeeded_finalizer=(
+                        claim_succeeded_finalizer
+                    ),
+                )
+
+            command = [
+                "project-version-update",
+                str(fixture["project_root"]),
+                "--target",
+                fixture["target_tag"],
+                "--approve",
+                "--affirm-external-writers-quiescent",
+                "--reviewed-by",
+                "person:approval-root-drift-reviewer",
+                "--format",
+                "json",
+            ]
+            with self.fast_project_runtime_candidate_patches(
+                artifacts
+            ), patch.object(
+                archive_services,
+                "wom_kit_project_version_update_approval_archive_root",
+                side_effect=change_root_for_continuation,
+            ), patch.object(
+                archive_services.project_runtime,
+                "promote_runtime_candidate",
+            ) as materialize, patch.object(
+                archive_cli,
+                "_execute_project_version_update_exact_human_approved_write",
+                side_effect=execute_approval,
+            ):
+                code, stdout, stderr = self.run_cli_split(command)
+
+            self.assertEqual(code, 1, stdout + stderr)
+            self.assertEqual(stdout, "")
+            self.assertIn("failed before a privacy-safe result", stderr)
+            self.assertTrue(approval_started)
+            self.assertGreaterEqual(resolver_calls, 2)
+            materialize.assert_not_called()
+            self.assertTrue(
+                (metadata_root / "version-update.lock").is_file()
+            )
+            self.assertEqual(
+                self.git_fixture_command(
+                    fixture["mirror"],
+                    "rev-parse",
+                    "HEAD",
+                ),
+                head_before,
+            )
+            self.assertEqual(
+                (metadata_root / "installed-version.txt").read_bytes(),
+                pin_before,
+            )
+            self.assertFalse(
+                (metadata_root / "receipts" / "version-updates").exists()
+            )
+
+    @unittest.skipUnless(
+        os.name == "nt",
+        "project approval rename protection uses Windows non-delete-sharing handles",
+    )
+    def test_project_version_update_progress_callback_cannot_replace_held_archive_file(
+        self,
+    ) -> None:
+        self.assertIsNotNone(shutil.which("git"))
+        with tempfile.TemporaryDirectory() as tmp:
+            fixture = self.create_project_version_update_fixture(
+                Path(tmp),
+                project_runtime_policy=True,
+            )
+            artifacts = self.project_runtime_candidate_artifact_fixture(
+                Path(tmp),
+                fixture,
+            )
+            metadata_root = fixture["metadata_root"]
+            archive_root = fixture["archive_root"]
+            archive_bytes = (archive_root / "archive.yml").read_bytes()
+            replacement = archive_root / "same-id-progress-replacement.yml"
+            replacement.write_bytes(archive_bytes)
+            head_before = self.git_fixture_command(
+                fixture["mirror"],
+                "rev-parse",
+                "HEAD",
+            )
+            pin_before = (
+                metadata_root / "installed-version.txt"
+            ).read_bytes()
+            progress_attacked = False
+
+            def attack_progress(
+                stage: str,
+                _event: str,
+                _current: int | None,
+                _total: int | None,
+            ) -> None:
+                nonlocal progress_attacked
+                if stage != "test-approval-root-after-bundle":
+                    return
+                progress_attacked = True
+                try:
+                    os.replace(replacement, archive_root / "archive.yml")
+                except OSError:
+                    return
+                self.fail("a held archive.yml was replaceable from progress")
+
+            def initialize_and_attack(*args: Any, **kwargs: Any) -> Any:
+                initialized = self.initialize_fast_runtime_candidate(
+                    *args,
+                    **kwargs,
+                )
+                progress_callback = kwargs.get("progress_callback")
+                self.assertIsNotNone(progress_callback)
+                progress_callback(
+                    "test-approval-root-after-bundle",
+                    "done",
+                    1,
+                    1,
+                )
+                return initialized
+
+            def cancel_after_blocked_attack(
+                _root: Path,
+                _context: Any,
+                _writer: Any,
+                **_kwargs: Any,
+            ) -> Any:
+                raise archive_cli.ExactHumanApprovalWorkflowError(
+                    "exact_human_approval_cancelled"
+                )
+
+            command = [
+                "project-version-update",
+                str(fixture["project_root"]),
+                "--target",
+                fixture["target_tag"],
+                "--approve",
+                "--affirm-external-writers-quiescent",
+                "--reviewed-by",
+                "person:progress-archive-root-reviewer",
+                "--format",
+                "json",
+            ]
+            with self.fast_project_runtime_candidate_patches(
+                artifacts,
+                initializer=initialize_and_attack,
+            ), patch.object(
+                archive_cli,
+                "operation_progress_callback",
+                return_value=attack_progress,
+            ), patch.object(
+                archive_services.project_runtime,
+                "promote_runtime_candidate",
+            ) as materialize, patch.object(
+                archive_cli,
+                "_execute_project_version_update_exact_human_approved_write",
+                side_effect=cancel_after_blocked_attack,
+            ) as approval:
+                code, stdout, stderr = self.run_cli_split(command)
+
+            self.assertEqual(code, 1, stdout + stderr)
+            self.assertTrue(progress_attacked)
+            self.assertEqual(stdout, "")
+            self.assertIn("failed before a privacy-safe result", stderr)
+            materialize.assert_not_called()
+            approval.assert_called_once()
+            self.assertFalse(
+                (metadata_root / "version-update.lock").exists()
+            )
+            self.assertEqual(
+                self.git_fixture_command(
+                    fixture["mirror"],
+                    "rev-parse",
+                    "HEAD",
+                ),
+                head_before,
+            )
+            self.assertEqual(
+                (metadata_root / "installed-version.txt").read_bytes(),
+                pin_before,
+            )
+            self.assertEqual(
+                (archive_root / "archive.yml").read_bytes(),
+                archive_bytes,
+            )
+
+    def test_project_runtime_policy_hash_binds_exact_git_blob_bytes(self) -> None:
+        self.assertIsNotNone(shutil.which("git"))
+        with tempfile.TemporaryDirectory() as tmp:
+            fixture = self.create_project_version_update_fixture(
+                Path(tmp),
+                project_runtime_policy=True,
+            )
+            object_spec = (
+                f"{fixture['target_commit']}:wom-kit/project-runtime-policy.json"
+            )
+            raw = subprocess.check_output(
+                [
+                    "git",
+                    "-C",
+                    str(fixture["upstream"]),
+                    "cat-file",
+                    "blob",
+                    object_spec,
+                ]
+            )
+            self.assertTrue(raw.endswith(b"\n"))
+
+            policy = archive_services.wom_kit_project_update_runtime_policy(
+                fixture["upstream"],
+                fixture["target_commit"],
+                runner=self.trusted_project_update_git_runner(),
+            )
+
+            self.assertEqual(policy["state"], "required")
+            self.assertTrue(policy["required"])
+            self.assertEqual(
+                policy["policy_sha256"],
+                "sha256:" + hashlib.sha256(raw).hexdigest(),
+            )
+            self.assertNotEqual(
+                policy["policy_sha256"],
+                "sha256:" + hashlib.sha256(raw.rstrip(b"\r\n")).hexdigest(),
+            )
+
+    def test_project_runtime_component_failure_preserves_lock_and_checkpoints_before_active_pin(
+        self,
+    ) -> None:
+        self.assertIsNotNone(shutil.which("git"))
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_root = Path(tmp)
+            fixture = self.create_project_version_update_fixture(
+                tmp_root,
+                project_runtime_policy=True,
+            )
+            artifacts = self.project_runtime_candidate_artifact_fixture(
+                tmp_root,
+                fixture,
+            )
+            metadata_root = fixture["metadata_root"]
+            old_active_pin = (
+                metadata_root / "installed-version.txt"
+            ).read_bytes()
+            original_perform = (
+                archive_services._project_update_perform_component
+            )
+            attempted_roles: list[str] = []
+
+            def fail_at_active_pin(state: Any, component: Any) -> None:
+                attempted_roles.append(component.role)
+                if component.role == "active_pin":
+                    raise archive_services.ArchiveServiceError(
+                        "synthetic_active_pin_failure"
+                    )
+                original_perform(state, component)
+
+            def execute_approval(
+                root: Path,
+                context: Any,
+                writer: Any,
+                *,
+                claim_succeeded_finalizer: Any = None,
+            ) -> Any:
+                return self.execute_test_exact_human_write(
+                    root,
+                    context,
+                    writer,
+                    claim_succeeded_finalizer=(
+                        claim_succeeded_finalizer
+                    ),
+                )
+
+            command = [
+                "project-version-update",
+                str(fixture["project_root"]),
+                "--target",
+                fixture["target_tag"],
+                "--approve",
+                "--affirm-external-writers-quiescent",
+                "--reviewed-by",
+                "person:project-runtime-checkpoint-reviewer",
+                "--format",
+                "json",
+            ]
+            with self.fast_project_runtime_candidate_patches(
+                artifacts
+            ), patch.object(
+                archive_services,
+                "_project_update_perform_component",
+                side_effect=fail_at_active_pin,
+            ), patch.object(
+                archive_cli,
+                "_execute_project_version_update_exact_human_approved_write",
+                side_effect=execute_approval,
+            ):
+                code, stdout, stderr = self.run_cli_split(command)
+
+            self.assertEqual(code, 1, stdout + stderr)
+            self.assertEqual(stdout, "")
+            self.assertIn("failed before a privacy-safe result", stderr)
+            self.assertEqual(attempted_roles[-1], "active_pin")
+            self.assertEqual(
+                (metadata_root / "installed-version.txt").read_bytes(),
+                old_active_pin,
+            )
+            self.assertEqual(
+                (
+                    fixture["mirror"] / "installed-version.txt"
+                ).read_bytes(),
+                (fixture["target_tag"] + "\n").encode("utf-8"),
+            )
+            self.assertTrue(
+                archive_services.project_runtime.runtime_path(
+                    fixture["project_root"],
+                    fixture["target_version"],
+                ).is_dir()
+            )
+            self.assertTrue(
+                (
+                    fixture["project_root"]
+                    / archive_services.project_runtime
+                    .PROJECT_RUNTIME_LAUNCHER_RELATIVE
+                ).is_file()
+            )
+            receipts = list(
+                (
+                    metadata_root
+                    / "receipts"
+                    / "version-updates"
+                ).glob("*.json")
+            )
+            self.assertEqual(len(receipts), 1)
+            self.assertTrue(
+                (metadata_root / "version-update.lock").is_file()
+            )
+
+            transaction_root = fixture["project_root"].joinpath(
+                *PurePosixPath(
+                    archive_services.project_update_transaction
+                    .TRANSACTION_ROOT_LOGICAL
+                ).parts
+            )
+            transaction_refs = [
+                item.name
+                for item in transaction_root.iterdir()
+                if item.is_dir() and item.name.startswith("update_")
+            ]
+            self.assertEqual(len(transaction_refs), 1)
+            transaction = (
+                archive_services.project_update_transaction
+                .ProjectUpdateTransaction.open(
+                    fixture["project_root"],
+                    transaction_refs[0],
+                )
+            )
+            journal = transaction.inspect().journal
+            self.assertEqual(journal.state, "exact")
+            verified_roles = {
+                item.phase
+                for item in journal.verified_prefix
+                if item.stage == "verified"
+            }
+            self.assertIn("runtime", verified_roles)
+            self.assertIn("launcher", verified_roles)
+            self.assertIn("non_active_pin", verified_roles)
+            self.assertIn("receipt", verified_roles)
+            self.assertNotIn("active_pin", verified_roles)
+            self.assertNotIn("domain_committed", verified_roles)
+
+    def test_project_runtime_candidate_cleanup_uncertainty_preserves_lock_without_domain_ref_write(
+        self,
+    ) -> None:
+        self.assertIsNotNone(shutil.which("git"))
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_root = Path(tmp)
+            fixture = self.create_project_version_update_fixture(
+                tmp_root,
+                project_runtime_policy=True,
+            )
+            artifacts = self.project_runtime_candidate_artifact_fixture(
+                tmp_root,
+                fixture,
+            )
+            metadata_root = fixture["metadata_root"]
+            head_before = self.git_fixture_command(
+                fixture["mirror"],
+                "rev-parse",
+                "HEAD",
+            )
+            pin_before = (
+                metadata_root / "installed-version.txt"
+            ).read_bytes()
+            approval_reached = False
+
+            def cancel_before_claim(
+                _root: Path,
+                _context: Any,
+                _writer: Any,
+                **_kwargs: Any,
+            ) -> Any:
+                nonlocal approval_reached
+                approval_reached = True
+                raise archive_cli.ExactHumanApprovalWorkflowError(
+                    "exact_human_approval_cancelled"
+                )
+
+            command = [
+                "project-version-update",
+                str(fixture["project_root"]),
+                "--target",
+                fixture["target_tag"],
+                "--approve",
+                "--affirm-external-writers-quiescent",
+                "--reviewed-by",
+                "person:runtime-candidate-cleanup-reviewer",
+                "--format",
+                "json",
+            ]
+            with self.fast_project_runtime_candidate_patches(
+                artifacts
+            ), patch.object(
+                archive_services.project_runtime,
+                "cleanup_prepared_runtime_candidate",
+                return_value=False,
+            ) as cleanup, patch.object(
+                archive_cli,
+                "_execute_project_version_update_exact_human_approved_write",
+                side_effect=cancel_before_claim,
+            ):
+                code, stdout, stderr = self.run_cli_split(command)
+
+            self.assertEqual(code, 1, stdout + stderr)
+            self.assertEqual(stdout, "")
+            self.assertIn("failed before a privacy-safe result", stderr)
+            self.assertTrue(approval_reached)
+            self.assertGreaterEqual(cleanup.call_count, 1)
+            self.assertTrue(
+                (metadata_root / "version-update.lock").is_file()
+            )
+            self.assertEqual(
+                self.git_fixture_command(
+                    fixture["mirror"],
+                    "rev-parse",
+                    "HEAD",
+                ),
+                head_before,
+            )
+            self.assertEqual(
+                (metadata_root / "installed-version.txt").read_bytes(),
+                pin_before,
+            )
+            self.assertFalse(
+                archive_services.project_runtime.runtime_path(
+                    fixture["project_root"],
+                    fixture["target_version"],
+                ).exists()
+            )
+            self.assertFalse(
+                (
+                    fixture["project_root"]
+                    / archive_services.project_runtime
+                    .PROJECT_RUNTIME_LAUNCHER_RELATIVE
+                ).exists()
+            )
+            self.assertFalse(
+                (metadata_root / "receipts" / "version-updates").exists()
+            )
+            # Fetch is the sole allowed preapproval Git side effect.  Its target
+            # ref may remain even though the domain source HEAD is unchanged.
+            self.assertEqual(
+                self.git_fixture_command(
+                    fixture["mirror"],
+                    "rev-parse",
+                    f"refs/tags/{fixture['target_tag']}^{{commit}}",
+                ),
+                fixture["target_commit"],
+            )
+
+            transaction_root = fixture["project_root"].joinpath(
+                *PurePosixPath(
+                    archive_services.project_update_transaction
+                    .TRANSACTION_ROOT_LOGICAL
+                ).parts
+            )
+            transaction_refs = [
+                item.name
+                for item in transaction_root.iterdir()
+                if item.is_dir() and item.name.startswith("update_")
+            ]
+            self.assertEqual(len(transaction_refs), 1)
+            transaction = (
+                archive_services.project_update_transaction
+                .ProjectUpdateTransaction.open(
+                    fixture["project_root"],
+                    transaction_refs[0],
+                )
+            )
+            journal = transaction.inspect().journal
+            self.assertEqual(journal.state, "exact")
+            phases = [item.phase for item in journal.verified_prefix]
+            self.assertIn("preapproval_cancel_requested", phases)
+            self.assertNotIn("approval_bound", phases)
+            self.assertNotIn("source", phases)
+            self.assertNotIn(str(transaction_root), stdout + stderr)
+
+    def test_approved_write_blocks_before_dispatch_on_project_runtime_mismatch(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project_root = Path(tmp) / "project"
+            metadata_root = project_root / ".zettel-kasten"
+            archive_root = project_root / "archive"
+            metadata_root.mkdir(parents=True)
+            archive_root.mkdir()
+            (metadata_root / "installed-version.txt").write_text(
+                "v0.4.2\n",
+                encoding="utf-8",
+            )
+            (archive_root / "archive.yml").write_text(
+                "archive_id: archive:personal:runtime-guard-test\n"
+                "archive_type: personal\n",
+                encoding="utf-8",
+            )
+            code, output = self.run_cli(
+                [
+                    "operational-context",
+                    str(archive_root),
+                    "--record",
+                    "candidate.yml",
+                    "--approve",
+                    "--reviewed-by",
+                    "person:runtime-guard-reviewer",
+                    "--format",
+                    "json",
+                ]
+            )
+        self.assertEqual(code, 3, output)
+        result = json.loads(output)
+        self.assertEqual(result["state"], "blocked")
+        self.assertEqual(
+            result["reason_codes"],
+            ["project_runtime_mismatch"],
+        )
+        self.assertEqual(result["project_pin"], "v0.4.2")
+        self.assertEqual(result["running_version"], "v0.4.3")
+        self.assertEqual(
+            result["project_runtime_argv"],
+            [r".\.zettel-kasten\bin\archive.cmd"],
+        )
+        self.assertEqual(result["files_written"], [])
+
+    def test_incomplete_project_update_lock_blocks_mixed_state_writers_before_dispatch(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project_root = Path(tmp) / "project"
+            metadata_root = project_root / ".zettel-kasten"
+            archive_root = project_root / "archive"
+            runtime_scripts = (
+                metadata_root / "runtimes" / "v0.4.3" / "Scripts"
+            )
+            launcher = metadata_root / "bin" / "archive.cmd"
+            runtime_scripts.mkdir(parents=True)
+            launcher.parent.mkdir(parents=True)
+            archive_root.mkdir()
+            (metadata_root / "installed-version.txt").write_text(
+                "v0.4.2\n",
+                encoding="utf-8",
+            )
+            (runtime_scripts / "python.exe").write_bytes(
+                b"new-runtime-before-old-pin"
+            )
+            launcher.write_bytes(
+                archive_services.project_runtime.launcher_bytes("0.4.3")
+            )
+            (metadata_root / "version-update.lock").write_text(
+                '{"private":"mixed-state-lock-body"}\n',
+                encoding="utf-8",
+            )
+            (archive_root / "archive.yml").write_text(
+                "archive_id: archive:personal:update-recovery-guard-test\n"
+                "archive_type: personal\n",
+                encoding="utf-8",
+            )
+
+            with patch.object(
+                archive_services,
+                "index_archive",
+            ) as index_archive:
+                write_code, write_output = self.run_cli(
+                    ["index", str(archive_root), "--format", "json"]
+                )
+            index_archive.assert_not_called()
+
+            with patch.object(
+                archive_cli,
+                "command_project_version_update_collision",
+                return_value=42,
+            ) as collision_writer:
+                collision_code, collision_output = self.run_cli(
+                    [
+                        "project-version-update-collision",
+                        str(project_root),
+                        "--target",
+                        "v0.4.3",
+                        "--entry-ref",
+                        "update-entry:0001",
+                        "--action",
+                        "preserve-relocate",
+                        "--approve",
+                        "--format",
+                        "json",
+                    ]
+                )
+            collision_writer.assert_not_called()
+
+            with patch.object(
+                archive_cli,
+                "command_project_version_update_collision",
+                return_value=43,
+            ) as collision_reader:
+                read_code, _read_output = self.run_cli(
+                    [
+                        "project-version-update-collision",
+                        str(project_root),
+                        "--target",
+                        "v0.4.3",
+                        "--entry-ref",
+                        "update-entry:0001",
+                        "--action",
+                        "inspect",
+                        "--dry-run",
+                        "--format",
+                        "json",
+                    ]
+                )
+            collision_reader.assert_called_once()
+
+            with patch.object(
+                archive_cli,
+                "command_project_version_update",
+                return_value=44,
+            ) as recovery_command:
+                recovery_code, _recovery_output = self.run_cli(
+                    [
+                        "project-version-update",
+                        str(project_root),
+                        "--target",
+                        "v0.4.3",
+                        "--approve",
+                        "--format",
+                        "json",
+                    ]
+                )
+            recovery_command.assert_called_once()
+
+        self.assertEqual(write_code, 3, write_output)
+        write_result = json.loads(write_output)
+        self.assertEqual(
+            write_result["schema"],
+            "wom-kit/project-update-recovery-required/v0.1",
+        )
+        self.assertEqual(
+            write_result["reason_codes"],
+            ["project_update_recovery_required"],
+        )
+        self.assertEqual(write_result["files_written"], [])
+        self.assertNotIn("mixed-state-lock-body", write_output)
+        self.assertEqual(collision_code, 3, collision_output)
+        self.assertEqual(
+            json.loads(collision_output)["reason_codes"],
+            ["project_update_recovery_required"],
+        )
+        self.assertNotIn("mixed-state-lock-body", collision_output)
+        self.assertEqual(read_code, 43)
+        self.assertEqual(recovery_code, 44)
+
+    def test_index_write_blocks_before_dispatch_on_project_runtime_mismatch(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project_root = Path(tmp) / "project"
+            metadata_root = project_root / ".zettel-kasten"
+            archive_root = project_root / "archive"
+            metadata_root.mkdir(parents=True)
+            archive_root.mkdir()
+            (metadata_root / "installed-version.txt").write_text(
+                "v0.4.2\n",
+                encoding="utf-8",
+            )
+            (archive_root / "archive.yml").write_text(
+                "archive_id: archive:personal:runtime-index-guard-test\n"
+                "archive_type: personal\n",
+                encoding="utf-8",
+            )
+            with patch.object(archive_services, "index_archive") as index_archive:
+                code, output = self.run_cli(
+                    ["index", str(archive_root), "--format", "json"]
+                )
+
+            index_archive.assert_not_called()
+            self.assertFalse((archive_root / "db").exists())
+
+        self.assertEqual(code, 3, output)
+        result = json.loads(output)
+        self.assertEqual(result["command"], "index")
+        self.assertEqual(result["state"], "blocked")
+        self.assertEqual(
+            result["reason_codes"],
+            ["project_runtime_mismatch"],
+        )
+        self.assertEqual(result["files_written"], [])
+
+    def test_all_project_version_update_names_share_bootstrap_guard_exception(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project_root = Path(tmp) / "project"
+            metadata_root = project_root / ".zettel-kasten"
+            archive_root = project_root / "archive"
+            metadata_root.mkdir(parents=True)
+            archive_root.mkdir()
+            (metadata_root / "installed-version.txt").write_text(
+                "v0.4.2\n",
+                encoding="utf-8",
+            )
+            (archive_root / "archive.yml").write_text(
+                "archive_id: archive:personal:runtime-bootstrap-guard-test\n"
+                "archive_type: personal\n",
+                encoding="utf-8",
+            )
+
+            for command_name in (
+                "project-version-update",
+                "version-update",
+                "update-wom-kit",
+            ):
+                with self.subTest(command_name=command_name), patch.object(
+                    archive_cli,
+                    "command_project_version_update",
+                    return_value=41,
+                ) as project_update:
+                    code, output = self.run_cli(
+                        [
+                            command_name,
+                            str(project_root),
+                            "--target",
+                            "v0.4.3",
+                            "--approve",
+                            "--format",
+                            "json",
+                        ]
+                    )
+
+                    self.assertEqual(code, 41, output)
+                    project_update.assert_called_once()
+                    parsed_args = project_update.call_args.args[0]
+                    self.assertEqual(parsed_args.command, command_name)
+                    self.assertEqual(
+                        parsed_args._wom_project_runtime_effect,
+                        "bootstrap_update",
+                    )
 
     def test_project_version_update_rematerializes_crlf_runtime_sources_after_lf_attribute_transition(
         self,
@@ -9463,12 +12750,14 @@ class ArchiveCliTests(unittest.TestCase):
                         mirror,
                         branch_name,
                         head,
+                        runner=self.trusted_project_update_git_runner(),
                     )
                 )
 
             before = (
                 archive_services._wom_kit_project_update_git_snapshot(
-                    mirror
+                    mirror,
+                    runner=self.trusted_project_update_git_runner(),
                 )
             )
             self.assertIsNotNone(before)
@@ -9485,6 +12774,7 @@ class ArchiveCliTests(unittest.TestCase):
                             mirror,
                             invalid_branch,
                             head,
+                            runner=self.trusted_project_update_git_runner(),
                         )
                     )
                     self.assertFalse(
@@ -9492,11 +12782,13 @@ class ArchiveCliTests(unittest.TestCase):
                             mirror,
                             head,
                             attach_branch=invalid_branch,
+                            runner=self.trusted_project_update_git_runner(),
                         )
                     )
                     self.assertEqual(
                         archive_services._wom_kit_project_update_git_snapshot(
-                            mirror
+                            mirror,
+                            runner=self.trusted_project_update_git_runner(),
                         ),
                         before,
                     )
@@ -9586,7 +12878,8 @@ class ArchiveCliTests(unittest.TestCase):
                 actual = (
                     archive_services
                     .wom_kit_project_update_symbolic_head_state(
-                        Path("unused-mirror")
+                        Path("unused-mirror"),
+                        runner=self.trusted_project_update_git_runner(),
                     )
                 )
 
@@ -9675,6 +12968,7 @@ class ArchiveCliTests(unittest.TestCase):
                 archive_services._wom_kit_project_update_git(
                     mirror,
                     ["show", "-s", "--format=%s", "HEAD"],
+                    runner=self.trusted_project_update_git_runner(),
                 )
             )
             self.assertTrue(subject_ok)
@@ -9684,6 +12978,7 @@ class ArchiveCliTests(unittest.TestCase):
                 archive_services.wom_kit_project_update_git_metadata_is_local_real(
                     fixture["project_root"],
                     mirror,
+                    runner=self.trusted_project_update_git_runner(),
                 )
             )
 
@@ -9702,6 +12997,7 @@ class ArchiveCliTests(unittest.TestCase):
                 archive_services.wom_kit_project_update_git_metadata_is_local_real(
                     fixture["project_root"],
                     mirror,
+                    runner=self.trusted_project_update_git_runner(),
                 )
             )
             packed_refs_path.write_text(
@@ -9721,6 +13017,7 @@ class ArchiveCliTests(unittest.TestCase):
                 archive_services.wom_kit_project_update_git_metadata_is_local_real(
                     fixture["project_root"],
                     mirror,
+                    runner=self.trusted_project_update_git_runner(),
                 )
             )
 
@@ -9743,6 +13040,7 @@ class ArchiveCliTests(unittest.TestCase):
                 archive_services.wom_kit_project_update_git_metadata_is_local_real(
                     fixture["project_root"],
                     mirror,
+                    runner=self.trusted_project_update_git_runner(),
                 )
             )
 
@@ -9758,6 +13056,7 @@ class ArchiveCliTests(unittest.TestCase):
                 archive_services.wom_kit_project_update_git_metadata_is_local_real(
                     fixture["project_root"],
                     mirror,
+                    runner=self.trusted_project_update_git_runner(),
                 )
             )
 
@@ -9951,6 +13250,7 @@ class ArchiveCliTests(unittest.TestCase):
                     archive_services._wom_kit_project_update_tree_blobs(
                         Path("unused-mirror"),
                         "b" * 40,
+                        runner=self.trusted_project_update_git_runner(),
                     )
                 )
 
@@ -10032,6 +13332,7 @@ class ArchiveCliTests(unittest.TestCase):
                     repository,
                     target_commit,
                     dry_run=True,
+                    runner=self.trusted_project_update_git_runner(),
                 )
             )
             if os.name == "nt":
@@ -10039,6 +13340,7 @@ class ArchiveCliTests(unittest.TestCase):
                     archive_services._wom_kit_project_update_materialize_commit(
                         repository,
                         target_commit,
+                        runner=self.trusted_project_update_git_runner(),
                     )
                 )
                 self.assertEqual(
@@ -10066,6 +13368,7 @@ class ArchiveCliTests(unittest.TestCase):
                             repository,
                             expected_commit,
                             directory_guard=directory_guard,
+                            runner=self.trusted_project_update_git_runner(),
                         )
                     )
                     self.assertEqual(
@@ -10487,6 +13790,7 @@ class ArchiveCliTests(unittest.TestCase):
                 snapshot = (
                     archive_services._wom_kit_project_update_git_snapshot(
                         repository,
+                        runner=self.trusted_project_update_git_runner(),
                     )
                 )
 
@@ -10586,7 +13890,8 @@ class ArchiveCliTests(unittest.TestCase):
                             self.assertIsNone(
                                 archive_services
                                 ._wom_kit_project_update_git_snapshot(
-                                    repository
+                                    repository,
+                                    runner=self.trusted_project_update_git_runner(),
                                 )
                             )
 
@@ -10634,7 +13939,8 @@ class ArchiveCliTests(unittest.TestCase):
                         self.assertIsNone(
                             archive_services
                             ._wom_kit_project_update_git_snapshot(
-                                repository
+                                repository,
+                                runner=self.trusted_project_update_git_runner(),
                             )
                         )
 
@@ -11025,6 +14331,7 @@ class ArchiveCliTests(unittest.TestCase):
             snapshot = (
                 archive_services._wom_kit_project_update_git_snapshot(
                     repository,
+                    runner=self.trusted_project_update_git_runner(),
                 )
             )
             self.assertIsNotNone(snapshot)

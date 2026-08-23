@@ -26,15 +26,17 @@ The v0.4.3 URL is a conditional release-artifact contract. Use it only after
 the matching public GitHub Release exists and lists the exact wheel:
 
 ```powershell
-uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.3/wom_kit-0.4.3-py3-none-any.whl"
-archive --version
+py -m venv .wom-bootstrap-v043
+& .\.wom-bootstrap-v043\Scripts\python.exe -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.3/wom_kit-0.4.3-py3-none-any.whl"
+& .\.wom-bootstrap-v043\Scripts\archive.exe --version
 ```
 
 Require exactly `archive 0.4.3` from a new process. The installed runtime adds
 the exact-approved Git writer and Letter 138 source-property backfill, but an
-install alone changes no archive, remote ref, project-local source mirror, or
-pin. Project update is a separate native exact-human workflow with its own
-receipt. See [Git Backup Plan And Reconciliation Plan](git-backup-plan.md) and
+bootstrap install alone changes no archive, remote ref, project-local source
+mirror, pin, shared PATH tool, or other project. Project update is a separate
+native exact-human workflow that creates and activates the project-local
+runtime with its own receipt. See [Git Backup Plan And Reconciliation Plan](git-backup-plan.md) and
 [ExactOperationManifest v1](exact-operation-manifest-v1.md).
 
 ## Canonical Checks
@@ -48,12 +50,21 @@ archive version <project-or-archive-root> --format json
 archive version <project-or-archive-root> --progress --format json
 archive runtime-context <archive-root> --format json
 archive project-version-update <project-or-archive-root> --target vX.Y.Z --dry-run --format json
+.\.zettel-kasten\bin\archive.cmd version <project-or-archive-root> --format json
 ```
 
 `archive --version` is the fastest human check. The structured `archive version`
 form is for AI runtimes and scripts. `runtime-context` includes the same
 version summary under `wom_kit_version`, so an agent can confirm archive identity
 and kit version in one read-only request.
+
+For a v0.4.3-or-newer project, the `project_runtime` object is also canonical
+evidence. It reports the exact versioned runtime receipt, stable launcher,
+project-relative `project_runtime_argv`, pin/runtime agreement, and whether the
+running process matches the project. Ordinary writes should use
+`.\.zettel-kasten\bin\archive.cmd`. A different running version is blocked
+before an approved writer dispatches with `project_runtime_mismatch`; the
+result changes no files and returns the exact project-local argv.
 
 ### Windows PATH shadow and bounded Git probes (v0.4.3)
 
@@ -110,8 +121,9 @@ The JSON result reports safe logical locations such as
 `parent_of_archive/.zettel-kasten/installed-version.txt`; it does not print the
 local absolute path unless `--no-redact-local-paths` is explicitly used. A
 mismatch does not rewrite anything; it simply returns `ok: false` with
-`consistency_state: project_pin_mismatch` so the human can decide whether to
-upgrade the project-local source or switch to the intended CLI. UTF-8
+`consistency_state: project_pin_mismatch` or `project_runtime_mismatch` so the
+human can run the intended project launcher or perform a reviewed update.
+UTF-8
 BOM-prefixed pin files are normalized for Windows-created text files.
 
 The pin is also an untrusted local input. Only an exact stable

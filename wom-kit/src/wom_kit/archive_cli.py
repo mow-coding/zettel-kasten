@@ -409,6 +409,7 @@ from . import (
     notion_property_backfill,
     operation_control,
     operation_approval_binding,
+    project_runtime,
     runtime_guidance,
     runtime_skill_install,
     saved_view_workflows,
@@ -435,6 +436,7 @@ from .exact_human_approval_workflow import (
     ExactHumanApprovalWorkflowError,
     _execute_exact_human_approved_write,
     _execute_exact_human_approved_write_core,
+    _resume_exact_human_approved_transaction_core,
 )
 from .exact_operation_manifest import ExactOperationProgress
 from .resource_paths import runtime_release_note_path, runtime_resource_root
@@ -4461,6 +4463,27 @@ def command_version(args: argparse.Namespace) -> int:
         if project_pin.get("checked"):
             installed = project_pin.get("installed_version") or "-"
             print(f"Project pin: {project_pin.get('status') or '-'} ({installed})")
+        project_runtime_result = (
+            result.get("project_runtime")
+            if isinstance(result.get("project_runtime"), dict)
+            else {}
+        )
+        if project_runtime_result.get("checked"):
+            print(
+                "Project runtime: "
+                f"{project_runtime_result.get('status') or '-'}"
+            )
+            if isinstance(
+                project_runtime_result.get("project_runtime_argv"),
+                list,
+            ):
+                print(
+                    "Project runtime argv: "
+                    + json.dumps(
+                        project_runtime_result["project_runtime_argv"],
+                        ensure_ascii=False,
+                    )
+                )
         runtime_alignment = (
             result.get("runtime_alignment")
             if isinstance(result.get("runtime_alignment"), dict)
@@ -5543,10 +5566,138 @@ def command_project_version_update_collision(
     return 0 if result.get("ok") else 1
 
 
+@contextmanager
+def _project_version_update_approval_read_boundary(
+    inspection_root: Path,
+):
+    """Hold one approval archive root and archive identity for the full run."""
+
+    try:
+        selected = (
+            archive_services
+            .wom_kit_project_version_update_approval_archive_root(
+                inspection_root
+            )
+        )
+        root = archive_services.require_existing_archive_root(selected)
+    except (archive_services.ArchiveServiceError, OSError, ValueError):
+        raise archive_services.ArchiveServiceError(
+            "project_version_update_archive_identity_unavailable"
+        ) from None
+
+    with ExitStack() as stack:
+        try:
+            held_archive = stack.enter_context(
+                archive_services._hold_activity_group_evidence_file(
+                    root,
+                    root / "archive.yml",
+                    max_bytes=1024 * 1024,
+                )
+            )
+            loaded = archive_services.load_approval_yaml_without_duplicate_keys(
+                held_archive["raw"].decode("utf-8")
+            )
+            document = archive_services.normalize_approval_json_tree(loaded)
+            archive_id = (
+                document.get("archive_id")
+                if isinstance(document, dict)
+                else None
+            )
+            exact_human_approval_archive_identity_sha256(archive_id)
+
+            # Re-resolve after both the root chain and archive.yml are held.
+            # This closes the small selection-to-open window without exposing
+            # either the selected path or archive id in a public result.
+            current_root = archive_services.require_existing_archive_root(
+                archive_services
+                .wom_kit_project_version_update_approval_archive_root(
+                    inspection_root
+                )
+            )
+            if current_root != root:
+                raise ValueError("approval_root_changed")
+            if archive_services.read_archive_id(current_root) != archive_id:
+                raise ValueError("approval_archive_id_changed")
+        except (
+            archive_services.ArchiveServiceError,
+            ExactHumanApprovalError,
+            OSError,
+            ValueError,
+        ):
+            raise archive_services.ArchiveServiceError(
+                "project_version_update_archive_identity_unavailable"
+            ) from None
+        yield root, archive_id
+
+
+@contextmanager
+def _exact_human_approval_post_decision_boundary(root: Path):
+    """Bind credential-key and one-use-claim parents after live approval."""
+
+    canonical_root = archive_services.require_existing_archive_root(root)
+    credential_lock_parent = (
+        canonical_root / "profiles" / "local" / "credential-intake"
+    )
+    claims_parent = (
+        canonical_root
+        / "profiles"
+        / "local"
+        / "exact-human-approvals"
+        / "claims"
+    )
+    with ExitStack() as stack:
+        stack.enter_context(
+            archive_services._activity_group_bound_directory_chain(
+                canonical_root,
+                credential_lock_parent,
+                create=True,
+            )
+        )
+        claims_binding = stack.enter_context(
+            archive_services._activity_group_bound_directory_chain(
+                canonical_root,
+                claims_parent,
+                create=True,
+            )
+        )
+        yield canonical_root, claims_binding
+
+
+@contextmanager
+def _project_version_update_post_decision_boundary(root: Path):
+    """Keep project-update credential and claim writes filesystem-bound."""
+
+    with _exact_human_approval_post_decision_boundary(root) as boundary:
+        yield boundary
+
+
+def _execute_project_version_update_exact_human_approved_write(
+    approval_root: Path,
+    context: ExactHumanApprovalContext,
+    writer: Callable[[Any], Mapping[str, Any]],
+    *,
+    claim_succeeded_finalizer: Callable[[Any], None],
+) -> dict[str, Any]:
+    """Run project update through its non-injectable bound claim workflow."""
+
+    return _execute_exact_human_approved_write_core(
+        approval_root,
+        context,
+        writer,
+        native=None,
+        key_provider=None,
+        post_decision_boundary=lambda: (
+            _project_version_update_post_decision_boundary(approval_root)
+        ),
+        claim_succeeded_finalizer=claim_succeeded_finalizer,
+    )
+
+
 def command_project_version_update(args: argparse.Namespace) -> int:
     reporter = CommandProgressReporter(
         bool(getattr(args, "progress", False)),
         label="project-version-update",
+        heartbeat_interval_seconds=9.0,
     )
     capture: _CommandRunResultCapture | None = None
     operation_journal: operation_control.OperationRunJournal | None = None
@@ -5577,60 +5728,121 @@ def command_project_version_update(args: argparse.Namespace) -> int:
             reporter,
             operation_journal,
         )
-        if args.approve:
+        # Establish observable liveness before approval-root resolution, Git
+        # runner resolution, or any other potentially long preflight.
+        progress_callback("starting", "start", None, None)
+        if args.approve or getattr(args, "resume", False):
             if not str(args.reviewed_by or "").strip():
                 raise ValueError("project_version_update_reviewer_required")
             if not bool(args.affirm_external_writers_quiescent):
                 raise ValueError("project_version_update_quiescence_required")
-            preview = archive_services.wom_kit_project_version_update(
-                inspection_root,
-                target=args.target,
-                dry_run=True,
-                approve=False,
-                reviewed_by=args.reviewed_by,
-                progress_callback=progress_callback,
-            )
-            if preview.get("ok") is not True:
-                result = preview
-            else:
-                binding = (
-                    operation_approval_binding
-                    .project_version_update_approval_binding(preview)
+            if getattr(args, "resume", False) and (
+                not str(getattr(args, "transaction_ref", "") or "").strip()
+                or not str(getattr(args, "approval_id", "") or "").strip()
+            ):
+                raise ValueError(
+                    "project_version_update_resume_reference_required"
                 )
-                approval_root = (
-                    archive_services
-                    .wom_kit_project_version_update_approval_archive_root(
-                        inspection_root
-                    )
+            if args.approve and (
+                getattr(args, "transaction_ref", None) is not None
+                or getattr(args, "approval_id", None) is not None
+            ):
+                raise ValueError(
+                    "project_version_update_resume_reference_unexpected"
                 )
-                context = binding.context(
-                    archive_id=archive_services.read_archive_id(approval_root),
-                    reviewer_claim=str(args.reviewed_by).strip(),
-                )
+            with _project_version_update_approval_read_boundary(
+                inspection_root
+            ) as (approval_root, held_archive_id):
 
-                def _write_project_version_update(claim) -> dict[str, Any]:
-                    return archive_services.wom_kit_project_version_update(
-                        inspection_root,
-                        target=args.target,
-                        dry_run=False,
-                        approve=True,
-                        reviewed_by=args.reviewed_by,
-                        affirm_external_writers_quiescent=True,
-                        expected_exact_approval_plan_sha256=(
-                            binding.plan_sha256
-                        ),
-                        expected_exact_approval_target_binding_sha256=(
-                            binding.target_binding_sha256
-                        ),
-                        exact_human_approval_claim=claim,
-                        progress_callback=progress_callback,
+                def _execute_project_version_update_approval(
+                    prepared_preview: Mapping[str, Any],
+                    continuation: Callable[
+                        [Any, str, str], Mapping[str, Any]
+                    ],
+                    claim_succeeded_finalizer: Callable[[Any], None],
+                    started_checkpoint_guard: Callable[[Any], bool],
+                    succeeded_checkpoint_guard: Callable[[Any], bool],
+                ) -> Mapping[str, Any]:
+                    binding = (
+                        operation_approval_binding
+                        .project_version_update_approval_binding(
+                            prepared_preview
+                        )
+                    )
+                    context = binding.context(
+                        archive_id=held_archive_id,
+                        reviewer_claim=str(args.reviewed_by).strip(),
                     )
 
-                result = _execute_exact_human_approved_write(
-                    approval_root,
-                    context,
-                    _write_project_version_update,
-                )
+                    def _write_project_version_update(
+                        claim,
+                    ) -> dict[str, Any]:
+                        return dict(
+                            continuation(
+                                claim,
+                                binding.plan_sha256,
+                                binding.target_binding_sha256,
+                            )
+                        )
+
+                    if getattr(args, "resume", False):
+                        return _resume_exact_human_approved_transaction_core(
+                            approval_root,
+                            context,
+                            str(args.approval_id).strip(),
+                            started_checkpoint_guard,
+                            _write_project_version_update,
+                            succeeded_checkpoint_guard,
+                            claim_succeeded_finalizer,
+                            key_provider=None,
+                            resume_boundary=lambda: (
+                                _project_version_update_post_decision_boundary(
+                                    approval_root
+                                )
+                            ),
+                        )
+                    return _execute_project_version_update_exact_human_approved_write(
+                        approval_root,
+                        context,
+                        _write_project_version_update,
+                        claim_succeeded_finalizer=(
+                            claim_succeeded_finalizer
+                        ),
+                    )
+
+                if getattr(args, "resume", False):
+                    result = (
+                        archive_services
+                        ._wom_kit_project_version_update_resume_live_transaction(
+                            inspection_root,
+                            target=args.target,
+                            reviewed_by=str(args.reviewed_by).strip(),
+                            transaction_ref=str(
+                                args.transaction_ref
+                            ).strip(),
+                            approval_executor=(
+                                _execute_project_version_update_approval
+                            ),
+                            _expected_approval_root=approval_root,
+                            _expected_archive_id=held_archive_id,
+                        )
+                    )
+                else:
+                    result = (
+                        archive_services
+                        ._wom_kit_project_version_update_live_approval_transaction(
+                            inspection_root,
+                            target=args.target,
+                            reviewed_by=str(args.reviewed_by).strip(),
+                            affirm_external_writers_quiescent=True,
+                            approval_executor=(
+                                _execute_project_version_update_approval
+                            ),
+                            progress_callback=progress_callback,
+                            _expected_approval_root=approval_root,
+                            _expected_archive_id=held_archive_id,
+                        )
+                    )
         else:
             result = archive_services.wom_kit_project_version_update(
                 inspection_root,
@@ -5644,6 +5856,7 @@ def command_project_version_update(args: argparse.Namespace) -> int:
         operation_control.OperationControlError,
         operation_approval_binding.OperationApprovalBindingError,
         archive_services.ArchiveServiceError,
+        archive_services.project_update_git_runner.ProjectUpdateGitRunnerError,
         ExactHumanApprovalError,
         ExactHumanApprovalWindowsError,
         ExactHumanApprovalWorkflowError,
@@ -16184,32 +16397,8 @@ def _zettel_objet_link_approval_read_boundary(
 def _zettel_objet_link_post_decision_boundary(root: Path):
     """Bind key-lock and exact-claim parents after live approval."""
 
-    credential_lock_parent = (
-        root / "profiles" / "local" / "credential-intake"
-    )
-    claims_parent = (
-        root
-        / "profiles"
-        / "local"
-        / "exact-human-approvals"
-        / "claims"
-    )
-    with ExitStack() as stack:
-        stack.enter_context(
-            archive_services._activity_group_bound_directory_chain(
-                root,
-                credential_lock_parent,
-                create=True,
-            )
-        )
-        claims_binding = stack.enter_context(
-            archive_services._activity_group_bound_directory_chain(
-                root,
-                claims_parent,
-                create=True,
-            )
-        )
-        yield root, claims_binding
+    with _exact_human_approval_post_decision_boundary(root) as boundary:
+        yield boundary
 
 
 def _execute_zettel_objet_link_exact_human_approved_write(
@@ -27121,6 +27310,22 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Fetch origin/main plus the exact tag atomically, verify, materialize, align pins, and write a receipt.",
     )
+    project_version_update_mode.add_argument(
+        "--resume",
+        action="store_true",
+        help=(
+            "Resume one exact started or succeeded approval transaction "
+            "without displaying a second native approval."
+        ),
+    )
+    project_version_update.add_argument(
+        "--transaction-ref",
+        help="Opaque durable project-update transaction ref; required with --resume.",
+    )
+    project_version_update.add_argument(
+        "--approval-id",
+        help="Opaque exact-human approval id; required with --resume.",
+    )
     project_version_update.add_argument(
         "--reviewed-by",
         help="Safe non-secret reviewer actor id; required with --approve.",
@@ -27146,7 +27351,10 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     project_version_update.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
-    project_version_update.set_defaults(func=command_project_version_update)
+    project_version_update.set_defaults(
+        func=command_project_version_update,
+        _wom_project_runtime_effect="bootstrap_update",
+    )
 
     project_version_update_collision = subcommands.add_parser(
         "project-version-update-collision",
@@ -33775,7 +33983,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="Optional new .wom-scratch/diagnostics/*.json file for the complete result and CLI exit evidence.",
     )
     index.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
-    index.set_defaults(func=command_index)
+    index.set_defaults(
+        func=command_index,
+        _wom_project_runtime_effect="project_write",
+    )
 
     index_health_parser = subcommands.add_parser(
         "index-health",
@@ -37272,6 +37483,83 @@ def _argument_parser_error_message(rendered: str) -> str:
     return "command arguments are invalid"
 
 
+def _project_write_runtime_guard(
+    args: argparse.Namespace,
+    raw_argv: list[str],
+) -> dict[str, Any] | None:
+    """Fail closed before a project write runs under another pinned version."""
+
+    command = raw_argv[0] if raw_argv else ""
+    runtime_effect = getattr(args, "_wom_project_runtime_effect", None)
+    if runtime_effect == "bootstrap_update":
+        return None
+    if runtime_effect != "project_write" and not bool(
+        getattr(args, "approve", False)
+    ):
+        return None
+    candidate_attributes = (
+        "archive_root",
+        "inspection_root",
+        "project_root",
+        "workspace_root",
+        "root",
+    )
+    for attribute in candidate_attributes:
+        value = getattr(args, attribute, None)
+        if not isinstance(value, (str, Path)) or not str(value).strip():
+            continue
+        candidate = Path(value).expanduser()
+        try:
+            if candidate.is_file():
+                candidate = candidate.parent
+        except OSError:
+            continue
+        result = project_runtime.project_write_guard(
+            candidate,
+            running_version=__version__,
+        )
+        if result.get("reason_code") == "project_runtime_pin_not_found":
+            continue
+        if result.get("blocked"):
+            recovery_required = (
+                result.get("reason_code")
+                == "project_update_recovery_required"
+            )
+            return {
+                "schema": (
+                    "wom-kit/project-update-recovery-required/v0.1"
+                    if recovery_required
+                    else "wom-kit/project-runtime-mismatch/v0.1"
+                ),
+                "ok": False,
+                "state": "blocked",
+                "status": "blocked",
+                "lifecycle_action": "project_runtime_guard",
+                "command": command,
+                "reason_codes": [result["reason_code"]],
+                "project_pin": result.get("project_pin"),
+                "running_version": result.get("running_version"),
+                "project_runtime_argv": result["project_runtime_argv"],
+                "next_safe_actions": (
+                    [
+                        "Preserve .zettel-kasten/version-update.lock and do not run another project writer.",
+                        "Use read-only inspection or the project-version-update recovery path before any new approved write.",
+                    ]
+                    if recovery_required
+                    else [
+                        r"Run .\.zettel-kasten\bin\archive.cmd with the same command from the project root.",
+                        "If that launcher is missing or invalid, run an exact approved project-version-update from the public target wheel first.",
+                    ]
+                ),
+                "effects_state": "none",
+                "files_written": [],
+                "private_values_echoed": False,
+                "absolute_paths_echoed": False,
+            }
+        return None
+    return None
+
+
 def main(argv: list[str] | None = None) -> int:
     _harden_std_streams()
     raw_argv = sys.argv[1:] if argv is None else list(argv)
@@ -37405,6 +37693,32 @@ def main(argv: list[str] | None = None) -> int:
             }
         )
         return exit_code
+    runtime_blocker = _project_write_runtime_guard(args, raw_argv)
+    if runtime_blocker is not None:
+        if json_requested:
+            print_json(runtime_blocker)
+        else:
+            if "project_update_recovery_required" in runtime_blocker.get(
+                "reason_codes", []
+            ):
+                print(
+                    "This write is blocked because an incomplete project update requires recovery.",
+                    file=sys.stderr,
+                )
+                print(
+                    "Preserve the project update lock and use read-only inspection or the project-version-update recovery path.",
+                    file=sys.stderr,
+                )
+            else:
+                print(
+                    "This write is blocked because the project pin and running WOM version differ.",
+                    file=sys.stderr,
+                )
+                print(
+                    r"Run the same command through .\.zettel-kasten\bin\archive.cmd from the project root.",
+                    file=sys.stderr,
+                )
+        return 3
     return int(args.func(args))
 
 

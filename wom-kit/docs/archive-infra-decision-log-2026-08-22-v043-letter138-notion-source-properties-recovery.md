@@ -104,7 +104,7 @@ omissions. One malformed canonical file without a `source_page_id` token was
 excluded as an opaque noncandidate rather than poisoning all joins; its BOM is
 tracked as v0.4.7 hygiene debt.
 
-This decision and source implementation are not proof of Basoon mutation,
+This decision and source implementation are not proof of acceptance-archive mutation,
 merge, tag, GitHub release, tester upgrade, or post-install live verification.
 Those remain explicit later steps.
 

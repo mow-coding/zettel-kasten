@@ -22,7 +22,7 @@ read-only plans or safety surfaces that leave historical data unrepaired.
 
 - Public development repository: `mow-coding/zettel-kasten`, public, current
   `origin/main` at `592f45232dad9cdc815910a27865fe1ee90c630e`.
-- Basoon archive: clean `main`, no ahead/behind divergence from `origin/main`,
+- Acceptance archive: clean `main`, no ahead/behind divergence from `origin/main`,
   starting commit `8973ab96150e2c6ced87eaa8b05ae5de3cf8ee0d`.
 - The prior Git backlog was manually committed and pushed.  This removes the
   immediate unbacked-worktree incident but does not fix WOM's large-tree
@@ -78,7 +78,7 @@ read-only plans or safety surfaces that leave historical data unrepaired.
 - `project-version-update` is reopened behind the existing exact-human broker.
   The durable v0.2 update receipt now contains the exact approval reference;
   the update, rollback, receipt, and replay test suite passes.
-- A live read-only Basoon version inspection confirms the project mirror is a
+- A live read-only acceptance-archive version inspection confirms the project mirror is a
   clean, integrity-verified annotated v0.4.0 checkout with configured origin;
   its latest fetched tag is v0.4.2 and the project pin is v0.4.0.  The Windows
   PATH diagnostic sees one candidate and no shadow.  A source-built v0.4.3
@@ -89,7 +89,7 @@ read-only plans or safety surfaces that leave historical data unrepaired.
 - Draft-only same-ID feedback revision is implemented with CAS evidence.
   Delivered or later records remain immutable and require a new superseding
   feedback id.
-- A first actual-scale read-only `git-backup-plan` run against the clean Basoon
+- A first actual-scale read-only `git-backup-plan` run against the clean acceptance archive
   archive exceeded an external 180-second hard timeout.  Direct measurements
   show the five main Git projections each complete in 0.139-0.347 seconds; the
   dominant defect is the repeated whole-archive `_archive_attribute_preflight`
@@ -123,7 +123,7 @@ read-only plans or safety surfaces that leave historical data unrepaired.
 - Re-testing after the first Git planner optimization reduced initial
   preflight/projection to 6.89 seconds, confirming that Git itself is not the
   remaining bottleneck.  The run then stayed in `context_initial` for more than
-  70 seconds and was deliberately interrupted.  Basoon has 54,542 receipt
+  70 seconds and was deliberately interrupted.  The acceptance archive has 54,542 receipt
   files totaling 131,235,335 bytes; simple metadata enumeration takes only
   1.843 seconds, while the old planner opens and hashes every receipt before
   and after the plan.  Tracked receipt contents are already bound by the Git
@@ -131,14 +131,14 @@ read-only plans or safety surfaces that leave historical data unrepaired.
   observation.  The planner will therefore cache one bounded metadata
   inventory and perform a final identity/CAS recheck rather than rehashing 131
   MB across 54,542 generic historical files twice.
-- The revised implementation completed the same real Basoon read-only plan in
+- The revised implementation completed the same real acceptance-archive read-only plan in
   31.72 seconds, down from more than 180 seconds.  It published the first state
   at 0.0 seconds and heartbeats no more than five seconds apart.  The archive
   had zero changes.  The remaining anonymous-transport blockers are expected
   for the private remote and belong to the stored-credential v0.4.3 writer
   verification, not to planner performance.
 - The stored-credential read-only route then completed against the actual
-  private Basoon remote in 32.02 seconds with `plan_ready`, zero changes, no
+  private acceptance remote in 32.02 seconds with `plan_ready`, zero changes, no
   blockers, a present remote ref, and an `equal` local/remote relation.  It
   reused the configured credential helper without prompting or exposing a
   credential, remote URL, or path.
@@ -226,12 +226,12 @@ read-only plans or safety surfaces that leave historical data unrepaired.
   complete GET rehash, mismatch-without-PUT fail-close behavior, common exact
   checkpoints/resume, and immutable `bytes_preserved` receipts.  It performs
   zero formal adoption or central manifest updates.
-- An actual Basoon read-only run reproduced all locked counts: 23,580 rows,
+- An actual acceptance-archive read-only run reproduced all locked counts: 23,580 rows,
   22,431 unique Objet, 1,149 conflicts, 3,374 preservation targets, 597 strict
   remote-key evidence rows, and 560 official deduplicated evidence rows.  The
   classification sum is complete; first status was immediate, cold runtime
   about 45 seconds and cached runtime about 11 seconds.  It made no provider,
-  credential, remote, or Basoon write.  Live HEAD/PUT remains an explicit
+  credential, remote, or acceptance-archive write.  Live HEAD/PUT remains an explicit
   post-v0.4.4-release acceptance blocker.
 - This v0.4.4 slice is committed separately as product commit `1a57848c` and
   evidence-record commit `eb25d048`.  It deliberately does not claim the
@@ -264,7 +264,7 @@ after that chain is complete.
 
 The user asked to stop immediately because the current Codex usage allowance
 was exhausted and to resume next week. All active subagents were interrupted.
-No release, installation, native approval, Basoon data write, provider call,
+No release, installation, native approval, acceptance-archive data write, provider call,
 feedback resolution, or remote backup write was started as part of the pause.
 
 - Integration remains on `codex/v0.4.3-recovery` at `8759f640`, with the
@@ -284,7 +284,7 @@ Resume in this order: restore the interrupted independent checkpoint review;
 finish, test, and commit Letter 138 and the Git writer in their existing
 worktrees; integrate those commits; measure the final command inventory; then
 integrate release preparation and run the full v0.4.3 release gates. Only
-after a green public release and supported Basoon installation may the native
+after a green public release and supported project installation may the native
 approval and real Letter 138 recovery sequence begin.
 
 ### Pause cancelled by the user
@@ -293,11 +293,11 @@ The user immediately cancelled the pause and directed work to continue from
 the preserved checkpoint. The three interrupted tasks were resumed in their
 existing worktrees: independent checkpoint review, Letter 138 writer closure,
 and exact Git writer closure. The pause caused no reset, cleanup, release,
-installation, provider action, or Basoon data write.
+installation, provider action, or acceptance-archive data write.
 
 ## Safety and privacy boundaries
 
-- Real Basoon content, credentials, URLs, and user-profile paths remain private.
+- Real acceptance-archive content, credentials, URLs, and user-profile paths remain private.
 - Public tests and documentation use synthetic values only.
 - The 173 work-marker titles, 335 quarantine records, and 1,149 conflicting R2
   definitions are never auto-deleted or auto-merged.

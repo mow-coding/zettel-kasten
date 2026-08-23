@@ -16,9 +16,9 @@
 - Windows PATH가 고른 공용 실행 파일은 사용자 로컬 `.local/bin` 아래의
   `archive.exe`였다. 공개 기록에는 실제 사용자 폴더 이름을 남기지 않는다.
 - 공용 `archive --version`은 v0.4.2였다.
-- Basoon의 `parent_of_archive/.zettel-kasten/source`와 프로젝트 핀은 v0.4.0이었다.
+- 검증 대상의 `parent_of_archive/.zettel-kasten/source`와 프로젝트 핀은 v0.4.0이었다.
 - v0.4.3은 개발 worktree에서만 실행했으며 공용 도구에는 설치하지 않았다.
-- v0.4.3 소스로 Basoon을 읽기 전용 검사한 결과는 running v0.4.3과 project
+- v0.4.3 소스로 검증 대상을 읽기 전용 검사한 결과는 running v0.4.3과 project
   v0.4.0을 분리해 보고했고, `running_version_differs_from_project_source`와
   `project_scoped_bridge_available`을 반환했다.
 - 이 bridge는 검증된 프로젝트 버전으로 `version` 명령을 한 번 실행하는 좁은
@@ -42,7 +42,7 @@ WOM 클라이언트의 업데이트 여부는 `archive --version` 하나로 판�
 - 이 개발 세션은 공용 v0.4.2 도구를 v0.4.3으로 교체하지 않는다.
 - GitHub Release와 wheel 검증, 공용 CLI 교체, 프로젝트 source/pin 업데이트는
   서로 다른 결과로 기록한다.
-- Basoon 실제 업데이트는 Basoon 프로젝트에 결속된 exact-human workflow로만
+- 검증 대상 실제 업데이트는 해당 프로젝트에 결속된 exact-human workflow로만
   수행한다.
 - 같은 계정에서 완전히 독립된 클라이언트 실행이 필요하면 프로젝트별 전용
   가상환경 또는 별도 OS 사용자 경계가 필요하다. 현재 WOM은 일반 명령 전체에
@@ -57,4 +57,4 @@ WOM 클라이언트의 업데이트 여부는 `archive --version` 하나로 판�
 - `wom-kit/docs/version-truth-source.md`
 - `wom-kit/docs/releases/v0.4.3.md`
 
-실제 Basoon 데이터, 공용 Python 도구, PATH, provider, 자격증명은 변경하지 않았다.
+실제 검증 대상 데이터, 공용 Python 도구, PATH, provider, 자격증명은 변경하지 않았다.

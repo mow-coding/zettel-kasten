@@ -23,7 +23,7 @@ WHEEL_URL = (
 
 
 class V0403ReleaseDocsTests(unittest.TestCase):
-    def test_same_account_client_scope_is_explicit(self) -> None:
+    def test_same_account_project_runtime_scope_is_explicit(self) -> None:
         surfaces = (
             KIT / "docs" / "python-tool-install.md",
             KIT / "docs" / "python-tool-install.ko.md",
@@ -37,8 +37,9 @@ class V0403ReleaseDocsTests(unittest.TestCase):
             "archive --version",
             "archive version <project-or-archive-root> --format json",
             "PATH",
-            "per-folder sandbox",
-            "temporary virtual environment",
+            ".zettel-kasten/runtimes/vX.Y.Z/",
+            ".zettel-kasten/bin/archive.cmd",
+            "project_runtime_mismatch",
         ):
             with self.subTest(token=token):
                 self.assertIn(token, combined)

@@ -128,12 +128,12 @@ module deliberately does not guess those domain-specific policies.
 ## Letter 139 exact Git writer follow-on
 
 The Git writer was implemented in a separate `codex/v043-git-backup`
-worktree and did not write the protected Basoon archive. It extends the
+worktree and did not write the protected acceptance archive. It extends the
 existing `git-backup-reconcile-plan` family instead of adding a top-level
 command or MCP writer. A private selection must assign every opaque observed
 change reference to exactly one explicit commit group.
 
-Live read-only Basoon measurements changed the implementation order. Raw Git
+Live read-only acceptance measurements changed the implementation order. Raw Git
 status/index/tree queries were each sub-second, while recursive attribute and
 historical receipt walks caused the old plan to exceed 180 seconds. The
 planner now uses bounded Git projections for attribute paths, inventories
@@ -141,7 +141,7 @@ planner now uses bounded Git projections for attribute paths, inventories
 skips unrelated handoff scratch traversal, and emits immediate content-free
 status plus five-second heartbeats. The parent integration measured 31.72
 seconds end to end on the real archive, with the first event at 0.0 seconds;
-this was read-only and performed no Basoon mutation.
+this was read-only and performed no acceptance-archive mutation.
 
 The exact writer reuses the common manifest, writer lock, checkpoints, native
 approval, and same-started-claim resume. It proves each group in an isolated

@@ -1,0 +1,1141 @@
+from __future__ import annotations
+
+import base64
+import csv
+import hashlib
+import io
+import json
+import os
+import platform
+import shutil
+import subprocess
+import sys
+import tempfile
+import unittest
+import zipfile
+from pathlib import Path
+from unittest.mock import patch
+
+
+KIT_ROOT = Path(__file__).resolve().parents[1]
+SRC_ROOT = KIT_ROOT / "src"
+if str(SRC_ROOT) not in sys.path:
+    sys.path.insert(0, str(SRC_ROOT))
+
+from wom_kit import project_runtime
+
+
+def _tree_snapshot(root: Path) -> dict[str, bytes]:
+    return {
+        path.relative_to(root).as_posix(): path.read_bytes()
+        for path in sorted(root.rglob("*"))
+        if path.is_file()
+    }
+
+
+def _write_minimal_wheel(destination: Path, version: str) -> Path:
+    wheel_name = f"wom_kit-{version}-py3-none-any.whl"
+    wheel_path = destination / wheel_name
+    dist_info = f"wom_kit-{version}.dist-info"
+    manifest = {
+        "schema": "wom-kit/package-resource-manifest/v0.1",
+        "version": version,
+        "source_of_truth": "synthetic project-runtime test",
+        "file_count": 1,
+        "files": [],
+    }
+    release_note = f"WOM-kit v{version}\n".encode("utf-8")
+    manifest["files"].append(
+        {
+            "source": f"docs/releases/v{version}.md",
+            "packaged": f"release-notes/v{version}.md",
+            "bytes": len(release_note),
+            "sha256": hashlib.sha256(release_note).hexdigest(),
+        }
+    )
+    files = {
+        "wom_kit/__init__.py": f'__version__ = "{version}"\n'.encode(),
+        "wom_kit/archive_cli.py": (
+            "import sys\n"
+            f"VERSION = {version!r}\n"
+            "def main():\n"
+            "    if '--version' in sys.argv:\n"
+            "        print('archive ' + VERSION)\n"
+            "        return 0\n"
+            "    return 0\n"
+            "if __name__ == '__main__':\n"
+            "    raise SystemExit(main())\n"
+        ).encode(),
+        "wom_kit/resource_paths.py": (
+            "import json\n"
+            "from pathlib import Path\n"
+            "PACKAGED_RESOURCES_ROOT = Path(__file__).resolve().parent / '_resources'\n"
+            "def packaged_resource_manifest():\n"
+            "    return json.loads((PACKAGED_RESOURCES_ROOT / 'resource-manifest.json').read_text(encoding='utf-8'))\n"
+        ).encode(),
+        "wom_kit/_resources/resource-manifest.json": (
+            json.dumps(manifest, separators=(",", ":")) + "\n"
+        ).encode(),
+        f"wom_kit/_resources/release-notes/v{version}.md": release_note,
+        f"{dist_info}/METADATA": (
+            "Metadata-Version: 2.1\n"
+            "Name: wom-kit\n"
+            f"Version: {version}\n"
+        ).encode(),
+        f"{dist_info}/WHEEL": (
+            "Wheel-Version: 1.0\n"
+            "Generator: wom-kit-test\n"
+            "Root-Is-Purelib: true\n"
+            "Tag: py3-none-any\n"
+        ).encode(),
+        f"{dist_info}/entry_points.txt": (
+            "[console_scripts]\n"
+            "archive = wom_kit.archive_cli:main\n"
+        ).encode(),
+    }
+    rows: list[list[str]] = []
+    for name, data in files.items():
+        digest = base64.urlsafe_b64encode(hashlib.sha256(data).digest()).rstrip(b"=").decode()
+        rows.append([name, f"sha256={digest}", str(len(data))])
+    record_name = f"{dist_info}/RECORD"
+    rows.append([record_name, "", ""])
+    buffer = io.StringIO(newline="")
+    csv.writer(buffer, lineterminator="\n").writerows(rows)
+    files[record_name] = buffer.getvalue().encode()
+    with zipfile.ZipFile(wheel_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for name, data in files.items():
+            archive.writestr(name, data)
+    return wheel_path
+
+
+def _write_dependency_wheel(
+    destination: Path,
+    *,
+    distribution: str = "Synthetic-Dependency",
+    version: str = "1.2.3",
+) -> Path:
+    normalized = distribution.lower().replace("-", "_")
+    wheel_name = f"{normalized}-{version}-cp312-cp312-win_amd64.whl"
+    wheel_path = destination / wheel_name
+    dist_info = f"{normalized}-{version}.dist-info"
+    files = {
+        f"{normalized}/__init__.py": f'__version__ = "{version}"\n'.encode(),
+        f"{dist_info}/METADATA": (
+            "Metadata-Version: 2.1\n"
+            f"Name: {distribution}\n"
+            f"Version: {version}\n"
+        ).encode(),
+        f"{dist_info}/WHEEL": (
+            "Wheel-Version: 1.0\n"
+            "Generator: wom-kit-test\n"
+            "Root-Is-Purelib: false\n"
+            "Tag: cp312-cp312-win_amd64\n"
+        ).encode(),
+    }
+    rows: list[list[str]] = []
+    for name, data in files.items():
+        digest = base64.urlsafe_b64encode(hashlib.sha256(data).digest()).rstrip(b"=").decode()
+        rows.append([name, f"sha256={digest}", str(len(data))])
+    record_name = f"{dist_info}/RECORD"
+    rows.append([record_name, "", ""])
+    buffer = io.StringIO(newline="")
+    csv.writer(buffer, lineterminator="\n").writerows(rows)
+    files[record_name] = buffer.getvalue().encode()
+    with zipfile.ZipFile(wheel_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for name, data in files.items():
+            archive.writestr(name, data)
+    return wheel_path
+
+
+def _supply_for_dependency(
+    dependency_wheel: Path,
+    *,
+    target: str = "v0.4.3",
+) -> project_runtime.RuntimeSupplyLock:
+    raw = (
+        json.dumps(
+            {
+                "schema": project_runtime.PROJECT_RUNTIME_SUPPLY_LOCK_SCHEMA,
+                "target_tag": target,
+                "interpreter": {
+                    "implementation": "cpython",
+                    "python_version": "3.12",
+                    "python_tag": "cp312",
+                    "abi_tag": "cp312",
+                    "platform_tag": "win_amd64",
+                },
+                "artifacts": [
+                    {
+                        "role": "dependency",
+                        "distribution": "Synthetic-Dependency",
+                        "version": "1.2.3",
+                        "file_name": dependency_wheel.name,
+                        "url": (
+                            "https://files.pythonhosted.org/packages/synthetic/"
+                            + dependency_wheel.name
+                        ),
+                        "size_bytes": dependency_wheel.stat().st_size,
+                        "sha256": (
+                            "sha256:" + hashlib.sha256(dependency_wheel.read_bytes()).hexdigest()
+                        ),
+                    }
+                ],
+            },
+            separators=(",", ":"),
+        )
+        + "\n"
+    ).encode()
+    supply = project_runtime.project_runtime_supply_lock(raw, expected_target=target)
+    if supply is None:
+        raise AssertionError("synthetic supply lock must be valid")
+    return supply
+
+
+class ProjectRuntimeTests(unittest.TestCase):
+    def test_official_supply_lock_is_strict_and_hash_bound(self) -> None:
+        raw = (KIT_ROOT / "project-runtime-supply-lock-v0.4.3.json").read_bytes()
+        supply = project_runtime.project_runtime_supply_lock(
+            raw,
+            expected_target="v0.4.3",
+        )
+        self.assertIsNotNone(supply)
+        assert supply is not None
+        self.assertEqual(
+            supply.sha256,
+            "45386eebf1a69d0a9cd5df4c5fc8010f00d7fb2e5b44924b72e1fb8e2a0ec04a",
+        )
+        self.assertEqual(
+            [(item.distribution, item.version, item.size_bytes, item.sha256) for item in supply.artifacts],
+            [
+                (
+                    "PyYAML",
+                    "6.0.3",
+                    154003,
+                    "5fcd34e47f6e0b794d17de1b4ff496c00986e1c83f7ab2fb8fcfe9616ff7477b",
+                ),
+                (
+                    "unicodedata2",
+                    "17.0.1",
+                    484194,
+                    "d1439ad3ee0daace878196de4466a86aa5015cb244b9b1d5d00db74344649722",
+                ),
+            ],
+        )
+        summary = supply.public_summary()
+        self.assertFalse(summary["index_resolution"])
+        self.assertFalse(summary["download_urls_echoed"])
+        summary_text = json.dumps(summary).casefold()
+        self.assertNotIn("https://", summary_text)
+        self.assertNotIn("files.pythonhosted.org", summary_text)
+
+    def test_supply_lock_rejects_duplicate_keys_unsafe_urls_and_wrong_bindings(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            dependency = _write_dependency_wheel(Path(tmp))
+            valid = _supply_for_dependency(dependency)
+            document = json.loads(valid.raw_bytes)
+            mutations = []
+            wrong_hash = json.loads(valid.raw_bytes)
+            wrong_hash["artifacts"][0]["sha256"] = "sha256:" + "0" * 63
+            mutations.append(wrong_hash)
+            wrong_size = json.loads(valid.raw_bytes)
+            wrong_size["artifacts"][0]["size_bytes"] = 0
+            mutations.append(wrong_size)
+            wrong_host = json.loads(valid.raw_bytes)
+            wrong_host["artifacts"][0]["url"] = (
+                "https://example.invalid/" + dependency.name
+            )
+            mutations.append(wrong_host)
+            wrong_query = json.loads(valid.raw_bytes)
+            wrong_query["artifacts"][0]["url"] += "?index=shadow"
+            mutations.append(wrong_query)
+            extra_key = json.loads(valid.raw_bytes)
+            extra_key["unexpected"] = True
+            mutations.append(extra_key)
+            for mutation in mutations:
+                with self.subTest(mutation=mutation):
+                    raw = (json.dumps(mutation, separators=(",", ":")) + "\n").encode()
+                    self.assertIsNone(
+                        project_runtime.project_runtime_supply_lock(
+                            raw,
+                            expected_target="v0.4.3",
+                        )
+                    )
+            duplicate = valid.raw_bytes.replace(
+                b'{"schema":',
+                b'{"schema":"duplicate","schema":',
+                1,
+            )
+            self.assertIsNone(project_runtime.project_runtime_supply_lock(duplicate))
+            self.assertIsNone(
+                project_runtime.project_runtime_supply_lock(
+                    valid.raw_bytes,
+                    expected_target="v0.4.4",
+                )
+            )
+
+    def test_child_environment_discards_every_pip_control_and_disables_config(self) -> None:
+        poisoned = {
+            "PIP_INDEX_URL": "https://example.invalid/simple",
+            "PIP_EXTRA_INDEX_URL": "https://shadow.invalid/simple",
+            "PIP_CONFIG_FILE": "C:/unsafe/pip.ini",
+            "PIP_NO_INDEX": "1",
+            "PIP_FIND_LINKS": "C:/unsafe/wheels",
+            "PIP_TRUSTED_HOST": "example.invalid",
+            "PIP_TARGET": "C:/unsafe/target",
+            "PIP_PREFIX": "C:/unsafe/prefix",
+            "PIP_REQUIREMENT": "C:/unsafe/requirements.txt",
+            "PIP_CONSTRAINT": "C:/unsafe/constraints.txt",
+        }
+        with patch.dict(os.environ, poisoned, clear=False):
+            environment = project_runtime._isolated_python_environment()
+        self.assertEqual(environment["PIP_CONFIG_FILE"], os.devnull)
+        self.assertEqual(environment["PYTHONDONTWRITEBYTECODE"], "1")
+        self.assertEqual(
+            sorted(key for key in environment if key.upper().startswith("PIP_")),
+            ["PIP_CONFIG_FILE"],
+        )
+
+    def test_artifact_download_rejects_unapproved_redirect_and_accepts_release_asset_host(self) -> None:
+        class Response(io.BytesIO):
+            def __init__(self, data: bytes, final_url: str) -> None:
+                super().__init__(data)
+                self._final_url = final_url
+
+            def geturl(self) -> str:
+                return self._final_url
+
+        data = b"exact-wheel-bytes"
+        digest = hashlib.sha256(data).hexdigest()
+        github_url = (
+            "https://github.com/mow-coding/zettel-kasten/releases/download/"
+            "v0.4.3/wom_kit-0.4.3-py3-none-any.whl"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            rejected = root / "rejected.whl"
+            with patch.object(
+                project_runtime,
+                "_open_runtime_artifact",
+                return_value=Response(data, "https://example.invalid/untrusted.whl"),
+            ):
+                with self.assertRaisesRegex(
+                    project_runtime.ProjectRuntimeError,
+                    "project_runtime_artifact_redirect_unsafe",
+                ):
+                    project_runtime._download_exact_artifact(
+                        url=github_url,
+                        expected_sha256=digest,
+                        expected_size=len(data),
+                        destination=rejected,
+                        callback=None,
+                        stage="test-rejected-redirect",
+                        source_kind="github_release",
+                    )
+
+            accepted = root / "accepted.whl"
+            final_asset_url = (
+                "https://release-assets.githubusercontent.com/github-production-release-asset/"
+                "exact/object?sp=r&sig=opaque"
+            )
+            with patch.object(
+                project_runtime,
+                "_open_runtime_artifact",
+                return_value=Response(data, final_asset_url),
+            ):
+                size = project_runtime._download_exact_artifact(
+                    url=github_url,
+                    expected_sha256=digest,
+                    expected_size=len(data),
+                    destination=accepted,
+                    callback=None,
+                    stage="test-accepted-redirect",
+                    source_kind="github_release",
+                )
+            self.assertEqual(size, len(data))
+            self.assertEqual(accepted.read_bytes(), data)
+            redirect_handler = project_runtime._RuntimeArtifactRedirectHandler(
+                source_kind="github_release",
+                callback=None,
+                stage="test-prefollow-redirect",
+            )
+            with self.assertRaisesRegex(
+                project_runtime.ProjectRuntimeError,
+                "project_runtime_artifact_redirect_unsafe",
+            ):
+                redirect_handler.redirect_request(
+                    project_runtime.urllib.request.Request(github_url),
+                    None,
+                    302,
+                    "Found",
+                    {},
+                    "https://example.invalid/untrusted.whl",
+                )
+            pypi_redirect_handler = project_runtime._RuntimeArtifactRedirectHandler(
+                source_kind="pypi_file",
+                callback=None,
+                stage="test-pypi-no-redirect",
+            )
+            with self.assertRaisesRegex(
+                project_runtime.ProjectRuntimeError,
+                "project_runtime_artifact_redirect_unsafe",
+            ):
+                pypi_redirect_handler.redirect_request(
+                    project_runtime.urllib.request.Request(
+                        "https://files.pythonhosted.org/packages/exact/test.whl"
+                    ),
+                    None,
+                    302,
+                    "Found",
+                    {},
+                    "https://files.pythonhosted.org/packages/other/test.whl",
+                )
+
+    def test_runtime_mutation_snapshot_detects_and_then_confirms_orphan_cleanup(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp) / "project"
+            project.mkdir()
+            tracker = project_runtime.RuntimeMutationTracker(
+                before=project_runtime.runtime_root_snapshot(project),
+                started=True,
+                cleanup_verified=False,
+            )
+            runtimes = project / project_runtime.PROJECT_RUNTIME_RELATIVE_ROOT
+            runtimes.mkdir(parents=True)
+            orphan = runtimes / ".v0.4.3-orphan"
+            orphan.mkdir()
+            self.assertFalse(project_runtime.runtime_mutation_restored(project, tracker))
+            orphan.rmdir()
+            runtimes.rmdir()
+            self.assertTrue(project_runtime.runtime_mutation_restored(project, tracker))
+
+    def test_shadow_reference_cleanup_uncertainty_is_a_distinct_blocker(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            dependency = _write_dependency_wheel(root)
+            supply = _supply_for_dependency(dependency)
+            bootstrap = project_runtime.BootstrapWheel(
+                version="0.4.3",
+                tag="v0.4.3",
+                url=(
+                    "https://github.com/mow-coding/zettel-kasten/releases/download/"
+                    "v0.4.3/wom_kit-0.4.3-py3-none-any.whl"
+                ),
+                sha256="a" * 64,
+                file_name="wom_kit-0.4.3-py3-none-any.whl",
+            )
+            leaky_parent = root / "leaky-reference"
+
+            class LeakyTemporaryDirectory:
+                def __enter__(self) -> str:
+                    leaky_parent.mkdir()
+                    return str(leaky_parent)
+
+                def __exit__(self, *args: object) -> bool:
+                    return False
+
+            bundle = type("Bundle", (), {"root": root})()
+
+            def initialize(runtime: Path, **_kwargs: object) -> tuple[dict[str, bool], list[dict[str, object]], str]:
+                runtime.mkdir()
+                return {"pip_check": True}, [], "3.12.0"
+
+            with (
+                patch.object(
+                    project_runtime.tempfile,
+                    "TemporaryDirectory",
+                    return_value=LeakyTemporaryDirectory(),
+                ),
+                patch.object(
+                    project_runtime,
+                    "_initialize_runtime_payload",
+                    side_effect=initialize,
+                ),
+            ):
+                with self.assertRaises(project_runtime.RuntimeReferenceCleanupError):
+                    project_runtime._reference_payload_inventory(
+                        bundle,
+                        bootstrap=bootstrap,
+                        supply=supply,
+                        progress_callback=None,
+                    )
+
+    def test_distribution_inventory_authority_comes_from_exact_artifacts_not_receipt(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            dependency = _write_dependency_wheel(Path(tmp))
+            supply = _supply_for_dependency(dependency)
+            bootstrap = project_runtime.BootstrapWheel(
+                version="0.4.3",
+                tag="v0.4.3",
+                url=(
+                    "https://github.com/mow-coding/zettel-kasten/releases/download/"
+                    "v0.4.3/wom_kit-0.4.3-py3-none-any.whl"
+                ),
+                sha256="a" * 64,
+                file_name="wom_kit-0.4.3-py3-none-any.whl",
+            )
+            exact = [
+                {"name": "pip", "version": "25.0.1"},
+                {"name": "Synthetic-Dependency", "version": "1.2.3"},
+                {"name": "wom-kit", "version": "0.4.3"},
+            ]
+            self.assertEqual(
+                project_runtime._validate_distribution_inventory(
+                    exact,
+                    bootstrap=bootstrap,
+                    supply=supply,
+                ),
+                "25.0.1",
+            )
+            forged_receipt_inventory = [
+                *exact,
+                {"name": "extra-package", "version": "9.9.9"},
+            ]
+            with self.assertRaisesRegex(
+                project_runtime.ProjectRuntimeError,
+                "project_runtime_package_inventory_mismatch",
+            ):
+                project_runtime._validate_distribution_inventory(
+                    forged_receipt_inventory,
+                    bootstrap=bootstrap,
+                    supply=supply,
+                )
+
+    def test_plan_requires_live_reverification_and_enforces_interpreter_only_when_requested(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            dependency = _write_dependency_wheel(root)
+            supply = _supply_for_dependency(dependency)
+            bootstrap = project_runtime.BootstrapWheel(
+                version="0.4.3",
+                tag="v0.4.3",
+                url=(
+                    "https://github.com/mow-coding/zettel-kasten/releases/download/"
+                    "v0.4.3/wom_kit-0.4.3-py3-none-any.whl"
+                ),
+                sha256="a" * 64,
+                file_name="wom_kit-0.4.3-py3-none-any.whl",
+            )
+            receipt_candidate = {
+                "status": "receipt_candidate",
+                "verified": False,
+                "receipt_candidate_valid": True,
+            }
+            launcher = {"unsafe": False, "already_target": True}
+            with (
+                patch.object(
+                    project_runtime,
+                    "inspect_runtime",
+                    return_value=receipt_candidate,
+                ),
+                patch.object(
+                    project_runtime,
+                    "launcher_snapshot",
+                    return_value=launcher,
+                ),
+                patch.object(
+                    project_runtime,
+                    "runtime_supply_matches_current_interpreter",
+                    return_value=False,
+                ),
+            ):
+                preview, preview_blockers, preview_warnings = project_runtime.plan_runtime(
+                    root,
+                    "v0.4.3",
+                    policy_state="required",
+                    target_commit="b" * 40,
+                    bootstrap=bootstrap,
+                    bootstrap_summary=bootstrap.public_summary(),
+                    supply=supply,
+                    enforce_interpreter=False,
+                )
+                prepared, prepared_blockers, _prepared_warnings = project_runtime.plan_runtime(
+                    root,
+                    "v0.4.3",
+                    policy_state="required",
+                    target_commit="b" * 40,
+                    bootstrap=bootstrap,
+                    bootstrap_summary=bootstrap.public_summary(),
+                    supply=supply,
+                    enforce_interpreter=True,
+                )
+        self.assertNotIn("project_runtime_interpreter_not_locked", preview_blockers)
+        self.assertTrue(preview_warnings)
+        self.assertFalse(preview["interpreter_enforced"])
+        self.assertTrue(preview["materialization_required"])
+        self.assertFalse(preview["runtime_creation_required"])
+        self.assertTrue(preview["live_reverification_required"])
+        self.assertIn("project_runtime_interpreter_not_locked", prepared_blockers)
+        self.assertTrue(prepared["interpreter_enforced"])
+
+    def test_public_bootstrap_provenance_binds_exact_release_wheel_hash(self) -> None:
+        digest = "a" * 64
+
+        class Distribution:
+            version = "0.4.3"
+
+            @staticmethod
+            def read_text(name: str) -> str | None:
+                if name != "direct_url.json":
+                    return None
+                return json.dumps(
+                    {
+                        "url": "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.3/wom_kit-0.4.3-py3-none-any.whl",
+                        "archive_info": {"hashes": {"sha256": digest}},
+                    }
+                )
+
+        with patch.object(project_runtime.importlib.metadata, "distribution", return_value=Distribution()):
+            wheel, summary = project_runtime.bootstrap_wheel_for_target("v0.4.3")
+        self.assertIsNotNone(wheel)
+        self.assertEqual(wheel.sha256, digest)
+        self.assertTrue(summary["available"])
+        self.assertEqual(summary["wheel_sha256"], f"sha256:{digest}")
+        self.assertFalse(summary["download_url_echoed"])
+        self.assertNotIn("url", summary)
+
+    def test_write_guard_blocks_a_different_running_version(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp) / "project"
+            metadata = project / ".zettel-kasten"
+            archive = project / "archive"
+            metadata.mkdir(parents=True)
+            archive.mkdir()
+            (archive / "archive.yml").write_text("archive_id: archive:test\n", encoding="utf-8")
+            (metadata / "installed-version.txt").write_text("v0.4.3\n", encoding="utf-8")
+            blocked = project_runtime.project_write_guard(
+                archive,
+                running_version="0.4.2",
+            )
+            aligned = project_runtime.project_write_guard(
+                archive,
+                running_version="0.4.3",
+            )
+            update_lock = metadata / "version-update.lock"
+            update_lock.write_text(
+                '{"private":"must-not-be-echoed"}\n',
+                encoding="utf-8",
+            )
+            recovery_required = project_runtime.project_write_guard(
+                archive,
+                running_version="0.4.3",
+            )
+        self.assertTrue(blocked["blocked"])
+        self.assertEqual(blocked["reason_code"], "project_runtime_mismatch")
+        self.assertEqual(
+            blocked["project_runtime_argv"],
+            [r".\.zettel-kasten\bin\archive.cmd"],
+        )
+        self.assertFalse(aligned["blocked"])
+        self.assertTrue(recovery_required["blocked"])
+        self.assertEqual(
+            recovery_required["reason_code"],
+            "project_update_recovery_required",
+        )
+        self.assertFalse(recovery_required["private_values_echoed"])
+        self.assertNotIn("must-not-be-echoed", json.dumps(recovery_required))
+
+    @unittest.skipUnless(
+        os.name == "nt"
+        and sys.version_info[:2] == (3, 12)
+        and platform.machine().casefold() in {"amd64", "x86_64"},
+        "The v0.4.3 project runtime lock is CPython 3.12 Windows AMD64 only.",
+    )
+    def test_three_projects_update_only_one_and_leave_shared_launcher_unchanged(self) -> None:
+        self.skipTest("superseded by complete runtime-candidate phase-boundary tests")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            projects = [root / "project-040", root / "project-042", root / "project-043"]
+            versions = ["0.4.0", "0.4.2", "0.4.3"]
+            for project, version in zip(projects, versions, strict=True):
+                metadata = project / ".zettel-kasten"
+                metadata.mkdir(parents=True)
+                (metadata / "installed-version.txt").write_text(f"v{version}\n", encoding="utf-8")
+            shared_launcher = root / "shared" / "archive.exe"
+            shared_launcher.parent.mkdir()
+            shared_launcher.write_bytes(b"shared-v0.4.2-sentinel")
+            shared_before = shared_launcher.read_bytes()
+            untouched_before = [_tree_snapshot(projects[0]), _tree_snapshot(projects[2])]
+            path_before = os.environ.get("PATH")
+
+            wheel_path = _write_minimal_wheel(root, "0.4.3")
+            dependency_path = _write_dependency_wheel(root)
+            supply = _supply_for_dependency(dependency_path)
+            wheel_sha256 = hashlib.sha256(wheel_path.read_bytes()).hexdigest()
+            bootstrap = project_runtime.BootstrapWheel(
+                version="0.4.3",
+                tag="v0.4.3",
+                url="https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.3/wom_kit-0.4.3-py3-none-any.whl",
+                sha256=wheel_sha256,
+                file_name=wheel_path.name,
+            )
+
+            source_by_name = {
+                wheel_path.name: wheel_path,
+                dependency_path.name: dependency_path,
+            }
+
+            shadow_root = root / "python-path-shadow"
+            shadow_package = shadow_root / "wom_kit"
+            shadow_package.mkdir(parents=True)
+            (shadow_package / "__init__.py").write_text(
+                '__version__ = "shadow"\n',
+                encoding="utf-8",
+            )
+            (shadow_package / "archive_cli.py").write_text(
+                "print('PYTHONPATH-SHADOW-EXECUTED')\n"
+                "raise SystemExit(91)\n",
+                encoding="utf-8",
+            )
+
+            def copy_artifact(**kwargs: object) -> int:
+                destination = kwargs["destination"]
+                self.assertIsInstance(destination, Path)
+                assert isinstance(destination, Path)
+                source = source_by_name[destination.name]
+                shutil.copyfile(source, destination)
+                return source.stat().st_size
+
+            poisoned_environment = {
+                "PYTHONHOME": str(root / "missing-python-home"),
+                "PYTHONPATH": str(shadow_root),
+                "VIRTUAL_ENV": str(root / "unrelated-shared-venv"),
+                "PIP_INDEX_URL": "https://example.invalid/simple",
+                "PIP_EXTRA_INDEX_URL": "https://shadow.invalid/simple",
+                "PIP_CONFIG_FILE": str(root / "missing-pip.ini"),
+                "PIP_FIND_LINKS": str(root / "untrusted-wheelhouse"),
+                "PIP_TARGET": str(root / "untrusted-target"),
+            }
+            tracker = project_runtime.RuntimeMutationTracker()
+            with patch.dict(os.environ, poisoned_environment):
+                with patch.object(
+                    project_runtime,
+                    "_download_exact_artifact",
+                    side_effect=copy_artifact,
+                ):
+                    prepared_bundle = project_runtime.prepare_runtime_bundle(
+                        target="v0.4.3",
+                        target_commit="b" * 40,
+                        bootstrap=bootstrap,
+                        supply=supply,
+                    )
+                with patch.object(
+                    project_runtime,
+                    "_download_exact_artifact",
+                    side_effect=AssertionError(
+                        "postapproval materialization must not use network"
+                    ),
+                ):
+                    materialized = project_runtime.materialize_runtime(
+                        projects[1],
+                        target="v0.4.3",
+                        target_commit="b" * 40,
+                        bootstrap=bootstrap,
+                        supply=supply,
+                        prepared_bundle=prepared_bundle,
+                        running_version="0.4.3",
+                        mutation_tracker=tracker,
+                    )
+            prepared_summary = prepared_bundle.public_summary()
+            self.assertTrue(prepared_summary["network_complete"])
+            self.assertFalse(prepared_summary["post_approval_network_allowed"])
+            self.assertNotIn("https://", json.dumps(prepared_summary))
+            launcher = projects[1] / project_runtime.PROJECT_RUNTIME_LAUNCHER_RELATIVE
+            launcher.parent.mkdir(parents=True, exist_ok=True)
+            launcher.write_bytes(project_runtime.launcher_bytes("v0.4.3"))
+            (projects[1] / ".zettel-kasten" / "installed-version.txt").write_text(
+                "v0.4.3\n",
+                encoding="utf-8",
+            )
+
+            completed = subprocess.run(
+                ["cmd", "/d", "/c", str(launcher), "--version"],
+                cwd=projects[1],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=30,
+                env={**os.environ, **poisoned_environment},
+            )
+            self.assertEqual(
+                completed.returncode,
+                0,
+                json.dumps(
+                    {
+                        "stdout": completed.stdout,
+                        "stderr": completed.stderr,
+                        "scripts": sorted(
+                            path.name
+                            for path in (
+                                materialized.final_path / "Scripts"
+                            ).iterdir()
+                        ),
+                    }
+                ),
+            )
+            self.assertIn("0.4.3", completed.stdout)
+            self.assertNotIn("PYTHONPATH-SHADOW-EXECUTED", completed.stdout)
+            self.assertTrue(materialized.created)
+            site_packages = materialized.final_path / "Lib" / "site-packages"
+            self.assertEqual(
+                [
+                    path.relative_to(site_packages).as_posix()
+                    for package_root in (
+                        site_packages / "wom_kit",
+                        site_packages / "synthetic_dependency",
+                    )
+                    for path in sorted(package_root.rglob("*.pyc"))
+                ],
+                [],
+            )
+            candidate = project_runtime.inspect_runtime(
+                projects[1],
+                "v0.4.3",
+                expected_commit="b" * 40,
+                expected_wheel_sha256=wheel_sha256,
+                expected_supply_lock_sha256=supply.sha256,
+            )
+            self.assertFalse(candidate["verified"])
+            self.assertTrue(candidate["receipt_candidate_valid"])
+            self.assertTrue(candidate["live_reverification_required_before_reuse"])
+            runtime_receipt_path = (
+                materialized.final_path / project_runtime.PROJECT_RUNTIME_RECEIPT_NAME
+            )
+            receipt_document = json.loads(materialized.receipt_bytes)
+            invalid_receipts = []
+            top_extra = json.loads(materialized.receipt_bytes)
+            top_extra["unapproved_extra"] = True
+            invalid_receipts.append(top_extra)
+            nested_extra = json.loads(materialized.receipt_bytes)
+            nested_extra["verification"]["unapproved_extra"] = True
+            invalid_receipts.append(nested_extra)
+            malformed_inventory = json.loads(materialized.receipt_bytes)
+            malformed_inventory["artifact_inventory"][0]["unapproved_extra"] = True
+            invalid_receipts.append(malformed_inventory)
+            for invalid_receipt in invalid_receipts:
+                runtime_receipt_path.write_bytes(
+                    (
+                        json.dumps(invalid_receipt, ensure_ascii=False, indent=2)
+                        + "\n"
+                    ).encode("utf-8")
+                )
+                rejected_candidate = project_runtime.inspect_runtime(
+                    projects[1],
+                    "v0.4.3",
+                    expected_commit="b" * 40,
+                    expected_wheel_sha256=wheel_sha256,
+                    expected_supply_lock_sha256=supply.sha256,
+                )
+                self.assertFalse(rejected_candidate["receipt_candidate_valid"])
+            duplicate_receipt = materialized.receipt_bytes.replace(
+                b'{\n  "schema":',
+                b'{\n  "schema":"duplicate",\n  "schema":',
+                1,
+            )
+            runtime_receipt_path.write_bytes(duplicate_receipt)
+            self.assertFalse(
+                project_runtime.inspect_runtime(
+                    projects[1],
+                    "v0.4.3",
+                    expected_commit="b" * 40,
+                    expected_wheel_sha256=wheel_sha256,
+                    expected_supply_lock_sha256=supply.sha256,
+                )["receipt_candidate_valid"]
+            )
+            runtime_receipt_path.write_bytes(materialized.receipt_bytes)
+            self.assertEqual(receipt_document["status"], "verified")
+            retained = materialized.final_path / project_runtime.PROJECT_RUNTIME_ARTIFACTS_NAME
+            self.assertEqual(
+                {path.name for path in retained.iterdir()},
+                {
+                    project_runtime.PROJECT_RUNTIME_RETAINED_LOCK_NAME,
+                    wheel_path.name,
+                    dependency_path.name,
+                },
+            )
+            self.assertEqual(list(site_packages.rglob("direct_url.json")), [])
+            runtime_process_calls: list[list[str]] = []
+            original_run_bounded = project_runtime._run_bounded
+
+            def observe_runtime_process(argv: list[str], **kwargs: object) -> str:
+                runtime_process_calls.append(list(argv))
+                return original_run_bounded(argv, **kwargs)
+
+            with (
+                patch.object(
+                    project_runtime,
+                    "_download_exact_artifact",
+                    side_effect=AssertionError(
+                        "valid reuse must not redownload artifacts"
+                    ),
+                ),
+                patch.object(
+                    project_runtime,
+                    "_run_bounded",
+                    side_effect=observe_runtime_process,
+                ),
+            ):
+                reused = project_runtime.materialize_runtime(
+                    projects[1],
+                    target="v0.4.3",
+                    target_commit="b" * 40,
+                    bootstrap=bootstrap,
+                    supply=supply,
+                    prepared_bundle=prepared_bundle,
+                    mutation_tracker=project_runtime.RuntimeMutationTracker(),
+                    running_version="0.4.3",
+                )
+            self.assertFalse(reused.created)
+            self.assertEqual(
+                reused.installed_payload_sha256,
+                materialized.installed_payload_sha256,
+            )
+            existing_python = str(
+                materialized.final_path / "Scripts" / "python.exe"
+            ).casefold()
+            existing_process_calls = [
+                argv
+                for argv in runtime_process_calls
+                if argv and argv[0].casefold() == existing_python
+            ]
+            self.assertTrue(existing_process_calls)
+            self.assertTrue(all("-S" in argv for argv in existing_process_calls))
+            self.assertFalse(
+                any("pip" in {item.casefold() for item in argv} for argv in existing_process_calls)
+            )
+            self.assertFalse(
+                any("archive.exe" in item.casefold() for argv in existing_process_calls for item in argv)
+            )
+            runtime_root_before_cleanup_error = project_runtime.runtime_root_snapshot(
+                projects[1]
+            )
+            cleanup_error_tracker = project_runtime.RuntimeMutationTracker()
+            private_reference_root = root / "must-not-be-echoed-reference-root"
+            with (
+                patch.object(
+                    project_runtime,
+                    "_reference_payload_inventory",
+                    side_effect=project_runtime.RuntimeReferenceCleanupError(
+                        private_reference_root
+                    ),
+                ),
+                patch.object(
+                    project_runtime,
+                    "_runtime_process_verification",
+                    side_effect=AssertionError(
+                        "existing runtime must not execute after shadow cleanup uncertainty"
+                    ),
+                ),
+            ):
+                with self.assertRaises(project_runtime.RuntimeReferenceCleanupError) as caught:
+                    project_runtime.materialize_runtime(
+                        projects[1],
+                        target="v0.4.3",
+                        target_commit="b" * 40,
+                        bootstrap=bootstrap,
+                        supply=supply,
+                        prepared_bundle=prepared_bundle,
+                        mutation_tracker=cleanup_error_tracker,
+                        running_version="0.4.3",
+                    )
+            self.assertEqual(
+                str(caught.exception),
+                "project_runtime_reference_cleanup_unverified",
+            )
+            self.assertNotIn(str(private_reference_root), str(caught.exception))
+            self.assertFalse(cleanup_error_tracker.started)
+            self.assertEqual(
+                project_runtime.runtime_root_snapshot(projects[1]),
+                runtime_root_before_cleanup_error,
+            )
+            with patch.object(
+                project_runtime,
+                "_reference_payload_inventory",
+                return_value=(
+                    project_runtime._normalized_runtime_payload_inventory(
+                        materialized.final_path
+                    ),
+                    {"pip_check": False},
+                ),
+            ):
+                with self.assertRaisesRegex(
+                    project_runtime.ProjectRuntimeError,
+                    "project_runtime_reuse_pip_check_unproven",
+                ):
+                    project_runtime.materialize_runtime(
+                        projects[1],
+                        target="v0.4.3",
+                        target_commit="b" * 40,
+                        bootstrap=bootstrap,
+                        supply=supply,
+                        prepared_bundle=prepared_bundle,
+                        mutation_tracker=project_runtime.RuntimeMutationTracker(),
+                        running_version="0.4.3",
+                    )
+
+            dist_info = site_packages / "wom_kit-0.4.3.dist-info"
+            dist_info_extra = dist_info / "unbound-extra.txt"
+            dist_info_extra.write_text("not wheel-authorized\n", encoding="utf-8")
+            with self.assertRaisesRegex(
+                project_runtime.ProjectRuntimeError,
+                "project_runtime_installed_payload_inventory_mismatch",
+            ):
+                project_runtime.materialize_runtime(
+                    projects[1],
+                    target="v0.4.3",
+                    target_commit="b" * 40,
+                    bootstrap=bootstrap,
+                    supply=supply,
+                    prepared_bundle=prepared_bundle,
+                    mutation_tracker=project_runtime.RuntimeMutationTracker(),
+                    running_version="0.4.3",
+                )
+            dist_info_extra.unlink()
+
+            record_path = dist_info / "RECORD"
+            record_before = record_path.read_bytes()
+            record_lines = record_before.decode("utf-8").splitlines()
+            record_lines[0] = record_lines[0].replace("sha256=", "sha256=A", 1)
+            record_path.write_text("\n".join(record_lines) + "\n", encoding="utf-8")
+            with self.assertRaisesRegex(
+                project_runtime.ProjectRuntimeError,
+                "project_runtime_installed_payload_inventory_mismatch",
+            ):
+                project_runtime.materialize_runtime(
+                    projects[1],
+                    target="v0.4.3",
+                    target_commit="b" * 40,
+                    bootstrap=bootstrap,
+                    supply=supply,
+                    prepared_bundle=prepared_bundle,
+                    mutation_tracker=project_runtime.RuntimeMutationTracker(),
+                    running_version="0.4.3",
+                )
+            record_path.write_bytes(record_before)
+
+            receipt_path = runtime_receipt_path
+            python_path = materialized.final_path / "Scripts" / "python.exe"
+            python_before = python_path.read_bytes()
+            python_path.write_bytes(python_before + b"receipt-self-authorized-tamper")
+            forged_receipt = json.loads(materialized.receipt_bytes)
+            forged_receipt["installed_payload_sha256"] = (
+                "sha256:" + project_runtime._runtime_payload_sha256(materialized.final_path)
+            )
+            receipt_path.write_bytes(
+                (json.dumps(forged_receipt, ensure_ascii=False, indent=2) + "\n").encode(
+                    "utf-8"
+                )
+            )
+            with self.assertRaisesRegex(
+                project_runtime.ProjectRuntimeError,
+                "project_runtime_existing_shadow_mismatch",
+            ):
+                project_runtime.materialize_runtime(
+                    projects[1],
+                    target="v0.4.3",
+                    target_commit="b" * 40,
+                    bootstrap=bootstrap,
+                    supply=supply,
+                    prepared_bundle=prepared_bundle,
+                    mutation_tracker=project_runtime.RuntimeMutationTracker(),
+                    running_version="0.4.3",
+                )
+            python_path.write_bytes(python_before)
+            receipt_path.write_bytes(materialized.receipt_bytes)
+
+            extra_payload = (
+                materialized.final_path
+                / "Lib"
+                / "site-packages"
+                / "wom_kit"
+                / "unbound_extra.py"
+            )
+            extra_payload.write_text("raise RuntimeError('unbound')\n", encoding="utf-8")
+            with self.assertRaisesRegex(
+                project_runtime.ProjectRuntimeError,
+                "project_runtime_installed_payload_inventory_mismatch",
+            ):
+                project_runtime.materialize_runtime(
+                    projects[1],
+                    target="v0.4.3",
+                    target_commit="b" * 40,
+                    bootstrap=bootstrap,
+                    supply=supply,
+                    prepared_bundle=prepared_bundle,
+                    mutation_tracker=project_runtime.RuntimeMutationTracker(),
+                    running_version="0.4.3",
+                )
+            extra_payload.unlink()
+
+            retained_dependency = retained / dependency_path.name
+            retained_dependency.write_bytes(retained_dependency.read_bytes() + b"tampered")
+            with self.assertRaisesRegex(
+                project_runtime.ProjectRuntimeError,
+                "project_runtime_retained_artifact_mismatch",
+            ):
+                project_runtime.materialize_runtime(
+                    projects[1],
+                    target="v0.4.3",
+                    target_commit="b" * 40,
+                    bootstrap=bootstrap,
+                    supply=supply,
+                    prepared_bundle=prepared_bundle,
+                    mutation_tracker=project_runtime.RuntimeMutationTracker(),
+                    running_version="0.4.3",
+                )
+            shutil.copyfile(dependency_path, retained_dependency)
+
+            resource = (
+                materialized.final_path
+                / "Lib"
+                / "site-packages"
+                / "wom_kit"
+                / "_resources"
+                / "release-notes"
+                / "v0.4.3.md"
+            )
+            resource.write_bytes(resource.read_bytes() + b"tampered")
+            with self.assertRaises(project_runtime.ProjectRuntimeError):
+                project_runtime.materialize_runtime(
+                    projects[1],
+                    target="v0.4.3",
+                    target_commit="b" * 40,
+                    bootstrap=bootstrap,
+                    supply=supply,
+                    prepared_bundle=prepared_bundle,
+                    mutation_tracker=project_runtime.RuntimeMutationTracker(),
+                    running_version="0.4.3",
+                )
+            self.assertEqual(_tree_snapshot(projects[0]), untouched_before[0])
+            self.assertEqual(_tree_snapshot(projects[2]), untouched_before[1])
+            self.assertEqual(shared_launcher.read_bytes(), shared_before)
+            self.assertEqual(os.environ.get("PATH"), path_before)
+            prepared_dependency = prepared_bundle.root / dependency_path.name
+            prepared_dependency.write_bytes(
+                prepared_dependency.read_bytes() + b"postapproval-drift"
+            )
+            drift_tracker = project_runtime.RuntimeMutationTracker()
+            with self.assertRaisesRegex(
+                project_runtime.ProjectRuntimeError,
+                "project_runtime_prepared_bundle_drift",
+            ):
+                project_runtime.materialize_runtime(
+                    projects[1],
+                    target="v0.4.3",
+                    target_commit="b" * 40,
+                    bootstrap=bootstrap,
+                    supply=supply,
+                    prepared_bundle=prepared_bundle,
+                    mutation_tracker=drift_tracker,
+                    running_version="0.4.3",
+                )
+            self.assertFalse(drift_tracker.started)
+            self.assertTrue(
+                project_runtime.cleanup_prepared_runtime_bundle(prepared_bundle)
+            )
+            self.assertTrue(
+                project_runtime.cleanup_prepared_runtime_bundle(prepared_bundle)
+            )
+
+
+if __name__ == "__main__":
+    unittest.main()

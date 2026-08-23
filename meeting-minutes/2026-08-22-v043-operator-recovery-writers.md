@@ -87,7 +87,7 @@ into the past, making the assertion deterministic.
 
 Implementation touched the existing CLI, service, exact approval binding,
 feedback body module, focused tests, and the public operator/version documents.
-No Basoon archive, beta-letter source, other worktree, PATH entry, external
+No acceptance archive, beta-letter source, other worktree, PATH entry, external
 provider, or release state was changed.
 
 Focused verification covers body create/revise/supersede, immutable lifecycle

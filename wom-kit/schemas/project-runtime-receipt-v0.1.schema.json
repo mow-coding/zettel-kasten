@@ -1,0 +1,91 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "WOM-kit project runtime receipt v0.1",
+  "type": "object",
+  "required": [
+    "schema",
+    "status",
+    "created_at",
+    "target_tag",
+    "target_version",
+    "target_commit",
+    "wheel_file_name",
+    "wheel_sha256",
+    "supply_lock_sha256",
+    "artifact_inventory",
+    "installed_payload_sha256",
+    "python_version",
+    "installer_running_version",
+    "installed_distributions",
+    "verification",
+    "global_path_mutation",
+    "previous_runtime_deleted",
+    "absolute_paths_echoed"
+  ],
+  "properties": {
+    "schema": {"type": "string", "const": "wom-kit/project-runtime-receipt/v0.1"},
+    "status": {"type": "string", "const": "verified"},
+    "created_at": {"type": "string"},
+    "target_tag": {"type": "string", "pattern": "^v[0-9]+\\.[0-9]+\\.[0-9]+$"},
+    "target_version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"},
+    "target_commit": {"type": "string", "pattern": "^[0-9a-f]{40,64}$"},
+    "wheel_file_name": {"type": "string", "pattern": "^wom_kit-[0-9]+\\.[0-9]+\\.[0-9]+-py3-none-any\\.whl$"},
+    "wheel_sha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "supply_lock_sha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "artifact_inventory": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 33,
+      "items": {
+        "type": "object",
+        "required": ["role", "distribution", "version", "file_name", "size_bytes", "sha256"],
+        "properties": {
+          "role": {"type": "string", "enum": ["runtime", "dependency"]},
+          "distribution": {"type": "string", "minLength": 1},
+          "version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"},
+          "file_name": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,199}\\.whl$"},
+          "size_bytes": {"type": "integer", "minimum": 1, "maximum": 134217728},
+          "sha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+        },
+        "additionalProperties": false
+      }
+    },
+    "installed_payload_sha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "python_version": {"type": "string"},
+    "installer_running_version": {"type": "string"},
+    "installed_distributions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "version"],
+        "properties": {
+          "name": {"type": ["string", "null"]},
+          "version": {"type": "string"}
+        },
+        "additionalProperties": false
+      }
+    },
+    "verification": {
+      "type": "object",
+      "required": ["wheel_sha256", "pip_check", "version", "package_resources", "new_process", "supply_lock", "artifact_hashes", "artifact_sizes", "artifact_inventory", "installed_payload", "live_process"],
+      "properties": {
+        "wheel_sha256": {"type": "boolean", "const": true},
+        "pip_check": {"type": "boolean", "const": true},
+        "version": {"type": "boolean", "const": true},
+        "package_resources": {"type": "boolean", "const": true},
+        "new_process": {"type": "boolean", "const": true},
+        "supply_lock": {"type": "boolean", "const": true},
+        "artifact_hashes": {"type": "boolean", "const": true},
+        "artifact_sizes": {"type": "boolean", "const": true},
+        "artifact_inventory": {"type": "boolean", "const": true},
+        "installed_payload": {"type": "boolean", "const": true},
+        "live_process": {"type": "boolean", "const": true}
+      },
+      "additionalProperties": false
+    },
+    "global_path_mutation": {"type": "boolean", "const": false},
+    "previous_runtime_deleted": {"type": "boolean", "const": false},
+    "absolute_paths_echoed": {"type": "boolean", "const": false}
+  },
+  "additionalProperties": false
+}

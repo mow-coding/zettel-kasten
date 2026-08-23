@@ -21,13 +21,18 @@ archive --version
 archive version <project-or-archive-root> --format json
 ```
 
-Use the second result's project source, pin, and runtime-alignment evidence to
+Use the second result's project source, pin, and `project_runtime` evidence to
 decide whether that client project needs an update. During development and
 release verification, install the wheel in a dedicated temporary virtual
 environment and invoke its `Scripts\archive.exe` by explicit path; do not
-replace the user-shared PATH tool as a side effect of testing. Fully independent
-client execution requires a dedicated environment or OS account per client.
-WOM v0.4.3 does not claim a general-command per-folder sandbox.
+replace the user-shared PATH tool as a side effect of testing.
+
+The approved v0.4.3 updater then installs the verified release wheel under the
+selected project at `.zettel-kasten/runtimes/vX.Y.Z/` and activates the stable
+`.zettel-kasten/bin/archive.cmd` launcher. Ordinary project commands use that
+launcher. Other project folders and the user-shared PATH executable do not
+change. This is WOM's supported project runtime boundary; it does not isolate
+arbitrary non-WOM programs or separate Windows user permissions.
 
 The v0.4.3 URL below is a conditional contract, not proof that an artifact is
 public. Use it only after the matching GitHub Release exists and lists the
@@ -40,22 +45,25 @@ Updating repository files alone does not replace the isolated `uv tool` or
 virtual-environment wheel. After the verified v0.4.3 asset exists, install that
 exact wheel and start a new process.
 
-## Recommended Install
+## Recommended Project Bootstrap
 
-Install with `uv` only after the exact WOM GitHub Release exists and lists the
-verified wheel. The versioned URL alone is not proof that the asset is
-available:
+Create a temporary bootstrap only after the exact WOM GitHub Release exists and
+lists the verified wheel. The versioned URL alone is not proof that the asset
+is available:
 
 ```powershell
-uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.3/wom_kit-0.4.3-py3-none-any.whl"
-archive --version
+py -m venv .wom-bootstrap-v043
+& .\.wom-bootstrap-v043\Scripts\python.exe -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.3/wom_kit-0.4.3-py3-none-any.whl"
+& .\.wom-bootstrap-v043\Scripts\archive.exe --version
 ```
 
-After the new process reports exactly `archive 0.4.3`, the read-only planner is
-available as:
+After the new process reports exactly `archive 0.4.3`, use that explicit
+bootstrap executable for `project-version-update`. After approval succeeds,
+verify the project runtime and use its launcher:
 
 ```powershell
-archive git-backup-plan <archive-root> --remote origin --dry-run --format json
+.\.zettel-kasten\bin\archive.cmd version <project-or-archive-root> --format json
+.\.zettel-kasten\bin\archive.cmd git-backup-plan <archive-root> --remote origin --dry-run --format json
 ```
 
 It observes the checked-out symbolic branch and remote ref without a write.

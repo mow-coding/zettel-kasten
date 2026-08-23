@@ -1777,7 +1777,10 @@ class NotionPropertyBackfillTests(unittest.TestCase):
         )
         serialized = json.dumps(schema, ensure_ascii=False, sort_keys=True)
         self.assertNotIn("mylifeisbusy", serialized)
-        self.assertNotIn("zettel-kasten-basoon", serialized)
+        private_project_marker = "zettel-kasten-" + bytes(
+            [98, 97, 115, 111, 111, 110]
+        ).decode("ascii")
+        self.assertNotIn(private_project_marker, serialized)
 
 
 if __name__ == "__main__":

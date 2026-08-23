@@ -20,13 +20,16 @@ archive --version
 archive version <project-or-archive-root> --format json
 ```
 
-두 번째 결과의 project source, pin, runtime alignment를 보고 그 클라이언트의
+두 번째 결과의 project source, pin, `project_runtime`을 보고 그 클라이언트의
 업데이트 필요 여부를 결정합니다. 개발·릴리스 검증 때는 별도 임시 가상환경에
 wheel을 설치하고 그 환경의 `Scripts\archive.exe`를 정확한 경로로 실행해야
 합니다. 테스트 과정에서 사용자 공용 PATH 도구를 교체하지 않습니다. 같은
-컴퓨터에서 클라이언트 실행까지 완전히 분리하려면 클라이언트별 전용 환경 또는
-OS 사용자 계정이 필요합니다. WOM v0.4.3은 일반 명령 전체의 폴더별 자동
-샌드박스를 제공한다고 주장하지 않습니다.
+검증된 v0.4.3 updater는 선택한 프로젝트의
+`.zettel-kasten/runtimes/vX.Y.Z/`에 정확한 릴리스 wheel을 설치하고
+`.zettel-kasten/bin/archive.cmd`를 활성화합니다. 이후 그 프로젝트의 일반 WOM
+명령은 이 launcher로 실행합니다. 다른 프로젝트 폴더와 사용자 공용 PATH
+실행기는 바뀌지 않습니다. 이 경계는 WOM 명령의 프로젝트 런타임 격리이며,
+Windows 사용자 권한이나 WOM 밖의 프로그램까지 격리한다는 뜻은 아닙니다.
 
 아래 v0.4.3 URL은 조건부 계약이며 공개 자산이 실제로 존재한다는 증거가
 아닙니다. 정확히 일치하는 GitHub Release가 존재하고 검증된 wheel을 자산으로
@@ -39,22 +42,25 @@ updater는 없습니다. 저장소 파일만 업데이트해도 분리된 `uv to
 가상환경 wheel은 바뀌지 않습니다. 검증된 v0.4.3 자산이 실제로 생긴 뒤 그
 정확한 wheel을 설치하고 새 프로세스를 시작하세요.
 
-## 권장 설치
+## 권장 프로젝트 부트스트랩
 
 정확한 WOM GitHub Release가 실제로 존재하고 검증된 wheel을 자산으로 나열한
-뒤에만 `uv`로 설치하세요. 버전이 들어간 URL만으로 파일이 실제 공개되었다는
+뒤에만 임시 부트스트랩을 만드세요. 버전이 들어간 URL만으로 파일이 실제 공개되었다는
 증거가 되지는 않습니다.
 
 ```powershell
-uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.3/wom_kit-0.4.3-py3-none-any.whl"
-archive --version
+py -m venv .wom-bootstrap-v043
+& .\.wom-bootstrap-v043\Scripts\python.exe -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.3/wom_kit-0.4.3-py3-none-any.whl"
+& .\.wom-bootstrap-v043\Scripts\archive.exe --version
 ```
 
-새 프로세스가 정확히 `archive 0.4.3`을 보고한 뒤 다음 읽기 전용 planner를
-사용할 수 있습니다.
+새 프로세스가 정확히 `archive 0.4.3`을 보고하면 그 명시적 부트스트랩으로
+`project-version-update`를 실행합니다. 승인 성공 뒤 프로젝트 런타임을
+검증하고 해당 launcher를 사용합니다.
 
 ```powershell
-archive git-backup-plan <archive-root> --remote origin --dry-run --format json
+.\.zettel-kasten\bin\archive.cmd version <project-or-archive-root> --format json
+.\.zettel-kasten\bin\archive.cmd git-backup-plan <archive-root> --remote origin --dry-run --format json
 ```
 
 이 명령은 쓰기 없이 체크아웃된 symbolic branch와 remote ref를 관찰합니다.

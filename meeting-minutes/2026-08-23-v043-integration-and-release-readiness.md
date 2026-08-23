@@ -31,7 +31,7 @@ feedback CAS/supersession, Letter 138 `source_properties` 복구를 하나의
 
 ## Letter 138 실제 자료 읽기 전용 재검증
 
-통합된 v0.4.3 소스로 전체 Basoon mirror를 두 번 읽었다. 첫 번째 pass는
+통합된 v0.4.3 소스로 전체 검증 대상 mirror를 두 번 읽었다. 첫 번째 pass는
 내용을 쓰지 않고 exact acceptance candidate를 계산했고, 두 번째 pass는 그
 candidate를 다시 결속해 verified plan을 만들었다.
 
@@ -74,5 +74,156 @@ Content-free bindings:
 - onboarding write: expected fixed-close.
 
 같은 Windows 계정의 공용 `archive` v0.4.2는 교체하지 않았다. 실제 Letter 138
-apply, native approval, rollback drill, Basoon project update, Git backup과 feedback
+apply, native approval, rollback drill, 검증 대상 project update, Git backup과 feedback
 resolved 상태 갱신은 이 기록 시점에는 아직 수행하지 않았다.
+
+## 재개 후 독립 감사와 후보 근거 무효화
+
+컴퓨터 중단 뒤 작업을 재개하면서 PR #77을 병합하기 전에 프로젝트 updater를
+다시 독립 추적했다. 그 결과, 위 자동 테스트와 wheel 검증은 당시 소스의 역사적
+결과로는 유효하지만 v0.4.3 릴리스 완료 근거로는 더 이상 사용할 수 없다고
+판정했다. 이후 코드가 바뀌므로 위 후보 wheel과 SHA-256도 폐기한다.
+
+확인된 병합 차단 사유는 다음과 같다.
+
+- 기존 흐름은 exact-human 승인 뒤에 tag와 `origin/main`을 fetch하여, 승인 대상에
+  없던 commit과 runtime policy가 실제 적용 대상으로 들어올 수 있었다.
+- 기존 runtime 재사용은 receipt의 과거 boolean과 실행 파일 존재만 믿어, 보존
+  artifact나 설치 payload가 바뀐 상태를 실제 새 프로세스로 다시 검증하지 않았다.
+- 최초 runtime 설치는 WOM wheel만 고정하고 PyYAML 등 의존성은 live pip index에
+  맡겨, 같은 v0.4.3 승인으로 서로 다른 dependency bytes가 설치될 수 있었다.
+- `index`는 승인 플래그 없이 SQLite를 쓰므로 project runtime mismatch guard를
+  우회했고, updater의 공식 별칭 두 개는 반대로 잘못 차단됐다.
+- runtime materializer가 반환 전에 실패하고 내부 삭제까지 실패하면 orphan을
+  outer rollback이 보지 못한 채 성공으로 기록할 수 있었다.
+
+교정 결정은 승인 창을 lock-held transaction 안으로 옮겨 승인 전에 release
+evidence를 전부 준비하고 승인 후 네트워크를 0회로 만드는 것이다. Runtime은
+tagged exact supply lock의 PyYAML 6.0.3 및 unicodedata2 17.0.1 Windows CPython
+3.12 wheels까지 size/hash로 결속하고, offline/no-deps 설치와 retained-artifact,
+installed-payload, fresh-process 재검증을 모두 요구한다. Runtime-root snapshot이
+원상 복귀하지 않으면 rollback incomplete로 남기고 update lock을 보존한다.
+
+이 교정의 focused 테스트와 전체 CI, 새 wheel 생성·해시 검증이 끝나기 전까지
+v0.4.3은 계속 미출시이며 실제 개인 프로젝트 apply, provider call, 공용 PATH 교체는 없다.
+
+## 재개 후 승인·트랜잭션 증거 경계 결정
+
+내구 트랜잭션 통합 중 기존 v0.3 프로젝트 업데이트 영수증이 승인 뒤에 생성되는
+`approval_id`, 승인 authority digest, 실행 시각을 본문에 포함한다는 충돌을
+확인했다. 이 바이트들은 네이티브 사람 승인 전에 존재하지 않으므로, 해당
+영수증 전체를 승인 전 immutable intent의 exact postimage로 결속할 수 없다.
+
+다음 경계로 교정한다.
+
+- 프로젝트 업데이트 디스크 영수증은 예약 단계에서 고정한 transaction reference와
+  생성 시각, exact plan SHA-256, target binding SHA-256을 포함하는 정적 문서로 만든다.
+- 승인 뒤에만 생기는 `approval_id`와 authority digest는 정적 영수증 본문에 넣지
+  않고, 성공한 authenticated claim과 hash-chained transaction journal에 기록한다.
+- writer는 정적 영수증을 포함한 모든 domain postimage를 검증하고
+  `domain_committed`까지 남긴 뒤에만 성공을 반환한다.
+- workflow가 claim을 durable `succeeded`로 만든 다음 bounded finalizer가 같은
+  claim reference를 journal의 `claim_succeeded`에 결속하고, 그 뒤에만
+  `ready_to_unlock`, exact lock 제거, `lock_released`를 진행한다.
+- CLI 결과에는 동적 승인 요약을 계속 제공할 수 있지만, 디스크 영수증의
+  preapproval exactness와 혼동하지 않는다.
+
+이 결정은 승인받지 않은 동적 바이트를 immutable intent에 끼워 넣거나, 반대로
+영수증 postimage 검사를 약화하는 두 가지 오류를 모두 피한다. 기존
+`exact_human_approval_link`는 source-fidelity archive 내부 경계에 한정되어 있고
+프로젝트 updater의 프로젝트 root와 approval archive root가 다를 수 있으므로
+이 통합을 위해 범위를 확장하지 않는다.
+
+추가로 claim을 durable `succeeded`로 바꾼 직후 finalizer 전에 hard exit가 나는
+창을 확인했다. 기존 resume은 `started` claim만 다시 열 수 있으므로 이 경우
+writer를 재실행하지 않는 succeeded-claim tail recovery를 추가했다. 이 경로는
+동일 context와 authenticated claim, transaction checkpoint를 재검증한 뒤 bounded
+finalizer만 실행하며 native 승인 창과 domain writer를 다시 호출하지 않는다.
+관련 exact-human-approval 전체 focused 검증은 44 tests와 27 subtests가 통과했다.
+
+## 승인 후 로컬 Git 명령 경계 강화
+
+재개 감사에서 현재 materializer 자체는 checkout/filter가 아니라 검증한 blob을 직접
+쓰고 `read-tree`, `update-ref` 등 로컬 plumbing만 사용한다는 것을 재확인했다. 다만
+실행기가 알려진 transport verb만 거부하면 미래 변경에서 `remote update`나
+`archive --remote` 같은 우회형 네트워크 명령이 들어올 수 있었다.
+
+따라서 trusted Git runner에 updater가 실제 사용하는 로컬 plumbing allowlist를
+추가했다. checkout, remote, archive, 외부 filter/textconv, write-capable config와
+hash-object, worktree를 건드리는 `read-tree -u`는 실행기 자체에서 거부한다.
+실행기 version probe를 제외한 모든 호출은 고정된 fsmonitor/hooks/attributes/excludes
+설정과 절대 working root를 포함하는 정확한 prologue만 허용해 임의 `-c`, `-C`,
+`--git-dir`, `--work-tree`, namespace 우회도 차단한다. 실제 무결성 검사에 필요한
+`hash-object --no-filters -- <safe-relative-path>`는 정확한 한 형태로만 허용한다.
+독립 focused 검증은 Git runner와 approval binding 합계 16 tests, 133 subtests가
+통과했다. 이 기록 시점에도 실제 릴리스, 프로젝트 설치, 개인 프로젝트 쓰기는 수행하지
+않았다.
+
+## 승인 전 runtime parent의 정직한 분류
+
+완성된 runtime candidate를 승인 뒤 copy 없이 같은 volume에서 원자적으로 승격하려면
+`.zettel-kasten/runtimes` 부모의 identity를 승인 전에 고정할 필요가 있다. 후보 준비가
+이 빈 부모를 exact-owned 상태로 만들 수 있는데, 이를 단순히 “승인 전 write 없음”으로
+표시하는 것은 부정확하다는 통합 감사를 반영했다.
+
+안전한 선생성은 유지하되 이를 transient control scaffold로 별도 공개한다. 승인 전
+runtime bytes 설치, pin/launcher/source 변경, 활성화는 모두 false이고, 취소 때 해당
+부모가 이번 transaction에서 생성됐으며 여전히 정확히 비어 있을 때만 제거한다.
+기존 부모는 보존한다. 따라서 정상 취소의 보장은 “write가 한 번도 없었다”가 아니라
+“지속되는 domain effect가 없고 exact control scaffold가 원복됐다”이다. 이 구분은
+approval projection, transaction evidence, 취소 테스트에 함께 결속한다.
+
+## durable updater 최종 통합과 독립 재검증
+
+새 프로젝트별 runtime 후보, exact-human claim workflow, held Git runner, 내구
+transaction journal을 실제 `project-version-update` 서비스와 CLI에 연결했다. 공개
+승인 경로는 승인 전에 runtime candidate와 모든 승인 입력을 봉인하고, 승인 뒤에는
+같은 held Git 실행기와 로컬 plumbing만 사용한다. 기존 역사적 core는 read-only
+preview와 과거 회귀 근거를 위해 남겨 두었지만, 현재 공개 live approval은 새 durable
+writer로 분기하거나 필수 입력이 없으면 차단되므로 예전 materializer로 우회하지
+않는다.
+
+통합 구현자가 먼저 전체 `ArchiveCliTests -k project_version_update`를 실행해 41 tests를
+통과했고 direct-worker 전용 1건은 의도된 skip이었다. 그 뒤 주 작업 세션에서 다음을
+독립 재실행했다.
+
+- Python compileall과 `git diff --check`: 통과;
+- held Git runner, durable transaction, approval binding, exact-human workflow:
+  66 tests passed in 35.109 seconds;
+- 실제 venv/wheel 설치, 정적 영수증, claim finalizer와 7개 hard-exit 경계 재개:
+  2 tests passed in 298.634 seconds;
+- 2초 내 최초 상태와 10초 미만 heartbeat, idempotent replay, 승인 취소,
+  fetch 준비 실패, 승인 뒤 ref/pin/policy drift의 pre-writer 차단:
+  5 tests passed in 72.702 seconds.
+
+hard-exit 수동 검증이 남긴 `.test-hard-exit-domain-20260823`은 현재 작업이 만든
+untracked test artifact임을 확인한 뒤 정확한 경로만 제거했다. 긴 Windows 경로와
+내부 test Git repository가 포함되어 `core.longPaths=true`와 double-force가 필요한
+범위였으며, 다른 untracked 파일은 정리하지 않았다.
+
+이 시점의 판정은 **v0.4.3 updater 통합과 핵심 복구 테스트 통과, 전체 CI 대기**다.
+아직 GitHub merge/tag/release, 실제 native 승인, 프로젝트 전용 공식 설치, 개인 프로젝트
+Letter 138 apply/rollback/독립 검증, provider 호출, 공용 PATH 교체는 수행하지 않았다.
+
+## 전체 CI 전 역사 회귀 교정
+
+이전 PR #77 실패 로그를 job별로 다시 수집해 실제 실패 범위를 다섯 모듈로 고정했다.
+문서의 현재 버전, v0.4.2 역사 검증, resource/privacy subset, feedback CAS 호출 계약,
+Letter 129 canary가 해당 범위였다.
+
+재실행 과정에서 trusted Git runner를 필수 인자로 바꾼 뒤 역사적
+`project-bytecode-repair` planner가 옛 무인자 호출을 남겨 둔 새 회귀를 발견했다.
+공개 updater의 held runner 경계를 완화하지 않고, 역사적 read-only planner 전용
+short-lived sealed runner adapter를 추가해 metadata, local Git probe, collision batch,
+target ref snapshot을 모두 명시적으로 로컬 read-only 경계에 연결했다.
+
+또 v0.4.3 공개 runtime policy와 exact public wheel이 없는 역사적 합성 fixture가 업데이트
+성공을 기대하던 canary를 교정했다. 이 fixture는 bytecode 복구 planner의 보존을 증명한
+뒤 공개 updater가 durable runtime supply 부재로 쓰기 전에 차단되는지를 검증한다.
+실제 exact broker 성공은 wheel/venv와 durable candidate를 포함하는 별도 끝단 통합
+테스트가 담당하므로, 합성 fixture를 성공으로 꾸미지 않는다.
+
+privacy predecessor subset은 새 회의록 경로의 개인 프로젝트 이름 세 건을 일반화해
+새 공개 경로에 그 식별자가 추가되지 않도록 했다. 검사 허용 목록을 넓히지 않았다.
+최종적으로 이전 PR 실패 다섯 모듈의 66 tests가 91.703 seconds에 통과했고 Windows
+조건 2건만 정상 skip됐다. GitHub 병렬 전체 CI는 아직 새 커밋을 올리기 전이다.

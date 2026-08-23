@@ -50,6 +50,11 @@ from .paths import (
     resolve_archive_relative_path,
 )
 from .resource_paths import runtime_resource_root
+from . import (
+    project_runtime,
+    project_update_git_runner,
+    project_update_transaction,
+)
 from .schema_validator import validate_schema
 from .version_policy import (
     STABLE_VERSION_TAG_RE,
@@ -47671,6 +47676,7 @@ def _require_exact_human_operation_approval(
     expected_plan_sha256: str | None,
     expected_target_binding_sha256: str | None,
     claim: _ClaimedExactHumanApproval | None,
+    expected_archive_id: str | None = None,
 ) -> dict[str, Any]:
     """Reauthenticate one approval claim against a freshly derived write plan."""
 
@@ -47680,19 +47686,35 @@ def _require_exact_human_operation_approval(
         expected_target_binding_sha256=expected_target_binding_sha256,
     )
     try:
+        current_archive_id = read_archive_id(root)
+        if (
+            expected_archive_id is not None
+            and current_archive_id != expected_archive_id
+        ):
+            raise OperationApprovalBindingError(
+                "operation_approval_binding_mismatch"
+            )
         assert_same_binding(
             binding,
             expected_plan_sha256=expected_plan_sha256,
             expected_target_binding_sha256=expected_target_binding_sha256,
         )
         context = binding.context(
-            archive_id=read_archive_id(root),
+            archive_id=(
+                expected_archive_id
+                if expected_archive_id is not None
+                else current_archive_id
+            ),
             reviewer_claim=reviewer_claim,
         )
         reference = claim.assert_ready_for_context(context)
         return build_operation_exact_human_approval_receipt(
             binding,
-            archive_id=read_archive_id(root),
+            archive_id=(
+                expected_archive_id
+                if expected_archive_id is not None
+                else current_archive_id
+            ),
             reviewer_claim=reviewer_claim,
             exact_human_approval_reference=reference,
         )
@@ -98201,7 +98223,11 @@ def wom_kit_project_source_mirror_location(root_label: str) -> str:
 
 
 def git_output_lines(cwd: Path, args: list[str]) -> list[str]:
-    ok, output = _wom_kit_project_update_git(cwd, args, timeout_seconds=5)
+    ok, output = _wom_kit_project_update_git_legacy_read_only(
+        cwd,
+        args,
+        timeout_seconds=5,
+    )
     if not ok:
         return []
     return [line.strip() for line in output.splitlines() if line.strip()]
@@ -98397,7 +98423,7 @@ def wom_kit_project_source_mirror_info(
     # A `.git` file can redirect Git into a linked worktree or an unrelated
     # repository.  Do not even read tag metadata until the mirror has proven
     # that its conventional real `.git` directory stays inside this project.
-    if wom_kit_project_update_git_metadata_is_local_real(
+    if wom_kit_project_update_git_metadata_is_local_real_legacy_read_only(
         search_root,
         mirror_path,
     ):
@@ -98537,6 +98563,7 @@ def wom_kit_runtime_head_python_entries(
     mirror_path: Path,
     *,
     ref: str = "HEAD",
+    runner: project_update_git_runner.TrustedProjectUpdateGitRunner,
 ) -> dict[str, tuple[str, str]] | None:
     tree_ok, tree_text = _wom_kit_project_update_git(
         mirror_path,
@@ -98549,6 +98576,7 @@ def wom_kit_runtime_head_python_entries(
             WOM_KIT_RUNTIME_WRAPPER_GIT_PATH,
             WOM_KIT_RUNTIME_PACKAGE_GIT_PREFIX.rstrip("/"),
         ],
+        runner=runner,
     )
     if not tree_ok:
         return None
@@ -98720,6 +98748,8 @@ def wom_kit_runtime_source_tree_inventory(
 def wom_kit_runtime_tracked_python_integrity(
     project_root: Path,
     mirror_path: Path,
+    *,
+    runner: project_update_git_runner.TrustedProjectUpdateGitRunner,
 ) -> dict[str, Any]:
     result: dict[str, Any] = {
         "reason_code": "project_tracked_python_source_set_unavailable",
@@ -98739,7 +98769,10 @@ def wom_kit_runtime_tracked_python_integrity(
         "runtime_python_filesystem_closed_world": False,
         "tracked_python_sources_verified": False,
     }
-    head_entries = wom_kit_runtime_head_python_entries(mirror_path)
+    head_entries = wom_kit_runtime_head_python_entries(
+        mirror_path,
+        runner=runner,
+    )
     if head_entries is None:
         return result
 
@@ -98763,6 +98796,7 @@ def wom_kit_runtime_tracked_python_integrity(
             WOM_KIT_RUNTIME_WRAPPER_GIT_PATH,
             WOM_KIT_RUNTIME_PACKAGE_GIT_PREFIX.rstrip("/"),
         ],
+        runner=runner,
     )
     if not flags_ok:
         result["reason_code"] = "project_tracked_python_index_flags_unavailable"
@@ -98807,6 +98841,7 @@ def wom_kit_runtime_tracked_python_integrity(
             WOM_KIT_RUNTIME_WRAPPER_GIT_PATH,
             WOM_KIT_RUNTIME_PACKAGE_GIT_PREFIX.rstrip("/"),
         ],
+        runner=runner,
     )
     if not index_ok:
         result["reason_code"] = "project_tracked_python_index_unavailable"
@@ -98883,6 +98918,7 @@ def wom_kit_runtime_tracked_python_integrity(
         hash_ok, actual_object_id = _wom_kit_project_update_git(
             mirror_path,
             ["hash-object", "--no-filters", "--", relative_path],
+            runner=runner,
         )
         if (
             not hash_ok
@@ -98913,10 +98949,13 @@ WOM_KIT_RUNTIME_PACKAGED_RESOURCE_PREFIX = "wom-kit/src/wom_kit/_resources/"
 
 def wom_kit_runtime_all_tracked_index_flags(
     mirror_path: Path,
+    *,
+    runner: project_update_git_runner.TrustedProjectUpdateGitRunner,
 ) -> tuple[bool, int]:
     flags_ok, flags_text = _wom_kit_project_update_git(
         mirror_path,
         ["ls-files", "-v", "-z"],
+        runner=runner,
     )
     if not flags_ok:
         return False, 0
@@ -98944,11 +98983,13 @@ def wom_kit_runtime_git_blob_at_ref(
     relative_path: str,
     *,
     max_bytes: int,
+    runner: project_update_git_runner.TrustedProjectUpdateGitRunner,
 ) -> tuple[str, bytes] | None:
     tree_ok, tree_text = _wom_kit_project_update_git(
         mirror_path,
         ["ls-tree", "-z", ref, "--", relative_path],
         max_output_bytes=16 * 1024,
+        runner=runner,
     )
     if not tree_ok:
         return None
@@ -98971,6 +99012,7 @@ def wom_kit_runtime_git_blob_at_ref(
         mirror_path,
         ["cat-file", "-s", object_id],
         max_output_bytes=256,
+        runner=runner,
     )
     try:
         blob_size = int(size_text) if size_ok else -1
@@ -98978,7 +99020,12 @@ def wom_kit_runtime_git_blob_at_ref(
         return None
     if blob_size < 0 or blob_size > max_bytes:
         return None
-    blob = _wom_kit_project_update_git_blob(mirror_path, object_id, blob_size)
+    blob = _wom_kit_project_update_git_blob(
+        mirror_path,
+        object_id,
+        blob_size,
+        runner=runner,
+    )
     if blob is None:
         return None
     return object_id.lower(), blob
@@ -98989,6 +99036,7 @@ def wom_kit_runtime_resource_integrity(
     mirror_path: Path,
     *,
     ref: str = "HEAD",
+    runner: project_update_git_runner.TrustedProjectUpdateGitRunner,
 ) -> dict[str, Any]:
     result: dict[str, Any] = {
         "reason_code": "project_runtime_resource_manifest_unavailable",
@@ -99001,7 +99049,10 @@ def wom_kit_runtime_resource_integrity(
         "runtime_resource_worktree_bytes_match_head": False,
         "runtime_resources_verified": False,
     }
-    flags_safe, tracked_count = wom_kit_runtime_all_tracked_index_flags(mirror_path)
+    flags_safe, tracked_count = wom_kit_runtime_all_tracked_index_flags(
+        mirror_path,
+        runner=runner,
+    )
     result["all_tracked_index_entry_count"] = tracked_count
     result["all_tracked_index_flags_safe"] = flags_safe
     if not flags_safe:
@@ -99013,6 +99064,7 @@ def wom_kit_runtime_resource_integrity(
         ref,
         WOM_KIT_RUNTIME_RESOURCE_MANIFEST_GIT_PATH,
         max_bytes=2 * 1024 * 1024,
+        runner=runner,
     )
     if manifest_blob is None:
         return result
@@ -99099,6 +99151,7 @@ def wom_kit_runtime_resource_integrity(
             "--",
             *sorted(expected_specs),
         ],
+        runner=runner,
     )
     if not tree_ok:
         return result
@@ -99137,6 +99190,7 @@ def wom_kit_runtime_resource_integrity(
             "--",
             *sorted(expected_specs),
         ],
+        runner=runner,
     )
     if not index_ok:
         result["reason_code"] = "project_runtime_resource_index_unavailable"
@@ -99226,13 +99280,14 @@ def wom_kit_runtime_resource_integrity(
     return result
 
 
-def wom_kit_runtime_mirror_integrity(
+def _wom_kit_runtime_mirror_integrity_with_runner(
     project_root: Path,
     mirror_path: Path,
     project_pin_path: Path | None,
     wrapper_path: Path,
     *,
     source_version: str | None,
+    runner: project_update_git_runner.TrustedProjectUpdateGitRunner,
 ) -> dict[str, Any]:
     evidence = wom_kit_runtime_integrity_evidence(
         checked=True,
@@ -99270,10 +99325,12 @@ def wom_kit_runtime_mirror_integrity(
     inside_ok, inside_text = _wom_kit_project_update_git(
         mirror_path,
         ["rev-parse", "--is-inside-work-tree"],
+        runner=runner,
     )
     top_ok, top_text = _wom_kit_project_update_git(
         mirror_path,
         ["rev-parse", "--show-toplevel"],
+        runner=runner,
     )
     try:
         exact_top = top_ok and Path(top_text).resolve() == mirror_path.resolve()
@@ -99290,13 +99347,17 @@ def wom_kit_runtime_mirror_integrity(
         wom_kit_project_update_git_metadata_is_local_real(
             project_root,
             mirror_path,
+            runner=runner,
         )
     )
     if not evidence["git_metadata_local_real"]:
         evidence["reason_code"] = "project_git_metadata_not_local_real"
         return evidence
 
-    runtime_snapshot = _wom_kit_project_update_git_snapshot(mirror_path)
+    runtime_snapshot = _wom_kit_project_update_git_snapshot(
+        mirror_path,
+        runner=runner,
+    )
     evidence["worktree_clean_except_untracked_installed_version"] = bool(
         runtime_snapshot is not None
         and runtime_snapshot.get("index_matches_head") is True
@@ -99315,6 +99376,7 @@ def wom_kit_runtime_mirror_integrity(
     pin_tracked, _ = _wom_kit_project_update_git(
         mirror_path,
         ["ls-files", "--error-unmatch", "--", "installed-version.txt"],
+        runner=runner,
     )
     evidence["installed_version_pin_untracked"] = not pin_tracked
     if pin_tracked:
@@ -99331,6 +99393,7 @@ def wom_kit_runtime_mirror_integrity(
             "--get-regexp",
             r"^remote\.origin\.url$",
         ],
+        runner=runner,
     )
     origin_key_lines = [
         line.strip().lower()
@@ -99349,6 +99412,7 @@ def wom_kit_runtime_mirror_integrity(
     head_ok, head_text = _wom_kit_project_update_git(
         mirror_path,
         ["rev-parse", "--verify", "HEAD"],
+        runner=runner,
     )
     head_commit = (
         head_text.lower()
@@ -99363,6 +99427,7 @@ def wom_kit_runtime_mirror_integrity(
     tracked_python_evidence = wom_kit_runtime_tracked_python_integrity(
         project_root,
         mirror_path,
+        runner=runner,
     )
     tracked_python_fields = (
         "tracked_python_source_count",
@@ -99393,6 +99458,7 @@ def wom_kit_runtime_mirror_integrity(
     resource_evidence = wom_kit_runtime_resource_integrity(
         project_root,
         mirror_path,
+        runner=runner,
         ref=head_commit,
     )
     resource_fields = (
@@ -99423,6 +99489,7 @@ def wom_kit_runtime_mirror_integrity(
     tag_evidence = wom_kit_project_update_target_evidence(
         mirror_path,
         expected_source_tag,
+        runner=runner,
     )
     evidence["source_tag_available_locally"] = bool(
         tag_evidence.get("tag_available_locally")
@@ -99473,6 +99540,7 @@ def wom_kit_runtime_mirror_integrity(
     runtime_entries = wom_kit_runtime_head_python_entries(
         mirror_path,
         ref=head_commit,
+        runner=runner,
     )
     wrapper_entry = (
         runtime_entries.get(WOM_KIT_RUNTIME_WRAPPER_GIT_PATH)
@@ -99488,6 +99556,34 @@ def wom_kit_runtime_mirror_integrity(
     evidence["verified"] = True
     evidence["reason_code"] = "verified"
     return evidence
+
+
+def wom_kit_runtime_mirror_integrity(
+    project_root: Path,
+    mirror_path: Path,
+    project_pin_path: Path | None,
+    wrapper_path: Path,
+    *,
+    source_version: str | None,
+) -> dict[str, Any]:
+    """Historical read-only runtime probe with an explicit sealed runner."""
+
+    runner = (
+        project_update_git_runner.TrustedProjectUpdateGitRunner
+        .resolve_preapproval()
+    )
+    try:
+        runner.close_transport_boundary()
+        return _wom_kit_runtime_mirror_integrity_with_runner(
+            project_root,
+            mirror_path,
+            project_pin_path,
+            wrapper_path,
+            source_version=source_version,
+            runner=runner,
+        )
+    finally:
+        runner.close()
 
 
 WOM_KIT_PROJECT_BRIDGE_BOOTSTRAP = r'''
@@ -100501,6 +100597,67 @@ def wom_kit_version_info(
                 pin_summary["status"] = "missing"
     progress("project-pin", "done")
 
+    progress("project-runtime", "start")
+    project_runtime_summary: dict[str, Any] = {
+        "checked": False,
+        "status": "not_checked",
+        "required_for_pinned_release": False,
+        "installed": {"status": "not_checked", "verified": False},
+        "launcher_path": project_runtime.PROJECT_RUNTIME_LAUNCHER_RELATIVE.as_posix(),
+        "launcher_aligned": None,
+        "project_runtime_argv": project_runtime.project_runtime_argv(),
+        "matches_running_version": None,
+        "global_path_mutation": False,
+    }
+    if root is not None and isinstance(pin_summary.get("installed_version"), str):
+        pinned_version = normalize_version_label(pin_summary["installed_version"])
+        pinned_key = version_sort_key(pinned_version)
+        runtime_minimum_key = version_sort_key("0.4.3")
+        runtime_required = bool(
+            pinned_key is not None
+            and runtime_minimum_key is not None
+            and pinned_key >= runtime_minimum_key
+        )
+        project_scope_root = (
+            root.parent
+            if pin_summary.get("pin_root") == "parent_of_archive"
+            else root
+        )
+        project_runtime_summary["checked"] = True
+        project_runtime_summary["required_for_pinned_release"] = runtime_required
+        project_runtime_summary["matches_running_version"] = (
+            pinned_version == normalized_package
+        )
+        if runtime_required and pinned_version is not None:
+            installed_runtime = project_runtime.inspect_runtime(
+                project_scope_root,
+                pinned_version,
+            )
+            launcher_state = project_runtime.launcher_snapshot(
+                project_scope_root,
+                pinned_version,
+            )
+            launcher_aligned = bool(
+                not launcher_state.get("unsafe")
+                and launcher_state.get("already_target")
+            )
+            project_runtime_summary["installed"] = installed_runtime
+            project_runtime_summary["launcher_aligned"] = launcher_aligned
+            project_runtime_summary["status"] = (
+                "aligned"
+                if installed_runtime.get("verified")
+                and launcher_aligned
+                and pinned_version == normalized_package
+                else "runtime_mismatch"
+            )
+            if project_runtime_summary["status"] != "aligned":
+                warnings.append(
+                    "The project-local WOM runtime is missing, invalid, or differs from the active project pin; use the exact project launcher after a verified project-version-update."
+                )
+        else:
+            project_runtime_summary["status"] = "not_required_for_pinned_release"
+    progress("project-runtime", "done")
+
     with _wom_kit_git_probe_budget(
         WOM_KIT_VERSION_GIT_PROBE_BUDGET_SECONDS
     ) as git_probe_budget:
@@ -100556,6 +100713,8 @@ def wom_kit_version_info(
         consistency_state = "project_source_mirror_mismatch"
     if source_mirror.get("mirror_behind_latest_fetched_tag") is True:
         consistency_state = "project_source_mirror_behind_latest_fetched_tag"
+    if project_runtime_summary.get("status") == "runtime_mismatch":
+        consistency_state = "project_runtime_mismatch"
 
     path_shadow_diagnostic["provenance_comparison"] = {
         "selected_launcher_is_running_launcher": path_shadow_diagnostic.get(
@@ -100620,6 +100779,7 @@ def wom_kit_version_info(
         },
         "project_pin": pin_summary,
         "project_source_mirror": source_mirror,
+        "project_runtime": project_runtime_summary,
         "runtime_alignment": runtime_alignment,
         "path_shadow_diagnostic": path_shadow_diagnostic,
         "source_probe_budget": git_probe_summary,
@@ -100628,6 +100788,7 @@ def wom_kit_version_info(
             "human_readable": "archive --version",
             "structured": "archive version --format json",
             "runtime_context": "archive runtime-context <archive-root> --format json",
+            "project_runtime": r".\.zettel-kasten\bin\archive.cmd version <project-or-archive-root> --format json",
             "windows_path_provenance": "archive version --no-redact-local-paths --format json",
         },
         "paths": {
@@ -102545,11 +102706,20 @@ def wom_kit_project_update_git_environment(
 def wom_kit_project_update_git_command(
     mirror_path: Path,
     args: list[str],
+    *,
+    runner: project_update_git_runner.TrustedProjectUpdateGitRunner,
+    transport: bool = False,
 ) -> list[str]:
-    return [
-        "git",
+    if not isinstance(
+        runner,
+        project_update_git_runner.TrustedProjectUpdateGitRunner,
+    ):
+        raise project_update_git_runner.ProjectUpdateGitRunnerError(
+            "project_update_git_runner_binding_invalid"
+        )
+    return runner.command(
+        [
         "--no-optional-locks",
-        "--no-replace-objects",
         "-c",
         "core.fsmonitor=false",
         "-c",
@@ -102561,7 +102731,9 @@ def wom_kit_project_update_git_command(
         "-C",
         str(mirror_path),
         *args,
-    ]
+        ],
+        transport=transport,
+    )
 
 
 def _wom_kit_project_update_run_capped(
@@ -102748,7 +102920,13 @@ def _wom_kit_project_update_git(
     max_output_bytes: int = WOM_KIT_PROJECT_UPDATE_MAX_GIT_OUTPUT_BYTES,
     allow_transport_environment: bool = False,
     extra_environment: dict[str, str] | None = None,
+    runner: project_update_git_runner.TrustedProjectUpdateGitRunner,
+    transport: bool = False,
 ) -> tuple[bool, str]:
+    if allow_transport_environment is not transport:
+        raise project_update_git_runner.ProjectUpdateGitRunnerError(
+            "project_update_git_runner_phase_invalid"
+        )
     effective_timeout_seconds = float(timeout_seconds)
     probe_budget = getattr(_WOM_KIT_GIT_PROBE_BUDGET_LOCAL, "state", None)
     if isinstance(probe_budget, dict):
@@ -102767,7 +102945,12 @@ def _wom_kit_project_update_git(
             probe_budget["git_calls_started"]
         ) + 1
     completed = _wom_kit_project_update_run_capped(
-        wom_kit_project_update_git_command(mirror_path, args),
+        wom_kit_project_update_git_command(
+            mirror_path,
+            args,
+            runner=runner,
+            transport=transport,
+        ),
         environment=wom_kit_project_update_git_environment(
             allow_transport_environment=allow_transport_environment,
             extra_environment=extra_environment,
@@ -102798,9 +102981,42 @@ def _wom_kit_project_update_git(
     return True, decoded_stdout.rstrip("\r\n")
 
 
+def _wom_kit_project_update_git_legacy_read_only(
+    mirror_path: Path,
+    args: list[str],
+    *,
+    timeout_seconds: float = 10,
+    input_text: str | None = None,
+    max_output_bytes: int = WOM_KIT_PROJECT_UPDATE_MAX_GIT_OUTPUT_BYTES,
+    extra_environment: dict[str, str] | None = None,
+) -> tuple[bool, str]:
+    """Explicit short-lived runner for unrelated historical read-only probes."""
+
+    runner = (
+        project_update_git_runner.TrustedProjectUpdateGitRunner
+        .resolve_preapproval()
+    )
+    try:
+        runner.close_transport_boundary()
+        return _wom_kit_project_update_git(
+            mirror_path,
+            args,
+            timeout_seconds=timeout_seconds,
+            input_text=input_text,
+            max_output_bytes=max_output_bytes,
+            extra_environment=extra_environment,
+            runner=runner,
+            transport=False,
+        )
+    finally:
+        runner.close()
+
+
 def wom_kit_project_update_git_metadata_is_local_real(
     project_root: Path,
     mirror_path: Path,
+    *,
+    runner: project_update_git_runner.TrustedProjectUpdateGitRunner,
 ) -> bool:
     """Require a conventional, project-contained, non-reparse Git metadata tree.
 
@@ -102824,11 +103040,13 @@ def wom_kit_project_update_git_metadata_is_local_real(
         mirror_path,
         ["rev-parse", "--absolute-git-dir"],
         max_output_bytes=64 * 1024,
+        runner=runner,
     )
     common_dir_ok, common_dir_text = _wom_kit_project_update_git(
         mirror_path,
         ["rev-parse", "--git-common-dir"],
         max_output_bytes=64 * 1024,
+        runner=runner,
     )
     if not git_dir_ok or not common_dir_ok:
         return False
@@ -102928,10 +103146,33 @@ def wom_kit_project_update_git_metadata_is_local_real(
     return True
 
 
+def wom_kit_project_update_git_metadata_is_local_real_legacy_read_only(
+    project_root: Path,
+    mirror_path: Path,
+) -> bool:
+    """Explicit sealed runner for historical metadata-only diagnostics."""
+
+    runner = (
+        project_update_git_runner.TrustedProjectUpdateGitRunner
+        .resolve_preapproval()
+    )
+    try:
+        runner.close_transport_boundary()
+        return wom_kit_project_update_git_metadata_is_local_real(
+            project_root,
+            mirror_path,
+            runner=runner,
+        )
+    finally:
+        runner.close()
+
+
 def _wom_kit_project_update_git_blob(
     mirror_path: Path,
     object_spec: str,
     expected_size: int,
+    *,
+    runner: project_update_git_runner.TrustedProjectUpdateGitRunner,
 ) -> bytes | None:
     if (
         expected_size < 0
@@ -102946,6 +103187,7 @@ def _wom_kit_project_update_git_blob(
         wom_kit_project_update_git_command(
             mirror_path,
             ["cat-file", "blob", object_spec],
+            runner=runner,
         ),
         environment=wom_kit_project_update_git_environment(),
         timeout_seconds=60,
@@ -103110,6 +103352,8 @@ def _wom_kit_project_update_run_batch_capped(
 def _wom_kit_project_update_git_blob_batch(
     mirror_path: Path,
     object_path_counts: dict[str, int],
+    *,
+    runner: project_update_git_runner.TrustedProjectUpdateGitRunner,
 ) -> dict[str, bytes] | None:
     """Read each unique tree blob through one strict ``cat-file --batch``."""
 
@@ -103140,6 +103384,7 @@ def _wom_kit_project_update_git_blob_batch(
         wom_kit_project_update_git_command(
             mirror_path,
             ["cat-file", "--batch"],
+            runner=runner,
         ),
         environment=wom_kit_project_update_git_environment(),
         timeout_seconds=WOM_KIT_PROJECT_UPDATE_BATCH_TIMEOUT_SECONDS,
@@ -103215,6 +103460,8 @@ def _wom_kit_project_update_git_blob_batch(
 
 def wom_kit_project_update_git_config_trust_digest(
     mirror_path: Path,
+    *,
+    runner: project_update_git_runner.TrustedProjectUpdateGitRunner,
 ) -> str | None:
     """Hash the effective Git config without exposing config values to Python.
 
@@ -103225,7 +103472,7 @@ def wom_kit_project_update_git_config_trust_digest(
     """
 
     environment = wom_kit_project_update_git_environment(
-        allow_transport_environment=True,
+        allow_transport_environment=runner.phase == "transport_open",
     )
     config_process: subprocess.Popen[bytes] | None = None
     digest_process: subprocess.Popen[bytes] | None = None
@@ -103240,6 +103487,7 @@ def wom_kit_project_update_git_config_trust_digest(
                     "--list",
                     "--show-origin",
                 ],
+                runner=runner,
             ),
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
@@ -103252,6 +103500,7 @@ def wom_kit_project_update_git_config_trust_digest(
             wom_kit_project_update_git_command(
                 mirror_path,
                 ["hash-object", "--stdin"],
+                runner=runner,
             ),
             stdin=config_process.stdout,
             stdout=subprocess.PIPE,
@@ -103479,10 +103728,13 @@ def wom_kit_project_update_safe_worktree_paths(
 def _wom_kit_project_update_tree_blobs(
     mirror_path: Path,
     ref: str,
+    *,
+    runner: project_update_git_runner.TrustedProjectUpdateGitRunner,
 ) -> dict[str, tuple[str, str, bytes]] | None:
     tree_ok, tree_text = _wom_kit_project_update_git(
         mirror_path,
         ["ls-tree", "-r", "-z", ref],
+        runner=runner,
     )
     if not tree_ok:
         return None
@@ -103521,6 +103773,7 @@ def _wom_kit_project_update_tree_blobs(
     blobs = _wom_kit_project_update_git_blob_batch(
         mirror_path,
         object_path_counts,
+        runner=runner,
     )
     if blobs is None:
         return None
@@ -103970,6 +104223,8 @@ def wom_kit_project_update_branch_points_to_commit(
     mirror_path: Path,
     branch_name: str,
     expected_commit: str,
+    *,
+    runner: project_update_git_runner.TrustedProjectUpdateGitRunner,
 ) -> bool:
     if (
         not isinstance(branch_name, str)
@@ -103981,6 +104236,7 @@ def wom_kit_project_update_branch_points_to_commit(
         mirror_path,
         ["check-ref-format", "--branch", branch_name],
         max_output_bytes=4096,
+        runner=runner,
     )
     if not branch_ok or checked_branch != branch_name:
         return False
@@ -103993,6 +104249,7 @@ def wom_kit_project_update_branch_points_to_commit(
             f"refs/heads/{branch_name}",
         ],
         max_output_bytes=256,
+        runner=runner,
     )
     return bool(
         ref_ok
@@ -104003,6 +104260,8 @@ def wom_kit_project_update_branch_points_to_commit(
 
 def wom_kit_project_update_symbolic_head_state(
     mirror_path: Path,
+    *,
+    runner: project_update_git_runner.TrustedProjectUpdateGitRunner,
 ) -> tuple[str, str | None]:
     """Return an exact branch, detached HEAD, or an unreadable unsafe state."""
 
@@ -104010,6 +104269,7 @@ def wom_kit_project_update_symbolic_head_state(
         wom_kit_project_update_git_command(
             mirror_path,
             ["symbolic-ref", "--quiet", "HEAD"],
+            runner=runner,
         ),
         environment=wom_kit_project_update_git_environment(),
         timeout_seconds=10,
@@ -104038,6 +104298,7 @@ def wom_kit_project_update_symbolic_head_state(
         mirror_path,
         ["check-ref-format", "--branch", branch_name],
         max_output_bytes=4096,
+        runner=runner,
     )
     if (
         not branch_name
@@ -104194,6 +104455,7 @@ def _wom_kit_project_update_materialization_plan_details_internal(
     target_commit: str,
     *,
     attach_branch: str | None = None,
+    runner: project_update_git_runner.TrustedProjectUpdateGitRunner,
 ) -> tuple[
     dict[str, Any],
     dict[str, tuple[str, str, bytes]] | None,
@@ -104224,6 +104486,7 @@ def _wom_kit_project_update_materialization_plan_details_internal(
             mirror_path,
             attach_branch,
             target_commit,
+            runner=runner,
         )
     ):
         conflicts.append(
@@ -104239,8 +104502,13 @@ def _wom_kit_project_update_materialization_plan_details_internal(
     target_entries = _wom_kit_project_update_tree_blobs(
         mirror_path,
         target_commit,
+        runner=runner,
     )
-    current_entries = _wom_kit_project_update_tree_blobs(mirror_path, "HEAD")
+    current_entries = _wom_kit_project_update_tree_blobs(
+        mirror_path,
+        "HEAD",
+        runner=runner,
+    )
     if target_entries is None:
         conflicts.append(
             ("\0target-tree", "target_tree_unavailable_or_unsafe")
@@ -104323,6 +104591,7 @@ def _wom_kit_project_update_materialization_plan_details(
     target_commit: str,
     *,
     attach_branch: str | None = None,
+    runner: project_update_git_runner.TrustedProjectUpdateGitRunner,
 ) -> tuple[
     dict[str, Any],
     dict[str, tuple[str, str, bytes]] | None,
@@ -104341,6 +104610,7 @@ def _wom_kit_project_update_materialization_plan_details(
             mirror_path,
             target_commit,
             attach_branch=attach_branch,
+            runner=runner,
         )
     )
     return plan, target_entries, current_entries
@@ -104351,6 +104621,7 @@ def wom_kit_project_update_materialization_plan(
     target_commit: str,
     *,
     attach_branch: str | None = None,
+    runner: project_update_git_runner.TrustedProjectUpdateGitRunner,
 ) -> dict[str, Any]:
     """Bounded, structured, read-only commit materialization preflight."""
 
@@ -104358,6 +104629,7 @@ def wom_kit_project_update_materialization_plan(
         mirror_path,
         target_commit,
         attach_branch=attach_branch,
+        runner=runner,
     )
     return {
         "state": "ready" if plan["safe"] else "blocked",
@@ -104376,6 +104648,7 @@ def _wom_kit_project_update_apply_tree_entries(
     destination_index_ref: str,
     *,
     directory_guard: _WomKitProjectUpdateDirectoryGuard | None,
+    runner: project_update_git_runner.TrustedProjectUpdateGitRunner,
 ) -> bool:
     """Apply one already-planned tree without moving HEAD."""
 
@@ -104485,6 +104758,7 @@ def _wom_kit_project_update_apply_tree_entries(
         mirror_path,
         ["read-tree", destination_index_ref],
         timeout_seconds=60,
+        runner=runner,
     )
     return index_ok
 
@@ -104498,12 +104772,14 @@ def _wom_kit_project_update_materialize_commit(
     directory_guard: _WomKitProjectUpdateDirectoryGuard | None = None,
     project_root: Path | None = None,
     expected_source_snapshot: dict[str, Any] | None = None,
+    runner: project_update_git_runner.TrustedProjectUpdateGitRunner,
 ) -> bool:
     plan, target_entries, current_entries = (
         _wom_kit_project_update_materialization_plan_details(
             mirror_path,
             target_commit,
             attach_branch=attach_branch,
+            runner=runner,
         )
     )
     if (
@@ -104535,6 +104811,7 @@ def _wom_kit_project_update_materialize_commit(
                 project_root,
                 mirror_path,
                 expected_source_snapshot,
+                runner=runner,
             )
         ):
             raise WomKitProjectUpdateSourceSnapshotChangedError(
@@ -104547,6 +104824,7 @@ def _wom_kit_project_update_materialize_commit(
         target_entries,
         target_commit,
         directory_guard=directory_guard,
+        runner=runner,
     ):
         return False
     if not wom_kit_project_update_target_worktree_snapshot_matches(
@@ -104567,6 +104845,7 @@ def _wom_kit_project_update_materialize_commit(
                 current_entries,
                 "HEAD",
                 directory_guard=directory_guard,
+                runner=runner,
             )
             rolled_back = bool(
                 rolled_back
@@ -104580,26 +104859,33 @@ def _wom_kit_project_update_materialize_commit(
         head_ok, _ = _wom_kit_project_update_git(
             mirror_path,
             ["update-ref", "--no-deref", "HEAD", target_commit],
+            runner=runner,
         )
     else:
         if not wom_kit_project_update_branch_points_to_commit(
             mirror_path,
             attach_branch,
             target_commit,
+            runner=runner,
         ):
             return False
         head_ok, _ = _wom_kit_project_update_git(
             mirror_path,
             ["symbolic-ref", "HEAD", f"refs/heads/{attach_branch}"],
+            runner=runner,
         )
     if not head_ok:
         return False
     verify_ok, verify_head = _wom_kit_project_update_git(
         mirror_path,
         ["rev-parse", "--verify", "HEAD"],
+        runner=runner,
     )
     symbolic_head_state, current_branch = (
-        wom_kit_project_update_symbolic_head_state(mirror_path)
+        wom_kit_project_update_symbolic_head_state(
+            mirror_path,
+            runner=runner,
+        )
     )
     branch_attached = bool(
         (
@@ -104622,8 +104908,13 @@ def _wom_kit_project_update_materialize_commit(
 
 def _wom_kit_project_update_materialize_runtime_sources(
     mirror_path: Path,
+    *,
+    runner: project_update_git_runner.TrustedProjectUpdateGitRunner,
 ) -> bool:
-    head_entries = wom_kit_runtime_head_python_entries(mirror_path)
+    head_entries = wom_kit_runtime_head_python_entries(
+        mirror_path,
+        runner=runner,
+    )
     if head_entries is None:
         return False
     tracked_paths = set(head_entries)
@@ -104646,6 +104937,7 @@ def _wom_kit_project_update_materialize_runtime_sources(
         size_ok, size_text = _wom_kit_project_update_git(
             mirror_path,
             ["cat-file", "-s", object_id],
+            runner=runner,
         )
         try:
             source_size = int(size_text) if size_ok else -1
@@ -104663,6 +104955,7 @@ def _wom_kit_project_update_materialize_runtime_sources(
             mirror_path,
             object_id,
             source_size,
+            runner=runner,
         )
         if source_bytes is None:
             return False
@@ -104684,6 +104977,7 @@ def _wom_kit_project_update_materialize_runtime_sources(
                 "--cacheinfo",
                 f"{mode},{object_id},{relative_path}",
             ],
+            runner=runner,
         )
         if not indexed:
             return False
@@ -104721,9 +105015,15 @@ def wom_kit_project_update_source_versions(mirror_path: Path) -> dict[str, str |
 def wom_kit_project_update_target_evidence(
     mirror_path: Path,
     target_tag: str,
+    *,
+    runner: project_update_git_runner.TrustedProjectUpdateGitRunner,
 ) -> dict[str, Any]:
     tag_ref = f"refs/tags/{target_tag}"
-    tag_available, _ = _wom_kit_project_update_git(mirror_path, ["show-ref", "--verify", "--quiet", tag_ref])
+    tag_available, _ = _wom_kit_project_update_git(
+        mirror_path,
+        ["show-ref", "--verify", "--quiet", tag_ref],
+        runner=runner,
+    )
     evidence: dict[str, Any] = {
         "tag_available_locally": tag_available,
         "annotated_tag_verified": False,
@@ -104740,11 +105040,16 @@ def wom_kit_project_update_target_evidence(
     if not tag_available:
         return evidence
 
-    type_ok, tag_type = _wom_kit_project_update_git(mirror_path, ["cat-file", "-t", tag_ref])
+    type_ok, tag_type = _wom_kit_project_update_git(
+        mirror_path,
+        ["cat-file", "-t", tag_ref],
+        runner=runner,
+    )
     evidence["annotated_tag_verified"] = type_ok and tag_type == "tag"
     commit_ok, target_commit = _wom_kit_project_update_git(
         mirror_path,
         ["rev-parse", "--verify", f"{tag_ref}^{{commit}}"],
+        runner=runner,
     )
     if not commit_ok or not re.fullmatch(r"[0-9a-fA-F]{40,64}", target_commit):
         return evidence
@@ -104763,6 +105068,7 @@ def wom_kit_project_update_target_evidence(
             mirror_path,
             ["cat-file", "-s", object_spec],
             max_output_bytes=256,
+            runner=runner,
         )
         try:
             blob_size = int(size_text) if size_ok else -1
@@ -104773,6 +105079,7 @@ def wom_kit_project_update_target_evidence(
                 mirror_path,
                 object_spec,
                 blob_size,
+                runner=runner,
             )
             if 0 <= blob_size <= WOM_KIT_VERSION_METADATA_MAX_BYTES
             else None
@@ -104794,12 +105101,14 @@ def wom_kit_project_update_target_evidence(
     main_ok, _ = _wom_kit_project_update_git(
         mirror_path,
         ["show-ref", "--verify", "--quiet", "refs/remotes/origin/main"],
+        runner=runner,
     )
     evidence["origin_main_available_locally"] = main_ok
     if main_ok:
         ancestor_ok, _ = _wom_kit_project_update_git(
             mirror_path,
             ["merge-base", "--is-ancestor", target_commit, "refs/remotes/origin/main"],
+            runner=runner,
         )
         evidence["target_reachable_from_origin_main"] = ancestor_ok
     return evidence
@@ -104808,27 +105117,33 @@ def wom_kit_project_update_target_evidence(
 def wom_kit_project_update_target_ref_snapshot(
     mirror_path: Path,
     target_tag: str,
+    *,
+    runner: project_update_git_runner.TrustedProjectUpdateGitRunner,
 ) -> dict[str, str] | None:
     tag_ref = f"refs/tags/{target_tag}"
     tag_ok, tag_object = _wom_kit_project_update_git(
         mirror_path,
         ["rev-parse", "--verify", tag_ref],
         max_output_bytes=256,
+        runner=runner,
     )
     tag_type_ok, tag_type = _wom_kit_project_update_git(
         mirror_path,
         ["cat-file", "-t", tag_ref],
         max_output_bytes=256,
+        runner=runner,
     )
     commit_ok, target_commit = _wom_kit_project_update_git(
         mirror_path,
         ["rev-parse", "--verify", f"{tag_ref}^{{commit}}"],
         max_output_bytes=256,
+        runner=runner,
     )
     main_ok, origin_main = _wom_kit_project_update_git(
         mirror_path,
         ["rev-parse", "--verify", "refs/remotes/origin/main"],
         max_output_bytes=256,
+        runner=runner,
     )
     values = (tag_object, target_commit, origin_main)
     if (
@@ -104848,6 +105163,27 @@ def wom_kit_project_update_target_ref_snapshot(
         "target_commit": target_commit.lower(),
         "origin_main": origin_main.lower(),
     }
+
+
+def wom_kit_project_update_target_ref_snapshot_legacy_read_only(
+    mirror_path: Path,
+    target_tag: str,
+) -> dict[str, str] | None:
+    """Resolve one historical ref snapshot with a sealed local runner."""
+
+    runner = (
+        project_update_git_runner.TrustedProjectUpdateGitRunner
+        .resolve_preapproval()
+    )
+    try:
+        runner.close_transport_boundary()
+        return wom_kit_project_update_target_ref_snapshot(
+            mirror_path,
+            target_tag,
+            runner=runner,
+        )
+    finally:
+        runner.close()
 
 
 def write_bytes_atomic(path: Path, value: bytes) -> None:
@@ -105305,33 +105641,44 @@ def _wom_kit_project_update_write_receipt_exclusive(
 
 def _wom_kit_project_update_git_snapshot(
     mirror_path: Path,
+    *,
+    runner: project_update_git_runner.TrustedProjectUpdateGitRunner,
 ) -> dict[str, Any] | None:
     head_ok, head = _wom_kit_project_update_git(
         mirror_path,
         ["rev-parse", "--verify", "HEAD"],
+        runner=runner,
     )
     symbolic_head_state, branch = (
-        wom_kit_project_update_symbolic_head_state(mirror_path)
+        wom_kit_project_update_symbolic_head_state(
+            mirror_path,
+            runner=runner,
+        )
     )
     tree_ok, tree_value = _wom_kit_project_update_git(
         mirror_path,
         ["ls-tree", "-r", "-z", "HEAD"],
+        runner=runner,
     )
     index_ok, index_value = _wom_kit_project_update_git(
         mirror_path,
         ["ls-files", "--stage", "-z"],
+        runner=runner,
     )
     flags_ok, flags_value = _wom_kit_project_update_git(
         mirror_path,
         ["ls-files", "-v", "-z"],
+        runner=runner,
     )
     eol_ok, eol_value = _wom_kit_project_update_git(
         mirror_path,
         ["ls-files", "--eol", "-z"],
+        runner=runner,
     )
     untracked_ok, untracked_value = _wom_kit_project_update_git(
         mirror_path,
         ["ls-files", "--others", "--exclude-standard", "-z"],
+        runner=runner,
     )
     autocrlf_ok, autocrlf_value = _wom_kit_project_update_git(
         mirror_path,
@@ -105342,6 +105689,7 @@ def _wom_kit_project_update_git_snapshot(
             "core.autocrlf",
         ],
         max_output_bytes=64,
+        runner=runner,
     )
     local_autocrlf_true = bool(
         autocrlf_ok and autocrlf_value.strip().casefold() == "true"
@@ -105587,14 +105935,20 @@ def wom_kit_project_update_source_matches_snapshot(
     project_root: Path,
     mirror_path: Path,
     expected_snapshot: dict[str, Any] | None,
+    *,
+    runner: project_update_git_runner.TrustedProjectUpdateGitRunner,
 ) -> bool:
     return bool(
         expected_snapshot is not None
         and wom_kit_project_update_git_metadata_is_local_real(
             project_root,
             mirror_path,
+            runner=runner,
         )
-        and _wom_kit_project_update_git_snapshot(mirror_path)
+        and _wom_kit_project_update_git_snapshot(
+            mirror_path,
+            runner=runner,
+        )
         == expected_snapshot
     )
 
@@ -105747,6 +106101,7 @@ def wom_kit_project_update_materialization_preflight(
     target_commit: str,
     head_before: str | None,
     original_branch: str | None,
+    runner: project_update_git_runner.TrustedProjectUpdateGitRunner,
 ) -> dict[str, Any]:
     """Use the approval materializer's exact bounded no-write decision."""
 
@@ -105759,11 +106114,13 @@ def wom_kit_project_update_materialization_preflight(
         runtime_source_before = wom_kit_runtime_tracked_python_integrity(
             project_root,
             mirror_path,
+            runner=runner,
         )
         runtime_resources_before = wom_kit_runtime_resource_integrity(
             project_root,
             mirror_path,
             ref=head_before or "HEAD",
+            runner=runner,
         )
         target_runtime_source_integrity_verified = bool(
             runtime_source_before["tracked_python_sources_verified"]
@@ -105800,6 +106157,7 @@ def wom_kit_project_update_materialization_preflight(
     plan = wom_kit_project_update_materialization_plan(
         mirror_path,
         target_commit,
+        runner=runner,
     )
     return {
         **plan,
@@ -105969,16 +106327,20 @@ def _wom_kit_project_update_collision_authority_matches(
 def _wom_kit_project_update_collision_git_eligibility(
     mirror_path: Path,
     internal_path: str,
+    *,
+    runner: project_update_git_runner.TrustedProjectUpdateGitRunner,
 ) -> tuple[bool, bool]:
     ignored, _ = _wom_kit_project_update_git(
         mirror_path,
         ["check-ignore", "--quiet", "--no-index", "--", internal_path],
         max_output_bytes=256,
+        runner=runner,
     )
     index_checked, index_text = _wom_kit_project_update_git(
         mirror_path,
         ["ls-files", "--stage", "--", internal_path],
         max_output_bytes=4096,
+        runner=runner,
     )
     return bool(ignored), bool(index_checked and index_text == "")
 
@@ -105986,6 +106348,8 @@ def _wom_kit_project_update_collision_git_eligibility(
 def _wom_kit_project_update_collision_git_eligibility_batch(
     mirror_path: Path,
     internal_paths: Iterable[str],
+    *,
+    runner: project_update_git_runner.TrustedProjectUpdateGitRunner,
 ) -> dict[str, tuple[bool, bool]] | None:
     """Classify ignore/index state for one bounded collision batch.
 
@@ -106017,6 +106381,7 @@ def _wom_kit_project_update_collision_git_eligibility_batch(
         wom_kit_project_update_git_command(
             mirror_path,
             ["check-ignore", "--no-index", "-z", "--stdin"],
+            runner=runner,
         ),
         environment=wom_kit_project_update_git_environment(),
         timeout_seconds=10,
@@ -106055,6 +106420,7 @@ def _wom_kit_project_update_collision_git_eligibility_batch(
                 "--stage",
                 "-z",
             ],
+            runner=runner,
         ),
         environment=wom_kit_project_update_git_environment(),
         timeout_seconds=10,
@@ -106102,6 +106468,7 @@ def _wom_kit_project_update_collision_classify_entry(
     current_entries: dict[str, tuple[str, str, bytes]],
     authority: Iterable[tuple[str, str]],
     git_eligibility: tuple[bool, bool] | None = None,
+    runner: project_update_git_runner.TrustedProjectUpdateGitRunner,
 ) -> dict[str, Any]:
     """Return a content-free, plan-bound classification for one collision."""
 
@@ -106194,6 +106561,7 @@ def _wom_kit_project_update_collision_classify_entry(
                 _wom_kit_project_update_collision_git_eligibility(
                     mirror_path,
                     internal_path,
+                    runner=runner,
                 )
             )
         else:
@@ -106848,6 +107216,7 @@ def _wom_kit_project_update_collision_existing_case_state(
     entry_ref: str,
     expected_plan_sha256: str,
     case_ref: str,
+    runner: project_update_git_runner.TrustedProjectUpdateGitRunner,
 ) -> dict[str, Any]:
     """Strictly classify one deterministic private case without changing it.
 
@@ -107040,8 +107409,13 @@ def _wom_kit_project_update_collision_existing_case_state(
     target_entries = _wom_kit_project_update_tree_blobs(
         mirror_path,
         target_commit,
+        runner=runner,
     )
-    current_entries = _wom_kit_project_update_tree_blobs(mirror_path, "HEAD")
+    current_entries = _wom_kit_project_update_tree_blobs(
+        mirror_path,
+        "HEAD",
+        runner=runner,
+    )
     if (
         target_entries is None
         or current_entries is None
@@ -107107,6 +107481,7 @@ def _wom_kit_project_version_update_collision_inspect_batch_core(
     entry_refs: Iterable[str] | None = None,
     expected_plan_sha256: str | None,
     owned_lock_identity: tuple[int, int] | None = None,
+    runner: project_update_git_runner.TrustedProjectUpdateGitRunner,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Inspect a complete opaque collision set with one materialization plan.
 
@@ -107243,6 +107618,7 @@ def _wom_kit_project_version_update_collision_inspect_batch_core(
             or not wom_kit_project_update_git_metadata_is_local_real(
                 project_root,
                 mirror_path,
+                runner=runner,
             )
         ):
             add_blocker("project_update_collision_source_mirror_unsafe")
@@ -107282,17 +107658,23 @@ def _wom_kit_project_version_update_collision_inspect_batch_core(
         inside_ok, inside_text = _wom_kit_project_update_git(
             mirror_path,
             ["rev-parse", "--is-inside-work-tree"],
+            runner=runner,
         )
         top_ok, top_text = _wom_kit_project_update_git(
             mirror_path,
             ["rev-parse", "--show-toplevel"],
+            runner=runner,
         )
         head_ok, head_text = _wom_kit_project_update_git(
             mirror_path,
             ["rev-parse", "--verify", "HEAD"],
+            runner=runner,
         )
         symbolic_state, original_branch = (
-            wom_kit_project_update_symbolic_head_state(mirror_path)
+            wom_kit_project_update_symbolic_head_state(
+                mirror_path,
+                runner=runner,
+            )
         )
         try:
             exact_top = bool(
@@ -107312,7 +107694,10 @@ def _wom_kit_project_version_update_collision_inspect_batch_core(
             or head_before is None
             or symbolic_state == "invalid"
             or not wom_kit_project_update_snapshot_is_clean(
-                _wom_kit_project_update_git_snapshot(mirror_path),
+                _wom_kit_project_update_git_snapshot(
+                    mirror_path,
+                    runner=runner,
+                ),
                 expected_head=head_before,
                 expected_branch=original_branch,
             )
@@ -107322,10 +107707,12 @@ def _wom_kit_project_version_update_collision_inspect_batch_core(
             target_evidence = wom_kit_project_update_target_evidence(
                 mirror_path,
                 target_tag,
+                runner=runner,
             )
             target_ref_snapshot = wom_kit_project_update_target_ref_snapshot(
                 mirror_path,
                 target_tag,
+                runner=runner,
             )
             target_ref_snapshot_private = target_ref_snapshot
             candidate_commit = target_evidence.get("target_commit")
@@ -107356,6 +107743,7 @@ def _wom_kit_project_version_update_collision_inspect_batch_core(
         ) = _wom_kit_project_update_materialization_plan_details_internal(
             mirror_path,
             target_commit,
+            runner=runner,
         )
         current_plan_value = plan.get("materialization_plan_sha256")
         current_plan = (
@@ -107425,6 +107813,7 @@ def _wom_kit_project_version_update_collision_inspect_batch_core(
                 _wom_kit_project_update_collision_git_eligibility_batch(
                     mirror_path,
                     safe_internal_paths,
+                    runner=runner,
                 )
                 if safe_internal_paths
                 else {}
@@ -107449,6 +107838,7 @@ def _wom_kit_project_version_update_collision_inspect_batch_core(
                             internal_path,
                             (False, False),
                         ),
+                        runner=runner,
                     )
                 )
                 entries.append(
@@ -107674,6 +108064,34 @@ def _wom_kit_project_version_update_collision_inspect_batch_core(
     return result, private
 
 
+def _wom_kit_project_version_update_collision_inspect_batch_legacy_read_only(
+    inspection_root: Path | str,
+    *,
+    target: str,
+    entry_refs: Iterable[str] | None = None,
+    expected_plan_sha256: str | None,
+    owned_lock_identity: tuple[int, int] | None = None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Use one sealed local runner for the historical repair planner."""
+
+    runner = (
+        project_update_git_runner.TrustedProjectUpdateGitRunner
+        .resolve_preapproval()
+    )
+    try:
+        runner.close_transport_boundary()
+        return _wom_kit_project_version_update_collision_inspect_batch_core(
+            inspection_root,
+            target=target,
+            entry_refs=entry_refs,
+            expected_plan_sha256=expected_plan_sha256,
+            owned_lock_identity=owned_lock_identity,
+            runner=runner,
+        )
+    finally:
+        runner.close()
+
+
 def wom_kit_project_version_update_collision_inspect_batch(
     inspection_root: Path | str,
     *,
@@ -107683,15 +108101,24 @@ def wom_kit_project_version_update_collision_inspect_batch(
 ) -> dict[str, Any]:
     """Public path-free read-only inspection for a complete collision batch."""
 
-    result, _private = (
-        _wom_kit_project_version_update_collision_inspect_batch_core(
-            inspection_root,
-            target=target,
-            entry_refs=entry_refs,
-            expected_plan_sha256=expected_plan_sha256,
-        )
+    runner = (
+        project_update_git_runner.TrustedProjectUpdateGitRunner
+        .resolve_preapproval()
     )
-    return result
+    try:
+        runner.close_transport_boundary()
+        result, _private = (
+            _wom_kit_project_version_update_collision_inspect_batch_core(
+                inspection_root,
+                target=target,
+                entry_refs=entry_refs,
+                expected_plan_sha256=expected_plan_sha256,
+                runner=runner,
+            )
+        )
+        return result
+    finally:
+        runner.close()
 
 
 def wom_kit_project_version_update_collision(
@@ -107733,7 +108160,7 @@ def wom_kit_project_version_update_collision(
     )
 
 
-def _wom_kit_project_version_update_collision_legacy_core(
+def _wom_kit_project_version_update_collision_legacy_core_with_runner(
     inspection_root: Path | str,
     *,
     target: str,
@@ -107745,6 +108172,7 @@ def _wom_kit_project_version_update_collision_legacy_core(
     reviewed_by: str | None = None,
     affirm_external_writers_quiescent: bool = False,
     reveal_target_relative_path: bool = False,
+    runner: project_update_git_runner.TrustedProjectUpdateGitRunner,
 ) -> dict[str, Any]:
     """Exercise the pre-v0.4 collision writer in historical tests only."""
 
@@ -108153,6 +108581,7 @@ def _wom_kit_project_version_update_collision_legacy_core(
         or not wom_kit_project_update_git_metadata_is_local_real(
             project_root,
             mirror_path,
+            runner=runner,
         )
     ):
         add_blocker("project_update_collision_source_mirror_unsafe")
@@ -108176,17 +108605,21 @@ def _wom_kit_project_version_update_collision_legacy_core(
     inside_ok, inside_text = _wom_kit_project_update_git(
         mirror_path,
         ["rev-parse", "--is-inside-work-tree"],
+        runner=runner,
     )
     top_ok, top_text = _wom_kit_project_update_git(
         mirror_path,
         ["rev-parse", "--show-toplevel"],
+        runner=runner,
     )
     head_ok, head_text = _wom_kit_project_update_git(
         mirror_path,
         ["rev-parse", "--verify", "HEAD"],
+        runner=runner,
     )
     symbolic_state, original_branch = wom_kit_project_update_symbolic_head_state(
-        mirror_path
+        mirror_path,
+        runner=runner,
     )
     try:
         exact_top = top_ok and Path(top_text).resolve() == mirror_path.resolve()
@@ -108197,7 +108630,10 @@ def _wom_kit_project_version_update_collision_legacy_core(
         if head_ok and re.fullmatch(r"[0-9a-fA-F]{40,64}", head_text)
         else None
     )
-    git_snapshot = _wom_kit_project_update_git_snapshot(mirror_path)
+    git_snapshot = _wom_kit_project_update_git_snapshot(
+        mirror_path,
+        runner=runner,
+    )
     if (
         not inside_ok
         or inside_text != "true"
@@ -108216,10 +108652,12 @@ def _wom_kit_project_version_update_collision_legacy_core(
     target_evidence = wom_kit_project_update_target_evidence(
         mirror_path,
         target_tag,
+        runner=runner,
     )
     target_ref_snapshot = wom_kit_project_update_target_ref_snapshot(
         mirror_path,
         target_tag,
+        runner=runner,
     )
     target_commit = target_evidence.get("target_commit")
     if (
@@ -108245,6 +108683,7 @@ def _wom_kit_project_version_update_collision_legacy_core(
                 entry_ref=safe_entry_ref,
                 expected_plan_sha256=expected_plan,
                 case_ref=str(case_ref),
+                runner=runner,
             )
         )
         receipt_private_metadata_read = bool(
@@ -108292,6 +108731,7 @@ def _wom_kit_project_version_update_collision_legacy_core(
     ) = _wom_kit_project_update_materialization_plan_details_internal(
         mirror_path,
         target_commit,
+        runner=runner,
     )
     current_plan = plan.get("materialization_plan_sha256")
     if current_plan != expected_plan:
@@ -108320,6 +108760,7 @@ def _wom_kit_project_version_update_collision_legacy_core(
         target_entries=target_entries,
         current_entries=current_entries,
         authority=authority,
+        runner=runner,
     )
     source_entry_kind = str(classification["entry_kind"])
     source_entry_kind_verified = bool(
@@ -108452,6 +108893,7 @@ def _wom_kit_project_version_update_collision_legacy_core(
                             entry_ref=safe_entry_ref,
                             expected_plan_sha256=expected_plan,
                             case_ref=str(case_ref),
+                            runner=runner,
                         )
                     )
                     receipt_private_metadata_read = bool(
@@ -108515,10 +108957,14 @@ def _wom_kit_project_version_update_collision_legacy_core(
                 wom_kit_project_update_target_ref_snapshot(
                     mirror_path,
                     target_tag,
+                    runner=runner,
                 )
                 != target_ref_snapshot
                 or not wom_kit_project_update_snapshot_is_clean(
-                    _wom_kit_project_update_git_snapshot(mirror_path),
+                    _wom_kit_project_update_git_snapshot(
+                        mirror_path,
+                        runner=runner,
+                    ),
                     expected_head=head_before,
                     expected_branch=original_branch,
                 )
@@ -108533,6 +108979,7 @@ def _wom_kit_project_version_update_collision_legacy_core(
             ) = _wom_kit_project_update_materialization_plan_details_internal(
                 mirror_path,
                 target_commit,
+                runner=runner,
             )
             current_plan = final_plan.get("materialization_plan_sha256")
             final_resolved = _wom_kit_project_update_collision_resolve_ref(
@@ -108543,6 +108990,7 @@ def _wom_kit_project_version_update_collision_legacy_core(
                 _wom_kit_project_update_collision_git_eligibility(
                     mirror_path,
                     internal_path,
+                    runner=runner,
                 )
             )
             if (
@@ -108738,6 +109186,182 @@ def _wom_kit_project_version_update_collision_legacy_core(
     return build_result()
 
 
+def _wom_kit_project_version_update_collision_legacy_core(
+    inspection_root: Path | str,
+    *,
+    target: str,
+    entry_ref: str,
+    action: str,
+    dry_run: bool = False,
+    approve: bool = False,
+    expected_plan_sha256: str | None = None,
+    reviewed_by: str | None = None,
+    affirm_external_writers_quiescent: bool = False,
+    reveal_target_relative_path: bool = False,
+) -> dict[str, Any]:
+    """Historical collision seam with one explicit sealed local runner."""
+
+    runner = (
+        project_update_git_runner.TrustedProjectUpdateGitRunner
+        .resolve_preapproval()
+    )
+    try:
+        runner.close_transport_boundary()
+        return _wom_kit_project_version_update_collision_legacy_core_with_runner(
+            inspection_root,
+            target=target,
+            entry_ref=entry_ref,
+            action=action,
+            dry_run=dry_run,
+            approve=approve,
+            expected_plan_sha256=expected_plan_sha256,
+            reviewed_by=reviewed_by,
+            affirm_external_writers_quiescent=(
+                affirm_external_writers_quiescent
+            ),
+            reveal_target_relative_path=reveal_target_relative_path,
+            runner=runner,
+        )
+    finally:
+        runner.close()
+
+
+def wom_kit_project_update_runtime_policy(
+    mirror_path: Path,
+    target_commit: str | None,
+    *,
+    runner: project_update_git_runner.TrustedProjectUpdateGitRunner,
+) -> dict[str, Any]:
+    """Inspect the exact tagged source for the project-runtime policy."""
+
+    result: dict[str, Any] = {
+        "state": "deferred" if target_commit is None else "not_required",
+        "required": False,
+        "schema": None,
+        "policy_sha256": None,
+        "source_path": "wom-kit/project-runtime-policy.json",
+        "supply_lock_path": None,
+        "supply_lock_sha256": None,
+    }
+    if target_commit is None:
+        return result
+    if re.fullmatch(r"[0-9a-f]{40,64}", target_commit) is None:
+        result["state"] = "invalid"
+        return result
+    git_object = f"{target_commit}:wom-kit/project-runtime-policy.json"
+    object_ok, object_id = _wom_kit_project_update_git(
+        mirror_path,
+        ["rev-parse", "--verify", git_object],
+        runner=runner,
+    )
+    if not object_ok:
+        return result
+    if re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", object_id) is None:
+        result["state"] = "invalid"
+        return result
+    size_ok, size_text = _wom_kit_project_update_git(
+        mirror_path,
+        ["cat-file", "-s", object_id],
+        runner=runner,
+    )
+    try:
+        expected_size = int(size_text) if size_ok else -1
+    except ValueError:
+        expected_size = -1
+    raw = _wom_kit_project_update_git_blob(
+        mirror_path,
+        object_id,
+        expected_size,
+        runner=runner,
+    )
+    document = project_runtime.project_runtime_policy_document(raw)
+    if document is None:
+        result["state"] = "invalid"
+        return result
+    result.update(
+        {
+            "state": "required",
+            "required": True,
+            "schema": document["schema"],
+            "policy_sha256": "sha256:" + hashlib.sha256(raw).hexdigest(),
+            "supply_lock_path": document.get("supply_lock"),
+            "supply_lock_sha256": document.get(
+                "supply_lock_sha256"
+            ),
+        }
+    )
+    return result
+
+
+def wom_kit_project_update_runtime_supply(
+    mirror_path: Path,
+    target_commit: str | None,
+    target_version: str | None,
+    policy: Mapping[str, Any],
+    *,
+    runner: project_update_git_runner.TrustedProjectUpdateGitRunner,
+) -> project_runtime.RuntimeSupplyLock | None:
+    """Read and verify the exact supply lock named by the target policy."""
+
+    if (
+        policy.get("state") != "required"
+        or type(target_commit) is not str
+        or re.fullmatch(r"[0-9a-f]{40,64}", target_commit) is None
+        or type(target_version) is not str
+    ):
+        return None
+    relative = policy.get("supply_lock_path")
+    declared_sha256 = policy.get("supply_lock_sha256")
+    if (
+        type(relative) is not str
+        or not relative.startswith("wom-kit/")
+        or ".." in PurePosixPath(relative).parts
+        or type(declared_sha256) is not str
+        or re.fullmatch(r"sha256:[0-9a-f]{64}", declared_sha256)
+        is None
+    ):
+        return None
+    git_object = f"{target_commit}:{relative}"
+    object_ok, object_id = _wom_kit_project_update_git(
+        mirror_path,
+        ["rev-parse", "--verify", git_object],
+        runner=runner,
+    )
+    if (
+        not object_ok
+        or re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", object_id)
+        is None
+    ):
+        return None
+    size_ok, size_text = _wom_kit_project_update_git(
+        mirror_path,
+        ["cat-file", "-s", object_id],
+        runner=runner,
+    )
+    try:
+        expected_size = int(size_text) if size_ok else -1
+    except ValueError:
+        expected_size = -1
+    if not 0 < expected_size <= 256 * 1024:
+        return None
+    raw = _wom_kit_project_update_git_blob(
+        mirror_path,
+        object_id,
+        expected_size,
+        runner=runner,
+    )
+    if (
+        raw is None
+        or "sha256:" + hashlib.sha256(raw).hexdigest()
+        != declared_sha256
+    ):
+        return None
+    return project_runtime.project_runtime_supply_lock(
+        raw,
+        expected_target=target_version,
+    )
+
+
 def wom_kit_project_version_update(
     inspection_root: Path | str,
     *,
@@ -108763,58 +109387,166 @@ def wom_kit_project_version_update(
                 expected_exact_approval_target_binding_sha256
             ),
         )
-
-    preview = _wom_kit_project_version_update_legacy_core(
-        inspection_root,
-        target=target,
-        dry_run=True,
-        approve=False,
-        reviewed_by=reviewed_by,
-        affirm_external_writers_quiescent=False,
-        progress_callback=progress_callback,
-    )
-    try:
-        binding = project_version_update_approval_binding(preview)
-    except OperationApprovalBindingError:
-        return preview
-    preview["exact_human_approval"] = binding.public_document()
+        raise ArchiveServiceError(
+            "project_version_update_live_approval_transaction_required"
+        )
     if dry_run:
-        return preview
+        return _wom_kit_project_version_update_legacy_core(
+            inspection_root,
+            target=target,
+            dry_run=True,
+            approve=False,
+            reviewed_by=reviewed_by,
+            affirm_external_writers_quiescent=False,
+            progress_callback=progress_callback,
+        )
+    return _compound_exact_human_approval_blocked(
+        lifecycle_action="project_version_update",
+    )
 
-    if not approve:
-        return _compound_exact_human_approval_blocked(
-            lifecycle_action="project_version_update",
+
+def _wom_kit_project_version_update_live_approval_transaction(
+    inspection_root: Path | str,
+    *,
+    target: str,
+    reviewed_by: str,
+    affirm_external_writers_quiescent: bool,
+    approval_executor: Callable[..., Mapping[str, Any]],
+    progress_callback: Callable[[str, str, int | None, int | None], None]
+    | None = None,
+    _expected_approval_root: Path | None = None,
+    _expected_archive_id: str | None = None,
+) -> dict[str, Any]:
+    """Prepare refs under the owned lock, then approve and write in one call."""
+
+    if (
+        type(affirm_external_writers_quiescent) is not bool
+        or not affirm_external_writers_quiescent
+        or not callable(approval_executor)
+    ):
+        raise ArchiveServiceError(
+            "project_version_update_live_approval_executor_required"
         )
     reviewer = safe_foreign_quarantine_actor_id(reviewed_by)
     if reviewer is None:
         raise ArchiveServiceError("project_version_update_reviewer_invalid")
-    approval_root = wom_kit_project_version_update_approval_archive_root(
-        inspection_root
-    )
-    exact_operation_approval = _require_exact_human_operation_approval(
-        approval_root,
-        binding,
-        reviewer_claim=reviewer,
-        expected_plan_sha256=expected_exact_approval_plan_sha256,
-        expected_target_binding_sha256=(
-            expected_exact_approval_target_binding_sha256
-        ),
-        claim=exact_human_approval_claim,
-    )
-    result = _wom_kit_project_version_update_legacy_core(
+    if not _wom_kit_project_version_update_approval_authority_matches(
+        inspection_root,
+        expected_root=_expected_approval_root,
+        expected_archive_id=_expected_archive_id,
+    ):
+        raise ArchiveServiceError(
+            "project_version_update_approval_archive_identity_changed"
+        )
+    return _wom_kit_project_version_update_legacy_core(
         inspection_root,
         target=target,
         dry_run=False,
         approve=True,
         reviewed_by=reviewer,
-        affirm_external_writers_quiescent=(
-            affirm_external_writers_quiescent
-        ),
-        operation_exact_human_approval=exact_operation_approval,
+        affirm_external_writers_quiescent=True,
+        approval_executor=approval_executor,
         progress_callback=progress_callback,
+        _expected_approval_root=_expected_approval_root,
+        _expected_archive_id=_expected_archive_id,
     )
-    result["operation_exact_human_approval"] = exact_operation_approval
-    return result
+
+
+def _wom_kit_project_version_update_resume_live_transaction(
+    inspection_root: Path | str,
+    *,
+    target: str,
+    reviewed_by: str,
+    transaction_ref: str,
+    approval_executor: Callable[..., Mapping[str, Any]],
+    _expected_approval_root: Path,
+    _expected_archive_id: str,
+) -> dict[str, Any]:
+    """Resume an authenticated claim/transaction pair with zero new native UI."""
+
+    if not callable(approval_executor):
+        raise ArchiveServiceError(
+            "project_version_update_live_approval_executor_required"
+        )
+    state, lifetime = _project_update_reopen_durable_state(
+        inspection_root,
+        target=target,
+        reviewed_by=reviewed_by,
+        transaction_ref=transaction_ref,
+        expected_approval_root=_expected_approval_root,
+        expected_archive_id=_expected_archive_id,
+    )
+
+    def continue_started_claim(
+        claim: _ClaimedExactHumanApproval,
+        expected_plan_sha256: str,
+        expected_target_binding_sha256: str,
+    ) -> Mapping[str, Any]:
+        binding = project_version_update_approval_binding(
+            state.prepared_preview
+        )
+        assert_same_binding(
+            binding,
+            expected_plan_sha256=expected_plan_sha256,
+            expected_target_binding_sha256=(
+                expected_target_binding_sha256
+            ),
+        )
+        state.approved_plan_sha256 = binding.plan_sha256
+        state.approved_target_binding_sha256 = (
+            binding.target_binding_sha256
+        )
+        return _project_update_durable_writer(state, claim)
+
+    def finalize_succeeded_claim(
+        claim: _ClaimedExactHumanApproval,
+    ) -> None:
+        _project_update_succeeded_claim_finalizer(state, claim)
+
+    def started_guard(claim: _ClaimedExactHumanApproval) -> bool:
+        binding = project_version_update_approval_binding(
+            state.prepared_preview
+        )
+        state.approved_plan_sha256 = binding.plan_sha256
+        state.approved_target_binding_sha256 = (
+            binding.target_binding_sha256
+        )
+        return _project_update_claim_checkpoint_guard(
+            state,
+            claim,
+            succeeded=False,
+        )
+
+    def succeeded_guard(claim: _ClaimedExactHumanApproval) -> bool:
+        binding = project_version_update_approval_binding(
+            state.prepared_preview
+        )
+        state.approved_plan_sha256 = binding.plan_sha256
+        state.approved_target_binding_sha256 = (
+            binding.target_binding_sha256
+        )
+        return _project_update_claim_checkpoint_guard(
+            state,
+            claim,
+            succeeded=True,
+        )
+
+    try:
+        result = approval_executor(
+            copy.deepcopy(state.prepared_preview),
+            continue_started_claim,
+            finalize_succeeded_claim,
+            started_guard,
+            succeeded_guard,
+        )
+        if not isinstance(result, Mapping):
+            raise ArchiveServiceError(
+                "project_version_update_result_invalid"
+            )
+        return dict(result)
+    finally:
+        state.directory_guard.close()
+        lifetime.close_after_service_transaction()
 
 
 def wom_kit_project_version_update_approval_archive_root(
@@ -108843,7 +109575,2238 @@ def wom_kit_project_version_update_approval_archive_root(
     return valid[0]
 
 
-def _wom_kit_project_version_update_legacy_core(
+def _wom_kit_project_version_update_approval_authority_matches(
+    inspection_root: Path | str,
+    *,
+    expected_root: Path | None,
+    expected_archive_id: str | None,
+) -> bool:
+    """Re-resolve one held approval authority without exposing its values."""
+
+    if not isinstance(expected_root, Path) or type(expected_archive_id) is not str:
+        return False
+    try:
+        exact_human_approval_archive_identity_sha256(expected_archive_id)
+        held_root = require_existing_archive_root(expected_root)
+        current_root = require_existing_archive_root(
+            wom_kit_project_version_update_approval_archive_root(
+                inspection_root
+            )
+        )
+        return bool(
+            current_root == held_root
+            and read_archive_id(current_root) == expected_archive_id
+        )
+    except (
+        ArchiveServiceError,
+        ExactHumanApprovalError,
+        OSError,
+        RuntimeError,
+        ValueError,
+    ):
+        return False
+
+
+class _ProjectVersionUpdateGitRunnerLifetime:
+    """Own one preapproval Git runner through the whole claim transaction.
+
+    The private handoff seam is intentionally dormant until the durable claim
+    finalizer can own the executable handle directly.  For now the service
+    transaction keeps ownership and closes only after ``approval_executor``
+    has returned, which is after the current claim-succeeded finalizer.
+    """
+
+    def __init__(self) -> None:
+        self._runner: (
+            project_update_git_runner.TrustedProjectUpdateGitRunner | None
+        ) = None
+        self._handed_to_claim_finalizer = False
+
+    def acquire_preapproval(
+        self,
+    ) -> project_update_git_runner.TrustedProjectUpdateGitRunner:
+        if self._runner is not None:
+            raise project_update_git_runner.ProjectUpdateGitRunnerError(
+                "project_update_git_runner_resolved_more_than_once"
+            )
+        self._runner = (
+            project_update_git_runner.TrustedProjectUpdateGitRunner
+            .resolve_preapproval()
+        )
+        return self._runner
+
+    def handoff_to_claim_finalizer(
+        self,
+    ) -> project_update_git_runner.TrustedProjectUpdateGitRunner:
+        """Private future seam; the current transaction does not call it."""
+
+        if self._runner is None or self._handed_to_claim_finalizer:
+            raise project_update_git_runner.ProjectUpdateGitRunnerError(
+                "project_update_git_runner_handoff_invalid"
+            )
+        self._handed_to_claim_finalizer = True
+        return self._runner
+
+    def close_after_service_transaction(self) -> None:
+        if self._runner is None or self._handed_to_claim_finalizer:
+            return
+        runner = self._runner
+        self._runner = None
+        runner.close()
+
+
+_PROJECT_UPDATE_PRIVATE_PLAN_SCHEMA = (
+    "wom-kit/project-version-update-private-domain-plan/v0.4.3"
+)
+_PROJECT_UPDATE_STATIC_APPROVAL_CONTRACT = {
+    "embedded_dynamic_claim_reference": False,
+    "authenticated_succeeded_claim_required": True,
+    "transaction_journal_checkpoint": "claim_succeeded",
+    "domain_writer_reentry_on_succeeded_tail_allowed": False,
+}
+_PROJECT_UPDATE_RECEIPT_MAX_BYTES = 2 * 1024 * 1024
+
+
+def _project_update_canonical_bytes(value: Any) -> bytes:
+    """Canonical private transaction bytes; never used as a public echo."""
+
+    return project_update_transaction.canonical_json_bytes(value) + b"\n"
+
+
+def _project_update_private_json_value(value: Any) -> Any:
+    """Encode the few byte-valued snapshots needed for crash recovery."""
+
+    if type(value) is bytes:
+        return {
+            "schema": "wom-kit/private-bytes/base64/v0.1",
+            "value": base64.b64encode(value).decode("ascii"),
+        }
+    if type(value) is dict:
+        return {
+            str(key): _project_update_private_json_value(item)
+            for key, item in value.items()
+        }
+    if type(value) is list:
+        return [_project_update_private_json_value(item) for item in value]
+    if type(value) is tuple:
+        return [_project_update_private_json_value(item) for item in value]
+    if value is None or type(value) in {str, int, bool}:
+        return value
+    raise ArchiveServiceError("project_version_update_private_plan_invalid")
+
+
+def _project_update_private_json_restore(value: Any) -> Any:
+    """Decode only the exact private byte wrapper emitted above."""
+
+    if type(value) is dict:
+        if set(value) == {"schema", "value"}:
+            if (
+                value.get("schema")
+                != "wom-kit/private-bytes/base64/v0.1"
+                or type(value.get("value")) is not str
+            ):
+                raise ArchiveServiceError(
+                    "project_version_update_private_plan_invalid"
+                )
+            try:
+                return base64.b64decode(
+                    value["value"].encode("ascii"),
+                    validate=True,
+                )
+            except (UnicodeError, binascii.Error):
+                raise ArchiveServiceError(
+                    "project_version_update_private_plan_invalid"
+                ) from None
+        return {
+            str(key): _project_update_private_json_restore(item)
+            for key, item in value.items()
+        }
+    if type(value) is list:
+        return [_project_update_private_json_restore(item) for item in value]
+    if value is None or type(value) in {str, int, bool}:
+        return value
+    raise ArchiveServiceError("project_version_update_private_plan_invalid")
+
+
+def _project_update_parse_private_plan(raw: bytes) -> dict[str, Any]:
+    try:
+        value = json.loads(raw.decode("ascii", errors="strict"))
+    except (UnicodeError, ValueError, TypeError):
+        raise ArchiveServiceError(
+            "project_version_update_private_plan_invalid"
+        ) from None
+    restored = _project_update_private_json_restore(value)
+    if (
+        type(restored) is not dict
+        or restored.get("schema") != _PROJECT_UPDATE_PRIVATE_PLAN_SCHEMA
+        or _project_update_canonical_bytes(
+            _project_update_private_json_value(restored)
+        )
+        != raw
+    ):
+        raise ArchiveServiceError("project_version_update_private_plan_invalid")
+    return restored
+
+
+def _project_update_runtime_candidate_private_document(
+    candidate: project_runtime.PreparedRuntimeCandidate,
+) -> dict[str, Any]:
+    """Persist only intent-bound candidate facts needed after a crash.
+
+    A successful promotion moves the candidate directory to its final runtime
+    path.  The public seal still proves those bytes, but reopening the Python
+    value also needs the original identities and recursive inventory.  This
+    private document is sealed by the transaction and is never echoed.
+    """
+
+    return {
+        "schema": "wom-kit/project-runtime-candidate-private-resume/v0.4.3",
+        "target_tag": candidate.target_tag,
+        "target_version": candidate.target_version,
+        "target_commit": candidate.target_commit,
+        "transaction_ref": candidate.transaction_ref,
+        "logical_candidate_path": candidate.logical_candidate_path,
+        "logical_seal_path": candidate.logical_seal_path,
+        "project_root_identity": list(candidate.project_root_identity),
+        "transaction_root_identity": list(candidate.transaction_root_identity),
+        "candidate_root_identity": list(candidate.candidate_root_identity),
+        "runtime_parent_identity": list(candidate.runtime_parent_identity),
+        "runtime_parent_existed_before": candidate.runtime_parent_existed_before,
+        "runtime_parent_created_identity": (
+            None
+            if candidate.runtime_parent_created_identity is None
+            else list(candidate.runtime_parent_created_identity)
+        ),
+        "same_volume_identity": candidate.same_volume_identity,
+        "inventory": [
+            {
+                "relative_path": item.relative_path,
+                "entry_type": item.entry_type,
+                "device": item.device,
+                "inode": item.inode,
+                "nlink": item.nlink,
+                "size_bytes": item.size_bytes,
+                "mtime_ns": item.mtime_ns,
+                "sha256": item.sha256,
+            }
+            for item in candidate.inventory
+        ],
+        "inventory_sha256": candidate.inventory_sha256,
+        "candidate_sha256": candidate.candidate_sha256,
+        "inventory_count": candidate.inventory_count,
+        "inventory_bytes": candidate.inventory_bytes,
+        "seal_bytes": candidate.seal_bytes,
+        "seal_sha256": candidate.seal_sha256,
+        "receipt_bytes": candidate.receipt_bytes,
+        "receipt_sha256": candidate.receipt_sha256,
+        "wheel_file_name": candidate.wheel_file_name,
+        "wheel_sha256": candidate.wheel_sha256,
+        "supply_lock_sha256": candidate.supply_lock_sha256,
+        "supply_lock_bytes": candidate.supply_lock_bytes,
+        "artifact_inventory": [dict(item) for item in candidate.artifact_inventory],
+        "installed_payload_sha256": candidate.installed_payload_sha256,
+        "normalized_payload_inventory": [list(item) for item in candidate.normalized_payload_inventory],
+        "python_version": candidate.python_version,
+        "installed_distributions": [dict(item) for item in candidate.installed_distributions],
+        "verification": dict(candidate.verification),
+        "existing_runtime_reusable": candidate.existing_runtime_reusable,
+    }
+
+
+def _project_update_restore_runtime_candidate(
+    project_root: Path,
+    transaction: project_update_transaction.ProjectUpdateTransaction,
+    value: Any,
+) -> project_runtime.PreparedRuntimeCandidate:
+    """Rehydrate one sealed private candidate without PATH or child lookup."""
+
+    expected_keys = {
+        "schema", "target_tag", "target_version", "target_commit",
+        "transaction_ref", "logical_candidate_path", "logical_seal_path",
+        "project_root_identity", "transaction_root_identity",
+        "candidate_root_identity", "runtime_parent_identity",
+        "runtime_parent_existed_before", "runtime_parent_created_identity",
+        "same_volume_identity", "inventory", "inventory_sha256",
+        "candidate_sha256", "inventory_count", "inventory_bytes",
+        "seal_bytes", "seal_sha256", "receipt_bytes", "receipt_sha256",
+        "wheel_file_name", "wheel_sha256", "supply_lock_sha256",
+        "supply_lock_bytes", "artifact_inventory",
+        "installed_payload_sha256", "normalized_payload_inventory",
+        "python_version", "installed_distributions", "verification",
+        "existing_runtime_reusable",
+    }
+    if (
+        type(value) is not dict
+        or set(value) != expected_keys
+        or value.get("schema")
+        != "wom-kit/project-runtime-candidate-private-resume/v0.4.3"
+        or value.get("transaction_ref") != transaction.transaction_ref
+        or type(value.get("inventory")) is not list
+        or not isinstance(value.get("seal_bytes"), bytes)
+        or not isinstance(value.get("receipt_bytes"), bytes)
+        or not isinstance(value.get("supply_lock_bytes"), bytes)
+    ):
+        raise ArchiveServiceError(
+            "project_version_update_runtime_candidate_resume_invalid"
+        )
+
+    def identity(name: str, *, optional: bool = False) -> tuple[int, int] | None:
+        raw = value.get(name)
+        if optional and raw is None:
+            return None
+        if (
+            type(raw) is not list
+            or len(raw) != 2
+            or any(type(item) is not int or item < 0 for item in raw)
+        ):
+            raise ArchiveServiceError(
+                "project_version_update_runtime_candidate_resume_invalid"
+            )
+        return int(raw[0]), int(raw[1])
+
+    try:
+        inventory = tuple(
+            project_runtime.RuntimeCandidateInventoryEntry(**dict(item))
+            for item in value["inventory"]
+            if type(item) is dict
+        )
+        normalized_payload_inventory = tuple(
+            (str(item[0]), int(item[1]), str(item[2]))
+            for item in value["normalized_payload_inventory"]
+            if type(item) is list and len(item) == 3
+        )
+        if (
+            len(inventory) != len(value["inventory"])
+            or len(normalized_payload_inventory)
+            != len(value["normalized_payload_inventory"])
+        ):
+            raise ValueError
+        candidate = project_runtime.PreparedRuntimeCandidate(
+            target_tag=value["target_tag"],
+            target_version=value["target_version"],
+            target_commit=value["target_commit"],
+            transaction_ref=transaction.transaction_ref,
+            logical_candidate_path=value["logical_candidate_path"],
+            logical_seal_path=value["logical_seal_path"],
+            project_root=project_root,
+            transaction_root=transaction.transaction_root,
+            candidate_root=transaction.runtime_candidate_path,
+            seal_path=(
+                transaction.transaction_root
+                / project_runtime.PROJECT_RUNTIME_CANDIDATE_SEAL_NAME
+            ),
+            project_root_identity=identity("project_root_identity"),
+            transaction_root_identity=identity("transaction_root_identity"),
+            candidate_root_identity=identity("candidate_root_identity"),
+            runtime_parent_identity=identity("runtime_parent_identity"),
+            runtime_parent_existed_before=value["runtime_parent_existed_before"],
+            runtime_parent_created_identity=identity(
+                "runtime_parent_created_identity", optional=True
+            ),
+            same_volume_identity=value["same_volume_identity"],
+            inventory=inventory,
+            inventory_sha256=value["inventory_sha256"],
+            candidate_sha256=value["candidate_sha256"],
+            inventory_count=value["inventory_count"],
+            inventory_bytes=value["inventory_bytes"],
+            seal_bytes=value["seal_bytes"],
+            seal_sha256=value["seal_sha256"],
+            receipt_bytes=value["receipt_bytes"],
+            receipt_sha256=value["receipt_sha256"],
+            wheel_file_name=value["wheel_file_name"],
+            wheel_sha256=value["wheel_sha256"],
+            supply_lock_sha256=value["supply_lock_sha256"],
+            supply_lock_bytes=value["supply_lock_bytes"],
+            artifact_inventory=tuple(
+                dict(item) for item in value["artifact_inventory"]
+            ),
+            installed_payload_sha256=value["installed_payload_sha256"],
+            normalized_payload_inventory=normalized_payload_inventory,
+            python_version=value["python_version"],
+            installed_distributions=tuple(
+                dict(item) for item in value["installed_distributions"]
+            ),
+            verification=dict(value["verification"]),
+            existing_runtime_reusable=value["existing_runtime_reusable"],
+        )
+    except (KeyError, TypeError, ValueError, AttributeError):
+        raise ArchiveServiceError(
+            "project_version_update_runtime_candidate_resume_invalid"
+        ) from None
+    if (
+        not hmac.compare_digest(
+            project_update_transaction.sha256_bytes(candidate.seal_bytes),
+            "sha256:" + candidate.seal_sha256,
+        )
+        or not hmac.compare_digest(
+            project_update_transaction.sha256_bytes(candidate.receipt_bytes),
+            "sha256:" + candidate.receipt_sha256,
+        )
+    ):
+        raise ArchiveServiceError(
+            "project_version_update_runtime_candidate_resume_invalid"
+        )
+    return candidate
+
+
+def _project_update_unknown_component_sha256(component_ref: str) -> str:
+    return project_update_transaction.sha256_document(
+        {
+            "component_ref": component_ref,
+            "schema": "wom-kit/project-update-live-state-unknown/v0.4.3",
+        }
+    )
+
+
+def _project_update_raw_component_sha256(value: bytes | None) -> str:
+    return project_update_transaction.digest_component(value)
+
+
+def _project_update_safe_read_component(
+    project_root: Path,
+    path: Path,
+    *,
+    maximum: int,
+) -> bytes | None | object:
+    """Return bytes/absence or one private sentinel for an unsafe live path."""
+
+    kind = wom_kit_real_path_kind(project_root, path)
+    if kind == "missing":
+        return None
+    if kind != "file" or not wom_kit_existing_path_components_are_real(
+        project_root,
+        path,
+    ):
+        return _PROJECT_UPDATE_UNSAFE_LIVE_COMPONENT
+    value = _wom_kit_read_bounded_real_bytes(
+        project_root,
+        path,
+        max_bytes=maximum,
+    )
+    return (
+        value
+        if isinstance(value, bytes)
+        else _PROJECT_UPDATE_UNSAFE_LIVE_COMPONENT
+    )
+
+
+_PROJECT_UPDATE_UNSAFE_LIVE_COMPONENT = object()
+
+
+@dataclass
+class _ProjectVersionUpdateDurableApprovalState:
+    """Private, non-echoed execution state for one sealed project update."""
+
+    inspection_root: Path
+    project_root: Path
+    mirror_path: Path
+    target_tag: str
+    target_version: str
+    target_commit: str
+    reviewer: str
+    expected_approval_root: Path
+    expected_archive_id: str
+    transaction: project_update_transaction.ProjectUpdateTransaction
+    expected_lock_bytes: bytes
+    runner: project_update_git_runner.TrustedProjectUpdateGitRunner
+    runtime_candidate: project_runtime.PreparedRuntimeCandidate
+    runtime_bootstrap: project_runtime.BootstrapWheel
+    runtime_supply: project_runtime.RuntimeSupplyLock
+    directory_guard: _WomKitProjectUpdateDirectoryGuard
+    private_plan: dict[str, Any]
+    prepared_preview: dict[str, Any]
+    static_receipt_bytes: bytes
+    static_receipt_path: Path
+    source_pre_sha256: str
+    source_post_sha256: str
+    runtime_pre_sha256: str
+    runtime_post_sha256: str
+    component_paths: dict[str, Path]
+    runtime_materialization: project_runtime.RuntimeMaterialization | None = None
+    approved_plan_sha256: str | None = None
+    approved_target_binding_sha256: str | None = None
+
+    def checkpoint_head(self) -> project_update_transaction.ProjectUpdateCheckpoint:
+        journal = self.transaction.inspect().journal
+        if journal.state != "exact" or not journal.verified_prefix:
+            raise ArchiveServiceError(
+                "project_version_update_transaction_checkpoint_invalid"
+            )
+        return journal.verified_prefix[-1]
+
+
+@dataclass(frozen=True)
+class _ProjectVersionUpdatePreparedApproval:
+    preview: Mapping[str, Any]
+    state: _ProjectVersionUpdateDurableApprovalState
+
+
+def _project_update_claim_authority(
+    state: _ProjectVersionUpdateDurableApprovalState,
+    claim: _ClaimedExactHumanApproval,
+) -> tuple[str, str]:
+    if (
+        type(state.approved_plan_sha256) is not str
+        or type(state.approved_target_binding_sha256) is not str
+    ):
+        raise ArchiveServiceError(
+            "project_version_update_approval_binding_unavailable"
+        )
+    reference_sha256 = project_update_transaction.sha256_bytes(
+        _project_update_canonical_bytes(claim.public_reference())
+    )
+    payload = project_update_transaction.canonical_json_bytes(
+        {
+            "approval_reference_sha256": reference_sha256,
+            "intent_sha256": state.transaction.intent.sha256,
+            "operation": "project_version_update",
+            "plan_sha256": state.approved_plan_sha256,
+            "schema": (
+                "wom-kit/project-update-transaction-approval-authority/v0.4.3"
+            ),
+            "target_binding_sha256": (
+                state.approved_target_binding_sha256
+            ),
+            "transaction_ref": state.transaction.transaction_ref,
+        }
+    )
+    approval_mac = claim.approval_integrity_mac(payload)
+    return (
+        reference_sha256,
+        project_update_transaction.sha256_bytes(
+            approval_mac.encode("ascii")
+        ),
+    )
+
+
+def _project_update_runtime_matches_candidate(
+    state: _ProjectVersionUpdateDurableApprovalState,
+) -> bool:
+    try:
+        return bool(
+            project_runtime._existing_runtime_matches_candidate(
+                state.project_root,
+                state.runtime_candidate,
+            )
+        )
+    except (OSError, project_runtime.ProjectRuntimeError):
+        return False
+
+
+def _project_update_source_live_sha256(
+    state: _ProjectVersionUpdateDurableApprovalState,
+) -> str:
+    plan = state.private_plan
+    expected_pre = plan.get("preflight_git_snapshot")
+    current = _wom_kit_project_update_git_snapshot(
+        state.mirror_path,
+        runner=state.runner,
+    )
+    if current == expected_pre:
+        return state.source_pre_sha256
+    if state.source_pre_sha256 == state.source_post_sha256:
+        return _project_update_unknown_component_sha256("source")
+    try:
+        versions = wom_kit_project_update_source_versions(state.mirror_path)
+        ref_snapshot = wom_kit_project_update_target_ref_snapshot(
+            state.mirror_path,
+            state.target_tag,
+            runner=state.runner,
+        )
+        runtime_source = wom_kit_runtime_tracked_python_integrity(
+            state.project_root,
+            state.mirror_path,
+            runner=state.runner,
+        )
+        runtime_resources = wom_kit_runtime_resource_integrity(
+            state.project_root,
+            state.mirror_path,
+            ref=state.target_commit,
+            runner=state.runner,
+        )
+        if (
+            wom_kit_project_update_snapshot_is_clean(
+                current,
+                expected_head=state.target_commit,
+                expected_branch=None,
+            )
+            and all(
+                normalize_version_label(value) == state.target_version
+                for value in versions.values()
+            )
+            and ref_snapshot == plan.get("target_ref_snapshot")
+            and runtime_source.get("tracked_python_sources_verified") is True
+            and runtime_resources.get("runtime_resources_verified") is True
+        ):
+            return state.source_post_sha256
+    except (OSError, RuntimeError, ValueError):
+        pass
+    return _project_update_unknown_component_sha256("source")
+
+
+def _project_update_live_component_sha256(
+    state: _ProjectVersionUpdateDurableApprovalState,
+) -> dict[str, str]:
+    """Classify every exact component without exposing any live value."""
+
+    live: dict[str, str] = {
+        "source": _project_update_source_live_sha256(state),
+    }
+    candidate_present = bool(
+        os.path.lexists(state.runtime_candidate.candidate_root)
+        or os.path.lexists(state.runtime_candidate.seal_path)
+    )
+    runtime_matches = _project_update_runtime_matches_candidate(state)
+    if runtime_matches:
+        live["runtime"] = state.runtime_post_sha256
+    elif (
+        state.runtime_pre_sha256
+        == project_update_transaction.ABSENT_COMPONENT_SHA256
+        and not os.path.lexists(
+            project_runtime.runtime_path(
+                state.project_root,
+                state.target_version,
+            )
+        )
+    ):
+        live["runtime"] = state.runtime_pre_sha256
+    else:
+        live["runtime"] = _project_update_unknown_component_sha256(
+            "runtime"
+        )
+
+    for component in state.transaction.intent.components:
+        if component.component_ref in {"source", "runtime"}:
+            continue
+        path = state.component_paths.get(component.component_ref)
+        if not isinstance(path, Path):
+            live[component.component_ref] = (
+                _project_update_unknown_component_sha256(
+                    component.component_ref
+                )
+            )
+            continue
+        maximum = (
+            _PROJECT_UPDATE_RECEIPT_MAX_BYTES
+            if component.role == "receipt"
+            else 64 * 1024
+            if component.role == "launcher"
+            else WOM_KIT_VERSION_PIN_MAX_BYTES
+        )
+        value = _project_update_safe_read_component(
+            state.project_root,
+            path,
+            maximum=maximum,
+        )
+        live[component.component_ref] = (
+            _project_update_unknown_component_sha256(
+                component.component_ref
+            )
+            if value is _PROJECT_UPDATE_UNSAFE_LIVE_COMPONENT
+            else _project_update_raw_component_sha256(value)
+        )
+    return live
+
+
+def _project_update_claim_checkpoint_guard(
+    state: _ProjectVersionUpdateDurableApprovalState,
+    claim: _ClaimedExactHumanApproval,
+    *,
+    succeeded: bool,
+) -> bool:
+    """Authenticate a resume branch against the exact transaction journal."""
+
+    reference_sha256 = project_update_transaction.sha256_bytes(
+        _project_update_canonical_bytes(claim.public_reference())
+    )
+    approval_mac_sha256 = (
+        None
+        if succeeded
+        else _project_update_claim_authority(state, claim)[1]
+    )
+    inspection = state.transaction.inspect()
+    if inspection.journal.state != "exact" or not inspection.lock_backlinked:
+        return False
+    checkpoints = inspection.journal.verified_prefix
+    if not checkpoints or checkpoints[0].phase != "lock_backlinked":
+        return False
+    approval = next(
+        (item for item in checkpoints if item.phase == "approval_bound"),
+        None,
+    )
+    if approval is not None and (
+        approval.approval_reference_sha256 != reference_sha256
+        or (
+            approval_mac_sha256 is not None
+            and approval.approval_mac_sha256 != approval_mac_sha256
+        )
+        or approval.approval_mac_sha256 is None
+    ):
+        return False
+    live = _project_update_live_component_sha256(state)
+    classification = state.transaction.classify_live_components(live)
+    if succeeded:
+        return bool(
+            approval is not None
+            and classification.overall == "complete_exact"
+            and any(
+                item.phase in {"domain_committed", "claim_succeeded"}
+                for item in checkpoints
+            )
+        )
+    return bool(
+        classification.overall in {
+            "prewrite_exact",
+            "mixed_exact",
+            "complete_exact",
+        }
+        and not any(
+            item.phase in {"claim_succeeded", "ready_to_unlock", "lock_released", "completed"}
+            for item in checkpoints
+        )
+    )
+
+
+def _project_update_exact_write_bytes(
+    state: _ProjectVersionUpdateDurableApprovalState,
+    component: project_update_transaction.ProjectUpdateComponent,
+    target_bytes: bytes,
+) -> None:
+    path = state.component_paths[component.component_ref]
+    maximum = (
+        _PROJECT_UPDATE_RECEIPT_MAX_BYTES
+        if component.role == "receipt"
+        else 64 * 1024
+        if component.role == "launcher"
+        else WOM_KIT_VERSION_PIN_MAX_BYTES
+    )
+    current = _project_update_safe_read_component(
+        state.project_root,
+        path,
+        maximum=maximum,
+    )
+    if current is _PROJECT_UPDATE_UNSAFE_LIVE_COMPONENT:
+        raise ArchiveServiceError(
+            "project_version_update_component_path_unsafe"
+        )
+    current_sha256 = _project_update_raw_component_sha256(current)
+    if hmac.compare_digest(current_sha256, component.post_sha256):
+        return
+    if not hmac.compare_digest(current_sha256, component.pre_sha256):
+        raise ArchiveServiceError(
+            "project_version_update_component_compare_and_swap_failed"
+        )
+    try:
+        relative_parent = path.parent.relative_to(state.project_root)
+    except ValueError:
+        raise ArchiveServiceError(
+            "project_version_update_component_path_unsafe"
+        ) from None
+    held_parent = state.project_root
+    if not state.directory_guard.is_held(held_parent):
+        raise ArchiveServiceError(
+            "project_version_update_component_parent_unbound"
+        )
+    for part in relative_parent.parts:
+        child = held_parent / part
+        kind = wom_kit_real_path_kind(state.project_root, child)
+        if kind == "directory":
+            held = state.directory_guard.hold(child)
+        elif kind == "missing":
+            held = state.directory_guard.ensure_directory(
+                held_parent,
+                child,
+            )
+        else:
+            held = False
+        if not held:
+            raise ArchiveServiceError(
+                "project_version_update_component_parent_unbound"
+            )
+        held_parent = child
+    if not wom_kit_existing_path_components_are_real(
+        state.project_root,
+        path,
+    ):
+        raise ArchiveServiceError(
+            "project_version_update_component_path_unsafe"
+        )
+    write_bytes_atomic(path, target_bytes)
+    verified = _project_update_safe_read_component(
+        state.project_root,
+        path,
+        maximum=maximum,
+    )
+    if verified is _PROJECT_UPDATE_UNSAFE_LIVE_COMPONENT or not isinstance(
+        verified,
+        bytes,
+    ) or not hmac.compare_digest(
+        _project_update_raw_component_sha256(verified),
+        component.post_sha256,
+    ):
+        raise ArchiveServiceError(
+            "project_version_update_component_verification_failed"
+        )
+
+
+def _project_update_perform_component(
+    state: _ProjectVersionUpdateDurableApprovalState,
+    component: project_update_transaction.ProjectUpdateComponent,
+) -> None:
+    if component.role == "source":
+        if component.pre_sha256 == component.post_sha256:
+            if _project_update_source_live_sha256(state) != component.post_sha256:
+                raise ArchiveServiceError(
+                    "project_version_update_source_snapshot_changed"
+                )
+            return
+        if _project_update_source_live_sha256(state) == component.post_sha256:
+            return
+        if _project_update_source_live_sha256(state) != component.pre_sha256:
+            raise ArchiveServiceError(
+                "project_version_update_source_snapshot_changed"
+            )
+        if not _wom_kit_project_update_materialize_commit(
+            state.mirror_path,
+            state.target_commit,
+            directory_guard=state.directory_guard,
+            project_root=state.project_root,
+            expected_source_snapshot=state.private_plan[
+                "preflight_git_snapshot"
+            ],
+            runner=state.runner,
+        ):
+            raise ArchiveServiceError(
+                "project_version_update_source_materialization_failed"
+            )
+        if _project_update_source_live_sha256(state) != component.post_sha256:
+            raise ArchiveServiceError(
+                "project_version_update_source_verification_failed"
+            )
+        return
+    if component.role == "runtime":
+        if _project_update_runtime_matches_candidate(state):
+            if os.path.lexists(state.runtime_candidate.candidate_root) or os.path.lexists(
+                state.runtime_candidate.seal_path
+            ):
+                if not project_runtime.cleanup_prepared_runtime_candidate(
+                    state.runtime_candidate
+                ):
+                    raise ArchiveServiceError(
+                        "project_version_update_runtime_candidate_cleanup_failed"
+                    )
+            return
+        state.runtime_materialization = project_runtime.promote_runtime_candidate(
+            state.project_root,
+            target=state.target_version,
+            target_commit=state.target_commit,
+            bootstrap=state.runtime_bootstrap,
+            supply=state.runtime_supply,
+            prepared_candidate=state.runtime_candidate,
+        )
+        if not _project_update_runtime_matches_candidate(state):
+            raise ArchiveServiceError(
+                "project_version_update_runtime_promotion_failed"
+            )
+        return
+    target_bytes = (
+        state.static_receipt_bytes
+        if component.role == "receipt"
+        else state.private_plan["component_postimages"][
+            component.component_ref
+        ]
+    )
+    if not isinstance(target_bytes, bytes):
+        raise ArchiveServiceError(
+            "project_version_update_private_plan_invalid"
+        )
+    _project_update_exact_write_bytes(state, component, target_bytes)
+
+
+def _project_update_assert_approved_snapshot_unchanged(
+    state: _ProjectVersionUpdateDurableApprovalState,
+) -> None:
+    """Re-prove every mutable prewrite input before the first component.
+
+    The native decision binds the post-fetch ref/config/source snapshots, the
+    project pins, runtime policy/supply/candidate, launcher, and exact
+    materialization plan.  None of those may be silently refreshed after the
+    person approves.  Reopened transactions call this guard while their
+    journal is still before the first component intent; later checkpoints are
+    governed by the transaction's exact live-component classifier.
+    """
+
+    failure_code = "project_version_update_approved_snapshot_changed"
+    try:
+        plan = state.private_plan
+        expected_snapshot = plan.get("preflight_git_snapshot")
+        expected_ref_snapshot = plan.get("target_ref_snapshot")
+        expected_target_evidence = plan.get("target_evidence")
+        expected_policy = plan.get("runtime_policy")
+        expected_materialization = plan.get(
+            "materialization_preflight"
+        )
+        expected_launcher = plan.get("launcher_snapshot")
+        expected_pin_specs = plan.get("pin_specs")
+        if (
+            type(expected_snapshot) is not dict
+            or type(expected_ref_snapshot) is not dict
+            or type(expected_target_evidence) is not dict
+            or type(expected_policy) is not dict
+            or type(expected_materialization) is not dict
+            or type(expected_launcher) is not dict
+            or type(expected_pin_specs) is not list
+            or type(plan.get("preflight_git_config_digest")) is not str
+            or type(plan.get("head_before")) is not str
+        ):
+            raise ArchiveServiceError(failure_code)
+
+        live_pin_specs: list[dict[str, Any]] = []
+        for private_spec in expected_pin_specs:
+            if type(private_spec) is not dict:
+                raise ArchiveServiceError(failure_code)
+            logical_value = private_spec.get("logical")
+            if type(logical_value) is not str:
+                raise ArchiveServiceError(failure_code)
+            logical = PurePosixPath(logical_value)
+            if (
+                logical.is_absolute()
+                or not logical.parts
+                or any(part in {"", ".", ".."} for part in logical.parts)
+            ):
+                raise ArchiveServiceError(failure_code)
+            path = state.project_root.joinpath(*logical.parts)
+            if not is_path_within_root(path, state.project_root):
+                raise ArchiveServiceError(failure_code)
+            live_pin_specs.append({**private_spec, "path": path})
+
+        live_policy = wom_kit_project_update_runtime_policy(
+            state.mirror_path,
+            state.target_commit,
+            runner=state.runner,
+        )
+        live_supply = wom_kit_project_update_runtime_supply(
+            state.mirror_path,
+            state.target_commit,
+            state.target_version,
+            live_policy,
+            runner=state.runner,
+        )
+        live_launcher = project_runtime.launcher_snapshot(
+            state.project_root,
+            state.target_version,
+        )
+        live_launcher_private = {
+            key: value
+            for key, value in live_launcher.items()
+            if key != "path"
+        }
+        live_materialization = (
+            wom_kit_project_update_materialization_preflight(
+                state.project_root,
+                state.mirror_path,
+                target_commit=state.target_commit,
+                head_before=plan["head_before"],
+                original_branch=expected_snapshot.get("branch"),
+                runner=state.runner,
+            )
+        )
+        live_candidate_summary = dict(
+            project_runtime.verify_prepared_runtime_candidate(
+                state.runtime_candidate,
+                project_root=state.project_root,
+                target=state.target_version,
+                target_commit=state.target_commit,
+                bootstrap=state.runtime_bootstrap,
+                supply=state.runtime_supply,
+            )
+        )
+        live_candidate_summary.pop("static_reverified", None)
+        exact = bool(
+            state.directory_guard.is_held(state.project_root)
+            and state.directory_guard.is_held(
+                state.project_root / ".zettel-kasten"
+            )
+            and state.directory_guard.is_held(state.mirror_path)
+            and wom_kit_project_update_git_metadata_is_local_real(
+                state.project_root,
+                state.mirror_path,
+                runner=state.runner,
+            )
+            and _wom_kit_project_update_git_snapshot(
+                state.mirror_path,
+                runner=state.runner,
+            )
+            == expected_snapshot
+            and wom_kit_project_update_git_config_trust_digest(
+                state.mirror_path,
+                runner=state.runner,
+            )
+            == plan["preflight_git_config_digest"]
+            and wom_kit_project_update_all_pins_match_snapshot(
+                state.project_root,
+                live_pin_specs,
+            )
+            and wom_kit_project_update_target_ref_snapshot(
+                state.mirror_path,
+                state.target_tag,
+                runner=state.runner,
+            )
+            == expected_ref_snapshot
+            and wom_kit_project_update_target_evidence(
+                state.mirror_path,
+                state.target_tag,
+                runner=state.runner,
+            )
+            == expected_target_evidence
+            and live_policy == expected_policy
+            and live_supply == state.runtime_supply
+            and live_launcher_private == expected_launcher
+            and live_materialization == expected_materialization
+            and live_candidate_summary
+            == state.runtime_candidate.public_summary()
+        )
+    except ArchiveServiceError:
+        raise
+    except Exception:
+        # Never echo a Git path, runtime path, or provider/tool exception from
+        # this post-native boundary.
+        raise ArchiveServiceError(failure_code) from None
+    if not exact:
+        raise ArchiveServiceError(failure_code)
+
+
+def _project_update_durable_writer(
+    state: _ProjectVersionUpdateDurableApprovalState,
+    claim: _ClaimedExactHumanApproval,
+) -> dict[str, Any]:
+    """Resume-safe exact component writer; it deliberately keeps the lock."""
+
+    if not _wom_kit_project_version_update_approval_authority_matches(
+        state.inspection_root,
+        expected_root=state.expected_approval_root,
+        expected_archive_id=state.expected_archive_id,
+    ):
+        raise ArchiveServiceError(
+            "project_version_update_approval_archive_identity_changed"
+        )
+    inspection = state.transaction.inspect()
+    if inspection.journal.state != "exact":
+        raise ArchiveServiceError(
+            "project_version_update_transaction_journal_degraded"
+        )
+    checkpoints = list(inspection.journal.verified_prefix)
+    component_started = any(
+        item.phase
+        not in {"lock_backlinked", "approval_bound"}
+        for item in checkpoints
+    )
+    if not component_started:
+        _project_update_assert_approved_snapshot_unchanged(state)
+    reference_sha256, approval_mac_sha256 = _project_update_claim_authority(
+        state,
+        claim,
+    )
+    operation_exact_human_approval = (
+        _require_exact_human_operation_approval(
+            state.expected_approval_root,
+            project_version_update_approval_binding(
+                state.prepared_preview
+            ),
+            reviewer_claim=state.reviewer,
+            expected_plan_sha256=state.approved_plan_sha256,
+            expected_target_binding_sha256=(
+                state.approved_target_binding_sha256
+            ),
+            claim=claim,
+            expected_archive_id=state.expected_archive_id,
+        )
+    )
+    if not checkpoints:
+        state.transaction.append(
+            phase="lock_backlinked",
+            stage="verified",
+            live_component_sha256=_project_update_live_component_sha256(
+                state
+            ),
+        )
+        checkpoints = list(
+            state.transaction.inspect().journal.verified_prefix
+        )
+    if not any(item.phase == "approval_bound" for item in checkpoints):
+        state.transaction.append(
+            phase="approval_bound",
+            stage="verified",
+            live_component_sha256=_project_update_live_component_sha256(
+                state
+            ),
+            approval_reference_sha256=reference_sha256,
+            approval_mac_sha256=approval_mac_sha256,
+        )
+
+    for component in state.transaction.intent.components:
+        checkpoints = list(
+            state.transaction.inspect().journal.verified_prefix
+        )
+        verified = any(
+            item.phase == component.role
+            and item.stage == "verified"
+            and item.component_ref == component.component_ref
+            for item in checkpoints
+        )
+        if verified:
+            continue
+        intended = any(
+            item.phase == component.role
+            and item.stage == "intent"
+            and item.component_ref == component.component_ref
+            for item in checkpoints
+        )
+        if not intended:
+            state.transaction.append(
+                phase=component.role,
+                stage="intent",
+                component_ref=component.component_ref,
+                live_component_sha256=(
+                    _project_update_live_component_sha256(state)
+                ),
+            )
+        _project_update_perform_component(state, component)
+        state.transaction.append(
+            phase=component.role,
+            stage="verified",
+            component_ref=component.component_ref,
+            live_component_sha256=_project_update_live_component_sha256(
+                state
+            ),
+        )
+
+    checkpoints = state.transaction.inspect().journal.verified_prefix
+    if not any(item.phase == "domain_committed" for item in checkpoints):
+        state.transaction.append(
+            phase="domain_committed",
+            stage="verified",
+            live_component_sha256=_project_update_live_component_sha256(
+                state
+            ),
+        )
+    runtime_summary = (
+        state.runtime_materialization.public_summary()
+        if state.runtime_materialization is not None
+        else {
+            **state.runtime_candidate.public_summary(),
+            "status": "verified",
+            "path": project_runtime.runtime_logical_path(
+                state.target_version
+            ),
+            "created": not state.runtime_candidate.existing_runtime_reusable,
+            "absolute_paths_echoed": False,
+        }
+    )
+    source_changed = state.source_pre_sha256 != state.source_post_sha256
+    source_summary = copy.deepcopy(
+        state.prepared_preview.get("source_mirror", {})
+    )
+    source_summary.update(
+        {
+            "head_commit_after": state.target_commit,
+            "source_checkout_change_attempted": source_changed,
+            "source_checkout_is_verified_target": True,
+            "runtime_source_rematerialization_attempted": source_changed,
+            "runtime_source_rematerialization_succeeded": (
+                True if source_changed else None
+            ),
+            "target_runtime_source_integrity_verified": True,
+            "checkout_mode_after_result": "detached_exact_tag",
+        }
+    )
+    target_pin_bytes = (state.target_tag + "\n").encode("utf-8")
+    written_pin_paths = [
+        str(spec["logical"])
+        for spec in state.private_plan["pin_specs"]
+        if spec.get("previous_bytes") != target_pin_bytes
+    ]
+    pins_summary = copy.deepcopy(state.prepared_preview.get("pins", {}))
+    pins_summary["written_paths"] = list(written_pin_paths)
+    pins_summary["write_attempted_paths"] = list(written_pin_paths)
+    for item in pins_summary.get("planned", []):
+        if type(item) is not dict:
+            continue
+        changed = item.get("path") in written_pin_paths
+        item["written"] = changed
+        item["write_attempted"] = changed
+    launcher_snapshot = state.private_plan["launcher_snapshot"]
+    launcher_changed = (
+        launcher_snapshot.get("previous_bytes")
+        != launcher_snapshot.get("target_bytes")
+    )
+    project_runtime_summary = copy.deepcopy(
+        state.prepared_preview.get("project_runtime", {})
+    )
+    project_runtime_summary.update(
+        {
+            "launcher_write_attempted": launcher_changed,
+            "launcher_written": launcher_changed,
+            "materialized": runtime_summary,
+        }
+    )
+    return {
+        "ok": True,
+        "schema": "wom-kit/project-version-update/v0.1",
+        "lifecycle_action": "project_version_update",
+        "status": "updated_restart_required",
+        "mode": "approved",
+        # Dynamic approval authority is intentionally returned to the caller
+        # only.  The deterministic transaction-owned disk receipt contains no
+        # claim identifier or post-native timestamp.
+        "operation_exact_human_approval": (
+            operation_exact_human_approval
+        ),
+        "fetch": copy.deepcopy(
+            state.prepared_preview.get("fetch", {})
+        ),
+        "target": copy.deepcopy(state.prepared_preview.get("target", {})),
+        "source_mirror": source_summary,
+        "pins": pins_summary,
+        "project_runtime": project_runtime_summary,
+        "runtime": copy.deepcopy(
+            state.prepared_preview.get("runtime", {})
+        ),
+        "receipt": {
+            "schema": "wom-kit/project-version-update-receipt/v0.3",
+            "path": state.private_plan["static_receipt_relative"],
+            "sha256": project_update_transaction.sha256_bytes(
+                state.static_receipt_bytes
+            ),
+            "written": True,
+        },
+        "transaction": state.transaction.public_summary(),
+        "write_boundary": {
+            **copy.deepcopy(
+                state.prepared_preview.get("write_boundary", {})
+            ),
+            "runtime_postapproval_child_process_allowed": False,
+            "project_update_postapproval_local_git_allowed": True,
+            "postapproval_git_transport_allowed": False,
+            "project_update_lock_released_by_succeeded_claim_finalizer": True,
+        },
+        "files_written": [
+            component.logical_target
+            for component in state.transaction.intent.components
+            if component.pre_sha256 != component.post_sha256
+        ],
+        "blockers": [],
+        "warnings": copy.deepcopy(
+            state.prepared_preview.get("warnings", [])
+        ),
+        "rollback": {
+            "attempted": False,
+            "succeeded": None,
+            "fetched_refs_may_remain": True,
+        },
+        "privacy_guards": {
+            "local_absolute_paths_echoed": False,
+            "remote_urls_echoed": False,
+            "credential_values_echoed": False,
+            "archive_body_text_read": False,
+            "objet_bytes_read": False,
+        },
+    }
+
+
+def _project_update_succeeded_claim_finalizer(
+    state: _ProjectVersionUpdateDurableApprovalState,
+    claim: _ClaimedExactHumanApproval,
+) -> None:
+    """Finish the authenticated journal tail, exact unlock, then cleanup."""
+
+    evidence = claim.succeeded_evidence_digests(
+        project_version_update_approval_binding(
+            state.prepared_preview
+        ).context(
+            archive_id=state.expected_archive_id,
+            reviewer_claim=state.reviewer,
+        )
+    )
+    evidence["static_receipt_sha256"] = (
+        project_update_transaction.sha256_bytes(
+            state.static_receipt_bytes
+        )
+    )
+    inspection = state.transaction.inspect()
+    if inspection.journal.state != "exact" or not inspection.journal.verified_prefix:
+        raise ArchiveServiceError(
+            "project_version_update_transaction_checkpoint_invalid"
+        )
+    head = inspection.journal.verified_prefix[-1]
+    if head.phase in {"domain_committed", "claim_succeeded"}:
+        state.transaction.finalize_succeeded_claim(
+            checkpoint_guard_sha256=head.checkpoint_sha256,
+            live_component_sha256=_project_update_live_component_sha256(
+                state
+            ),
+            claim_receipt_sha256=evidence["claim_receipt_sha256"],
+            claim_mac_sha256=evidence["claim_mac_sha256"],
+            claim_evidence=evidence,
+        )
+    inspection = state.transaction.inspect()
+    head = inspection.journal.verified_prefix[-1]
+    if head.phase == "claim_succeeded":
+        state.transaction.append(
+            phase="ready_to_unlock",
+            stage="verified",
+            live_component_sha256=_project_update_live_component_sha256(
+                state
+            ),
+        )
+    inspection = state.transaction.inspect()
+    head = inspection.journal.verified_prefix[-1]
+    if head.phase == "ready_to_unlock":
+        live_component_sha256 = _project_update_live_component_sha256(
+            state
+        )
+        lock_path = state.project_root.joinpath(
+            *PurePosixPath(
+                project_update_transaction.PROJECT_UPDATE_LOCK_LOGICAL
+            ).parts
+        )
+        if os.path.lexists(lock_path):
+            release = state.transaction.release_lock_exact(
+                expected_lock_bytes=state.expected_lock_bytes,
+                live_component_sha256=live_component_sha256,
+            )
+        else:
+            # A hard exit may land after the exact unlink+directory fsync but
+            # before the lock_released checkpoint.  Re-prove that same absence
+            # under the sealed backlink instead of attempting a second unlink.
+            release = state.transaction.confirm_lock_absence_durable(
+                live_component_sha256=live_component_sha256,
+            )
+        state.transaction.append(
+            phase="lock_released",
+            stage="verified",
+            live_component_sha256=live_component_sha256,
+            lock_release_result=release,
+        )
+    inspection = state.transaction.inspect()
+    head = inspection.journal.verified_prefix[-1]
+    if head.phase == "lock_released":
+        state.transaction.append(
+            phase="completed",
+            stage="verified",
+            live_component_sha256=_project_update_live_component_sha256(
+                state
+            ),
+        )
+    if not state.transaction.exact_cleanup(
+        cleanup_authority_sha256=evidence[
+            "approval_reference_sha256"
+        ]
+    ):
+        raise ArchiveServiceError(
+            "project_version_update_transaction_cleanup_incomplete"
+        )
+
+
+def _project_update_cancel_before_native(
+    state: _ProjectVersionUpdateDurableApprovalState,
+) -> None:
+    """Use only core-derived deterministic cancellation evidence."""
+
+    live = _project_update_live_component_sha256(state)
+    state.transaction.begin_cancel_before_approval(
+        expected_lock_bytes=state.expected_lock_bytes,
+        live_component_sha256=live,
+    )
+    if not project_runtime.cleanup_prepared_runtime_candidate(
+        state.runtime_candidate
+    ):
+        raise ArchiveServiceError(
+            "project_version_update_runtime_candidate_cleanup_failed"
+        )
+    state.transaction.cancel_before_approval(
+        expected_lock_bytes=state.expected_lock_bytes,
+        live_component_sha256=_project_update_live_component_sha256(state),
+    )
+    cleanup_authority = state.transaction.candidate_cleanup_receipt_sha256()
+    if not state.transaction.exact_cleanup(
+        cleanup_authority_sha256=cleanup_authority
+    ):
+        raise ArchiveServiceError(
+            "project_version_update_transaction_cleanup_incomplete"
+        )
+
+
+def _project_update_abort_unsealed_candidate(
+    *,
+    reservation: project_update_transaction.ReservedProjectUpdateTransaction,
+    expected_lock_bytes: bytes,
+    candidate: project_runtime.PreparedRuntimeCandidate,
+) -> dict[str, Any]:
+    """Remove one complete candidate, then durably abort its unsealed lock."""
+
+    if not project_runtime.cleanup_prepared_runtime_candidate(candidate):
+        raise ArchiveServiceError(
+            "project_version_update_runtime_candidate_cleanup_failed"
+        )
+    return reservation.abort_before_intent_seal(
+        expected_lock_bytes=expected_lock_bytes,
+    )
+
+
+def _project_update_prepare_durable_state(
+    *,
+    inspection_root: Path,
+    project_root: Path,
+    mirror_path: Path,
+    mirror_logical: str,
+    target_tag: str,
+    target_version: str,
+    target_commit: str,
+    reviewer: str,
+    expected_approval_root: Path,
+    expected_archive_id: str,
+    reservation: project_update_transaction.ReservedProjectUpdateTransaction,
+    expected_lock_bytes: bytes,
+    runner: project_update_git_runner.TrustedProjectUpdateGitRunner,
+    runtime_candidate: project_runtime.PreparedRuntimeCandidate,
+    runtime_bootstrap: project_runtime.BootstrapWheel,
+    runtime_supply: project_runtime.RuntimeSupplyLock,
+    runtime_policy: Mapping[str, Any],
+    runtime_plan: Mapping[str, Any],
+    directory_guard: _WomKitProjectUpdateDirectoryGuard,
+    preflight_git_snapshot: Mapping[str, Any],
+    preflight_git_config_digest: str,
+    target_ref_snapshot: Mapping[str, str],
+    target_evidence: Mapping[str, Any],
+    materialization_preflight: Mapping[str, Any],
+    head_before: str,
+    pin_specs: list[dict[str, Any]],
+    launcher_snapshot: Mapping[str, Any],
+    prepared_preview_base: Mapping[str, Any],
+) -> _ProjectVersionUpdateDurableApprovalState:
+    """Construct receipt/intent once; no final approval digest is patched in."""
+
+    if (
+        type(target_version) is not str
+        or type(target_commit) is not str
+        or type(preflight_git_config_digest) is not str
+        or type(head_before) is not str
+        or not isinstance(preflight_git_snapshot, Mapping)
+        or not isinstance(target_ref_snapshot, Mapping)
+        or not isinstance(launcher_snapshot, Mapping)
+        or not isinstance(prepared_preview_base, Mapping)
+        or not isinstance(runtime_candidate, project_runtime.PreparedRuntimeCandidate)
+        or not isinstance(runtime_bootstrap, project_runtime.BootstrapWheel)
+        or not isinstance(runtime_supply, project_runtime.RuntimeSupplyLock)
+    ):
+        raise ArchiveServiceError(
+            "project_version_update_transaction_preparation_invalid"
+        )
+    static_receipt_relative = (
+        f"{WOM_KIT_PROJECT_UPDATE_RECEIPTS_RELATIVE}/"
+        f"{reservation.transaction_ref}.json"
+    )
+    static_receipt_path = project_root.joinpath(
+        *PurePosixPath(static_receipt_relative).parts
+    )
+    if wom_kit_real_path_kind(project_root, static_receipt_path) != "missing":
+        raise ArchiveServiceError(
+            "project_version_update_transaction_receipt_exists"
+        )
+
+    source_preimage = _project_update_canonical_bytes(
+        _project_update_private_json_value(dict(preflight_git_snapshot))
+    )
+    source_pre_sha256 = project_update_transaction.sha256_bytes(
+        source_preimage
+    )
+    rematerialization_required = bool(
+        materialization_preflight.get("required")
+    )
+    source_post_projection = {
+        "branch": None,
+        "materialization_plan_sha256": materialization_preflight.get(
+            "materialization_plan_sha256"
+        ),
+        "runtime_source_integrity_required": True,
+        "schema": "wom-kit/project-update-source-postimage/v0.4.3",
+        "target_commit": target_commit,
+        "target_ref_snapshot_sha256": (
+            project_update_transaction.sha256_document(
+                dict(target_ref_snapshot)
+            )
+        ),
+        "target_version": target_version,
+    }
+    source_post_sha256 = (
+        project_update_transaction.sha256_document(source_post_projection)
+        if rematerialization_required
+        else source_pre_sha256
+    )
+    runtime_post_sha256 = "sha256:" + runtime_candidate.installed_payload_sha256
+    runtime_pre_sha256 = (
+        runtime_post_sha256
+        if runtime_candidate.existing_runtime_reusable
+        else project_update_transaction.ABSENT_COMPONENT_SHA256
+    )
+
+    target_pin_bytes = (target_tag + "\n").encode("utf-8")
+    launcher_previous = launcher_snapshot.get("previous_bytes")
+    launcher_target = launcher_snapshot.get("target_bytes")
+    if (
+        launcher_previous is not None
+        and not isinstance(launcher_previous, bytes)
+    ) or not isinstance(launcher_target, bytes):
+        raise ArchiveServiceError(
+            "project_version_update_transaction_preparation_invalid"
+        )
+
+    component_specs: list[dict[str, Any]] = [
+        {
+            "component_ref": "source",
+            "role": "source",
+            "logical_target": mirror_logical,
+            "pre_sha256": source_pre_sha256,
+            "post_sha256": source_post_sha256,
+            "preimage_key": "source-preimage",
+        },
+        {
+            "component_ref": "runtime",
+            "role": "runtime",
+            "logical_target": project_runtime.runtime_logical_path(
+                target_version
+            ),
+            "pre_sha256": runtime_pre_sha256,
+            "post_sha256": runtime_post_sha256,
+            "preimage_key": None,
+        },
+        {
+            "component_ref": "launcher",
+            "role": "launcher",
+            "logical_target": str(launcher_snapshot.get("logical")),
+            "pre_sha256": _project_update_raw_component_sha256(
+                launcher_previous
+            ),
+            "post_sha256": _project_update_raw_component_sha256(
+                launcher_target
+            ),
+            "preimage_key": (
+                "launcher-preimage"
+                if isinstance(launcher_previous, bytes)
+                else None
+            ),
+        },
+    ]
+    non_active_specs = [
+        spec for spec in pin_specs if spec.get("role") != "project_pin"
+    ]
+    active_specs = [
+        spec for spec in pin_specs if spec.get("role") == "project_pin"
+    ]
+    if len(active_specs) != 1:
+        raise ArchiveServiceError(
+            "project_version_update_transaction_preparation_invalid"
+        )
+    ordered_pin_specs = [*non_active_specs, *active_specs]
+    for index, spec in enumerate(ordered_pin_specs, start=1):
+        previous = spec.get("previous_bytes")
+        if previous is not None and not isinstance(previous, bytes):
+            raise ArchiveServiceError(
+                "project_version_update_transaction_preparation_invalid"
+            )
+        is_active = spec.get("role") == "project_pin"
+        component_ref = (
+            "active-pin" if is_active else f"non-active-pin:{index:02d}"
+        )
+        component_specs.append(
+            {
+                "component_ref": component_ref,
+                "role": "active_pin" if is_active else "non_active_pin",
+                "logical_target": spec["logical"],
+                "pre_sha256": _project_update_raw_component_sha256(
+                    previous
+                ),
+                "post_sha256": _project_update_raw_component_sha256(
+                    target_pin_bytes
+                ),
+                "preimage_key": (
+                    f"{component_ref}-preimage"
+                    if isinstance(previous, bytes)
+                    else None
+                ),
+            }
+        )
+    # Receipt is the last non-activation component.  The project pin remains
+    # the final component even when other pins are already at the target.
+    active_component = component_specs.pop()
+
+    domain_target = {
+        "component_postimages": {
+            item["component_ref"]: item["post_sha256"]
+            for item in [*component_specs, active_component]
+        },
+        "schema": "wom-kit/project-update-domain-target/v0.4.3",
+        "target_commit": target_commit,
+        "target_ref_snapshot_sha256": (
+            project_update_transaction.sha256_document(
+                dict(target_ref_snapshot)
+            )
+        ),
+        "target_tag": target_tag,
+        "target_version": target_version,
+    }
+    domain_plan = {
+        "components": [
+            {
+                key: value
+                for key, value in item.items()
+                if key != "preimage_key"
+            }
+            for item in [*component_specs, active_component]
+        ],
+        "external_writer_quiescence": True,
+        "git_config_sha256": "sha256:" + preflight_git_config_digest,
+        "materialization_preflight_sha256": (
+            project_update_transaction.sha256_document(
+                dict(materialization_preflight)
+            )
+        ),
+        "runtime_candidate_sha256": (
+            project_update_transaction.sha256_document(
+                runtime_candidate.public_summary()
+            )
+        ),
+        "schema": "wom-kit/project-update-domain-plan/v0.4.3",
+        "source_preimage_sha256": source_pre_sha256,
+        "target": domain_target,
+    }
+    domain_plan_sha256 = project_update_transaction.sha256_document(
+        domain_plan
+    )
+    domain_target_sha256 = project_update_transaction.sha256_document(
+        domain_target
+    )
+    pins_written = [
+        spec["logical"]
+        for spec in pin_specs
+        if spec.get("previous_bytes") != target_pin_bytes
+    ]
+    runtime_created = not runtime_candidate.existing_runtime_reusable
+    launcher_written = launcher_previous != launcher_target
+    receipt = {
+        "schema": "wom-kit/project-version-update-receipt/v0.3",
+        "action": "project_version_update",
+        "status": "updated_restart_required",
+        "timestamp": reservation.created_at,
+        "reviewed_by": reviewer,
+        "target_tag": target_tag,
+        "target_version": target_version,
+        "source_mirror": mirror_logical,
+        "head_commit_before": head_before,
+        "head_commit_after": target_commit,
+        "source_checkout_changed": rematerialization_required,
+        "runtime_source_materialization": {
+            "attempted": rematerialization_required,
+            "succeeded": True if rematerialization_required else None,
+            "target_integrity_verified": True,
+        },
+        "external_writer_quiescence": {
+            "affirmed": True,
+            "scope": "complete_project_version_update_transaction",
+        },
+        "pins_written": pins_written,
+        "pin_transitions": [
+            {
+                "path": spec["logical"],
+                "previous_version": spec.get("previous_version"),
+                "new_version": target_tag,
+                "written": spec.get("previous_bytes") != target_pin_bytes,
+            }
+            for spec in pin_specs
+        ],
+        "configured_origin": {
+            "remote_name": "origin",
+            "atomic_fetch_succeeded": True,
+            "target_reachable_from_origin_main": True,
+            "annotated_tag_verified": True,
+            "cryptographic_tag_signature_verified": False,
+            "remote_url_echoed": False,
+        },
+        "project_runtime": {
+            "policy_schema": runtime_policy["schema"],
+            "policy_sha256": runtime_policy["policy_sha256"],
+            "path": project_runtime.runtime_logical_path(target_version),
+            "launcher_path": str(launcher_snapshot["logical"]),
+            "project_runtime_argv": project_runtime.project_runtime_argv(),
+            "target_tag": target_tag,
+            "target_version": target_version,
+            "target_commit": target_commit,
+            "wheel_sha256": "sha256:" + runtime_candidate.wheel_sha256,
+            "supply_lock_sha256": (
+                "sha256:" + runtime_candidate.supply_lock_sha256
+            ),
+            "runtime_receipt_sha256": (
+                "sha256:" + runtime_candidate.receipt_sha256
+            ),
+            "artifact_inventory": [
+                dict(item) for item in runtime_candidate.artifact_inventory
+            ],
+            "installed_payload_sha256": runtime_post_sha256,
+            "python_version": runtime_candidate.python_version,
+            "created": runtime_created,
+            "launcher_written": launcher_written,
+            "verification": dict(runtime_candidate.verification),
+            "new_process_verified": True,
+            "global_path_mutation": False,
+            "previous_runtime_deleted": False,
+        },
+        "runtime": {
+            "running_version_before": WOM_KIT_VERSION,
+            "running_process_reloaded": False,
+            "restart_required": True,
+        },
+        "transaction_ref": reservation.transaction_ref,
+        # These are the acyclic domain manifest/target-set digests.  They are
+        # deliberately not the final native approval binding digests.
+        "plan_sha256": domain_plan_sha256,
+        "target_binding_sha256": domain_target_sha256,
+        "approval_evidence_contract": dict(
+            _PROJECT_UPDATE_STATIC_APPROVAL_CONTRACT
+        ),
+        "privacy_guards": {
+            "local_absolute_paths_echoed": False,
+            "remote_urls_echoed": False,
+            "credential_values_echoed": False,
+            "archive_body_text_read": False,
+            "objet_bytes_read": False,
+        },
+    }
+    if validate_schema(
+        receipt,
+        "project-version-update-receipt-v0.3.schema.json",
+    ):
+        raise ArchiveServiceError(
+            "project_version_update_static_receipt_schema_invalid"
+        )
+    static_receipt_bytes = _project_update_canonical_bytes(receipt)
+    component_specs.append(
+        {
+            "component_ref": "receipt",
+            "role": "receipt",
+            "logical_target": static_receipt_relative,
+            "pre_sha256": project_update_transaction.ABSENT_COMPONENT_SHA256,
+            "post_sha256": project_update_transaction.sha256_bytes(
+                static_receipt_bytes
+            ),
+            "preimage_key": None,
+        }
+    )
+    component_specs.append(active_component)
+    components = tuple(
+        project_update_transaction.ProjectUpdateComponent(
+            sequence=index,
+            **spec,
+        )
+        for index, spec in enumerate(component_specs, start=1)
+    )
+    preimages: dict[str, bytes] = {"source-preimage": source_preimage}
+    if isinstance(launcher_previous, bytes):
+        preimages["launcher-preimage"] = launcher_previous
+    for component, spec in zip(components, component_specs):
+        if component.role not in {"non_active_pin", "active_pin"}:
+            continue
+        matching = next(
+            item
+            for item in pin_specs
+            if item["logical"] == component.logical_target
+        )
+        if isinstance(matching.get("previous_bytes"), bytes):
+            assert component.preimage_key is not None
+            preimages[component.preimage_key] = matching["previous_bytes"]
+
+    private_plan = {
+        "schema": _PROJECT_UPDATE_PRIVATE_PLAN_SCHEMA,
+        "transaction_ref": reservation.transaction_ref,
+        "target_tag": target_tag,
+        "target_version": target_version,
+        "target_commit": target_commit,
+        "reviewer": reviewer,
+        "mirror_logical": mirror_logical,
+        "head_before": head_before,
+        "preflight_git_snapshot": dict(preflight_git_snapshot),
+        "preflight_git_config_digest": preflight_git_config_digest,
+        "target_ref_snapshot": dict(target_ref_snapshot),
+        "target_evidence": dict(target_evidence),
+        "materialization_preflight": dict(materialization_preflight),
+        "runtime_policy": dict(runtime_policy),
+        "runtime_plan": dict(runtime_plan),
+        "runtime_bootstrap": dict(runtime_bootstrap.public_summary()),
+        "runtime_candidate_private": (
+            _project_update_runtime_candidate_private_document(
+                runtime_candidate
+            )
+        ),
+        "launcher_snapshot": {
+            key: value
+            for key, value in launcher_snapshot.items()
+            if key != "path"
+        },
+        "pin_specs": [
+            {
+                key: value
+                for key, value in spec.items()
+                if key != "path"
+            }
+            for spec in pin_specs
+        ],
+        "component_postimages": {
+            "launcher": launcher_target,
+            **{
+                component.component_ref: target_pin_bytes
+                for component in components
+                if component.role in {"non_active_pin", "active_pin"}
+            },
+        },
+        "static_receipt_relative": static_receipt_relative,
+        "domain_plan": domain_plan,
+        "domain_plan_sha256": domain_plan_sha256,
+        "domain_target_sha256": domain_target_sha256,
+        "expected_archive_identity_sha256": (
+            exact_human_approval_archive_identity_sha256(
+                expected_archive_id
+            )
+        ),
+        # This is the complete acyclic service projection before the sealed
+        # intent/runner/static-receipt summaries are attached.  It lets a
+        # crashed process reconstruct the identical native context without
+        # storing the final (self-referential) approval digest.
+        "prepared_preview_base": copy.deepcopy(
+            dict(prepared_preview_base)
+        ),
+    }
+    private_plan_bytes = _project_update_canonical_bytes(
+        _project_update_private_json_value(private_plan)
+    )
+    bindings = project_update_transaction.ProjectUpdateBindings(
+        preflight_sha256=project_update_transaction.sha256_document(
+            dict(materialization_preflight)
+        ),
+        source_sha256=source_post_sha256,
+        config_sha256="sha256:" + preflight_git_config_digest,
+        ref_sha256=project_update_transaction.sha256_document(
+            dict(target_ref_snapshot)
+        ),
+        pin_sha256=project_update_transaction.sha256_document(
+            [
+                {
+                    "logical": spec["logical"],
+                    "post_sha256": _project_update_raw_component_sha256(
+                        target_pin_bytes
+                    ),
+                }
+                for spec in pin_specs
+            ]
+        ),
+        launcher_sha256=_project_update_raw_component_sha256(
+            launcher_target
+        ),
+        runtime_sha256=runtime_post_sha256,
+        receipt_sha256=project_update_transaction.sha256_bytes(
+            static_receipt_bytes
+        ),
+        bundle_sha256=project_update_transaction.sha256_document(
+            runtime_candidate.public_summary()
+        ),
+    )
+    transaction = reservation.seal_intent(
+        bindings=bindings,
+        components=components,
+        preimages=preimages,
+        private_binding_blobs={
+            "git-runner-binding": runner.private_binding_bytes(),
+            "project-update-domain-plan": private_plan_bytes,
+            "runtime-supply-lock": runtime_supply.raw_bytes,
+        },
+        static_receipt_postimage=static_receipt_bytes,
+        runtime_candidate_inventory_sha256=(
+            "sha256:" + runtime_candidate.inventory_sha256
+        ),
+        runtime_candidate_postimage_sha256=runtime_post_sha256,
+        runtime_candidate_receipt_relative_path=(
+            project_runtime.PROJECT_RUNTIME_RECEIPT_NAME
+        ),
+    )
+    transaction.bind_sealed_intent_to_lock(expected_lock_bytes)
+    component_paths: dict[str, Path] = {
+        "launcher": project_root
+        / project_runtime.PROJECT_RUNTIME_LAUNCHER_RELATIVE,
+        "receipt": static_receipt_path,
+    }
+    for component in components:
+        if component.role in {"non_active_pin", "active_pin"}:
+            matching = next(
+                item
+                for item in pin_specs
+                if item["logical"] == component.logical_target
+            )
+            component_paths[component.component_ref] = matching["path"]
+    state = _ProjectVersionUpdateDurableApprovalState(
+        inspection_root=inspection_root,
+        project_root=project_root,
+        mirror_path=mirror_path,
+        target_tag=target_tag,
+        target_version=target_version,
+        target_commit=target_commit,
+        reviewer=reviewer,
+        expected_approval_root=expected_approval_root,
+        expected_archive_id=expected_archive_id,
+        transaction=transaction,
+        expected_lock_bytes=expected_lock_bytes,
+        runner=runner,
+        runtime_candidate=runtime_candidate,
+        runtime_bootstrap=runtime_bootstrap,
+        runtime_supply=runtime_supply,
+        directory_guard=directory_guard,
+        private_plan=private_plan,
+        prepared_preview={},
+        static_receipt_bytes=static_receipt_bytes,
+        static_receipt_path=static_receipt_path,
+        source_pre_sha256=source_pre_sha256,
+        source_post_sha256=source_post_sha256,
+        runtime_pre_sha256=runtime_pre_sha256,
+        runtime_post_sha256=runtime_post_sha256,
+        component_paths=component_paths,
+    )
+    transaction.append(
+        phase="lock_backlinked",
+        stage="verified",
+        live_component_sha256=_project_update_live_component_sha256(state),
+    )
+    return state
+
+
+def _project_update_build_prepared_preview(
+    state: _ProjectVersionUpdateDurableApprovalState,
+) -> dict[str, Any]:
+    """Rebuild the one exact native projection from acyclic sealed inputs."""
+
+    base = state.private_plan.get("prepared_preview_base")
+    if type(base) is not dict:
+        raise ArchiveServiceError(
+            "project_version_update_private_plan_invalid"
+        )
+    prepared = copy.deepcopy(base)
+    prepared["mode"] = "approval_prepared"
+    runner_summary = dict(state.runner.public_summary())
+    candidate_summary = dict(state.runtime_candidate.public_summary())
+    transaction = state.transaction
+    control_scaffold_created = bool(
+        not state.runtime_candidate.runtime_parent_existed_before
+    )
+    prepared["approval_preparation"] = {
+        "lock_held": True,
+        "network_complete": True,
+        "post_approval_network_allowed": False,
+        "target_ref_snapshot": copy.deepcopy(
+            state.private_plan["target_ref_snapshot"]
+        ),
+        "preapproval_control_writes_completed": True,
+        "preapproval_domain_writes_completed": False,
+        "fetched_refs_may_change": True,
+        "preapproval_control_scaffold_created": (
+            control_scaffold_created
+        ),
+        "preapproval_persistent_domain_effect": False,
+        "preapproval_runtime_content_installed": False,
+        "preapproval_activation_changed": False,
+        "runtime_postapproval_child_process_allowed": False,
+        "project_update_postapproval_local_git_allowed": True,
+        "postapproval_git_transport_allowed": False,
+        "trusted_git_runner": runner_summary,
+        "transaction": {
+            "schema": project_update_transaction.PUBLIC_SUMMARY_SCHEMA,
+            "transaction_ref": transaction.transaction_ref,
+            "transaction_logical_ref": transaction.transaction_logical_ref,
+            "intent_sha256": transaction.intent.sha256,
+            "lock_backlinked": True,
+            "directory_fsync_required": True,
+            "static_receipt_domain_plan_sha256": (
+                transaction.intent.static_receipt_domain_plan_sha256
+            ),
+            "static_receipt_domain_target_binding_sha256": (
+                transaction.intent
+                .static_receipt_domain_target_binding_sha256
+            ),
+        },
+        "runtime_candidate": candidate_summary,
+        "static_receipt": {
+            "schema": "wom-kit/project-version-update-receipt/v0.3",
+            "logical_path": state.private_plan[
+                "static_receipt_relative"
+            ],
+            "sha256": project_update_transaction.sha256_bytes(
+                state.static_receipt_bytes
+            ),
+            "domain_plan_sha256": state.private_plan[
+                "domain_plan_sha256"
+            ],
+            "domain_target_binding_sha256": state.private_plan[
+                "domain_target_sha256"
+            ],
+            "dynamic_claim_fields_embedded": False,
+            "deterministic_one_pass_construction": True,
+        },
+    }
+    prepared["fetch"]["phase"] = "before_native_approval"
+    prepared["write_boundary"].update(
+        {
+            "post_approval_network_allowed": False,
+            "project_update_lock_acquired": True,
+            "preapproval_control_writes_completed": True,
+            "preapproval_domain_writes_completed": False,
+            "fetched_refs_may_change": True,
+            "preapproval_control_scaffold_created": (
+                control_scaffold_created
+            ),
+            "preapproval_persistent_domain_effect": False,
+            "preapproval_runtime_content_installed": False,
+            "preapproval_activation_changed": False,
+            "runtime_postapproval_child_process_allowed": False,
+            "project_update_postapproval_local_git_allowed": True,
+            "postapproval_git_transport_allowed": False,
+        }
+    )
+    return prepared
+
+
+def _project_update_reopen_durable_state(
+    inspection_root: Path | str,
+    *,
+    target: str,
+    reviewed_by: str,
+    transaction_ref: str,
+    expected_approval_root: Path,
+    expected_archive_id: str,
+) -> tuple[
+    _ProjectVersionUpdateDurableApprovalState,
+    _ProjectVersionUpdateGitRunnerLifetime,
+]:
+    """Reopen only an intent-bound update; never refetch or redisplay native."""
+
+    inspection = Path(
+        os.path.abspath(str(Path(inspection_root).expanduser()))
+    )
+    project_root = (
+        inspection.parent
+        if (
+            wom_kit_real_path_kind(
+                inspection, inspection / ".zettel-kasten"
+            )
+            == "missing"
+            and wom_kit_real_path_kind(
+                inspection, inspection / "archive.yml"
+            )
+            == "file"
+            and wom_kit_real_path_kind(
+                inspection.parent,
+                inspection.parent / ".zettel-kasten",
+            )
+            == "directory"
+        )
+        else inspection
+    )
+    reviewer = safe_foreign_quarantine_actor_id(reviewed_by)
+    if reviewer is None or not _wom_kit_project_version_update_approval_authority_matches(
+        inspection,
+        expected_root=expected_approval_root,
+        expected_archive_id=expected_archive_id,
+    ):
+        raise ArchiveServiceError(
+            "project_version_update_approval_archive_identity_changed"
+        )
+    transaction = project_update_transaction.ProjectUpdateTransaction.open(
+        project_root,
+        transaction_ref,
+    )
+    target_tag = str(target or "").strip()
+    if transaction.intent.requested_target_tag != target_tag:
+        raise ArchiveServiceError(
+            "project_version_update_resume_target_mismatch"
+        )
+    private_plan = _project_update_parse_private_plan(
+        transaction.private_binding_bytes("project-update-domain-plan")
+    )
+    if (
+        private_plan.get("transaction_ref") != transaction_ref
+        or private_plan.get("target_tag") != target_tag
+        or private_plan.get("reviewer") != reviewer
+        or private_plan.get("expected_archive_identity_sha256")
+        != exact_human_approval_archive_identity_sha256(
+            expected_archive_id
+        )
+    ):
+        raise ArchiveServiceError(
+            "project_version_update_resume_binding_mismatch"
+        )
+    lifetime = _ProjectVersionUpdateGitRunnerLifetime()
+    try:
+        runner_binding = project_update_git_runner.load_private_binding_bytes(
+            transaction.private_binding_bytes("git-runner-binding")
+        )
+        runner = project_update_git_runner.TrustedProjectUpdateGitRunner.reopen_private(
+            runner_binding
+        )
+        # Adopt the already-reopened exact runner into the lifetime without a
+        # second PATH resolution.  This private assignment is intentionally
+        # local to crash recovery.
+        lifetime._runner = runner
+        runner.close_transport_boundary()
+        bootstrap_summary = private_plan.get("runtime_bootstrap")
+        if (
+            type(bootstrap_summary) is not dict
+            or bootstrap_summary.get("available") is not True
+            or bootstrap_summary.get("release_tag") != target_tag
+        ):
+            raise ArchiveServiceError(
+                "project_version_update_resume_binding_mismatch"
+            )
+        target_version = str(private_plan.get("target_version") or "")
+        bootstrap = project_runtime.BootstrapWheel(
+            version=target_version,
+            tag=target_tag,
+            url="https://invalid.example/intent-bound-never-fetched",
+            sha256=str(
+                bootstrap_summary.get("wheel_sha256") or ""
+            ).removeprefix("sha256:"),
+            file_name=str(
+                bootstrap_summary.get("wheel_file_name") or ""
+            ),
+        )
+        supply_raw = transaction.private_binding_bytes(
+            "runtime-supply-lock"
+        )
+        supply = project_runtime.project_runtime_supply_lock(
+            supply_raw,
+            expected_target=target_tag,
+        )
+        if supply is None:
+            raise ArchiveServiceError(
+                "project_version_update_resume_binding_mismatch"
+            )
+        candidate = _project_update_restore_runtime_candidate(
+            project_root,
+            transaction,
+            private_plan.get("runtime_candidate_private"),
+        )
+        if os.path.lexists(candidate.candidate_root):
+            live_candidate = project_runtime.load_prepared_runtime_candidate(
+                project_root,
+                transaction.transaction_root,
+                target=target_version,
+                target_commit=str(private_plan.get("target_commit") or ""),
+                bootstrap=bootstrap,
+                supply=supply,
+            )
+            if live_candidate.public_summary() != candidate.public_summary():
+                raise ArchiveServiceError(
+                    "project_version_update_resume_binding_mismatch"
+                )
+            candidate = live_candidate
+        elif not project_runtime._existing_runtime_matches_candidate(
+            project_root,
+            candidate,
+        ):
+            raise ArchiveServiceError(
+                "project_version_update_runtime_candidate_resume_invalid"
+            )
+        if (
+            project_update_transaction.sha256_document(
+                candidate.public_summary()
+            )
+            != private_plan.get("domain_plan", {}).get(
+                "runtime_candidate_sha256"
+            )
+        ):
+            raise ArchiveServiceError(
+                "project_version_update_resume_binding_mismatch"
+            )
+        directory_guard = _WomKitProjectUpdateDirectoryGuard(project_root)
+        metadata_root = project_root / ".zettel-kasten"
+        mirror_path = project_root.joinpath(
+            *PurePosixPath(str(private_plan["mirror_logical"])).parts
+        )
+        if not (
+            directory_guard.hold(project_root)
+            and directory_guard.hold(metadata_root)
+            and directory_guard.hold_existing_tree(mirror_path)
+        ):
+            raise ArchiveServiceError(
+                "project_version_update_directory_stability_unavailable"
+            )
+        component_paths: dict[str, Path] = {}
+        for component in transaction.intent.components:
+            if component.role in {"source", "runtime"}:
+                continue
+            logical = PurePosixPath(component.logical_target)
+            if logical.is_absolute() or ".." in logical.parts:
+                raise ArchiveServiceError(
+                    "project_version_update_resume_binding_mismatch"
+                )
+            component_paths[component.component_ref] = project_root.joinpath(
+                *logical.parts
+            )
+        by_role = {
+            component.role: component
+            for component in transaction.intent.components
+            if component.role in {"source", "runtime", "receipt"}
+        }
+        if set(by_role) != {"source", "runtime", "receipt"}:
+            raise ArchiveServiceError(
+                "project_version_update_resume_binding_mismatch"
+            )
+        static_receipt_bytes = transaction.private_binding_bytes(
+            "static-receipt-postimage"
+        )
+        state = _ProjectVersionUpdateDurableApprovalState(
+            inspection_root=inspection,
+            project_root=project_root,
+            mirror_path=mirror_path,
+            target_tag=target_tag,
+            target_version=target_version,
+            target_commit=str(private_plan["target_commit"]),
+            reviewer=reviewer,
+            expected_approval_root=expected_approval_root,
+            expected_archive_id=expected_archive_id,
+            transaction=transaction,
+            expected_lock_bytes=transaction.lock_bytes(),
+            runner=runner,
+            runtime_candidate=candidate,
+            runtime_bootstrap=bootstrap,
+            runtime_supply=supply,
+            directory_guard=directory_guard,
+            private_plan=private_plan,
+            prepared_preview={},
+            static_receipt_bytes=static_receipt_bytes,
+            static_receipt_path=component_paths[by_role["receipt"].component_ref],
+            source_pre_sha256=by_role["source"].pre_sha256,
+            source_post_sha256=by_role["source"].post_sha256,
+            runtime_pre_sha256=by_role["runtime"].pre_sha256,
+            runtime_post_sha256=by_role["runtime"].post_sha256,
+            component_paths=component_paths,
+        )
+        state.prepared_preview = _project_update_build_prepared_preview(
+            state
+        )
+        # The reopened runner must match the final approval projection exactly.
+        project_version_update_approval_binding(state.prepared_preview)
+        return state, lifetime
+    except BaseException:
+        lifetime.close_after_service_transaction()
+        raise
+
+
+def _wom_kit_project_version_update_legacy_core_generator(
     inspection_root: Path | str,
     *,
     target: str,
@@ -108852,10 +111815,15 @@ def _wom_kit_project_version_update_legacy_core(
     reviewed_by: str | None = None,
     affirm_external_writers_quiescent: bool = False,
     operation_exact_human_approval: Mapping[str, Any] | None = None,
+    prepare_exact_approval: bool = False,
     progress_callback: Callable[[str, str, int | None, int | None], None] | None = None,
-) -> dict[str, Any]:
-    """Exercise the pre-v0.4 project updater in historical tests only."""
+    _expected_approval_root: Path | None = None,
+    _expected_archive_id: str | None = None,
+    _git_runner_lifetime: _ProjectVersionUpdateGitRunnerLifetime,
+) -> Any:
+    """Run the updater, optionally yielding one lock-held exact preview."""
 
+    git_runner = _git_runner_lifetime.acquire_preapproval()
     blockers: list[str] = []
     warnings: list[str] = []
     target_tag = str(target or "").strip()
@@ -108960,8 +111928,16 @@ def _wom_kit_project_version_update_legacy_core(
     )
 
     if mirror_kind == "directory":
-        inside_ok, inside_text = _wom_kit_project_update_git(mirror_path, ["rev-parse", "--is-inside-work-tree"])
-        top_ok, top_text = _wom_kit_project_update_git(mirror_path, ["rev-parse", "--show-toplevel"])
+        inside_ok, inside_text = _wom_kit_project_update_git(
+            mirror_path,
+            ["rev-parse", "--is-inside-work-tree"],
+            runner=git_runner,
+        )
+        top_ok, top_text = _wom_kit_project_update_git(
+            mirror_path,
+            ["rev-parse", "--show-toplevel"],
+            runner=git_runner,
+        )
         try:
             exact_top = top_ok and Path(top_text).resolve() == mirror_path.resolve()
         except (OSError, RuntimeError, ValueError):
@@ -108973,6 +111949,7 @@ def _wom_kit_project_version_update_legacy_core(
             and wom_kit_project_update_git_metadata_is_local_real(
                 project_root,
                 mirror_path,
+                runner=git_runner,
             )
         )
         if not git_repo_verified:
@@ -108980,14 +111957,21 @@ def _wom_kit_project_version_update_legacy_core(
                 "The project source mirror must be the exact root of a Git working tree whose real .git metadata stays inside that mirror."
             )
         else:
-            head_ok, head_text = _wom_kit_project_update_git(mirror_path, ["rev-parse", "--verify", "HEAD"])
+            head_ok, head_text = _wom_kit_project_update_git(
+                mirror_path,
+                ["rev-parse", "--verify", "HEAD"],
+                runner=git_runner,
+            )
             if head_ok and re.fullmatch(r"[0-9a-fA-F]{40,64}", head_text):
                 head_before = head_text.lower()
                 head_after = head_before
             else:
                 blockers.append("The project source mirror has no valid HEAD commit.")
             symbolic_head_state, branch_text = (
-                wom_kit_project_update_symbolic_head_state(mirror_path)
+                wom_kit_project_update_symbolic_head_state(
+                    mirror_path,
+                    runner=git_runner,
+                )
             )
             original_branch = (
                 branch_text
@@ -109006,13 +111990,17 @@ def _wom_kit_project_version_update_legacy_core(
                         mirror_path,
                         original_branch,
                         head_before,
+                        runner=git_runner,
                     )
                 )
             ):
                 blockers.append(
                     "The original project source branch cannot be restored safely with Git's branch-name rules."
                 )
-            initial_snapshot = _wom_kit_project_update_git_snapshot(mirror_path)
+            initial_snapshot = _wom_kit_project_update_git_snapshot(
+                mirror_path,
+                runner=git_runner,
+            )
             unexpected_worktree_entry_count = (
                 len(
                     [
@@ -109043,6 +112031,7 @@ def _wom_kit_project_version_update_legacy_core(
             tracked_pin_ok, _ = _wom_kit_project_update_git(
                 mirror_path,
                 ["ls-files", "--error-unmatch", "--", "installed-version.txt"],
+                runner=git_runner,
             )
             mirror_pin_tracked = tracked_pin_ok
             if mirror_pin_tracked:
@@ -109057,6 +112046,7 @@ def _wom_kit_project_version_update_legacy_core(
                     "--get-regexp",
                     r"^remote\.origin\.url$",
                 ],
+                runner=git_runner,
             )
             origin_key_lines = [
                 line.strip().lower()
@@ -109142,12 +112132,18 @@ def _wom_kit_project_version_update_legacy_core(
             spec["previous_version"] = f"v{previous_version}"
 
     preflight_git_snapshot = (
-        _wom_kit_project_update_git_snapshot(mirror_path)
+        _wom_kit_project_update_git_snapshot(
+            mirror_path,
+            runner=git_runner,
+        )
         if git_repo_verified
         else None
     )
     preflight_git_config_digest = (
-        wom_kit_project_update_git_config_trust_digest(mirror_path)
+        wom_kit_project_update_git_config_trust_digest(
+            mirror_path,
+            runner=git_runner,
+        )
         if git_repo_verified
         else None
     )
@@ -109207,7 +112203,11 @@ def _wom_kit_project_version_update_legacy_core(
             )
 
     target_evidence = (
-        wom_kit_project_update_target_evidence(mirror_path, target_tag)
+        wom_kit_project_update_target_evidence(
+            mirror_path,
+            target_tag,
+            runner=git_runner,
+        )
         if git_repo_verified and WOM_KIT_PROJECT_UPDATE_TAG_RE.fullmatch(target_tag)
         else {
             "tag_available_locally": False,
@@ -109219,6 +112219,106 @@ def _wom_kit_project_version_update_legacy_core(
             "all_source_versions_match_target": False,
         }
     )
+    project_runtime_bootstrap, project_runtime_bootstrap_summary = (
+        project_runtime.bootstrap_wheel_for_target(target_version or "")
+    )
+    project_runtime_policy = wom_kit_project_update_runtime_policy(
+        mirror_path,
+        (
+            str(target_evidence["target_commit"])
+            if isinstance(target_evidence.get("target_commit"), str)
+            else None
+        ),
+        runner=git_runner,
+    )
+    project_runtime_supply = wom_kit_project_update_runtime_supply(
+        mirror_path,
+        (
+            str(target_evidence["target_commit"])
+            if isinstance(target_evidence.get("target_commit"), str)
+            else None
+        ),
+        target_version,
+        project_runtime_policy,
+        runner=git_runner,
+    )
+    project_runtime_plan: dict[str, Any] = {
+        "policy_state": project_runtime_policy["state"],
+        "required": False,
+        "target_path": None,
+        "launcher_path": project_runtime.PROJECT_RUNTIME_LAUNCHER_RELATIVE.as_posix(),
+        "project_runtime_argv": project_runtime.project_runtime_argv(),
+        "installed": {"status": "not_checked", "verified": False},
+        "bootstrap": dict(project_runtime_bootstrap_summary),
+        "materialization_required": False,
+        "activation_required": False,
+        "active_version_pin": ".zettel-kasten/installed-version.txt",
+        "global_path_mutation": False,
+        "previous_runtime_deletion": False,
+    }
+    project_runtime_plan_blockers: list[str] = []
+    project_runtime_plan_warnings: list[str] = []
+    project_runtime_launcher_snapshot: dict[str, Any] | None = None
+    project_runtime_launcher_write_attempted = False
+    project_runtime_launcher_written = False
+    project_runtime_materialization: project_runtime.RuntimeMaterialization | None = None
+    project_runtime_mutation_tracker = project_runtime.RuntimeMutationTracker()
+    prepared_runtime_bundle: Any | None = None
+    prepared_runtime_bundle_summary: dict[str, Any] | None = None
+    prepared_runtime_bundle_cleanup_state = "not_required"
+
+    def refresh_project_runtime_plan(*, enforce_interpreter: bool) -> None:
+        nonlocal project_runtime_policy
+        nonlocal project_runtime_supply
+        nonlocal project_runtime_plan
+        nonlocal project_runtime_plan_blockers
+        nonlocal project_runtime_plan_warnings
+        nonlocal project_runtime_launcher_snapshot
+        target_commit_value = (
+            str(target_evidence["target_commit"])
+            if isinstance(target_evidence.get("target_commit"), str)
+            else None
+        )
+        project_runtime_policy = wom_kit_project_update_runtime_policy(
+            mirror_path,
+            target_commit_value,
+            runner=git_runner,
+        )
+        project_runtime_supply = wom_kit_project_update_runtime_supply(
+            mirror_path,
+            target_commit_value,
+            target_version,
+            project_runtime_policy,
+            runner=git_runner,
+        )
+        if target_version is None or project_root_kind != "directory":
+            return
+        project_runtime_plan, project_runtime_plan_blockers, project_runtime_plan_warnings = (
+            project_runtime.plan_runtime(
+                project_root,
+                target_version,
+                policy_state=str(project_runtime_policy["state"]),
+                target_commit=target_commit_value,
+                bootstrap=project_runtime_bootstrap,
+                bootstrap_summary=project_runtime_bootstrap_summary,
+                supply=project_runtime_supply,
+                enforce_interpreter=enforce_interpreter,
+            )
+        )
+        project_runtime_plan["policy"] = dict(project_runtime_policy)
+        project_runtime_launcher_snapshot = project_runtime.launcher_snapshot(
+            project_root,
+            target_version,
+        )
+
+    # Ordinary previews are portable and strictly read-only.  The exact
+    # interpreter/platform lock becomes mandatory only inside the live,
+    # lock-held approval transaction before the native dialog is shown.
+    refresh_project_runtime_plan(enforce_interpreter=False)
+    if project_runtime_policy["state"] == "invalid":
+        blockers.append("project_runtime_policy_invalid")
+    blockers.extend(project_runtime_plan_blockers)
+    warnings.extend(project_runtime_plan_warnings)
     fetch_attempted = False
     fetch_succeeded = False
     source_checkout_changed = False
@@ -109236,6 +112336,10 @@ def _wom_kit_project_version_update_legacy_core(
         "succeeded": None,
         "source_restored": None,
         "pins_restored": None,
+        "project_runtime_removed": None,
+        "prepared_runtime_bundle_removed": None,
+        "runtime_reference_cleanup_verified": None,
+        "project_runtime_launcher_restored": None,
         "lock_removed": None,
         "fetched_refs_may_remain": False,
     }
@@ -109245,6 +112349,16 @@ def _wom_kit_project_version_update_legacy_core(
     lock_release_intent_status: str | None = None
     directory_guard: _WomKitProjectUpdateDirectoryGuard | None = None
     preserve_lock = False
+    durable_reservation: (
+        project_update_transaction.ReservedProjectUpdateTransaction | None
+    ) = None
+    durable_transaction: (
+        project_update_transaction.ProjectUpdateTransaction | None
+    ) = None
+    durable_lock_bytes: bytes | None = None
+    durable_approval_state: (
+        _ProjectVersionUpdateDurableApprovalState | None
+    ) = None
     target_git_snapshot: dict[str, Any] | None = None
     trusted_target_ref_snapshot: dict[str, str] | None = None
     source_materialization_completed = False
@@ -109299,6 +112413,7 @@ def _wom_kit_project_version_update_legacy_core(
                 target_commit=str(target_evidence["target_commit"]),
                 head_before=head_before,
                 original_branch=original_branch,
+                runner=git_runner,
             )
         )
         target_runtime_source_integrity_verified = bool(
@@ -109318,6 +112433,23 @@ def _wom_kit_project_version_update_legacy_core(
             and rollback.get("succeeded") is True
         )
         final_pins_written = [] if rolled_back else list(pins_written)
+        final_launcher_written = bool(
+            project_runtime_launcher_written and not rolled_back
+        )
+        runtime_receipt_schema = (
+            "wom-kit/project-version-update-receipt/v0.3"
+            if project_runtime_plan.get("required")
+            else "wom-kit/project-version-update-receipt/v0.2"
+        )
+        runtime_result = dict(project_runtime_plan)
+        if project_runtime_materialization is not None and not rolled_back:
+            runtime_result["materialized"] = (
+                project_runtime_materialization.public_summary()
+            )
+        runtime_result["launcher_write_attempted"] = (
+            project_runtime_launcher_write_attempted
+        )
+        runtime_result["launcher_written"] = final_launcher_written
         source_is_target = bool(
             head_after == target_commit
             and target_runtime_source_integrity_verified
@@ -109458,6 +112590,7 @@ def _wom_kit_project_version_update_legacy_core(
                 "write_attempted_paths": list(pin_write_attempted_paths),
             },
             "materialization_preflight": materialization_preflight,
+            "project_runtime": runtime_result,
             "forward_only": {
                 "comparison_basis": "recognized_project_pins_and_project_source_versions",
                 "recognized_project_version_count": len(
@@ -109486,7 +112619,7 @@ def _wom_kit_project_version_update_legacy_core(
                 ),
             },
             "receipt": {
-                "schema": "wom-kit/project-version-update-receipt/v0.2",
+                "schema": runtime_receipt_schema,
                 "path": display_receipt_relative,
                 "written": receipt_written,
             },
@@ -109529,6 +112662,12 @@ def _wom_kit_project_version_update_legacy_core(
                     approve
                     and WOM_KIT_PROJECT_UPDATE_APPROVAL_PLATFORM_SUPPORTED
                 ),
+                "project_local_runtime_may_change": bool(
+                    approve
+                    and WOM_KIT_PROJECT_UPDATE_APPROVAL_PLATFORM_SUPPORTED
+                    and project_runtime_plan.get("required")
+                ),
+                "global_path_or_python_installation_may_change": False,
                 "recognized_version_pins_may_change": (
                     approve
                     and WOM_KIT_PROJECT_UPDATE_APPROVAL_PLATFORM_SUPPORTED
@@ -109543,6 +112682,14 @@ def _wom_kit_project_version_update_legacy_core(
                 if status == "no_change"
                 else [
                     f"{mirror_logical} detached checkout to the exact verified target tag",
+                    *(
+                        [
+                            f"{project_runtime_plan['target_path']} exact public-wheel runtime materialized",
+                            f"{project_runtime_plan['launcher_path']} project launcher activated",
+                        ]
+                        if project_runtime_plan.get("required")
+                        else []
+                    ),
                     "recognized installed-version pins aligned to the target tag",
                     (
                         f"{WOM_KIT_PROJECT_UPDATE_RECEIPTS_RELATIVE}/ one update receipt"
@@ -109552,6 +112699,20 @@ def _wom_kit_project_version_update_legacy_core(
                 ]
             ),
             "files_written": [
+                *(
+                    [project_runtime_plan["target_path"]]
+                    if (
+                        project_runtime_materialization is not None
+                        and project_runtime_materialization.created
+                        and not rolled_back
+                    )
+                    else []
+                ),
+                *(
+                    [project_runtime_plan["launcher_path"]]
+                    if final_launcher_written
+                    else []
+                ),
                 *final_pins_written,
                 *([display_receipt_relative] if receipt_written and display_receipt_relative else []),
             ],
@@ -109615,12 +112776,63 @@ def _wom_kit_project_version_update_legacy_core(
         lock_reservation = {"identity": identity}
 
     try:
-        _wom_kit_project_update_acquire_lock_exclusive(
-            project_root,
-            metadata_root,
-            lock_path,
-            reservation_callback=register_lock_reservation,
-        )
+        if prepare_exact_approval:
+            if (
+                not isinstance(_expected_approval_root, Path)
+                or type(_expected_archive_id) is not str
+            ):
+                raise ArchiveServiceError(
+                    "project_version_update_approval_archive_identity_changed"
+                )
+            reservation_created_at = (
+                datetime.now(timezone.utc)
+                .replace(microsecond=0)
+                .isoformat()
+                .replace("+00:00", "Z")
+            )
+            project_identity_sha256 = (
+                project_update_transaction.sha256_document(
+                    {
+                        "approval_archive_identity_sha256": (
+                            exact_human_approval_archive_identity_sha256(
+                                _expected_archive_id
+                            )
+                        ),
+                        "preflight_git_config_sha256": (
+                            "sha256:" + str(preflight_git_config_digest)
+                        ),
+                        "root_label": root_label,
+                        "schema": (
+                            "wom-kit/project-update-project-identity/v0.4.3"
+                        ),
+                        "source_head_sha256": (
+                            project_update_transaction.sha256_document(
+                                {"head": head_before}
+                            )
+                        ),
+                    }
+                )
+            )
+            durable_reservation = (
+                project_update_transaction.ProjectUpdateTransaction.reserve(
+                    project_root,
+                    project_identity_sha256=project_identity_sha256,
+                    requested_target_tag=target_tag,
+                    created_at=reservation_created_at,
+                )
+            )
+            durable_lock_bytes = durable_reservation.acquire_lock()
+            lock_stat = os.lstat(lock_path)
+            register_lock_reservation(
+                (int(lock_stat.st_dev), int(lock_stat.st_ino))
+            )
+        else:
+            _wom_kit_project_update_acquire_lock_exclusive(
+                project_root,
+                metadata_root,
+                lock_path,
+                reservation_callback=register_lock_reservation,
+            )
         lock_acquired = True
         lock_release_state = "held"
     except FileExistsError:
@@ -109677,11 +112889,61 @@ def _wom_kit_project_version_update_legacy_core(
             else "interrupted_rolled_back"
         )
 
+    def cleanup_prepared_runtime_bundle_or_raise() -> None:
+        nonlocal prepared_runtime_bundle_cleanup_state, preserve_lock
+        if prepared_runtime_bundle is None:
+            prepared_runtime_bundle_cleanup_state = "not_required"
+            rollback["prepared_runtime_bundle_removed"] = True
+            return
+        if prepared_runtime_bundle_cleanup_state == "verified_absent":
+            rollback["prepared_runtime_bundle_removed"] = True
+            return
+        prepared_runtime_bundle_cleanup_state = "cleaning"
+        try:
+            removed = project_runtime.cleanup_prepared_runtime_bundle(
+                prepared_runtime_bundle
+            )
+        except BaseException:
+            removed = False
+        rollback["prepared_runtime_bundle_removed"] = bool(removed)
+        if not removed:
+            prepared_runtime_bundle_cleanup_state = "uncertain"
+            preserve_lock = True
+            blockers.append(
+                "project_runtime_prepared_bundle_cleanup_unverified"
+            )
+            raise RuntimeError(
+                "project_runtime_prepared_bundle_cleanup_unverified"
+            )
+        prepared_runtime_bundle_cleanup_state = "verified_absent"
+
     def release_current_lock_or_raise(intent_status: str) -> None:
         nonlocal lock_acquired, lock_release_intent_status
         nonlocal lock_release_state, preserve_lock
         if not lock_acquired:
             return
+        if durable_reservation is not None:
+            if durable_approval_state is not None:
+                _project_update_cancel_before_native(
+                    durable_approval_state
+                )
+            else:
+                cleanup_prepared_runtime_bundle_or_raise()
+                if durable_lock_bytes is None:
+                    raise RuntimeError(
+                        "project_update_transaction_lock_ownership_changed"
+                    )
+                durable_reservation.abort_before_intent_seal(
+                    expected_lock_bytes=durable_lock_bytes,
+                )
+            lock_release_intent_status = intent_status
+            lock_release_state = "released"
+            lock_acquired = False
+            return
+        # Every terminal state removes the exact pre-approval network bundle
+        # before releasing the project lock.  Uncertain cleanup preserves the
+        # lock for recovery rather than claiming a complete transaction.
+        cleanup_prepared_runtime_bundle_or_raise()
         lock_release_intent_status = intent_status
         lock_release_state = "releasing"
         identity = (
@@ -109736,12 +112998,18 @@ def _wom_kit_project_version_update_legacy_core(
         )
 
     def unlocked_terminal_state_verified(status: str) -> bool:
+        if prepared_runtime_bundle_cleanup_state not in {
+            "not_required",
+            "verified_absent",
+        }:
+            return False
         if status in {"blocked", "no_change"}:
             return bool(
                 wom_kit_project_update_source_matches_snapshot(
                     project_root,
                     mirror_path,
                     preflight_git_snapshot,
+                    runner=git_runner,
                 )
                 and wom_kit_project_update_all_pins_match_snapshot(
                     project_root,
@@ -109752,6 +113020,7 @@ def _wom_kit_project_version_update_legacy_core(
                     or wom_kit_project_update_target_ref_snapshot(
                         mirror_path,
                         target_tag,
+                        runner=git_runner,
                     )
                     == trusted_target_ref_snapshot
                 )
@@ -109765,6 +113034,7 @@ def _wom_kit_project_version_update_legacy_core(
                 project_root,
                 mirror_path,
                 target_git_snapshot,
+                runner=git_runner,
             )
             and all(
                 _wom_kit_read_bounded_real_bytes(
@@ -109776,25 +113046,36 @@ def _wom_kit_project_version_update_legacy_core(
                 for spec in pin_specs
             )
             and reserved_receipt_matches()
-            and wom_kit_project_update_git_config_trust_digest(mirror_path)
+            and wom_kit_project_update_git_config_trust_digest(
+                mirror_path,
+                runner=git_runner,
+            )
             == preflight_git_config_digest
             and wom_kit_project_update_target_ref_snapshot(
                 mirror_path,
                 target_tag,
+                runner=git_runner,
             )
             == trusted_target_ref_snapshot
         )
 
     try:
-        post_lock_snapshot = _wom_kit_project_update_git_snapshot(mirror_path)
+        post_lock_snapshot = _wom_kit_project_update_git_snapshot(
+            mirror_path,
+            runner=git_runner,
+        )
         if (
             preflight_git_snapshot is None
             or post_lock_snapshot != preflight_git_snapshot
-            or wom_kit_project_update_git_config_trust_digest(mirror_path)
+            or wom_kit_project_update_git_config_trust_digest(
+                mirror_path,
+                runner=git_runner,
+            )
             != preflight_git_config_digest
             or not wom_kit_project_update_git_metadata_is_local_real(
                 project_root,
                 mirror_path,
+                runner=git_runner,
             )
             or not wom_kit_project_update_all_pins_match_snapshot(
                 project_root,
@@ -109809,7 +113090,10 @@ def _wom_kit_project_version_update_legacy_core(
         if progress_callback is not None:
             progress_callback("fetch-release", "start", None, None)
         if (
-            wom_kit_project_update_git_config_trust_digest(mirror_path)
+            wom_kit_project_update_git_config_trust_digest(
+                mirror_path,
+                runner=git_runner,
+            )
             != preflight_git_config_digest
         ):
             blockers.append(
@@ -109834,16 +113118,24 @@ def _wom_kit_project_version_update_legacy_core(
             ],
             timeout_seconds=180,
             allow_transport_environment=True,
+            runner=git_runner,
+            transport=True,
         )
         fetch_succeeded = fetch_ok
         post_fetch_config_matches = bool(
-            wom_kit_project_update_git_config_trust_digest(mirror_path)
+            wom_kit_project_update_git_config_trust_digest(
+                mirror_path,
+                runner=git_runner,
+            )
             == preflight_git_config_digest
         )
         if progress_callback is not None:
             progress_callback("fetch-release", "done", None, None)
         post_fetch_callback_config_matches = bool(
-            wom_kit_project_update_git_config_trust_digest(mirror_path)
+            wom_kit_project_update_git_config_trust_digest(
+                mirror_path,
+                runner=git_runner,
+            )
             == preflight_git_config_digest
         )
         if not fetch_ok:
@@ -109862,12 +113154,22 @@ def _wom_kit_project_version_update_legacy_core(
 
         if progress_callback is not None:
             progress_callback("verify-release", "start", None, None)
-        target_evidence = wom_kit_project_update_target_evidence(mirror_path, target_tag)
+        target_evidence = wom_kit_project_update_target_evidence(
+            mirror_path,
+            target_tag,
+            runner=git_runner,
+        )
         validate_target_evidence(require_local=True, require_origin_ancestry=True)
+        refresh_project_runtime_plan(enforce_interpreter=True)
+        if project_runtime_policy["state"] == "invalid":
+            blockers.append("project_runtime_policy_invalid")
+        blockers.extend(project_runtime_plan_blockers)
+        warnings.extend(project_runtime_plan_warnings)
         trusted_target_ref_snapshot = (
             wom_kit_project_update_target_ref_snapshot(
                 mirror_path,
                 target_tag,
+                runner=git_runner,
             )
         )
         if (
@@ -109885,15 +113187,20 @@ def _wom_kit_project_version_update_legacy_core(
             return result_payload("blocked")
 
         before_mutation_snapshot = _wom_kit_project_update_git_snapshot(
-            mirror_path
+            mirror_path,
+            runner=git_runner,
         )
         if (
             before_mutation_snapshot != preflight_git_snapshot
-            or wom_kit_project_update_git_config_trust_digest(mirror_path)
+            or wom_kit_project_update_git_config_trust_digest(
+                mirror_path,
+                runner=git_runner,
+            )
             != preflight_git_config_digest
             or not wom_kit_project_update_git_metadata_is_local_real(
                 project_root,
                 mirror_path,
+                runner=git_runner,
             )
             or not wom_kit_project_update_all_pins_match_snapshot(
                 project_root,
@@ -109902,6 +113209,7 @@ def _wom_kit_project_version_update_legacy_core(
             or wom_kit_project_update_target_ref_snapshot(
                 mirror_path,
                 target_tag,
+                runner=git_runner,
             )
             != trusted_target_ref_snapshot
             or (
@@ -109912,6 +113220,7 @@ def _wom_kit_project_version_update_legacy_core(
                         mirror_path,
                         original_branch,
                         head_before,
+                        runner=git_runner,
                     )
                 )
             )
@@ -109931,6 +113240,7 @@ def _wom_kit_project_version_update_legacy_core(
                 target_commit=target_commit,
                 head_before=head_before,
                 original_branch=original_branch,
+                runner=git_runner,
             )
         )
         target_runtime_source_integrity_verified = bool(
@@ -109958,10 +113268,625 @@ def _wom_kit_project_version_update_legacy_core(
             and pins_already_target
             and target_runtime_source_integrity_verified
             and not checkout_required
+            and not project_runtime_plan.get("required")
         ):
             head_after = head_before
             release_current_lock_or_raise("no_change")
             return result_payload("no_change")
+
+        # Runtime bytes are prepared only after the fetched tag, origin ref,
+        # target policy/supply/bootstrap, interpreter lock, source/pins, and
+        # materialization preflight are all exact and blocker-free.  The
+        # resulting content-free summary becomes part of the plan that is
+        # snapshotted for native approval below; no later plan refresh may
+        # overwrite it.
+        if prepare_exact_approval and project_runtime_plan.get("required"):
+            if (
+                project_runtime_bootstrap is None
+                or project_runtime_supply is None
+                or durable_reservation is None
+            ):
+                blockers.append(
+                    "project_runtime_exact_public_supply_required"
+                )
+                release_current_lock_or_raise("blocked")
+                return result_payload("blocked")
+            try:
+                prepared_runtime_bundle = (
+                    project_runtime.prepare_runtime_candidate(
+                        project_root,
+                        durable_reservation.transaction_root,
+                        target=target_version or "",
+                        target_commit=target_commit,
+                        bootstrap=project_runtime_bootstrap,
+                        supply=project_runtime_supply,
+                        running_version=WOM_KIT_VERSION,
+                        receipt_created_at=durable_reservation.created_at,
+                        progress_callback=progress_callback,
+                    )
+                )
+                prepared_runtime_bundle_cleanup_state = "pending"
+                prepared_runtime_bundle_summary = dict(
+                    prepared_runtime_bundle.public_summary()
+                )
+            except project_runtime.PreparedRuntimeBundleCleanupError:
+                prepared_runtime_bundle_cleanup_state = "uncertain"
+                rollback["prepared_runtime_bundle_removed"] = False
+                preserve_lock = True
+                raise
+            except project_runtime.ProjectRuntimeError as failure:
+                blockers.append(str(failure))
+                release_current_lock_or_raise("blocked")
+                return result_payload("blocked")
+            project_runtime_plan["runtime_candidate"] = copy.deepcopy(
+                prepared_runtime_bundle_summary
+            )
+
+            # Bundle preparation may perform bounded downloads for long enough
+            # that another process can change the source, pins, refs, policy,
+            # runtime candidate, or launcher.  Recompute every approved input
+            # now so a stale plan never reaches the native dialog merely to be
+            # rejected by the post-approval drift check.
+            post_bundle_target_evidence = (
+                wom_kit_project_update_target_evidence(
+                    mirror_path,
+                    target_tag,
+                    runner=git_runner,
+                )
+            )
+            post_bundle_ref_snapshot = (
+                wom_kit_project_update_target_ref_snapshot(
+                    mirror_path,
+                    target_tag,
+                    runner=git_runner,
+                )
+            )
+            post_bundle_runtime_policy = (
+                wom_kit_project_update_runtime_policy(
+                    mirror_path,
+                    target_commit,
+                    runner=git_runner,
+                )
+            )
+            post_bundle_runtime_supply = (
+                wom_kit_project_update_runtime_supply(
+                    mirror_path,
+                    target_commit,
+                    target_version,
+                    post_bundle_runtime_policy,
+                    runner=git_runner,
+                )
+            )
+            (
+                post_bundle_bootstrap,
+                post_bundle_bootstrap_summary,
+            ) = project_runtime.bootstrap_wheel_for_target(
+                target_version or ""
+            )
+            (
+                post_bundle_runtime_plan,
+                post_bundle_runtime_blockers,
+                _post_bundle_runtime_warnings,
+            ) = project_runtime.plan_runtime(
+                project_root,
+                target_version or "",
+                policy_state=str(post_bundle_runtime_policy["state"]),
+                target_commit=target_commit,
+                bootstrap=post_bundle_bootstrap,
+                bootstrap_summary=post_bundle_bootstrap_summary,
+                supply=post_bundle_runtime_supply,
+                enforce_interpreter=True,
+            )
+            post_bundle_runtime_plan["policy"] = dict(
+                post_bundle_runtime_policy
+            )
+            post_bundle_runtime_plan["runtime_candidate"] = copy.deepcopy(
+                prepared_runtime_bundle_summary
+            )
+            post_bundle_launcher_snapshot = (
+                project_runtime.launcher_snapshot(
+                    project_root,
+                    target_version or "",
+                )
+            )
+            post_bundle_materialization_preflight = (
+                wom_kit_project_update_materialization_preflight(
+                    project_root,
+                    mirror_path,
+                    target_commit=target_commit,
+                    head_before=head_before,
+                    original_branch=original_branch,
+                    runner=git_runner,
+                )
+            )
+            try:
+                post_bundle_live_summary = dict(
+                    project_runtime.verify_prepared_runtime_candidate(
+                        prepared_runtime_bundle,
+                        project_root=project_root,
+                        target=target_version or "",
+                        target_commit=target_commit,
+                        bootstrap=project_runtime_bootstrap,
+                        supply=project_runtime_supply,
+                    )
+                )
+                post_bundle_live_summary.pop(
+                    "static_reverified",
+                    None,
+                )
+            except project_runtime.ProjectRuntimeError:
+                post_bundle_live_summary = {}
+            post_bundle_state_still_exact = bool(
+                _wom_kit_project_update_git_snapshot(
+                    mirror_path,
+                    runner=git_runner,
+                )
+                == preflight_git_snapshot
+                and wom_kit_project_update_git_config_trust_digest(
+                    mirror_path,
+                    runner=git_runner,
+                )
+                == preflight_git_config_digest
+                and wom_kit_project_update_git_metadata_is_local_real(
+                    project_root,
+                    mirror_path,
+                    runner=git_runner,
+                )
+                and wom_kit_project_update_all_pins_match_snapshot(
+                    project_root,
+                    pin_specs,
+                )
+                and post_bundle_ref_snapshot
+                == trusted_target_ref_snapshot
+                and post_bundle_target_evidence == target_evidence
+                and post_bundle_runtime_policy == project_runtime_policy
+                and post_bundle_runtime_supply == project_runtime_supply
+                and post_bundle_bootstrap == project_runtime_bootstrap
+                and post_bundle_bootstrap_summary
+                == project_runtime_bootstrap_summary
+                and not post_bundle_runtime_blockers
+                and post_bundle_runtime_plan == project_runtime_plan
+                and post_bundle_launcher_snapshot
+                == project_runtime_launcher_snapshot
+                and post_bundle_materialization_preflight
+                == materialization_preflight
+                and post_bundle_live_summary
+                == prepared_runtime_bundle_summary
+                and (
+                    original_branch is None
+                    or (
+                        head_before is not None
+                        and wom_kit_project_update_branch_points_to_commit(
+                            mirror_path,
+                            original_branch,
+                            head_before,
+                            runner=git_runner,
+                        )
+                    )
+                )
+            )
+            if not post_bundle_state_still_exact:
+                blockers.append(
+                    "project_version_update_state_changed_during_runtime_preparation"
+                )
+                try:
+                    _project_update_abort_unsealed_candidate(
+                        reservation=durable_reservation,
+                        expected_lock_bytes=durable_lock_bytes,
+                        candidate=prepared_runtime_bundle,
+                    )
+                except BaseException:
+                    prepared_runtime_bundle_cleanup_state = "uncertain"
+                    rollback["prepared_runtime_bundle_removed"] = False
+                    preserve_lock = True
+                    raise
+                prepared_runtime_bundle_cleanup_state = "verified_absent"
+                rollback["prepared_runtime_bundle_removed"] = True
+                prepared_runtime_bundle = None
+                lock_acquired = False
+                lock_release_state = "released"
+                return result_payload("blocked")
+
+            # A required project runtime is a policy invariant, not proof that
+            # this invocation still has a domain change to make.  Only the
+            # complete pre-native candidate can prove the existing runtime is
+            # byte-for-byte reusable.  Once that proof is available, an exact
+            # source/pin/launcher target is a true no-op: remove the transient
+            # candidate, durably abort the still-unsealed reservation, and do
+            # not open a second native approval or write another receipt.
+            if (
+                head_before == target_commit
+                and pins_already_target
+                and target_runtime_source_integrity_verified
+                and not checkout_required
+                and prepared_runtime_bundle.existing_runtime_reusable
+                and bool(
+                    project_runtime_launcher_snapshot.get("already_target")
+                )
+            ):
+                try:
+                    _project_update_abort_unsealed_candidate(
+                        reservation=durable_reservation,
+                        expected_lock_bytes=durable_lock_bytes,
+                        candidate=prepared_runtime_bundle,
+                    )
+                except BaseException:
+                    prepared_runtime_bundle_cleanup_state = "uncertain"
+                    rollback["prepared_runtime_bundle_removed"] = False
+                    preserve_lock = True
+                    raise
+                prepared_runtime_bundle_cleanup_state = "verified_absent"
+                rollback["prepared_runtime_bundle_removed"] = True
+                lock_acquired = False
+                lock_release_state = "released"
+                head_after = head_before
+                installed_summary = copy.deepcopy(
+                    project_runtime_plan.get("installed", {})
+                )
+                installed_summary.update(
+                    {
+                        "status": "verified",
+                        "verified": True,
+                        "verification_basis": (
+                            "sealed_candidate_equivalence_and_live_existing_runtime_verification"
+                        ),
+                        "live_reverification_required_before_reuse": False,
+                    }
+                )
+                project_runtime_plan.update(
+                    {
+                        "installed": installed_summary,
+                        "materialization_required": False,
+                        "runtime_creation_required": False,
+                        "live_reverification_required": False,
+                    }
+                )
+                project_runtime_plan.pop("runtime_candidate", None)
+                prepared_runtime_bundle = None
+                return result_payload("no_change")
+
+        if prepare_exact_approval:
+            if (
+                not project_runtime_plan.get("required")
+                or not isinstance(
+                    prepared_runtime_bundle,
+                    project_runtime.PreparedRuntimeCandidate,
+                )
+                or project_runtime_bootstrap is None
+                or project_runtime_supply is None
+                or project_runtime_launcher_snapshot is None
+                or durable_reservation is None
+                or durable_lock_bytes is None
+                or not isinstance(_expected_approval_root, Path)
+                or type(_expected_archive_id) is not str
+                or target_version is None
+                or head_before is None
+                or preflight_git_snapshot is None
+                or preflight_git_config_digest is None
+                or trusted_target_ref_snapshot is None
+                or directory_guard is None
+                or reviewer is None
+            ):
+                blockers.append(
+                    "project_version_update_durable_transaction_inputs_invalid"
+                )
+                release_current_lock_or_raise("blocked")
+                return result_payload("blocked")
+            prepared_preview_base = result_payload(
+                "ready_for_approval"
+            )
+            durable_approval_state = _project_update_prepare_durable_state(
+                inspection_root=inspection,
+                project_root=project_root,
+                mirror_path=mirror_path,
+                mirror_logical=mirror_logical,
+                target_tag=target_tag,
+                target_version=target_version,
+                target_commit=target_commit,
+                reviewer=reviewer,
+                expected_approval_root=_expected_approval_root,
+                expected_archive_id=_expected_archive_id,
+                reservation=durable_reservation,
+                expected_lock_bytes=durable_lock_bytes,
+                runner=git_runner,
+                runtime_candidate=prepared_runtime_bundle,
+                runtime_bootstrap=project_runtime_bootstrap,
+                runtime_supply=project_runtime_supply,
+                runtime_policy=project_runtime_policy,
+                runtime_plan=project_runtime_plan,
+                directory_guard=directory_guard,
+                preflight_git_snapshot=preflight_git_snapshot,
+                preflight_git_config_digest=preflight_git_config_digest,
+                target_ref_snapshot=trusted_target_ref_snapshot,
+                target_evidence=target_evidence,
+                materialization_preflight=materialization_preflight,
+                head_before=head_before,
+                pin_specs=pin_specs,
+                launcher_snapshot=project_runtime_launcher_snapshot,
+                prepared_preview_base=prepared_preview_base,
+            )
+            # This is the permanent transport boundary.  Every later Git
+            # process is the held absolute executable and local plumbing only.
+            git_runner.close_transport_boundary()
+            prepared_preview = _project_update_build_prepared_preview(
+                durable_approval_state
+            )
+            durable_approval_state.prepared_preview = copy.deepcopy(
+                prepared_preview
+            )
+            yield _ProjectVersionUpdatePreparedApproval(
+                preview=copy.deepcopy(prepared_preview),
+                state=durable_approval_state,
+            )
+            # The driver owns the closures and never resumes this generator.
+            # Reaching this line means an invalid second continuation attempt.
+            raise ArchiveServiceError(
+                "project_version_update_approval_continuation_reused"
+            )
+
+            if not _wom_kit_project_version_update_approval_authority_matches(
+                inspection_root,
+                expected_root=_expected_approval_root,
+                expected_archive_id=_expected_archive_id,
+            ):
+                blockers.append(
+                    "project_version_update_approval_archive_identity_changed"
+                )
+                release_current_lock_or_raise("blocked")
+                return result_payload("blocked")
+            prepared_ref_snapshot = copy.deepcopy(
+                trusted_target_ref_snapshot
+            )
+            prepared_target_evidence = copy.deepcopy(target_evidence)
+            prepared_runtime_policy = copy.deepcopy(project_runtime_policy)
+            prepared_runtime_supply = project_runtime_supply
+            prepared_runtime_plan = copy.deepcopy(project_runtime_plan)
+            prepared_bootstrap = project_runtime_bootstrap
+            prepared_bootstrap_summary = copy.deepcopy(
+                project_runtime_bootstrap_summary
+            )
+            prepared_materialization_preflight = copy.deepcopy(
+                materialization_preflight
+            )
+            transaction_nonce_sha256 = (
+                "sha256:"
+                + hashlib.sha256(secrets.token_bytes(32)).hexdigest()
+            )
+            # This is the last Git transport boundary before native review.
+            # The same held executable remains available for local-only claim,
+            # mutation, rollback, and claim-finalization checks.
+            git_runner.close_transport_boundary()
+            trusted_git_runner_summary = dict(
+                git_runner.public_summary()
+            )
+            prepared_preview = result_payload("ready_for_approval")
+            prepared_preview["mode"] = "approval_prepared"
+            prepared_preview["approval_preparation"] = {
+                "lock_held": True,
+                "network_complete": True,
+                "post_approval_network_allowed": False,
+                "transaction_nonce_sha256": transaction_nonce_sha256,
+                "target_ref_snapshot": copy.deepcopy(
+                    prepared_ref_snapshot
+                ),
+                "preapproval_control_writes_completed": True,
+                "preapproval_domain_writes_completed": False,
+                "fetched_refs_may_change": True,
+                "trusted_git_runner": trusted_git_runner_summary,
+            }
+            prepared_preview["fetch"]["phase"] = (
+                "before_native_approval"
+            )
+            prepared_preview["write_boundary"][
+                "post_approval_network_allowed"
+            ] = False
+            prepared_preview["write_boundary"][
+                "project_update_lock_acquired"
+            ] = True
+            prepared_preview["write_boundary"][
+                "preapproval_control_writes_completed"
+            ] = True
+            prepared_preview["write_boundary"][
+                "preapproval_domain_writes_completed"
+            ] = False
+            prepared_preview["write_boundary"][
+                "fetched_refs_may_change"
+            ] = True
+
+            approval_request = yield copy.deepcopy(prepared_preview)
+            if not isinstance(approval_request, Mapping):
+                raise ArchiveServiceError(
+                    "project_version_update_approval_continuation_invalid"
+                )
+            claim = approval_request.get("claim")
+            expected_plan_sha256 = approval_request.get(
+                "expected_plan_sha256"
+            )
+            expected_target_binding_sha256 = approval_request.get(
+                "expected_target_binding_sha256"
+            )
+            if (
+                not isinstance(claim, _ClaimedExactHumanApproval)
+                or type(expected_plan_sha256) is not str
+                or type(expected_target_binding_sha256) is not str
+            ):
+                raise ArchiveServiceError(
+                    "project_version_update_approval_continuation_invalid"
+                )
+            if not _wom_kit_project_version_update_approval_authority_matches(
+                inspection_root,
+                expected_root=_expected_approval_root,
+                expected_archive_id=_expected_archive_id,
+            ):
+                blockers.append(
+                    "project_version_update_approval_archive_identity_changed"
+                )
+                release_current_lock_or_raise("blocked")
+                return result_payload("blocked")
+            prepared_binding = project_version_update_approval_binding(
+                prepared_preview
+            )
+            approval_root = _expected_approval_root
+            if not isinstance(approval_root, Path):
+                raise ArchiveServiceError(
+                    "project_version_update_approval_archive_identity_changed"
+                )
+            operation_exact_human_approval = (
+                _require_exact_human_operation_approval(
+                    approval_root,
+                    prepared_binding,
+                    reviewer_claim=reviewer or "",
+                    expected_plan_sha256=expected_plan_sha256,
+                    expected_target_binding_sha256=(
+                        expected_target_binding_sha256
+                    ),
+                    claim=claim,
+                    expected_archive_id=_expected_archive_id,
+                )
+            )
+
+            current_ref_snapshot = (
+                wom_kit_project_update_target_ref_snapshot(
+                    mirror_path,
+                    target_tag,
+                    runner=git_runner,
+                )
+            )
+            current_target_evidence = (
+                wom_kit_project_update_target_evidence(
+                    mirror_path,
+                    target_tag,
+                    runner=git_runner,
+                )
+            )
+            current_runtime_policy = (
+                wom_kit_project_update_runtime_policy(
+                    mirror_path,
+                    target_commit,
+                    runner=git_runner,
+                )
+            )
+            current_runtime_supply = (
+                wom_kit_project_update_runtime_supply(
+                    mirror_path,
+                    target_commit,
+                    target_version,
+                    current_runtime_policy,
+                    runner=git_runner,
+                )
+            )
+            current_bootstrap, current_bootstrap_summary = (
+                project_runtime.bootstrap_wheel_for_target(
+                    target_version or ""
+                )
+            )
+            current_runtime_plan, current_runtime_blockers, _ = (
+                project_runtime.plan_runtime(
+                    project_root,
+                    target_version or "",
+                    policy_state=str(current_runtime_policy["state"]),
+                    target_commit=target_commit,
+                    bootstrap=current_bootstrap,
+                    bootstrap_summary=current_bootstrap_summary,
+                    supply=current_runtime_supply,
+                    enforce_interpreter=True,
+                )
+            )
+            current_runtime_plan["policy"] = copy.deepcopy(
+                current_runtime_policy
+            )
+            if prepared_runtime_bundle is not None:
+                try:
+                    if (
+                        current_bootstrap is None
+                        or current_runtime_supply is None
+                    ):
+                        raise project_runtime.ProjectRuntimeError(
+                            "project_runtime_prepared_bundle_binding_invalid"
+                        )
+                    live_bundle_summary = dict(
+                        project_runtime.verify_prepared_runtime_bundle(
+                            prepared_runtime_bundle,
+                            target=target_version or "",
+                            target_commit=target_commit,
+                            bootstrap=current_bootstrap,
+                            supply=current_runtime_supply,
+                        )
+                    )
+                    live_reverified = (
+                        live_bundle_summary.pop(
+                            "live_reverified",
+                            None,
+                        )
+                        is True
+                    )
+                    current_bundle_summary = (
+                        live_bundle_summary
+                        if (
+                            live_reverified
+                            and live_bundle_summary
+                            == prepared_runtime_bundle_summary
+                        )
+                        else {}
+                    )
+                except project_runtime.ProjectRuntimeError:
+                    current_bundle_summary = {}
+                current_runtime_plan["prepared_bundle"] = copy.deepcopy(
+                    current_bundle_summary
+                )
+            current_materialization_preflight = (
+                wom_kit_project_update_materialization_preflight(
+                    project_root,
+                    mirror_path,
+                    target_commit=target_commit,
+                    head_before=head_before,
+                    original_branch=original_branch,
+                    runner=git_runner,
+                )
+            )
+            lock_identity = (
+                lock_reservation.get("identity")
+                if lock_reservation is not None
+                else None
+            )
+            prepared_state_still_exact = bool(
+                wom_kit_project_update_owned_lock_present(
+                    project_root,
+                    lock_path,
+                    lock_identity,
+                )
+                and _wom_kit_project_update_git_snapshot(
+                    mirror_path,
+                    runner=git_runner,
+                )
+                == preflight_git_snapshot
+                and wom_kit_project_update_git_config_trust_digest(
+                    mirror_path,
+                    runner=git_runner,
+                )
+                == preflight_git_config_digest
+                and wom_kit_project_update_all_pins_match_snapshot(
+                    project_root,
+                    pin_specs,
+                )
+                and current_ref_snapshot == prepared_ref_snapshot
+                and current_target_evidence == prepared_target_evidence
+                and current_runtime_policy == prepared_runtime_policy
+                and current_runtime_supply == prepared_runtime_supply
+                and current_bootstrap == prepared_bootstrap
+                and current_bootstrap_summary
+                == prepared_bootstrap_summary
+                and not current_runtime_blockers
+                and current_runtime_plan == prepared_runtime_plan
+                and current_materialization_preflight
+                == prepared_materialization_preflight
+            )
+            if not prepared_state_still_exact:
+                blockers.append(
+                    "project_version_update_approved_snapshot_changed"
+                )
+                release_current_lock_or_raise("blocked")
+                return result_payload("blocked")
 
         if progress_callback is not None:
             progress_callback("checkout-release", "start", None, None)
@@ -109976,6 +113901,7 @@ def _wom_kit_project_version_update_legacy_core(
                         directory_guard=directory_guard,
                         project_root=project_root,
                         expected_source_snapshot=preflight_git_snapshot,
+                        runner=git_runner,
                     )
                 )
             except WomKitProjectUpdateSourceSnapshotChangedError:
@@ -109991,12 +113917,16 @@ def _wom_kit_project_version_update_legacy_core(
                 # preserves the lock for recovery.
                 if (
                     preflight_git_snapshot is not None
-                    and _wom_kit_project_update_git_snapshot(mirror_path)
+                    and _wom_kit_project_update_git_snapshot(
+                        mirror_path,
+                        runner=git_runner,
+                    )
                     == preflight_git_snapshot
                     and wom_kit_project_update_source_matches_snapshot(
                         project_root,
                         mirror_path,
                         preflight_git_snapshot,
+                        runner=git_runner,
                     )
                 ):
                     source_checkout_changed = False
@@ -110006,11 +113936,15 @@ def _wom_kit_project_version_update_legacy_core(
         head_ok, checked_out_head = _wom_kit_project_update_git(
             mirror_path,
             ["rev-parse", "--verify", "HEAD"],
+            runner=git_runner,
         )
         head_after = checked_out_head.lower() if head_ok else None
         if not head_ok or head_after != target_commit:
             raise RuntimeError("checkout_verification_failed")
-        target_git_snapshot = _wom_kit_project_update_git_snapshot(mirror_path)
+        target_git_snapshot = _wom_kit_project_update_git_snapshot(
+            mirror_path,
+            runner=git_runner,
+        )
         if not wom_kit_project_update_snapshot_is_clean(
             target_git_snapshot,
             expected_head=target_commit,
@@ -110025,11 +113959,13 @@ def _wom_kit_project_version_update_legacy_core(
         runtime_source_after = wom_kit_runtime_tracked_python_integrity(
             project_root,
             mirror_path,
+            runner=git_runner,
         )
         runtime_resources_after = wom_kit_runtime_resource_integrity(
             project_root,
             mirror_path,
             ref=target_commit,
+            runner=git_runner,
         )
         target_runtime_source_integrity_verified = bool(
             runtime_source_after["tracked_python_sources_verified"]
@@ -110041,6 +113977,7 @@ def _wom_kit_project_version_update_legacy_core(
             wom_kit_project_update_target_ref_snapshot(
                 mirror_path,
                 target_tag,
+                runner=git_runner,
             )
             != trusted_target_ref_snapshot
         ):
@@ -110049,21 +113986,116 @@ def _wom_kit_project_version_update_legacy_core(
             project_root,
             mirror_path,
             target_git_snapshot,
+            runner=git_runner,
         ):
             raise RuntimeError("target_source_snapshot_unavailable")
         if progress_callback is not None:
             progress_callback("checkout-release", "done", None, None)
 
+        if project_runtime_plan.get("required"):
+            if (
+                project_runtime_bootstrap is None
+                or project_runtime_supply is None
+                or prepared_runtime_bundle is None
+                or project_runtime_launcher_snapshot is None
+            ):
+                raise RuntimeError(
+                    "project_runtime_exact_public_supply_required"
+                )
+            runtimes_root = project_root / project_runtime.PROJECT_RUNTIME_RELATIVE_ROOT
+            launcher_parent = (
+                project_root
+                / project_runtime.PROJECT_RUNTIME_LAUNCHER_RELATIVE.parent
+            )
+            if (
+                not directory_guard.ensure_directory(
+                    metadata_root,
+                    runtimes_root,
+                )
+                or not directory_guard.ensure_directory(
+                    metadata_root,
+                    launcher_parent,
+                )
+            ):
+                raise RuntimeError("project_runtime_directory_stability_unavailable")
+            current_launcher = project_runtime.launcher_snapshot(
+                project_root,
+                target_version,
+            )
+            if (
+                current_launcher.get("unsafe")
+                or current_launcher.get("previous_bytes")
+                != project_runtime_launcher_snapshot.get("previous_bytes")
+                or current_launcher.get("existed")
+                != project_runtime_launcher_snapshot.get("existed")
+            ):
+                raise RuntimeError("project_runtime_launcher_compare_and_swap_failed")
+            project_runtime_materialization = project_runtime.materialize_runtime(
+                project_root,
+                target=target_version,
+                target_commit=target_commit,
+                bootstrap=project_runtime_bootstrap,
+                supply=project_runtime_supply,
+                prepared_bundle=prepared_runtime_bundle,
+                running_version=WOM_KIT_VERSION,
+                progress_callback=progress_callback,
+                mutation_tracker=project_runtime_mutation_tracker,
+            )
+            cleanup_prepared_runtime_bundle_or_raise()
+            if (
+                head_before == target_commit
+                and pins_already_target
+                and target_runtime_source_integrity_verified
+                and not checkout_required
+                and project_runtime_materialization.created is False
+                and project_runtime_launcher_snapshot.get("already_target")
+            ):
+                # A required runtime is never accepted from its static receipt
+                # alone.  Reaching this branch proves the existing executable,
+                # packages, retained artifacts, and payload in a fresh process
+                # under the approved supply lock, without a durable write.
+                head_after = head_before
+                release_current_lock_or_raise("no_change")
+                return result_payload("no_change")
+            launcher_path = project_runtime_launcher_snapshot["path"]
+            launcher_target_bytes = project_runtime_launcher_snapshot["target_bytes"]
+            if not project_runtime_launcher_snapshot.get("already_target"):
+                project_runtime_launcher_write_attempted = True
+                write_bytes_atomic(launcher_path, launcher_target_bytes)
+                project_runtime_launcher_written = True
+            if (
+                _wom_kit_read_bounded_real_bytes(
+                    project_root,
+                    launcher_path,
+                    max_bytes=64 * 1024,
+                )
+                != launcher_target_bytes
+            ):
+                raise RuntimeError("project_runtime_launcher_verification_failed")
+            if not wom_kit_project_update_source_matches_snapshot(
+                project_root,
+                mirror_path,
+                target_git_snapshot,
+                runner=git_runner,
+            ):
+                raise RuntimeError("project_source_changed_during_runtime_install")
+
         if progress_callback is not None:
             progress_callback("write-pins", "start", 0, len(pin_specs))
         target_pin_bytes = (target_tag + "\n").encode("utf-8")
-        for index, spec in enumerate(pin_specs, start=1):
+        activation_ordered_pin_specs = [
+            spec for spec in pin_specs if spec.get("role") != "project_pin"
+        ] + [
+            spec for spec in pin_specs if spec.get("role") == "project_pin"
+        ]
+        for index, spec in enumerate(activation_ordered_pin_specs, start=1):
             path = spec["path"]
             if (
                 not wom_kit_project_update_source_matches_snapshot(
                     project_root,
                     mirror_path,
                     target_git_snapshot,
+                    runner=git_runner,
                 )
                 or not wom_kit_project_update_pin_matches_snapshot(
                     project_root,
@@ -110103,12 +114135,14 @@ def _wom_kit_project_version_update_legacy_core(
             project_root,
             mirror_path,
             target_git_snapshot,
+            runner=git_runner,
         ):
             raise RuntimeError("project_source_changed_during_pin_write")
         if (
             wom_kit_project_update_target_ref_snapshot(
                 mirror_path,
                 target_tag,
+                runner=git_runner,
             )
             != trusted_target_ref_snapshot
         ):
@@ -110125,8 +114159,13 @@ def _wom_kit_project_version_update_legacy_core(
                 raise RuntimeError("pin_compare_and_swap_verification_failed")
 
         timestamp = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+        receipt_schema = (
+            "wom-kit/project-version-update-receipt/v0.3"
+            if project_runtime_plan.get("required")
+            else "wom-kit/project-version-update-receipt/v0.2"
+        )
         receipt = {
-            "schema": "wom-kit/project-version-update-receipt/v0.2",
+            "schema": receipt_schema,
             "action": "project_version_update",
             "status": "updated_restart_required",
             "timestamp": timestamp,
@@ -110151,6 +114190,71 @@ def _wom_kit_project_version_update_legacy_core(
                 ),
             },
             "pins_written": list(pins_written),
+            **(
+                {
+                    "pin_transitions": [
+                        {
+                            "path": spec["logical"],
+                            "previous_version": spec.get("previous_version"),
+                            "new_version": target_tag,
+                            "written": spec["logical"] in pins_written,
+                        }
+                        for spec in pin_specs
+                    ],
+                    "project_runtime": {
+                        "policy_schema": project_runtime_policy["schema"],
+                        "policy_sha256": project_runtime_policy["policy_sha256"],
+                        "path": project_runtime_plan["target_path"],
+                        "launcher_path": project_runtime_plan["launcher_path"],
+                        "project_runtime_argv": project_runtime_plan[
+                            "project_runtime_argv"
+                        ],
+                        "target_tag": target_tag,
+                        "target_version": target_version,
+                        "target_commit": target_commit,
+                        "wheel_sha256": (
+                            "sha256:"
+                            + project_runtime_materialization.wheel_sha256
+                        ),
+                        "supply_lock_sha256": (
+                            "sha256:"
+                            + project_runtime_materialization.supply_lock_sha256
+                        ),
+                        "artifact_inventory": [
+                            dict(item)
+                            for item in (
+                                project_runtime_materialization.artifact_inventory
+                            )
+                        ],
+                        "installed_payload_sha256": (
+                            "sha256:"
+                            + project_runtime_materialization.installed_payload_sha256
+                        ),
+                        "runtime_receipt_sha256": (
+                            "sha256:"
+                            + project_runtime_materialization.receipt_sha256
+                        ),
+                        "python_version": (
+                            project_runtime_materialization.python_version
+                        ),
+                        "created": project_runtime_materialization.created,
+                        "launcher_written": (
+                            project_runtime_launcher_written
+                        ),
+                        "verification": dict(
+                            project_runtime_materialization.verification
+                        ),
+                        "new_process_verified": True,
+                        "global_path_mutation": False,
+                        "previous_runtime_deleted": False,
+                    },
+                }
+                if (
+                    project_runtime_plan.get("required")
+                    and project_runtime_materialization is not None
+                )
+                else {}
+            ),
             "configured_origin": {
                 "remote_name": "origin",
                 "atomic_fetch_succeeded": fetch_succeeded,
@@ -110164,15 +114268,6 @@ def _wom_kit_project_version_update_legacy_core(
                 "running_process_reloaded": False,
                 "restart_required": True,
             },
-            **(
-                {
-                    "operation_exact_human_approval": dict(
-                        operation_exact_human_approval
-                    )
-                }
-                if isinstance(operation_exact_human_approval, Mapping)
-                else {}
-            ),
             "privacy_guards": {
                 "local_absolute_paths_echoed": False,
                 "remote_urls_echoed": False,
@@ -110183,7 +114278,11 @@ def _wom_kit_project_version_update_legacy_core(
         }
         schema_issues = validate_schema(
             receipt,
-            "project-version-update-receipt-v0.2.schema.json",
+            (
+                "project-version-update-receipt-v0.3.schema.json"
+                if project_runtime_plan.get("required")
+                else "project-version-update-receipt-v0.2.schema.json"
+            ),
         )
         if schema_issues:
             raise RuntimeError("receipt_schema_validation_failed")
@@ -110236,6 +114335,7 @@ def _wom_kit_project_version_update_legacy_core(
             wom_kit_project_update_target_ref_snapshot(
                 mirror_path,
                 target_tag,
+                runner=git_runner,
             )
             != trusted_target_ref_snapshot
         ):
@@ -110244,8 +114344,58 @@ def _wom_kit_project_version_update_legacy_core(
         return result_payload("updated_restart_required")
     except BaseException as failure:
         interrupted = not isinstance(failure, Exception)
+        runtime_reference_cleanup_unverified = isinstance(
+            failure,
+            project_runtime.RuntimeReferenceCleanupError,
+        )
+        rollback["runtime_reference_cleanup_verified"] = (
+            False if runtime_reference_cleanup_unverified else True
+        )
+        if runtime_reference_cleanup_unverified:
+            preserve_lock = True
+            blockers.append(
+                "project_runtime_reference_cleanup_unverified"
+            )
+        prepared_bundle_removed = True
+        if (
+            prepared_runtime_bundle is not None
+            and prepared_runtime_bundle_cleanup_state != "verified_absent"
+        ):
+            try:
+                prepared_bundle_removed = bool(
+                    project_runtime.cleanup_prepared_runtime_bundle(
+                        prepared_runtime_bundle
+                    )
+                )
+            except BaseException:
+                prepared_bundle_removed = False
+            prepared_runtime_bundle_cleanup_state = (
+                "verified_absent"
+                if prepared_bundle_removed
+                else "uncertain"
+            )
+        elif isinstance(
+            failure,
+            project_runtime.PreparedRuntimeBundleCleanupError,
+        ):
+            prepared_bundle_removed = False
+            prepared_runtime_bundle_cleanup_state = "uncertain"
+        rollback["prepared_runtime_bundle_removed"] = (
+            prepared_bundle_removed
+        )
+        if not prepared_bundle_removed:
+            preserve_lock = True
+            blockers.append(
+                "project_runtime_prepared_bundle_cleanup_unverified"
+            )
         potential_mutation_attempted = bool(
             source_checkout_changed
+            or project_runtime_launcher_write_attempted
+            or (
+                project_runtime_materialization is not None
+                and project_runtime_materialization.created
+            )
+            or project_runtime_mutation_tracker.started
             or pin_write_attempted_paths
             or receipt_written
             or receipt_reservation is not None
@@ -110317,7 +114467,10 @@ def _wom_kit_project_version_update_legacy_core(
             )
 
         if (
-            wom_kit_project_update_git_config_trust_digest(mirror_path)
+            wom_kit_project_update_git_config_trust_digest(
+                mirror_path,
+                runner=git_runner,
+            )
             != preflight_git_config_digest
         ):
             preserve_lock = True
@@ -110349,13 +114502,17 @@ def _wom_kit_project_version_update_legacy_core(
         source_restored = True
         source_restore_operation_ok = True
         pins_restored = not uncertain_receipt_mutation
+        project_runtime_launcher_restored = True
+        project_runtime_removed = True
         if source_checkout_changed and head_before:
             current_ok, current_head = _wom_kit_project_update_git(
                 mirror_path,
                 ["rev-parse", "--verify", "HEAD"],
+                runner=git_runner,
             )
             current_git_snapshot = _wom_kit_project_update_git_snapshot(
-                mirror_path
+                mirror_path,
+                runner=git_runner,
             )
             rollback_head_safe = bool(
                 current_ok
@@ -110378,11 +114535,16 @@ def _wom_kit_project_version_update_legacy_core(
                         head_before,
                         attach_branch=original_branch,
                         directory_guard=directory_guard,
+                        runner=git_runner,
                     )
                 )
             except BaseException:
                 restored_ok = False
-            verify_ok, restored_head = _wom_kit_project_update_git(mirror_path, ["rev-parse", "--verify", "HEAD"])
+            verify_ok, restored_head = _wom_kit_project_update_git(
+                mirror_path,
+                ["rev-parse", "--verify", "HEAD"],
+                runner=git_runner,
+            )
             source_restore_operation_ok = (
                 restored_ok
                 and verify_ok
@@ -110398,6 +114560,49 @@ def _wom_kit_project_version_update_legacy_core(
                 )
             source_restored = source_restore_operation_ok
             head_after = restored_head.lower() if verify_ok else None
+        if project_runtime_launcher_write_attempted:
+            try:
+                if project_runtime_launcher_snapshot is None:
+                    raise OSError("missing_project_runtime_launcher_snapshot")
+                launcher_path = project_runtime_launcher_snapshot["path"]
+                target_launcher_bytes = project_runtime_launcher_snapshot[
+                    "target_bytes"
+                ]
+                current_launcher_bytes = _wom_kit_read_bounded_real_bytes(
+                    project_root,
+                    launcher_path,
+                    max_bytes=64 * 1024,
+                )
+                previous_launcher_bytes = project_runtime_launcher_snapshot.get(
+                    "previous_bytes"
+                )
+                if current_launcher_bytes == previous_launcher_bytes:
+                    pass
+                elif current_launcher_bytes != target_launcher_bytes:
+                    raise OSError("project_runtime_launcher_compare_and_swap_failed")
+                elif project_runtime_launcher_snapshot.get("existed"):
+                    if not isinstance(previous_launcher_bytes, bytes):
+                        raise OSError("project_runtime_launcher_snapshot_missing")
+                    write_bytes_atomic(launcher_path, previous_launcher_bytes)
+                else:
+                    launcher_path.unlink()
+                verified_launcher_bytes = _wom_kit_read_bounded_real_bytes(
+                    project_root,
+                    launcher_path,
+                    max_bytes=64 * 1024,
+                )
+                if project_runtime_launcher_snapshot.get("existed"):
+                    project_runtime_launcher_restored = (
+                        verified_launcher_bytes == previous_launcher_bytes
+                    )
+                else:
+                    project_runtime_launcher_restored = (
+                        wom_kit_real_path_kind(project_root, launcher_path)
+                        == "missing"
+                    )
+                project_runtime_launcher_written = False
+            except BaseException:
+                project_runtime_launcher_restored = False
         for spec in pin_specs:
             if spec["logical"] not in pin_write_attempted_paths:
                 if not wom_kit_project_update_pin_matches_snapshot(
@@ -110452,6 +114657,50 @@ def _wom_kit_project_version_update_legacy_core(
                     raise OSError("pin_compare_and_swap_failed")
             except BaseException:
                 pins_restored = False
+        if project_runtime_mutation_tracker.started:
+            try:
+                if project_runtime_materialization is not None:
+                    project_runtime_removed = (
+                        project_runtime.remove_materialized_runtime(
+                            project_root,
+                            project_runtime_materialization,
+                            mutation_tracker=(
+                                project_runtime_mutation_tracker
+                            ),
+                        )
+                    )
+                else:
+                    # materialize_runtime owns cleanup for failures before it
+                    # can return a RuntimeMaterialization.  Verify the complete
+                    # runtime-root snapshot here before allowing lock release.
+                    project_runtime_removed = (
+                        project_runtime.runtime_mutation_restored(
+                            project_root,
+                            project_runtime_mutation_tracker,
+                        )
+                    )
+            except BaseException:
+                project_runtime_removed = False
+        elif (
+            project_runtime_materialization is not None
+            and project_runtime_materialization.created
+        ):
+            # Fail closed for a non-conforming injected materializer which
+            # claims creation without using the required mutation tracker.
+            try:
+                removed_without_snapshot = (
+                    project_runtime.remove_materialized_runtime(
+                        project_root,
+                        project_runtime_materialization,
+                    )
+                )
+                project_runtime_removed = False
+                if not removed_without_snapshot:
+                    warnings.append(
+                        "The project runtime could not be removed after a materializer violated the mutation-tracker contract."
+                    )
+            except BaseException:
+                project_runtime_removed = False
         if receipt_reservation is not None:
             receipt_candidate = receipt_reservation["path"]
             receipt_identity = receipt_reservation["identity"]
@@ -110500,14 +114749,30 @@ def _wom_kit_project_version_update_legacy_core(
                 and wom_kit_project_update_git_metadata_is_local_real(
                     project_root,
                     mirror_path,
+                    runner=git_runner,
                 )
-                and _wom_kit_project_update_git_snapshot(mirror_path)
+                and _wom_kit_project_update_git_snapshot(
+                    mirror_path,
+                    runner=git_runner,
+                )
                 == preflight_git_snapshot
             )
         rollback["source_restored"] = source_restored
         rollback["pins_restored"] = pins_restored
+        rollback["project_runtime_removed"] = project_runtime_removed
+        rollback["project_runtime_launcher_restored"] = (
+            project_runtime_launcher_restored
+        )
         lock_removed = False
-        if source_restored and pins_restored and lock_acquired:
+        if (
+            source_restored
+            and pins_restored
+            and project_runtime_removed
+            and prepared_bundle_removed
+            and project_runtime_launcher_restored
+            and not runtime_reference_cleanup_unverified
+            and lock_acquired
+        ):
             identity = (
                 lock_reservation.get("identity")
                 if lock_reservation is not None
@@ -110531,7 +114796,15 @@ def _wom_kit_project_version_update_legacy_core(
         elif not lock_acquired:
             lock_removed = True
         rollback["lock_removed"] = lock_removed
-        rollback["succeeded"] = source_restored and pins_restored and lock_removed
+        rollback["succeeded"] = bool(
+            source_restored
+            and pins_restored
+            and project_runtime_removed
+            and prepared_bundle_removed
+            and project_runtime_launcher_restored
+            and not runtime_reference_cleanup_unverified
+            and lock_removed
+        )
         preserve_lock = not bool(rollback["succeeded"])
         blockers.append(
             (
@@ -110560,6 +114833,249 @@ def _wom_kit_project_version_update_legacy_core(
         return result_payload(status)
     finally:
         directory_guard.close()
+
+
+def _wom_kit_project_version_update_legacy_core(
+    inspection_root: Path | str,
+    *,
+    target: str,
+    dry_run: bool = False,
+    approve: bool = False,
+    reviewed_by: str | None = None,
+    affirm_external_writers_quiescent: bool = False,
+    operation_exact_human_approval: Mapping[str, Any] | None = None,
+    approval_executor: Callable[..., Mapping[str, Any]]
+    | None = None,
+    progress_callback: Callable[[str, str, int | None, int | None], None]
+    | None = None,
+    _expected_approval_root: Path | None = None,
+    _expected_archive_id: str | None = None,
+) -> dict[str, Any]:
+    """Drive the historical core or one live lock-held approval yield."""
+
+    git_runner_lifetime = _ProjectVersionUpdateGitRunnerLifetime()
+    transaction = _wom_kit_project_version_update_legacy_core_generator(
+        inspection_root,
+        target=target,
+        dry_run=dry_run,
+        approve=approve,
+        reviewed_by=reviewed_by,
+        affirm_external_writers_quiescent=(
+            affirm_external_writers_quiescent
+        ),
+        operation_exact_human_approval=operation_exact_human_approval,
+        prepare_exact_approval=approval_executor is not None,
+        progress_callback=progress_callback,
+        _expected_approval_root=_expected_approval_root,
+        _expected_archive_id=_expected_archive_id,
+        _git_runner_lifetime=git_runner_lifetime,
+    )
+    try:
+        prepared_preview = next(transaction)
+    except StopIteration as completed:
+        git_runner_lifetime.close_after_service_transaction()
+        result = completed.value
+        if not isinstance(result, Mapping):
+            raise ArchiveServiceError(
+                "project_version_update_result_invalid"
+            )
+        return dict(result)
+    except BaseException:
+        transaction.close()
+        git_runner_lifetime.close_after_service_transaction()
+        raise
+
+    if approval_executor is None:
+        transaction.close()
+        git_runner_lifetime.close_after_service_transaction()
+        raise ArchiveServiceError(
+            "project_version_update_live_approval_executor_required"
+        )
+
+    if isinstance(
+        prepared_preview,
+        _ProjectVersionUpdatePreparedApproval,
+    ):
+        prepared = prepared_preview
+        state = prepared.state
+        continuation_used = False
+
+        def durable_continue_after_approval(
+            claim: _ClaimedExactHumanApproval,
+            expected_plan_sha256: str,
+            expected_target_binding_sha256: str,
+        ) -> Mapping[str, Any]:
+            nonlocal continuation_used
+            if continuation_used:
+                raise ArchiveServiceError(
+                    "project_version_update_approval_continuation_reused"
+                )
+            continuation_used = True
+            binding = project_version_update_approval_binding(
+                prepared.preview
+            )
+            assert_same_binding(
+                binding,
+                expected_plan_sha256=expected_plan_sha256,
+                expected_target_binding_sha256=(
+                    expected_target_binding_sha256
+                ),
+            )
+            state.approved_plan_sha256 = binding.plan_sha256
+            state.approved_target_binding_sha256 = (
+                binding.target_binding_sha256
+            )
+            try:
+                return _project_update_durable_writer(state, claim)
+            except ArchiveServiceError:
+                raise
+            except (
+                project_update_transaction.ProjectUpdateTransactionError,
+                project_runtime.ProjectRuntimeError,
+                project_update_git_runner.ProjectUpdateGitRunnerError,
+            ) as failure:
+                # All three implementations expose a fixed, path-free code.
+                # Translate at the public service boundary so the CLI never
+                # renders a traceback or an implementation-local exception.
+                code = getattr(
+                    failure,
+                    "code",
+                    "project_version_update_durable_transaction_failed",
+                )
+                raise ArchiveServiceError(str(code)) from None
+
+        def durable_claim_succeeded_finalizer(
+            claim: _ClaimedExactHumanApproval,
+        ) -> None:
+            try:
+                _project_update_succeeded_claim_finalizer(state, claim)
+            except ArchiveServiceError:
+                raise
+            except (
+                project_update_transaction.ProjectUpdateTransactionError,
+                project_runtime.ProjectRuntimeError,
+                project_update_git_runner.ProjectUpdateGitRunnerError,
+            ) as failure:
+                code = getattr(
+                    failure,
+                    "code",
+                    "project_version_update_durable_transaction_failed",
+                )
+                raise ArchiveServiceError(str(code)) from None
+
+        def durable_started_guard(
+            claim: _ClaimedExactHumanApproval,
+        ) -> bool:
+            binding = project_version_update_approval_binding(
+                prepared.preview
+            )
+            state.approved_plan_sha256 = binding.plan_sha256
+            state.approved_target_binding_sha256 = (
+                binding.target_binding_sha256
+            )
+            return _project_update_claim_checkpoint_guard(
+                state,
+                claim,
+                succeeded=False,
+            )
+
+        def durable_succeeded_guard(
+            claim: _ClaimedExactHumanApproval,
+        ) -> bool:
+            binding = project_version_update_approval_binding(
+                prepared.preview
+            )
+            state.approved_plan_sha256 = binding.plan_sha256
+            state.approved_target_binding_sha256 = (
+                binding.target_binding_sha256
+            )
+            return _project_update_claim_checkpoint_guard(
+                state,
+                claim,
+                succeeded=True,
+            )
+
+        try:
+            result = approval_executor(
+                copy.deepcopy(dict(prepared.preview)),
+                durable_continue_after_approval,
+                durable_claim_succeeded_finalizer,
+                durable_started_guard,
+                durable_succeeded_guard,
+            )
+            if not continuation_used:
+                raise ArchiveServiceError(
+                    "project_version_update_approval_continuation_not_used"
+                )
+            if not isinstance(result, Mapping):
+                raise ArchiveServiceError(
+                    "project_version_update_result_invalid"
+                )
+            return dict(result)
+        except BaseException as failure:
+            if (
+                not continuation_used
+                and getattr(failure, "code", None)
+                == "exact_human_approval_cancelled"
+            ):
+                _project_update_cancel_before_native(state)
+            raise
+        finally:
+            transaction.close()
+            git_runner_lifetime.close_after_service_transaction()
+
+    continuation_used = False
+
+    def continue_after_approval(
+        claim: _ClaimedExactHumanApproval,
+        expected_plan_sha256: str,
+        expected_target_binding_sha256: str,
+    ) -> Mapping[str, Any]:
+        nonlocal continuation_used
+        if continuation_used:
+            raise ArchiveServiceError(
+                "project_version_update_approval_continuation_reused"
+            )
+        continuation_used = True
+        try:
+            unexpected = transaction.send(
+                {
+                    "claim": claim,
+                    "expected_plan_sha256": expected_plan_sha256,
+                    "expected_target_binding_sha256": (
+                        expected_target_binding_sha256
+                    ),
+                }
+            )
+        except StopIteration as completed:
+            result = completed.value
+            if not isinstance(result, Mapping):
+                raise ArchiveServiceError(
+                    "project_version_update_result_invalid"
+                )
+            return dict(result)
+        transaction.close()
+        raise ArchiveServiceError(
+            "project_version_update_approval_continuation_invalid"
+        ) from RuntimeError(str(unexpected))
+
+    try:
+        result = approval_executor(
+            copy.deepcopy(prepared_preview),
+            continue_after_approval,
+        )
+        if not continuation_used:
+            raise ArchiveServiceError(
+                "project_version_update_approval_continuation_not_used"
+            )
+        if not isinstance(result, Mapping):
+            raise ArchiveServiceError(
+                "project_version_update_result_invalid"
+            )
+        return dict(result)
+    finally:
+        transaction.close()
+        git_runner_lifetime.close_after_service_transaction()
 
 
 def ai_start_here_inbox_attention(archive_root: Path) -> dict[str, Any]:
