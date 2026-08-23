@@ -27,6 +27,7 @@ from unittest.mock import patch
 KIT_ROOT = Path(__file__).resolve().parents[1]
 SRC_ROOT = KIT_ROOT / "src"
 TESTS_ROOT = Path(__file__).resolve().parent
+WINDOWS_PROJECT_RUNTIME = os.name == "nt" and sys.version_info[:2] == (3, 12)
 PROMOTION_CHECKLIST_IDS = [
     "one_clear_purpose",
     "understandable_title",
@@ -9325,7 +9326,7 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertNotIn(str(fixture["project_root"]), output)
 
     @unittest.skipUnless(
-        os.name == "nt" and sys.version_info[:2] == (3, 12),
+        WINDOWS_PROJECT_RUNTIME,
         "the production runtime supply is Windows CPython 3.12",
     )
     def test_project_version_update_durable_candidate_static_receipt_and_claim_finalizer(
@@ -9725,7 +9726,7 @@ class ArchiveCliTests(unittest.TestCase):
         )
 
     @unittest.skipUnless(
-        os.name == "nt" and sys.version_info[:2] == (3, 12),
+        WINDOWS_PROJECT_RUNTIME,
         "the production runtime supply is Windows CPython 3.12",
     )
     def test_project_version_update_hard_exit_matrix_resumes_exact_next_stage(
@@ -10181,6 +10182,10 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertLessEqual(max(gaps), 10.0)
             self.assertEqual(gaps, [9.0, 9.0])
 
+    @unittest.skipUnless(
+        WINDOWS_PROJECT_RUNTIME,
+        "the production runtime supply is Windows CPython 3.12",
+    )
     def test_project_version_update_approve_fetches_verifies_updates_and_is_replay_safe(
         self,
     ) -> None:
@@ -10530,6 +10535,10 @@ class ArchiveCliTests(unittest.TestCase):
                 1,
             )
 
+    @unittest.skipUnless(
+        WINDOWS_PROJECT_RUNTIME,
+        "the production runtime supply is Windows CPython 3.12",
+    )
     def test_project_version_update_cancel_after_preparation_releases_lock_without_project_write(
         self,
     ) -> None:
@@ -10765,6 +10774,10 @@ class ArchiveCliTests(unittest.TestCase):
                 ]
             )
 
+    @unittest.skipUnless(
+        WINDOWS_PROJECT_RUNTIME,
+        "the production runtime supply is Windows CPython 3.12",
+    )
     def test_project_version_update_postapproval_ref_pin_and_policy_drift_block_before_writer(
         self,
     ) -> None:
@@ -10921,6 +10934,10 @@ class ArchiveCliTests(unittest.TestCase):
                     ).exists()
                 )
 
+    @unittest.skipUnless(
+        WINDOWS_PROJECT_RUNTIME,
+        "the production runtime supply is Windows CPython 3.12",
+    )
     def test_project_version_update_bundle_progress_drift_blocks_before_native_approval(
         self,
     ) -> None:
@@ -11316,6 +11333,10 @@ class ArchiveCliTests(unittest.TestCase):
                 target["unapproved_extra"] = True
                 assert_rejected(broken)
 
+    @unittest.skipUnless(
+        WINDOWS_PROJECT_RUNTIME,
+        "the production runtime supply is Windows CPython 3.12",
+    )
     def test_project_version_update_holds_archive_root_file_and_claim_parent_before_claim(
         self,
     ) -> None:
@@ -11459,6 +11480,10 @@ class ArchiveCliTests(unittest.TestCase):
                     ).exists()
                 )
 
+    @unittest.skipUnless(
+        WINDOWS_PROJECT_RUNTIME,
+        "the production runtime supply is Windows CPython 3.12",
+    )
     def test_project_version_update_continuation_rejects_same_id_different_approval_root(
         self,
     ) -> None:
@@ -11741,6 +11766,10 @@ class ArchiveCliTests(unittest.TestCase):
                 "sha256:" + hashlib.sha256(raw.rstrip(b"\r\n")).hexdigest(),
             )
 
+    @unittest.skipUnless(
+        WINDOWS_PROJECT_RUNTIME,
+        "the production runtime supply is Windows CPython 3.12",
+    )
     def test_project_runtime_component_failure_preserves_lock_and_checkpoints_before_active_pin(
         self,
     ) -> None:
@@ -11885,6 +11914,10 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertNotIn("active_pin", verified_roles)
             self.assertNotIn("domain_committed", verified_roles)
 
+    @unittest.skipUnless(
+        WINDOWS_PROJECT_RUNTIME,
+        "the production runtime supply is Windows CPython 3.12",
+    )
     def test_project_runtime_candidate_cleanup_uncertainty_preserves_lock_without_domain_ref_write(
         self,
     ) -> None:
