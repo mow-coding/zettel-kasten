@@ -222,6 +222,7 @@ class ProjectUpdateCollisionParityTests(unittest.TestCase):
                 archive_services._wom_kit_project_update_materialization_plan_details_internal(
                     fixture["mirror"],
                     fixture["target_commit"],
+                    runner=self.fixture_case.trusted_project_update_git_runner(),
                 )
             )
             authority = internal_plan[4]
@@ -247,6 +248,7 @@ class ProjectUpdateCollisionParityTests(unittest.TestCase):
                     archive_services.wom_kit_project_update_materialization_plan(
                         fixture["mirror"],
                         fixture["target_commit"],
+                        runner=self.fixture_case.trusted_project_update_git_runner(),
                     )
                 )
             self.assertNotEqual(
@@ -530,6 +532,7 @@ class ProjectUpdateCollisionParityTests(unittest.TestCase):
                 archive_services.wom_kit_project_update_materialization_plan(
                     repo,
                     file_commit,
+                    runner=self.fixture_case.trusted_project_update_git_runner(),
                 )
             )
             self.assertEqual(directory_to_file["state"], "ready")
@@ -545,6 +548,7 @@ class ProjectUpdateCollisionParityTests(unittest.TestCase):
                 archive_services.wom_kit_project_update_materialization_plan(
                     repo,
                     file_commit,
+                    runner=self.fixture_case.trusted_project_update_git_runner(),
                 )
             )
             self.assertEqual(empty_directory_collision["state"], "blocked")
@@ -566,6 +570,7 @@ class ProjectUpdateCollisionParityTests(unittest.TestCase):
                 archive_services.wom_kit_project_update_materialization_plan(
                     repo,
                     directory_commit,
+                    runner=self.fixture_case.trusted_project_update_git_runner(),
                 )
             )
             self.assertEqual(file_to_directory["state"], "ready")
@@ -622,7 +627,8 @@ class ProjectUpdateCollisionParityTests(unittest.TestCase):
             pin_path = fixture["metadata_root"] / "installed-version.txt"
             pin_before = pin_path.read_bytes()
             snapshot_before = archive_services._wom_kit_project_update_git_snapshot(
-                fixture["mirror"]
+                fixture["mirror"],
+                runner=self.fixture_case.trusted_project_update_git_runner(),
             )
 
             with patch.object(
@@ -643,7 +649,8 @@ class ProjectUpdateCollisionParityTests(unittest.TestCase):
             )
             self.assertEqual(
                 archive_services._wom_kit_project_update_git_snapshot(
-                    fixture["mirror"]
+                    fixture["mirror"],
+                    runner=self.fixture_case.trusted_project_update_git_runner(),
                 ),
                 snapshot_before,
             )
@@ -734,7 +741,8 @@ class ProjectUpdateCollisionParityTests(unittest.TestCase):
                 fixture["mirror"], "rev-parse", "HEAD"
             )
             snapshot_before = archive_services._wom_kit_project_update_git_snapshot(
-                fixture["mirror"]
+                fixture["mirror"],
+                runner=self.fixture_case.trusted_project_update_git_runner(),
             )
 
             with patch.object(
@@ -765,7 +773,8 @@ class ProjectUpdateCollisionParityTests(unittest.TestCase):
             )
             self.assertNotEqual(
                 archive_services._wom_kit_project_update_git_snapshot(
-                    fixture["mirror"]
+                    fixture["mirror"],
+                    runner=self.fixture_case.trusted_project_update_git_runner(),
                 ),
                 snapshot_before,
             )

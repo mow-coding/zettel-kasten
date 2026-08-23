@@ -140,6 +140,65 @@
         "restart_required": {"type": "boolean", "const": true}
       }
     },
+    "operation_exact_human_approval": {
+      "type": "object",
+      "required": [
+        "schema_version",
+        "operation",
+        "plan_sha256",
+        "target_binding_sha256",
+        "exact_human_approval"
+      ],
+      "properties": {
+        "schema_version": {
+          "type": "string",
+          "const": "wom-kit/operation-exact-human-approval/v0.1"
+        },
+        "operation": {
+          "type": "string",
+          "const": "project_version_update"
+        },
+        "plan_sha256": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "target_binding_sha256": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "exact_human_approval": {
+          "type": "object",
+          "required": [
+            "schema_version",
+            "approval_id",
+            "context_sha256",
+            "approval_authority_sha256",
+            "one_use"
+          ],
+          "properties": {
+            "schema_version": {
+              "type": "string",
+              "const": "wom-kit/exact-human-approval-reference/v0.1"
+            },
+            "approval_id": {
+              "type": "string",
+              "pattern": "^approval_[0-9a-f]{32}$"
+            },
+            "context_sha256": {
+              "type": "string",
+              "pattern": "^sha256:[0-9a-f]{64}$"
+            },
+            "approval_authority_sha256": {
+              "type": "string",
+              "pattern": "^sha256:[0-9a-f]{64}$"
+            },
+            "one_use": {"type": "boolean", "const": true}
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
     "privacy_guards": {
       "type": "object",
       "required": [

@@ -2,11 +2,43 @@
 
 Status: public navigation baseline
 Date: 2026-06-02
-Updated: 2026-08-21
+Updated: 2026-08-22
 Philosophy clarified: 2026-07-15
 Harness compatibility clarified: 2026-07-16
 
-Current v0.4.2 delta: `git-backup-plan` and
+Current v0.4.3 delta: `ExactOperationManifest v1` supplies one exact-approved,
+checkpointed, resumable, independently verified, field-scoped-revert base.
+The existing Git planning family adds exact commit/non-force-push and remote-ref
+re-query, `archive migrate` adds Letter 138 lossless `source_properties`
+backfill, `project-version-update` is reopened with an approval-bound receipt,
+and feedback drafts gain CAS revision and immutable delivered supersession.
+None of these public capabilities alone proves a private archive result.
+
+Detailed Git backup boundary: `git-backup-plan` remains bounded and read-only.
+The existing `git-backup-reconcile-plan` family adds exact private all-change
+group validation, one native manifest-bound approval, literal bounded commits,
+an authenticated ordinary non-force push, exact ref requery, resumable
+checkpoints, and content-free completion receipts. It never pulls, fetches,
+merges, rebases, resets, cleans, deletes, force-pushes, echoes a remote URL or
+credential, or exposes an MCP writer. Plain dry-run remains write-free, and a
+matching `ls-remote` result remains Git-transport evidence rather than account,
+branch-policy, or provider audit-log proof.
+
+The same v0.4.3 candidate also contains the Letter 138 delta (implemented in
+the working tree, not yet released):
+`archive migrate --target notion-source-properties` can now plan, apply,
+resume, independently verify, and field-revert the Letter 138 local Notion
+`source_properties` recovery. A first dry-run stages the exact aggregate
+acceptance bytes create-only under ignored `profiles/local/`; the later plan
+must bind that same file and complete local mirror. Direction-specific apply
+and revert approvals use the common exact-operation manifest, archive-wide
+writer lock, late canonical-projection recheck, durable checkpoints, and final
+result receipt. Parser inventory availability is conditional on this one
+target; every other approved migration target stays fixed closed. It does not
+call Notion or expose property values, source page ids, or local paths. See
+[Notion Source Properties Recovery](notion-source-properties-recovery.md).
+
+Previous v0.4.2 delta: `git-backup-plan` and
 `git-backup-reconcile-plan` add bounded, content-free, CLI-only Git inspection
 and remote-ref reconciliation. They never add, commit, fetch, pull, push,
 delete, or change a ref; both keep `ready_for_write: false`,
@@ -16,12 +48,11 @@ only the read-only planning foundation of Letter 139, not its requested
 end-to-end backup writer.
 
 Previous v0.4.1 write boundary: `zettel-objet-link --approve` has an
-operation-specific local exact-human binding. Its matching revert, every Objet
-capture writer, and the project updater/collision/bytecode writers remain fixed
-closed. `archive capabilities --machine` reports the parser-derived inventory:
-78 fixed-closed canonical executable paths, with all supplied fixed-close
-entries matched. The inventory does not evaluate prerequisites, and lack of
-`--approve` is not proof that a command is read-only.
+operation-specific local exact-human binding. In v0.4.3 its matching revert,
+Objet capture, project collision, and bytecode writers remain fixed closed.
+`archive capabilities --machine` reports the parser-derived inventory and must
+match every supplied fixed-close entry. The inventory does not evaluate
+prerequisites, and lack of `--approve` is not proof that a command is read-only.
 
 Historical v0.4.0 write boundary: 79 canonical top-level compound, batch, revert,
 archive-authority, durable, and external commands remain available only for
@@ -99,6 +130,7 @@ Supporting philosophy and model docs:
 - [v0.4.0 Exact Human Control And Operator Friction Decision](archive-infra-decision-log-2026-08-20-v0400-letter136-operator-friction.md)
 - [v0.4.1 Letter 140 Exact Link Recovery Decision](archive-infra-decision-log-2026-08-21-v041-letter140-exact-link-recovery.md)
 - [v0.4.2 Letter 139 Read-Only Git Backup Planning Decision](archive-infra-decision-log-2026-08-21-v042-letter139-read-only-git-backup-planning.md)
+- [v0.4.3 Letter 138 Notion Source Property Recovery Decision](archive-infra-decision-log-2026-08-22-v043-letter138-notion-source-properties-recovery.md)
 - [Human Artifact Store And Private Registry Contract](human-artifact-store-contract.md)
 - [Project Version Update](project-version-update.md)
 - [Derived Text Capture And Paired-Batch Recovery](derived-text.md)
@@ -165,6 +197,7 @@ Supporting philosophy and model docs:
 - [Derived Text Capture](derived-text.md)
 - [Derived Text Coverage And Toolchain](derived-text-coverage-and-toolchain.md)
 - [Notion Page Snapshot Model](notion-page-snapshot-model.md)
+- [Notion Source Properties Recovery](notion-source-properties-recovery.md)
 - [Objet Ref Resolution](objet-ref-resolution.md)
 - [Presigned URL Plan](presigned-url-plan.md)
 - [Zettel Objet Links](zettel-objet-links.md)
@@ -473,6 +506,7 @@ These documents record public-safe work already performed.
 - [v0.2.11 Delegate Capability Contract Work Log](../plans/work-log-2026-05-23-delegate-capability-contract.md)
 - [Changelog](../../CHANGELOG.md)
 - [Release Notes](releases/)
+- [v0.4.3 Release Note](releases/v0.4.3.md)
 - [v0.4.2 Release Note](releases/v0.4.2.md)
 - [v0.4.1 Release Note](releases/v0.4.1.md)
 - [v0.4.0 Release Note](releases/v0.4.0.md)
@@ -519,7 +553,8 @@ Schemas:
 - [Source-Fidelity Draft Receipt v0.2 Schema](../schemas/source-fidelity-draft-receipt-v0.2.schema.json)
 - [Source-Fidelity Session-Evidence Receipt Schema](../schemas/source-fidelity-session-evidence-receipt-v0.1.schema.json)
 - [Content-Free CLI Error Envelope Schema](../schemas/cli-error-v0.1.schema.json)
-- [Command Approval Status Inventory Schema](../schemas/command-approval-status-inventory-v0.1.schema.json)
+- [Command Approval Status Inventory v0.2 Schema](../schemas/command-approval-status-inventory-v0.2.schema.json)
+- [Historical Command Approval Status Inventory v0.1 Schema](../schemas/command-approval-status-inventory-v0.1.schema.json)
 - [Exact-Human Operation Approval Schema](../schemas/operation-exact-human-approval-v0.1.schema.json)
 - [Zettel-Objet Link Receipt v0.1/v0.2 Reader Schema](../schemas/zettel-objet-link-receipt.schema.json)
 - [Exact-Human Approval Link Schema](../schemas/exact-human-approval-link-receipt-v0.1.schema.json)

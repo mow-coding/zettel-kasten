@@ -135,6 +135,10 @@ class Letter129ProjectUpdateCollisionBatchCoreTests(unittest.TestCase):
                         expected_plan_sha256=preflight[
                             "materialization_plan_sha256"
                         ],
+                        runner=(
+                            self.fixture_case
+                            .trusted_project_update_git_runner()
+                        ),
                     )
                 )
 
@@ -380,6 +384,10 @@ class Letter129ProjectUpdateCollisionBatchCoreTests(unittest.TestCase):
                             "materialization_plan_sha256"
                         ],
                         owned_lock_identity=identity,
+                        runner=(
+                            self.fixture_case
+                            .trusted_project_update_git_runner()
+                        ),
                     )
                 )
                 self.assertTrue(result["ok"], result)
@@ -398,6 +406,10 @@ class Letter129ProjectUpdateCollisionBatchCoreTests(unittest.TestCase):
                             "materialization_plan_sha256"
                         ],
                         owned_lock_identity=(identity[0], identity[1] + 1),
+                        runner=(
+                            self.fixture_case
+                            .trusted_project_update_git_runner()
+                        ),
                     )
                 )
                 self.assertFalse(wrong["ok"])

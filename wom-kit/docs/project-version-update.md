@@ -1,20 +1,23 @@
 # Project Version Update
 
-Status: read-only preview/inspection in v0.4.2; v0.3 mutation contract is historical
+Status: v0.4.3 exact-human project-mirror writer; collision and bytecode repair writers remain closed
 
-Current boundary: `project-version-update`, collision preserve-relocate, and
-`project-bytecode-repair` approval fail with
-`compound_exact_human_approval_binding_required` before private project read or
-mutation. The dry-runs and inspections below remain available; older approval
-examples describe historical receipts only and are not v0.4.2 run instructions.
+Current boundary: `project-version-update` is reopened only through the native
+exact-human approval broker. The CLI derives a content-free dry-run digest and
+target binding, a person approves that exact context, and the service derives
+the preview again and authenticates the one-use claim before the existing
+locked updater may fetch or write. Direct unbound service calls fail before a
+private project read. Collision preserve-relocate and `project-bytecode-repair`
+approval remain fixed closed.
 
 ## Plain-Language Purpose
 
-A WOM project can have three version states that drift apart:
+A WOM project can have four version states that drift apart:
 
 1. the WOM-kit code currently loaded by Python;
 2. the project-local code copy at `.zettel-kasten/source`;
 3. one or more small files that remember the intended version, called pins.
+4. the project-local installed runtime and launcher used for ordinary commands.
 
 Previously, a human had to receive update files with Git, move the local code to
 the release tag, and edit the pin by hand. `project-version-update` turns those
@@ -47,12 +50,66 @@ their read-only previews and inspections. Do not hand-edit a pin, copy global
 package files into the mirror, or describe the mirror as v0.4.1 without a
 future supported project-update transaction and its verification evidence.
 
+## v0.4.3 Project Runtime Activation
+
+For a v0.4.3-or-newer tagged source that carries
+`wom-kit/project-runtime-policy.json`, update is not complete when Git and pins
+match. The approved updater also requires the running bootstrap to be the exact
+public target wheel with a bound SHA-256. It creates, but does not yet activate,
+this side-by-side runtime:
+
+```text
+.zettel-kasten/runtimes/vX.Y.Z/
+```
+
+The tagged policy binds both the public WOM wheel and an exact dependency
+supply lock. For v0.4.3 the supported runtime target is CPython 3.12 on Windows
+x86-64. The updater verifies every locked artifact's file name, byte size, and
+SHA-256, retains those artifacts in the runtime, and installs only from those
+local files with pip isolation, package-index access disabled, and dependency
+resolution disabled. Unsupported interpreters and platforms fail closed.
+
+The updater verifies the retained artifacts, installed payload bytes, `pip
+check`, package version, packaged resource manifest, exact installed
+distribution inventory, and a separate new Python process. Existing runtimes
+must pass the same live verification before reuse; historical receipt booleans
+alone are not sufficient. Windows console-script paths are rebound and
+rechecked at the final runtime directory before activation. It then writes the stable project launcher
+`.zettel-kasten/bin/archive.cmd`, which contains only a project-relative route
+to the exact versioned runtime.
+
+The existing `.zettel-kasten/installed-version.txt` remains the active version
+source; no duplicate active pin is introduced. The active pin is written only
+after the runtime and launcher pass verification. The user PATH, shared
+`archive.exe`, and other project folders are never modified.
+
+The v0.3 receipt binds the release tag and commit, policy and supply-lock
+SHA-256, complete artifact inventory, installed-payload digest, WOM wheel
+SHA-256, Python version, previous and new pin values, runtime receipt SHA-256,
+launcher state, and new-process checks. Failure restores values changed by this
+transaction and removes only transaction-owned runtime paths. The runtime-root
+child snapshot must return exactly to its pre-install state; otherwise rollback
+is incomplete and the update lock remains for review. The updater never deletes
+a previous runtime as part of activation.
+
+After success, ordinary project commands should start with:
+
+```powershell
+.\.zettel-kasten\bin\archive.cmd version <project-or-archive-root> --format json
+```
+
+A project write started by a different running WOM version is blocked before
+dispatch as `project_runtime_mismatch`, including writers such as `index` that
+do not expose a separate approval flag. Read-only `version` and the updater
+bootstrap (`project-version-update`, `version-update`, or `update-wom-kit`)
+remain available; all updater names enter the same exact-public-wheel checks.
+
 ## Safe Workflow
 
 First preview. This performs no fetch and writes nothing:
 
 ```powershell
-archive project-version-update <project-or-archive-root> `
+& <exact-target-bootstrap> project-version-update <project-or-archive-root> `
   --target vX.Y.Z `
   --dry-run `
   --progress `
@@ -60,16 +117,35 @@ archive project-version-update <project-or-archive-root> `
   --format json
 ```
 
-The target may not exist locally yet. In that case
-Windows may report the historical status `ready_to_fetch_on_approve`. In
-v0.4.2 that status is diagnostic only: approval is fixed fail-closed before
-private project reads, fetch, or materialization. POSIX also remains preview
-only.
+The target may not exist locally yet. In that case the dry-run may report
+`ready_to_fetch_on_approve`, but that informational preview cannot mint an
+exact-human approval. Approval must be invoked from the CLI with a safe reviewer
+and the complete-transaction quiescence affirmation:
 
-After a human reviews the preview, stop. In v0.4.2 approval returns
-`compound_exact_human_approval_binding_required` before reading the private
-project target, fetching refs, materializing a tree, changing a pin, creating
-a lock, or publishing a receipt.
+```powershell
+& <exact-target-bootstrap> project-version-update <project-or-archive-root> `
+  --target vX.Y.Z `
+  --approve `
+  --reviewed-by person:me `
+  --affirm-external-writers-quiescent `
+  --progress `
+  --format json
+```
+
+The approved command first acquires the project update lock and performs one
+atomic configured-origin fetch. Before it opens the native dialog it verifies
+and fixes the exact annotated tag object, peeled target commit, `origin/main`,
+source HEAD, Git trust configuration, recognized pin bytes, public WOM wheel,
+runtime policy, dependency supply lock, runtime effect set, and materialization
+preflight. Only this `approval_prepared` plan can mint the exact-human approval.
+
+The updater keeps the same lock while the native dialog is open. After approval
+it performs no fetch, provider query, or other network operation. It rechecks
+the complete prepared snapshot and authenticated claim before the first source,
+runtime, launcher, pin, or update-receipt write. Drift fails closed. A cancelled
+dialog or failed preparation changes none of those durable project targets and
+releases the owned lock; successfully fetched Git refs may remain as explicitly
+reported preparation evidence. POSIX remains preview-only.
 
 These project-local output paths opt into v0.3.314 operation observation. When
 the command is started from an archive root, use a fresh
@@ -83,7 +159,8 @@ and completion still requires a fresh-process `archive version` check.
 
 The ordinary preflight retains the bounded materialization planner whenever
 the exact target commit is locally available. Historical approved updater
-evidence used the same planner.
+evidence used the same planner. Every follow-up collision inspection
+requires the same plan digest rather than silently binding a new local set.
 The public plan reports only fixed reason codes, counts, a
 `materialization_plan_sha256`, and sorted ordinal references such as
 `update-entry:0001`. An ordinal is meaningful only together with that exact
@@ -241,13 +318,14 @@ held write-path directory behind the project root, `.zettel-kasten/source`,
 its `.git` tree, pins, lock, and receipts cannot be renamed, deleted, or
 replaced by a junction while the transaction resolves child paths.
 
-Every v0.4.2 platform can still run the useful read-only dry-run. POSIX result is
-`status: preview_only_platform_unsupported`, includes a warning, and reports
-`write_boundary.approval_platform_supported: false`. v0.4.2 approval on every
-platform returns `compound_exact_human_approval_binding_required` before
-private project reads or writes. An open POSIX directory descriptor does not
-prevent another process from renaming that pathname, and the Git plus complete
-tree update is not descriptor-relative end to end.
+Every v0.4.3 platform can still run the useful read-only dry-run. POSIX result
+is `status: preview_only_platform_unsupported`, includes a warning, and reports
+`write_boundary.approval_platform_supported: false`; the exact-human writer is
+Windows-only. On Windows, an unbound direct approval call returns
+`exact_human_approval_required` before private project reads, and the bound CLI
+route must authenticate the exact preview and target. An open POSIX directory
+descriptor does not prevent another process from renaming that pathname, and
+the Git plus complete-tree update is not descriptor-relative end to end.
 
 ## What Approval Verifies
 
@@ -364,15 +442,19 @@ After verification, WOM-kit:
 8. detaches `HEAD` at the target commit, then verifies the resulting raw
    worktree, index, flags, commit, all three source
    versions, and the full synchronized runtime-resource set;
-9. rechecks checkpoint snapshots, then writes the canonical project pin and
-   any recognized existing mirror or legacy project pin;
-10. creates and immediately holds a missing `receipts/` parent and
-   `version-updates/` root one level at a time, validates the v0.2 receipt
+9. for a target runtime policy, materializes the exact public wheel into the
+   versioned side-by-side runtime, verifies it, and prepares the stable
+   project-relative launcher without changing PATH;
+10. rechecks checkpoint snapshots, writes any recognized mirror or legacy pin,
+   and writes the canonical project pin last as the activation checkpoint;
+11. creates and immediately holds a missing `receipts/` parent and
+   `version-updates/` root one level at a time, validates the applicable v0.2
+   historical or v0.3 project-runtime receipt
    document, and creates one new receipt under
    `.zettel-kasten/receipts/version-updates/` with `O_EXCL`, never replacing an
    existing path; the receipt writer refuses to run unless that root is
    already held; and
-11. rechecks the owned terminal state before removing only the lock reserved by
+12. rechecks the owned terminal state before removing only the lock reserved by
    this transaction.
 
 This is checkpointed change detection, not atomic file compare-and-swap.
@@ -398,9 +480,12 @@ The receipt is written last. It records commits, target, reviewer, changed pin
 roles, source materialization attempt/success/target-integrity evidence,
 configured-origin evidence, restart requirement, privacy guards, and
 `external_writer_quiescence: {affirmed: true, scope:
-complete_project_version_update_transaction}`. v0.3.291 writes
-`wom-kit/project-version-update-receipt/v0.2`; the existing v0.1 schema remains
-available and compatible for old receipts. The receipt contains no local
+complete_project_version_update_transaction}`. Historical updates retain
+`wom-kit/project-version-update-receipt/v0.2`; a runtime-policy target writes
+v0.3 with exact policy, dependency supply lock, retained artifact inventory,
+installed-payload digest, WOM wheel, runtime, launcher, Python, transition, and
+new-process evidence. The existing v0.1 schema remains available and compatible
+for old receipts. The receipt contains no local
 absolute path, remote URL, raw Git error, or credential value.
 
 Repository attributes require LF bytes for the wrapper and packaged runtime

@@ -46,10 +46,18 @@ class Letter137BlockedCliHelpTests(unittest.TestCase):
         }
         self.assertEqual(
             len(archive_cli.COMPOUND_APPROVAL_BLOCKED_COMMANDS),
-            78,
+            76,
+        )
+        self.assertNotIn(
+            "migrate",
+            archive_cli.COMPOUND_APPROVAL_BLOCKED_COMMANDS,
         )
         self.assertNotIn(
             "zettel-objet-link",
+            archive_cli.COMPOUND_APPROVAL_BLOCKED_COMMANDS,
+        )
+        self.assertNotIn(
+            "project-version-update",
             archive_cli.COMPOUND_APPROVAL_BLOCKED_COMMANDS,
         )
         self.assertIn(
@@ -69,25 +77,17 @@ class Letter137BlockedCliHelpTests(unittest.TestCase):
                 action = self._approval_action(command_parser)
                 self.assertEqual(
                     action.help,
-                    (
-                        archive_cli.PROJECT_VERSION_UPDATE_BLOCKED_HELP
-                        if command_name == "project-version-update"
-                        else archive_cli.COMPOUND_APPROVAL_BLOCKED_HELP
-                    ),
+                    archive_cli.COMPOUND_APPROVAL_BLOCKED_HELP,
                 )
                 rendered = " ".join(command_parser.format_help().split())
                 self.assertIn(
                     f"Unavailable in v{archive_cli.__version__}",
                     rendered,
                 )
-                if command_name == "project-version-update":
-                    self.assertIn("exact public", rendered)
-                    self.assertIn("global CLI", rendered)
-                else:
-                    self.assertIn(
-                        "dry-run, plan, or audit mode",
-                        rendered,
-                    )
+                self.assertIn(
+                    "dry-run, plan, or audit mode",
+                    rendered,
+                )
 
     def test_exact_single_write_flows_keep_their_specific_help(self) -> None:
         exact_commands = {
@@ -98,8 +98,10 @@ class Letter137BlockedCliHelpTests(unittest.TestCase):
             "human-artifact-transition",
             "mint-zet",
             "promote",
+            "project-version-update",
             "retire-draft",
             "source-fidelity-session-evidence",
+            "migrate",
             "zettel-edge",
             "zettel-objet-link",
         }
@@ -120,6 +122,11 @@ class Letter137BlockedCliHelpTests(unittest.TestCase):
                     "exact compound human-approval binding",
                     str(action.help),
                 )
+        migrate_help = self._approval_action(
+            self.subcommands.choices["migrate"]
+        ).help
+        self.assertIn("notion-source-properties", str(migrate_help))
+        self.assertIn("Every other migration target", str(migrate_help))
 
 
 if __name__ == "__main__":

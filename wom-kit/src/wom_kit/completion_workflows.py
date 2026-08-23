@@ -13327,7 +13327,7 @@ def _project_mirror_for_repair(
         if (
             archive_services.wom_kit_real_path_kind(search_root, mirror)
             == "directory"
-            and archive_services.wom_kit_project_update_git_metadata_is_local_real(
+            and archive_services.wom_kit_project_update_git_metadata_is_local_real_legacy_read_only(
                 search_root,
                 mirror,
             )
@@ -14114,7 +14114,7 @@ def _project_bytecode_plan_core(
                         continue
                     relative = path.relative_to(mirror).as_posix()
                     tracked, _output = (
-                        archive_services._wom_kit_project_update_git(
+                        archive_services._wom_kit_project_update_git_legacy_read_only(
                             mirror,
                             [
                                 "ls-files",
@@ -14130,7 +14130,7 @@ def _project_bytecode_plan_core(
                         )
                         continue
                     ignored, _output = (
-                        archive_services._wom_kit_project_update_git(
+                        archive_services._wom_kit_project_update_git_legacy_read_only(
                             mirror,
                             [
                                 "check-ignore",
@@ -14295,7 +14295,7 @@ def _project_bytecode_plan_core(
             ):
                 blockers.append("project_bytecode_path_unsafe")
                 break
-            tracked, _output = archive_services._wom_kit_project_update_git(
+            tracked, _output = archive_services._wom_kit_project_update_git_legacy_read_only(
                 mirror,
                 [
                     "ls-files",
@@ -14304,7 +14304,7 @@ def _project_bytecode_plan_core(
                     directory_relative,
                 ],
             )
-            ignored, _output = archive_services._wom_kit_project_update_git(
+            ignored, _output = archive_services._wom_kit_project_update_git_legacy_read_only(
                 mirror,
                 [
                     "check-ignore",
@@ -14348,7 +14348,7 @@ def _project_bytecode_plan_core(
     if not blockers and collision_binding_requested:
         collision_result, collision_private_value = (
             archive_services
-            ._wom_kit_project_version_update_collision_inspect_batch_core(
+            ._wom_kit_project_version_update_collision_inspect_batch_legacy_read_only(
                 root,
                 target=target_tag,
                 expected_plan_sha256=collision_plan_sha256,
@@ -14429,7 +14429,7 @@ def _project_bytecode_plan_core(
         ),
     }
     if mirror is not None:
-        head_ok, head_value = archive_services._wom_kit_project_update_git(
+        head_ok, head_value = archive_services._wom_kit_project_update_git_legacy_read_only(
             mirror,
             ["rev-parse", "HEAD"],
         )
@@ -14444,7 +14444,7 @@ def _project_bytecode_plan_core(
         and isinstance(collision_private, dict)
     ):
         current_target_ref_snapshot = (
-            archive_services.wom_kit_project_update_target_ref_snapshot(
+            archive_services.wom_kit_project_update_target_ref_snapshot_legacy_read_only(
                 mirror,
                 target_tag,
             )

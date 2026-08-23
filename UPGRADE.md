@@ -24,6 +24,63 @@ Before upgrading a real archive:
 
 The archive should never silently rewrite memory.
 
+## v0.4.3 Exact Recovery and Git Backup
+
+Install only after the matching public Release lists the exact wheel:
+
+```powershell
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.3/wom_kit-0.4.3-py3-none-any.whl"
+archive --version
+```
+
+Close older WOM processes and require exactly `archive 0.4.3` from a new
+process. This replaces the global CLI only. Inspect the project-local source
+and PATH candidates separately; do not hand-edit a project pin.
+
+v0.4.3 adds approval-gated writers to existing command families. The safe
+order for a real archive is:
+
+1. require a clean Git worktree and verify the current remote ref;
+2. generate the content-free plan and exact manifest without approval;
+3. review counts, reason codes, manifest digest, and intended target version;
+4. approve only through the native exact-human dialog;
+5. if interrupted, use the explicit same-claim resume path rather than
+   starting a second approval;
+6. independently verify the disk result and exercise the exact field-scoped
+   revert contract on reviewed evidence; and
+7. run the exact Git commit/non-force-push writer and verify its remote-ref
+   receipt.
+
+Letter 138 planning stays inside the existing migration family:
+
+```powershell
+archive migrate <archive-root> `
+  --target notion-source-properties `
+  --source-mirror <reviewed-preserved-mirror> `
+  --acceptance <private-acceptance-output> `
+  --dry-run `
+  --progress `
+  --format json
+```
+
+The plan must account for the complete source snapshot as `backfill`,
+`already_equal`, `unmapped_no_canonical_target`, or `human_review`, with zero
+unexplained populated-property omissions. `unmapped_no_canonical_target` is
+preserved unresolved evidence, not a drop or a repaired page. Do not approve a
+partial source scan, a changed mirror, or an acceptance document whose counts
+or digests differ.
+
+Git backup and project update reuse their existing top-level command families;
+run `archive git-backup-plan --help` and
+`archive project-version-update --help` from the verified v0.4.3 process for
+the exact approval/resume options. Never put a credential in an argument,
+environment variable, URL, or pasted transcript.
+
+See the [v0.4.3 release note](wom-kit/docs/releases/v0.4.3.md),
+[ExactOperationManifest v1](wom-kit/docs/exact-operation-manifest-v1.md),
+[Git backup guide](wom-kit/docs/git-backup-plan.md), and
+[project update guide](wom-kit/docs/project-version-update.md).
+
 ## v0.4.2 Read-Only Git Backup Planning
 
 v0.4.2 is the read-only planning foundation for Letter 139. Do not run the URL

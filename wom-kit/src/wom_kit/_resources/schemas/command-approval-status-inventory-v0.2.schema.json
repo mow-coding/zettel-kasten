@@ -1,0 +1,203 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "wom-kit/command-approval-status-inventory/v0.2",
+  "title": "WOM-kit parser-derived command approval status inventory v0.2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "state",
+    "parser_derived",
+    "prerequisites_evaluated",
+    "private_values_echoed",
+    "external_effects_performed",
+    "counts",
+    "commands"
+  ],
+  "properties": {
+    "schema": {
+      "const": "wom-kit/command-approval-status-inventory/v0.2"
+    },
+    "state": {"const": "complete"},
+    "parser_derived": {"const": true},
+    "prerequisites_evaluated": {"const": false},
+    "private_values_echoed": {"const": false},
+    "external_effects_performed": {"const": false},
+    "counts": {"$ref": "#/$defs/counts"},
+    "commands": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/command"}
+    }
+  },
+  "$defs": {
+    "count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "counts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "total_command_count",
+        "canonical_executable_command_count",
+        "alias_invocation_path_count",
+        "invocation_path_count",
+        "approval_status_counts",
+        "approval_available_command_count",
+        "approval_fixed_closed_command_count",
+        "approval_not_exposed_command_count",
+        "conditional_approval_command_count",
+        "dry_run_exposed_command_count",
+        "supplied_fixed_closed_command_count",
+        "matched_fixed_closed_command_count",
+        "unmatched_fixed_closed_command_count"
+      ],
+      "properties": {
+        "total_command_count": {"$ref": "#/$defs/count"},
+        "canonical_executable_command_count": {"$ref": "#/$defs/count"},
+        "alias_invocation_path_count": {"$ref": "#/$defs/count"},
+        "invocation_path_count": {"$ref": "#/$defs/count"},
+        "approval_status_counts": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "approval_available",
+            "approval_fixed_closed",
+            "approval_not_exposed"
+          ],
+          "properties": {
+            "approval_available": {"$ref": "#/$defs/count"},
+            "approval_fixed_closed": {"$ref": "#/$defs/count"},
+            "approval_not_exposed": {"$ref": "#/$defs/count"}
+          }
+        },
+        "approval_available_command_count": {"$ref": "#/$defs/count"},
+        "approval_fixed_closed_command_count": {"$ref": "#/$defs/count"},
+        "approval_not_exposed_command_count": {"$ref": "#/$defs/count"},
+        "conditional_approval_command_count": {"$ref": "#/$defs/count"},
+        "dry_run_exposed_command_count": {"$ref": "#/$defs/count"},
+        "supplied_fixed_closed_command_count": {"$ref": "#/$defs/count"},
+        "matched_fixed_closed_command_count": {"$ref": "#/$defs/count"},
+        "unmatched_fixed_closed_command_count": {"$ref": "#/$defs/count"}
+      }
+    },
+    "commandPath": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]*(?: [a-z0-9][a-z0-9-]*)*$"
+    },
+    "approvalScope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "argument",
+        "allowed_values",
+        "outside_scope_status",
+        "outside_scope_reason_code"
+      ],
+      "properties": {
+        "kind": {"const": "argument_value_allowlist"},
+        "argument": {
+          "type": "string",
+          "pattern": "^--[a-z0-9][a-z0-9-]*$"
+        },
+        "allowed_values": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9-]*$"
+          }
+        },
+        "outside_scope_status": {"const": "approval_fixed_closed"},
+        "outside_scope_reason_code": {
+          "const": "compound_exact_human_approval_binding_required"
+        }
+      }
+    },
+    "commandBase": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "canonical_path",
+        "alias_paths",
+        "approval_status",
+        "approval_reason_code",
+        "approval_scope",
+        "dry_run_exposed",
+        "invocation_surface_available"
+      ],
+      "properties": {
+        "canonical_path": {"$ref": "#/$defs/commandPath"},
+        "alias_paths": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/commandPath"}
+        },
+        "approval_status": {
+          "enum": [
+            "approval_available",
+            "approval_fixed_closed",
+            "approval_not_exposed"
+          ]
+        },
+        "approval_reason_code": {
+          "oneOf": [
+            {"const": "compound_exact_human_approval_binding_required"},
+            {"type": "null"}
+          ]
+        },
+        "approval_scope": {
+          "oneOf": [
+            {"$ref": "#/$defs/approvalScope"},
+            {"type": "null"}
+          ]
+        },
+        "dry_run_exposed": {"type": "boolean"},
+        "invocation_surface_available": {"const": true}
+      }
+    },
+    "command": {
+      "oneOf": [
+        {
+          "allOf": [
+            {"$ref": "#/$defs/commandBase"},
+            {
+              "properties": {
+                "approval_status": {"const": "approval_fixed_closed"},
+                "approval_reason_code": {
+                  "const": "compound_exact_human_approval_binding_required"
+                },
+                "approval_scope": {"type": "null"}
+              }
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {"$ref": "#/$defs/commandBase"},
+            {
+              "properties": {
+                "approval_status": {"const": "approval_available"},
+                "approval_reason_code": {"type": "null"}
+              }
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {"$ref": "#/$defs/commandBase"},
+            {
+              "properties": {
+                "approval_status": {"const": "approval_not_exposed"},
+                "approval_reason_code": {"type": "null"},
+                "approval_scope": {"type": "null"}
+              }
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

@@ -55,6 +55,10 @@ jobs:
     if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
     runs-on: ${{ matrix.os }}
     timeout-minutes: ${{ matrix.timeout-minutes }}
+    env:
+      # unittest shards add the source tree themselves, but the explicit
+      # pytest-native modules import wom_kit directly in a fresh runner.
+      PYTHONPATH: wom-kit/src
     strategy:
       # One platform failing must not hide the result on the other.
       fail-fast: false

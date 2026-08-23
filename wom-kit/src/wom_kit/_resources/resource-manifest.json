@@ -1,8 +1,8 @@
 {
   "schema": "wom-kit/package-resource-manifest/v0.1",
-  "version": "0.4.2",
+  "version": "0.4.3",
   "source_of_truth": "wom-kit source resource directories",
-  "file_count": 158,
+  "file_count": 163,
   "files": [
     {
       "source": "schemas/activity-group-membership-receipt.schema.json",
@@ -105,6 +105,12 @@
       "packaged": "schemas/command-approval-status-inventory-v0.1.schema.json",
       "bytes": 4776,
       "sha256": "55c35d576eade85702072e8e67774650df4162d1c9307c7fa13306d7a30e15c1"
+    },
+    {
+      "source": "schemas/command-approval-status-inventory-v0.2.schema.json",
+      "packaged": "schemas/command-approval-status-inventory-v0.2.schema.json",
+      "bytes": 6270,
+      "sha256": "a304fdf0f521834bcc6359235a21154d7ad9964555b6b0587d0c5ba4ad5b9002"
     },
     {
       "source": "schemas/credential-adapter-manifest.schema.json",
@@ -257,6 +263,18 @@
       "sha256": "6e8c561d02c4741cf8628ab8690b7d53c84ef914ca6653e178f49dd000a8bcb5"
     },
     {
+      "source": "schemas/notion-property-backfill-acceptance-v0.1.schema.json",
+      "packaged": "schemas/notion-property-backfill-acceptance-v0.1.schema.json",
+      "bytes": 2435,
+      "sha256": "51bfff12ecc67d95e3330f0f38baf6d9a30ed3bb0efed2e0340663e21f00a6d8"
+    },
+    {
+      "source": "schemas/notion-source-properties-v0.1.schema.json",
+      "packaged": "schemas/notion-source-properties-v0.1.schema.json",
+      "bytes": 3632,
+      "sha256": "a06165650be6df9865d46fe4e1a3b7ff31989674131241f1cc428f1ba211f1e8"
+    },
+    {
       "source": "schemas/object-manifest-entry.schema.json",
       "packaged": "schemas/object-manifest-entry.schema.json",
       "bytes": 743,
@@ -401,10 +419,22 @@
       "sha256": "7edeeded93e1eebb3f942ce4d7aeaf72cf7d0975c38c6a774b695b4b7671c030"
     },
     {
+      "source": "schemas/project-runtime-receipt-v0.1.schema.json",
+      "packaged": "schemas/project-runtime-receipt-v0.1.schema.json",
+      "bytes": 3806,
+      "sha256": "917c013535b8b11000c543ae0b00b20fe93d4631bf805d9d93f812f2a5f66999"
+    },
+    {
       "source": "schemas/project-version-update-receipt-v0.2.schema.json",
       "packaged": "schemas/project-version-update-receipt-v0.2.schema.json",
-      "bytes": 4663,
-      "sha256": "e435bcf8548a27c1fa7758e0996d622b9df7d512a5a9817513b40b47beb4f25e"
+      "bytes": 6368,
+      "sha256": "e818c9c463e86e43b3c25f2f9e503233759fc08e79c58430f62b7e0c696b3f71"
+    },
+    {
+      "source": "schemas/project-version-update-receipt-v0.3.schema.json",
+      "packaged": "schemas/project-version-update-receipt-v0.3.schema.json",
+      "bytes": 10013,
+      "sha256": "49655e44fdf32cdaf82e51a642a1e3a40f6d57344652c9f94abcf688fcb03cf4"
     },
     {
       "source": "schemas/project-version-update-receipt.schema.json",
@@ -613,8 +643,8 @@
     {
       "source": "schemas/zettel-frontmatter.schema.json",
       "packaged": "schemas/zettel-frontmatter.schema.json",
-      "bytes": 4752,
-      "sha256": "acf9715ed4b0ab9e71ff112462da4a8096eca9ee47184ef2d3e627a67a60049d"
+      "bytes": 4844,
+      "sha256": "62da314d3036596a2907e3fef986e239c2e7377d477f24e4e05ea7c11f822bbf"
     },
     {
       "source": "schemas/zettel-kasten-actions.schema.json",
@@ -947,10 +977,10 @@
       "sha256": "d619dc26af3216498c8392dfe838b0fe752d4bad9da998a58ca682d668fc510c"
     },
     {
-      "source": "docs/releases/v0.4.2.md",
-      "packaged": "release-notes/v0.4.2.md",
-      "bytes": 8072,
-      "sha256": "eff8541b1923b75c01e7c365b22617735be6dec14d7d2226c1663b040bb0b053"
+      "source": "docs/releases/v0.4.3.md",
+      "packaged": "release-notes/v0.4.3.md",
+      "bytes": 11578,
+      "sha256": "d011af6206ef7a0f177be2612d45fda27f710cf96801516e8a3e4e370f914cb4"
     }
   ]
 }

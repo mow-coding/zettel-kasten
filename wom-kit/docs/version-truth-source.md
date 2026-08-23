@@ -1,8 +1,10 @@
 # WOM-kit Version Truth Source
 
-Status: v0.4.2 read-only Git backup planning and global CLI bootstrap
+Status: v0.4.3 bounded Windows PATH/source provenance and exact project updater
 
-Current checkpoint: Status: v0.4.2 bounded Git plan/reconciliation with no writer
+Current checkpoint: Status: v0.4.3 PATH shadow diagnosis plus exact-human project update
+
+Previous checkpoint: Status: v0.4.2 bounded Git plan/reconciliation with no writer
 
 Previous checkpoint: Status: v0.4.1 one exact link apply plus content-free operator recovery
 
@@ -20,18 +22,22 @@ or runtime workflow. This page defines the safe order for checking them.
 
 ## Current Public Tool
 
-The v0.4.2 URL is a conditional release-artifact contract. Use it only after
+The v0.4.3 URL is a conditional release-artifact contract. Use it only after
 the matching public GitHub Release exists and lists the exact wheel:
 
 ```powershell
-uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.2/wom_kit-0.4.2-py3-none-any.whl"
-archive --version
+py -m venv .wom-bootstrap-v043
+& .\.wom-bootstrap-v043\Scripts\python.exe -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.3/wom_kit-0.4.3-py3-none-any.whl"
+& .\.wom-bootstrap-v043\Scripts\archive.exe --version
 ```
 
-Require exactly `archive 0.4.2` from a new process. The installed runtime adds
-read-only `git-backup-plan` and `git-backup-reconcile-plan`; it adds no Git
-writer and does not update a project-local source mirror or pin. See [Git
-Backup Plan And Reconciliation Plan](git-backup-plan.md).
+Require exactly `archive 0.4.3` from a new process. The installed runtime adds
+the exact-approved Git writer and Letter 138 source-property backfill, but an
+bootstrap install alone changes no archive, remote ref, project-local source
+mirror, pin, shared PATH tool, or other project. Project update is a separate
+native exact-human workflow that creates and activates the project-local
+runtime with its own receipt. See [Git Backup Plan And Reconciliation Plan](git-backup-plan.md) and
+[ExactOperationManifest v1](exact-operation-manifest-v1.md).
 
 ## Canonical Checks
 
@@ -41,14 +47,46 @@ Use these commands before deciding which kit is current:
 archive --version
 archive version --format json
 archive version <project-or-archive-root> --format json
+archive version <project-or-archive-root> --progress --format json
 archive runtime-context <archive-root> --format json
 archive project-version-update <project-or-archive-root> --target vX.Y.Z --dry-run --format json
+.\.zettel-kasten\bin\archive.cmd version <project-or-archive-root> --format json
 ```
 
 `archive --version` is the fastest human check. The structured `archive version`
 form is for AI runtimes and scripts. `runtime-context` includes the same
 version summary under `wom_kit_version`, so an agent can confirm archive identity
 and kit version in one read-only request.
+
+For a v0.4.3-or-newer project, the `project_runtime` object is also canonical
+evidence. It reports the exact versioned runtime receipt, stable launcher,
+project-relative `project_runtime_argv`, pin/runtime agreement, and whether the
+running process matches the project. Ordinary writes should use
+`.\.zettel-kasten\bin\archive.cmd`. A different running version is blocked
+before an approved writer dispatches with `project_runtime_mismatch`; the
+result changes no files and returns the exact project-local argv.
+
+### Windows PATH shadow and bounded Git probes (v0.4.3)
+
+On Windows, `archive version` now returns `path_shadow_diagnostic`. A bounded
+system application-resolution probe enumerates at most 64 `archive` launcher
+candidates in actual selection order without executing any alternate. It
+reports candidate 1 as selected, compares that selection with the running
+process launcher when observable, and separately reports the imported WOM-kit
+module version/origin and inspected project source version. It explicitly does
+not claim that an unexecuted alternate launcher imports a particular module.
+
+Exact launcher and module paths remain redacted by default. Use
+`--no-redact-local-paths` only during attended local diagnosis. The report
+never edits PATH, replaces a launcher, installs Python, or changes a project.
+
+`--progress` writes an immediate content-free line to stderr before source and
+Git provenance work. All Git reads in one version inspection share a 12-second
+total budget, in addition to the existing per-child limits. Once that deadline
+is exhausted, later Git probes are skipped and the result reports
+`source_probe_budget.budget_exhausted: true`; no write process is started. This
+prevents a chain of stuck Git or credential-helper children from leaving the
+operator with indefinite silence.
 
 ## Source Of Truth
 
@@ -83,8 +121,9 @@ The JSON result reports safe logical locations such as
 `parent_of_archive/.zettel-kasten/installed-version.txt`; it does not print the
 local absolute path unless `--no-redact-local-paths` is explicitly used. A
 mismatch does not rewrite anything; it simply returns `ok: false` with
-`consistency_state: project_pin_mismatch` so the human can decide whether to
-upgrade the project-local source or switch to the intended CLI. UTF-8
+`consistency_state: project_pin_mismatch` or `project_runtime_mismatch` so the
+human can run the intended project launcher or perform a reviewed update.
+UTF-8
 BOM-prefixed pin files are normalized for Windows-created text files.
 
 The pin is also an untrusted local input. Only an exact stable
@@ -210,13 +249,31 @@ The bridge runs the verified project source for one invocation. It does not:
 - change an already imported Python process; or
 - install or update the separate `wom-archive` runtime Agent Skill.
 
+### Same-account multi-project boundary
+
+Multiple project folders under one Windows account may resolve the same
+user-level `archive.exe`. Replacing that executable changes the running tool
+seen by every such folder on its next invocation; the current working directory
+does not sandbox it. Conversely, a project source mirror and pin may remain on
+an older version because project update is a separate transaction.
+
+For that reason, `archive --version` alone is never project-update evidence.
+Use `archive version <project-or-archive-root> --format json` and compare the
+running import, project source, pin, PATH selection, and runtime alignment.
+The read-only project bridge remains version-command-only and does not claim to
+isolate general commands per folder. Release verification should use an
+explicit executable inside a dedicated temporary environment when replacing a
+same-account shared PATH tool is not intended.
+
 If source/pin metadata is incomplete or inconsistent, or any local release
 integrity check fails, the result fails closed and provides no executable
 bridge argv. A present but unverified mirror also makes the command nonzero.
-Preview a verified `project-version-update --dry-run` and stop. In v0.4.2
-updater approval returns `compound_exact_human_approval_binding_required`
-before private project/source/Git/pin reads, fetch, or mutation and writes no
-source, pin, lock, or receipt.
+In v0.4.3, preview a verified `project-version-update --dry-run`, review its
+content-free exact-human binding, and use the Windows CLI approval route only
+when the target and complete-transaction quiescence are intentional. The
+service recomputes the same preview and authenticates the exact claim before
+the locked updater starts. Collision and bytecode-repair writers remain fixed
+closed. See [Project Version Update](project-version-update.md).
 
 ## Source Development Launcher
 
@@ -277,9 +334,10 @@ process, rerun `archive version <root> --format json`, and follow its
 `next_safe_actions`. For pristine recovery, use a separate exact tagged
 checkout and keep the original checkout unchanged for diagnosis.
 
-## Project Update Preview And Historical Contract
+## Project Update Preview And Exact-Human Contract
 
-The current v0.4.2 command provides the bounded preview only:
+The v0.4.3 command keeps the bounded preview and adds the Windows exact-human
+approval path described in the project-update guide:
 
 ```powershell
 archive project-version-update <project-or-archive-root> `
@@ -290,10 +348,11 @@ archive project-version-update <project-or-archive-root> `
   --format json
 ```
 
-Approval returns `compound_exact_human_approval_binding_required` before
-private project reads, fetch, materialization, pin mutation, lock creation, or
-receipt publication. The implementation details below describe historical
-v0.3.315 evidence only and grant no v0.4.2 write authority.
+An unbound direct writer returns `exact_human_approval_required` before private
+project reads. The bound CLI writer must rederive the same preview and target
+digests after approval before entering the updater. The implementation details
+below remain the updater's current lock, mutation, rollback, and receipt
+contract; collision and bytecode-repair mutation stay fixed closed.
 
 From v0.3.315, a locally available exact target uses the same digest-bound
 materialization planner in preview and approval. Its cross-map covers the

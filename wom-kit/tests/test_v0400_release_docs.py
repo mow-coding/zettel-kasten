@@ -120,11 +120,18 @@ class V0400ReleaseDocsTests(unittest.TestCase):
     def test_all_seventy_nine_cli_fixed_close_commands_are_published_exactly(self) -> None:
         current_blocked = archive_cli.COMPOUND_APPROVAL_BLOCKED_COMMANDS
         historical_blocked = frozenset(
-            {*current_blocked, "zettel-objet-link"}
+            {
+                *current_blocked,
+                "migrate",
+                "zettel-objet-link",
+                "project-version-update",
+            }
         )
-        self.assertEqual(len(current_blocked), 78)
+        self.assertEqual(len(current_blocked), 76)
         self.assertEqual(len(historical_blocked), 79)
+        self.assertNotIn("migrate", current_blocked)
         self.assertNotIn("zettel-objet-link", current_blocked)
+        self.assertNotIn("project-version-update", current_blocked)
         self.assertIn("zettel-objet-link-revert", current_blocked)
 
         release = RELEASE_PATH.read_text(encoding="utf-8")
@@ -149,11 +156,7 @@ class V0400ReleaseDocsTests(unittest.TestCase):
                 self.assertEqual(len(actions), 1)
                 self.assertEqual(
                     actions[0].help,
-                    (
-                        archive_cli.PROJECT_VERSION_UPDATE_BLOCKED_HELP
-                        if command == "project-version-update"
-                        else archive_cli.COMPOUND_APPROVAL_BLOCKED_HELP
-                    ),
+                    archive_cli.COMPOUND_APPROVAL_BLOCKED_HELP,
                 )
 
         link_approve = next(

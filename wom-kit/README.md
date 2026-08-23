@@ -10,29 +10,30 @@ It is not a website, SaaS app, dashboard, or visual note-taking product. The int
 
 ## Install The Command-Line Tool
 
-The exact v0.4.2 GitHub Release, when present, uses the self-contained wheel
+The exact v0.4.3 GitHub Release, when present, uses the self-contained wheel
 below. Confirm that the release exists and lists the wheel before installing
 it. The versioned URL alone is not proof that the asset is available.
 
 ```powershell
-uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.2/wom_kit-0.4.2-py3-none-any.whl"
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.3/wom_kit-0.4.3-py3-none-any.whl"
 archive --version
 ```
 
 Run the version check in a new process. The install replaces the existing
-`uv`-managed global tool, including a v0.4.1 installation. It does not update a
-project-local WOM-kit source mirror or its pin. The project updater remains
-fixed closed, so a global v0.4.2 runtime and an unchanged older project mirror
-must be reported as two different states rather than silently treated as one
-successful project update.
+`uv`-managed global tool, including a v0.4.2 installation. It does not silently
+update a project-local WOM-kit source mirror or its pin. v0.4.3 reopens the
+project updater only through its separately reviewed exact-human plan, so the
+global runtime and project-local source remain two distinct states until that
+workflow succeeds.
 
-v0.4.2 adds CLI-only `git-backup-plan` and `git-backup-reconcile-plan` for a
-bounded, content-free observation of the currently checked-out symbolic branch
-and one anonymous HTTPS remote ref. Both require `--dry-run`, expose no
-`--approve` or MCP writer, and do not add, reset, checkout, commit, merge,
-rebase, delete, fetch, pull, push, or change a ref. Authenticated/private HTTPS
-can report unavailable, while SSH/scp-like and credential-bearing remotes fail
-closed. This is only Letter 139's planning foundation, not backup completion.
+v0.4.3 adds `ExactOperationManifest v1` and uses it for bounded multi-item
+execution, same-claim resume, independent verification, and field-scoped
+revert. The v0.4.2 Git planners now have an exact-approved commit/non-force-
+push writer with remote-ref re-query; Letter 138 has a lossless local-mirror
+`notion-source-properties` audit/backfill; project update receipts bind the
+exact approval; and operator feedback supports draft-only CAS revision with
+immutable delivered-record supersession. These capabilities do not by
+themselves prove that a private archive was changed or backed up.
 
 The v0.4.1 checkpoint opened `zettel-objet-link --approve` through the same local exact-human
 boundary. The command requires a fresh exact plan digest and reviewer, then
@@ -43,22 +44,26 @@ control artifact. It publishes a v0.2 receipt with an embedded
 `zettel_objet_link` exact-human approval reference. It echoes no label or zettel
 body, reads no object bytes, calls no provider, and exposes no MCP writer.
 
-The matching revert remains fixed closed. Objet capture enable/selection/
-single/batch and the project updater/collision/bytecode repair writers also
-remain fixed closed. The parser-derived current inventory therefore has 78
-fixed-closed command paths; v0.4.0's explicit 79-command inventory remains
-historical release evidence.
+The matching link revert and Objet capture enable/selection/single/batch remain
+fixed closed. Project collision preservation and bytecode repair also remain
+separate from the reopened exact project updater. The parser-derived current
+inventory is the authority for every approval-available, fixed-closed, or
+not-exposed path; v0.4.0's explicit 79-command inventory remains historical
+release evidence.
 
 `archive capabilities --machine` now exposes
 `data.approval_status_inventory` using
-`wom-kit/command-approval-status-inventory/v0.1`. It classifies each canonical
+`wom-kit/command-approval-status-inventory/v0.2` (v0.1 remains the historical
+v0.4.1 contract). It classifies each canonical
 executable path and aliases as `approval_available`, `approval_fixed_closed`,
-or `approval_not_exposed` without evaluating archive prerequisites. JSON usage
+or `approval_not_exposed`, and records any argument-value approval scope,
+without evaluating archive prerequisites. JSON usage
 and repaired high-risk failures can use `wom-kit/cli-error/v0.1`: exit `2` is a
 usage failure, exit `1` is policy/precondition failure, and
 `effects_state: unknown` means an exact-human workflow had started and its
 durable claim requires reconciliation rather than automatic retry. See the
-[`v0.4.2 release note`](docs/releases/v0.4.2.md),
+[`v0.4.3 release note`](docs/releases/v0.4.3.md),
+[`ExactOperationManifest v1`](docs/exact-operation-manifest-v1.md),
 [`Git Backup Plan`](docs/git-backup-plan.md),
 [`v0.4.1 release note`](docs/releases/v0.4.1.md),
 [`Zettel Objet Links`](docs/zettel-objet-links.md), and

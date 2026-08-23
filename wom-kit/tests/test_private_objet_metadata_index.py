@@ -72,13 +72,14 @@ DB_SOURCE_CANONICAL_SHA256 = (
 )
 RESOURCE_ADDITIONS = frozenset(
     {
-        "release-notes/v0.4.2.md",
+        "release-notes/v0.4.3.md",
         "schemas/agent-instruction-policy-v0.1.schema.json",
         "schemas/approval-handoff-v0.1.schema.json",
         "schemas/approval-integrity-audit-result-v0.1.schema.json",
         "schemas/approval-integrity-overlay-entry-v0.1.schema.json",
         "schemas/cli-error-v0.1.schema.json",
         "schemas/command-approval-status-inventory-v0.1.schema.json",
+        "schemas/command-approval-status-inventory-v0.2.schema.json",
         "schemas/credential-capability-v0.1.schema.json",
         "schemas/duplicate-object-reconciliation-receipt-v0.1.schema.json",
         "schemas/exact-human-approval-link-receipt-v0.1.schema.json",
@@ -97,6 +98,8 @@ RESOURCE_ADDITIONS = frozenset(
         "schemas/markup-normalization-recovery-receipt.schema.json",
         "schemas/markup-normalization-revert-receipt.schema.json",
         "schemas/markup-reference-binding-manifest.schema.json",
+        "schemas/notion-property-backfill-acceptance-v0.1.schema.json",
+        "schemas/notion-source-properties-v0.1.schema.json",
         "schemas/objet-capture-batch-receipt.schema.json",
         "schemas/objet-capture-batch-request.schema.json",
         "schemas/principal-record.schema.json",
@@ -105,6 +108,8 @@ RESOURCE_ADDITIONS = frozenset(
         "schemas/private-objet-finder-request-v0.1.schema.json",
         "schemas/private-objet-finder-result-v0.1.schema.json",
         "schemas/project-bytecode-repair-receipt.schema.json",
+        "schemas/project-runtime-receipt-v0.1.schema.json",
+        "schemas/project-version-update-receipt-v0.3.schema.json",
         "schemas/relation-candidate-plan.schema.json",
         "schemas/relation-judgment-receipt.schema.json",
         "schemas/relation-judgment.schema.json",
@@ -1203,7 +1208,7 @@ class PrivateObjetMetadataIndexPrivacyGateTests(unittest.TestCase):
             manifest["schema"],
             "wom-kit/package-resource-manifest/v0.1",
         )
-        self.assertEqual(manifest["version"], "0.4.2")
+        self.assertEqual(manifest["version"], "0.4.3")
         self.assertEqual(manifest["file_count"], len(manifest["files"]))
         current_paths = {row["packaged"] for row in manifest["files"]}
         self.assertEqual(

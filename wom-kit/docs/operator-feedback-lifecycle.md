@@ -1,6 +1,6 @@
 # Operator Feedback Lifecycle
 
-Status: v0.4.0 archive-root guidance and body-authority preflight; earlier metadata, ledger, and body contracts preserved
+Status: v0.4.3 draft-only body revision and explicit immutable supersession; earlier metadata, ledger, and body contracts preserved
 
 WOM now gives operator-generated tool feedback a separate lifecycle surface.
 
@@ -82,6 +82,43 @@ The ignored-local request has exactly six sections: `environment`, `task`,
 plus a digest; it never echoes the request path, title, body, or rejected value.
 Approval creates the body and receipt without overwrite. The metadata record
 then binds the body as `feedback-body-sha256:<64 hex>`.
+
+### v0.4.3 draft correction without history loss
+
+A body may change under the same feedback id only while its lifecycle record is
+still `draft`. First copy the exact current body SHA-256 from the body check,
+then preview and approve the same request with revision intent:
+
+```powershell
+archive operator-feedback-compose <archive-root> `
+  --request profiles/local/operator-feedback/requests/<private>.json `
+  --intent revise `
+  --expected-body-sha256 <current-body-sha256> `
+  --dry-run --format json
+
+archive operator-feedback-compose <archive-root> `
+  --request profiles/local/operator-feedback/requests/<private>.json `
+  --intent revise `
+  --expected-body-sha256 <current-body-sha256> `
+  --expected-plan-sha256 <fresh-plan-sha256> `
+  --approve --reviewed-by person:me --format json
+```
+
+The approval uses compare-and-swap against both the current body hash and the
+exact draft record. Before replacing the body atomically, it preserves the old
+bytes under `receipts/operator-feedback/body/revisions/` and then creates an
+immutable transition receipt. It never edits the old evidence. Because body
+and metadata remain separate authorities, finish by previewing and approving
+`operator-feedback-record --intent update --status draft` with the new
+`feedback_ref` and the fresh `current_record_sha256`. That rebind is allowed
+only for draft-to-draft managed bodies with a verified body receipt.
+
+`delivered`, `acknowledged`, `resolved`, and `archived` bodies are immutable.
+To correct one, create a new feedback id with `--intent supersede`, bind the
+exact old body SHA and `--supersedes-feedback-id`, and then create the new
+metadata record. The old body is not modified. `delivered` remains an internal
+lifecycle fact; `external_submission_performed: false` is independent and does
+not make a delivered body mutable.
 
 The request is exact-schema JSON:
 
@@ -171,8 +208,9 @@ archive operator-feedback-record <archive-root> `
 ```
 
 Update preserves omitted title, related-release, and delivery/acknowledgment
-timestamps. It cannot change `feedback_ref`. A stale digest or concurrent
-change blocks before overwrite.
+timestamps. It normally cannot change `feedback_ref`; the only exception is
+the verified draft-to-draft managed-body rebind described above. A stale
+digest or concurrent change blocks before overwrite.
 
 Aliases:
 
