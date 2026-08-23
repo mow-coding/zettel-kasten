@@ -105,9 +105,17 @@ class GitCappedRunnerTests(unittest.TestCase):
             project_root = Path(temporary) / "project"
             project_root.mkdir()
             mirror = self.create_repository(project_root)
-            expected_snapshot = (
-                archive_services._wom_kit_project_update_git_snapshot(mirror)
-            )
+            with (
+                archive_services.project_update_git_runner
+                .TrustedProjectUpdateGitRunner.resolve_preapproval()
+            ) as runner:
+                runner.close_transport_boundary()
+                expected_snapshot = (
+                    archive_services._wom_kit_project_update_git_snapshot(
+                        mirror,
+                        runner=runner,
+                    )
+                )
             self.assertIsNotNone(expected_snapshot)
             real_runner = archive_services._wom_kit_project_update_run_capped
             with patch.object(
@@ -119,13 +127,20 @@ class GitCappedRunnerTests(unittest.TestCase):
                     mirror,
                     ["rev-parse", "HEAD"],
                 )
-                source_matches = (
-                    archive_services.wom_kit_project_update_source_matches_snapshot(
-                        project_root,
-                        mirror,
-                        expected_snapshot,
+                with (
+                    archive_services.project_update_git_runner
+                    .TrustedProjectUpdateGitRunner.resolve_preapproval()
+                ) as source_runner:
+                    source_runner.close_transport_boundary()
+                    source_matches = (
+                        archive_services
+                        .wom_kit_project_update_source_matches_snapshot(
+                            project_root,
+                            mirror,
+                            expected_snapshot,
+                            runner=source_runner,
+                        )
                     )
-                )
 
             self.assertEqual(len(head_lines), 1)
             self.assertTrue(source_matches)

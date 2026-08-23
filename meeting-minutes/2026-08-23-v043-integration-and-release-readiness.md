@@ -227,3 +227,72 @@ privacy predecessor subset은 새 회의록 경로의 개인 프로젝트 이름
 새 공개 경로에 그 식별자가 추가되지 않도록 했다. 검사 허용 목록을 넓히지 않았다.
 최종적으로 이전 PR 실패 다섯 모듈의 66 tests가 91.703 seconds에 통과했고 Windows
 조건 2건만 정상 skip됐다. GitHub 병렬 전체 CI는 아직 새 커밋을 올리기 전이다.
+
+## 2026-08-24 PR 첫 전체 CI와 Windows 회귀 교정
+
+통합 커밋 `905463b8`을 PR #77에 올린 뒤 GitHub Actions run
+`32642358548`의 모든 job을 끝까지 확인했다. Release readiness gate 자체는
+통과했지만 8개 unittest shard는 역사적 호출 계약과 새 프로젝트 runtime 계약의
+불일치 때문에 실패했고, Windows raw resource hash도 checkout의 CRLF 변환 때문에
+실패했다. 이 상태에서는 PR을 병합하거나 tag/release를 만들지 않았다.
+
+실패를 다음 경계로 교정했다.
+
+- trusted runner가 필요한 역사적 batch/collision 테스트는 실제 임시 절대 Git
+  mirror와 명시적인 runner를 전달하도록 바꿨다. 서비스가 runner를 몰래 생성하는
+  옛 계약으로 되돌리지 않았다.
+- updater가 실제로 사용하는 안전한 read-only 명령 중
+  `describe --tags --exact-match HEAD`, `tag --list v*`,
+  `show -s --format=%s HEAD`만 runner allowlist에 추가하고 변형은 계속 거부했다.
+- 공개 exact-human production wrapper의 서명은 기존 세 인자 계약을 보존하고,
+  project updater 전용 claim finalizer는 내부 core 경로에서만 전달하도록 했다.
+- source checkout이나 v0.4.3 side-by-side runtime이 없는 옛 합성 fixture는 성공으로
+  꾸미지 않고 `project_runtime_mismatch`로 차단되는 현재 계약을 검증하게 했다.
+- runtime policy와 supply lock은 Windows checkout에서도 raw SHA-256이 동일하도록
+  `.gitattributes`에서 LF를 명시했다. privacy/resource 검사의 부분집합은 약화하지
+  않았다.
+
+강제 종료 뒤에도 위 변경 열 건이 작업 트리에 보존됐음을 확인하고 중단된 검증을
+재개했다. 최종 로컬 증거는 다음과 같다.
+
+- pytest-native exact CI 집합: 210 tests passed in 16.70 seconds;
+- two-shard의 shard 1: 1,721 tests passed in 1,060.916 seconds,
+  19 skipped;
+- `tests.test_cli`: 1,402 tests passed in 2,532.614 seconds,
+  9 skipped;
+- shard 0의 비-CLI 62개 모듈 분리 실행: 545 tests passed, 5 skipped;
+- 분리 명령의 module search path 때문에 import되지 않은
+  `test_project_runtime_candidate`는 원래 tests 경계에서 독립 재실행해
+  3 tests passed in 261.040 seconds;
+- release readiness 네 gate, 163개 package resource sync/check와
+  `git diff --check`: 통과.
+
+따라서 이전 shard 0 실행의 5 failures와 출력이 잘린 17 errors는 현재 수정본에서
+재현되지 않는다. 다음 단계는 이 기록을 포함해 resource/privacy 검사와 새 wheel을
+다시 검증하고 한 커밋으로 push한 뒤, 새 GitHub Actions run의 Ubuntu Python
+3.10/3.12와 Windows Python 3.12 전체 job이 모두 통과하는지 확인하는 것이다.
+그 전까지 merge/tag/release, 실제 프로젝트 설치, Letter 138 데이터 쓰기,
+provider 호출과 공용 `archive.exe` 교체는 계속 금지한다.
+
+## 현재 수정본의 새 격리 wheel
+
+이전 후보 SHA-256은 폐기한 채 현재 수정본으로 새 wheel을 만들었다.
+`tools/check_wheel_install.py`는 OS 임시 폴더의 새 가상환경에만 설치했고 공용 PATH와
+프로젝트 pin은 변경하지 않았다.
+
+- wheel: `wom_kit-0.4.3-py3-none-any.whl`;
+- size: 2,291,226 bytes;
+- SHA-256: `535f99f2e6d53c17bfc62cb05674d5df634deaf30ac7afbf3ec92da5db6f2064`;
+- package resources: 163/163, 685,190 bytes;
+- wheel files: 230;
+- runtime skill lifecycle, onboarding preview/fixed-close, strict Doctor fixture:
+  passed;
+- 독립 `Get-FileHash` 결과: checker의 SHA-256과 일치;
+- wheel 전체 entry의 실제 Windows 사용자명, long path와 8.3 short path 흔적:
+  0건.
+
+공개 문서의 `C:\Users\<user>` 및 `C:\Users\example`은 설명용 placeholder이고,
+실제 사용자 폴더 경로가 아니다. 추적 파일의 실제 사용자명 문자열 1건은
+privacy 회귀 테스트가 해당 이름이 직렬화 결과에 없음을 검증하는 부정 assertion이다.
+privacy gate는 그대로 통과했다. 이 wheel은 로컬 후보 근거이며 아직 GitHub Release
+asset이 아니다.

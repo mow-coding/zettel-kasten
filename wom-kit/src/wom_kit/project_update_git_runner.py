@@ -52,14 +52,17 @@ _LOCAL_ONLY_SUBCOMMANDS = frozenset(
         "check-ignore",
         "check-ref-format",
         "config",
+        "describe",
         "hash-object",
         "ls-files",
         "ls-tree",
         "merge-base",
         "read-tree",
         "rev-parse",
+        "show",
         "show-ref",
         "symbolic-ref",
+        "tag",
         "update-ref",
     }
 )
@@ -371,6 +374,20 @@ def _validate_local_only_command(
         )
         if tail != ("--stdin",) and not worktree_hash:
             raise _fail("project_update_git_runner_command_invalid")
+    if subcommand == "describe" and tail != (
+        "--tags",
+        "--exact-match",
+        "head",
+    ):
+        raise _fail("project_update_git_runner_command_invalid")
+    if subcommand == "tag" and tail != ("--list", "v*"):
+        raise _fail("project_update_git_runner_command_invalid")
+    if subcommand == "show" and tail != (
+        "-s",
+        "--format=%s",
+        "head",
+    ):
+        raise _fail("project_update_git_runner_command_invalid")
     if subcommand == "read-tree" and any(item in {"-u", "--empty"} for item in tail):
         raise _fail("project_update_git_runner_command_invalid")
 

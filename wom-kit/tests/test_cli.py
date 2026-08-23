@@ -4894,10 +4894,12 @@ class ArchiveCliTests(unittest.TestCase):
             (pin_dir / "installed-version.txt").write_text(f"v{archive_cli.__version__}\n", encoding="utf-8")
             ok_code, ok_output = self.run_cli(["version", str(project_root), "--format", "json"])
             ok_result = json.loads(ok_output)
-            self.assertEqual(ok_code, 0, ok_output)
-            self.assertTrue(ok_result["ok"])
+            self.assertEqual(ok_code, 1, ok_output)
+            self.assertFalse(ok_result["ok"])
             self.assertTrue(ok_result["project_pin"]["matches_package_version"])
-            self.assertEqual(ok_result["consistency_state"], "source_checkout_match")
+            self.assertEqual(ok_result["project_source_mirror"]["status"], "missing")
+            self.assertEqual(ok_result["project_runtime"]["status"], "runtime_mismatch")
+            self.assertEqual(ok_result["consistency_state"], "project_runtime_mismatch")
 
     def test_object_storage_upload_help_matches_shipped_live_transport(self) -> None:
         parser = archive_cli.build_parser()
@@ -7042,7 +7044,7 @@ class ArchiveCliTests(unittest.TestCase):
             )
             self.assertEqual(
                 completed.returncode,
-                0,
+                1,
                 completed.stdout + completed.stderr,
             )
             bridged_result = json.loads(completed.stdout)
@@ -7233,7 +7235,7 @@ class ArchiveCliTests(unittest.TestCase):
             )
             self.assertEqual(
                 bridged.returncode,
-                0,
+                1,
                 bridged.stdout + bridged.stderr,
             )
             bridged_result = json.loads(bridged.stdout)
@@ -7346,7 +7348,7 @@ class ArchiveCliTests(unittest.TestCase):
             )
             self.assertEqual(
                 direct.returncode,
-                0,
+                1,
                 direct.stdout + direct.stderr,
             )
             direct_result = json.loads(direct.stdout)
@@ -7388,7 +7390,7 @@ class ArchiveCliTests(unittest.TestCase):
 
             self.assertEqual(
                 bridged.returncode,
-                0,
+                1,
                 bridged.stdout + bridged.stderr,
             )
             bridged_result = json.loads(bridged.stdout)
@@ -7541,7 +7543,7 @@ class ArchiveCliTests(unittest.TestCase):
             )
             self.assertEqual(
                 restored.returncode,
-                0,
+                1,
                 restored.stdout + restored.stderr,
             )
             restored_result = json.loads(restored.stdout)
@@ -7856,7 +7858,10 @@ class ArchiveCliTests(unittest.TestCase):
             )
             result = json.loads(output)
 
-            self.assertEqual(code, 0, output)
+            self.assertEqual(code, 1, output)
+            self.assertFalse(result["ok"])
+            self.assertEqual(result["project_runtime"]["status"], "runtime_mismatch")
+            self.assertEqual(result["consistency_state"], "project_runtime_mismatch")
             alignment = result["runtime_alignment"]
             self.assertEqual(alignment["status"], "aligned")
             self.assertEqual(
@@ -7908,7 +7913,8 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertTrue(result["next_safe_actions"])
 
             text_code, text_output = self.run_cli(["version", str(project_root)])
-            self.assertEqual(text_code, 0, text_output)
+            self.assertEqual(text_code, 1, text_output)
+            self.assertIn("Project runtime: runtime_mismatch", text_output)
             self.assertIn("Runtime alignment: aligned", text_output)
             self.assertIn(
                 "Alignment reason: running_version_matches_project_source",
@@ -8581,8 +8587,10 @@ class ArchiveCliTests(unittest.TestCase):
                     ]
                 )
 
-            self.assertEqual(code, 0, stdout + stderr)
+            self.assertEqual(code, 1, stdout + stderr)
             result = json.loads(stdout)
+            self.assertEqual(result["project_runtime"]["status"], "runtime_mismatch")
+            self.assertEqual(result["consistency_state"], "project_runtime_mismatch")
             integrity = result["runtime_alignment"]["integrity"]
             self.assertTrue(integrity["verified"])
             self.assertTrue(integrity["origin_config_key_present"])
@@ -12796,6 +12804,9 @@ class ArchiveCliTests(unittest.TestCase):
     def test_project_update_symbolic_head_state_distinguishes_branch_detached_and_errors(
         self,
     ) -> None:
+        mirror_fixture = tempfile.TemporaryDirectory()
+        self.addCleanup(mirror_fixture.cleanup)
+        mirror_path = Path(mirror_fixture.name).resolve()
         cases = (
             (
                 "branch",
@@ -12878,7 +12889,7 @@ class ArchiveCliTests(unittest.TestCase):
                 actual = (
                     archive_services
                     .wom_kit_project_update_symbolic_head_state(
-                        Path("unused-mirror"),
+                        mirror_path,
                         runner=self.trusted_project_update_git_runner(),
                     )
                 )
@@ -12890,13 +12901,14 @@ class ArchiveCliTests(unittest.TestCase):
             )
             if case_name == "branch":
                 git_call.assert_called_once_with(
-                    Path("unused-mirror"),
+                    mirror_path,
                     [
                         "check-ref-format",
                         "--branch",
                         "feature+rollback",
                     ],
                     max_output_bytes=4096,
+                    runner=self.trusted_project_update_git_runner(),
                 )
             elif case_name == "branch_rejected_by_git":
                 git_call.assert_called_once()
