@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -73,6 +74,27 @@ class OperatorFeedbackBodyTests(unittest.TestCase):
             reviewed_by="operator:reviewer",
         )
         return plan, result
+
+    def write_feedback_record(
+        self,
+        feedback_id: str,
+        feedback_ref: str,
+        *,
+        status: str,
+        external_submission_performed: bool = False,
+    ) -> Path:
+        record = self.root / "ops" / "feedback" / f"{feedback_id}.yml"
+        record.parent.mkdir(parents=True, exist_ok=True)
+        record.write_text(
+            "schema: wom-kit/operator-feedback/v0.1\n"
+            f"feedback_id: {feedback_id}\n"
+            f"feedback_ref: {feedback_ref}\n"
+            f"status: {status}\n"
+            "external_submission_performed: "
+            + ("true\n" if external_submission_performed else "false\n"),
+            encoding="utf-8",
+        )
+        return record
 
     def assert_nonreflecting(self, result: dict[str, object], *values: str) -> None:
         rendered = json.dumps(result, ensure_ascii=False, sort_keys=True)
@@ -600,6 +622,207 @@ class OperatorFeedbackBodyTests(unittest.TestCase):
         )
         self.assertIn("feedback_body_receipt_missing", result["blockers"])
         self.assert_nonreflecting(result, private_value)
+
+    def test_draft_same_id_revision_uses_body_cas_and_preserves_prior_bytes(self) -> None:
+        _initial_plan, initial = self.approve()
+        old_ref = str(initial["feedback_ref"])
+        old_sha = old_ref.rsplit(":", 1)[-1]
+        body_path = self.root / str(initial["proposed_relative_path"])
+        old_body = body_path.read_bytes()
+        self.write_feedback_record(FEEDBACK_ID, old_ref, status="draft")
+
+        revised_request = valid_request()
+        revised_request["sections"]["observed_failure"] = (
+            "A corrected fact was found before this draft was delivered."
+        )
+        self.write_request(revised_request)
+        preview = plan_operator_feedback_body(
+            self.root,
+            self.request_path,
+            intent="revise",
+            expected_body_sha256=old_sha,
+        )
+        self.assertTrue(preview["ok"], preview)
+        self.assertEqual(preview["intent"], "revise")
+
+        revised = approve_operator_feedback_body(
+            self.root,
+            self.request_path,
+            expected_plan_sha256=str(preview["plan_sha256"]),
+            expected_body_sha256=old_sha,
+            intent="revise",
+            reviewed_by="operator:reviewer",
+        )
+
+        self.assertTrue(revised["ok"], revised)
+        self.assertEqual(revised["state"], "revised")
+        self.assertNotEqual(body_path.read_bytes(), old_body)
+        self.assertEqual(
+            hashlib.sha256(body_path.read_bytes()).hexdigest(),
+            str(revised["feedback_ref"]).rsplit(":", 1)[-1],
+        )
+        evidence = revised["revision_evidence"]
+        snapshot = self.root / evidence["prior_body_snapshot_path"]
+        revision_receipt = self.root / evidence["revision_receipt_path"]
+        self.assertEqual(snapshot.read_bytes(), old_body)
+        self.assertTrue(revision_receipt.is_file())
+        self.assertTrue(evidence["immutable"])
+        self.assertFalse(revised["record_binding"]["feedback_ref_bound"])
+
+    def test_delivered_internal_record_is_immutable_but_explicit_supersession_works(
+        self,
+    ) -> None:
+        # Synthetic correction semantics from the 141-144 lineage: lifecycle
+        # delivery is an internal record fact and is independent of external
+        # provider submission.  The body is still immutable once delivered.
+        _initial_plan, initial = self.approve()
+        old_ref = str(initial["feedback_ref"])
+        old_sha = old_ref.rsplit(":", 1)[-1]
+        old_path = self.root / str(initial["proposed_relative_path"])
+        old_bytes = old_path.read_bytes()
+        self.write_feedback_record(
+            FEEDBACK_ID,
+            old_ref,
+            status="delivered",
+            external_submission_performed=False,
+        )
+
+        corrected = valid_request()
+        corrected["sections"]["task"] = "Correct a delivered internal report."
+        self.write_request(corrected)
+        blocked = plan_operator_feedback_body(
+            self.root,
+            self.request_path,
+            intent="revise",
+            expected_body_sha256=old_sha,
+        )
+        self.assertFalse(blocked["ok"])
+        self.assertEqual(
+            blocked["blockers"],
+            ["feedback_body_revision_status_immutable"],
+        )
+        self.assertEqual(old_path.read_bytes(), old_bytes)
+
+        corrected_id = "WOM-feedback-144-corrected"
+        corrected["feedback_id"] = corrected_id
+        self.write_request(corrected)
+        supersede_preview = plan_operator_feedback_body(
+            self.root,
+            self.request_path,
+            intent="supersede",
+            expected_body_sha256=old_sha,
+            supersedes_feedback_id=FEEDBACK_ID,
+        )
+        self.assertTrue(supersede_preview["ok"], supersede_preview)
+        superseded = approve_operator_feedback_body(
+            self.root,
+            self.request_path,
+            intent="supersede",
+            expected_body_sha256=old_sha,
+            supersedes_feedback_id=FEEDBACK_ID,
+            expected_plan_sha256=str(supersede_preview["plan_sha256"]),
+            reviewed_by="operator:reviewer",
+        )
+        self.assertTrue(superseded["ok"], superseded)
+        self.assertEqual(old_path.read_bytes(), old_bytes)
+        self.assertFalse(
+            superseded["supersession_evidence"]["superseded_body_modified"]
+        )
+        self.assertTrue(
+            (self.root / superseded["supersession_evidence"]["supersession_receipt_path"]).is_file()
+        )
+
+    def test_synthetic_141_144_lifecycle_fixture_keeps_independent_records_separate(
+        self,
+    ) -> None:
+        # No real client ids, titles, or bodies are used.  This fixture only
+        # preserves the corrected lifecycle relationships requested for v0.4.3.
+        def create_feedback(
+            feedback_id: str,
+            status: str,
+            *,
+            supersedes_feedback_id: str | None = None,
+            superseded_body_sha256: str | None = None,
+        ) -> dict[str, object]:
+            request = valid_request()
+            request["feedback_id"] = feedback_id
+            request["title"] = "Synthetic lifecycle fixture"
+            request["sections"]["task"] = f"Synthetic task for {feedback_id}."
+            self.write_request(request)
+            intent = "supersede" if supersedes_feedback_id is not None else "create"
+            plan = plan_operator_feedback_body(
+                self.root,
+                self.request_path,
+                intent=intent,
+                expected_body_sha256=superseded_body_sha256,
+                supersedes_feedback_id=supersedes_feedback_id,
+            )
+            self.assertTrue(plan["ok"], plan)
+            written = approve_operator_feedback_body(
+                self.root,
+                self.request_path,
+                intent=intent,
+                expected_body_sha256=superseded_body_sha256,
+                supersedes_feedback_id=supersedes_feedback_id,
+                expected_plan_sha256=str(plan["plan_sha256"]),
+                reviewed_by="operator:fixture-reviewer",
+            )
+            self.assertTrue(written["ok"], written)
+            self.write_feedback_record(
+                feedback_id,
+                str(written["feedback_ref"]),
+                status=status,
+                external_submission_performed=False,
+            )
+            return written
+
+        report_141 = create_feedback("synthetic-feedback-141", "archived")
+        report_142 = create_feedback("synthetic-feedback-142", "draft")
+        report_143 = create_feedback(
+            "synthetic-feedback-143",
+            "archived",
+            supersedes_feedback_id="synthetic-feedback-141",
+            superseded_body_sha256=str(report_141["feedback_ref"]).rsplit(":", 1)[-1],
+        )
+        report_144 = create_feedback(
+            "synthetic-feedback-144",
+            "delivered",
+            supersedes_feedback_id="synthetic-feedback-143",
+            superseded_body_sha256=str(report_143["feedback_ref"]).rsplit(":", 1)[-1],
+        )
+
+        independent = self.root / "ops/feedback/letters/synthetic-feedback-142.md"
+        independent_sha = hashlib.sha256(independent.read_bytes()).hexdigest()
+        for archived_id in ("synthetic-feedback-141", "synthetic-feedback-143"):
+            record = (self.root / f"ops/feedback/{archived_id}.yml").read_text(
+                encoding="utf-8"
+            )
+            self.assertIn("status: archived", record)
+        delivered_record = (
+            self.root / "ops/feedback/synthetic-feedback-144.yml"
+        ).read_text(encoding="utf-8")
+        self.assertIn("status: delivered", delivered_record)
+        self.assertIn("external_submission_performed: false", delivered_record)
+        self.assertEqual(
+            hashlib.sha256(independent.read_bytes()).hexdigest(),
+            independent_sha,
+        )
+        self.assertEqual(
+            report_143["supersession_evidence"]["superseded_feedback_id"],
+            "synthetic-feedback-141",
+        )
+        self.assertEqual(
+            report_144["supersession_evidence"]["superseded_feedback_id"],
+            "synthetic-feedback-143",
+        )
+        supersession_receipts = list(
+            (self.root / "receipts/operator-feedback/body/supersessions").glob("*.json")
+        )
+        self.assertEqual(len(supersession_receipts), 2)
+        serialized_receipts = "\n".join(
+            path.read_text(encoding="utf-8") for path in supersession_receipts
+        )
+        self.assertNotIn(str(report_142["feedback_ref"]), serialized_receipts)
 
 
 if __name__ == "__main__":

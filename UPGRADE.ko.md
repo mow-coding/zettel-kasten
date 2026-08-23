@@ -2,6 +2,60 @@
 
 [English Upgrade Guide](UPGRADE.md)
 
+## v0.4.3 정확한 복구와 Git 백업
+
+일치하는 공개 Release가 정확한 wheel을 자산으로 나열한 뒤에만 설치합니다.
+
+```powershell
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.3/wom_kit-0.4.3-py3-none-any.whl"
+archive --version
+```
+
+기존 WOM 프로세스를 닫고 새 프로세스에서 정확히 `archive 0.4.3`인지
+확인하세요. 이 단계는 전역 CLI만 교체합니다. project-local source와 Windows
+PATH 후보는 따로 점검하고 pin을 손으로 고치지 마세요.
+
+v0.4.3의 실제 보관함 작업 순서는 다음과 같습니다.
+
+1. Git worktree가 깨끗하고 현재 원격 ref가 일치하는지 확인합니다.
+2. 승인 없이 content-free 계획과 exact manifest를 만듭니다.
+3. 개수·reason code·manifest digest·목표 버전을 검토합니다.
+4. native exact-human 창에서만 승인합니다.
+5. 중단되면 새 승인을 만들지 말고 같은 claim의 명시적 resume을 씁니다.
+6. 디스크 결과를 독립적으로 다시 읽고, 검토한 근거에서 정확한 필드 단위
+   revert 계약도 확인합니다.
+7. 정확한 Git commit·non-force push writer를 실행하고 원격 ref 영수증을
+   검증합니다.
+
+Letter 138은 기존 migrate 명령 계열에서 계획합니다.
+
+```powershell
+archive migrate <archive-root> `
+  --target notion-source-properties `
+  --source-mirror <검토한-보존-mirror> `
+  --acceptance <비공개-acceptance-output> `
+  --dry-run `
+  --progress `
+  --format json
+```
+
+전체 source snapshot이 `backfill`, `already_equal`,
+`unmapped_no_canonical_target`, `human_review` 중 하나로 합계가 맞고,
+설명되지 않은 populated-property 누락이 0이어야 합니다.
+`unmapped_no_canonical_target`은 보존된 미해결 근거이지 버리거나 복구된
+페이지가 아닙니다. 일부만 읽은 source, 변경된 mirror, 개수·digest가 달라진
+acceptance는 승인하지 마세요.
+
+Git 백업과 project update는 기존 최상위 명령 계열을 재사용합니다. 검증한
+v0.4.3 프로세스에서 `archive git-backup-plan --help`와
+`archive project-version-update --help`를 읽어 정확한 승인·resume 옵션을
+확인하세요. 자격증명을 인자·환경 변수·URL·대화 기록에 넣지 마세요.
+
+[v0.4.3 릴리스 노트](wom-kit/docs/releases/v0.4.3.md),
+[ExactOperationManifest v1](wom-kit/docs/exact-operation-manifest-v1.md),
+[Git 백업 가이드](wom-kit/docs/git-backup-plan.md),
+[project update 가이드](wom-kit/docs/project-version-update.md)를 보세요.
+
 ## v0.4.2 읽기 전용 Git 백업 계획
 
 v0.4.2는 Letter 139의 읽기 전용 계획 기반입니다. 아래 URL이 소스 문서에

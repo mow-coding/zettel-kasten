@@ -122,17 +122,17 @@ class Letter137RemainingAffirmServiceBoundaryTests(
                 "wom_kit_real_path_kind",
                 side_effect=AssertionError("project filesystem read entered"),
             ) as path_kind:
-                self._assert_fixed_service_block(
-                    root=root,
-                    lifecycle_action="project_version_update",
-                    invoke=lambda: archive_services.wom_kit_project_version_update(
+                with self.assertRaisesRegex(
+                    archive_services.ArchiveServiceError,
+                    "exact_human_approval_required",
+                ):
+                    archive_services.wom_kit_project_version_update(
                         root,
                         target=PRIVATE_TARGET,
                         approve=True,
                         reviewed_by=PRIVATE_REVIEWER,
                         affirm_external_writers_quiescent=True,
-                    ),
-                )
+                    )
                 self._assert_fixed_service_block(
                     root=root,
                     lifecycle_action="project_version_update_collision",
@@ -311,25 +311,6 @@ class Letter137RemainingAffirmCliBoundaryTests(_RemainingAffirmAssertions):
                     legacy_coordination_cleanup,
                     "legacy_coordination_cleanup",
                     "legacy_coordination_cleanup",
-                ),
-                (
-                    [
-                        "project-version-update",
-                        root,
-                        "--target",
-                        PRIVATE_TARGET,
-                        "--approve",
-                        "--reviewed-by",
-                        PRIVATE_REVIEWER,
-                        "--affirm-external-writers-quiescent",
-                        "--output",
-                        PRIVATE_OUTPUT,
-                        "--format",
-                        "json",
-                    ],
-                    archive_services,
-                    "wom_kit_project_version_update",
-                    "project_version_update",
                 ),
                 (
                     [

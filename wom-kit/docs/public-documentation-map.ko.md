@@ -2,11 +2,43 @@
 
 상태: 공개 navigation baseline
 날짜: 2026-05-27
-갱신: 2026-08-21
+갱신: 2026-08-22
 철학 갱신: 2026-07-15
 하네스 호환 경계 갱신: 2026-07-16
 
-현재 v0.4.2 변경점: `git-backup-plan`과
+현재 v0.4.3 변경점: `ExactOperationManifest v1`이 정확한 승인, checkpoint,
+resume, 독립 검증, 필드 단위 revert를 위한 공통 기반을 제공합니다. 기존 Git
+계획 계열은 정확한 commit·non-force push·원격 ref 재조회를 추가하고,
+`archive migrate`는 Letter 138의 손실 없는 `source_properties` 보강을,
+`project-version-update`는 승인에 결속된 영수증을, feedback draft는 CAS
+개정과 delivered 이후 새 ID supersession을 제공합니다. 공개 기능의 존재만으로
+비공개 보관함의 실제 결과가 증명되지는 않습니다.
+
+Git 백업의 상세 경계: `git-backup-plan`은 제한된 read-only 점검으로
+유지됩니다. 기존 `git-backup-reconcile-plan` 명령군에는 모든 변경을 정확히
+한 번 분류하는 비공개 그룹 manifest 검증, manifest SHA-256에 묶인 네이티브
+사람 승인, literal 경로 상한을 지키는 commit, 저장된 비대화형 인증을 쓰는
+일반 non-force push, 정확한 remote ref 재조회, checkpoint resume, content-free
+완료 receipt가 추가됩니다. pull, fetch, merge, rebase, reset, clean, delete,
+force-push, remote URL/credential 노출, MCP writer는 없습니다. dry-run은 계속
+아무것도 쓰지 않으며, 일치한 `ls-remote` 결과는 계정 소유권이나 branch
+policy/provider audit log가 아니라 Git transport 근거입니다.
+
+같은 v0.4.3 후보의 Letter 138 변경점(현재 작업 트리에 구현됐지만 아직
+릴리스되지 않음):
+`archive migrate --target notion-source-properties`가 Letter 138의 로컬
+Notion `source_properties` 복구를 계획하고, 승인 후 적용하고, 중단 시 재개하고,
+독립 검증하고, 해당 필드만 되돌릴 수 있습니다. 첫 dry-run이 집계 acceptance의
+정확한 bytes를 ignored `profiles/local/` 아래에 create-only로 저장하고, 다음 계획은
+그 동일 파일과 완전한 로컬 raw mirror를 결속해야 합니다. 적용과 철회는 서로 다른
+native exact-human 승인/manifest를 쓰며, 공통 archive writer lock, 승인 직전
+canonical projection 재검사, durable checkpoint, 최종 결과 receipt를 재사용합니다.
+parser inventory의 approval 가능 표시는 이 target에만 조건부이고 다른 migrate
+target의 승인 쓰기는 계속 fixed-close입니다. Notion API를 호출하지 않고
+속성값, source page id, 로컬 경로를 출력하지 않습니다. 자세한 운영 절차는
+[Notion Source Properties Recovery](notion-source-properties-recovery.md)를 봅니다.
+
+이전 v0.4.2 변경점: `git-backup-plan`과
 `git-backup-reconcile-plan`이 제한된 content-free CLI 전용 Git 점검과 remote
 ref 재조정 계획을 제공합니다. add, commit, fetch, pull, push, delete, ref
 변경은 전혀 하지 않으며 두 명령은 항상 `ready_for_write: false`,
@@ -16,12 +48,11 @@ v0.4.2는 Letter 139의 read-only 계획 기반만 다루며, 요청된 end-to-e
 writer를 구현하지 않습니다.
 
 이전 v0.4.1 쓰기 경계: `zettel-objet-link --approve` 하나에는 작업 전용 로컬
-exact-human binding이 있습니다. 대응하는 revert, 모든 Objet capture 쓰기,
-project updater/collision/bytecode 쓰기는 계속 고정 차단됩니다. `archive
-capabilities --machine`이 parser에서 직접 만든 inventory에는 고정 차단
-canonical 실행 경로 78개가 있고, 제공된 고정 차단 항목은 모두 일치합니다.
-이 inventory는 archive별 선행 조건을 검사하지 않으며, `--approve`가 없다는
-사실만으로 read-only라고 단정할 수 없습니다.
+exact-human binding이 있습니다. v0.4.3에서도 대응하는 revert, Objet capture,
+project collision, bytecode 쓰기는 계속 고정 차단됩니다. `archive
+capabilities --machine`이 parser에서 직접 만든 inventory는 제공된 모든 고정
+차단 항목과 일치해야 합니다. 이 inventory는 archive별 선행 조건을 검사하지
+않으며, `--approve`가 없다는 사실만으로 read-only라고 단정할 수 없습니다.
 
 과거 v0.4.0 쓰기 경계: compound, batch, revert, archive-authority, durable,
 external 범주의 canonical top-level 명령 79개는 각 명령의 plan/dry-run/audit 동작만
@@ -97,6 +128,7 @@ source mirror가 아니고, 과거 typed-property 유실을 탐지하거나 복�
 - [v0.4.0 정확한 사람 제어와 운영 마찰 개선 결정](archive-infra-decision-log-2026-08-20-v0400-letter136-operator-friction.md)
 - [v0.4.1 Letter 140 정확 링크 복구 결정](archive-infra-decision-log-2026-08-21-v041-letter140-exact-link-recovery.md)
 - [v0.4.2 Letter 139 읽기 전용 Git 백업 계획 결정](archive-infra-decision-log-2026-08-21-v042-letter139-read-only-git-backup-planning.md)
+- [v0.4.3 Letter 138 Notion source property 복구 결정](archive-infra-decision-log-2026-08-22-v043-letter138-notion-source-properties-recovery.md)
 - [Human Artifact Store와 비공개 registry 계약](human-artifact-store-contract.md)
 - [프로젝트 버전 업데이트](project-version-update.md)
 - [Derived Text Capture와 paired batch 복구](derived-text.md)
@@ -162,6 +194,7 @@ source mirror가 아니고, 과거 typed-property 유실을 탐지하거나 복�
 - [Derived Text Capture](derived-text.md)
 - [Derived Text Coverage And Toolchain](derived-text-coverage-and-toolchain.md)
 - [Notion Objet Link Index](notion-objet-link-index.md)
+- [Notion Source Properties Recovery](notion-source-properties-recovery.md)
 - [Notion Objet Import Clue Audit](notion-objet-import-clue-audit.md)
 - [Notion Import Locator-Loss Audit](notion-import-locator-loss-audit.md)
 - [Notion Import Locator Evidence Plan](notion-import-locator-evidence-plan.md)
@@ -459,6 +492,7 @@ local archive
 - [v0.2.11 Delegate Capability Contract Work Log](../plans/work-log-2026-05-23-delegate-capability-contract.md)
 - [Changelog](../../CHANGELOG.md)
 - [Release Notes](releases/)
+- [v0.4.3 릴리스 노트](releases/v0.4.3.md)
 - [v0.4.2 릴리스 노트](releases/v0.4.2.md)
 - [v0.4.1 릴리스 노트](releases/v0.4.1.md)
 - [v0.4.0 릴리스 노트](releases/v0.4.0.md)
@@ -503,7 +537,8 @@ Schemas:
 - [Schemas Directory](../schemas/)
 - [Source-Fidelity Draft Receipt Schema](../schemas/source-fidelity-draft-receipt.schema.json)
 - [Content-Free CLI Error Envelope Schema](../schemas/cli-error-v0.1.schema.json)
-- [Command Approval Status Inventory Schema](../schemas/command-approval-status-inventory-v0.1.schema.json)
+- [Command Approval Status Inventory v0.2 Schema](../schemas/command-approval-status-inventory-v0.2.schema.json)
+- [과거 Command Approval Status Inventory v0.1 Schema](../schemas/command-approval-status-inventory-v0.1.schema.json)
 - [Exact-Human Operation Approval Schema](../schemas/operation-exact-human-approval-v0.1.schema.json)
 - [Zettel-Objet Link Receipt v0.1/v0.2 Reader Schema](../schemas/zettel-objet-link-receipt.schema.json)
 - [IMAP Mailbox Adapter Manifest Schema](../schemas/imap-mailbox-adapter-manifest.schema.json)

@@ -403,10 +403,13 @@ from . import (
     completion_workflows,
     duplicate_object_reconciliation,
     git_backup_plan as git_backup_planning,
+    git_backup_writer,
     human_artifact_registry,
     legacy_coordination_cleanup as legacy_cleanup,
+    notion_property_backfill,
     operation_control,
     operation_approval_binding,
+    project_runtime,
     runtime_guidance,
     runtime_skill_install,
     saved_view_workflows,
@@ -433,7 +436,9 @@ from .exact_human_approval_workflow import (
     ExactHumanApprovalWorkflowError,
     _execute_exact_human_approved_write,
     _execute_exact_human_approved_write_core,
+    _resume_exact_human_approved_transaction_core,
 )
+from .exact_operation_manifest import ExactOperationProgress
 from .resource_paths import runtime_release_note_path, runtime_resource_root
 from .schema_validator import validate_schema
 
@@ -4400,10 +4405,25 @@ def command_doctor(args: argparse.Namespace) -> int:
 
 
 def command_version(args: argparse.Namespace) -> int:
-    result = archive_services.wom_kit_version_info(
-        Path(args.inspection_root) if args.inspection_root else None,
-        redact_local_paths=args.redact_local_paths,
+    reporter = CommandProgressReporter(
+        bool(getattr(args, "progress", False)),
+        label="version",
+        heartbeat_interval_seconds=5.0,
+        stage_order=(
+            "windows-path-resolution",
+            "project-pin",
+            "source-provenance",
+            "runtime-alignment",
+        ),
     )
+    try:
+        result = archive_services.wom_kit_version_info(
+            Path(args.inspection_root) if args.inspection_root else None,
+            redact_local_paths=args.redact_local_paths,
+            progress_callback=reporter.progress,
+        )
+    finally:
+        reporter.close()
     if args.format == "json":
         print_json(result)
     else:
@@ -4416,10 +4436,54 @@ def command_version(args: argparse.Namespace) -> int:
             print(f"Import module: {module_path}")
         elif import_origin.get("module_path_redacted"):
             print("Import module: redacted (pass --no-redact-local-paths to inspect)")
+        path_shadow = (
+            result.get("path_shadow_diagnostic")
+            if isinstance(result.get("path_shadow_diagnostic"), dict)
+            else {}
+        )
+        if path_shadow.get("checked"):
+            print(
+                "Windows PATH launcher: "
+                f"{path_shadow.get('status') or '-'} "
+                f"(candidates={path_shadow.get('candidate_count', 0)})"
+            )
+            selected_candidate = (
+                path_shadow.get("selected_candidate")
+                if isinstance(path_shadow.get("selected_candidate"), dict)
+                else {}
+            )
+            if selected_candidate.get("path"):
+                print(f"Selected launcher: {selected_candidate['path']}")
+            elif selected_candidate.get("file_name"):
+                print(
+                    "Selected launcher: "
+                    f"{selected_candidate['file_name']} (path redacted)"
+                )
         project_pin = result.get("project_pin") if isinstance(result.get("project_pin"), dict) else {}
         if project_pin.get("checked"):
             installed = project_pin.get("installed_version") or "-"
             print(f"Project pin: {project_pin.get('status') or '-'} ({installed})")
+        project_runtime_result = (
+            result.get("project_runtime")
+            if isinstance(result.get("project_runtime"), dict)
+            else {}
+        )
+        if project_runtime_result.get("checked"):
+            print(
+                "Project runtime: "
+                f"{project_runtime_result.get('status') or '-'}"
+            )
+            if isinstance(
+                project_runtime_result.get("project_runtime_argv"),
+                list,
+            ):
+                print(
+                    "Project runtime argv: "
+                    + json.dumps(
+                        project_runtime_result["project_runtime_argv"],
+                        ensure_ascii=False,
+                    )
+                )
         runtime_alignment = (
             result.get("runtime_alignment")
             if isinstance(result.get("runtime_alignment"), dict)
@@ -5502,16 +5566,138 @@ def command_project_version_update_collision(
     return 0 if result.get("ok") else 1
 
 
-def command_project_version_update(args: argparse.Namespace) -> int:
-    if args.approve:
-        return _exact_human_approval_cli_error(
-            args,
-            lifecycle_action="project_version_update",
-            reason_code="compound_exact_human_approval_binding_required",
+@contextmanager
+def _project_version_update_approval_read_boundary(
+    inspection_root: Path,
+):
+    """Hold one approval archive root and archive identity for the full run."""
+
+    try:
+        selected = (
+            archive_services
+            .wom_kit_project_version_update_approval_archive_root(
+                inspection_root
+            )
         )
+        root = archive_services.require_existing_archive_root(selected)
+    except (archive_services.ArchiveServiceError, OSError, ValueError):
+        raise archive_services.ArchiveServiceError(
+            "project_version_update_archive_identity_unavailable"
+        ) from None
+
+    with ExitStack() as stack:
+        try:
+            held_archive = stack.enter_context(
+                archive_services._hold_activity_group_evidence_file(
+                    root,
+                    root / "archive.yml",
+                    max_bytes=1024 * 1024,
+                )
+            )
+            loaded = archive_services.load_approval_yaml_without_duplicate_keys(
+                held_archive["raw"].decode("utf-8")
+            )
+            document = archive_services.normalize_approval_json_tree(loaded)
+            archive_id = (
+                document.get("archive_id")
+                if isinstance(document, dict)
+                else None
+            )
+            exact_human_approval_archive_identity_sha256(archive_id)
+
+            # Re-resolve after both the root chain and archive.yml are held.
+            # This closes the small selection-to-open window without exposing
+            # either the selected path or archive id in a public result.
+            current_root = archive_services.require_existing_archive_root(
+                archive_services
+                .wom_kit_project_version_update_approval_archive_root(
+                    inspection_root
+                )
+            )
+            if current_root != root:
+                raise ValueError("approval_root_changed")
+            if archive_services.read_archive_id(current_root) != archive_id:
+                raise ValueError("approval_archive_id_changed")
+        except (
+            archive_services.ArchiveServiceError,
+            ExactHumanApprovalError,
+            OSError,
+            ValueError,
+        ):
+            raise archive_services.ArchiveServiceError(
+                "project_version_update_archive_identity_unavailable"
+            ) from None
+        yield root, archive_id
+
+
+@contextmanager
+def _exact_human_approval_post_decision_boundary(root: Path):
+    """Bind credential-key and one-use-claim parents after live approval."""
+
+    canonical_root = archive_services.require_existing_archive_root(root)
+    credential_lock_parent = (
+        canonical_root / "profiles" / "local" / "credential-intake"
+    )
+    claims_parent = (
+        canonical_root
+        / "profiles"
+        / "local"
+        / "exact-human-approvals"
+        / "claims"
+    )
+    with ExitStack() as stack:
+        stack.enter_context(
+            archive_services._activity_group_bound_directory_chain(
+                canonical_root,
+                credential_lock_parent,
+                create=True,
+            )
+        )
+        claims_binding = stack.enter_context(
+            archive_services._activity_group_bound_directory_chain(
+                canonical_root,
+                claims_parent,
+                create=True,
+            )
+        )
+        yield canonical_root, claims_binding
+
+
+@contextmanager
+def _project_version_update_post_decision_boundary(root: Path):
+    """Keep project-update credential and claim writes filesystem-bound."""
+
+    with _exact_human_approval_post_decision_boundary(root) as boundary:
+        yield boundary
+
+
+def _execute_project_version_update_exact_human_approved_write(
+    approval_root: Path,
+    context: ExactHumanApprovalContext,
+    writer: Callable[[Any], Mapping[str, Any]],
+    *,
+    claim_succeeded_finalizer: Callable[[Any], None],
+) -> dict[str, Any]:
+    """Run project update through its non-injectable bound claim workflow."""
+
+    return _execute_exact_human_approved_write_core(
+        approval_root,
+        context,
+        writer,
+        native=None,
+        key_provider=None,
+        post_decision_boundary=lambda: (
+            _project_version_update_post_decision_boundary(approval_root)
+        ),
+        claim_succeeded_finalizer=claim_succeeded_finalizer,
+    )
+
+
+def command_project_version_update(args: argparse.Namespace) -> int:
     reporter = CommandProgressReporter(
         bool(getattr(args, "progress", False)),
         label="project-version-update",
+        heartbeat_interval_seconds=9.0,
     )
     capture: _CommandRunResultCapture | None = None
     operation_journal: operation_control.OperationRunJournal | None = None
@@ -5537,21 +5723,146 @@ def command_project_version_update(args: argparse.Namespace) -> int:
                 f"[project-version-update] result pending: {capture.metadata['path']}",
                 file=sys.stderr,
             )
-        result = archive_services.wom_kit_project_version_update(
-            Path(args.inspection_root),
-            target=args.target,
-            dry_run=bool(args.dry_run),
-            approve=bool(args.approve),
-            reviewed_by=args.reviewed_by,
-            affirm_external_writers_quiescent=bool(
-                args.affirm_external_writers_quiescent
-            ),
-            progress_callback=operation_progress_callback(
-                reporter,
-                operation_journal,
-            ),
+        inspection_root = Path(args.inspection_root)
+        progress_callback = operation_progress_callback(
+            reporter,
+            operation_journal,
         )
-    except (operation_control.OperationControlError, OSError, ValueError) as exc:
+        # Establish observable liveness before approval-root resolution, Git
+        # runner resolution, or any other potentially long preflight.
+        progress_callback("starting", "start", None, None)
+        if args.approve or getattr(args, "resume", False):
+            if not str(args.reviewed_by or "").strip():
+                raise ValueError("project_version_update_reviewer_required")
+            if not bool(args.affirm_external_writers_quiescent):
+                raise ValueError("project_version_update_quiescence_required")
+            if getattr(args, "resume", False) and (
+                not str(getattr(args, "transaction_ref", "") or "").strip()
+                or not str(getattr(args, "approval_id", "") or "").strip()
+            ):
+                raise ValueError(
+                    "project_version_update_resume_reference_required"
+                )
+            if args.approve and (
+                getattr(args, "transaction_ref", None) is not None
+                or getattr(args, "approval_id", None) is not None
+            ):
+                raise ValueError(
+                    "project_version_update_resume_reference_unexpected"
+                )
+            with _project_version_update_approval_read_boundary(
+                inspection_root
+            ) as (approval_root, held_archive_id):
+
+                def _execute_project_version_update_approval(
+                    prepared_preview: Mapping[str, Any],
+                    continuation: Callable[
+                        [Any, str, str], Mapping[str, Any]
+                    ],
+                    claim_succeeded_finalizer: Callable[[Any], None],
+                    started_checkpoint_guard: Callable[[Any], bool],
+                    succeeded_checkpoint_guard: Callable[[Any], bool],
+                ) -> Mapping[str, Any]:
+                    binding = (
+                        operation_approval_binding
+                        .project_version_update_approval_binding(
+                            prepared_preview
+                        )
+                    )
+                    context = binding.context(
+                        archive_id=held_archive_id,
+                        reviewer_claim=str(args.reviewed_by).strip(),
+                    )
+
+                    def _write_project_version_update(
+                        claim,
+                    ) -> dict[str, Any]:
+                        return dict(
+                            continuation(
+                                claim,
+                                binding.plan_sha256,
+                                binding.target_binding_sha256,
+                            )
+                        )
+
+                    if getattr(args, "resume", False):
+                        return _resume_exact_human_approved_transaction_core(
+                            approval_root,
+                            context,
+                            str(args.approval_id).strip(),
+                            started_checkpoint_guard,
+                            _write_project_version_update,
+                            succeeded_checkpoint_guard,
+                            claim_succeeded_finalizer,
+                            key_provider=None,
+                            resume_boundary=lambda: (
+                                _project_version_update_post_decision_boundary(
+                                    approval_root
+                                )
+                            ),
+                        )
+                    return _execute_project_version_update_exact_human_approved_write(
+                        approval_root,
+                        context,
+                        _write_project_version_update,
+                        claim_succeeded_finalizer=(
+                            claim_succeeded_finalizer
+                        ),
+                    )
+
+                if getattr(args, "resume", False):
+                    result = (
+                        archive_services
+                        ._wom_kit_project_version_update_resume_live_transaction(
+                            inspection_root,
+                            target=args.target,
+                            reviewed_by=str(args.reviewed_by).strip(),
+                            transaction_ref=str(
+                                args.transaction_ref
+                            ).strip(),
+                            approval_executor=(
+                                _execute_project_version_update_approval
+                            ),
+                            _expected_approval_root=approval_root,
+                            _expected_archive_id=held_archive_id,
+                        )
+                    )
+                else:
+                    result = (
+                        archive_services
+                        ._wom_kit_project_version_update_live_approval_transaction(
+                            inspection_root,
+                            target=args.target,
+                            reviewed_by=str(args.reviewed_by).strip(),
+                            affirm_external_writers_quiescent=True,
+                            approval_executor=(
+                                _execute_project_version_update_approval
+                            ),
+                            progress_callback=progress_callback,
+                            _expected_approval_root=approval_root,
+                            _expected_archive_id=held_archive_id,
+                        )
+                    )
+        else:
+            result = archive_services.wom_kit_project_version_update(
+                inspection_root,
+                target=args.target,
+                dry_run=True,
+                approve=False,
+                reviewed_by=args.reviewed_by,
+                progress_callback=progress_callback,
+            )
+    except (
+        operation_control.OperationControlError,
+        operation_approval_binding.OperationApprovalBindingError,
+        archive_services.ArchiveServiceError,
+        archive_services.project_update_git_runner.ProjectUpdateGitRunnerError,
+        ExactHumanApprovalError,
+        ExactHumanApprovalWindowsError,
+        ExactHumanApprovalWorkflowError,
+        OSError,
+        ValueError,
+    ) as exc:
         failure_result_written = False
         if capture is not None:
             try:
@@ -6002,6 +6313,17 @@ def command_operator_feedback_compose(args: argparse.Namespace) -> int:
             result = api.plan_operator_feedback_body(
                 Path(args.archive_root),
                 args.request,
+                intent=getattr(args, "intent", "create"),
+                expected_body_sha256=getattr(
+                    args,
+                    "expected_body_sha256",
+                    None,
+                ),
+                supersedes_feedback_id=getattr(
+                    args,
+                    "supersedes_feedback_id",
+                    None,
+                ),
                 **strict_root_kwargs,
             )
         else:
@@ -6010,6 +6332,17 @@ def command_operator_feedback_compose(args: argparse.Namespace) -> int:
                 args.request,
                 expected_plan_sha256=args.expected_plan_sha256,
                 reviewed_by=args.reviewed_by,
+                intent=getattr(args, "intent", "create"),
+                expected_body_sha256=getattr(
+                    args,
+                    "expected_body_sha256",
+                    None,
+                ),
+                supersedes_feedback_id=getattr(
+                    args,
+                    "supersedes_feedback_id",
+                    None,
+                ),
                 **strict_root_kwargs,
             )
         if not isinstance(result, dict):
@@ -6384,6 +6717,7 @@ def _git_backup_cli_error(
     reason_code: str,
     dry_run: bool,
     error_class: str = "precondition",
+    effects_state: str = "none",
 ) -> int:
     """Print one fixed failure without reflecting private Git inputs."""
 
@@ -6399,7 +6733,9 @@ def _git_backup_cli_error(
             "error_class": error_class,
             "reason_codes": [reason_code],
             "exit_code": 1,
-            "effects_state": "none",
+            "effects_state": (
+                effects_state if effects_state in {"none", "unknown"} else "unknown"
+            ),
             "would_change": [],
             "files_written": [],
             "private_values_echoed": False,
@@ -6415,14 +6751,22 @@ def command_git_backup_plan(args: argparse.Namespace) -> int:
             reason_code="git_backup_plan_dry_run_required",
             dry_run=False,
         )
+    progress = _git_backup_progress_printer if args.progress else None
     try:
+        plan_options: dict[str, Any] = {
+            "remote_name": args.remote,
+            "branch": args.branch,
+            "max_changes": args.max_changes,
+            "max_changed_bytes": args.max_changed_bytes,
+            "dry_run": True,
+        }
+        if args.credential_mode != "anonymous":
+            plan_options["credential_mode"] = args.credential_mode
+        if progress is not None:
+            plan_options["progress_hook"] = progress
         result = git_backup_planning.git_backup_plan(
             Path(args.archive_root),
-            remote_name=args.remote,
-            branch=args.branch,
-            max_changes=args.max_changes,
-            max_changed_bytes=args.max_changed_bytes,
-            dry_run=True,
+            **plan_options,
         )
         if not isinstance(result, dict):
             raise TypeError("git_backup_plan_result_invalid")
@@ -6437,36 +6781,139 @@ def command_git_backup_plan(args: argparse.Namespace) -> int:
     return 0 if result.get("ok") is True else 1
 
 
+def _git_backup_progress_printer(event: Any) -> None:
+    if isinstance(event, Mapping):
+        document = dict(event)
+    elif callable(getattr(event, "public_document", None)):
+        document = {
+            "schema": "wom-kit/git-backup-progress/v1",
+            **event.public_document(),
+        }
+    else:
+        return
+    print(
+        json.dumps(document, ensure_ascii=True, sort_keys=True),
+        file=sys.stderr,
+        flush=True,
+    )
+
+
 def command_git_backup_reconcile_plan(args: argparse.Namespace) -> int:
-    if not args.dry_run:
+    resume_requested = bool(args.resume_approval_id)
+    mode_count = int(bool(args.dry_run)) + int(bool(args.approve)) + int(
+        resume_requested
+    )
+    if mode_count != 1:
         return _git_backup_cli_error(
             command="git-backup-reconcile-plan",
-            reason_code="git_backup_reconcile_plan_dry_run_required",
+            reason_code=(
+                "git_backup_reconcile_plan_dry_run_required"
+                if mode_count == 0
+                else "git_backup_reconcile_plan_mode_required"
+            ),
             dry_run=False,
         )
-    try:
-        result = git_backup_planning.git_backup_reconcile_plan(
-            Path(args.archive_root),
-            expected_plan_sha256=args.expected_plan_sha256,
-            expected_hidden_effect_set_sha256=(
-                args.expected_hidden_effect_set_sha256
-            ),
-            expected_local_head_oid=args.expected_local_head_oid,
-            expected_remote_oid=args.expected_remote_oid,
-            remote_name=args.remote,
-            branch=args.branch,
-            max_changes=args.max_changes,
-            max_changed_bytes=args.max_changed_bytes,
-            dry_run=True,
-        )
-        if not isinstance(result, dict):
-            raise TypeError("git_backup_reconcile_plan_result_invalid")
-    except Exception:  # noqa: BLE001 - private Git errors must never cross the CLI.
+    if (args.approve or resume_requested) and not str(args.reviewed_by or "").strip():
         return _git_backup_cli_error(
             command="git-backup-reconcile-plan",
-            reason_code="git_backup_reconcile_plan_inspection_unavailable",
-            dry_run=True,
-            error_class="inspection",
+            reason_code="git_backup_reviewer_required",
+            dry_run=False,
+        )
+    if args.approve and not args.selection_manifest:
+        return _git_backup_cli_error(
+            command="git-backup-reconcile-plan",
+            reason_code="git_backup_selection_manifest_required",
+            dry_run=False,
+        )
+    if resume_requested and not args.expected_manifest_sha256:
+        return _git_backup_cli_error(
+            command="git-backup-reconcile-plan",
+            reason_code="git_backup_resume_manifest_required",
+            dry_run=False,
+        )
+
+    progress = _git_backup_progress_printer if args.progress else None
+    approval_workflow_started = False
+
+    try:
+        if resume_requested:
+            prepared = git_backup_writer.load_private_git_backup_bundle(
+                Path(args.archive_root),
+                manifest_sha256=args.expected_manifest_sha256,
+            )
+            if prepared.expected_plan_sha256 != args.expected_plan_sha256:
+                raise git_backup_writer.GitBackupWriterError(
+                    "git_backup_selection_plan_mismatch"
+                )
+            approval_workflow_started = True
+            result = git_backup_writer.resume_git_backup(
+                prepared,
+                reviewer_claim=args.reviewed_by,
+                approval_id=args.resume_approval_id,
+                progress_hook=progress,
+            )
+        elif args.selection_manifest:
+            prepared = git_backup_writer.prepare_git_backup(
+                Path(args.archive_root),
+                expected_plan_sha256=args.expected_plan_sha256,
+                selection_manifest_path=Path(args.selection_manifest),
+                remote_name=args.remote,
+                branch=args.branch,
+                credential_mode=args.credential_mode,
+                max_changes=args.max_changes,
+                max_changed_bytes=args.max_changed_bytes,
+                progress_hook=progress,
+            )
+            if args.dry_run:
+                result = prepared.public_plan()
+            else:
+                approval_workflow_started = True
+                result = git_backup_writer.execute_git_backup(
+                    prepared,
+                    selection_manifest_path=Path(args.selection_manifest),
+                    reviewer_claim=args.reviewed_by,
+                    progress_hook=progress,
+                )
+        else:
+            reconcile_options: dict[str, Any] = {
+                "expected_plan_sha256": args.expected_plan_sha256,
+                "expected_hidden_effect_set_sha256": (
+                    args.expected_hidden_effect_set_sha256
+                ),
+                "expected_local_head_oid": args.expected_local_head_oid,
+                "expected_remote_oid": args.expected_remote_oid,
+                "remote_name": args.remote,
+                "branch": args.branch,
+                "max_changes": args.max_changes,
+                "max_changed_bytes": args.max_changed_bytes,
+                "dry_run": True,
+            }
+            if args.credential_mode != "anonymous":
+                reconcile_options["credential_mode"] = args.credential_mode
+            if progress is not None:
+                reconcile_options["progress_hook"] = progress
+            result = git_backup_planning.git_backup_reconcile_plan(
+                Path(args.archive_root),
+                **reconcile_options,
+            )
+        if not isinstance(result, dict):
+            raise TypeError("git_backup_reconcile_plan_result_invalid")
+    except Exception as exc:  # noqa: BLE001 - private Git errors never cross CLI.
+        reason_code = getattr(exc, "code", None)
+        if type(reason_code) is not str or re.fullmatch(
+            r"[a-z][a-z0-9_]{0,95}", reason_code
+        ) is None:
+            reason_code = "git_backup_reconcile_plan_inspection_unavailable"
+        return _git_backup_cli_error(
+            command="git-backup-reconcile-plan",
+            reason_code=reason_code,
+            dry_run=bool(args.dry_run),
+            error_class=(
+                "execution"
+                if approval_workflow_started
+                else ("inspection" if args.dry_run else "precondition")
+            ),
+            effects_state=("unknown" if approval_workflow_started else "none"),
         )
     print_json(result)
     return 0 if result.get("ok") is True else 1
@@ -6582,7 +7029,313 @@ def command_repair_gitignore(args: argparse.Namespace) -> int:
     return 0 if result.get("ok") else 1
 
 
+class _NotionPropertyBackfillCliProgress:
+    """Throttle content-free plan/write status and retain a resume locator."""
+
+    def __init__(self) -> None:
+        self._last_execution_emit: float | None = None
+        self._last_execution_sha256: str | None = None
+        self.resume_locator: dict[str, Any] | None = None
+
+    @staticmethod
+    def _emit(prefix: str, document: Mapping[str, Any]) -> None:
+        print(
+            prefix
+            + json.dumps(
+                dict(document),
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ),
+            file=sys.stderr,
+            flush=True,
+        )
+
+    def planning(self, event: Mapping[str, Any], *, phase: str) -> None:
+        self._emit("WOM-PROGRESS ", {**dict(event), "phase": phase})
+
+    def initial_plan(self, event: Mapping[str, Any]) -> None:
+        self.planning(event, phase="initial_plan")
+
+    def revalidation(self, event: Mapping[str, Any]) -> None:
+        self.planning(event, phase="approved_revalidation")
+
+    def execution(self, event: ExactOperationProgress) -> None:
+        if type(event) is not ExactOperationProgress:
+            return
+        now = time.monotonic()
+        execution_changed = (
+            event.execution_sha256 is not None
+            and event.execution_sha256 != self._last_execution_sha256
+        )
+        if not (
+            self._last_execution_emit is None
+            or execution_changed
+            or event.stage == "completed"
+            or now - self._last_execution_emit >= 1.0
+        ):
+            return
+        document = event.public_document()
+        document.update(
+            {
+                "schema_version": (
+                    "wom-kit/notion-property-backfill-execution-progress/v0.1"
+                ),
+                "phase": "field_execution",
+                "paths_echoed": False,
+                "source_page_ids_echoed": False,
+                "property_values_echoed": False,
+            }
+        )
+        self._emit("WOM-PROGRESS ", document)
+        self._last_execution_emit = now
+        if event.execution_sha256 is not None:
+            self._last_execution_sha256 = event.execution_sha256
+
+    def locator(self, document: Mapping[str, Any]) -> None:
+        candidate = dict(document)
+        if (
+            candidate.get("schema_version")
+            != "wom-kit/notion-property-backfill-execution-locator/v0.1"
+        ):
+            return
+        self.resume_locator = candidate
+        self._emit("WOM-RESUME ", candidate)
+
+
+def command_migrate_notion_source_properties(args: argparse.Namespace) -> int:
+    if bool(args.dry_run) == bool(args.approve):
+        print(
+            "notion-source-properties migration requires exactly one of --dry-run or --approve.",
+            file=sys.stderr,
+        )
+        return 1
+    acceptance_bootstrap = bool(
+        getattr(args, "acceptance_bootstrap", False)
+    )
+    if not args.source_mirror:
+        print(
+            "notion-source-properties migration requires --source-mirror.",
+            file=sys.stderr,
+        )
+        return 1
+    if acceptance_bootstrap and (
+        not args.dry_run
+        or args.approve
+        or args.revert
+        or args.acceptance_file
+        or getattr(args, "resume", False)
+        or not getattr(args, "acceptance_output", None)
+    ):
+        print(
+            "--acceptance-bootstrap requires --dry-run and forbids "
+            "--approve, --revert, --resume, and --acceptance-file; it also "
+            "requires --acceptance-output.",
+            file=sys.stderr,
+        )
+        return 1
+    if not acceptance_bootstrap and getattr(args, "acceptance_output", None):
+        print(
+            "--acceptance-output is valid only with --acceptance-bootstrap.",
+            file=sys.stderr,
+        )
+        return 1
+    if not acceptance_bootstrap and not args.acceptance_file:
+        print(
+            "notion-source-properties migration requires --acceptance-file "
+            "after the reviewed bootstrap step.",
+            file=sys.stderr,
+        )
+        return 1
+    if getattr(args, "link_type", None):
+        print(
+            "--link-type is not valid for notion-source-properties migration.",
+            file=sys.stderr,
+        )
+        return 1
+    reviewed_by = getattr(args, "reviewed_by", None)
+    resume = bool(getattr(args, "resume", False))
+    approval_id = getattr(args, "approval_id", None)
+    execution_sha256 = getattr(args, "execution_sha256", None)
+    if args.approve and not reviewed_by:
+        print(
+            "notion-source-properties approved writes require --reviewed-by.",
+            file=sys.stderr,
+        )
+        return 1
+    if resume and (
+        not args.approve or not approval_id or not execution_sha256
+    ):
+        print(
+            "notion-source-properties --resume requires --approve, --approval-id, and --execution-sha256.",
+            file=sys.stderr,
+        )
+        return 1
+    if not resume and (approval_id or execution_sha256):
+        print(
+            "--approval-id and --execution-sha256 are valid only with --resume.",
+            file=sys.stderr,
+        )
+        return 1
+    progress = _NotionPropertyBackfillCliProgress()
+    try:
+        acceptance = (
+            notion_property_backfill.load_notion_property_backfill_acceptance(
+                args.acceptance_file
+            )
+            if args.acceptance_file
+            else None
+        )
+        plan = notion_property_backfill._plan_notion_property_backfill_core(
+            Path(args.archive_root),
+            Path(args.source_mirror),
+            acceptance=acceptance,
+            progress=progress.initial_plan,
+        )
+        if acceptance_bootstrap:
+            result = (
+                notion_property_backfill.persist_notion_property_backfill_acceptance_candidate(
+                    plan,
+                    args.acceptance_output,
+                )
+            )
+        elif args.dry_run:
+            result = (
+                notion_property_backfill.plan_notion_property_backfill_revert(
+                    plan
+                )
+                if args.revert
+                else plan.public_document()
+            )
+        elif resume:
+            resume_writer = (
+                notion_property_backfill.resume_notion_property_backfill_revert
+                if args.revert
+                else notion_property_backfill.resume_notion_property_backfill
+            )
+            result = resume_writer(
+                plan,
+                reviewer_claim=reviewed_by,
+                approval_id=approval_id,
+                execution_sha256=execution_sha256,
+                progress_hook=progress.execution,
+                planning_progress=progress.revalidation,
+                execution_locator_hook=progress.locator,
+            )
+        else:
+            fresh_writer = (
+                notion_property_backfill.execute_notion_property_backfill_revert
+                if args.revert
+                else notion_property_backfill.execute_notion_property_backfill
+            )
+            result = fresh_writer(
+                plan,
+                reviewer_claim=reviewed_by,
+                progress_hook=progress.execution,
+                planning_progress=progress.revalidation,
+                execution_locator_hook=progress.locator,
+            )
+    except ExactHumanApprovalWorkflowError as exc:
+        state_unknown = exc.code == "exact_human_approval_state_unknown"
+        return _recognized_command_cli_error(
+            args,
+            command="migrate",
+            lifecycle_action="notion_source_properties_migration",
+            error_class="execution" if state_unknown else "precondition",
+            reason_code=exc.code,
+            text_message=(
+                "Notion source-properties write state is uncertain; do not "
+                "retry automatically. Use the emitted WOM-RESUME locator "
+                "only after reconciliation."
+                if state_unknown
+                else "Notion source-properties migration was blocked before "
+                "a protected write completed."
+            ),
+            effects_state="unknown" if state_unknown else "none",
+            reconciliation_locator=(
+                progress.resume_locator if state_unknown else None
+            ),
+        )
+    except (
+        notion_property_backfill.NotionPropertyBackfillError,
+        RuntimeError,
+    ) as exc:
+        # ExactOperationManifestError and other domain-safe runtime failures
+        # carry fixed codes.  Never reflect paths or private field values.
+        reason_code = getattr(exc, "code", "operation_failed")
+        state_unknown = (
+            reason_code
+            == "notion_property_backfill_acceptance_output_outcome_unknown"
+        )
+        return _recognized_command_cli_error(
+            args,
+            command="migrate",
+            lifecycle_action="notion_source_properties_migration",
+            error_class="execution" if state_unknown else "precondition",
+            reason_code=reason_code,
+            text_message=(
+                "Acceptance staging outcome is uncertain; inspect the exact "
+                "private output before retrying."
+                if state_unknown
+                else "Notion source-properties migration failed closed "
+                "before a protected write completed."
+            ),
+            effects_state="unknown" if state_unknown else "none",
+        )
+
+    if args.format == "json":
+        print_json(result)
+    elif acceptance_bootstrap:
+        print(
+            "Notion source-properties acceptance candidate was staged "
+            "create-only below the ignored private profile. Review that "
+            "exact file, then pass it back with --acceptance-file."
+        )
+    else:
+        print(
+            "Notion source-properties migration: "
+            + str(result.get("reason_code") or result.get("status") or "unknown")
+        )
+        if "mirror_page_count" in result:
+            print(f"Mirror pages: {result['mirror_page_count']}")
+        if "category_counts" in result:
+            counts = result["category_counts"]
+            print(
+                "Classification: "
+                f"mapped={counts.get('mapped', 0)} "
+                f"already_equal={counts.get('already_equal', 0)} "
+                f"unmapped={counts.get('unmapped', 0)} "
+                f"review={counts.get('review', 0)}"
+            )
+        print(
+            "Writes performed: "
+            + ("yes" if result.get("writes_performed") else "no")
+        )
+    return 0 if acceptance_bootstrap or result.get("ok") else 1
+
+
 def command_migrate(args: argparse.Namespace) -> int:
+    if (
+        args.target
+        == notion_property_backfill.NOTION_SOURCE_PROPERTIES_MIGRATION_TARGET
+    ):
+        return command_migrate_notion_source_properties(args)
+    if any(
+        (
+            getattr(args, "source_mirror", None),
+            getattr(args, "acceptance_file", None),
+            getattr(args, "acceptance_bootstrap", False),
+            getattr(args, "acceptance_output", None),
+            getattr(args, "resume", False),
+            getattr(args, "approval_id", None),
+            getattr(args, "execution_sha256", None),
+        )
+    ):
+        print(
+            "Notion source-property options require --target notion-source-properties.",
+            file=sys.stderr,
+        )
+        return 1
     if args.approve:
         return _exact_human_approval_cli_error(
             args,
@@ -15644,32 +16397,8 @@ def _zettel_objet_link_approval_read_boundary(
 def _zettel_objet_link_post_decision_boundary(root: Path):
     """Bind key-lock and exact-claim parents after live approval."""
 
-    credential_lock_parent = (
-        root / "profiles" / "local" / "credential-intake"
-    )
-    claims_parent = (
-        root
-        / "profiles"
-        / "local"
-        / "exact-human-approvals"
-        / "claims"
-    )
-    with ExitStack() as stack:
-        stack.enter_context(
-            archive_services._activity_group_bound_directory_chain(
-                root,
-                credential_lock_parent,
-                create=True,
-            )
-        )
-        claims_binding = stack.enter_context(
-            archive_services._activity_group_bound_directory_chain(
-                root,
-                claims_parent,
-                create=True,
-            )
-        )
-        yield root, claims_binding
+    with _exact_human_approval_post_decision_boundary(root) as boundary:
+        yield boundary
 
 
 def _execute_zettel_objet_link_exact_human_approved_write(
@@ -16567,6 +17296,7 @@ def _recognized_command_cli_error(
     text_message: str,
     effects_state: str = "none",
     exit_code: int = 1,
+    reconciliation_locator: Mapping[str, Any] | None = None,
 ) -> int:
     """Emit one content-free failure contract for an already parsed command."""
 
@@ -16595,6 +17325,21 @@ def _recognized_command_cli_error(
                 "automatic_retry_allowed": False,
             }
         )
+        if isinstance(reconciliation_locator, Mapping):
+            locator = dict(reconciliation_locator)
+            if (
+                locator.get("schema_version")
+                == "wom-kit/notion-property-backfill-execution-locator/v0.1"
+                and re.fullmatch(
+                    r"approval_[0-9a-f]{32}",
+                    str(locator.get("approval_id") or ""),
+                )
+                and re.fullmatch(
+                    r"sha256:[0-9a-f]{64}",
+                    str(locator.get("execution_sha256") or ""),
+                )
+            ):
+                payload["resume_locator"] = locator
     if getattr(args, "format", None) == "json":
         print_json(payload)
     else:
@@ -26193,15 +26938,6 @@ COMPOUND_APPROVAL_BLOCKED_HELP = (
     "status."
 )
 
-PROJECT_VERSION_UPDATE_BLOCKED_HELP = (
-    f"Unavailable in v{__version__}: the project-mirror updater still needs a "
-    "complete exact compound human-approval binding. To leave v0.4.0, install "
-    f"the exact public v{__version__} wheel using the documented bootstrap, "
-    "start a new process, and use that global CLI. The bootstrap does not "
-    "change the project-local mirror."
-)
-
-
 COMPOUND_APPROVAL_BLOCKED_COMMANDS = frozenset(
     {
         "activity-group-membership-recover",
@@ -26227,7 +26963,6 @@ COMPOUND_APPROVAL_BLOCKED_COMMANDS = frozenset(
         "markup-normalization",
         "markup-normalization-recovery",
         "markup-normalization-revert",
-        "migrate",
         "mint-zet-batch",
         "notion-ancestor-fetch-adapter-run",
         "notion-objet-manifest-locator-label",
@@ -26249,7 +26984,6 @@ COMPOUND_APPROVAL_BLOCKED_COMMANDS = frozenset(
         "principal-register",
         "principal-unregister",
         "project-bytecode-repair",
-        "project-version-update",
         "project-version-update-collision",
         "repair-gitignore",
         "quarantine-foreign-block",
@@ -26306,11 +27040,7 @@ def _mark_compound_approval_help(
             raise RuntimeError(
                 "compound_approval_help_action_invalid:" + command_name
             )
-        approval_actions[0].help = (
-            PROJECT_VERSION_UPDATE_BLOCKED_HELP
-            if command_name == "project-version-update"
-            else COMPOUND_APPROVAL_BLOCKED_HELP
-        )
+        approval_actions[0].help = COMPOUND_APPROVAL_BLOCKED_HELP
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -26360,6 +27090,14 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_false",
         default=True,
         help="Include local module and inspection paths in JSON output.",
+    )
+    version.add_argument(
+        "--progress",
+        action="store_true",
+        help=(
+            "Write immediate content-free version inspection progress and bounded "
+            "heartbeats to stderr."
+        ),
     )
     version.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     version.set_defaults(func=command_version)
@@ -26572,6 +27310,22 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Fetch origin/main plus the exact tag atomically, verify, materialize, align pins, and write a receipt.",
     )
+    project_version_update_mode.add_argument(
+        "--resume",
+        action="store_true",
+        help=(
+            "Resume one exact started or succeeded approval transaction "
+            "without displaying a second native approval."
+        ),
+    )
+    project_version_update.add_argument(
+        "--transaction-ref",
+        help="Opaque durable project-update transaction ref; required with --resume.",
+    )
+    project_version_update.add_argument(
+        "--approval-id",
+        help="Opaque exact-human approval id; required with --resume.",
+    )
     project_version_update.add_argument(
         "--reviewed-by",
         help="Safe non-secret reviewer actor id; required with --approve.",
@@ -26597,7 +27351,10 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     project_version_update.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
-    project_version_update.set_defaults(func=command_project_version_update)
+    project_version_update.set_defaults(
+        func=command_project_version_update,
+        _wom_project_runtime_effect="bootstrap_update",
+    )
 
     project_version_update_collision = subcommands.add_parser(
         "project-version-update-collision",
@@ -26771,6 +27528,28 @@ def build_parser() -> argparse.ArgumentParser:
         "--request",
         required=True,
         help="Archive-relative private request at profiles/local/operator-feedback/requests/<name>.json.",
+    )
+    operator_feedback_compose.add_argument(
+        "--intent",
+        choices=["create", "revise", "supersede"],
+        default="create",
+        help=(
+            "Create a new body, revise the same-id draft with body-hash CAS, "
+            "or create a new body that explicitly supersedes an immutable record."
+        ),
+    )
+    operator_feedback_compose.add_argument(
+        "--expected-body-sha256",
+        help=(
+            "Required for revise/supersede: exact current body SHA-256 from "
+            "operator-feedback-body-check."
+        ),
+    )
+    operator_feedback_compose.add_argument(
+        "--supersedes-feedback-id",
+        help=(
+            "Required only with --intent supersede: immutable prior feedback id."
+        ),
     )
     operator_feedback_compose_action = operator_feedback_compose.add_mutually_exclusive_group(required=True)
     operator_feedback_compose_action.add_argument("--dry-run", action="store_true", help="Plan only; write nothing.")
@@ -26995,6 +27774,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="Optional target branch name; omitted means use the current symbolic branch.",
     )
     git_backup.add_argument(
+        "--credential-mode",
+        choices=git_backup_planning.GIT_BACKUP_CREDENTIAL_MODES,
+        default="anonymous",
+        help=(
+            "Remote observation mode. 'stored' permits an existing non-interactive "
+            "credential helper without echoing credentials."
+        ),
+    )
+    git_backup.add_argument(
         "--max-changes",
         type=int,
         default=git_backup_planning.GIT_BACKUP_PLAN_DEFAULT_MAX_CHANGES,
@@ -27012,6 +27800,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Required. Inspect and query only the selected exact ref; write nothing.",
     )
     git_backup.add_argument(
+        "--progress",
+        action="store_true",
+        help="Stream content-free stages immediately and heartbeats at most 10 seconds apart.",
+    )
+    git_backup.add_argument(
         "--format",
         choices=["json"],
         default="json",
@@ -27022,12 +27815,13 @@ def build_parser() -> argparse.ArgumentParser:
     git_backup_reconcile = subcommands.add_parser(
         "git-backup-reconcile-plan",
         help=(
-            "Re-observe an exact reviewed Git backup plan without commit, push, "
-            "fetch, checkout, merge, reset, delete, or any other writer."
+            "Re-observe a Git backup plan or apply/resume one exact private "
+            "selection through native approval."
         ),
         description=(
-            "Re-observe an exact reviewed Git backup plan without commit, push, "
-            "fetch, checkout, merge, reset, delete, or any other writer."
+            "Dry-run re-observes without writes. --approve commits only the "
+            "explicit bounded groups, performs a non-force fast-forward push, "
+            "and independently requeries the exact remote ref."
         ),
     )
     git_backup_reconcile.add_argument(
@@ -27061,6 +27855,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="Optional target branch name; omitted means use the current symbolic branch.",
     )
     git_backup_reconcile.add_argument(
+        "--credential-mode",
+        choices=git_backup_planning.GIT_BACKUP_CREDENTIAL_MODES,
+        default="anonymous",
+        help=(
+            "Remote mode. Exact apply requires 'stored' and reuses existing "
+            "non-interactive credentials without exposing values."
+        ),
+    )
+    git_backup_reconcile.add_argument(
         "--max-changes",
         type=int,
         default=git_backup_planning.GIT_BACKUP_PLAN_DEFAULT_MAX_CHANGES,
@@ -27075,7 +27878,36 @@ def build_parser() -> argparse.ArgumentParser:
     git_backup_reconcile.add_argument(
         "--dry-run",
         action="store_true",
-        help="Required. Re-observe only; write nothing.",
+        help="Re-observe or validate an exact private selection; write nothing.",
+    )
+    git_backup_reconcile.add_argument(
+        "--selection-manifest",
+        help=(
+            "Private JSON manifest assigning every ordinal change_ref to exactly "
+            "one commit group; never echoed."
+        ),
+    )
+    git_backup_reconcile.add_argument(
+        "--approve",
+        action="store_true",
+        help="Request native exact-human approval, then commit, push, and requery.",
+    )
+    git_backup_reconcile.add_argument(
+        "--reviewed-by",
+        help="Safe reviewer claim required for approve or resume.",
+    )
+    git_backup_reconcile.add_argument(
+        "--resume-approval-id",
+        help="Resume one existing authenticated started approval without a new prompt.",
+    )
+    git_backup_reconcile.add_argument(
+        "--expected-manifest-sha256",
+        help="Exact manifest SHA-256 required to load a private resume bundle.",
+    )
+    git_backup_reconcile.add_argument(
+        "--progress",
+        action="store_true",
+        help="Stream content-free stages immediately and heartbeats at most 10 seconds apart.",
     )
     git_backup_reconcile.add_argument(
         "--format",
@@ -27176,12 +28008,76 @@ def build_parser() -> argparse.ArgumentParser:
             archive_services.FRONTMATTER_V03_TARGET,
             archive_services.LINK_TYPES_V03_TARGET,
             archive_services.BASE_LINK_TYPES_TARGET,
+            notion_property_backfill.NOTION_SOURCE_PROPERTIES_MIGRATION_TARGET,
         ],
         help="Migration target.",
     )
-    migrate.add_argument("--dry-run", action="store_true", help="Preview migration changes without writing files.")
-    migrate.add_argument("--approve", action="store_true", help="Apply the reviewed migration changes.")
+    migrate.add_argument(
+        "--dry-run",
+        action="store_true",
+        help=(
+            "Preview migration changes without canonical writes. With "
+            "--acceptance-bootstrap only, it stages one create-only private "
+            "acceptance artifact."
+        ),
+    )
+    migrate.add_argument(
+        "--approve",
+        action="store_true",
+        help=(
+            "Apply only the operation-specifically bound "
+            "notion-source-properties target. Every other migration target "
+            "remains fixed closed."
+        ),
+    )
     migrate.add_argument("--revert", action="store_true", help="Preview or apply a safe migration rollback where the target supports it.")
+    migrate.add_argument(
+        "--source-mirror",
+        help=(
+            "Local raw-page JSONL or block-mirror directory; required only "
+            "for the notion-source-properties target and never echoed."
+        ),
+    )
+    migrate.add_argument(
+        "--acceptance-file",
+        help=(
+            "Bounded local JSON completeness profile; required only for the "
+            "notion-source-properties target and never echoed."
+        ),
+    )
+    migrate.add_argument(
+        "--acceptance-bootstrap",
+        action="store_true",
+        help=(
+            "For notion-source-properties dry-run only, stage the exact "
+            "content-free source-inventory candidate create-only at "
+            "--acceptance-output before supplying --acceptance-file."
+        ),
+    )
+    migrate.add_argument(
+        "--acceptance-output",
+        help=(
+            "Create-only archive-relative JSON below "
+            "profiles/local/notion-property-backfill/; required only with "
+            "--acceptance-bootstrap and never echoed."
+        ),
+    )
+    migrate.add_argument(
+        "--resume",
+        action="store_true",
+        help=(
+            "Resume only the same authenticated notion-source-properties "
+            "execution from its durable exact-operation checkpoint."
+        ),
+    )
+    migrate.add_argument(
+        "--approval-id",
+        help="Authenticated started approval id required with --resume.",
+    )
+    migrate.add_argument(
+        "--execution-sha256",
+        help="Exact authority-bound execution digest required with --resume.",
+    )
     migrate.add_argument(
         "--link-type",
         action="append",
@@ -27190,9 +28086,28 @@ def build_parser() -> argparse.ArgumentParser:
             "link type. May be repeated."
         ),
     )
-    migrate.add_argument("--reviewed-by", help="Reviewer id required with --approve for the base-link-types target.")
+    migrate.add_argument(
+        "--reviewed-by",
+        help=(
+            "Reviewer claim required with --approve for base-link-types and "
+            "notion-source-properties."
+        ),
+    )
     migrate.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
-    migrate.set_defaults(func=command_migrate)
+    migrate.set_defaults(
+        func=command_migrate,
+        _wom_approval_scope={
+            "kind": "argument_value_allowlist",
+            "argument": "--target",
+            "allowed_values": [
+                notion_property_backfill.NOTION_SOURCE_PROPERTIES_MIGRATION_TARGET
+            ],
+            "outside_scope_status": "approval_fixed_closed",
+            "outside_scope_reason_code": (
+                command_status.COMPOUND_APPROVAL_REASON_CODE
+            ),
+        },
+    )
 
     profile_list_parser = subcommands.add_parser(
         "profile-list",
@@ -33068,7 +33983,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="Optional new .wom-scratch/diagnostics/*.json file for the complete result and CLI exit evidence.",
     )
     index.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
-    index.set_defaults(func=command_index)
+    index.set_defaults(
+        func=command_index,
+        _wom_project_runtime_effect="project_write",
+    )
 
     index_health_parser = subcommands.add_parser(
         "index-health",
@@ -36565,6 +37483,83 @@ def _argument_parser_error_message(rendered: str) -> str:
     return "command arguments are invalid"
 
 
+def _project_write_runtime_guard(
+    args: argparse.Namespace,
+    raw_argv: list[str],
+) -> dict[str, Any] | None:
+    """Fail closed before a project write runs under another pinned version."""
+
+    command = raw_argv[0] if raw_argv else ""
+    runtime_effect = getattr(args, "_wom_project_runtime_effect", None)
+    if runtime_effect == "bootstrap_update":
+        return None
+    if runtime_effect != "project_write" and not bool(
+        getattr(args, "approve", False)
+    ):
+        return None
+    candidate_attributes = (
+        "archive_root",
+        "inspection_root",
+        "project_root",
+        "workspace_root",
+        "root",
+    )
+    for attribute in candidate_attributes:
+        value = getattr(args, attribute, None)
+        if not isinstance(value, (str, Path)) or not str(value).strip():
+            continue
+        candidate = Path(value).expanduser()
+        try:
+            if candidate.is_file():
+                candidate = candidate.parent
+        except OSError:
+            continue
+        result = project_runtime.project_write_guard(
+            candidate,
+            running_version=__version__,
+        )
+        if result.get("reason_code") == "project_runtime_pin_not_found":
+            continue
+        if result.get("blocked"):
+            recovery_required = (
+                result.get("reason_code")
+                == "project_update_recovery_required"
+            )
+            return {
+                "schema": (
+                    "wom-kit/project-update-recovery-required/v0.1"
+                    if recovery_required
+                    else "wom-kit/project-runtime-mismatch/v0.1"
+                ),
+                "ok": False,
+                "state": "blocked",
+                "status": "blocked",
+                "lifecycle_action": "project_runtime_guard",
+                "command": command,
+                "reason_codes": [result["reason_code"]],
+                "project_pin": result.get("project_pin"),
+                "running_version": result.get("running_version"),
+                "project_runtime_argv": result["project_runtime_argv"],
+                "next_safe_actions": (
+                    [
+                        "Preserve .zettel-kasten/version-update.lock and do not run another project writer.",
+                        "Use read-only inspection or the project-version-update recovery path before any new approved write.",
+                    ]
+                    if recovery_required
+                    else [
+                        r"Run .\.zettel-kasten\bin\archive.cmd with the same command from the project root.",
+                        "If that launcher is missing or invalid, run an exact approved project-version-update from the public target wheel first.",
+                    ]
+                ),
+                "effects_state": "none",
+                "files_written": [],
+                "private_values_echoed": False,
+                "absolute_paths_echoed": False,
+            }
+        return None
+    return None
+
+
 def main(argv: list[str] | None = None) -> int:
     _harden_std_streams()
     raw_argv = sys.argv[1:] if argv is None else list(argv)
@@ -36603,6 +37598,7 @@ def main(argv: list[str] | None = None) -> int:
             "create-draft",
             "zettel-objet-link",
             "zet-objet-link",
+            "migrate",
         }
     )
     if raw_argv[:1] == ["credential-adopt"] and any(
@@ -36697,6 +37693,32 @@ def main(argv: list[str] | None = None) -> int:
             }
         )
         return exit_code
+    runtime_blocker = _project_write_runtime_guard(args, raw_argv)
+    if runtime_blocker is not None:
+        if json_requested:
+            print_json(runtime_blocker)
+        else:
+            if "project_update_recovery_required" in runtime_blocker.get(
+                "reason_codes", []
+            ):
+                print(
+                    "This write is blocked because an incomplete project update requires recovery.",
+                    file=sys.stderr,
+                )
+                print(
+                    "Preserve the project update lock and use read-only inspection or the project-version-update recovery path.",
+                    file=sys.stderr,
+                )
+            else:
+                print(
+                    "This write is blocked because the project pin and running WOM version differ.",
+                    file=sys.stderr,
+                )
+                print(
+                    r"Run the same command through .\.zettel-kasten\bin\archive.cmd from the project root.",
+                    file=sys.stderr,
+                )
+        return 3
     return int(args.func(args))
 
 

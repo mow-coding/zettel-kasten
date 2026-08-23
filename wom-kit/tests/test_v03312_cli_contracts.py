@@ -377,8 +377,8 @@ class V03312CliContractTests(unittest.TestCase):
     def test_operator_feedback_compose_and_check_dispatch_public_api(self) -> None:
         calls: list[tuple[object, ...]] = []
 
-        def plan(root: Path, request: str) -> dict[str, object]:
-            calls.append(("plan", root, request))
+        def plan(root: Path, request: str, **kwargs: object) -> dict[str, object]:
+            calls.append(("plan", root, request, kwargs))
             return {"ok": True, "state": "planned"}
 
         def approve(root: Path, request: str, **kwargs: object) -> dict[str, object]:
@@ -435,9 +435,11 @@ class V03312CliContractTests(unittest.TestCase):
 
         self.assertEqual((plan_code, approve_code, check_code), (0, 0, 0))
         self.assertEqual(calls[0][0], "plan")
+        self.assertEqual(calls[0][3]["intent"], "create")
         self.assertEqual(calls[1][0], "approve")
         self.assertEqual(calls[1][3]["expected_plan_sha256"], "a" * 64)
         self.assertEqual(calls[1][3]["reviewed_by"], "person:reviewer")
+        self.assertEqual(calls[1][3]["intent"], "create")
         self.assertEqual(calls[2][0], "check")
 
     def test_operator_feedback_late_import_resolves_public_api(self) -> None:

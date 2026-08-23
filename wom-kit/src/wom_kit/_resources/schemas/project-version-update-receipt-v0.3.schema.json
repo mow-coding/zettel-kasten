@@ -1,0 +1,263 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "WOM-kit project version update receipt v0.3",
+  "type": "object",
+  "required": [
+    "schema",
+    "action",
+    "status",
+    "timestamp",
+    "reviewed_by",
+    "target_tag",
+    "target_version",
+    "source_mirror",
+    "head_commit_before",
+    "head_commit_after",
+    "source_checkout_changed",
+    "runtime_source_materialization",
+    "external_writer_quiescence",
+    "pins_written",
+    "pin_transitions",
+    "configured_origin",
+    "project_runtime",
+    "runtime",
+    "transaction_ref",
+    "plan_sha256",
+    "target_binding_sha256",
+    "approval_evidence_contract",
+    "privacy_guards"
+  ],
+  "properties": {
+    "schema": {
+      "type": "string",
+      "const": "wom-kit/project-version-update-receipt/v0.3"
+    },
+    "action": {"type": "string", "const": "project_version_update"},
+    "status": {"type": "string", "const": "updated_restart_required"},
+    "timestamp": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
+    },
+    "reviewed_by": {"type": "string", "minLength": 1},
+    "target_tag": {
+      "type": "string",
+      "pattern": "^v(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"
+    },
+    "target_version": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"
+    },
+    "source_mirror": {"type": "string"},
+    "head_commit_before": {"type": "string", "pattern": "^[0-9a-f]{40,64}$"},
+    "head_commit_after": {"type": "string", "pattern": "^[0-9a-f]{40,64}$"},
+    "source_checkout_changed": {"type": "boolean"},
+    "runtime_source_materialization": {
+      "type": "object",
+      "required": ["attempted", "succeeded", "target_integrity_verified"],
+      "properties": {
+        "attempted": {"type": "boolean"},
+        "succeeded": {"type": ["boolean", "null"]},
+        "target_integrity_verified": {"type": "boolean", "const": true}
+      },
+      "additionalProperties": false
+    },
+    "external_writer_quiescence": {
+      "type": "object",
+      "required": ["affirmed", "scope"],
+      "properties": {
+        "affirmed": {"type": "boolean", "const": true},
+        "scope": {"type": "string", "const": "complete_project_version_update_transaction"}
+      },
+      "additionalProperties": false
+    },
+    "pins_written": {
+      "type": "array",
+      "items": {"type": "string"},
+      "uniqueItems": true
+    },
+    "pin_transitions": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["path", "previous_version", "new_version", "written"],
+        "properties": {
+          "path": {"type": "string"},
+          "previous_version": {
+            "type": ["string", "null"],
+            "pattern": "^v(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"
+          },
+          "new_version": {
+            "type": "string",
+            "pattern": "^v(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"
+          },
+          "written": {"type": "boolean"}
+        },
+        "additionalProperties": false
+      }
+    },
+    "configured_origin": {
+      "type": "object",
+      "required": [
+        "remote_name",
+        "atomic_fetch_succeeded",
+        "target_reachable_from_origin_main",
+        "annotated_tag_verified",
+        "cryptographic_tag_signature_verified",
+        "remote_url_echoed"
+      ],
+      "properties": {
+        "remote_name": {"type": "string", "const": "origin"},
+        "atomic_fetch_succeeded": {"type": "boolean", "const": true},
+        "target_reachable_from_origin_main": {"type": "boolean", "const": true},
+        "annotated_tag_verified": {"type": "boolean", "const": true},
+        "cryptographic_tag_signature_verified": {"type": "boolean", "const": false},
+        "remote_url_echoed": {"type": "boolean", "const": false}
+      },
+      "additionalProperties": false
+    },
+    "project_runtime": {
+      "type": "object",
+      "required": [
+        "policy_schema",
+        "policy_sha256",
+        "path",
+        "launcher_path",
+        "project_runtime_argv",
+        "target_tag",
+        "target_version",
+        "target_commit",
+        "wheel_sha256",
+        "supply_lock_sha256",
+        "runtime_receipt_sha256",
+        "artifact_inventory",
+        "installed_payload_sha256",
+        "python_version",
+        "created",
+        "launcher_written",
+        "verification",
+        "new_process_verified",
+        "global_path_mutation",
+        "previous_runtime_deleted"
+      ],
+      "properties": {
+        "policy_schema": {"type": "string", "const": "wom-kit/project-runtime-policy/v0.1"},
+        "policy_sha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+        "path": {"type": "string", "pattern": "^\\.zettel-kasten/runtimes/v[0-9]+\\.[0-9]+\\.[0-9]+$"},
+        "launcher_path": {"type": "string", "const": ".zettel-kasten/bin/archive.cmd"},
+        "project_runtime_argv": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"type": "string"}
+        },
+        "target_tag": {"type": "string"},
+        "target_version": {"type": "string"},
+        "target_commit": {"type": "string", "pattern": "^[0-9a-f]{40,64}$"},
+        "wheel_sha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+        "supply_lock_sha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+        "runtime_receipt_sha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+        "artifact_inventory": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 33,
+          "items": {
+            "type": "object",
+            "required": ["role", "distribution", "version", "file_name", "size_bytes", "sha256"],
+            "properties": {
+              "role": {"type": "string", "enum": ["runtime", "dependency"]},
+              "distribution": {"type": "string", "minLength": 1},
+              "version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"},
+              "file_name": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,199}\\.whl$"},
+              "size_bytes": {"type": "integer", "minimum": 1, "maximum": 134217728},
+              "sha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+            },
+            "additionalProperties": false
+          }
+        },
+        "installed_payload_sha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+        "python_version": {"type": "string"},
+        "created": {"type": "boolean"},
+        "launcher_written": {"type": "boolean"},
+        "verification": {
+          "type": "object",
+          "required": ["wheel_sha256", "pip_check", "version", "package_resources", "new_process", "supply_lock", "artifact_hashes", "artifact_sizes", "artifact_inventory", "installed_payload", "live_process"],
+          "properties": {
+            "wheel_sha256": {"type": "boolean", "const": true},
+            "pip_check": {"type": "boolean", "const": true},
+            "version": {"type": "boolean", "const": true},
+            "package_resources": {"type": "boolean", "const": true},
+            "new_process": {"type": "boolean", "const": true},
+            "supply_lock": {"type": "boolean", "const": true},
+            "artifact_hashes": {"type": "boolean", "const": true},
+            "artifact_sizes": {"type": "boolean", "const": true},
+            "artifact_inventory": {"type": "boolean", "const": true},
+            "installed_payload": {"type": "boolean", "const": true},
+            "live_process": {"type": "boolean", "const": true}
+          },
+          "additionalProperties": false
+        },
+        "new_process_verified": {"type": "boolean", "const": true},
+        "global_path_mutation": {"type": "boolean", "const": false},
+        "previous_runtime_deleted": {"type": "boolean", "const": false}
+      },
+      "additionalProperties": false
+    },
+    "runtime": {
+      "type": "object",
+      "required": ["running_version_before", "running_process_reloaded", "restart_required"],
+      "properties": {
+        "running_version_before": {"type": "string"},
+        "running_process_reloaded": {"type": "boolean", "const": false},
+        "restart_required": {"type": "boolean", "const": true}
+      },
+      "additionalProperties": false
+    },
+    "transaction_ref": {
+      "type": "string",
+      "pattern": "^update_[0-9a-f]{32}$"
+    },
+    "plan_sha256": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "target_binding_sha256": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "approval_evidence_contract": {
+      "type": "object",
+      "required": [
+        "embedded_dynamic_claim_reference",
+        "authenticated_succeeded_claim_required",
+        "transaction_journal_checkpoint",
+        "domain_writer_reentry_on_succeeded_tail_allowed"
+      ],
+      "properties": {
+        "embedded_dynamic_claim_reference": {"type": "boolean", "const": false},
+        "authenticated_succeeded_claim_required": {"type": "boolean", "const": true},
+        "transaction_journal_checkpoint": {"type": "string", "const": "claim_succeeded"},
+        "domain_writer_reentry_on_succeeded_tail_allowed": {"type": "boolean", "const": false}
+      },
+      "additionalProperties": false
+    },
+    "privacy_guards": {
+      "type": "object",
+      "required": [
+        "local_absolute_paths_echoed",
+        "remote_urls_echoed",
+        "credential_values_echoed",
+        "archive_body_text_read",
+        "objet_bytes_read"
+      ],
+      "properties": {
+        "local_absolute_paths_echoed": {"type": "boolean", "const": false},
+        "remote_urls_echoed": {"type": "boolean", "const": false},
+        "credential_values_echoed": {"type": "boolean", "const": false},
+        "archive_body_text_read": {"type": "boolean", "const": false},
+        "objet_bytes_read": {"type": "boolean", "const": false}
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

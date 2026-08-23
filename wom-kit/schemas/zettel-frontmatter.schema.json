@@ -65,6 +65,9 @@
         "required": ["type", "value"]
       }
     },
+    "source_properties": {
+      "$ref": "notion-source-properties-v0.1.schema.json"
+    },
     "local_ai_sessions": {
       "type": "array",
       "items": {

@@ -69,6 +69,10 @@ class ExactHumanApprovalOperation(Enum):
     human_artifact_lifecycle = "human_artifact_lifecycle"
     duplicate_object_reconcile = "duplicate_object_reconcile"
     integrity_repair = "integrity_repair"
+    project_version_update = "project_version_update"
+    git_backup = "git_backup"
+    notion_property_backfill = "notion_property_backfill"
+    notion_property_backfill_revert = "notion_property_backfill_revert"
 
 
 def exact_human_approval_warning_codes(
@@ -116,6 +120,10 @@ _OPERATION_LABELS = {
     ExactHumanApprovalOperation.human_artifact_lifecycle: "사람 작업물 수명주기 변경",
     ExactHumanApprovalOperation.duplicate_object_reconcile: "중복 객체 정리",
     ExactHumanApprovalOperation.integrity_repair: "무결성 보충 또는 철회",
+    ExactHumanApprovalOperation.project_version_update: "프로젝트 WOM-kit 버전 갱신",
+    ExactHumanApprovalOperation.git_backup: "Git 원격 백업",
+    ExactHumanApprovalOperation.notion_property_backfill: "Notion 원본 속성 복구",
+    ExactHumanApprovalOperation.notion_property_backfill_revert: "Notion 원본 속성 복구 철회",
 }
 
 

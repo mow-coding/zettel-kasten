@@ -17,10 +17,21 @@ SRC_ROOT = KIT_ROOT / "src"
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
-from wom_kit import archive_services
+from wom_kit import archive_services, project_update_git_runner
 
 
 class ProjectUpdateBatchTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.mirror_fixture = tempfile.TemporaryDirectory()
+        self.addCleanup(self.mirror_fixture.cleanup)
+        self.unused_mirror = Path(self.mirror_fixture.name).resolve()
+        self.runner = (
+            project_update_git_runner.TrustedProjectUpdateGitRunner
+            .resolve_preapproval()
+        )
+        self.runner.close_transport_boundary()
+        self.addCleanup(self.runner.close)
+
     @staticmethod
     def git(repository: Path, *args: str) -> str:
         completed = subprocess.run(
@@ -94,6 +105,7 @@ class ProjectUpdateBatchTests(unittest.TestCase):
                 entries = archive_services._wom_kit_project_update_tree_blobs(
                     repository,
                     "HEAD",
+                    runner=self.runner,
                 )
 
             self.assertIsNotNone(entries)
@@ -140,6 +152,7 @@ class ProjectUpdateBatchTests(unittest.TestCase):
                 entries = archive_services._wom_kit_project_update_tree_blobs(
                     repository,
                     "HEAD",
+                    runner=self.runner,
                 )
 
             self.assertIsNotNone(entries)
@@ -203,8 +216,9 @@ class ProjectUpdateBatchTests(unittest.TestCase):
             ):
                 self.assertIsNone(
                     archive_services._wom_kit_project_update_git_blob_batch(
-                        Path("unused-mirror"),
+                        self.unused_mirror,
                         {object_id: 1},
+                        runner=self.runner,
                     )
                 )
 
@@ -232,8 +246,9 @@ class ProjectUpdateBatchTests(unittest.TestCase):
             ):
                 self.assertIsNone(
                     archive_services._wom_kit_project_update_git_blob_batch(
-                        Path("unused-mirror"),
+                        self.unused_mirror,
                         {object_id: path_count},
+                        runner=self.runner,
                     )
                 )
 

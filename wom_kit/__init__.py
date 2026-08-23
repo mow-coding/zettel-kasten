@@ -22,4 +22,4 @@ if _SOURCE_PACKAGE.is_dir():
 else:
     __path__ = _extended_path
 
-__version__ = "0.4.2"
+__version__ = "0.4.3"

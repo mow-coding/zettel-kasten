@@ -11,11 +11,12 @@ from __future__ import annotations
 import argparse
 from collections.abc import Iterable
 from itertools import product
+import re
 from typing import AbstractSet, Any
 
 
 COMMAND_STATUS_INVENTORY_SCHEMA = (
-    "wom-kit/command-approval-status-inventory/v0.1"
+    "wom-kit/command-approval-status-inventory/v0.2"
 )
 
 APPROVAL_AVAILABLE = "approval_available"
@@ -69,6 +70,50 @@ def _option_exposed(
 
 def _invocation_surface_available(parser: argparse.ArgumentParser) -> bool:
     return callable(parser._defaults.get("func"))
+
+
+def _parser_approval_scope(
+    parser: argparse.ArgumentParser,
+) -> dict[str, Any] | None:
+    """Return one strictly content-free parser-declared approval scope."""
+
+    raw = parser._defaults.get("_wom_approval_scope")
+    if raw is None:
+        return None
+    if type(raw) is not dict or set(raw) != {
+        "kind",
+        "argument",
+        "allowed_values",
+        "outside_scope_status",
+        "outside_scope_reason_code",
+    }:
+        raise ValueError("command_approval_scope_invalid")
+    argument = raw.get("argument")
+    allowed_values = raw.get("allowed_values")
+    if (
+        raw.get("kind") != "argument_value_allowlist"
+        or type(argument) is not str
+        or re.fullmatch(r"--[a-z0-9][a-z0-9-]*", argument) is None
+        or type(allowed_values) is not list
+        or not allowed_values
+        or any(
+            type(value) is not str
+            or re.fullmatch(r"[a-z0-9][a-z0-9-]*", value) is None
+            for value in allowed_values
+        )
+        or len(set(allowed_values)) != len(allowed_values)
+        or raw.get("outside_scope_status") != APPROVAL_FIXED_CLOSED
+        or raw.get("outside_scope_reason_code")
+        != COMPOUND_APPROVAL_REASON_CODE
+    ):
+        raise ValueError("command_approval_scope_invalid")
+    return {
+        "kind": "argument_value_allowlist",
+        "argument": argument,
+        "allowed_values": sorted(allowed_values),
+        "outside_scope_status": APPROVAL_FIXED_CLOSED,
+        "outside_scope_reason_code": COMPOUND_APPROVAL_REASON_CODE,
+    }
 
 
 def _normalize_fixed_closed_commands(
@@ -159,6 +204,11 @@ def build_command_status_inventory(
                     else:
                         approval_status = APPROVAL_AVAILABLE
                         approval_reason_code = None
+                    approval_scope = (
+                        _parser_approval_scope(command_parser)
+                        if approval_status == APPROVAL_AVAILABLE
+                        else None
+                    )
 
                     alias_path_texts = sorted(
                         {
@@ -173,6 +223,7 @@ def build_command_status_inventory(
                             "alias_paths": alias_path_texts,
                             "approval_status": approval_status,
                             "approval_reason_code": approval_reason_code,
+                            "approval_scope": approval_scope,
                             "dry_run_exposed": _option_exposed(
                                 command_parser,
                                 "--dry-run",
@@ -198,6 +249,9 @@ def build_command_status_inventory(
         for status in APPROVAL_STATUSES
     }
     alias_path_count = sum(len(command["alias_paths"]) for command in commands)
+    conditional_approval_count = sum(
+        command["approval_scope"] is not None for command in commands
+    )
     return {
         "schema": COMMAND_STATUS_INVENTORY_SCHEMA,
         "state": "complete",
@@ -220,6 +274,7 @@ def build_command_status_inventory(
             "approval_not_exposed_command_count": status_counts[
                 APPROVAL_NOT_EXPOSED
             ],
+            "conditional_approval_command_count": conditional_approval_count,
             "dry_run_exposed_command_count": sum(
                 bool(command["dry_run_exposed"]) for command in commands
             ),

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, Callable
 
@@ -14,9 +15,13 @@ from wom_kit.exact_human_approval_windows import (
     ExactHumanApprovalContext,
     ExactHumanApprovalOperation,
 )
+from wom_kit import exact_human_approval_workflow as workflow_module
 from wom_kit.exact_human_approval_workflow import (
     ExactHumanApprovalWorkflowError,
     _execute_exact_human_approved_write_core as execute_exact_human_approved_write,
+    _resume_exact_human_approved_transaction_core as resume_exact_human_approved_transaction,
+    _resume_exact_human_approved_write_core as resume_exact_human_approved_write,
+    _resume_succeeded_claim_finalizer_core as resume_succeeded_claim_finalizer,
 )
 
 
@@ -73,6 +78,15 @@ class ExactHumanApprovalWorkflowTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.temporary.cleanup()
 
+    def test_generic_resume_writer_injection_is_not_public(self) -> None:
+        self.assertNotIn(
+            "resume_exact_human_approved_write",
+            workflow_module.__all__,
+        )
+        self.assertFalse(
+            hasattr(workflow_module, "resume_exact_human_approved_write")
+        )
+
     def test_cancel_touches_no_key_claim_or_writer(self) -> None:
         native = _Native((2, False))
         key_provider = _KeyProvider()
@@ -121,6 +135,188 @@ class ExactHumanApprovalWorkflowTests(unittest.TestCase):
         self.assertEqual(result["exact_human_approval_reference"], observed[0])
         claim_path = next((self.root / CLAIMS_RELATIVE_ROOT).glob("*.json"))
         self.assertIn('"status":"succeeded"', claim_path.read_text(encoding="utf-8"))
+
+    def test_success_finalizer_runs_only_after_claim_is_durably_succeeded(self) -> None:
+        events: list[str] = []
+
+        def writer(_claim):
+            events.append("writer")
+            return {"ok": True, "lifecycle_action": "test_write"}
+
+        def finalizer(claim) -> None:
+            events.append("finalizer")
+            self.assertEqual(claim.status, "succeeded")
+            evidence = claim.succeeded_evidence_digests(self.context)
+            self.assertEqual(
+                set(evidence),
+                {
+                    "approval_reference_sha256",
+                    "claim_receipt_sha256",
+                    "claim_mac_sha256",
+                },
+            )
+            self.assertTrue(
+                all(value.startswith("sha256:") for value in evidence.values())
+            )
+            claim_path = next(
+                (self.root / CLAIMS_RELATIVE_ROOT).glob("*.json")
+            )
+            self.assertIn(
+                '"status":"succeeded"',
+                claim_path.read_text(encoding="utf-8"),
+            )
+
+        result = execute_exact_human_approved_write(
+            self.root,
+            self.context,
+            writer,
+            native=_Native((APPROVE_BUTTON_ID, True)),
+            key_provider=_KeyProvider(),
+            claim_succeeded_finalizer=finalizer,
+        )
+
+        self.assertEqual(events, ["writer", "finalizer"])
+        self.assertEqual(result["exact_human_approval"]["status"], "succeeded")
+
+    def test_success_finalizer_is_skipped_for_unsuccessful_writer(self) -> None:
+        finalizer_calls = 0
+
+        def finalizer(_claim) -> None:
+            nonlocal finalizer_calls
+            finalizer_calls += 1
+
+        result = execute_exact_human_approved_write(
+            self.root,
+            self.context,
+            lambda _claim: {"ok": False, "reason_code": "blocked"},
+            native=_Native((APPROVE_BUTTON_ID, True)),
+            key_provider=_KeyProvider(),
+            claim_succeeded_finalizer=finalizer,
+        )
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(finalizer_calls, 0)
+        self.assertEqual(result["exact_human_approval"]["status"], "started")
+
+    def test_success_finalizer_failure_is_unknown_after_claim_succeeded(self) -> None:
+        def finalizer(_claim) -> None:
+            raise RuntimeError("private finalizer detail")
+
+        with self.assertRaises(ExactHumanApprovalWorkflowError) as captured:
+            execute_exact_human_approved_write(
+                self.root,
+                self.context,
+                lambda _claim: {"ok": True},
+                native=_Native((APPROVE_BUTTON_ID, True)),
+                key_provider=_KeyProvider(),
+                claim_succeeded_finalizer=finalizer,
+            )
+
+        self.assertEqual(
+            captured.exception.code, "exact_human_approval_state_unknown"
+        )
+        self.assertNotIn("private finalizer detail", str(captured.exception))
+        claim_path = next((self.root / CLAIMS_RELATIVE_ROOT).glob("*.json"))
+        self.assertIn(
+            '"status":"succeeded"', claim_path.read_text(encoding="utf-8")
+        )
+
+    def test_succeeded_claim_tail_resumes_without_writer_or_new_prompt(self) -> None:
+        with self.assertRaises(ExactHumanApprovalWorkflowError) as interrupted:
+            execute_exact_human_approved_write(
+                self.root,
+                self.context,
+                lambda _claim: {"ok": True},
+                native=_Native((APPROVE_BUTTON_ID, True)),
+                key_provider=_KeyProvider(),
+                claim_succeeded_finalizer=lambda _claim: (_ for _ in ()).throw(
+                    RuntimeError("hard exit before transaction unlock")
+                ),
+            )
+        self.assertEqual(
+            interrupted.exception.code, "exact_human_approval_state_unknown"
+        )
+        claim_path = next((self.root / CLAIMS_RELATIVE_ROOT).glob("*.json"))
+        approval_id = claim_path.stem
+        self.assertIn(
+            '"status":"succeeded"', claim_path.read_text(encoding="utf-8")
+        )
+
+        events: list[str] = []
+        provider = _KeyProvider()
+
+        def guard(claim) -> bool:
+            events.append("guard")
+            reference = claim.assert_succeeded_for_context(self.context)
+            self.assertEqual(reference["approval_id"], approval_id)
+            self.assertTrue(
+                all(
+                    value.startswith("sha256:")
+                    for value in claim.succeeded_evidence_digests(
+                        self.context
+                    ).values()
+                )
+            )
+            return True
+
+        def tail(claim) -> None:
+            events.append("tail")
+            self.assertEqual(claim.status, "succeeded")
+            self.assertEqual(
+                claim.assert_succeeded_for_context(self.context)["approval_id"],
+                approval_id,
+            )
+
+        result = resume_succeeded_claim_finalizer(
+            self.root,
+            self.context,
+            approval_id,
+            guard,
+            tail,
+            key_provider=provider,
+        )
+        self.assertEqual(events, ["guard", "tail"])
+        self.assertEqual(provider.create_if_missing, [False])
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["exact_human_approval"]["status"], "succeeded")
+        self.assertFalse(result["domain_writer_reentered"])
+        self.assertFalse(result["native_approval_redisplayed"])
+
+    def test_succeeded_claim_tail_requires_exact_checkpoint(self) -> None:
+        with self.assertRaises(ExactHumanApprovalWorkflowError):
+            execute_exact_human_approved_write(
+                self.root,
+                self.context,
+                lambda _claim: {"ok": True},
+                native=_Native((APPROVE_BUTTON_ID, True)),
+                key_provider=_KeyProvider(),
+                claim_succeeded_finalizer=lambda _claim: (_ for _ in ()).throw(
+                    RuntimeError("leave succeeded claim for recovery")
+                ),
+            )
+        approval_id = next(
+            (self.root / CLAIMS_RELATIVE_ROOT).glob("*.json")
+        ).stem
+        tail_calls = 0
+
+        def tail(_claim) -> None:
+            nonlocal tail_calls
+            tail_calls += 1
+
+        with self.assertRaises(ExactHumanApprovalWorkflowError) as missing:
+            resume_succeeded_claim_finalizer(
+                self.root,
+                self.context,
+                approval_id,
+                lambda _claim: False,
+                tail,
+                key_provider=_KeyProvider(),
+            )
+        self.assertEqual(
+            missing.exception.code,
+            "exact_human_approval_resume_checkpoint_invalid",
+        )
+        self.assertEqual(tail_calls, 0)
 
     def test_false_writer_result_keeps_claim_started_for_reconciliation(self) -> None:
         result = execute_exact_human_approved_write(
@@ -242,6 +438,231 @@ class ExactHumanApprovalWorkflowTests(unittest.TestCase):
         self.assertEqual(captured.exception.code, "exact_human_approval_state_unknown")
         claim_path = next((self.root / CLAIMS_RELATIVE_ROOT).glob("*.json"))
         self.assertIn('"status":"started"', claim_path.read_text(encoding="utf-8"))
+
+    def test_resume_reauthenticates_same_started_claim_without_new_prompt(self) -> None:
+        initial_provider = _KeyProvider()
+        started = execute_exact_human_approved_write(
+            self.root,
+            self.context,
+            lambda _claim: {"ok": False, "reason_code": "process_interrupted"},
+            native=_Native((APPROVE_BUTTON_ID, True)),
+            key_provider=initial_provider,
+        )
+        approval_id = started["exact_human_approval"]["approval_id"]
+        resumed_provider = _KeyProvider()
+        guard_calls = 0
+        writer_calls = 0
+
+        guarded_claim = None
+
+        def checkpoint_guard(claim) -> bool:
+            nonlocal guard_calls
+            nonlocal guarded_claim
+            guard_calls += 1
+            guarded_claim = claim
+            self.assertEqual(
+                claim.assert_ready_for_context(self.context)["approval_id"],
+                approval_id,
+            )
+            return True
+
+        def writer(claim):
+            nonlocal writer_calls
+            writer_calls += 1
+            self.assertEqual(
+                claim.assert_ready_for_context(self.context)["approval_id"],
+                approval_id,
+            )
+            return {"ok": True, "lifecycle_action": "resumed_test_write"}
+
+        resumed = resume_exact_human_approved_write(
+            self.root,
+            self.context,
+            approval_id,
+            checkpoint_guard,
+            writer,
+            key_provider=resumed_provider,
+        )
+
+        self.assertEqual(initial_provider.create_if_missing, [True])
+        self.assertEqual(resumed_provider.create_if_missing, [False])
+        self.assertEqual(guard_calls, 1)
+        self.assertEqual(writer_calls, 1)
+        self.assertIsNotNone(guarded_claim)
+        self.assertEqual(resumed["exact_human_approval"]["status"], "succeeded")
+
+        with self.assertRaises(ExactHumanApprovalWorkflowError) as terminal:
+            resume_exact_human_approved_write(
+                self.root,
+                self.context,
+                approval_id,
+                lambda _claim: True,
+                writer,
+                key_provider=_KeyProvider(),
+            )
+        self.assertEqual(
+            terminal.exception.code,
+            "exact_human_approval_resume_claim_invalid",
+        )
+        self.assertEqual(writer_calls, 1)
+
+    def test_transaction_resume_routes_authenticated_started_claim_to_writer(self) -> None:
+        started = execute_exact_human_approved_write(
+            self.root,
+            self.context,
+            lambda _claim: {"ok": False, "reason_code": "interrupted"},
+            native=_Native((APPROVE_BUTTON_ID, True)),
+            key_provider=_KeyProvider(),
+        )
+        approval_id = started["exact_human_approval"]["approval_id"]
+        events: list[str] = []
+
+        result = resume_exact_human_approved_transaction(
+            self.root,
+            self.context,
+            approval_id,
+            lambda claim: (
+                events.append("started_guard") is None
+                and claim.status == "started"
+            ),
+            lambda _claim: (
+                events.append("writer") is None
+                and {"ok": True, "lifecycle_action": "resume"}
+            ),
+            lambda _claim: False,
+            lambda claim: events.append(
+                "finalizer_" + claim.status
+            ),
+            key_provider=_KeyProvider(),
+        )
+        self.assertEqual(
+            events, ["started_guard", "writer", "finalizer_succeeded"]
+        )
+        self.assertTrue(result["ok"])
+        self.assertEqual(
+            result["exact_human_approval_resume_branch"], "started_writer"
+        )
+        self.assertFalse(result["native_approval_redisplayed"])
+
+    def test_transaction_resume_routes_authenticated_succeeded_claim_to_tail(self) -> None:
+        with self.assertRaises(ExactHumanApprovalWorkflowError):
+            execute_exact_human_approved_write(
+                self.root,
+                self.context,
+                lambda _claim: {"ok": True},
+                native=_Native((APPROVE_BUTTON_ID, True)),
+                key_provider=_KeyProvider(),
+                claim_succeeded_finalizer=lambda _claim: (_ for _ in ()).throw(
+                    RuntimeError("hard exit")
+                ),
+            )
+        approval_id = next(
+            (self.root / CLAIMS_RELATIVE_ROOT).glob("*.json")
+        ).stem
+        events: list[str] = []
+
+        def writer(_claim):
+            events.append("writer_must_not_run")
+            return {"ok": True}
+
+        result = resume_exact_human_approved_transaction(
+            self.root,
+            self.context,
+            approval_id,
+            lambda _claim: False,
+            writer,
+            lambda claim: (
+                events.append("succeeded_guard") is None
+                and claim.status == "succeeded"
+            ),
+            lambda claim: events.append("tail_" + claim.status),
+            key_provider=_KeyProvider(),
+        )
+        self.assertEqual(events, ["succeeded_guard", "tail_succeeded"])
+        self.assertEqual(
+            result["exact_human_approval_resume_branch"], "succeeded_tail"
+        )
+        self.assertFalse(result["domain_writer_reentered"])
+        self.assertFalse(result["native_approval_redisplayed"])
+
+    def test_resume_blocks_missing_checkpoint_and_context_drift(self) -> None:
+        started = execute_exact_human_approved_write(
+            self.root,
+            self.context,
+            lambda _claim: {"ok": False, "reason_code": "process_interrupted"},
+            native=_Native((APPROVE_BUTTON_ID, True)),
+            key_provider=_KeyProvider(),
+        )
+        approval_id = started["exact_human_approval"]["approval_id"]
+        writer_calls = 0
+
+        def writer(_claim):
+            nonlocal writer_calls
+            writer_calls += 1
+            return {"ok": True}
+
+        with self.assertRaises(ExactHumanApprovalWorkflowError) as missing:
+            resume_exact_human_approved_write(
+                self.root,
+                self.context,
+                approval_id,
+                lambda _claim: False,
+                writer,
+                key_provider=_KeyProvider(),
+            )
+        self.assertEqual(
+            missing.exception.code,
+            "exact_human_approval_resume_checkpoint_invalid",
+        )
+        self.assertEqual(writer_calls, 0)
+        claim_path = next((self.root / CLAIMS_RELATIVE_ROOT).glob("*.json"))
+        self.assertIn('"status":"started"', claim_path.read_text(encoding="utf-8"))
+
+        drifted_context = replace(
+            self.context,
+            plan_sha256="sha256:" + "c" * 64,
+        )
+        with self.assertRaises(ExactHumanApprovalWorkflowError) as drifted:
+            resume_exact_human_approved_write(
+                self.root,
+                drifted_context,
+                approval_id,
+                lambda _claim: True,
+                writer,
+                key_provider=_KeyProvider(),
+            )
+        self.assertEqual(
+            drifted.exception.code,
+            "exact_human_approval_resume_claim_invalid",
+        )
+        self.assertEqual(writer_calls, 0)
+
+    def test_resume_blocks_tampered_authenticated_claim(self) -> None:
+        started = execute_exact_human_approved_write(
+            self.root,
+            self.context,
+            lambda _claim: {"ok": False, "reason_code": "process_interrupted"},
+            native=_Native((APPROVE_BUTTON_ID, True)),
+            key_provider=_KeyProvider(),
+        )
+        approval_id = started["exact_human_approval"]["approval_id"]
+        claim_path = next((self.root / CLAIMS_RELATIVE_ROOT).glob("*.json"))
+        raw = claim_path.read_bytes()
+        claim_path.write_bytes(raw.replace(b'"started"', b'"failed"', 1))
+
+        with self.assertRaises(ExactHumanApprovalWorkflowError) as tampered:
+            resume_exact_human_approved_write(
+                self.root,
+                self.context,
+                approval_id,
+                lambda _claim: True,
+                lambda _claim: {"ok": True},
+                key_provider=_KeyProvider(),
+            )
+        self.assertEqual(
+            tampered.exception.code,
+            "exact_human_approval_resume_claim_invalid",
+        )
 
 
 if __name__ == "__main__":

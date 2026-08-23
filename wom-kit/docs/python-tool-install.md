@@ -1,46 +1,80 @@
 # Install WOM-kit As A Python Tool
 
-Status: v0.4.2 conditional GitHub wheel and read-only Git planning boundary
+Status: v0.4.3 conditional GitHub wheel and exact recovery boundary
 
 WOM-kit is a command-line tool. It should live in its own Python environment
 instead of being mixed into an application project's dependencies.
 
-The v0.4.2 URL below is a conditional contract, not proof that an artifact is
+## One Windows account with multiple client folders
+
+An isolated `uv tool` environment isolates Python dependencies; it does **not**
+make the exposed `archive.exe` private to the folder from which it is called.
+Every process under the same Windows account that resolves the same executable
+on PATH can see a replacement immediately on its next invocation. Therefore
+`archive --version` reports the running shared tool version, not proof that one
+client project was updated.
+
+For same-computer beta clients, inspect both layers:
+
+```powershell
+archive --version
+archive version <project-or-archive-root> --format json
+```
+
+Use the second result's project source, pin, and `project_runtime` evidence to
+decide whether that client project needs an update. During development and
+release verification, install the wheel in a dedicated temporary virtual
+environment and invoke its `Scripts\archive.exe` by explicit path; do not
+replace the user-shared PATH tool as a side effect of testing.
+
+The approved v0.4.3 updater then installs the verified release wheel under the
+selected project at `.zettel-kasten/runtimes/vX.Y.Z/` and activates the stable
+`.zettel-kasten/bin/archive.cmd` launcher. Ordinary project commands use that
+launcher. Other project folders and the user-shared PATH executable do not
+change. This is WOM's supported project runtime boundary; it does not isolate
+arbitrary non-WOM programs or separate Windows user permissions.
+
+The v0.4.3 URL below is a conditional contract, not proof that an artifact is
 public. Use it only after the matching GitHub Release exists and lists the
-verified wheel. See the [v0.4.2 release note](releases/v0.4.2.md) for the
+verified wheel. See the [v0.4.3 release note](releases/v0.4.3.md) for the
 separate source and release-evidence boundary.
 
-An installed v0.4.1 client contains the exact link binding but not v0.4.2's
-`git-backup-plan` or `git-backup-reconcile-plan`. Updating repository files
-alone does not replace the isolated `uv tool` or virtual-environment wheel.
-After the verified v0.4.2 asset exists, install that exact wheel and start a
-new process.
+An installed v0.4.2 client contains the Git read-only planners but not v0.4.3's
+exact commit/push writer, source-property backfill, or reopened project updater.
+Updating repository files alone does not replace the isolated `uv tool` or
+virtual-environment wheel. After the verified v0.4.3 asset exists, install that
+exact wheel and start a new process.
 
-## Recommended Install
+## Recommended Project Bootstrap
 
-Install with `uv` only after the exact WOM GitHub Release exists and lists the
-verified wheel. The versioned URL alone is not proof that the asset is
-available:
-
-```powershell
-uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.2/wom_kit-0.4.2-py3-none-any.whl"
-archive --version
-```
-
-After the new process reports exactly `archive 0.4.2`, the read-only planner is
-available as:
+Create a temporary bootstrap only after the exact WOM GitHub Release exists and
+lists the verified wheel. The versioned URL alone is not proof that the asset
+is available:
 
 ```powershell
-archive git-backup-plan <archive-root> --remote origin --dry-run --format json
+py -m venv .wom-bootstrap-v043
+& .\.wom-bootstrap-v043\Scripts\python.exe -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.3/wom_kit-0.4.3-py3-none-any.whl"
+& .\.wom-bootstrap-v043\Scripts\archive.exe --version
 ```
 
-It observes the checked-out symbolic branch and one anonymous HTTPS remote ref
-without commit, fetch, pull, push, or another write. See [Git Backup Plan And
-Reconciliation Plan](git-backup-plan.md) before interpreting its result.
+After the new process reports exactly `archive 0.4.3`, use that explicit
+bootstrap executable for `project-version-update`. After approval succeeds,
+verify the project runtime and use its launcher:
+
+```powershell
+.\.zettel-kasten\bin\archive.cmd version <project-or-archive-root> --format json
+.\.zettel-kasten\bin\archive.cmd git-backup-plan <archive-root> --remote origin --dry-run --format json
+```
+
+It observes the checked-out symbolic branch and remote ref without a write.
+Its exact approval/resume path may commit and non-force push only the bound
+selection. See [Git Backup Plan And Reconciliation Plan](git-backup-plan.md)
+before interpreting or approving its result.
 
 `uv tool install` creates an isolated tool environment and exposes all commands
 provided by the package. WOM-kit installs `archive`, `wom`, `archive-mcp`, and
-`wom-mcp`.
+`wom-mcp`. The environment is dependency-isolated but its exposed commands are
+user-shared PATH entrypoints, not project-folder-local commands.
 
 This release does not publish WOM-kit to PyPI. Therefore
 `pip install wom-kit` is not the official command yet. The exact GitHub release
@@ -48,11 +82,11 @@ URL keeps the installed artifact tied to a reviewed repository tag.
 
 ### Replace an installed older global CLI
 
-After the v0.4.2 Release and wheel actually exist, replace the isolated
+After the v0.4.3 Release and wheel actually exist, replace the isolated
 `uv tool` environment and verify the result from a new process:
 
 ```powershell
-uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.2/wom_kit-0.4.2-py3-none-any.whl"
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.3/wom_kit-0.4.3-py3-none-any.whl"
 archive --version
 ```
 
@@ -62,12 +96,11 @@ unmanaged executable collision and a human has reviewed that executable; the
 flag permits replacing executables that `uv` does not manage. See the
 [official `uv tool install` reference](https://docs.astral.sh/uv/reference/cli/#uv-tool-install).
 
-Require exactly `archive 0.4.2`. This is a global CLI-only bootstrap. It does not
-change a project-local `.zettel-kasten/source` mirror or version pin. The
-project updater, collision mutation, and bytecode-repair approval paths remain
-fixed closed, so an older project mirror stays at its independently reported
-version. Do not hand-edit the pin. See [Project Version Update](project-version-update.md) and
-the [Upgrade Guide](../../UPGRADE.md).
+Require exactly `archive 0.4.3`. This is a global CLI-only bootstrap. It does
+not change a project-local `.zettel-kasten/source` mirror or version pin. The
+project updater is a separate exact-human workflow; collision mutation and
+bytecode repair remain fixed closed. Do not hand-edit the pin. See [Project
+Version Update](project-version-update.md) and the [Upgrade Guide](../../UPGRADE.md).
 
 ## Standard pip Alternative
 
@@ -75,7 +108,7 @@ Plain `pip` works when it is placed inside a dedicated virtual environment:
 
 ```powershell
 py -m venv "$HOME\.wom-tools\wom-kit"
-& "$HOME\.wom-tools\wom-kit\Scripts\python.exe" -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.2/wom_kit-0.4.2-py3-none-any.whl"
+& "$HOME\.wom-tools\wom-kit\Scripts\python.exe" -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.3/wom_kit-0.4.3-py3-none-any.whl"
 & "$HOME\.wom-tools\wom-kit\Scripts\archive.exe" --version
 ```
 
@@ -147,11 +180,11 @@ ownership plus source/pin checkpoints detect observed drift, but they are not
 atomic file compare-and-swap and cannot guarantee that an external writer will
 never clobber a file.
 
-In v0.4.2, stop after dry-run. Approval returns
-`compound_exact_human_approval_binding_required` before private project reads,
-fetch, tree materialization, pin mutation, lock creation, or receipt
-publication. The transaction details below describe historical v0.3 receipts,
-not a current runbook.
+In v0.4.3, approval is available only on the reviewed Windows native exact-
+human path. The plan binds current source/pin, target annotated tag and commit,
+rollback state, and the receipt's approval reference. Cancelled, drifted,
+ambiguous, or unsupported-platform attempts make no project change. Collision
+mutation and bytecode repair remain separate fixed-closed surfaces.
 
 From v0.3.314, the explicit output also prints an opaque `operation_ref` early.
 If the caller times out, retain that reference and use `operation-control`
@@ -185,11 +218,10 @@ project, source/`.git`, pin, lock, and receipt directory chains without
 missing receipt parent and root are created and held in order, and the receipt
 writer rejects an unheld root.
 
-All v0.4.2 users can run the complete read-only preview. POSIX returns
+All v0.4.3 users can run the complete read-only preview. POSIX returns
 `preview_only_platform_unsupported` and
-`write_boundary.approval_platform_supported: false`. Approval on every
-platform returns `compound_exact_human_approval_binding_required` before
-private project reads or writes.
+`write_boundary.approval_platform_supported: false`. It does not run the
+Windows native exact-human writer.
 
 The runtime Agent Skill is a third, separate lifecycle. Installing or updating
 the Python tool does not automatically install the Skill, and
@@ -201,7 +233,7 @@ Archive creation remains a separate dry-run-first operation:
 archive onboard --target-root <new-archive-folder> --type personal --archive-id <archive-id> --principal-id <principal-id> --dry-run --format json
 ```
 
-In v0.4.2 stop after the preview. Onboarding approval returns
+In v0.4.3 stop after the preview. Onboarding approval returns
 `compound_exact_human_approval_binding_required` before target/template/provider
 reads and creates no archive.
 

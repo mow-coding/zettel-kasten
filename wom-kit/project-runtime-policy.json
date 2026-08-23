@@ -1,0 +1,10 @@
+{
+  "schema": "wom-kit/project-runtime-policy/v0.1",
+  "mode": "project_local_venv",
+  "runtime_root": ".zettel-kasten/runtimes/vX.Y.Z",
+  "active_version_pin": ".zettel-kasten/installed-version.txt",
+  "launcher": ".zettel-kasten/bin/archive.cmd",
+  "supply_lock": "wom-kit/project-runtime-supply-lock-v0.4.3.json",
+  "supply_lock_sha256": "sha256:45386eebf1a69d0a9cd5df4c5fc8010f00d7fb2e5b44924b72e1fb8e2a0ec04a",
+  "global_path_mutation": false
+}
