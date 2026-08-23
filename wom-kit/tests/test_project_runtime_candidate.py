@@ -18,8 +18,11 @@ from unittest.mock import patch
 
 KIT_ROOT = Path(__file__).resolve().parents[1]
 SRC_ROOT = KIT_ROOT / "src"
+TESTS_ROOT = Path(__file__).resolve().parent
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
+if str(TESTS_ROOT) not in sys.path:
+    sys.path.append(str(TESTS_ROOT))
 
 from wom_kit import project_runtime
 

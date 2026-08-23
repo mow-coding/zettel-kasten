@@ -339,3 +339,11 @@ platform-agnostic 단위 테스트로 계속 검증한다.
 Windows에서 대표 candidate cleanup 테스트는 10.759초에 다시 통과했고,
 interpreter enforcement 단위 테스트도 통과했다. Production source와 공식 supply
 lock은 변경하지 않았다.
+
+같은 run이 새 push로 취소되기 직전 Windows Python 3.12 shard 4/4도 완료됐고,
+792 tests 중 `test_project_runtime_candidate` module import 1건만 error였다. 이 파일은
+sibling `test_project_runtime`을 직접 import하면서 CI의 repository-root file-path
+호출에서 자기 tests 폴더를 module search path에 넣지 않았다. `test_cli.py`와 같은
+절대 `TESTS_ROOT` 규칙을 추가했다. GitHub와 동일한 repo-root file-path 명령으로
+candidate 모듈 전체를 재실행해 3 tests가 172.699초에 통과했다. 이 수정도
+production source나 wheel payload를 바꾸지 않는다.
