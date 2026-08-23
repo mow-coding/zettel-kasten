@@ -317,3 +317,25 @@ GitHub와 같은 file-path unittest 호출 형태로 대표 cleanup uncertainty 
 전체 approve/fetch/verify/replay 테스트를 재실행해 각각 11.091초와 49.748초에
 통과했다. 남은 첫 run job 결과도 확인하되, 이 교정을 새 커밋으로 push한 뒤 새
 전체 CI run을 기준으로 병합 가능 여부를 다시 판정한다.
+
+## Linux의 Windows 전용 runtime 성공 테스트 경계
+
+Import 교정 커밋 `1b5a67af`의 GitHub Actions run `32651060733`에서는 Ubuntu
+Python 3.12와 3.10 shard 1/2가 각각 14 failures로 끝났다. Import error는 0건으로
+교정됐고, 모든 실패는 Windows CPython 3.12로 고정된 production supply를 Ubuntu에서
+실행하려 할 때 나온 `project_runtime_interpreter_not_locked` 조기 차단의 후속
+assertion이었다. 같은 run의 release gate, 두 Ubuntu shard 2/2, Windows shard 3/4는
+먼저 통과했다.
+
+공식 v0.4.3 runtime supply schema와 materializer는 의도적으로 `cp312-cp312-win_amd64`
+만 허용한다. 이를 Linux용 가짜 supply로 넓히거나 production guard를 mock으로
+무력화하지 않는다. 실제 runtime candidate를 만들고 성공·취소·drift·held-handle·
+component rollback·cleanup uncertainty를 검증하는 8개 CLI 통합 테스트를, 이미 같은
+성격의 complete-candidate와 hard-exit matrix가 사용하는 Windows CPython 3.12
+조건에 맞췄다. 비-Windows 또는 다른 interpreter에서
+`project_runtime_interpreter_not_locked`가 plan blocker가 되는 계약은 별도
+platform-agnostic 단위 테스트로 계속 검증한다.
+
+Windows에서 대표 candidate cleanup 테스트는 10.759초에 다시 통과했고,
+interpreter enforcement 단위 테스트도 통과했다. Production source와 공식 supply
+lock은 변경하지 않았다.
