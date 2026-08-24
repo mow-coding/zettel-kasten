@@ -193,6 +193,13 @@ def _supply_for_dependency(
 
 class ProjectRuntimeTests(unittest.TestCase):
     def test_official_supply_lock_is_strict_and_hash_bound(self) -> None:
+        attributes = (KIT_ROOT.parent / ".gitattributes").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn(
+            "wom-kit/project-runtime-supply-lock-v*.json text eol=lf",
+            attributes.splitlines(),
+        )
         raw = (KIT_ROOT / "project-runtime-supply-lock-v0.4.6.json").read_bytes()
         supply = project_runtime.project_runtime_supply_lock(
             raw,
