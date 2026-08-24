@@ -492,6 +492,7 @@ local archive
 - [v0.2.11 Delegate Capability Contract Work Log](../plans/work-log-2026-05-23-delegate-capability-contract.md)
 - [Changelog](../../CHANGELOG.md)
 - [Release Notes](releases/)
+- [v0.4.5 릴리스 노트](releases/v0.4.5.md)
 - [v0.4.4 릴리스 노트](releases/v0.4.4.md)
 - [v0.4.3 릴리스 노트](releases/v0.4.3.md)
 - [v0.4.2 릴리스 노트](releases/v0.4.2.md)

@@ -6,6 +6,16 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.4.5 - 2026-08-24
+
+- Fixed the clean-wheel Windows approval surface by activating the Common
+  Controls v6 side-by-side assembly on the calling thread.
+- Corrected `TASKDIALOG_BUTTON` and `TASKDIALOGCONFIG` to the one-byte packing
+  required by `CommCtrl.h`; the prior default alignment caused
+  `TaskDialogIndirect` to return `E_INVALIDARG` before any write.
+- Preserved the v0.4.4 human boundary: WOM verifies technical evidence and the
+  person chooses only the specific action or safe cancel.
+
 ## v0.4.4 - 2026-08-24
 
 - Replaced the native exact-human digest-reading checkbox with one explicit,

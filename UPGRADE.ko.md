@@ -7,7 +7,7 @@
 일치하는 공개 Release가 정확한 wheel을 자산으로 나열한 뒤에만 설치합니다.
 
 ```powershell
-uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.4/wom_kit-0.4.4-py3-none-any.whl"
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.5/wom_kit-0.4.5-py3-none-any.whl"
 archive --version
 ```
 
