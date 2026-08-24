@@ -1,0 +1,79 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "wom-kit/object-storage-formal-adoption-receipt/v0.1",
+  "title": "WOM-kit object-storage formal-adoption HEAD verification receipt",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "object_id",
+    "content_sha256",
+    "size_bytes",
+    "provider_kind",
+    "store_ref",
+    "remote_key",
+    "remote_key_sha256",
+    "remote_key_verification",
+    "remote_key_verified",
+    "provider_confirmation_by_wom_kit",
+    "byte_verification_by_wom_kit",
+    "verification_scope",
+    "classification",
+    "formal_adoption_eligible",
+    "formal_adoption_status",
+    "source_inventory_sha256",
+    "receipt_state_sha256",
+    "verified_at",
+    "provider_put_called",
+    "automatic_conflict_merge",
+    "private_values_echoed",
+    "credential_values_echoed",
+    "provider_url_echoed",
+    "local_path_echoed"
+  ],
+  "properties": {
+    "schema_version": {"const": "wom-kit/object-storage-formal-adoption-receipt/v0.1"},
+    "object_id": {"$ref": "#/$defs/sha256_ref"},
+    "content_sha256": {"$ref": "#/$defs/sha256_ref"},
+    "size_bytes": {"type": "integer", "minimum": 0},
+    "provider_kind": {"type": "string", "pattern": "^[a-z][a-z0-9-]{0,63}$"},
+    "store_ref": {"type": "string", "minLength": 1, "maxLength": 255},
+    "remote_key": {"type": "string", "minLength": 1, "maxLength": 1024},
+    "remote_key_sha256": {"$ref": "#/$defs/sha256_ref"},
+    "remote_key_verification": {"const": "presence_size"},
+    "remote_key_verified": {"const": true},
+    "provider_confirmation_by_wom_kit": {"const": true},
+    "byte_verification_by_wom_kit": {"const": false},
+    "verification_scope": {"const": "remote_presence_and_size_not_content_hash"},
+    "classification": {
+      "enum": [
+        "pending_formal_adoption",
+        "existing_formal_adoption",
+        "conflicting_definition_review_required"
+      ]
+    },
+    "formal_adoption_eligible": {"type": "boolean"},
+    "formal_adoption_status": {
+      "enum": [
+        "verified_pending_manifest_projection",
+        "already_adopted_verified",
+        "conflict_review_required_verified"
+      ]
+    },
+    "source_inventory_sha256": {"$ref": "#/$defs/sha256_ref"},
+    "receipt_state_sha256": {"$ref": "#/$defs/sha256_ref"},
+    "verified_at": {"type": "string", "format": "date-time"},
+    "provider_put_called": {"const": false},
+    "automatic_conflict_merge": {"const": false},
+    "private_values_echoed": {"const": false},
+    "credential_values_echoed": {"const": false},
+    "provider_url_echoed": {"const": false},
+    "local_path_echoed": {"const": false}
+  },
+  "$defs": {
+    "sha256_ref": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    }
+  }
+}

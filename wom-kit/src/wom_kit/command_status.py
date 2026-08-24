@@ -80,40 +80,69 @@ def _parser_approval_scope(
     raw = parser._defaults.get("_wom_approval_scope")
     if raw is None:
         return None
-    if type(raw) is not dict or set(raw) != {
-        "kind",
-        "argument",
-        "allowed_values",
-        "outside_scope_status",
-        "outside_scope_reason_code",
-    }:
+    if type(raw) is not dict:
         raise ValueError("command_approval_scope_invalid")
-    argument = raw.get("argument")
-    allowed_values = raw.get("allowed_values")
     if (
-        raw.get("kind") != "argument_value_allowlist"
-        or type(argument) is not str
-        or re.fullmatch(r"--[a-z0-9][a-z0-9-]*", argument) is None
-        or type(allowed_values) is not list
-        or not allowed_values
-        or any(
-            type(value) is not str
-            or re.fullmatch(r"[a-z0-9][a-z0-9-]*", value) is None
-            for value in allowed_values
-        )
-        or len(set(allowed_values)) != len(allowed_values)
-        or raw.get("outside_scope_status") != APPROVAL_FIXED_CLOSED
-        or raw.get("outside_scope_reason_code")
-        != COMPOUND_APPROVAL_REASON_CODE
+        raw.get("outside_scope_status") != APPROVAL_FIXED_CLOSED
+        or raw.get("outside_scope_reason_code") != COMPOUND_APPROVAL_REASON_CODE
     ):
         raise ValueError("command_approval_scope_invalid")
-    return {
-        "kind": "argument_value_allowlist",
-        "argument": argument,
-        "allowed_values": sorted(allowed_values),
+    common = {
         "outside_scope_status": APPROVAL_FIXED_CLOSED,
         "outside_scope_reason_code": COMPOUND_APPROVAL_REASON_CODE,
     }
+    if raw.get("kind") == "argument_value_allowlist":
+        if set(raw) != {
+            "kind",
+            "argument",
+            "allowed_values",
+            *common,
+        }:
+            raise ValueError("command_approval_scope_invalid")
+        argument = raw.get("argument")
+        allowed_values = raw.get("allowed_values")
+        if (
+            type(argument) is not str
+            or re.fullmatch(r"--[a-z0-9][a-z0-9-]*", argument) is None
+            or not _option_exposed(parser, argument)
+            or type(allowed_values) is not list
+            or not allowed_values
+            or any(
+                type(value) is not str
+                or re.fullmatch(r"[a-z0-9][a-z0-9-]*", value) is None
+                for value in allowed_values
+            )
+            or len(set(allowed_values)) != len(allowed_values)
+        ):
+            raise ValueError("command_approval_scope_invalid")
+        return {
+            "kind": "argument_value_allowlist",
+            "argument": argument,
+            "allowed_values": sorted(allowed_values),
+            **common,
+        }
+    if raw.get("kind") == "argument_flag_exactly_one_allowlist":
+        if set(raw) != {"kind", "allowed_flags", *common}:
+            raise ValueError("command_approval_scope_invalid")
+        allowed_flags = raw.get("allowed_flags")
+        if (
+            type(allowed_flags) is not list
+            or not allowed_flags
+            or any(
+                type(flag) is not str
+                or re.fullmatch(r"--[a-z0-9][a-z0-9-]*", flag) is None
+                or not _option_exposed(parser, flag)
+                for flag in allowed_flags
+            )
+            or len(set(allowed_flags)) != len(allowed_flags)
+        ):
+            raise ValueError("command_approval_scope_invalid")
+        return {
+            "kind": "argument_flag_exactly_one_allowlist",
+            "allowed_flags": sorted(allowed_flags),
+            **common,
+        }
+    raise ValueError("command_approval_scope_invalid")
 
 
 def _normalize_fixed_closed_commands(

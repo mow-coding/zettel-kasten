@@ -148,7 +148,7 @@ CURRENT_DATABASE_CANONICAL_SHA256 = (
     "d9a42f08ee12a6d42e40214cfb12441e4077bf50c38c25b2692ec1344328294a"
 )
 RESOURCE_ADDITIONS = {
-    "release-notes/v0.4.5.md",
+    "release-notes/v0.4.6.md",
     "schemas/agent-instruction-policy-v0.1.schema.json",
     "schemas/approval-handoff-v0.1.schema.json",
     "schemas/approval-integrity-audit-result-v0.1.schema.json",
@@ -176,6 +176,8 @@ RESOURCE_ADDITIONS = {
     "schemas/markup-reference-binding-manifest.schema.json",
     "schemas/notion-property-backfill-acceptance-v0.1.schema.json",
     "schemas/notion-source-properties-v0.1.schema.json",
+    "schemas/object-storage-bytes-preserved-receipt-v0.1.schema.json",
+    "schemas/object-storage-formal-adoption-receipt-v0.1.schema.json",
     "schemas/objet-capture-batch-receipt.schema.json",
     "schemas/objet-capture-batch-request.schema.json",
     "schemas/principal-record.schema.json",
@@ -203,9 +205,9 @@ RESOURCE_ADDITIONS = {
     "schemas/zettel-objet-link-revert-receipt.schema.json",
 }
 RESOURCE_REMOVALS = {"release-notes/v0.3.297.md"}
-CURRENT_RESOURCE_COUNT = 163
+CURRENT_RESOURCE_COUNT = 165
 CURRENT_RESOURCE_CANONICAL_SHA256 = (
-    "5e6755c40b3187eecbf6af8cec12469b739c2f0727dff8698866dd4cddbca5f1"
+    "5ad1a9cc8541ba590185b494376a80c57720c8d76bcfafd92f8a5bdcf8cbf4ab"
 )
 
 
@@ -533,7 +535,7 @@ class V03299PredecessorSurfaceTests(unittest.TestCase):
             "^sha256:[0-9a-f]{64}$",
         )
 
-    def test_resource_paths_are_v03297_plus_exact_through_v0402_delta(self) -> None:
+    def test_resource_paths_are_v03297_plus_exact_through_v0406_delta(self) -> None:
         predecessor_paths = set(self.fixture["package_resources"]["packaged_paths"])
         self.assertTrue(
             RESOURCE_REMOVALS <= predecessor_paths,
@@ -563,10 +565,10 @@ class V03299PredecessorSurfaceTests(unittest.TestCase):
             actual,
             expected,
             "Current package-resource paths must be the full v0.3.297 set plus "
-            "the exact cumulative v0.3.298 through v0.4.5 delta. "
+            "the exact cumulative v0.3.298 through v0.4.6 delta. "
             f"missing={compact(missing)}; extra={compact(extra)}",
         )
-        self.assertEqual(manifest["version"], "0.4.5")
+        self.assertEqual(manifest["version"], "0.4.6")
         self.assertEqual(len(actual), CURRENT_RESOURCE_COUNT)
         self.assertEqual(
             canonical_sha256(actual),
@@ -585,14 +587,14 @@ class V03299PredecessorSurfaceTests(unittest.TestCase):
         self.assertIn("does not undo", predecessor_flat)
         self.assertNotIn("C:\\Users\\", predecessor_text)
 
-    def test_v0405_release_note_is_current_and_v0402_remains_historical(self) -> None:
-        current_source_release = KIT_ROOT / "docs" / "releases" / "v0.4.5.md"
+    def test_v0406_release_note_is_current_and_v0402_remains_historical(self) -> None:
+        current_source_release = KIT_ROOT / "docs" / "releases" / "v0.4.6.md"
         current_packaged_release = (
             SRC_ROOT
             / "wom_kit"
             / "_resources"
             / "release-notes"
-            / "v0.4.5.md"
+            / "v0.4.6.md"
         )
         self.assertEqual(
             current_source_release.read_bytes(),
@@ -601,10 +603,10 @@ class V03299PredecessorSurfaceTests(unittest.TestCase):
         current_text = current_source_release.read_text(encoding="utf-8")
         current_flat = " ".join(current_text.split())
         for token in (
-            "TaskDialogIndirect",
-            "one-byte packing",
-            "WOM still performs those checks",
-            "wom_kit-0.4.5-py3-none-any.whl",
+            "preserve-local-only",
+            "formal-adoption",
+            "WOM verifies counts",
+            "wom_kit-0.4.6-py3-none-any.whl",
         ):
             with self.subTest(token=token):
                 self.assertIn(token, current_flat)

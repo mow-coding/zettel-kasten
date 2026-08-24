@@ -101,9 +101,9 @@ class V0401ReleaseDocsTests(unittest.TestCase):
                 self.assertEqual(source.read_bytes(), packaged.read_bytes())
                 self.assertIn(f"schemas/{name}", packaged_paths)
 
-    def test_current_parser_combines_all_v043_writers(self) -> None:
+    def test_current_parser_combines_all_released_writers(self) -> None:
         blocked = archive_cli.COMPOUND_APPROVAL_BLOCKED_COMMANDS
-        self.assertEqual(len(blocked), 76)
+        self.assertEqual(len(blocked), 75)
         self.assertNotIn("migrate", blocked)
         self.assertNotIn("zettel-objet-link", blocked)
         self.assertIn("zettel-objet-link-revert", blocked)
@@ -123,8 +123,8 @@ class V0401ReleaseDocsTests(unittest.TestCase):
         self.assertEqual(counts["canonical_executable_command_count"], 315)
         self.assertEqual(counts["alias_invocation_path_count"], 259)
         self.assertEqual(counts["invocation_path_count"], 574)
-        self.assertEqual(counts["approval_available_command_count"], 38)
-        self.assertEqual(counts["approval_fixed_closed_command_count"], 76)
+        self.assertEqual(counts["approval_available_command_count"], 39)
+        self.assertEqual(counts["approval_fixed_closed_command_count"], 75)
         self.assertEqual(counts["approval_not_exposed_command_count"], 201)
         self.assertEqual(counts["dry_run_exposed_command_count"], 270)
         self.assertEqual(counts["unmatched_fixed_closed_command_count"], 0)

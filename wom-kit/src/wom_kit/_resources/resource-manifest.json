@@ -1,8 +1,8 @@
 {
   "schema": "wom-kit/package-resource-manifest/v0.1",
-  "version": "0.4.5",
+  "version": "0.4.6",
   "source_of_truth": "wom-kit source resource directories",
-  "file_count": 163,
+  "file_count": 165,
   "files": [
     {
       "source": "schemas/activity-group-membership-receipt.schema.json",
@@ -109,8 +109,8 @@
     {
       "source": "schemas/command-approval-status-inventory-v0.2.schema.json",
       "packaged": "schemas/command-approval-status-inventory-v0.2.schema.json",
-      "bytes": 6270,
-      "sha256": "a304fdf0f521834bcc6359235a21154d7ad9964555b6b0587d0c5ba4ad5b9002"
+      "bytes": 7202,
+      "sha256": "a63033b9eb80463e3fbe3e85b245a77e1aedfcdc1d4775e795fdcb05a89380c3"
     },
     {
       "source": "schemas/credential-adapter-manifest.schema.json",
@@ -279,6 +279,18 @@
       "packaged": "schemas/object-manifest-entry.schema.json",
       "bytes": 743,
       "sha256": "d88ca89017ec8043a5a71f4a9bfad2e7805998158dbb91c30cd4a0524e9d567f"
+    },
+    {
+      "source": "schemas/object-storage-bytes-preserved-receipt-v0.1.schema.json",
+      "packaged": "schemas/object-storage-bytes-preserved-receipt-v0.1.schema.json",
+      "bytes": 2323,
+      "sha256": "20fdc217d04a02a9b43d3dbde81b316cec327d72643144a1b7a0d9a04aa1a918"
+    },
+    {
+      "source": "schemas/object-storage-formal-adoption-receipt-v0.1.schema.json",
+      "packaged": "schemas/object-storage-formal-adoption-receipt-v0.1.schema.json",
+      "bytes": 2768,
+      "sha256": "9bb9cdb1b6481e597d6599223514131ab66ab3124db1aa9f40b3d8c8680471df"
     },
     {
       "source": "schemas/object-storage-manifest-reconcile-receipt.schema.json",
@@ -977,10 +989,10 @@
       "sha256": "d619dc26af3216498c8392dfe838b0fe752d4bad9da998a58ca682d668fc510c"
     },
     {
-      "source": "docs/releases/v0.4.5.md",
-      "packaged": "release-notes/v0.4.5.md",
-      "bytes": 2751,
-      "sha256": "f879087a1c4aade6676e33756ef9a1de78c86229fb017dde475ef3bdcd2e066f"
+      "source": "docs/releases/v0.4.6.md",
+      "packaged": "release-notes/v0.4.6.md",
+      "bytes": 2959,
+      "sha256": "b08957248e783ad13f15adba3a89e2d2622c70bd4cfdd0261a9b7426b90c82b7"
     }
   ]
 }

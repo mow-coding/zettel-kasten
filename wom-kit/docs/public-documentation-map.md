@@ -506,6 +506,7 @@ These documents record public-safe work already performed.
 - [v0.2.11 Delegate Capability Contract Work Log](../plans/work-log-2026-05-23-delegate-capability-contract.md)
 - [Changelog](../../CHANGELOG.md)
 - [Release Notes](releases/)
+- [v0.4.6 Release Note](releases/v0.4.6.md)
 - [v0.4.5 Release Note](releases/v0.4.5.md)
 - [v0.4.4 Release Note](releases/v0.4.4.md)
 - [v0.4.3 Release Note](releases/v0.4.3.md)
