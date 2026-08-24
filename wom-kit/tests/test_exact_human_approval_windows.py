@@ -23,9 +23,9 @@ SHA_C = "sha256:" + "c" * 64
 class _FakeNative:
     def __init__(self, result: tuple[int, bool] = (APPROVE_BUTTON_ID, True)) -> None:
         self.result = result
-        self.calls: list[dict[str, str]] = []
+        self.calls: list[dict[str, object]] = []
 
-    def show(self, **kwargs: str) -> tuple[int, bool]:
+    def show(self, **kwargs: object) -> tuple[int, bool]:
         self.calls.append(dict(kwargs))
         return self.result
 
@@ -42,10 +42,10 @@ class ExactHumanApprovalWindowsTests(unittest.TestCase):
             warning_codes=("unknown_facet_key",),
         )
 
-    def test_live_requires_button_and_checked_verification(self) -> None:
+    def test_live_requires_explicit_action_button_not_checkbox(self) -> None:
         for native_result, approved in (
             ((APPROVE_BUTTON_ID, True), True),
-            ((APPROVE_BUTTON_ID, False), False),
+            ((APPROVE_BUTTON_ID, False), True),
             ((2, True), False),
             ((2, False), False),
         ):
@@ -72,7 +72,7 @@ class ExactHumanApprovalWindowsTests(unittest.TestCase):
             result.reason_code, "exact_human_approval_synthetic_acknowledged"
         )
 
-    def test_dialog_contains_only_fixed_labels_codes_and_bindings(self) -> None:
+    def test_dialog_keeps_human_decision_simple_and_machine_evidence_advanced(self) -> None:
         native = _FakeNative()
         request_exact_human_approval(
             self._context(),
@@ -80,7 +80,16 @@ class ExactHumanApprovalWindowsTests(unittest.TestCase):
             native=native,
         )
         self.assertEqual(len(native.calls), 1)
-        rendered = "\n".join(native.calls[0].values())
+        call = native.calls[0]
+        primary = "\n".join(
+            str(call[name])
+            for name in ("title", "main_instruction", "content", "approve_button_text", "footer")
+        )
+        advanced = str(call["expanded_information"])
+        self.assertIn("AI 초안을 만들까요?", primary)
+        self.assertIn("초안 만들기", primary)
+        self.assertIn("사람이 결정할 일은 이 작업을 지금 실행할지 여부", primary)
+        self.assertIn("취소하면 아무 변경도 하지 않습니다", primary)
         for expected in (
             SHA_A,
             SHA_B,
@@ -89,9 +98,13 @@ class ExactHumanApprovalWindowsTests(unittest.TestCase):
             "frontmatter_digest",
             "unknown_facet_key",
             "person:local-operator",
-            "실제 쓰기 1회를 검토하고 승인합니다",
+            "사람이 직접 비교하거나 계산할 필요가 없습니다",
         ):
-            self.assertIn(expected, rendered)
+            self.assertIn(expected, advanced)
+            self.assertNotIn(expected, primary)
+        self.assertEqual(call["collapsed_control_text"], "기술 세부정보 보기")
+        self.assertEqual(call["expanded_control_text"], "기술 세부정보 숨기기")
+        rendered = primary + "\n" + advanced
         for forbidden in (
             "Bearer ",
             "https://",
@@ -100,6 +113,59 @@ class ExactHumanApprovalWindowsTests(unittest.TestCase):
             "secret_",
         ):
             self.assertNotIn(forbidden, rendered)
+
+    def test_every_operation_has_one_plain_question_summary_and_action(self) -> None:
+        for operation in ExactHumanApprovalOperation:
+            with self.subTest(operation=operation.value):
+                context = ExactHumanApprovalContext(
+                    operation=operation,
+                    archive_identity_sha256=SHA_A,
+                    plan_sha256=SHA_B,
+                    target_binding_sha256=SHA_C,
+                    reviewer_claim="person:local-operator",
+                    review_binding_codes=("machine_verified",),
+                )
+                native = _FakeNative((2, False))
+                request_exact_human_approval(
+                    context,
+                    intent=ExactHumanApprovalIntent.live_write,
+                    native=native,
+                )
+                call = native.calls[0]
+                self.assertTrue(str(call["main_instruction"]).endswith("까요?"))
+                self.assertTrue(str(call["approve_button_text"]))
+                primary = str(call["content"])
+                self.assertIn("WOM이", primary)
+                self.assertIn("사람이 결정할 일", primary)
+                for machine_value in (SHA_A, SHA_B, SHA_C, "machine_verified"):
+                    self.assertNotIn(machine_value, primary)
+
+    def test_notion_recovery_explains_scope_without_delegating_verification(self) -> None:
+        context = ExactHumanApprovalContext(
+            operation=ExactHumanApprovalOperation.notion_property_backfill,
+            archive_identity_sha256=SHA_A,
+            plan_sha256=SHA_B,
+            target_binding_sha256=SHA_C,
+            reviewer_claim="person:local-operator",
+            review_binding_codes=("source_properties",),
+            warning_codes=("review_pages_present",),
+        )
+        native = _FakeNative((2, False))
+        request_exact_human_approval(
+            context,
+            intent=ExactHumanApprovalIntent.live_write,
+            native=native,
+        )
+        call = native.calls[0]
+        self.assertEqual(
+            call["main_instruction"],
+            "검증된 Notion 원본 속성 복구를 실행할까요?",
+        )
+        self.assertEqual(call["approve_button_text"], "복구 실행")
+        self.assertIn("source_properties 필드만 복구", str(call["content"]))
+        self.assertIn("검토가 필요한 항목은 변경하지 않습니다", str(call["content"]))
+        self.assertNotIn("review_pages_present", str(call["content"]))
+        self.assertIn("review_pages_present", str(call["expanded_information"]))
 
     def test_invalid_context_or_plain_string_intent_fails_before_native(self) -> None:
         native = _FakeNative()
@@ -132,7 +198,7 @@ class ExactHumanApprovalWindowsTests(unittest.TestCase):
 
     def test_native_exception_is_content_free(self) -> None:
         class _ExplodingNative:
-            def show(self, **_kwargs: str) -> tuple[int, bool]:
+            def show(self, **_kwargs: object) -> tuple[int, bool]:
                 raise RuntimeError("secret_private_path")
 
         with self.assertRaises(ExactHumanApprovalWindowsError) as captured:

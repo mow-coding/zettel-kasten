@@ -213,9 +213,14 @@ class Letter140ZettelObjetBindingTests(unittest.TestCase):
             archive_id="archive:letter140-test",
             reviewer_claim="person:reviewer",
         )
-        dialog = exact_human_approval_windows._dialog_content(context)
-        self.assertIn("작업: 제텔-오브제 연결 생성", dialog)
-        self.assertNotIn("PRIVATE_ZETTEL_ID", dialog)
+        primary = exact_human_approval_windows._dialog_content(context)
+        advanced = exact_human_approval_windows._dialog_advanced_information(
+            context
+        )
+        self.assertIn("선택한 연결만 추가합니다", primary)
+        self.assertNotIn("작업: 제텔-오브제 연결 생성", primary)
+        self.assertIn("작업: 제텔-오브제 연결 생성", advanced)
+        self.assertNotIn("PRIVATE_ZETTEL_ID", primary + "\n" + advanced)
 
     def test_every_target_and_effect_component_changes_the_binding(self) -> None:
         def zettel_id(plan: dict[str, Any]) -> None:

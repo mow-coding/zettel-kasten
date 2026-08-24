@@ -6,6 +6,19 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.4.4 - 2026-08-24
+
+- Replaced the native exact-human digest-reading checkbox with one explicit,
+  operation-specific action button. WOM verifies target counts, hashes,
+  canonical state, completeness, drift, and receipts; the person decides only
+  whether to execute the described operation now.
+- Moved content-free digests and internal review/warning codes behind collapsed
+  technical details, added plain effect summaries and safe-cancel wording, and
+  preserved the privacy boundary that excludes paths, titles, bodies, property
+  values, credentials, and provider data.
+- Kept authenticated v0.4.3 approval claims resumable while recording all new
+  approvals with the explicit-action-button mechanism.
+
 ## v0.4.3 - 2026-08-22
 
 - Added `ExactOperationManifest v1` as the common exact-approved multi-item

@@ -12093,7 +12093,7 @@ class ArchiveCliTests(unittest.TestCase):
             ["project_runtime_mismatch"],
         )
         self.assertEqual(result["project_pin"], "v0.4.2")
-        self.assertEqual(result["running_version"], "v0.4.3")
+        self.assertEqual(result["running_version"], "v0.4.4")
         self.assertEqual(
             result["project_runtime_argv"],
             [r".\.zettel-kasten\bin\archive.cmd"],
