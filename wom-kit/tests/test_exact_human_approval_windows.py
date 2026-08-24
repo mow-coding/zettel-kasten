@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import ctypes
+import os
 import unittest
+from pathlib import Path
 
 from wom_kit.exact_human_approval_windows import (
     APPROVE_BUTTON_ID,
@@ -9,7 +11,12 @@ from wom_kit.exact_human_approval_windows import (
     ExactHumanApprovalIntent,
     ExactHumanApprovalOperation,
     ExactHumanApprovalWindowsError,
+    _ACTCTXW,
+    _COMMON_CONTROLS_V6_MANIFEST,
     _DLLVERSIONINFO,
+    _TASKDIALOGCONFIG,
+    _TASKDIALOG_BUTTON,
+    _activate_comctl32_v6,
     _require_comctl32_v6,
     _request_exact_human_approval_core as request_exact_human_approval,
 )
@@ -239,6 +246,98 @@ class ExactHumanApprovalWindowsTests(unittest.TestCase):
                     captured.exception.code,
                     "exact_human_approval_activation_context_required",
                 )
+
+    def test_task_dialog_structures_use_commctrl_byte_packing(self) -> None:
+        pointer_bytes = ctypes.sizeof(ctypes.c_void_p)
+        self.assertEqual(
+            ctypes.sizeof(_TASKDIALOG_BUTTON),
+            12 if pointer_bytes == 8 else 8,
+        )
+        self.assertEqual(
+            ctypes.sizeof(_TASKDIALOGCONFIG),
+            160 if pointer_bytes == 8 else 96,
+        )
+        self.assertEqual(_TASKDIALOGCONFIG.hwndParent.offset, 4)
+        self.assertEqual(
+            _TASKDIALOGCONFIG.pszMainInstruction.offset,
+            44 if pointer_bytes == 8 else 28,
+        )
+
+    def test_activation_context_parses_content_free_manifest_and_cleans_source(self) -> None:
+        calls: list[tuple[object, ...]] = []
+        observed: dict[str, object] = {}
+
+        class _Function:
+            argtypes: object = None
+            restype: object = None
+
+            def __init__(self, callback):
+                self.callback = callback
+
+            def __call__(self, *args):
+                return self.callback(*args)
+
+        def create(raw: object) -> int:
+            descriptor = ctypes.cast(
+                raw, ctypes.POINTER(_ACTCTXW)
+            ).contents
+            source = Path(descriptor.lpSource)
+            observed["source"] = source
+            observed["manifest"] = source.read_bytes()
+            calls.append(("create",))
+            return 123
+
+        def activate(handle: object, raw_cookie: object) -> int:
+            ctypes.cast(
+                raw_cookie, ctypes.POINTER(ctypes.c_size_t)
+            ).contents.value = 456
+            calls.append(("activate", handle))
+            return 1
+
+        def deactivate(flags: object, cookie: object) -> int:
+            calls.append(("deactivate", flags, cookie))
+            return 1
+
+        def release(handle: object) -> None:
+            calls.append(("release", handle))
+
+        class _Kernel32:
+            CreateActCtxW = _Function(create)
+            ActivateActCtx = _Function(activate)
+            DeactivateActCtx = _Function(deactivate)
+            ReleaseActCtx = _Function(release)
+
+        class _Loader:
+            def __call__(self, name: str, **kwargs: object) -> object:
+                self_name = name.lower()
+                self.assertEqual(self_name, "kernel32")
+                self.assertTrue(kwargs.get("use_last_error"))
+                return _Kernel32()
+
+            def assertEqual(self, first: object, second: object) -> None:
+                ExactHumanApprovalWindowsTests.assertEqual(
+                    self_test, first, second
+                )
+
+            def assertTrue(self, value: object) -> None:
+                ExactHumanApprovalWindowsTests.assertTrue(self_test, value)
+
+        self_test = self
+        with _activate_comctl32_v6(loader=_Loader()):
+            source = observed["source"]
+            self.assertIsInstance(source, Path)
+            self.assertFalse(os.path.exists(source))
+            self.assertEqual(observed["manifest"], _COMMON_CONTROLS_V6_MANIFEST)
+
+        self.assertEqual(
+            calls,
+            [
+                ("create",),
+                ("activate", 123),
+                ("deactivate", 0, 456),
+                ("release", 123),
+            ],
+        )
 
 
 if __name__ == "__main__":

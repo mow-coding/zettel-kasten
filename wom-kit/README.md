@@ -10,12 +10,12 @@ It is not a website, SaaS app, dashboard, or visual note-taking product. The int
 
 ## Install The Command-Line Tool
 
-The exact v0.4.4 GitHub Release, when present, uses the self-contained wheel
+The exact v0.4.5 GitHub Release, when present, uses the self-contained wheel
 below. Confirm that the release exists and lists the wheel before installing
 it. The versioned URL alone is not proof that the asset is available.
 
 ```powershell
-uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.4/wom_kit-0.4.4-py3-none-any.whl"
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.5/wom_kit-0.4.5-py3-none-any.whl"
 archive --version
 ```
 
@@ -40,6 +40,11 @@ verifies complete targets, counts, hashes, canonical state, drift, and durable
 evidence. The native dialog asks the person only whether to execute the plain-
 language operation now; digests and internal codes are collapsed technical
 details, and no verification checkbox is required.
+
+v0.4.5 makes that boundary usable from a clean Windows wheel install. It
+activates Common Controls v6 on the calling thread and uses the byte-packed
+Task Dialog ABI required by `CommCtrl.h`; machine verification and the single
+human run-or-cancel decision remain unchanged.
 
 The v0.4.1 checkpoint opened `zettel-objet-link --approve` through the same local exact-human
 boundary. The command requires a fresh exact plan digest and reviewer, then
@@ -68,6 +73,7 @@ and repaired high-risk failures can use `wom-kit/cli-error/v0.1`: exit `2` is a
 usage failure, exit `1` is policy/precondition failure, and
 `effects_state: unknown` means an exact-human workflow had started and its
 durable claim requires reconciliation rather than automatic retry. See the
+[`v0.4.5 release note`](docs/releases/v0.4.5.md),
 [`v0.4.4 release note`](docs/releases/v0.4.4.md),
 [`v0.4.3 release note`](docs/releases/v0.4.3.md),
 [`ExactOperationManifest v1`](docs/exact-operation-manifest-v1.md),

@@ -1,6 +1,6 @@
 # Exact Human Approval Contract
 
-Status: v0.4.4 human-decision boundary; v0.4.0 one-use authority baseline preserved
+Status: v0.4.5 usable Windows human-decision boundary; v0.4.0 one-use authority baseline preserved
 
 ## Purpose
 

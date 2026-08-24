@@ -11,6 +11,7 @@ wom-kit/src/wom_kit/_resources/** text eol=lf
 wom-kit/project-runtime-policy.json text eol=lf
 wom-kit/project-runtime-supply-lock-v0.4.3.json text eol=lf
 wom-kit/project-runtime-supply-lock-v0.4.4.json text eol=lf
+wom-kit/project-runtime-supply-lock-v0.4.5.json text eol=lf
 wom-kit/tests/fixtures/unicode-17.0.0/*.txt text eol=lf
 wom-kit/tests/fixtures/v0.3.294-surface-baseline.json text eol=lf
 
