@@ -2,12 +2,36 @@
 
 [English Upgrade Guide](UPGRADE.md)
 
+## v0.4.6 정확한 R2 바이트 보존과 정식 채택
+
+일치하는 공개 Release가 정확한 wheel을 자산으로 나열한 뒤에만 설치합니다.
+
+```powershell
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.6/wom_kit-0.4.6-py3-none-any.whl"
+archive --version
+```
+
+새 프로세스에서 정확히 `archive 0.4.6`인지 확인합니다. dry-run은 근거를
+계산하고 결속하지만 자격증명 값을 읽거나 provider를 호출하거나 파일을 쓰지
+않습니다. local-only 바이트 보호는 기존 `object-storage-adopt-existing`
+계열에 `--preserve-local-only`를, 검증된 key-map 정합은
+`--formal-adoption`을 사용합니다. 기존 legacy adopt 승인 경로는 계속
+닫혀 있습니다.
+
+개수·해시·drift·원격 근거·checkpoint·receipt는 WOM이 검증합니다. 사람은
+보관함을 다시 세거나 digest를 비교하지 않고, native 창에서 쉽게 설명된 정확한
+작업을 지금 실행할지 또는 취소할지만 결정합니다. 릴리스 공개나 설치만으로
+클라이언트 보관함에 이 작업이 적용되지는 않습니다.
+
+[v0.4.6 릴리스 노트](wom-kit/docs/releases/v0.4.6.md)와
+[object-storage 실행 계약](wom-kit/docs/object-storage-adapter-execution-contract.md)을 보세요.
+
 ## v0.4.3 정확한 복구와 Git 백업
 
 일치하는 공개 Release가 정확한 wheel을 자산으로 나열한 뒤에만 설치합니다.
 
 ```powershell
-uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.5/wom_kit-0.4.5-py3-none-any.whl"
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.3/wom_kit-0.4.3-py3-none-any.whl"
 archive --version
 ```
 

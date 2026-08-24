@@ -27340,7 +27340,6 @@ COMPOUND_APPROVAL_BLOCKED_COMMANDS = frozenset(
         "notion-page-recovery",
         "notion-recover",
         "object-storage",
-        "object-storage-adopt-existing",
         "object-storage-upload",
         "object-storage-upload-evidence",
         "object-storage-wom-location-reconcile",
@@ -29667,7 +29666,17 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     object_storage_adopt_existing.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
-    object_storage_adopt_existing.set_defaults(func=command_object_storage_adopt_existing)
+    object_storage_adopt_existing.set_defaults(
+        func=command_object_storage_adopt_existing,
+        _wom_approval_scope={
+            "kind": "argument_flag_exactly_one_allowlist",
+            "allowed_flags": ["--preserve-local-only", "--formal-adoption"],
+            "outside_scope_status": "approval_fixed_closed",
+            "outside_scope_reason_code": (
+                command_status.COMPOUND_APPROVAL_REASON_CODE
+            ),
+        },
+    )
 
     object_storage_wom_location_reconcile = subcommands.add_parser(
         "object-storage-wom-location-reconcile",

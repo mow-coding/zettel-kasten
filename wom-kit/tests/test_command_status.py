@@ -29,6 +29,7 @@ class CommandStatusSyntheticParserTests(unittest.TestCase):
         write_parser = commands.add_parser("write", aliases=["w"])
         write_parser.add_argument("--approve", action="store_true")
         write_parser.add_argument("--dry-run", action="store_true")
+        write_parser.add_argument("--target")
         write_parser.add_argument(
             "--private-input",
             default="not_projected_private_default",
@@ -190,6 +191,41 @@ class CommandStatusSyntheticParserTests(unittest.TestCase):
                 parser,
                 frozenset(),
             )
+
+    def test_parser_declared_exactly_one_flag_scope_is_bounded(self) -> None:
+        parser = self._parser()
+        write_parser = command_status._subparser_actions(parser)[0].choices[
+            "write"
+        ]
+        write_parser.set_defaults(
+            _wom_approval_scope={
+                "kind": "argument_flag_exactly_one_allowlist",
+                "allowed_flags": ["--approve", "--dry-run"],
+                "outside_scope_status": "approval_fixed_closed",
+                "outside_scope_reason_code": (
+                    command_status.COMPOUND_APPROVAL_REASON_CODE
+                ),
+            }
+        )
+        inventory = command_status.build_command_status_inventory(
+            parser,
+            frozenset(),
+        )
+        row = next(
+            item for item in inventory["commands"]
+            if item["canonical_path"] == "write"
+        )
+        self.assertEqual(
+            row["approval_scope"],
+            {
+                "kind": "argument_flag_exactly_one_allowlist",
+                "allowed_flags": ["--approve", "--dry-run"],
+                "outside_scope_status": "approval_fixed_closed",
+                "outside_scope_reason_code": (
+                    command_status.COMPOUND_APPROVAL_REASON_CODE
+                ),
+            },
+        )
 
     def test_counts_are_complete_and_output_is_deterministic_json(self) -> None:
         first = command_status.build_command_status_inventory(
@@ -359,8 +395,19 @@ class CommandStatusArchiveParserTests(unittest.TestCase):
             },
         )
         self.assertEqual(
+            by_path["object-storage-adopt-existing"]["approval_scope"],
+            {
+                "kind": "argument_flag_exactly_one_allowlist",
+                "allowed_flags": ["--formal-adoption", "--preserve-local-only"],
+                "outside_scope_status": "approval_fixed_closed",
+                "outside_scope_reason_code": (
+                    "compound_exact_human_approval_binding_required"
+                ),
+            },
+        )
+        self.assertEqual(
             exposed["counts"]["conditional_approval_command_count"],
-            1,
+            2,
         )
 
 

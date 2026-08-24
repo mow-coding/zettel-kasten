@@ -1,6 +1,6 @@
 # Runtime Canonical Entry Points
 
-Status: v0.4.5 Windows native approval hotfix, exact recovery, project update, and Git backup checkpoint
+Status: v0.4.6 exact R2 recovery, project-isolated runtime, and Git backup checkpoint
 
 Previous checkpoint: Status: v0.4.3 exact recovery, project update, and Git backup checkpoint
 
@@ -110,7 +110,7 @@ v0.4.3 GitHub Release wheel has been independently confirmed, use the public
 wheel directly:
 
 ```powershell
-uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.5/wom_kit-0.4.5-py3-none-any.whl"
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.6/wom_kit-0.4.6-py3-none-any.whl"
 archive --version
 ```
 
