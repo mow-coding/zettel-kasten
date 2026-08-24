@@ -92,7 +92,9 @@ class ExactHumanApprovalOperation(Enum):
     promote_zet = "promote_zet"
     mint_zet = "mint_zet"
     zettel_edge = "zettel_edge"
+    zettel_edge_revert = "zettel_edge_revert"
     zettel_objet_link = "zettel_objet_link"
+    objet_capture = "objet_capture"
     retire_draft = "retire_draft"
     warning_override = "warning_override"
     source_fidelity_session_evidence = "source_fidelity_session_evidence"
@@ -105,6 +107,8 @@ class ExactHumanApprovalOperation(Enum):
     notion_property_backfill_revert = "notion_property_backfill_revert"
     object_storage_bytes_preservation = "object_storage_bytes_preservation"
     object_storage_formal_adoption = "object_storage_formal_adoption"
+    local_recovery = "local_recovery"
+    local_recovery_revert = "local_recovery_revert"
 
 
 def exact_human_approval_warning_codes(
@@ -145,7 +149,9 @@ _OPERATION_LABELS = {
     ExactHumanApprovalOperation.promote_zet: "제텔 승격",
     ExactHumanApprovalOperation.mint_zet: "제텔 발행",
     ExactHumanApprovalOperation.zettel_edge: "제텔 연결 생성",
+    ExactHumanApprovalOperation.zettel_edge_revert: "제텔 연결 되돌리기",
     ExactHumanApprovalOperation.zettel_objet_link: "제텔-오브제 연결 생성",
+    ExactHumanApprovalOperation.objet_capture: "단일 오브제 보존",
     ExactHumanApprovalOperation.retire_draft: "초안 폐기",
     ExactHumanApprovalOperation.warning_override: "경고 예외 적용",
     ExactHumanApprovalOperation.source_fidelity_session_evidence: "세션 근거 보존",
@@ -162,6 +168,8 @@ _OPERATION_LABELS = {
     ExactHumanApprovalOperation.object_storage_formal_adoption: (
         "오브제 원격 정식 채택"
     ),
+    ExactHumanApprovalOperation.local_recovery: "검증된 로컬 복구",
+    ExactHumanApprovalOperation.local_recovery_revert: "로컬 복구 되돌리기",
 }
 
 _OPERATION_QUESTIONS = {
@@ -169,7 +177,9 @@ _OPERATION_QUESTIONS = {
     ExactHumanApprovalOperation.promote_zet: "이 초안을 제텔로 승격할까요?",
     ExactHumanApprovalOperation.mint_zet: "이 제텔을 정본으로 발행할까요?",
     ExactHumanApprovalOperation.zettel_edge: "이 제텔 연결을 만들까요?",
+    ExactHumanApprovalOperation.zettel_edge_revert: "이 제텔 연결만 되돌릴까요?",
     ExactHumanApprovalOperation.zettel_objet_link: "이 제텔과 오브제를 연결할까요?",
+    ExactHumanApprovalOperation.objet_capture: "검증된 원본 파일을 오브제로 보존할까요?",
     ExactHumanApprovalOperation.retire_draft: "이 초안을 폐기할까요?",
     ExactHumanApprovalOperation.warning_override: "경고를 확인하고 계속할까요?",
     ExactHumanApprovalOperation.source_fidelity_session_evidence: (
@@ -202,6 +212,12 @@ _OPERATION_QUESTIONS = {
     ExactHumanApprovalOperation.object_storage_formal_adoption: (
         "보존·검증된 오브제를 정식 원격 연결로 채택할까요?"
     ),
+    ExactHumanApprovalOperation.local_recovery: (
+        "WOM이 검증한 로컬 복구를 실행할까요?"
+    ),
+    ExactHumanApprovalOperation.local_recovery_revert: (
+        "이 로컬 복구가 바꾼 필드만 되돌릴까요?"
+    ),
 }
 
 _OPERATION_SUMMARIES = {
@@ -217,8 +233,14 @@ _OPERATION_SUMMARIES = {
     ExactHumanApprovalOperation.zettel_edge: (
         "검증된 두 제텔 사이에 선택한 관계만 추가합니다."
     ),
+    ExactHumanApprovalOperation.zettel_edge_revert: (
+        "선택한 관계 영수증과 현재 제텔이 일치할 때 그 관계만 제거합니다."
+    ),
     ExactHumanApprovalOperation.zettel_objet_link: (
         "검증된 제텔과 오브제 사이에 선택한 연결만 추가합니다."
+    ),
+    ExactHumanApprovalOperation.objet_capture: (
+        "검증된 선택 manifest의 원본 바이트만 보존하고 manifest와 영수증을 남깁니다."
     ),
     ExactHumanApprovalOperation.retire_draft: (
         "검증된 초안만 폐기하며 정본은 변경하지 않습니다."
@@ -260,6 +282,14 @@ _OPERATION_SUMMARIES = {
         "바이트와 원격 근거가 일치하는 항목만 정식 채택하고 "
         "충돌 항목은 검토 상태로 남깁니다."
     ),
+    ExactHumanApprovalOperation.local_recovery: (
+        "근거가 정확히 일치하는 필드와 로컬 기록만 바꾸고, "
+        "불명확한 항목은 검토 상태로 남깁니다."
+    ),
+    ExactHumanApprovalOperation.local_recovery_revert: (
+        "이 복구 manifest가 바꾼 필드만 원래 값으로 되돌리고 "
+        "관계없는 필드와 본문은 유지합니다."
+    ),
 }
 
 _OPERATION_APPROVE_BUTTONS = {
@@ -267,7 +297,9 @@ _OPERATION_APPROVE_BUTTONS = {
     ExactHumanApprovalOperation.promote_zet: "제텔로 승격",
     ExactHumanApprovalOperation.mint_zet: "정본 발행",
     ExactHumanApprovalOperation.zettel_edge: "관계 만들기",
+    ExactHumanApprovalOperation.zettel_edge_revert: "관계 되돌리기",
     ExactHumanApprovalOperation.zettel_objet_link: "연결 만들기",
+    ExactHumanApprovalOperation.objet_capture: "오브제 보존",
     ExactHumanApprovalOperation.retire_draft: "초안 폐기",
     ExactHumanApprovalOperation.warning_override: "계속 실행",
     ExactHumanApprovalOperation.source_fidelity_session_evidence: "근거 보존",
@@ -280,6 +312,8 @@ _OPERATION_APPROVE_BUTTONS = {
     ExactHumanApprovalOperation.notion_property_backfill_revert: "복구 되돌리기",
     ExactHumanApprovalOperation.object_storage_bytes_preservation: "바이트 보존",
     ExactHumanApprovalOperation.object_storage_formal_adoption: "정식 채택",
+    ExactHumanApprovalOperation.local_recovery: "복구 실행",
+    ExactHumanApprovalOperation.local_recovery_revert: "복구 되돌리기",
 }
 
 

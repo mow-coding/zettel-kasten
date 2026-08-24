@@ -10,8 +10,14 @@ from pathlib import Path, PurePosixPath
 
 from wom_kit import archive_cli, archive_services
 from wom_kit.local_objet_link_recovery import (
+    zettel_objet_link_recovery_execution_plan,
     zettel_objet_link_recovery_plan,
 )
+from wom_kit.exact_operation_manifest import (
+    FileExactOperationCheckpointStore,
+    exact_operation_writer_lock,
+)
+from wom_kit.local_recovery_execution import _run_with_store
 
 
 KIT_ROOT = Path(__file__).resolve().parents[1]
@@ -116,8 +122,11 @@ class V045LocalObjetLinkRecoveryTests(unittest.TestCase):
             self.assertEqual(result["summary"]["classified_item_count"], 1)
             manifest = result["exact_operation_manifest"]
             self.assertIsInstance(manifest, dict)
-            self.assertEqual(manifest["operation"], "zettel_objet_link_recovery")
-            self.assertEqual(manifest["item_count"], 1)
+            self.assertEqual(manifest["operation"], "local_recovery")
+            self.assertEqual(manifest["item_count"], 2)
+            self.assertEqual(
+                result["summary"]["exact_link_manifest_item_count"], 1
+            )
             evidence = manifest["operation_evidence"]
             self.assertEqual(evidence["counts"]["capture_item_count"], 1)
             self.assertEqual(evidence["counts"]["classified_item_count"], 1)
@@ -141,7 +150,9 @@ class V045LocalObjetLinkRecoveryTests(unittest.TestCase):
             )
             self.assertTrue(result["ok"], result)
             self.assertEqual(result["summary"]["review_required"], 1)
-            self.assertIsNone(result["exact_operation_manifest"])
+            self.assertEqual(
+                result["exact_operation_manifest"]["item_count"], 1
+            )
             self.assertEqual(
                 result["items"][0]["blocker_codes"],
                 ["title_only_evidence_requires_review"],
@@ -183,7 +194,52 @@ class V045LocalObjetLinkRecoveryTests(unittest.TestCase):
             )
             self.assertNotIn(PRIVATE_TITLE, json.dumps(result))
 
-    def test_cli_reuses_existing_family_and_keeps_receipt_apply_closed(self) -> None:
+    def test_execution_plan_applies_and_reverts_link_and_classification(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self.archive(
+                Path(tmp), source_id=True, matching_title=True
+            )
+            plan = zettel_objet_link_recovery_execution_plan(
+                root,
+                capture_receipt=self.receipt_relative(),
+            )
+            with exact_operation_writer_lock(root) as lock:
+                applied = _run_with_store(
+                    plan,
+                    None,
+                    FileExactOperationCheckpointStore(root, writer_lock=lock),
+                    mode="apply",
+                    resume=False,
+                    progress_hook=None,
+                )
+            self.assertTrue(applied["ok"], applied)
+            zettel = root / "zettels" / f"{ZETTEL}.md"
+            frontmatter, _body = archive_services.require_readable_zettel_content(
+                zettel
+            )
+            self.assertEqual(frontmatter["assets"][-1]["object_id"], OBJECT_ID)
+            ledger_spec = plan.specs[-1]
+            self.assertTrue(
+                root.joinpath(*ledger_spec.target_relative.split("/")).is_file()
+            )
+            with exact_operation_writer_lock(root) as lock:
+                reverted = _run_with_store(
+                    plan,
+                    None,
+                    FileExactOperationCheckpointStore(root, writer_lock=lock),
+                    mode="revert",
+                    resume=False,
+                    progress_hook=None,
+                )
+            self.assertTrue(reverted["ok"], reverted)
+            frontmatter, _body = archive_services.require_readable_zettel_content(
+                zettel
+            )
+            self.assertFalse(
+                any(asset.get("object_id") == OBJECT_ID for asset in frontmatter["assets"])
+            )
+
+    def test_cli_reuses_existing_family_for_receipt_recovery_plan(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = self.archive(
                 Path(tmp), source_id=False, matching_title=False
@@ -204,21 +260,9 @@ class V045LocalObjetLinkRecoveryTests(unittest.TestCase):
                 )
             self.assertEqual(code, 0, (stdout.getvalue(), stderr.getvalue()))
             result = json.loads(stdout.getvalue())
-            self.assertEqual(
-                result["lifecycle_action"],
-                "zettel_objet_link_recovery_plan",
-            )
-            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
-                blocked = archive_cli.main(
-                    [
-                        "zettel-objet-link",
-                        str(root),
-                        "--capture-receipt",
-                        self.receipt_relative(),
-                        "--approve",
-                    ]
-                )
-            self.assertEqual(blocked, 1)
+            self.assertEqual(result["domain"], "zettel_objet_link")
+            self.assertEqual(result["state"], "ready_for_native_approval")
+            self.assertNotIn("items", result["manifest"])
 
 if __name__ == "__main__":
     unittest.main()

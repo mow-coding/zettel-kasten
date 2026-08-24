@@ -6,19 +6,28 @@ import json
 import shutil
 import tempfile
 import unittest
-from contextlib import redirect_stderr
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from types import SimpleNamespace
 
 from wom_kit import archive_cli, archive_services, completion_workflows
 from wom_kit.local_locator_recovery import (
+    notion_locator_mirror_recovery_execution_plan,
     notion_locator_mirror_recovery_plan,
+    notion_locator_orphan_recovery_execution_plan,
     notion_locator_orphan_recovery_plan,
 )
 from wom_kit.local_title_recovery import (
+    zet_identifier_title_recovery_execution_plan,
     zet_identifier_title_recovery_plan,
+    zet_title_field_local_execution_plan,
     zet_title_field_local_recovery_plan,
 )
+from wom_kit.exact_operation_manifest import (
+    FileExactOperationCheckpointStore,
+    exact_operation_writer_lock,
+)
+from wom_kit.local_recovery_execution import _run_with_store
 
 
 KIT_ROOT = Path(__file__).resolve().parents[1]
@@ -41,6 +50,20 @@ class V045LocalLocatorTitleRecoveryTests(unittest.TestCase):
 
     def zettel_path(self, root: Path) -> Path:
         return root / "zettels" / f"{ZETTEL_ID}.md"
+
+    def execute(self, plan, *, mode: str):
+        with exact_operation_writer_lock(plan.archive_root) as lock:
+            return _run_with_store(
+                plan,
+                None,
+                FileExactOperationCheckpointStore(
+                    plan.archive_root,
+                    writer_lock=lock,
+                ),
+                mode=mode,
+                resume=False,
+                progress_hook=None,
+            )
 
     def write_notion_zettel(
         self,
@@ -103,7 +126,13 @@ class V045LocalLocatorTitleRecoveryTests(unittest.TestCase):
                 result["summary"]["classified_pair_count"], 1
             )
             manifest = result["exact_operation_manifest"]
-            self.assertEqual(manifest["item_count"], 1)
+            self.assertEqual(manifest["item_count"], 2)
+            self.assertEqual(
+                result["summary"]["locator_record_manifest_item_count"], 1
+            )
+            self.assertEqual(
+                result["summary"]["classification_ledger_item_count"], 1
+            )
             evidence = manifest["operation_evidence"]
             self.assertEqual(evidence["counts"]["locator_pair_count"], 1)
             self.assertIn("locator_pair_set_sha256", evidence["digests"])
@@ -111,6 +140,53 @@ class V045LocalLocatorTitleRecoveryTests(unittest.TestCase):
             self.assertNotIn(PRIVATE_URL, rendered)
             self.assertNotIn(SOURCE_ID, rendered)
             self.assertNotIn(ZETTEL_ID, rendered)
+
+            stdout = io.StringIO()
+            stderr = io.StringIO()
+            with redirect_stdout(stdout), redirect_stderr(stderr):
+                code = archive_cli.main(
+                    [
+                        "external-locator-record",
+                        str(root),
+                        "--source-mirror",
+                        str(mirror),
+                        "--expected-zettel-count",
+                        "1",
+                        "--expected-pair-count",
+                        "1",
+                        "--dry-run",
+                        "--format",
+                        "json",
+                    ]
+                )
+            self.assertEqual(code, 0, (stdout.getvalue(), stderr.getvalue()))
+            cli_plan = json.loads(stdout.getvalue())
+            self.assertEqual(cli_plan["domain"], "notion_locator_mirror")
+            self.assertFalse(cli_plan["writes"])
+            self.assertFalse(cli_plan["private_values_echoed"])
+
+            execution = notion_locator_mirror_recovery_execution_plan(
+                root,
+                source_mirror=mirror,
+                expected_zettel_count=1,
+                expected_pair_count=1,
+            )
+            applied = self.execute(execution, mode="apply")
+            self.assertTrue(applied["ok"], applied)
+            locator_relative = completion_workflows._record_relative(ZETTEL_ID)
+            locator_path = root.joinpath(*locator_relative.split("/"))
+            self.assertTrue(locator_path.is_file())
+            locator_record = json.loads(locator_path.read_text(encoding="utf-8"))
+            self.assertTrue(
+                completion_workflows._locator_record_is_valid(
+                    locator_record,
+                    archive_id=archive_services.read_archive_id(root),
+                    zettel_id=ZETTEL_ID,
+                )
+            )
+            reverted = self.execute(execution, mode="revert")
+            self.assertTrue(reverted["ok"], reverted)
+            self.assertFalse(locator_path.exists())
 
             mismatch = notion_locator_mirror_recovery_plan(
                 root,
@@ -189,12 +265,36 @@ class V045LocalLocatorTitleRecoveryTests(unittest.TestCase):
             self.assertEqual(result["summary"]["restore_ready_count"], 1)
             self.assertEqual(result["summary"]["review_pending_count"], 0)
             manifest = result["exact_operation_manifest"]
-            self.assertEqual(manifest["item_count"], 1)
+            self.assertEqual(manifest["item_count"], 2)
+            self.assertEqual(
+                result["summary"]["marker_restore_manifest_item_count"], 1
+            )
+            self.assertEqual(
+                result["summary"]["classification_ledger_item_count"], 1
+            )
             self.assertEqual(
                 manifest["operation_evidence"]["counts"][
                     "classified_orphan_row_count"
                 ],
                 1,
+            )
+
+            execution = notion_locator_orphan_recovery_execution_plan(
+                root,
+                markup_receipts=[receipt_relative],
+                expected_orphan_row_count=1,
+            )
+            applied = self.execute(execution, mode="apply")
+            self.assertTrue(applied["ok"], applied)
+            self.assertIn(
+                marker,
+                self.zettel_path(root).read_text(encoding="utf-8"),
+            )
+            reverted = self.execute(execution, mode="revert")
+            self.assertTrue(reverted["ok"], reverted)
+            self.assertNotIn(
+                marker,
+                self.zettel_path(root).read_text(encoding="utf-8"),
             )
 
     def test_suffix_identifier_uses_own_source_id_and_body_agreement(self) -> None:
@@ -244,10 +344,56 @@ class V045LocalLocatorTitleRecoveryTests(unittest.TestCase):
                 ],
                 1,
             )
-            self.assertEqual(result["exact_operation_manifest"]["item_count"], 1)
+            self.assertEqual(result["exact_operation_manifest"]["item_count"], 2)
+            self.assertEqual(
+                result["summary"]["title_change_manifest_item_count"], 1
+            )
+            self.assertEqual(
+                result["summary"]["classification_ledger_item_count"], 1
+            )
             rendered = json.dumps(result)
             self.assertNotIn(HUMAN_TITLE, rendered)
             self.assertNotIn(SOURCE_ID, rendered)
+
+            stdout = io.StringIO()
+            stderr = io.StringIO()
+            with redirect_stdout(stdout), redirect_stderr(stderr):
+                code = archive_cli.main(
+                    [
+                        "zet-title-remap-write",
+                        str(root),
+                        "--source-mirror",
+                        str(source_index),
+                        "--expected-identifier-title-count",
+                        "1",
+                        "--dry-run",
+                        "--format",
+                        "json",
+                    ]
+                )
+            self.assertEqual(code, 0, (stdout.getvalue(), stderr.getvalue()))
+            cli_plan = json.loads(stdout.getvalue())
+            self.assertEqual(cli_plan["domain"], "zet_title_recovery")
+            self.assertFalse(cli_plan["writes"])
+            self.assertFalse(cli_plan["private_values_echoed"])
+
+            execution = zet_identifier_title_recovery_execution_plan(
+                root,
+                source_mirror=source_index,
+                expected_identifier_title_count=1,
+            )
+            applied = self.execute(execution, mode="apply")
+            self.assertTrue(applied["ok"], applied)
+            frontmatter, _body = archive_services.require_readable_zettel_content(
+                self.zettel_path(root)
+            )
+            self.assertEqual(frontmatter["title"], HUMAN_TITLE)
+            reverted = self.execute(execution, mode="revert")
+            self.assertTrue(reverted["ok"], reverted)
+            frontmatter, _body = archive_services.require_readable_zettel_content(
+                self.zettel_path(root)
+            )
+            self.assertEqual(frontmatter["title"], identifier_title)
 
     def test_title_receipt_audit_uses_title_field_not_whole_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -345,13 +491,63 @@ class V045LocalLocatorTitleRecoveryTests(unittest.TestCase):
                 build_revert_manifest=True,
             )
             self.assertTrue(revert["ok"], revert)
-            self.assertEqual(revert["exact_operation_manifest"]["item_count"], 1)
+            self.assertEqual(revert["exact_operation_manifest"]["item_count"], 2)
+            self.assertEqual(
+                revert["summary"]["title_change_manifest_item_count"], 1
+            )
+            self.assertEqual(
+                revert["summary"]["classification_ledger_item_count"], 1
+            )
             self.assertEqual(
                 revert["exact_operation_manifest"]["items"][0]["fields"][0][
                     "field_ref"
                 ],
                 "frontmatter.title",
             )
+
+            stdout = io.StringIO()
+            stderr = io.StringIO()
+            with redirect_stdout(stdout), redirect_stderr(stderr):
+                code = archive_cli.main(
+                    [
+                        "zet-title-remap-revert",
+                        str(root),
+                        "--receipt",
+                        receipt_relative,
+                        "--expected-receipt-sha256",
+                        _sha(receipt_raw),
+                        "--field-local",
+                        "--dry-run",
+                        "--format",
+                        "json",
+                    ]
+                )
+            self.assertEqual(code, 0, (stdout.getvalue(), stderr.getvalue()))
+            cli_plan = json.loads(stdout.getvalue())
+            self.assertEqual(cli_plan["domain"], "zet_title_field_revert")
+            self.assertFalse(cli_plan["writes"])
+            self.assertFalse(cli_plan["private_values_echoed"])
+
+            execution = zet_title_field_local_execution_plan(
+                root,
+                receipt_path=receipt_relative,
+                expected_receipt_sha256=_sha(receipt_raw),
+                build_revert_manifest=True,
+            )
+            applied = self.execute(execution, mode="apply")
+            self.assertTrue(applied["ok"], applied)
+            frontmatter, body = archive_services.require_readable_zettel_content(
+                self.zettel_path(root)
+            )
+            self.assertEqual(frontmatter["title"], before_title)
+            self.assertIn("later body edit", body)
+            reverted = self.execute(execution, mode="revert")
+            self.assertTrue(reverted["ok"], reverted)
+            frontmatter, body = archive_services.require_readable_zettel_content(
+                self.zettel_path(root)
+            )
+            self.assertEqual(frontmatter["title"], after_title)
+            self.assertIn("later body edit", body)
 
     def test_expected_counts_require_their_evidence_mode(self) -> None:
         cases = [

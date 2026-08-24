@@ -11,16 +11,28 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable
 
 from . import archive_services, completion_workflows
+from .exact_human_approval import exact_human_approval_archive_identity_sha256
 from .exact_operation_manifest import (
     ExactFieldEffect,
     ExactOperationEvidence,
     ExactOperationItem,
     ExactOperationManifest,
     hash_field_value,
+)
+from .local_recovery_execution import (
+    APPLY_OPERATION,
+    LocalRecoveryFieldSpec,
+    LocalRecoveryPlan,
+    build_local_recovery_plan,
+    combine_local_recovery_plans,
+    local_recovery_ledger_identity_sha256,
+    local_recovery_ledger_relative,
+    local_recovery_zettel_identity_sha256,
 )
 
 
@@ -296,7 +308,8 @@ def notion_locator_mirror_recovery_plan(
     expected_pair_count: int | None = None,
     progress_callback: Callable[[str, str, int | None, int | None], None]
     | None = None,
-) -> dict[str, Any]:
+    _build_execution: bool = False,
+) -> dict[str, Any] | LocalRecoveryPlan:
     """Bind one local Notion mirror to all currently unrecorded locator pairs."""
 
     root = archive_services.require_existing_archive_root(archive_root)
@@ -342,8 +355,19 @@ def notion_locator_mirror_recovery_plan(
         }
 
     mirror_sha256 = _sha(mirror_raw)
+    try:
+        mirror_mtime = Path(source_mirror).stat().st_mtime
+        recorded_at = (
+            datetime.fromtimestamp(mirror_mtime, timezone.utc)
+            .isoformat(timespec="microseconds")
+            .replace("+00:00", "Z")
+        )
+    except (OSError, OverflowError, ValueError):
+        blockers.append("local_locator_source_mirror_timestamp_invalid")
+        recorded_at = ""
     public_pairs: list[dict[str, Any]] = []
     exact_items: list[ExactOperationItem] = []
+    exact_specs: list[LocalRecoveryFieldSpec] = []
     pair_counts = {"exact_record_ready": 0, "review_required": 0}
     target_counts = {"exact_record_ready": 0, "review_required": 0}
     if progress_callback is not None:
@@ -392,40 +416,93 @@ def notion_locator_mirror_recovery_plan(
         )
         target_counts[target_state] += 1
         if not target_has_review:
-            source_sha256 = _sha(
-                _canonical_bytes(
+            coordinate_set = _canonical_bytes(
+                [
                     {
-                        "source_row_sha256": target["source_row_sha256"],
-                        "source_page_id": target["source_page_id"],
-                        "locator_refs": safe_urls,
+                        "locator_type": "source_url",
+                        "locator_ref": url,
+                    }
+                    for url in safe_urls
+                ]
+            )
+            locator_rows = []
+            for url in safe_urls:
+                locator_identity = _canonical_bytes(
+                    {
+                        "locator_ref": url,
+                        "service_ref": None,
+                        "account_ref": None,
+                        "occurrence_anchor": None,
                     }
                 )
+                locator_rows.append(
+                    {
+                        "locator_id": (
+                            "locator:sha256:"
+                            + hashlib.sha256(locator_identity).hexdigest()
+                        ),
+                        "locator_type": "source_url",
+                        "locator_ref": url,
+                        "status": "active",
+                        "recorded_at": recorded_at,
+                        "reviewed_by": "exact_human_approval",
+                        "provenance": {
+                            "source": "receipt_bound_local_recovery",
+                            "automatic_recovery_claimed": False,
+                        },
+                    }
+                )
+            record = {
+                "schema": completion_workflows.EXTERNAL_LOCATOR_SCHEMA,
+                "archive_id": archive_id,
+                "zettel_id": target["zettel_id"],
+                "created_at": recorded_at,
+                "updated_at": recorded_at,
+                "locators": locator_rows,
+            }
+            record_bytes = completion_workflows._canonical_json_bytes(record)
+            source_value = _canonical_bytes(
+                {
+                    "source_row_sha256": target["source_row_sha256"],
+                    "source_page_id": target["source_page_id"],
+                    "locator_refs": safe_urls,
+                    "record_sha256": _sha(record_bytes),
+                }
             )
-            exact_items.append(
-                ExactOperationItem(
+            target_identity = local_recovery_zettel_identity_sha256(
+                archive_id,
+                target["zettel_id"],
+                target["path"],
+            )
+            exact_item = ExactOperationItem(
                     ordinal=len(exact_items),
                     item_id=f"item:{target_ordinal:06d}",
                     target_kind="external_locator_record",
                     target_ref=target_ref,
-                    target_identity_sha256=target["canonical_sha256"],
+                    target_identity_sha256=target_identity,
                     fields=(
                         ExactFieldEffect(
                             field_ref="external_locator.coordinate_set",
                             pre_sha256=hash_field_value(None),
-                            post_sha256=hash_field_value(
-                                _canonical_bytes(
-                                    [
-                                        {
-                                            "locator_type": "source_url",
-                                            "locator_ref": url,
-                                        }
-                                        for url in safe_urls
-                                    ]
-                                )
-                            ),
-                            source_sha256=source_sha256,
+                            post_sha256=hash_field_value(coordinate_set),
+                            source_sha256=hash_field_value(source_value),
                         ),
                     ),
+                )
+            exact_items.append(exact_item)
+            exact_specs.append(
+                LocalRecoveryFieldSpec(
+                    item_id=exact_item.item_id,
+                    target_kind=exact_item.target_kind,
+                    target_ref=exact_item.target_ref,
+                    target_identity_sha256=exact_item.target_identity_sha256,
+                    field_ref="external_locator.coordinate_set",
+                    target_relative=target["path"],
+                    zettel_id=target["zettel_id"],
+                    pre_value=None,
+                    post_value=coordinate_set,
+                    source_value=source_value,
+                    post_file_bytes=record_bytes,
                 )
             )
         completed = target_ordinal + 1
@@ -509,20 +586,79 @@ def notion_locator_mirror_recovery_plan(
         counts=tuple(sorted(counts.items())),
         digests=tuple(sorted(digests.items())),
     )
+    locator_record_item_count = len(exact_items)
+    ledger_bytes = _canonical_bytes(
+        {
+            "schema": "wom-kit/notion-locator-mirror-recovery-ledger/v0.1",
+            "archive_identity_sha256": (
+                exact_human_approval_archive_identity_sha256(archive_id)
+            ),
+            "classification_items": public_pairs,
+            "operation_evidence": operation_evidence.document(),
+            "private_values_echoed": False,
+        }
+    ) + b"\n"
+    ledger_relative = local_recovery_ledger_relative(
+        "notion_locator_mirror",
+        ledger_bytes,
+    )
+    ledger_identity = local_recovery_ledger_identity_sha256(
+        archive_id,
+        "notion_locator_mirror",
+        ledger_relative,
+    )
+    ledger_source = _canonical_bytes(
+        {
+            "operation_evidence_sha256": operation_evidence.evidence_sha256,
+            "source_mirror_sha256": mirror_sha256,
+        }
+    )
+    ledger_item = ExactOperationItem(
+        ordinal=len(exact_items),
+        item_id=f"item:{pair_count:06d}:classification",
+        target_kind="local_recovery_ledger",
+        target_ref=_sha(ledger_relative.encode("utf-8")),
+        target_identity_sha256=ledger_identity,
+        fields=(
+            ExactFieldEffect(
+                field_ref="classification.ledger",
+                pre_sha256=hash_field_value(None),
+                post_sha256=hash_field_value(ledger_bytes),
+                source_sha256=hash_field_value(ledger_source),
+            ),
+        ),
+    )
+    exact_items.append(ledger_item)
+    exact_specs.append(
+        LocalRecoveryFieldSpec(
+            item_id=ledger_item.item_id,
+            target_kind=ledger_item.target_kind,
+            target_ref=ledger_item.target_ref,
+            target_identity_sha256=ledger_item.target_identity_sha256,
+            field_ref="classification.ledger",
+            target_relative=ledger_relative,
+            zettel_id=None,
+            pre_value=None,
+            post_value=ledger_bytes,
+            source_value=ledger_source,
+        )
+    )
+    exact_manifest_object = None
     exact_manifest = None
-    if exact_items and not blockers:
-        exact_manifest = ExactOperationManifest.build(
-            operation="notion_locator_mirror_recovery",
-            archive_identity_sha256=hash_field_value(
-                archive_id.encode("utf-8")
+    if not blockers:
+        exact_manifest_object = ExactOperationManifest.build(
+            operation=APPLY_OPERATION,
+            archive_identity_sha256=(
+                exact_human_approval_archive_identity_sha256(archive_id)
             ),
             items=exact_items,
             operation_evidence=operation_evidence,
-        ).document()
+        )
+        exact_manifest = exact_manifest_object.document()
     returned_items = public_pairs[:returned_limit]
     if len(returned_items) < pair_count:
         warnings.append("local_locator_items_truncated")
-    return {
+    result = {
         "ok": not blockers,
         "schema": MIRROR_RECOVERY_SCHEMA,
         "lifecycle_action": "notion_locator_mirror_recovery_plan",
@@ -533,6 +669,8 @@ def notion_locator_mirror_recovery_plan(
             **digests,
             "operation_evidence_sha256": operation_evidence.evidence_sha256,
             "exact_manifest_item_count": len(exact_items),
+            "locator_record_manifest_item_count": locator_record_item_count,
+            "classification_ledger_item_count": 1,
             "returned_item_count": len(returned_items),
             "truncated_item_count": pair_count - len(returned_items),
             "expected_zettel_count": expected_zettel_count,
@@ -543,10 +681,32 @@ def notion_locator_mirror_recovery_plan(
         "blockers": archive_services.unique_preserve_order(blockers),
         "warnings": archive_services.unique_preserve_order(warnings),
         "would_change": (
-            ["ops/external-locators"] if exact_manifest is not None else []
+            (
+                (["ops/external-locators"] if locator_record_item_count else [])
+                + ["classification.ledger"]
+            )
+            if exact_manifest is not None
+            else []
         ),
         "privacy_guards": _privacy_guards(),
     }
+    if _build_execution:
+        if exact_manifest_object is None:
+            raise archive_services.ArchiveServiceError(
+                "notion_locator_mirror_execution_blocked"
+            )
+        execution_warnings = []
+        if pair_counts["review_required"]:
+            execution_warnings.append("review_locator_pairs_present")
+        return build_local_recovery_plan(
+            root,
+            domain="notion_locator_mirror",
+            manifest=exact_manifest_object,
+            specs=exact_specs,
+            warning_codes=execution_warnings,
+            public_summary=result["summary"],
+        )
+    return result
 
 
 def _read_markup_receipt(
@@ -682,7 +842,8 @@ def notion_locator_orphan_recovery_plan(
     expected_orphan_row_count: int | None = None,
     progress_callback: Callable[[str, str, int | None, int | None], None]
     | None = None,
-) -> dict[str, Any]:
+    _build_execution: bool = False,
+) -> dict[str, Any] | LocalRecoveryPlan:
     """Classify marker-loss rows introduced by exact markup transactions."""
 
     root = archive_services.require_existing_archive_root(archive_root)
@@ -780,6 +941,7 @@ def notion_locator_orphan_recovery_plan(
 
     public_items: list[dict[str, Any]] = []
     exact_items: list[ExactOperationItem] = []
+    exact_specs: list[LocalRecoveryFieldSpec] = []
     state_counts = {
         "normal_maintain": 0,
         "restore_ready": 0,
@@ -889,43 +1051,56 @@ def notion_locator_orphan_recovery_plan(
                 }
             )
             if state == "restore_ready" and current_raw is not None:
-                exact_items.append(
-                    ExactOperationItem(
+                pre_value = _marker_projection(current_body)
+                post_value = _marker_projection(before_body)
+                source_value = _canonical_bytes(
+                    {
+                        "receipt_sha256": receipt_sha256,
+                        "transaction_ordinal": transaction_ordinal,
+                        "before_sha256": item.get("before_sha256"),
+                        "after_sha256": item.get("after_sha256"),
+                        "orphan_row_count": new_orphans,
+                    }
+                )
+                identity = local_recovery_zettel_identity_sha256(
+                    archive_id,
+                    item["zettel_id"],
+                    item["path"],
+                )
+                exact_item = ExactOperationItem(
                         ordinal=len(exact_items),
                         item_id=f"item:{transaction_ordinal:06d}",
                         target_kind="zettel",
                         target_ref=target_ref,
-                        target_identity_sha256=_sha(current_raw),
+                        target_identity_sha256=identity,
                         fields=(
                             ExactFieldEffect(
                                 field_ref=(
                                     "body.source_locator_omission_markers"
                                 ),
-                                pre_sha256=hash_field_value(
-                                    _marker_projection(current_body)
-                                ),
-                                post_sha256=hash_field_value(
-                                    _marker_projection(before_body)
-                                ),
-                                source_sha256=_sha(
-                                    _canonical_bytes(
-                                        {
-                                            "receipt_sha256": receipt_sha256,
-                                            "transaction_ordinal": (
-                                                transaction_ordinal
-                                            ),
-                                            "before_sha256": item.get(
-                                                "before_sha256"
-                                            ),
-                                            "after_sha256": item.get(
-                                                "after_sha256"
-                                            ),
-                                            "orphan_row_count": new_orphans,
-                                        }
-                                    )
-                                ),
+                                pre_sha256=hash_field_value(pre_value),
+                                post_sha256=hash_field_value(post_value),
+                                source_sha256=hash_field_value(source_value),
                             ),
                         ),
+                    )
+                exact_items.append(exact_item)
+                exact_specs.append(
+                    LocalRecoveryFieldSpec(
+                        item_id=exact_item.item_id,
+                        target_kind=exact_item.target_kind,
+                        target_ref=exact_item.target_ref,
+                        target_identity_sha256=exact_item.target_identity_sha256,
+                        field_ref=(
+                            "body.source_locator_omission_markers"
+                        ),
+                        target_relative=item["path"],
+                        zettel_id=item["zettel_id"],
+                        pre_value=pre_value,
+                        post_value=post_value,
+                        source_value=source_value,
+                        marker_pre_body=current_body,
+                        marker_post_body=before_body,
                     )
                 )
             completed = transaction_ordinal + 1
@@ -1040,20 +1215,79 @@ def notion_locator_orphan_recovery_plan(
         counts=tuple(sorted(counts.items())),
         digests=tuple(sorted(digests.items())),
     )
+    marker_item_count = len(exact_items)
+    ledger_bytes = _canonical_bytes(
+        {
+            "schema": "wom-kit/notion-locator-orphan-recovery-ledger/v0.1",
+            "archive_identity_sha256": (
+                exact_human_approval_archive_identity_sha256(archive_id)
+            ),
+            "classification_items": public_items,
+            "operation_evidence": operation_evidence.document(),
+            "private_values_echoed": False,
+        }
+    ) + b"\n"
+    ledger_relative = local_recovery_ledger_relative(
+        "notion_locator_orphan",
+        ledger_bytes,
+    )
+    ledger_identity = local_recovery_ledger_identity_sha256(
+        archive_id,
+        "notion_locator_orphan",
+        ledger_relative,
+    )
+    ledger_source = _canonical_bytes(
+        {
+            "operation_evidence_sha256": operation_evidence.evidence_sha256,
+            "markup_receipt_set_sha256": digests["markup_receipt_set_sha256"],
+        }
+    )
+    ledger_item = ExactOperationItem(
+        ordinal=len(exact_items),
+        item_id=f"item:{orphan_row_count:06d}:classification",
+        target_kind="local_recovery_ledger",
+        target_ref=_sha(ledger_relative.encode("utf-8")),
+        target_identity_sha256=ledger_identity,
+        fields=(
+            ExactFieldEffect(
+                field_ref="classification.ledger",
+                pre_sha256=hash_field_value(None),
+                post_sha256=hash_field_value(ledger_bytes),
+                source_sha256=hash_field_value(ledger_source),
+            ),
+        ),
+    )
+    exact_items.append(ledger_item)
+    exact_specs.append(
+        LocalRecoveryFieldSpec(
+            item_id=ledger_item.item_id,
+            target_kind=ledger_item.target_kind,
+            target_ref=ledger_item.target_ref,
+            target_identity_sha256=ledger_item.target_identity_sha256,
+            field_ref="classification.ledger",
+            target_relative=ledger_relative,
+            zettel_id=None,
+            pre_value=None,
+            post_value=ledger_bytes,
+            source_value=ledger_source,
+        )
+    )
+    exact_manifest_object = None
     exact_manifest = None
-    if exact_items and not blockers:
-        exact_manifest = ExactOperationManifest.build(
-            operation="notion_locator_orphan_recovery",
-            archive_identity_sha256=hash_field_value(
-                archive_id.encode("utf-8")
+    if not blockers:
+        exact_manifest_object = ExactOperationManifest.build(
+            operation=APPLY_OPERATION,
+            archive_identity_sha256=(
+                exact_human_approval_archive_identity_sha256(archive_id)
             ),
             items=exact_items,
             operation_evidence=operation_evidence,
-        ).document()
+        )
+        exact_manifest = exact_manifest_object.document()
     returned_items = public_items[:returned_limit]
     if len(returned_items) < len(public_items):
         warnings.append("local_locator_orphan_items_truncated")
-    return {
+    result = {
         "ok": not blockers,
         "schema": ORPHAN_RECOVERY_SCHEMA,
         "lifecycle_action": "notion_locator_orphan_recovery_plan",
@@ -1064,6 +1298,8 @@ def notion_locator_orphan_recovery_plan(
             **digests,
             "operation_evidence_sha256": operation_evidence.evidence_sha256,
             "exact_manifest_item_count": len(exact_items),
+            "marker_restore_manifest_item_count": marker_item_count,
+            "classification_ledger_item_count": 1,
             "returned_item_count": len(returned_items),
             "truncated_item_count": len(public_items) - len(returned_items),
             "expected_orphan_row_count": expected_orphan_row_count,
@@ -1073,12 +1309,32 @@ def notion_locator_orphan_recovery_plan(
         "blockers": archive_services.unique_preserve_order(blockers),
         "warnings": archive_services.unique_preserve_order(warnings),
         "would_change": (
-            ["body.source_locator_omission_markers"]
+            (
+                (["body.source_locator_omission_markers"] if marker_item_count else [])
+                + ["classification.ledger"]
+            )
             if exact_manifest is not None
             else []
         ),
         "privacy_guards": _privacy_guards(),
     }
+    if _build_execution:
+        if exact_manifest_object is None:
+            raise archive_services.ArchiveServiceError(
+                "notion_locator_orphan_execution_blocked"
+            )
+        execution_warnings = []
+        if state_counts["review_pending"]:
+            execution_warnings.append("review_marker_rows_present")
+        return build_local_recovery_plan(
+            root,
+            domain="notion_locator_orphan",
+            manifest=exact_manifest_object,
+            specs=exact_specs,
+            warning_codes=execution_warnings,
+            public_summary=result["summary"],
+        )
+    return result
 
 
 def _privacy_guards() -> dict[str, bool]:
@@ -1097,7 +1353,109 @@ def _privacy_guards() -> dict[str, bool]:
     }
 
 
+def notion_locator_mirror_recovery_execution_plan(
+    archive_root: Path | str,
+    *,
+    source_mirror: Path | str,
+    max_items: int = 200,
+    expected_zettel_count: int | None = None,
+    expected_pair_count: int | None = None,
+    progress_callback: Callable[[str, str, int | None, int | None], None]
+    | None = None,
+) -> LocalRecoveryPlan:
+    plan = notion_locator_mirror_recovery_plan(
+        archive_root,
+        source_mirror=source_mirror,
+        dry_run=True,
+        max_items=max_items,
+        expected_zettel_count=expected_zettel_count,
+        expected_pair_count=expected_pair_count,
+        progress_callback=progress_callback,
+        _build_execution=True,
+    )
+    if type(plan) is not LocalRecoveryPlan:
+        raise archive_services.ArchiveServiceError(
+            "notion_locator_mirror_execution_blocked"
+        )
+    return plan
+
+
+def notion_locator_orphan_recovery_execution_plan(
+    archive_root: Path | str,
+    *,
+    markup_receipts: list[str],
+    max_items: int = 200,
+    expected_orphan_row_count: int | None = None,
+    progress_callback: Callable[[str, str, int | None, int | None], None]
+    | None = None,
+) -> LocalRecoveryPlan:
+    plan = notion_locator_orphan_recovery_plan(
+        archive_root,
+        markup_receipts=markup_receipts,
+        dry_run=True,
+        max_items=max_items,
+        expected_orphan_row_count=expected_orphan_row_count,
+        progress_callback=progress_callback,
+        _build_execution=True,
+    )
+    if type(plan) is not LocalRecoveryPlan:
+        raise archive_services.ArchiveServiceError(
+            "notion_locator_orphan_execution_blocked"
+        )
+    return plan
+
+
+def notion_locator_local_recovery_execution_plan(
+    archive_root: Path | str,
+    *,
+    source_mirror: Path | str,
+    markup_receipts: list[str],
+    max_items: int = 200,
+    expected_zettel_count: int | None = None,
+    expected_pair_count: int | None = None,
+    expected_orphan_row_count: int | None = None,
+    progress_callback: Callable[[str, str, int | None, int | None], None]
+    | None = None,
+) -> LocalRecoveryPlan:
+    mirror = notion_locator_mirror_recovery_execution_plan(
+        archive_root,
+        source_mirror=source_mirror,
+        max_items=max_items,
+        expected_zettel_count=expected_zettel_count,
+        expected_pair_count=expected_pair_count,
+        progress_callback=progress_callback,
+    )
+    orphan = notion_locator_orphan_recovery_execution_plan(
+        archive_root,
+        markup_receipts=markup_receipts,
+        max_items=max_items,
+        expected_orphan_row_count=expected_orphan_row_count,
+        progress_callback=progress_callback,
+    )
+    return combine_local_recovery_plans(
+        (mirror, orphan),
+        domain="notion_locator_local_recovery",
+        public_summary={
+            "locator_pair_count": mirror.public_summary.get(
+                "locator_pair_count", 0
+            ),
+            "locator_record_count": mirror.public_summary.get(
+                "locator_record_manifest_item_count", 0
+            ),
+            "orphan_row_count": orphan.public_summary.get(
+                "orphan_row_count", 0
+            ),
+            "marker_restore_count": orphan.public_summary.get(
+                "marker_restore_manifest_item_count", 0
+            ),
+        },
+    )
+
+
 __all__ = [
+    "notion_locator_local_recovery_execution_plan",
+    "notion_locator_mirror_recovery_execution_plan",
     "notion_locator_mirror_recovery_plan",
+    "notion_locator_orphan_recovery_execution_plan",
     "notion_locator_orphan_recovery_plan",
 ]

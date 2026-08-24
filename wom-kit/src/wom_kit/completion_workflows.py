@@ -536,7 +536,8 @@ def _locator_row_is_valid(item: Any, *, schema: str) -> bool:
         or not item["reviewed_by"]
         or not isinstance(provenance, dict)
         or set(provenance) != {"source", "automatic_recovery_claimed"}
-        or provenance.get("source") != "human_reviewed_cli"
+        or provenance.get("source")
+        not in {"human_reviewed_cli", "receipt_bound_local_recovery"}
         or provenance.get("automatic_recovery_claimed") is not False
     ):
         return False
@@ -1481,7 +1482,8 @@ def _external_locator_deactivate_plan_core(
                 "source",
                 "automatic_recovery_claimed",
             }
-            or provenance.get("source") != "human_reviewed_cli"
+            or provenance.get("source")
+            not in {"human_reviewed_cli", "receipt_bound_local_recovery"}
             or provenance.get("automatic_recovery_claimed") is not False
         ):
             return False

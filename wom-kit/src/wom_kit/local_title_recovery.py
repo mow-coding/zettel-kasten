@@ -10,12 +10,23 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Callable
 
 from . import archive_services
+from .exact_human_approval import exact_human_approval_archive_identity_sha256
 from .exact_operation_manifest import (
     ExactFieldEffect,
     ExactOperationEvidence,
     ExactOperationItem,
     ExactOperationManifest,
     hash_field_value,
+)
+from .local_recovery_execution import (
+    APPLY_OPERATION,
+    LocalRecoveryFieldSpec,
+    LocalRecoveryPlan,
+    build_local_recovery_plan,
+    combine_local_recovery_plans,
+    local_recovery_ledger_identity_sha256,
+    local_recovery_ledger_relative,
+    local_recovery_zettel_identity_sha256,
 )
 
 
@@ -192,7 +203,8 @@ def zet_title_field_local_recovery_plan(
     build_revert_manifest: bool = False,
     progress_callback: Callable[[str, str, int | None, int | None], None]
     | None = None,
-) -> dict[str, Any]:
+    _build_execution: bool = False,
+) -> dict[str, Any] | LocalRecoveryPlan:
     """Audit title fields independently of unrelated later body/file changes."""
 
     root = archive_services.require_existing_archive_root(archive_root)
@@ -214,10 +226,14 @@ def zet_title_field_local_recovery_plan(
         paths = []
         blockers.append("title_field_receipt_invalid")
     if not paths:
-        blockers.append("title_field_receipt_missing")
+        if _build_execution and not build_revert_manifest:
+            warnings.append("title_field_receipt_population_empty")
+        else:
+            blockers.append("title_field_receipt_missing")
 
     public_items: list[dict[str, Any]] = []
     exact_items: list[ExactOperationItem] = []
+    exact_specs: list[LocalRecoveryFieldSpec] = []
     receipt_refs: list[str] = []
     receipt_item_count = 0
     states = {
@@ -317,38 +333,53 @@ def zet_title_field_local_recovery_plan(
                 and current_raw is not None
                 and before_title is not None
             ):
-                exact_items.append(
-                    ExactOperationItem(
+                pre_value = current_title.encode("utf-8")
+                post_value = before_title.encode("utf-8")
+                source_value = _canonical_bytes(
+                    {
+                        "receipt_sha256": receipt_sha256,
+                        "row_index": item.get("row_index"),
+                        "before_title_sha256": item.get(
+                            "before_title_sha256"
+                        ),
+                        "after_title_sha256": item.get(
+                            "after_title_sha256"
+                        ),
+                    }
+                )
+                identity = local_recovery_zettel_identity_sha256(
+                    archive_id,
+                    item["zettel_id"],
+                    item["canonical_path"],
+                )
+                exact_item = ExactOperationItem(
                         ordinal=len(exact_items),
                         item_id=f"item:{int(item['row_index']):06d}",
                         target_kind="zettel",
                         target_ref=target_ref,
-                        target_identity_sha256=_sha(current_raw),
+                        target_identity_sha256=identity,
                         fields=(
                             ExactFieldEffect(
                                 field_ref="frontmatter.title",
-                                pre_sha256=hash_field_value(
-                                    current_title.encode("utf-8")
-                                ),
-                                post_sha256=hash_field_value(
-                                    before_title.encode("utf-8")
-                                ),
-                                source_sha256=_sha(
-                                    _canonical_bytes(
-                                        {
-                                            "receipt_sha256": receipt_sha256,
-                                            "row_index": item.get("row_index"),
-                                            "before_title_sha256": item.get(
-                                                "before_title_sha256"
-                                            ),
-                                            "after_title_sha256": item.get(
-                                                "after_title_sha256"
-                                            ),
-                                        }
-                                    )
-                                ),
+                                pre_sha256=hash_field_value(pre_value),
+                                post_sha256=hash_field_value(post_value),
+                                source_sha256=hash_field_value(source_value),
                             ),
                         ),
+                    )
+                exact_items.append(exact_item)
+                exact_specs.append(
+                    LocalRecoveryFieldSpec(
+                        item_id=exact_item.item_id,
+                        target_kind=exact_item.target_kind,
+                        target_ref=exact_item.target_ref,
+                        target_identity_sha256=exact_item.target_identity_sha256,
+                        field_ref="frontmatter.title",
+                        target_relative=item["canonical_path"],
+                        zettel_id=item["zettel_id"],
+                        pre_value=pre_value,
+                        post_value=post_value,
+                        source_value=source_value,
                     )
                 )
             if progress_callback is not None and (
@@ -429,20 +460,79 @@ def zet_title_field_local_recovery_plan(
         counts=tuple(sorted(counts.items())),
         digests=tuple(sorted(digests.items())),
     )
+    title_item_count = len(exact_items)
+    ledger_bytes = _canonical_bytes(
+        {
+            "schema": "wom-kit/zet-title-field-local-ledger/v0.1",
+            "archive_identity_sha256": (
+                exact_human_approval_archive_identity_sha256(archive_id)
+            ),
+            "classification_items": public_items,
+            "operation_evidence": operation_evidence.document(),
+            "private_values_echoed": False,
+        }
+    ) + b"\n"
+    ledger_relative = local_recovery_ledger_relative(
+        "zet_title_field",
+        ledger_bytes,
+    )
+    ledger_identity = local_recovery_ledger_identity_sha256(
+        archive_id,
+        "zet_title_field",
+        ledger_relative,
+    )
+    ledger_source = _canonical_bytes(
+        {
+            "operation_evidence_sha256": operation_evidence.evidence_sha256,
+            "title_receipt_set_sha256": digests["title_receipt_set_sha256"],
+        }
+    )
+    ledger_item = ExactOperationItem(
+        ordinal=len(exact_items),
+        item_id=f"item:{receipt_item_count:06d}:classification",
+        target_kind="local_recovery_ledger",
+        target_ref=_sha(ledger_relative.encode("utf-8")),
+        target_identity_sha256=ledger_identity,
+        fields=(
+            ExactFieldEffect(
+                field_ref="classification.ledger",
+                pre_sha256=hash_field_value(None),
+                post_sha256=hash_field_value(ledger_bytes),
+                source_sha256=hash_field_value(ledger_source),
+            ),
+        ),
+    )
+    exact_items.append(ledger_item)
+    exact_specs.append(
+        LocalRecoveryFieldSpec(
+            item_id=ledger_item.item_id,
+            target_kind=ledger_item.target_kind,
+            target_ref=ledger_item.target_ref,
+            target_identity_sha256=ledger_item.target_identity_sha256,
+            field_ref="classification.ledger",
+            target_relative=ledger_relative,
+            zettel_id=None,
+            pre_value=None,
+            post_value=ledger_bytes,
+            source_value=ledger_source,
+        )
+    )
+    exact_manifest_object = None
     exact_manifest = None
-    if build_revert_manifest and exact_items and not blockers:
-        exact_manifest = ExactOperationManifest.build(
-            operation="zet_title_field_revert",
-            archive_identity_sha256=hash_field_value(
-                archive_id.encode("utf-8")
+    if not blockers:
+        exact_manifest_object = ExactOperationManifest.build(
+            operation=APPLY_OPERATION,
+            archive_identity_sha256=(
+                exact_human_approval_archive_identity_sha256(archive_id)
             ),
             items=exact_items,
             operation_evidence=operation_evidence,
-        ).document()
+        )
+        exact_manifest = exact_manifest_object.document()
     returned_items = public_items[:returned_limit]
     if len(returned_items) < len(public_items):
         warnings.append("title_field_items_truncated")
-    return {
+    result = {
         "ok": not blockers,
         "schema": FIELD_AUDIT_SCHEMA,
         "lifecycle_action": (
@@ -457,6 +547,8 @@ def zet_title_field_local_recovery_plan(
             **digests,
             "operation_evidence_sha256": operation_evidence.evidence_sha256,
             "exact_manifest_item_count": len(exact_items),
+            "title_change_manifest_item_count": title_item_count,
+            "classification_ledger_item_count": 1,
             "returned_item_count": len(returned_items),
             "truncated_item_count": len(public_items) - len(returned_items),
         },
@@ -465,10 +557,38 @@ def zet_title_field_local_recovery_plan(
         "blockers": archive_services.unique_preserve_order(blockers),
         "warnings": archive_services.unique_preserve_order(warnings),
         "would_change": (
-            ["frontmatter.title"] if exact_manifest is not None else []
+            (
+                (["frontmatter.title"] if title_item_count else [])
+                + ["classification.ledger"]
+            )
+            if exact_manifest is not None
+            else []
         ),
         "privacy_guards": _privacy_guards(),
     }
+    if _build_execution:
+        if exact_manifest_object is None:
+            raise archive_services.ArchiveServiceError(
+                "title_field_execution_plan_blocked"
+            )
+        execution_warnings = []
+        if states["title_divergent"]:
+            execution_warnings.append("divergent_titles_present")
+        if states["reverted_title_matches"]:
+            execution_warnings.append("already_reverted_titles_present")
+        return build_local_recovery_plan(
+            root,
+            domain=(
+                "zet_title_field_revert"
+                if build_revert_manifest
+                else "zet_title_field_audit"
+            ),
+            manifest=exact_manifest_object,
+            specs=exact_specs,
+            warning_codes=execution_warnings,
+            public_summary=result["summary"],
+        )
+    return result
 
 
 def _normalize_title(value: Any) -> str | None:
@@ -576,7 +696,8 @@ def zet_identifier_title_recovery_plan(
     expected_identifier_title_count: int | None = None,
     progress_callback: Callable[[str, str, int | None, int | None], None]
     | None = None,
-) -> dict[str, Any]:
+    _build_execution: bool = False,
+) -> dict[str, Any] | LocalRecoveryPlan:
     """Plan replacements only from each zettel's own exact source page id."""
 
     root = archive_services.require_existing_archive_root(archive_root)
@@ -618,6 +739,7 @@ def zet_identifier_title_recovery_plan(
 
     public_items: list[dict[str, Any]] = []
     exact_items: list[ExactOperationItem] = []
+    exact_specs: list[LocalRecoveryFieldSpec] = []
     states = {
         "exact_recovery_ready": 0,
         "review_required": 0,
@@ -720,37 +842,50 @@ def zet_identifier_title_recovery_plan(
             }
         )
         if state == "exact_recovery_ready" and isinstance(replacement, str):
-            exact_items.append(
-                ExactOperationItem(
+            pre_value = current_title.encode("utf-8")
+            post_value = replacement.encode("utf-8")
+            source_value = _canonical_bytes(
+                {
+                    "source_page_id": source_page_id,
+                    "source_row_sha256": source["row_sha256"],
+                    "body_first_paragraph_sha256": _sha(
+                        first_paragraph.encode("utf-8")
+                    ),
+                }
+            )
+            identity = local_recovery_zettel_identity_sha256(
+                archive_id,
+                frontmatter["id"],
+                relative,
+            )
+            exact_item = ExactOperationItem(
                     ordinal=len(exact_items),
                     item_id=f"item:{len(public_items) - 1:06d}",
                     target_kind="zettel",
                     target_ref=target_ref,
-                    target_identity_sha256=_sha(raw),
+                    target_identity_sha256=identity,
                     fields=(
                         ExactFieldEffect(
                             field_ref="frontmatter.title",
-                            pre_sha256=hash_field_value(
-                                current_title.encode("utf-8")
-                            ),
-                            post_sha256=hash_field_value(
-                                replacement.encode("utf-8")
-                            ),
-                            source_sha256=_sha(
-                                _canonical_bytes(
-                                    {
-                                        "source_page_id": source_page_id,
-                                        "source_row_sha256": source[
-                                            "row_sha256"
-                                        ],
-                                        "body_first_paragraph_sha256": _sha(
-                                            first_paragraph.encode("utf-8")
-                                        ),
-                                    }
-                                )
-                            ),
+                            pre_sha256=hash_field_value(pre_value),
+                            post_sha256=hash_field_value(post_value),
+                            source_sha256=hash_field_value(source_value),
                         ),
                     ),
+                )
+            exact_items.append(exact_item)
+            exact_specs.append(
+                LocalRecoveryFieldSpec(
+                    item_id=exact_item.item_id,
+                    target_kind=exact_item.target_kind,
+                    target_ref=exact_item.target_ref,
+                    target_identity_sha256=exact_item.target_identity_sha256,
+                    field_ref="frontmatter.title",
+                    target_relative=relative,
+                    zettel_id=frontmatter["id"],
+                    pre_value=pre_value,
+                    post_value=post_value,
+                    source_value=source_value,
                 )
             )
         if progress_callback is not None and (
@@ -839,20 +974,79 @@ def zet_identifier_title_recovery_plan(
         counts=tuple(sorted(counts.items())),
         digests=tuple(sorted(digests.items())),
     )
+    title_item_count = len(exact_items)
+    ledger_bytes = _canonical_bytes(
+        {
+            "schema": "wom-kit/zet-identifier-title-recovery-ledger/v0.1",
+            "archive_identity_sha256": (
+                exact_human_approval_archive_identity_sha256(archive_id)
+            ),
+            "classification_items": public_items,
+            "operation_evidence": operation_evidence.document(),
+            "private_values_echoed": False,
+        }
+    ) + b"\n"
+    ledger_relative = local_recovery_ledger_relative(
+        "zet_identifier_title",
+        ledger_bytes,
+    )
+    ledger_identity = local_recovery_ledger_identity_sha256(
+        archive_id,
+        "zet_identifier_title",
+        ledger_relative,
+    )
+    ledger_source = _canonical_bytes(
+        {
+            "operation_evidence_sha256": operation_evidence.evidence_sha256,
+            "source_index_sha256": digests["source_index_sha256"],
+        }
+    )
+    ledger_item = ExactOperationItem(
+        ordinal=len(exact_items),
+        item_id=f"item:{identifier_count:06d}:classification",
+        target_kind="local_recovery_ledger",
+        target_ref=_sha(ledger_relative.encode("utf-8")),
+        target_identity_sha256=ledger_identity,
+        fields=(
+            ExactFieldEffect(
+                field_ref="classification.ledger",
+                pre_sha256=hash_field_value(None),
+                post_sha256=hash_field_value(ledger_bytes),
+                source_sha256=hash_field_value(ledger_source),
+            ),
+        ),
+    )
+    exact_items.append(ledger_item)
+    exact_specs.append(
+        LocalRecoveryFieldSpec(
+            item_id=ledger_item.item_id,
+            target_kind=ledger_item.target_kind,
+            target_ref=ledger_item.target_ref,
+            target_identity_sha256=ledger_item.target_identity_sha256,
+            field_ref="classification.ledger",
+            target_relative=ledger_relative,
+            zettel_id=None,
+            pre_value=None,
+            post_value=ledger_bytes,
+            source_value=ledger_source,
+        )
+    )
+    exact_manifest_object = None
     exact_manifest = None
-    if exact_items and not blockers:
-        exact_manifest = ExactOperationManifest.build(
-            operation="zet_identifier_title_recovery",
-            archive_identity_sha256=hash_field_value(
-                archive_id.encode("utf-8")
+    if not blockers:
+        exact_manifest_object = ExactOperationManifest.build(
+            operation=APPLY_OPERATION,
+            archive_identity_sha256=(
+                exact_human_approval_archive_identity_sha256(archive_id)
             ),
             items=exact_items,
             operation_evidence=operation_evidence,
-        ).document()
+        )
+        exact_manifest = exact_manifest_object.document()
     returned_items = public_items[:returned_limit]
     if len(returned_items) < identifier_count:
         warnings.append("identifier_title_items_truncated")
-    return {
+    result = {
         "ok": not blockers,
         "schema": IDENTIFIER_RECOVERY_SCHEMA,
         "lifecycle_action": "zet_identifier_title_recovery_plan",
@@ -863,6 +1057,8 @@ def zet_identifier_title_recovery_plan(
             **digests,
             "operation_evidence_sha256": operation_evidence.evidence_sha256,
             "exact_manifest_item_count": len(exact_items),
+            "title_change_manifest_item_count": title_item_count,
+            "classification_ledger_item_count": 1,
             "returned_item_count": len(returned_items),
             "truncated_item_count": identifier_count - len(returned_items),
             "expected_identifier_title_count": expected_identifier_title_count,
@@ -872,10 +1068,124 @@ def zet_identifier_title_recovery_plan(
         "blockers": archive_services.unique_preserve_order(blockers),
         "warnings": archive_services.unique_preserve_order(warnings),
         "would_change": (
-            ["frontmatter.title"] if exact_manifest is not None else []
+            (
+                (["frontmatter.title"] if title_item_count else [])
+                + ["classification.ledger"]
+            )
+            if exact_manifest is not None
+            else []
         ),
         "privacy_guards": _privacy_guards(),
     }
+    if _build_execution:
+        if exact_manifest_object is None:
+            raise archive_services.ArchiveServiceError(
+                "identifier_title_execution_plan_blocked"
+            )
+        execution_warnings = []
+        if states["review_required"]:
+            execution_warnings.append("review_titles_present")
+        if states["source_title_unavailable"]:
+            execution_warnings.append("unavailable_source_titles_present")
+        return build_local_recovery_plan(
+            root,
+            domain="zet_identifier_title",
+            manifest=exact_manifest_object,
+            specs=exact_specs,
+            warning_codes=execution_warnings,
+            public_summary=result["summary"],
+        )
+    return result
+
+
+def zet_title_field_local_execution_plan(
+    archive_root: Path | str,
+    *,
+    receipt_path: str | None = None,
+    expected_receipt_sha256: str | None = None,
+    max_items: int = 200,
+    build_revert_manifest: bool = False,
+    progress_callback: Callable[[str, str, int | None, int | None], None]
+    | None = None,
+) -> LocalRecoveryPlan:
+    plan = zet_title_field_local_recovery_plan(
+        archive_root,
+        receipt_path=receipt_path,
+        expected_receipt_sha256=expected_receipt_sha256,
+        dry_run=True,
+        max_items=max_items,
+        build_revert_manifest=build_revert_manifest,
+        progress_callback=progress_callback,
+        _build_execution=True,
+    )
+    if type(plan) is not LocalRecoveryPlan:
+        raise archive_services.ArchiveServiceError(
+            "title_field_execution_plan_blocked"
+        )
+    return plan
+
+
+def zet_identifier_title_recovery_execution_plan(
+    archive_root: Path | str,
+    *,
+    source_mirror: Path | str,
+    max_items: int = 200,
+    expected_identifier_title_count: int | None = None,
+    progress_callback: Callable[[str, str, int | None, int | None], None]
+    | None = None,
+) -> LocalRecoveryPlan:
+    plan = zet_identifier_title_recovery_plan(
+        archive_root,
+        source_mirror=source_mirror,
+        dry_run=True,
+        max_items=max_items,
+        expected_identifier_title_count=expected_identifier_title_count,
+        progress_callback=progress_callback,
+        _build_execution=True,
+    )
+    if type(plan) is not LocalRecoveryPlan:
+        raise archive_services.ArchiveServiceError(
+            "identifier_title_execution_plan_blocked"
+        )
+    return plan
+
+
+def zet_title_recovery_execution_plan(
+    archive_root: Path | str,
+    *,
+    source_mirror: Path | str,
+    max_items: int = 200,
+    expected_identifier_title_count: int | None = None,
+    progress_callback: Callable[[str, str, int | None, int | None], None]
+    | None = None,
+) -> LocalRecoveryPlan:
+    audit = zet_title_field_local_execution_plan(
+        archive_root,
+        max_items=max_items,
+        progress_callback=progress_callback,
+    )
+    recovery = zet_identifier_title_recovery_execution_plan(
+        archive_root,
+        source_mirror=source_mirror,
+        max_items=max_items,
+        expected_identifier_title_count=expected_identifier_title_count,
+        progress_callback=progress_callback,
+    )
+    return combine_local_recovery_plans(
+        (audit, recovery),
+        domain="zet_title_recovery",
+        public_summary={
+            "title_receipt_item_count": audit.public_summary.get(
+                "title_receipt_item_count", 0
+            ),
+            "identifier_title_count": recovery.public_summary.get(
+                "identifier_title_count", 0
+            ),
+            "identifier_title_change_count": recovery.public_summary.get(
+                "title_change_manifest_item_count", 0
+            ),
+        },
+    )
 
 
 def _privacy_guards() -> dict[str, bool]:
@@ -893,6 +1203,9 @@ def _privacy_guards() -> dict[str, bool]:
 
 
 __all__ = [
+    "zet_identifier_title_recovery_execution_plan",
     "zet_identifier_title_recovery_plan",
+    "zet_title_field_local_execution_plan",
     "zet_title_field_local_recovery_plan",
+    "zet_title_recovery_execution_plan",
 ]

@@ -1,6 +1,6 @@
 # Agent Operator Capabilities Manifest
 
-Status: v0.4.3 candidate parser-derived approval-status inventory
+Status: v0.4.7 parser-derived conditional local-recovery inventory
 
 `archive capabilities --machine` lets an AI operator ask one practical question:
 
@@ -43,7 +43,7 @@ includes:
 - runnable status.
 
 v0.4.1 introduced `data.approval_status_inventory` with schema
-`wom-kit/command-approval-status-inventory/v0.1`. The v0.4.3 candidate returns
+`wom-kit/command-approval-status-inventory/v0.1`. The v0.4.7 release returns
 the successor v0.2 shape, which adds machine-readable conditional
 approval scope. Unlike the legacy flattened
 command summary, this inventory walks canonical executable paths at every
@@ -54,7 +54,7 @@ record. Each record includes:
 - `approval_status`,
 - the fixed-close `approval_reason_code` when applicable,
 - `approval_scope` (`null`, an argument/value allowlist, or an exactly-one
-  argument-flag allowlist plus the fixed-close
+  argument-flag allowlist, an any-matching argument-flag allowlist, plus the fixed-close
   status outside that allowlist),
 - whether `--dry-run` is exposed, and
 - `invocation_surface_available: true`.
@@ -72,16 +72,16 @@ These are parser facts, not execution promises. `approval_available` does not
 mean that archive-specific prerequisites have passed. `approval_not_exposed`
 does not mean that the command is read-only.
 
-For the v0.4.3 candidate parser, the inventory snapshot is:
+For the v0.4.7 parser, the inventory snapshot is:
 
 ```text
 canonical executable command paths: 315
 alias invocation paths:              259
 all invocation paths:                574
-approval_available:                   36
-approval_fixed_closed:                78
+approval_available:                   44
+approval_fixed_closed:                70
 approval_not_exposed:                201
-dry_run_exposed:                     270
+dry_run_exposed:                     271
 unmatched fixed-close entries:         0
 ```
 
@@ -111,6 +111,15 @@ v0.4.6 adds a second conditional scope without adding a top-level command.
 `--preserve-local-only` or `--formal-adoption` selects the operation-specific
 exact writer. No selected flag, both flags, or the legacy argument family stays
 fixed closed; the handler independently enforces that same boundary.
+
+v0.4.7 adds five receipt-bound conditional scopes without adding top-level
+commands. `objet-capture`, `revert-edge`, `external-locator-record`,
+`zet-title-remap-write`, and `zet-title-remap-revert` enter an operation-specific
+or common exact local-recovery writer only
+when one of their explicitly listed recovery-mode flags is present. The v0.2
+inventory represents this as `argument_flag_any_allowlist`; every legacy mode
+outside those flags remains fixed closed, and each handler independently
+enforces the same boundary.
 
 The `summary` includes:
 

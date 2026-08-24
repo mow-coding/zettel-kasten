@@ -14,15 +14,15 @@ ROOT = Path(__file__).resolve().parents[2]
 KIT = ROOT / "wom-kit"
 RESOURCE_ROOT = KIT / "src" / "wom_kit" / "_resources"
 MANIFEST_PATH = RESOURCE_ROOT / "resource-manifest.json"
-RELEASE_PATH = KIT / "docs" / "releases" / "v0.4.6.md"
-PACKAGED_RELEASE_PATH = RESOURCE_ROOT / "release-notes" / "v0.4.6.md"
+RELEASE_PATH = KIT / "docs" / "releases" / "v0.4.7.md"
+PACKAGED_RELEASE_PATH = RESOURCE_ROOT / "release-notes" / "v0.4.7.md"
 WHEEL_URL = (
     "https://github.com/mow-coding/zettel-kasten/releases/download/"
-    "v0.4.6/wom_kit-0.4.6-py3-none-any.whl"
+    "v0.4.7/wom_kit-0.4.7-py3-none-any.whl"
 )
 
 
-class V0406ReleaseDocsTests(unittest.TestCase):
+class V0407ReleaseDocsTests(unittest.TestCase):
     def test_letter138_docs_never_delegate_machine_verification_to_the_person(self) -> None:
         recovery = (
             KIT / "docs" / "notion-source-properties-recovery.md"
@@ -68,9 +68,9 @@ class V0406ReleaseDocsTests(unittest.TestCase):
                 self.assertIn(token, combined)
 
     def test_version_sources_and_wheel_contract_are_synchronized(self) -> None:
-        self.assertEqual(__version__, "0.4.6")
+        self.assertEqual(__version__, "0.4.7")
         self.assertIn(
-            'version = "0.4.6"',
+            'version = "0.4.7"',
             (KIT / "pyproject.toml").read_text(encoding="utf-8"),
         )
         for version_file in (
@@ -79,11 +79,11 @@ class V0406ReleaseDocsTests(unittest.TestCase):
         ):
             with self.subTest(version_file=version_file):
                 self.assertIn(
-                    '__version__ = "0.4.6"',
+                    '__version__ = "0.4.7"',
                     version_file.read_text(encoding="utf-8"),
                 )
         self.assertIn(
-            'PACKAGE_VERSION = "0.4.6"',
+            'PACKAGE_VERSION = "0.4.7"',
             (KIT / "tests" / "test_wheel_install.py").read_text(encoding="utf-8"),
         )
 
@@ -93,14 +93,14 @@ class V0406ReleaseDocsTests(unittest.TestCase):
             path.name
             for path in (RESOURCE_ROOT / "release-notes").glob("v*.md")
         )
-        self.assertEqual(release_names, ["v0.4.6.md"])
+        self.assertEqual(release_names, ["v0.4.7.md"])
 
         manifest = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
-        self.assertEqual(manifest["version"], "0.4.6")
+        self.assertEqual(manifest["version"], "0.4.7")
         self.assertEqual(manifest["file_count"], len(manifest["files"]))
         packaged_paths = [row["packaged"] for row in manifest["files"]]
         self.assertEqual(len(packaged_paths), len(set(packaged_paths)))
-        self.assertIn("release-notes/v0.4.6.md", packaged_paths)
+        self.assertIn("release-notes/v0.4.7.md", packaged_paths)
         self.assertNotIn("release-notes/v0.4.2.md", packaged_paths)
         for row in manifest["files"]:
             with self.subTest(packaged=row["packaged"]):
@@ -130,12 +130,12 @@ class V0406ReleaseDocsTests(unittest.TestCase):
         for token in (
             WHEEL_URL,
             "ExactOperationManifest v1",
-            "preserve-local-only",
-            "formal-adoption",
-            "bytes_preserved",
-            "zero PUT calls",
+            "field-scoped writers",
+            "content-free classification ledger",
+            "project-scoped command",
+            "No client manifest was approved or applied",
             "independent verification",
-            "native approval",
+            "native, selection-digest-bound approval",
             "versioned URL alone is not proof",
         ):
             with self.subTest(token=token):
@@ -162,8 +162,8 @@ class V0406ReleaseDocsTests(unittest.TestCase):
         release = " ".join(RELEASE_PATH.read_text(encoding="utf-8").split())
         self.assertNotIn("current client evidence snapshot", release.casefold())
         self.assertIn(
-            "Exact client counts, object identifiers, keys, digests, and paths "
-            "remain only in private acceptance records",
+            "Exact client totals, identifiers, paths, hashes, and source values "
+            "remain only in ignored-local acceptance records",
             release,
         )
 

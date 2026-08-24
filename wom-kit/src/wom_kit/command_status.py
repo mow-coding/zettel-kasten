@@ -121,7 +121,10 @@ def _parser_approval_scope(
             "allowed_values": sorted(allowed_values),
             **common,
         }
-    if raw.get("kind") == "argument_flag_exactly_one_allowlist":
+    if raw.get("kind") in {
+        "argument_flag_exactly_one_allowlist",
+        "argument_flag_any_allowlist",
+    }:
         if set(raw) != {"kind", "allowed_flags", *common}:
             raise ValueError("command_approval_scope_invalid")
         allowed_flags = raw.get("allowed_flags")
@@ -138,7 +141,7 @@ def _parser_approval_scope(
         ):
             raise ValueError("command_approval_scope_invalid")
         return {
-            "kind": "argument_flag_exactly_one_allowlist",
+            "kind": raw["kind"],
             "allowed_flags": sorted(allowed_flags),
             **common,
         }

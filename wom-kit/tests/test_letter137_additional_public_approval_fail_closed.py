@@ -342,8 +342,8 @@ class Letter137AdditionalPublicCliBoundaryTests(_CliAssertions):
         parcel_help = " ".join(top.choices["parcel"].format_help().split())
         init_help = " ".join(top.choices["init"].format_help().split())
         create_help = " ".join(top.choices["create-draft"].format_help().split())
-        self.assertIn("Unavailable in v0.4.6", parcel_help)
-        self.assertIn("unavailable in v0.4.6", init_help)
+        self.assertIn("Unavailable in v0.4.7", parcel_help)
+        self.assertIn("unavailable in v0.4.7", init_help)
         self.assertIn("exact reviewed AI", create_help)
 
     def test_nested_derive_approve_blocks_before_single_or_manifest_read(self) -> None:
@@ -924,7 +924,7 @@ class Letter137InitParcelAndAdvisoryTests(_CliAssertions):
             definition["inputSchema"]["properties"]["dry_run"]["default"],
             True,
         )
-        self.assertIn("unavailable in v0.4.6", definition["description"])
+        self.assertIn("unavailable in v0.4.7", definition["description"])
         with tempfile.TemporaryDirectory() as tmp:
             cli_target = Path(tmp) / "cli-target"
             code, _stdout, stderr = self.run_cli(
