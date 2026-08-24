@@ -1,8 +1,8 @@
 # Notion Source Properties Recovery
 
-Status: v0.4.3 working-tree implementation; public release and real-archive apply pending
+Status: v0.4.4 machine-verification contract; real-archive apply remains client-delegated
 
-Date: 2026-08-22
+Date: 2026-08-24
 
 ## What this repairs
 
@@ -60,9 +60,10 @@ automatically.
 The saved document binds the exact one-pass mirror snapshot digest, total page
 count, source-property count, populated count, indeterminate count, opaque
 count, source-shape split, legacy-root split, normalized source-id accounting,
-and optional populated page counts by property type. Review that exact private
-file. A later plan accepts only its byte-canonical JSON form and exposes the
-same content-free `acceptance_document_sha256` for comparison.
+and optional populated page counts by property type. WOM, not the person,
+compares that private evidence with the later plan. A person may open the file
+for optional technical inspection, but reading it, counting rows, or comparing
+its `acceptance_document_sha256` is not an approval prerequisite.
 
 This gate matters because the separate 3,605-page DB3 JSONL is not the full
 Letter 138 source. A well-formed but incomplete export must not be mistaken for
@@ -89,8 +90,8 @@ Argument-parser failures are redacted for the entire `migrate` family as well,
 so a misspelled option cannot reflect a mirror or acceptance path into text
 output.
 
-Do not approve unless the digest matches the reviewed private candidate and all
-of these are true in the final JSON:
+WOM refuses to open the approval dialog unless the private acceptance evidence
+matches and all of these are true in the final JSON:
 
 - `ok: true`;
 - `acceptance_verified: true`;
@@ -98,6 +99,10 @@ of these are true in the final JSON:
 - `unexplained_missing_populated_property_count: 0`;
 - `unexplained_missing_populated_property_type_count: 0`; and
 - `mapped + already_equal + unmapped + review == mirror_page_count`.
+
+These are machine gates, not a checklist delegated to the person. The person
+does not count categories, compare hashes, or determine canonical completeness.
+If any gate changes, WOM stops before writing and explains the fixed reason.
 
 `unmapped` means the source page has no exact canonical zettel target, so WOM
 does not invent one. `review` means the source or target is ambiguous or the
@@ -107,12 +112,13 @@ but does not silently write it.
 Every category has a deterministic source-set digest. The exact unresolved
 source and reason digests are included in the source inventory bound by every
 manifest effect and therefore by native approval. A bounded backfill may write
-the certain mapped effects after a human reviews those exact unresolved
-digests. This does not classify unresolved pages as dropped or resolved, does
-not modify the source mirror, and does not guarantee the mirror's future
+the certain mapped effects after WOM verifies that unresolved rows remain
+excluded. The human decision is only whether to run or cancel that plainly
+described bounded recovery. This does not classify unresolved pages as dropped
+or resolved, modify the source mirror, or guarantee the mirror's future
 lifecycle.
 
-## Step 3: apply the reviewed plan
+## Step 3: apply the machine-verified plan
 
 Run the same command with `--approve` and a reviewer claim:
 
@@ -120,17 +126,19 @@ Run the same command with `--approve` and a reviewer claim:
 archive migrate <archive-root> \
   --target notion-source-properties \
   --source-mirror <complete-block-mirror> \
-  --acceptance-file <exact-private-acceptance.json> \
+  --acceptance-file <machine-verified-private-acceptance.json> \
   --approve \
   --reviewed-by person:<reviewer> \
   --format json
 ```
 
 The complete source and archive are planned again. The native Windows dialog
-shows the exact recovery operation summary. Approval is valid only for the
-unchanged manifest, acceptance bytes, unresolved classification, canonical
-projection, and target set. Revert has a separate operation label and manifest;
-an apply approval cannot authorize a revert, or vice versa.
+shows the recovery effect in ordinary language and asks only `복구 실행` or
+`취소`. WOM automatically binds and rechecks the unchanged manifest, acceptance
+bytes, unresolved classification, canonical projection, and target set. Hashes
+and counts are optional collapsed technical details, never a human verification
+task. Revert has a separate operation label and manifest; an apply approval
+cannot authorize a revert, or vice versa.
 
 The writer then:
 
@@ -183,7 +191,7 @@ continues only that execution. Reconstruction does not depend on the prior
 Python process: an exact adapter-owned managed-equal field is normalized back
 to its originally approved mapped effect for manifest accounting, while plain
 pre-existing equal data is not. A regression rebuilds the byte-identical
-manifest from the reviewed acceptance, complete mirror, and partially written
+manifest from the machine-verified acceptance, complete mirror, and partially written
 archive after a write-before-receipt crash. A changed mirror, archive target,
 reviewer context, approval id, execution digest, checkpoint chain, or field
 state blocks.
