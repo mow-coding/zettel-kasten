@@ -14,15 +14,15 @@ ROOT = Path(__file__).resolve().parents[2]
 KIT = ROOT / "wom-kit"
 RESOURCE_ROOT = KIT / "src" / "wom_kit" / "_resources"
 MANIFEST_PATH = RESOURCE_ROOT / "resource-manifest.json"
-RELEASE_PATH = KIT / "docs" / "releases" / "v0.4.3.md"
-PACKAGED_RELEASE_PATH = RESOURCE_ROOT / "release-notes" / "v0.4.3.md"
+RELEASE_PATH = KIT / "docs" / "releases" / "v0.4.4.md"
+PACKAGED_RELEASE_PATH = RESOURCE_ROOT / "release-notes" / "v0.4.4.md"
 WHEEL_URL = (
     "https://github.com/mow-coding/zettel-kasten/releases/download/"
-    "v0.4.3/wom_kit-0.4.3-py3-none-any.whl"
+    "v0.4.4/wom_kit-0.4.4-py3-none-any.whl"
 )
 
 
-class V0403ReleaseDocsTests(unittest.TestCase):
+class V0404ReleaseDocsTests(unittest.TestCase):
     def test_same_account_project_runtime_scope_is_explicit(self) -> None:
         surfaces = (
             KIT / "docs" / "python-tool-install.md",
@@ -45,9 +45,9 @@ class V0403ReleaseDocsTests(unittest.TestCase):
                 self.assertIn(token, combined)
 
     def test_version_sources_and_wheel_contract_are_synchronized(self) -> None:
-        self.assertEqual(__version__, "0.4.3")
+        self.assertEqual(__version__, "0.4.4")
         self.assertIn(
-            'version = "0.4.3"',
+            'version = "0.4.4"',
             (KIT / "pyproject.toml").read_text(encoding="utf-8"),
         )
         for version_file in (
@@ -56,11 +56,11 @@ class V0403ReleaseDocsTests(unittest.TestCase):
         ):
             with self.subTest(version_file=version_file):
                 self.assertIn(
-                    '__version__ = "0.4.3"',
+                    '__version__ = "0.4.4"',
                     version_file.read_text(encoding="utf-8"),
                 )
         self.assertIn(
-            'PACKAGE_VERSION = "0.4.3"',
+            'PACKAGE_VERSION = "0.4.4"',
             (KIT / "tests" / "test_wheel_install.py").read_text(encoding="utf-8"),
         )
 
@@ -70,14 +70,14 @@ class V0403ReleaseDocsTests(unittest.TestCase):
             path.name
             for path in (RESOURCE_ROOT / "release-notes").glob("v*.md")
         )
-        self.assertEqual(release_names, ["v0.4.3.md"])
+        self.assertEqual(release_names, ["v0.4.4.md"])
 
         manifest = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
-        self.assertEqual(manifest["version"], "0.4.3")
+        self.assertEqual(manifest["version"], "0.4.4")
         self.assertEqual(manifest["file_count"], len(manifest["files"]))
         packaged_paths = [row["packaged"] for row in manifest["files"]]
         self.assertEqual(len(packaged_paths), len(set(packaged_paths)))
-        self.assertIn("release-notes/v0.4.3.md", packaged_paths)
+        self.assertIn("release-notes/v0.4.4.md", packaged_paths)
         self.assertNotIn("release-notes/v0.4.2.md", packaged_paths)
         for row in manifest["files"]:
             with self.subTest(packaged=row["packaged"]):

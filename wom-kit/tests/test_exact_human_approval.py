@@ -17,10 +17,13 @@ from wom_kit.exact_human_approval import (
     APPROVAL_LINK_MAC_MAX_PAYLOAD_BYTES,
     CLAIMS_RELATIVE_ROOT,
     ExactHumanApprovalError,
+    _canonical_bytes,
+    _claim_mac,
     _claim_exact_human_approval_core as claim_exact_human_approval,
     exact_human_approval_archive_identity_sha256,
 )
 from wom_kit.exact_human_approval_windows import (
+    CURRENT_INTERACTIVE_INTENT_MECHANISM,
     ExactHumanApprovalContext,
     _ExactHumanApprovalDecision as ExactHumanApprovalDecision,
     ExactHumanApprovalOperation,
@@ -98,6 +101,13 @@ class ExactHumanApprovalTests(unittest.TestCase):
             document = json.loads(path.read_text(encoding="utf-8"))
             self.assertEqual(document["status"], "started")
             self.assertEqual(document["reviewer_identity_authenticated"], False)
+            self.assertEqual(
+                document["interactive_intent"],
+                {
+                    "mechanism": CURRENT_INTERACTIVE_INTENT_MECHANISM,
+                    "confirmed": True,
+                },
+            )
             self.assertEqual(document["authentication"]["algorithm"], "hmac-sha256")
             self.assertEqual(
                 claim.assert_ready_for_context(self.context),
@@ -106,6 +116,23 @@ class ExactHumanApprovalTests(unittest.TestCase):
             rendered = path.read_text(encoding="utf-8")
             self.assertNotIn("person:local-operator", rendered)
             self.assertNotIn(str(self.root), rendered)
+        finally:
+            claim.close()
+
+    def test_authenticated_v043_checkbox_claim_remains_resumable(self) -> None:
+        claim = self._claim()
+        try:
+            path = self.root / CLAIMS_RELATIVE_ROOT / (claim.approval_id + ".json")
+            document = json.loads(path.read_text(encoding="utf-8"))
+            document["interactive_intent"]["mechanism"] = (
+                "windows_task_dialog_checkbox_and_button"
+            )
+            document["authentication"]["mac"] = _claim_mac(document, AUTH_KEY)
+            path.write_bytes(_canonical_bytes(document))
+            self.assertEqual(
+                claim.assert_ready_for_context(self.context),
+                claim.public_reference(),
+            )
         finally:
             claim.close()
 

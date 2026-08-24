@@ -29,7 +29,7 @@ The archive should never silently rewrite memory.
 Install only after the matching public Release lists the exact wheel:
 
 ```powershell
-uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.3/wom_kit-0.4.3-py3-none-any.whl"
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.4/wom_kit-0.4.4-py3-none-any.whl"
 archive --version
 ```
 
