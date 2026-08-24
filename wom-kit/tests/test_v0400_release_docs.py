@@ -123,11 +123,12 @@ class V0400ReleaseDocsTests(unittest.TestCase):
             {
                 *current_blocked,
                 "migrate",
+                "object-storage-adopt-existing",
                 "zettel-objet-link",
                 "project-version-update",
             }
         )
-        self.assertEqual(len(current_blocked), 76)
+        self.assertEqual(len(current_blocked), 75)
         self.assertEqual(len(historical_blocked), 79)
         self.assertNotIn("migrate", current_blocked)
         self.assertNotIn("zettel-objet-link", current_blocked)
