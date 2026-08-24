@@ -1,6 +1,6 @@
 # Install WOM-kit As A Python Tool
 
-Status: v0.4.3 conditional GitHub wheel and exact recovery boundary
+Status: v0.4.7 verified GitHub wheel and receipt-bound local recovery
 
 WOM-kit is a command-line tool. It should live in its own Python environment
 instead of being mixed into an application project's dependencies.
@@ -27,37 +27,39 @@ release verification, install the wheel in a dedicated temporary virtual
 environment and invoke its `Scripts\archive.exe` by explicit path; do not
 replace the user-shared PATH tool as a side effect of testing.
 
-The approved v0.4.3 updater then installs the verified release wheel under the
+The approved project updater then installs the verified release wheel under the
 selected project at `.zettel-kasten/runtimes/vX.Y.Z/` and activates the stable
 `.zettel-kasten/bin/archive.cmd` launcher. Ordinary project commands use that
 launcher. Other project folders and the user-shared PATH executable do not
 change. This is WOM's supported project runtime boundary; it does not isolate
 arbitrary non-WOM programs or separate Windows user permissions.
 
-The v0.4.3 URL below is a conditional contract, not proof that an artifact is
+The v0.4.7 URL below is a conditional contract, not proof that an artifact is
 public. Use it only after the matching GitHub Release exists and lists the
-verified wheel. See the [v0.4.3 release note](releases/v0.4.3.md) for the
+verified wheel. See the [v0.4.7 release note](releases/v0.4.7.md) for the
 separate source and release-evidence boundary.
 
-An installed v0.4.2 client contains the Git read-only planners but not v0.4.3's
-exact commit/push writer, source-property backfill, or reopened project updater.
+An installed older client may not contain v0.4.7's complete exact writer and
+receipt-bound local-recovery surfaces.
 Updating repository files alone does not replace the isolated `uv tool` or
-virtual-environment wheel. After the verified v0.4.3 asset exists, install that
+virtual-environment wheel. After the verified v0.4.7 asset exists, install that
 exact wheel and start a new process.
 
 ## Recommended Project Bootstrap
 
 Create a temporary bootstrap only after the exact WOM GitHub Release exists and
 lists the verified wheel. The versioned URL alone is not proof that the asset
-is available:
+is available. Keep this temporary environment outside the inspected project or
+archive so it cannot become project input or an updater collision:
 
 ```powershell
-py -m venv .wom-bootstrap-v043
-& .\.wom-bootstrap-v047\Scripts\python.exe -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.7/wom_kit-0.4.7-py3-none-any.whl"
-& .\.wom-bootstrap-v043\Scripts\archive.exe --version
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v047"
+py -m venv $womBootstrapRoot
+& "$womBootstrapRoot\Scripts\python.exe" -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.7/wom_kit-0.4.7-py3-none-any.whl"
+& "$womBootstrapRoot\Scripts\archive.exe" --version
 ```
 
-After the new process reports exactly `archive 0.4.3`, use that explicit
+After the new process reports exactly `archive 0.4.7`, use that explicit
 bootstrap executable for `project-version-update`. After approval succeeds,
 verify the project runtime and use its launcher:
 
@@ -82,7 +84,7 @@ URL keeps the installed artifact tied to a reviewed repository tag.
 
 ### Replace an installed older global CLI
 
-After the v0.4.3 Release and wheel actually exist, replace the isolated
+After the v0.4.7 Release and wheel actually exist, replace the isolated
 `uv tool` environment and verify the result from a new process:
 
 ```powershell
@@ -96,7 +98,7 @@ unmanaged executable collision and a human has reviewed that executable; the
 flag permits replacing executables that `uv` does not manage. See the
 [official `uv tool install` reference](https://docs.astral.sh/uv/reference/cli/#uv-tool-install).
 
-Require exactly `archive 0.4.3`. This is a global CLI-only bootstrap. It does
+Require exactly `archive 0.4.7`. This is a global CLI-only bootstrap. It does
 not change a project-local `.zettel-kasten/source` mirror or version pin. The
 project updater is a separate exact-human workflow; collision mutation and
 bytecode repair remain fixed closed. Do not hand-edit the pin. See [Project
