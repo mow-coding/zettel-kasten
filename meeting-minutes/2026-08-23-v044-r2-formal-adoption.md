@@ -10,7 +10,7 @@ preservation:
 2. classify the 1,149 duplicate-definition groups by evidence rule and leave
    ambiguous metadata decisions at a human review boundary.
 
-Development stayed in the dedicated `codex/v044-r2` worktree. No Basoon file,
+Development stayed in the dedicated `codex/v044-r2` worktree. No client-archive file,
 provider object, credential value, release, or installed runtime was changed.
 The only real-data access was aggregate read-only planning.
 
@@ -118,7 +118,7 @@ v0.4.4 recovery result. Remaining blockers are intentionally external:
 2. release/package/install verification;
 3. native approval of the exact 19,055-target manifest;
 4. live R2 HEAD execution and independent provider verification;
-5. supported Basoon manifest projection;
+5. supported client-archive manifest projection;
 6. final receipt inspection and remote Git backup.
 
 No feedback letter is resolved by this development-only result.

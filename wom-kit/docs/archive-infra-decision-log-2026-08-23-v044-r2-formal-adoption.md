@@ -45,5 +45,5 @@ verification. The emergency bytes-preservation path supplies HEAD plus full GET
 rehash for local-only bytes; formal adoption preserves the historical 158 GB
 cost boundary and records its narrower evidence honestly.
 
-Live provider and Basoon completion evidence remains pending release,
+Live provider and client-archive completion evidence remains pending release,
 installation, native approval, and authorized application.

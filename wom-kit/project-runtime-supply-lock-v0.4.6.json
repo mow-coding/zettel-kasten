@@ -1,0 +1,31 @@
+{
+  "schema": "wom-kit/project-runtime-supply-lock/v0.1",
+  "target_tag": "v0.4.6",
+  "interpreter": {
+    "implementation": "cpython",
+    "python_version": "3.12",
+    "python_tag": "cp312",
+    "abi_tag": "cp312",
+    "platform_tag": "win_amd64"
+  },
+  "artifacts": [
+    {
+      "role": "dependency",
+      "distribution": "PyYAML",
+      "version": "6.0.3",
+      "file_name": "pyyaml-6.0.3-cp312-cp312-win_amd64.whl",
+      "url": "https://files.pythonhosted.org/packages/86/bf/899e81e4cce32febab4fb42bb97dcdf66bc135272882d1987881a4b519e9/pyyaml-6.0.3-cp312-cp312-win_amd64.whl",
+      "size_bytes": 154003,
+      "sha256": "sha256:5fcd34e47f6e0b794d17de1b4ff496c00986e1c83f7ab2fb8fcfe9616ff7477b"
+    },
+    {
+      "role": "dependency",
+      "distribution": "unicodedata2",
+      "version": "17.0.1",
+      "file_name": "unicodedata2-17.0.1-cp312-cp312-win_amd64.whl",
+      "url": "https://files.pythonhosted.org/packages/dd/4d/24523557cfd632fc70fc031a83b280ae60d618e55afd54a6298c5d8b80f7/unicodedata2-17.0.1-cp312-cp312-win_amd64.whl",
+      "size_bytes": 484194,
+      "sha256": "sha256:d1439ad3ee0daace878196de4466a86aa5015cb244b9b1d5d00db74344649722"
+    }
+  ]
+}

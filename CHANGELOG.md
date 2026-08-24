@@ -6,6 +6,18 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.4.6 - 2026-08-24
+
+- Added exact, resumable emergency R2 preservation for local-only Objet bytes,
+  with content-addressed keys, HEAD plus full GET rehash, immutable
+  `bytes_preserved` receipts, and no false formal-adoption claim.
+- Added exact formal adoption for verified key-map entries through immutable
+  HEAD evidence and one final manifest projection; provider PUT is forbidden
+  and conflicting definitions remain review-only.
+- Reused the common native human decision, checkpoint, resume, privacy, and
+  independent-verification contract while keeping the legacy compound adopt
+  approval path closed.
+
 ## v0.4.5 - 2026-08-24
 
 - Fixed the clean-wheel Windows approval surface by activating the Common

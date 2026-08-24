@@ -1,6 +1,6 @@
 # Notion Source Properties Recovery
 
-Status: v0.4.5 machine-verification and usable native-decision contract; real-archive apply remains client-delegated
+Status: v0.4.6 machine-verification and usable native-decision contract; real-archive apply remains client-delegated
 
 Date: 2026-08-24
 
