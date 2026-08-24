@@ -295,7 +295,7 @@ class Letter137AdditionalPublicCliBoundaryTests(_CliAssertions):
             ],
             "parcel": ["pack"],
         }
-        self.assertEqual(len(archive_cli.COMPOUND_APPROVAL_BLOCKED_COMMANDS), 75)
+        self.assertEqual(len(archive_cli.COMPOUND_APPROVAL_BLOCKED_COMMANDS), 70)
         self.assertNotIn(
             "migrate",
             archive_cli.COMPOUND_APPROVAL_BLOCKED_COMMANDS,
@@ -306,6 +306,14 @@ class Letter137AdditionalPublicCliBoundaryTests(_CliAssertions):
         )
         self.assertNotIn(
             "object-storage-adopt-existing",
+            archive_cli.COMPOUND_APPROVAL_BLOCKED_COMMANDS,
+        )
+        self.assertNotIn(
+            "objet-capture",
+            archive_cli.COMPOUND_APPROVAL_BLOCKED_COMMANDS,
+        )
+        self.assertNotIn(
+            "revert-edge",
             archive_cli.COMPOUND_APPROVAL_BLOCKED_COMMANDS,
         )
         self.assertIn(
