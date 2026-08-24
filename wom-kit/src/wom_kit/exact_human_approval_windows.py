@@ -1,9 +1,11 @@
 """Native Windows confirmation for one exact, content-free write plan.
 
 This module establishes *interactive intent*, not human identity.  The live
-boundary is one standard Windows task dialog.  It displays only fixed labels,
-SHA-256 bindings, and machine-owned warning/review codes; private archive
-paths, source text, facet values, and secrets are never accepted by the API.
+boundary is one standard Windows task dialog.  Its primary surface asks one
+human decision in ordinary language.  Machine-owned SHA-256 bindings and
+warning/review codes remain available only through progressive disclosure;
+private archive paths, source text, facet values, and secrets are never
+accepted by the API.
 
 The dialog alone is not write authority.  A caller must combine an approved
 decision with the authenticated, one-use receipt/claim boundary in
@@ -24,12 +26,17 @@ from enum import Enum
 from typing import Protocol
 
 
-TASK_DIALOG_TITLE = "WOM · 정확한 사람 검토"
-LIVE_MAIN_INSTRUCTION = "실제 쓰기 1회를 검토하고 승인합니다"
+TASK_DIALOG_TITLE = "WOM · 실행 확인"
 SYNTHETIC_MAIN_INSTRUCTION = "합성 UI 테스트 · 실제 쓰기 권한이 아닙니다"
-VERIFICATION_TEXT = "위 계획 식별자와 검토 항목을 확인했습니다."
-APPROVE_BUTTON_TEXT = "이 계획을 1회 승인"
-CANCEL_BUTTON_TEXT = "취소"
+ADVANCED_DETAILS_COLLAPSED_TEXT = "기술 세부정보 보기"
+ADVANCED_DETAILS_EXPANDED_TEXT = "기술 세부정보 숨기기"
+SAFE_CANCEL_FOOTER = "취소하면 아무 변경도 하지 않습니다."
+CURRENT_INTERACTIVE_INTENT_MECHANISM = (
+    "windows_task_dialog_explicit_action_button"
+)
+LEGACY_INTERACTIVE_INTENT_MECHANISMS = frozenset(
+    {"windows_task_dialog_checkbox_and_button"}
+)
 
 APPROVE_BUTTON_ID = 1001
 IDCANCEL = 2
@@ -126,6 +133,108 @@ _OPERATION_LABELS = {
     ExactHumanApprovalOperation.notion_property_backfill_revert: "Notion 원본 속성 복구 철회",
 }
 
+_OPERATION_QUESTIONS = {
+    ExactHumanApprovalOperation.create_draft: "AI 초안을 만들까요?",
+    ExactHumanApprovalOperation.promote_zet: "이 초안을 제텔로 승격할까요?",
+    ExactHumanApprovalOperation.mint_zet: "이 제텔을 정본으로 발행할까요?",
+    ExactHumanApprovalOperation.zettel_edge: "이 제텔 연결을 만들까요?",
+    ExactHumanApprovalOperation.zettel_objet_link: "이 제텔과 오브제를 연결할까요?",
+    ExactHumanApprovalOperation.retire_draft: "이 초안을 폐기할까요?",
+    ExactHumanApprovalOperation.warning_override: "경고를 확인하고 계속할까요?",
+    ExactHumanApprovalOperation.source_fidelity_session_evidence: (
+        "이 세션 근거를 보존할까요?"
+    ),
+    ExactHumanApprovalOperation.human_artifact_lifecycle: (
+        "이 사람 작업물의 상태를 변경할까요?"
+    ),
+    ExactHumanApprovalOperation.duplicate_object_reconcile: (
+        "검증된 중복 객체 정리를 실행할까요?"
+    ),
+    ExactHumanApprovalOperation.integrity_repair: (
+        "검증된 무결성 복구를 실행할까요?"
+    ),
+    ExactHumanApprovalOperation.project_version_update: (
+        "현재 프로젝트의 WOM 버전을 업데이트할까요?"
+    ),
+    ExactHumanApprovalOperation.git_backup: (
+        "현재 아카이브 변경을 원격 Git에 백업할까요?"
+    ),
+    ExactHumanApprovalOperation.notion_property_backfill: (
+        "검증된 Notion 원본 속성 복구를 실행할까요?"
+    ),
+    ExactHumanApprovalOperation.notion_property_backfill_revert: (
+        "Notion 원본 속성 복구를 되돌릴까요?"
+    ),
+}
+
+_OPERATION_SUMMARIES = {
+    ExactHumanApprovalOperation.create_draft: (
+        "새 초안을 만들며 기존 정본은 변경하지 않습니다."
+    ),
+    ExactHumanApprovalOperation.promote_zet: (
+        "검증된 초안을 제텔 단계로 옮깁니다."
+    ),
+    ExactHumanApprovalOperation.mint_zet: (
+        "검증된 제텔을 정본으로 발행하고 영수증을 남깁니다."
+    ),
+    ExactHumanApprovalOperation.zettel_edge: (
+        "검증된 두 제텔 사이에 선택한 관계만 추가합니다."
+    ),
+    ExactHumanApprovalOperation.zettel_objet_link: (
+        "검증된 제텔과 오브제 사이에 선택한 연결만 추가합니다."
+    ),
+    ExactHumanApprovalOperation.retire_draft: (
+        "검증된 초안만 폐기하며 정본은 변경하지 않습니다."
+    ),
+    ExactHumanApprovalOperation.warning_override: (
+        "WOM이 표시한 경고가 있는 작업을 예외적으로 계속합니다."
+    ),
+    ExactHumanApprovalOperation.source_fidelity_session_evidence: (
+        "현재 세션의 검증된 근거만 보존합니다."
+    ),
+    ExactHumanApprovalOperation.human_artifact_lifecycle: (
+        "검증된 사람 작업물의 선택된 상태만 변경합니다."
+    ),
+    ExactHumanApprovalOperation.duplicate_object_reconcile: (
+        "확실한 근거로 묶인 중복 객체만 정리하고 불명확한 항목은 건드리지 않습니다."
+    ),
+    ExactHumanApprovalOperation.integrity_repair: (
+        "WOM이 검증한 대상과 필드만 복구합니다."
+    ),
+    ExactHumanApprovalOperation.project_version_update: (
+        "프로젝트 전용 런타임과 버전 핀만 바꾸며 컴퓨터 공용 PATH 설치는 건드리지 않습니다."
+    ),
+    ExactHumanApprovalOperation.git_backup: (
+        "검토된 변경만 커밋하고 force push 없이 원격 상태를 다시 검증합니다."
+    ),
+    ExactHumanApprovalOperation.notion_property_backfill: (
+        "확실히 매핑된 제텔의 source_properties 필드만 복구합니다. "
+        "매핑되지 않거나 검토가 필요한 항목은 변경하지 않습니다."
+    ),
+    ExactHumanApprovalOperation.notion_property_backfill_revert: (
+        "이 복구가 추가한 source_properties 필드만 되돌립니다. "
+        "제목과 본문 등 다른 필드는 변경하지 않습니다."
+    ),
+}
+
+_OPERATION_APPROVE_BUTTONS = {
+    ExactHumanApprovalOperation.create_draft: "초안 만들기",
+    ExactHumanApprovalOperation.promote_zet: "제텔로 승격",
+    ExactHumanApprovalOperation.mint_zet: "정본 발행",
+    ExactHumanApprovalOperation.zettel_edge: "관계 만들기",
+    ExactHumanApprovalOperation.zettel_objet_link: "연결 만들기",
+    ExactHumanApprovalOperation.retire_draft: "초안 폐기",
+    ExactHumanApprovalOperation.warning_override: "계속 실행",
+    ExactHumanApprovalOperation.source_fidelity_session_evidence: "근거 보존",
+    ExactHumanApprovalOperation.human_artifact_lifecycle: "상태 변경",
+    ExactHumanApprovalOperation.duplicate_object_reconcile: "중복 정리",
+    ExactHumanApprovalOperation.integrity_repair: "복구 실행",
+    ExactHumanApprovalOperation.project_version_update: "업데이트 실행",
+    ExactHumanApprovalOperation.git_backup: "백업 실행",
+    ExactHumanApprovalOperation.notion_property_backfill: "복구 실행",
+    ExactHumanApprovalOperation.notion_property_backfill_revert: "복구 되돌리기",
+}
+
 
 class ExactHumanApprovalWindowsError(RuntimeError):
     """Fixed-code error that never retains native text or private values."""
@@ -162,7 +271,7 @@ def _validate_codes(value: tuple[str, ...]) -> tuple[str, ...]:
 
 @dataclass(frozen=True)
 class ExactHumanApprovalContext:
-    """Content-free bindings shown to the person before one write attempt."""
+    """Content-free bindings kept behind one human decision surface."""
 
     operation: ExactHumanApprovalOperation
     archive_identity_sha256: str
@@ -225,9 +334,11 @@ class _ExactHumanApprovalNative(Protocol):
         title: str,
         main_instruction: str,
         content: str,
-        verification_text: str,
+        expanded_information: str,
+        expanded_control_text: str,
+        collapsed_control_text: str,
+        footer: str,
         approve_button_text: str,
-        cancel_button_text: str,
     ) -> tuple[int, bool]: ...
 
 
@@ -325,9 +436,11 @@ class _CtypesTaskDialogNative:
         title: str,
         main_instruction: str,
         content: str,
-        verification_text: str,
+        expanded_information: str,
+        expanded_control_text: str,
+        collapsed_control_text: str,
+        footer: str,
         approve_button_text: str,
-        cancel_button_text: str,
     ) -> tuple[int, bool]:
         buttons = (_TASKDIALOG_BUTTON * 1)(
             _TASKDIALOG_BUTTON(APPROVE_BUTTON_ID, approve_button_text)
@@ -356,12 +469,12 @@ class _CtypesTaskDialogNative:
                 cRadioButtons=0,
                 pRadioButtons=None,
                 nDefaultRadioButton=0,
-                pszVerificationText=verification_text,
-                pszExpandedInformation=None,
-                pszExpandedControlText=None,
-                pszCollapsedControlText=None,
+                pszVerificationText=None,
+                pszExpandedInformation=expanded_information,
+                pszExpandedControlText=expanded_control_text,
+                pszCollapsedControlText=collapsed_control_text,
                 pszFooterIcon=None,
-                pszFooter=cancel_button_text,
+                pszFooter=footer,
                 pfCallback=None,
                 lpCallbackData=0,
                 cxWidth=0,
@@ -382,18 +495,28 @@ class _CtypesTaskDialogNative:
 
 
 def _dialog_content(context: ExactHumanApprovalContext) -> str:
+    return (
+        "WOM이 대상, 현재 상태, 적용할 변경을 자동으로 검증했습니다.\n\n"
+        f"{_OPERATION_SUMMARIES[context.operation]}\n\n"
+        "사람이 결정할 일은 이 작업을 지금 실행할지 여부뿐입니다. "
+        "대상이나 상태가 달라지면 WOM이 쓰기 전에 자동으로 중단합니다."
+    )
+
+
+def _dialog_advanced_information(context: ExactHumanApprovalContext) -> str:
     review = ", ".join(context.review_binding_codes)
     warnings = ", ".join(context.warning_codes) if context.warning_codes else "없음"
     return (
-        f"작업: {_OPERATION_LABELS[context.operation]}\n\n"
+        "아래 값은 WOM이 자동 대조하는 기계 검증 근거입니다. "
+        "사람이 직접 비교하거나 계산할 필요가 없습니다.\n\n"
+        f"작업: {_OPERATION_LABELS[context.operation]}\n"
         f"아카이브 식별자: {context.archive_identity_sha256}\n"
         f"계획: {context.plan_sha256}\n"
-        f"대상 결합: {context.target_binding_sha256}\n\n"
+        f"대상 결합: {context.target_binding_sha256}\n"
         f"검토자 표기: {context.reviewer_claim}\n"
-        f"필수 검토 항목: {review}\n"
-        f"경고 항목: {warnings}\n\n"
-        "승인은 위 해시로 결합된 계획의 첫 실행 1회에만 사용됩니다. "
-        "실패하거나 중단되어도 자동 재사용되지 않습니다."
+        f"기계 검증 항목: {review}\n"
+        f"기계 경고 항목: {warnings}\n\n"
+        "이 식별자는 승인된 계획의 첫 실행 1회에만 결속됩니다."
     )
 
 
@@ -411,7 +534,7 @@ def _request_exact_human_approval_core(
         raise _fail("exact_human_approval_context_invalid")
     selected = native if native is not None else _CtypesTaskDialogNative()
     instruction = (
-        LIVE_MAIN_INSTRUCTION
+        _OPERATION_QUESTIONS[context.operation]
         if intent is ExactHumanApprovalIntent.live_write
         else SYNTHETIC_MAIN_INSTRUCTION
     )
@@ -420,16 +543,23 @@ def _request_exact_human_approval_core(
             title=TASK_DIALOG_TITLE,
             main_instruction=instruction,
             content=_dialog_content(context),
-            verification_text=VERIFICATION_TEXT,
-            approve_button_text=APPROVE_BUTTON_TEXT,
-            cancel_button_text=CANCEL_BUTTON_TEXT,
+            expanded_information=_dialog_advanced_information(context),
+            expanded_control_text=ADVANCED_DETAILS_EXPANDED_TEXT,
+            collapsed_control_text=ADVANCED_DETAILS_COLLAPSED_TEXT,
+            footer=SAFE_CANCEL_FOOTER,
+            approve_button_text=_OPERATION_APPROVE_BUTTONS[context.operation],
         )
     except ExactHumanApprovalWindowsError:
         raise
     except BaseException:
         raise _fail("exact_human_approval_native_call_failed") from None
 
-    acknowledged = button == APPROVE_BUTTON_ID and checked is True
+    # The explicit action button is the human decision.  Task-dialog
+    # verification checkboxes are for optional secondary choices (for example,
+    # "do not show again"), not a second oath that machine hashes were read.
+    # ``checked`` is intentionally ignored for compatibility with the native
+    # return shape and older injected test facades.
+    acknowledged = button == APPROVE_BUTTON_ID
     if intent is ExactHumanApprovalIntent.synthetic_acceptance:
         return _ExactHumanApprovalDecision(
             approved=False,

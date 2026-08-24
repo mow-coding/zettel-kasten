@@ -10,17 +10,17 @@ It is not a website, SaaS app, dashboard, or visual note-taking product. The int
 
 ## Install The Command-Line Tool
 
-The exact v0.4.3 GitHub Release, when present, uses the self-contained wheel
+The exact v0.4.4 GitHub Release, when present, uses the self-contained wheel
 below. Confirm that the release exists and lists the wheel before installing
 it. The versioned URL alone is not proof that the asset is available.
 
 ```powershell
-uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.3/wom_kit-0.4.3-py3-none-any.whl"
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.4/wom_kit-0.4.4-py3-none-any.whl"
 archive --version
 ```
 
 Run the version check in a new process. The install replaces the existing
-`uv`-managed global tool, including a v0.4.2 installation. It does not silently
+`uv`-managed global tool, including a v0.4.3 installation. It does not silently
 update a project-local WOM-kit source mirror or its pin. v0.4.3 reopens the
 project updater only through its separately reviewed exact-human plan, so the
 global runtime and project-local source remain two distinct states until that
@@ -34,6 +34,12 @@ push writer with remote-ref re-query; Letter 138 has a lossless local-mirror
 exact approval; and operator feedback supports draft-only CAS revision with
 immutable delivered-record supersession. These capabilities do not by
 themselves prove that a private archive was changed or backed up.
+
+v0.4.4 keeps those machine safety checks and corrects the human boundary. WOM
+verifies complete targets, counts, hashes, canonical state, drift, and durable
+evidence. The native dialog asks the person only whether to execute the plain-
+language operation now; digests and internal codes are collapsed technical
+details, and no verification checkbox is required.
 
 The v0.4.1 checkpoint opened `zettel-objet-link --approve` through the same local exact-human
 boundary. The command requires a fresh exact plan digest and reviewer, then
@@ -62,6 +68,7 @@ and repaired high-risk failures can use `wom-kit/cli-error/v0.1`: exit `2` is a
 usage failure, exit `1` is policy/precondition failure, and
 `effects_state: unknown` means an exact-human workflow had started and its
 durable claim requires reconciliation rather than automatic retry. See the
+[`v0.4.4 release note`](docs/releases/v0.4.4.md),
 [`v0.4.3 release note`](docs/releases/v0.4.3.md),
 [`ExactOperationManifest v1`](docs/exact-operation-manifest-v1.md),
 [`Git Backup Plan`](docs/git-backup-plan.md),

@@ -27,7 +27,7 @@ the matching public GitHub Release exists and lists the exact wheel:
 
 ```powershell
 py -m venv .wom-bootstrap-v043
-& .\.wom-bootstrap-v043\Scripts\python.exe -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.3/wom_kit-0.4.3-py3-none-any.whl"
+& .\.wom-bootstrap-v044\Scripts\python.exe -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.4/wom_kit-0.4.4-py3-none-any.whl"
 & .\.wom-bootstrap-v043\Scripts\archive.exe --version
 ```
 
