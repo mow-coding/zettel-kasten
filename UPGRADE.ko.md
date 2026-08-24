@@ -2,6 +2,24 @@
 
 [English Upgrade Guide](UPGRADE.md)
 
+## v0.4.7 영수증 결속 로컬 복구
+
+일치하는 공개 Release가 정확한 wheel을 자산으로 나열한 뒤에만 설치합니다.
+
+```powershell
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.7/wom_kit-0.4.7-py3-none-any.whl"
+archive --version
+```
+
+새 프로세스에서 정확히 `archive 0.4.7`인지 확인합니다. 설치만으로 보관함은
+바뀌지 않습니다. `objet-capture --exact-local`과
+`revert-edge --exact-local`은 선택된 로컬 효과 하나를 native 결정 한 번에
+결속합니다. capture-link·locator·marker·title 복구의 전체 비공개 manifest는
+WOM이 계산하며, 사람은 실행 또는 취소만 선택합니다. resume이나 revert에서도
+사람에게 보관함 개수를 다시 세거나 digest를 비교하라고 요구하지 않습니다.
+
+[v0.4.7 릴리스 노트](wom-kit/docs/releases/v0.4.7.md)를 보세요.
+
 ## v0.4.6 정확한 R2 바이트 보존과 정식 채택
 
 일치하는 공개 Release가 정확한 wheel을 자산으로 나열한 뒤에만 설치합니다.

@@ -703,6 +703,87 @@ def zettel_edge_approval_binding(
     )
 
 
+def zettel_edge_revert_approval_binding(
+    dry_run: Mapping[str, Any],
+) -> ExactOperationApprovalBinding:
+    plan = _plain_mapping(dry_run)
+    if (
+        plan.get("ok") is not True
+        or plan.get("dry_run") is not True
+        or plan.get("lifecycle_action") != "zettel_edge_revert_plan"
+    ):
+        raise _fail("operation_approval_plan_blocked")
+    source = _plain_mapping(plan.get("source"))
+    edge = _plain_mapping(plan.get("edge"))
+    source_sha = _sha_ref(source.get("current_sha256"))
+    target_projection = {
+        "source_current_sha256": source_sha,
+        "source_identity_digest": _sha256(source),
+        "edge_digest": _sha256(edge),
+        "edge_receipt_digest": _sha256(plan.get("edge_receipt_path")),
+        "revert_receipt_digest": _sha256(plan.get("revert_receipt_path")),
+    }
+    basis = {
+        "schema_version": BINDING_SCHEMA_VERSION,
+        "operation": "zettel_edge_revert",
+        "target": target_projection,
+        "would_change_digest": _sha256(plan.get("would_change")),
+        "warnings": plan.get("warnings"),
+    }
+    return ExactOperationApprovalBinding(
+        operation=ExactHumanApprovalOperation.zettel_edge_revert,
+        plan_sha256=_sha256(basis),
+        target_binding_sha256=_sha256(target_projection),
+        warning_codes=_warning_codes(plan.get("warnings")),
+        review_binding_codes=(
+            "edge_receipt_digest",
+            "edge_target_digest",
+            "source_current_digest",
+        ),
+    )
+
+
+def objet_capture_approval_binding(
+    dry_run: Mapping[str, Any],
+) -> ExactOperationApprovalBinding:
+    plan = _plain_mapping(dry_run)
+    if (
+        plan.get("ok") is not True
+        or plan.get("dry_run") is not True
+        or plan.get("lifecycle_action") != "objet_capture_plan"
+        or not isinstance(plan.get("items"), list)
+        or not plan.get("items")
+    ):
+        raise _fail("operation_approval_plan_blocked")
+    selection_sha = _sha_ref(plan.get("selection_manifest_sha256"))
+    target_projection = {
+        "selection_manifest_sha256": selection_sha,
+        "items_digest": _sha256(plan.get("items")),
+        "planned_writes_digest": _sha256(plan.get("planned_writes")),
+        "summary_digest": _sha256(plan.get("summary")),
+        "project_intake_context_digest": _sha256(
+            plan.get("project_intake_context")
+        ),
+    }
+    basis = {
+        "schema_version": BINDING_SCHEMA_VERSION,
+        "operation": "objet_capture",
+        "target": target_projection,
+        "warnings": plan.get("warnings"),
+    }
+    return ExactOperationApprovalBinding(
+        operation=ExactHumanApprovalOperation.objet_capture,
+        plan_sha256=_sha256(basis),
+        target_binding_sha256=_sha256(target_projection),
+        warning_codes=_warning_codes(plan.get("warnings")),
+        review_binding_codes=(
+            "capture_item_set",
+            "capture_source_digests",
+            "selection_manifest_digest",
+        ),
+    )
+
+
 def zettel_objet_link_approval_binding(
     dry_run: Mapping[str, Any],
 ) -> ExactOperationApprovalBinding:
@@ -1616,9 +1697,11 @@ __all__ = [
     "build_operation_exact_human_approval_receipt",
     "exact_operation_manifest_approval_binding",
     "mint_zet_approval_binding",
+    "objet_capture_approval_binding",
     "promote_zet_approval_binding",
     "retire_draft_approval_binding",
     "warning_override_approval_binding",
     "zettel_edge_approval_binding",
+    "zettel_edge_revert_approval_binding",
     "zettel_objet_link_approval_binding",
 ]

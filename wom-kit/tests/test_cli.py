@@ -12093,7 +12093,7 @@ class ArchiveCliTests(unittest.TestCase):
             ["project_runtime_mismatch"],
         )
         self.assertEqual(result["project_pin"], "v0.4.2")
-        self.assertEqual(result["running_version"], "v0.4.6")
+        self.assertEqual(result["running_version"], "v0.4.7")
         self.assertEqual(
             result["project_runtime_argv"],
             [r".\.zettel-kasten\bin\archive.cmd"],
@@ -20833,6 +20833,68 @@ state:
             self.assertEqual(object_result["target"]["ref"], object_id)
             self.assertTrue(object_result["target"]["verified"])
             self.assertEqual(object_result["target"]["manifest_path"], "objects/manifests/files.jsonl")
+
+    def test_exact_local_edge_revert_removes_only_receipt_bound_edge(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            source_id = "zet_20240504_fake_lunch_thought"
+            target_id = "zet_20240505_fake_company_onboarding_insight"
+            write_code, write_output = self.run_cli(
+                [
+                    "zettel-edge", str(archive_root), "--from-zettel", source_id,
+                    "--target", target_id, "--edge-type", "semantic",
+                    "--approve", "--reviewed-by", "person:fixture-reviewer",
+                    "--format", "json",
+                ]
+            )
+            written = json.loads(write_output)
+            self.assertEqual(write_code, 0, write_output)
+            source_path = archive_root / "zettels" / f"{source_id}.md"
+            _frontmatter, body_before = archive_services.split_zettel_text(
+                source_path.read_text(encoding="utf-8")
+            )
+
+            dry_code, dry_output = self.run_cli(
+                [
+                    "revert-edge", str(archive_root), "--receipt",
+                    written["receipt_path"], "--exact-local", "--dry-run",
+                    "--format", "json",
+                ]
+            )
+            dry = json.loads(dry_output)
+            self.assertEqual(dry_code, 0, dry_output)
+            self.assertRegex(dry["source"]["current_sha256"], r"^sha256:[0-9a-f]{64}$")
+
+            revert_code, revert_output = self.run_cli(
+                [
+                    "revert-edge", str(archive_root), "--receipt",
+                    written["receipt_path"], "--exact-local", "--approve",
+                    "--reviewed-by", "person:fixture-reviewer", "--format", "json",
+                ]
+            )
+            reverted = json.loads(revert_output)
+            self.assertEqual(revert_code, 0, revert_output)
+            self.assertEqual(reverted["write_status"], "reverted")
+            frontmatter, body_after = archive_services.split_zettel_text(
+                source_path.read_text(encoding="utf-8")
+            )
+            self.assertEqual(body_after, body_before)
+            self.assertFalse(
+                any(
+                    isinstance(edge, dict)
+                    and edge.get("edge_id") == written["edge_id"]
+                    for edge in frontmatter.get("edges", [])
+                )
+            )
+            receipt = json.loads(
+                (archive_root / reverted["revert_receipt_path"]).read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertEqual(
+                receipt["exact_human_approval"]["operation"],
+                "zettel_edge_revert",
+            )
 
     def test_zettel_edge_type_contract_blocks_incompatible_targets_without_mutation_or_receipt(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -70339,6 +70401,90 @@ class ObjetCaptureTests(unittest.TestCase):
             self.assertIn("proposed_receipt_path", result)
             self.assertEqual(self._inventory(archive_root), before, "dry-run must not write anything")
             self.assertFalse(list(archive_root.rglob("*.part-*")))
+
+    def test_objet_capture_exact_local_works_on_unenabled_live_archive(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self._real_archive(
+                tmp,
+                name="client-archive",
+                archive_id="archive:personal:exact-capture",
+            )
+            staged_path, digest = self._stage(
+                archive_root,
+                "exact.txt",
+                b"exact capture bytes\n",
+            )
+            plan_path, plan_sha = self._plan(archive_root, "exact")
+            selection = self._selection(
+                tmp,
+                "archive:personal:exact-capture",
+                [self._item(staged_path, digest, plan_path, plan_sha)],
+            )
+            before = self._inventory(archive_root)
+            ordinary_code, ordinary_output = self.run_cli(
+                [
+                    "objet-capture", str(archive_root), "--selection",
+                    str(selection), "--dry-run", "--format", "json",
+                ]
+            )
+            self.assertEqual(ordinary_code, 1, ordinary_output)
+            self.assertEqual(self._inventory(archive_root), before)
+
+            dry_code, dry_output = self.run_cli(
+                [
+                    "objet-capture", str(archive_root), "--selection",
+                    str(selection), "--exact-local", "--dry-run", "--format", "json",
+                ]
+            )
+            dry = json.loads(dry_output)
+            self.assertEqual(dry_code, 0, dry_output)
+            self.assertEqual(dry["summary"]["would_capture"], 1)
+            self.assertEqual(self._inventory(archive_root), before)
+
+            with patch.object(
+                archive_cli,
+                "_execute_exact_human_approved_write",
+                side_effect=archive_cli.ExactHumanApprovalWorkflowError(
+                    "exact_human_approval_cancelled"
+                ),
+            ):
+                cancelled_code, _cancelled_output = self.run_cli(
+                    [
+                        "objet-capture", str(archive_root), "--selection",
+                        str(selection), "--exact-local", "--approve",
+                        "--reviewed-by", "person:fixture-reviewer",
+                        "--format", "json",
+                    ]
+                )
+            self.assertEqual(cancelled_code, 1)
+            self.assertEqual(self._inventory(archive_root), before)
+
+            with patch.object(
+                archive_cli,
+                "_execute_exact_human_approved_write",
+                side_effect=ArchiveCliTests.execute_test_exact_human_write,
+            ):
+                apply_code, apply_output = self.run_cli(
+                    [
+                        "objet-capture", str(archive_root), "--selection",
+                        str(selection), "--exact-local", "--approve",
+                        "--reviewed-by", "person:fixture-reviewer",
+                        "--format", "json",
+                    ]
+                )
+            applied = json.loads(apply_output)
+            self.assertEqual(apply_code, 0, apply_output)
+            self.assertEqual(applied["summary"]["captured"], 1)
+            self.assertTrue(
+                (archive_root / "objects" / "sha256" / digest[:2] / digest).is_file()
+            )
+            capture_receipt = json.loads(
+                (archive_root / applied["receipt_path"]).read_text(encoding="utf-8")
+            )
+            self.assertEqual(
+                capture_receipt["exact_human_approval"]["operation"],
+                "objet_capture",
+            )
 
     def test_objet_capture_selection_path_is_archive_root_relative_with_typed_refusals(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

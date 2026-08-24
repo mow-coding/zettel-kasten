@@ -1,6 +1,6 @@
 {
   "schema": "wom-kit/package-resource-manifest/v0.1",
-  "version": "0.4.6",
+  "version": "0.4.7",
   "source_of_truth": "wom-kit source resource directories",
   "file_count": 165,
   "files": [
@@ -109,8 +109,8 @@
     {
       "source": "schemas/command-approval-status-inventory-v0.2.schema.json",
       "packaged": "schemas/command-approval-status-inventory-v0.2.schema.json",
-      "bytes": 7202,
-      "sha256": "a63033b9eb80463e3fbe3e85b245a77e1aedfcdc1d4775e795fdcb05a89380c3"
+      "bytes": 8009,
+      "sha256": "d4d7f86ac55437f20c11d6d06378bbbd13aae39584db181d6c04cb220cd8ada6"
     },
     {
       "source": "schemas/credential-adapter-manifest.schema.json",
@@ -989,10 +989,10 @@
       "sha256": "d619dc26af3216498c8392dfe838b0fe752d4bad9da998a58ca682d668fc510c"
     },
     {
-      "source": "docs/releases/v0.4.6.md",
-      "packaged": "release-notes/v0.4.6.md",
-      "bytes": 2959,
-      "sha256": "b08957248e783ad13f15adba3a89e2d2622c70bd4cfdd0261a9b7426b90c82b7"
+      "source": "docs/releases/v0.4.7.md",
+      "packaged": "release-notes/v0.4.7.md",
+      "bytes": 4059,
+      "sha256": "825e2f9fbca20b74b6fe4094f13665eccfeb25e417438056fe4e36ab18264174"
     }
   ]
 }

@@ -227,6 +227,41 @@ class CommandStatusSyntheticParserTests(unittest.TestCase):
             },
         )
 
+    def test_parser_declared_any_flag_scope_is_bounded(self) -> None:
+        parser = self._parser()
+        write_parser = command_status._subparser_actions(parser)[0].choices[
+            "write"
+        ]
+        write_parser.set_defaults(
+            _wom_approval_scope={
+                "kind": "argument_flag_any_allowlist",
+                "allowed_flags": ["--approve", "--dry-run"],
+                "outside_scope_status": "approval_fixed_closed",
+                "outside_scope_reason_code": (
+                    command_status.COMPOUND_APPROVAL_REASON_CODE
+                ),
+            }
+        )
+        inventory = command_status.build_command_status_inventory(
+            parser,
+            frozenset(),
+        )
+        row = next(
+            item for item in inventory["commands"]
+            if item["canonical_path"] == "write"
+        )
+        self.assertEqual(
+            row["approval_scope"],
+            {
+                "kind": "argument_flag_any_allowlist",
+                "allowed_flags": ["--approve", "--dry-run"],
+                "outside_scope_status": "approval_fixed_closed",
+                "outside_scope_reason_code": (
+                    command_status.COMPOUND_APPROVAL_REASON_CODE
+                ),
+            },
+        )
+
     def test_counts_are_complete_and_output_is_deterministic_json(self) -> None:
         first = command_status.build_command_status_inventory(
             self._parser(),
@@ -405,9 +440,42 @@ class CommandStatusArchiveParserTests(unittest.TestCase):
                 ),
             },
         )
+        expected_local_recovery_scopes = {
+            "objet-capture": ["--exact-local"],
+            "revert-edge": ["--exact-local"],
+            "external-locator-record": [
+                "--markup-receipt",
+                "--resume-recovery",
+                "--revert-recovery",
+                "--source-mirror",
+            ],
+            "zet-title-remap-write": [
+                "--resume-recovery",
+                "--revert-recovery",
+                "--source-mirror",
+            ],
+            "zet-title-remap-revert": [
+                "--field-local",
+                "--resume-recovery",
+                "--revert-recovery",
+            ],
+        }
+        for command, allowed_flags in expected_local_recovery_scopes.items():
+            with self.subTest(command=command):
+                self.assertEqual(
+                    by_path[command]["approval_scope"],
+                    {
+                        "kind": "argument_flag_any_allowlist",
+                        "allowed_flags": allowed_flags,
+                        "outside_scope_status": "approval_fixed_closed",
+                        "outside_scope_reason_code": (
+                            "compound_exact_human_approval_binding_required"
+                        ),
+                    },
+                )
         self.assertEqual(
             exposed["counts"]["conditional_approval_command_count"],
-            2,
+            7,
         )
 
 

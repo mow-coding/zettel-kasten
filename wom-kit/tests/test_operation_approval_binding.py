@@ -11,9 +11,11 @@ from wom_kit.operation_approval_binding import (
     assert_same_binding,
     build_operation_exact_human_approval_receipt,
     mint_zet_approval_binding,
+    objet_capture_approval_binding,
     project_version_update_approval_binding,
     retire_draft_approval_binding,
     zettel_edge_approval_binding,
+    zettel_edge_revert_approval_binding,
 )
 
 
@@ -134,6 +136,48 @@ class OperationApprovalBindingTests(unittest.TestCase):
         self.assertNotEqual(
             binding.target_binding_sha256,
             zettel_edge_approval_binding(changed).target_binding_sha256,
+        )
+
+    def test_edge_revert_and_objet_capture_bind_current_effect_sets(self) -> None:
+        edge_plan = {
+            "ok": True,
+            "dry_run": True,
+            "lifecycle_action": "zettel_edge_revert_plan",
+            "source": {
+                "zettel_id": "private",
+                "current_sha256": "sha256:" + "4" * 64,
+            },
+            "edge": {"edge_id": "edge:private", "target_ref": "private"},
+            "edge_receipt_path": "receipts/edges/private.json",
+            "revert_receipt_path": "receipts/edges/reverts/private.json",
+            "would_change": ["private"],
+            "warnings": [],
+        }
+        first_edge = zettel_edge_revert_approval_binding(edge_plan)
+        changed_edge = copy.deepcopy(edge_plan)
+        changed_edge["source"]["current_sha256"] = "sha256:" + "5" * 64
+        self.assertNotEqual(
+            first_edge.target_binding_sha256,
+            zettel_edge_revert_approval_binding(changed_edge).target_binding_sha256,
+        )
+
+        capture_plan = {
+            "ok": True,
+            "dry_run": True,
+            "lifecycle_action": "objet_capture_plan",
+            "selection_manifest_sha256": "sha256:" + "6" * 64,
+            "items": [{"item_id": "private", "source_sha256": "7" * 64}],
+            "planned_writes": ["private"],
+            "summary": {"would_capture": 1},
+            "project_intake_context": {},
+            "warnings": [],
+        }
+        first_capture = objet_capture_approval_binding(capture_plan)
+        changed_capture = copy.deepcopy(capture_plan)
+        changed_capture["items"][0]["source_sha256"] = "8" * 64
+        self.assertNotEqual(
+            first_capture.target_binding_sha256,
+            objet_capture_approval_binding(changed_capture).target_binding_sha256,
         )
 
     def test_retire_binding_covers_all_four_durable_refs(self) -> None:

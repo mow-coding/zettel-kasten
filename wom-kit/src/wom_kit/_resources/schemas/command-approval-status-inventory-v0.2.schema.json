@@ -142,10 +142,37 @@
         }
       }
     },
+    "argumentFlagAnyApprovalScope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "allowed_flags",
+        "outside_scope_status",
+        "outside_scope_reason_code"
+      ],
+      "properties": {
+        "kind": {"const": "argument_flag_any_allowlist"},
+        "allowed_flags": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^--[a-z0-9][a-z0-9-]*$"
+          }
+        },
+        "outside_scope_status": {"const": "approval_fixed_closed"},
+        "outside_scope_reason_code": {
+          "const": "compound_exact_human_approval_binding_required"
+        }
+      }
+    },
     "approvalScope": {
       "oneOf": [
         {"$ref": "#/$defs/argumentValueApprovalScope"},
-        {"$ref": "#/$defs/argumentFlagApprovalScope"}
+        {"$ref": "#/$defs/argumentFlagApprovalScope"},
+        {"$ref": "#/$defs/argumentFlagAnyApprovalScope"}
       ]
     },
     "commandBase": {

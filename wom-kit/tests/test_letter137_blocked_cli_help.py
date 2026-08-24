@@ -46,7 +46,7 @@ class Letter137BlockedCliHelpTests(unittest.TestCase):
         }
         self.assertEqual(
             len(archive_cli.COMPOUND_APPROVAL_BLOCKED_COMMANDS),
-            75,
+            70,
         )
         self.assertNotIn(
             "migrate",
@@ -62,6 +62,14 @@ class Letter137BlockedCliHelpTests(unittest.TestCase):
         )
         self.assertNotIn(
             "object-storage-adopt-existing",
+            archive_cli.COMPOUND_APPROVAL_BLOCKED_COMMANDS,
+        )
+        self.assertNotIn(
+            "objet-capture",
+            archive_cli.COMPOUND_APPROVAL_BLOCKED_COMMANDS,
+        )
+        self.assertNotIn(
+            "revert-edge",
             archive_cli.COMPOUND_APPROVAL_BLOCKED_COMMANDS,
         )
         self.assertIn(
@@ -104,6 +112,8 @@ class Letter137BlockedCliHelpTests(unittest.TestCase):
             "promote",
             "project-version-update",
             "object-storage-adopt-existing",
+            "objet-capture",
+            "revert-edge",
             "retire-draft",
             "source-fidelity-session-evidence",
             "migrate",
