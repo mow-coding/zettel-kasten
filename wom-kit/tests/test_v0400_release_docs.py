@@ -126,13 +126,20 @@ class V0400ReleaseDocsTests(unittest.TestCase):
                 "object-storage-adopt-existing",
                 "zettel-objet-link",
                 "project-version-update",
+                "external-locator-record",
+                "objet-capture",
+                "revert-edge",
+                "zet-title-remap-revert",
+                "zet-title-remap-write",
             }
         )
-        self.assertEqual(len(current_blocked), 75)
+        self.assertEqual(len(current_blocked), 70)
         self.assertEqual(len(historical_blocked), 79)
         self.assertNotIn("migrate", current_blocked)
         self.assertNotIn("zettel-objet-link", current_blocked)
         self.assertNotIn("project-version-update", current_blocked)
+        self.assertNotIn("objet-capture", current_blocked)
+        self.assertNotIn("revert-edge", current_blocked)
         self.assertIn("zettel-objet-link-revert", current_blocked)
 
         release = RELEASE_PATH.read_text(encoding="utf-8")

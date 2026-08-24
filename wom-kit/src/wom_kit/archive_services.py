@@ -101,11 +101,13 @@ from .operation_approval_binding import (
     assert_same_binding,
     build_operation_exact_human_approval_receipt,
     mint_zet_approval_binding,
+    objet_capture_approval_binding,
     project_version_update_approval_binding,
     promote_zet_approval_binding,
     retire_draft_approval_binding,
     warning_override_approval_binding,
     zettel_edge_approval_binding,
+    zettel_edge_revert_approval_binding,
 )
 
 try:
@@ -9079,16 +9081,41 @@ def compact_zet_title_comparison_form(value: str) -> str:
     return re.sub(r"[\s._-]+", "", str(value).casefold())
 
 
+def zet_title_identifier_duplicate_suffix(value: Any) -> str | None:
+    """Return the identifier base for a standard duplicate `` (n)`` suffix.
+
+    Notion-style duplicate names append a single space plus a positive integer
+    in parentheses.  Only an already-valid bare identifier base is accepted;
+    arbitrary parenthesized titles therefore remain human-readable.
+    """
+
+    if not isinstance(value, str):
+        return None
+    match = re.fullmatch(r"(?s)(.+?)[ \t]+\([1-9][0-9]*\)", value)
+    if match is None:
+        return None
+    base = match.group(1)
+    compact = compact_zet_title_comparison_form(base)
+    if (
+        len(compact) < ZET_TITLE_IDENTIFIER_MIN_HEX_CHARS
+        or ZET_TITLE_HEX_RE.fullmatch(compact) is None
+    ):
+        return None
+    return base
+
+
 def zet_title_is_identifier_shaped(value: Any) -> bool:
-    """Whether a title is the house's separator-insensitive bare hex shape."""
+    """Whether a title is a bare identifier or its standard duplicate form."""
 
     if not isinstance(value, str):
         return False
     compact = compact_zet_title_comparison_form(value)
-    return bool(
+    if bool(
         len(compact) >= ZET_TITLE_IDENTIFIER_MIN_HEX_CHARS
         and ZET_TITLE_HEX_RE.match(compact)
-    )
+    ):
+        return True
+    return zet_title_identifier_duplicate_suffix(value) is not None
 
 
 def zet_title_reference_discloses_title(reference: Any, compact_title: str) -> bool:
@@ -71490,11 +71517,27 @@ def zettel_edge_revert(
     dry_run: bool = False,
     approve: bool = False,
     reviewed_by: str | None = None,
+    expected_exact_approval_plan_sha256: str | None = None,
+    expected_exact_approval_target_binding_sha256: str | None = None,
+    exact_human_approval_claim: _ClaimedExactHumanApproval | None = None,
 ) -> dict[str, Any]:
-    if type(dry_run) is not bool or type(approve) is not bool or approve:
+    if type(dry_run) is not bool or type(approve) is not bool:
         return _compound_exact_human_approval_blocked(
             lifecycle_action="zettel_edge_revert",
         )
+    if approve:
+        try:
+            _require_exact_human_approval_inputs_before_archive_read(
+                claim=exact_human_approval_claim,
+                expected_plan_sha256=expected_exact_approval_plan_sha256,
+                expected_target_binding_sha256=(
+                    expected_exact_approval_target_binding_sha256
+                ),
+            )
+        except ArchiveServiceError:
+            return _compound_exact_human_approval_blocked(
+                lifecycle_action="zettel_edge_revert",
+            )
     root = require_existing_archive_root(archive_root)
     archive_id = read_archive_id(root)
     blockers: list[str] = []
@@ -71528,6 +71571,7 @@ def zettel_edge_revert(
     source_body = ""
     edge_index: int | None = None
     matched_edge: dict[str, Any] | None = None
+    source_original_bytes: bytes | None = None
     revert_receipt_relative: str | None = None
 
     if receipt_doc is not None:
@@ -71549,6 +71593,7 @@ def zettel_edge_revert(
                     blockers.append("edge receipt source zettel is missing.")
                 else:
                     try:
+                        source_original_bytes = source_path.read_bytes()
                         source_frontmatter, source_body = require_readable_zettel_content(source_path)
                     except ArchiveServiceError as exc:
                         blockers.append(str(exc))
@@ -71561,6 +71606,11 @@ def zettel_edge_revert(
                     source_summary = {
                         "zettel_id": str(source_frontmatter.get("id") or source_zettel_id),
                         "path": normalized_source,
+                        "current_sha256": (
+                            "sha256:" + hashlib.sha256(source_original_bytes).hexdigest()
+                            if source_original_bytes is not None
+                            else None
+                        ),
                     }
         edge_id = str(receipt_doc.get("edge_id") or "").strip()
         revert_receipt_relative = zettel_edge_revert_receipt_relative_path(receipt_relative or "", edge_id) if edge_id and receipt_relative else None
@@ -71584,12 +71634,11 @@ def zettel_edge_revert(
             revert_receipt_relative,
         ]
 
-    if blockers or dry_run:
-        return zettel_edge_revert_result(
+    planned_result = zettel_edge_revert_result(
             archive_id=archive_id,
-            dry_run=bool(dry_run),
-            approve=bool(approve),
-            reviewed_by=reviewed_by,
+            dry_run=True,
+            approve=False,
+            reviewed_by=None,
             edge_receipt_path=receipt_relative,
             revert_receipt_path=revert_receipt_relative,
             source_summary=source_summary,
@@ -71599,6 +71648,8 @@ def zettel_edge_revert(
             blockers=blockers,
             warnings=warnings,
         )
+    if blockers or dry_run:
+        return planned_result
 
     assert receipt_doc is not None
     assert source_path is not None
@@ -71608,7 +71659,8 @@ def zettel_edge_revert(
     assert receipt_relative is not None
     assert reviewed_by is not None
 
-    original_text = source_path.read_text(encoding="utf-8")
+    assert source_original_bytes is not None
+    original_text = decode_utf8_with_universal_newlines(source_original_bytes)
     updated_frontmatter = copy.deepcopy(source_frontmatter)
     updated_edges = list(source_frontmatter.get("edges") or [])
     reverted_edge = updated_edges.pop(edge_index)
@@ -71649,11 +71701,30 @@ def zettel_edge_revert(
             "original_edge_receipt_deleted": False,
         },
     }
+    try:
+        exact_operation_approval = _require_exact_human_operation_approval(
+            root,
+            zettel_edge_revert_approval_binding(planned_result),
+            reviewer_claim=reviewed_by,
+            expected_plan_sha256=expected_exact_approval_plan_sha256,
+            expected_target_binding_sha256=(
+                expected_exact_approval_target_binding_sha256
+            ),
+            claim=exact_human_approval_claim,
+        )
+    except OperationApprovalBindingError as exc:
+        raise ArchiveServiceError(exc.code) from None
+    revert_receipt["exact_human_approval"] = exact_operation_approval
     if isinstance(reverted_edge, dict) and str(reverted_edge.get("receipt") or "") != receipt_relative:
         warnings.append("reverted edge receipt pointer differed from the reviewed receipt path.")
 
     revert_receipt_path = archive_internal_path(root, revert_receipt_relative)
     revert_receipt_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        if not hmac.compare_digest(source_path.read_bytes(), source_original_bytes):
+            raise ArchiveServiceError("zettel_edge_source_changed_after_approval")
+    except OSError:
+        raise ArchiveServiceError("zettel_edge_source_changed_after_approval") from None
     zettel_written = False
     try:
         write_text_atomic(source_path, updated_text)
@@ -134089,15 +134160,21 @@ def _objet_capture_run(
     project_intake_receipt: str | None = None,
     selection_document: dict[str, Any] | None = None,
     selection_document_path: Path | str | None = None,
+    native_exact_authorized: bool = False,
+    exact_human_approval_receipt: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     root = Path(archive_root).resolve()
     enablement = read_capture_enablement(root)
-    sandbox_blockers = objet_capture_sandbox_blockers(root, enablement)
+    sandbox_blockers = (
+        []
+        if native_exact_authorized
+        else objet_capture_sandbox_blockers(root, enablement)
+    )
     if sandbox_blockers:
         return objet_capture_refusal(
             sandbox_blockers[0], dry_run=not approve, enablement_state=str(enablement.get("state"))
         )
-    capture_enabled = enablement.get("valid") is True
+    capture_enabled = enablement.get("valid") is True or native_exact_authorized
     root = require_existing_archive_root(root)
     archive_id = read_archive_id(root)
     captured_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
@@ -134330,6 +134407,10 @@ def _objet_capture_run(
                         ]
                     ),
                     }
+                    if exact_human_approval_receipt is not None:
+                        receipt["exact_human_approval"] = dict(
+                            exact_human_approval_receipt
+                        )
                     try:
                         receipt_path_value = _objet_capture_write_receipt(
                             root,
@@ -136162,6 +136243,28 @@ def objet_capture_document_dry_run(
     )
 
 
+def objet_capture_exact_dry_run(
+    archive_root: Path | str,
+    selection_path: Path | str,
+    *,
+    project_intake_receipt: str | None = None,
+) -> dict[str, Any]:
+    """Plan a live single capture for the native exact-approval boundary.
+
+    This is read-only.  It replaces the forgeable persistent enablement marker
+    only for the exact selection that will be bound to the native decision.
+    """
+
+    return _objet_capture_run(
+        archive_root,
+        selection_path,
+        approve=False,
+        reviewed_by=None,
+        project_intake_receipt=project_intake_receipt,
+        native_exact_authorized=True,
+    )
+
+
 def objet_capture_apply(
     archive_root: Path | str,
     selection_path: Path | str,
@@ -136169,13 +136272,50 @@ def objet_capture_apply(
     reviewed_by: str,
     project_intake_receipt: str | None = None,
     selection_document: dict[str, Any] | None = None,
+    expected_exact_approval_plan_sha256: str | None = None,
+    expected_exact_approval_target_binding_sha256: str | None = None,
+    exact_human_approval_claim: _ClaimedExactHumanApproval | None = None,
 ) -> dict[str, Any]:
-    return _compound_exact_human_approval_blocked(
-        lifecycle_action="objet_capture",
+    try:
+        _require_exact_human_approval_inputs_before_archive_read(
+            claim=exact_human_approval_claim,
+            expected_plan_sha256=expected_exact_approval_plan_sha256,
+            expected_target_binding_sha256=(
+                expected_exact_approval_target_binding_sha256
+            ),
+        )
+    except ArchiveServiceError:
+        return _compound_exact_human_approval_blocked(
+            lifecycle_action="objet_capture",
+        )
+    preview = _objet_capture_run(
+        archive_root,
+        selection_path,
+        approve=False,
+        reviewed_by=None,
+        project_intake_receipt=project_intake_receipt,
+        selection_document=selection_document,
+        selection_document_path=(
+            selection_path if selection_document is not None else None
+        ),
+        native_exact_authorized=True,
     )
-
-    # Dormant legacy implementation retained for compatibility analysis.
-    # It is not an approval authority.
+    if preview.get("ok") is not True:
+        return preview
+    root = require_existing_archive_root(archive_root)
+    try:
+        approval_receipt = _require_exact_human_operation_approval(
+            root,
+            objet_capture_approval_binding(preview),
+            reviewer_claim=reviewed_by,
+            expected_plan_sha256=expected_exact_approval_plan_sha256,
+            expected_target_binding_sha256=(
+                expected_exact_approval_target_binding_sha256
+            ),
+            claim=exact_human_approval_claim,
+        )
+    except OperationApprovalBindingError as exc:
+        raise ArchiveServiceError(exc.code) from None
     return _objet_capture_run(
         archive_root,
         selection_path,
@@ -136186,6 +136326,8 @@ def objet_capture_apply(
         selection_document_path=(
             selection_path if selection_document is not None else None
         ),
+        native_exact_authorized=True,
+        exact_human_approval_receipt=approval_receipt,
     )
 
 

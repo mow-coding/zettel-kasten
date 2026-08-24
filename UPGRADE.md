@@ -24,6 +24,25 @@ Before upgrading a real archive:
 
 The archive should never silently rewrite memory.
 
+## v0.4.7 Receipt-Bound Local Recovery
+
+Install only after the matching public Release lists the exact wheel:
+
+```powershell
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.7/wom_kit-0.4.7-py3-none-any.whl"
+archive --version
+```
+
+Require exactly `archive 0.4.7` from a new process. Installing the wheel does
+not modify an archive. `objet-capture --exact-local` and
+`revert-edge --exact-local` use one native decision bound to the selected local
+effect. The capture-link, locator, marker, and title recovery modes compute the
+complete private manifest themselves; the person chooses only run or cancel.
+Resume or revert uses the original private control and never asks the person to
+recount archive records or compare digests.
+
+See the [v0.4.7 release note](wom-kit/docs/releases/v0.4.7.md).
+
 ## v0.4.6 Exact R2 Preservation and Formal Adoption
 
 Install only after the matching public Release lists the exact wheel:
