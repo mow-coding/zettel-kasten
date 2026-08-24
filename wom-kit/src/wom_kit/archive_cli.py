@@ -10524,22 +10524,71 @@ def command_zettel_edge_batch(args: argparse.Namespace) -> int:
 
 
 def command_revert_edge(args: argparse.Namespace) -> int:
-    if args.approve:
+    if args.approve and not bool(getattr(args, "exact_local", False)):
         return _exact_human_approval_cli_error(
             args,
             lifecycle_action="zettel_edge_revert",
             reason_code="compound_exact_human_approval_binding_required",
         )
     try:
-        result = archive_services.zettel_edge_revert(
-            Path(args.archive_root),
-            receipt=args.receipt,
-            dry_run=args.dry_run,
-            approve=args.approve,
-            reviewed_by=args.reviewed_by,
-        )
-    except (archive_services.ArchiveServiceError, OSError) as exc:
-        print(str(exc), file=sys.stderr)
+        archive_root = Path(args.archive_root)
+        if args.approve:
+            if not args.reviewed_by:
+                raise ValueError("reviewer")
+            preview = archive_services.zettel_edge_revert(
+                archive_root,
+                receipt=args.receipt,
+                dry_run=True,
+                approve=False,
+            )
+            if preview.get("ok") is not True:
+                result = preview
+            else:
+                binding = operation_approval_binding.zettel_edge_revert_approval_binding(
+                    preview
+                )
+                context = binding.context(
+                    archive_id=archive_services.read_archive_id(archive_root),
+                    reviewer_claim=str(args.reviewed_by).strip(),
+                )
+
+                def _write_edge_revert(claim) -> dict[str, Any]:
+                    return archive_services.zettel_edge_revert(
+                        archive_root,
+                        receipt=args.receipt,
+                        dry_run=False,
+                        approve=True,
+                        reviewed_by=args.reviewed_by,
+                        expected_exact_approval_plan_sha256=binding.plan_sha256,
+                        expected_exact_approval_target_binding_sha256=(
+                            binding.target_binding_sha256
+                        ),
+                        exact_human_approval_claim=claim,
+                    )
+
+                result = _execute_exact_human_approved_write(
+                    archive_root,
+                    context,
+                    _write_edge_revert,
+                )
+        else:
+            result = archive_services.zettel_edge_revert(
+                archive_root,
+                receipt=args.receipt,
+                dry_run=args.dry_run,
+                approve=False,
+                reviewed_by=None,
+            )
+    except (
+        archive_services.ArchiveServiceError,
+        operation_approval_binding.OperationApprovalBindingError,
+        ExactHumanApprovalError,
+        ExactHumanApprovalWindowsError,
+        ExactHumanApprovalWorkflowError,
+        OSError,
+        ValueError,
+    ):
+        print("Zettel edge revert failed safely.", file=sys.stderr)
         return 1
 
     if args.format == "json":
@@ -14381,6 +14430,226 @@ def command_first_read_readiness(args: argparse.Namespace) -> int:
 
 
 def command_zet_title_remap_write(args: argparse.Namespace) -> int:
+    source_mirror = getattr(args, "source_mirror", None)
+    resume_recovery = bool(getattr(args, "resume_recovery", False))
+    revert_recovery = bool(getattr(args, "revert_recovery", False))
+    recovery_mode = bool(source_mirror or resume_recovery or revert_recovery)
+    if recovery_mode:
+        if bool(args.dry_run) == bool(args.approve):
+            return _recognized_command_cli_error(
+                args,
+                command="zet-title-remap-write",
+                lifecycle_action="zet_title_local_recovery",
+                error_class="usage",
+                reason_code="local_recovery_mode_required",
+                text_message=(
+                    "Title recovery requires exactly one of --dry-run or "
+                    "--approve."
+                ),
+                exit_code=2,
+            )
+        legacy_arguments = any(
+            (
+                getattr(args, "proposal", None),
+                getattr(args, "expected_proposal_sha256", None),
+                getattr(args, "expected_plan_digest", None),
+                getattr(args, "expected_write_plan_digest", None),
+                bool(getattr(args, "affirm_titles_reviewed", False)),
+            )
+        )
+        if legacy_arguments:
+            return _recognized_command_cli_error(
+                args,
+                command="zet-title-remap-write",
+                lifecycle_action="zet_title_local_recovery",
+                error_class="usage",
+                reason_code="local_recovery_mode_mixed",
+                text_message=(
+                    "Receipt-bound title recovery cannot be combined with a "
+                    "legacy title proposal or its approval arguments."
+                ),
+                exit_code=2,
+            )
+        expected_manifest = str(
+            getattr(args, "expected_manifest_sha256", None) or ""
+        ).strip().lower()
+        if expected_manifest and SHA256_RE.fullmatch(expected_manifest) is None:
+            return _recognized_command_cli_error(
+                args,
+                command="zet-title-remap-write",
+                lifecycle_action="zet_title_local_recovery",
+                error_class="usage",
+                reason_code="local_recovery_manifest_invalid",
+                text_message="The local-recovery manifest SHA-256 is invalid.",
+                exit_code=2,
+            )
+        if (resume_recovery or revert_recovery) and not expected_manifest:
+            return _recognized_command_cli_error(
+                args,
+                command="zet-title-remap-write",
+                lifecycle_action="zet_title_local_recovery",
+                error_class="usage",
+                reason_code="local_recovery_manifest_required",
+                text_message=(
+                    "Interrupted resume or revert requires the manifest "
+                    "SHA-256 printed by the original recovery run."
+                ),
+                exit_code=2,
+            )
+        if resume_recovery and not args.approve:
+            return _recognized_command_cli_error(
+                args,
+                command="zet-title-remap-write",
+                lifecycle_action="zet_title_local_recovery_resume",
+                error_class="usage",
+                reason_code="local_recovery_resume_requires_approve",
+                text_message="Recovery resume requires --approve.",
+                exit_code=2,
+            )
+        if (resume_recovery or revert_recovery) and source_mirror:
+            return _recognized_command_cli_error(
+                args,
+                command="zet-title-remap-write",
+                lifecycle_action="zet_title_local_recovery",
+                error_class="usage",
+                reason_code="local_recovery_resume_evidence_mixed",
+                text_message=(
+                    "Resume or revert reloads the approved private control; "
+                    "do not supply the source mirror again."
+                ),
+                exit_code=2,
+            )
+        if not (resume_recovery or revert_recovery) and not source_mirror:
+            return _recognized_command_cli_error(
+                args,
+                command="zet-title-remap-write",
+                lifecycle_action="zet_title_local_recovery",
+                error_class="usage",
+                reason_code="local_recovery_source_mirror_required",
+                text_message="Title recovery requires --source-mirror.",
+                exit_code=2,
+            )
+        reporter = CommandProgressReporter(
+            bool(getattr(args, "progress", False)),
+            label="zet-title-local-recovery",
+            stage_order=(
+                "title-field-audit",
+                "title-source-index",
+                "identifier-title-scan",
+            ),
+        )
+        execution_started = False
+        try:
+            from .local_title_recovery import (
+                zet_title_recovery_execution_plan,
+            )
+
+            def plan_factory():
+                return zet_title_recovery_execution_plan(
+                    Path(args.archive_root),
+                    source_mirror=Path(source_mirror),
+                    max_items=int(args.max_items),
+                    expected_identifier_title_count=getattr(
+                        args, "expected_identifier_title_count", None
+                    ),
+                    progress_callback=reporter.progress,
+                )
+
+            result, execution_started = _execute_local_recovery_cli_mode(
+                args,
+                allowed_domains={"zet_title_recovery"},
+                plan_factory=(
+                    None
+                    if resume_recovery or revert_recovery
+                    else plan_factory
+                ),
+                expected_manifest_sha256=expected_manifest,
+                resume=resume_recovery,
+                revert=revert_recovery,
+                reporter=reporter,
+            )
+        except ExactHumanApprovalWorkflowError as error:
+            no_effects = _local_recovery_workflow_error_has_no_archive_effects(
+                error
+            )
+            return _recognized_command_cli_error(
+                args,
+                command="zet-title-remap-write",
+                lifecycle_action="zet_title_local_recovery",
+                error_class="precondition" if no_effects else "execution",
+                reason_code=(
+                    "local_recovery_workflow_precondition_failed"
+                    if no_effects
+                    else "local_recovery_execution_state_unknown"
+                ),
+                text_message=(
+                    "The native approval ended before the protected writer; "
+                    "no archive fields were changed."
+                    if no_effects
+                    else "Recovery execution state is unknown. Inspect the "
+                    "durable checkpoint and do not retry automatically."
+                ),
+                effects_state="none" if no_effects else "unknown",
+            )
+        except Exception:
+            return _recognized_command_cli_error(
+                args,
+                command="zet-title-remap-write",
+                lifecycle_action="zet_title_local_recovery",
+                error_class="execution" if execution_started else "precondition",
+                reason_code=(
+                    "local_recovery_execution_state_unknown"
+                    if execution_started
+                    else "local_recovery_failed_safely"
+                ),
+                text_message=(
+                    "Recovery execution state is unknown. Inspect durable "
+                    "checkpoints before any retry."
+                    if execution_started
+                    else "Title recovery was blocked before its writer; "
+                    "private values were not echoed."
+                ),
+                effects_state="unknown" if execution_started else "none",
+            )
+        finally:
+            reporter.close()
+        _print_local_recovery_execution_result(result, args.format)
+        return 0 if result.get("ok") else 1
+
+    if bool(getattr(args, "resume_recovery", False)) or bool(
+        getattr(args, "revert_recovery", False)
+    ):
+        return _recognized_command_cli_error(
+            args,
+            command="zet-title-remap-write",
+            lifecycle_action="zet_title_remap_write",
+            error_class="usage",
+            reason_code="local_recovery_manifest_required",
+            text_message=(
+                "Resume or revert requires --expected-manifest-sha256."
+            ),
+            exit_code=2,
+        )
+    if not all(
+        str(getattr(args, name, None) or "").strip()
+        for name in (
+            "proposal",
+            "expected_proposal_sha256",
+            "expected_plan_digest",
+        )
+    ):
+        return _recognized_command_cli_error(
+            args,
+            command="zet-title-remap-write",
+            lifecycle_action="zet_title_remap_write",
+            error_class="usage",
+            reason_code="zet_title_remap_write_arguments_required",
+            text_message=(
+                "Legacy title remap requires proposal and its exact proposal/"
+                "plan digests."
+            ),
+            exit_code=2,
+        )
     if args.approve:
         return _exact_human_approval_cli_error(
             args,
@@ -14750,6 +15019,209 @@ def command_zet_title_remap_revert_plan(
 def command_zet_title_remap_revert(
     args: argparse.Namespace,
 ) -> int:
+    field_local = bool(getattr(args, "field_local", False))
+    resume_recovery = bool(getattr(args, "resume_recovery", False))
+    revert_recovery = bool(getattr(args, "revert_recovery", False))
+    if field_local or resume_recovery or revert_recovery:
+        if bool(args.dry_run) == bool(args.approve):
+            return _recognized_command_cli_error(
+                args,
+                command="zet-title-remap-revert",
+                lifecycle_action="zet_title_field_local_recovery",
+                error_class="usage",
+                reason_code="local_recovery_mode_required",
+                text_message=(
+                    "Field-local title recovery requires exactly one of "
+                    "--dry-run or --approve."
+                ),
+                exit_code=2,
+            )
+        expected_manifest = str(
+            getattr(args, "expected_manifest_sha256", None) or ""
+        ).strip().lower()
+        if expected_manifest and SHA256_RE.fullmatch(expected_manifest) is None:
+            return _recognized_command_cli_error(
+                args,
+                command="zet-title-remap-revert",
+                lifecycle_action="zet_title_field_local_recovery",
+                error_class="usage",
+                reason_code="local_recovery_manifest_invalid",
+                text_message="The local-recovery manifest SHA-256 is invalid.",
+                exit_code=2,
+            )
+        if (resume_recovery or revert_recovery) and not expected_manifest:
+            return _recognized_command_cli_error(
+                args,
+                command="zet-title-remap-revert",
+                lifecycle_action="zet_title_field_local_recovery",
+                error_class="usage",
+                reason_code="local_recovery_manifest_required",
+                text_message=(
+                    "Interrupted resume or revert requires the manifest "
+                    "SHA-256 printed by the original field-local run."
+                ),
+                exit_code=2,
+            )
+        if resume_recovery and not args.approve:
+            return _recognized_command_cli_error(
+                args,
+                command="zet-title-remap-revert",
+                lifecycle_action="zet_title_field_local_recovery_resume",
+                error_class="usage",
+                reason_code="local_recovery_resume_requires_approve",
+                text_message="Recovery resume requires --approve.",
+                exit_code=2,
+            )
+        evidence_values = (
+            getattr(args, "receipt", None),
+            getattr(args, "expected_receipt_sha256", None),
+        )
+        if resume_recovery or revert_recovery:
+            if any(evidence_values) or getattr(
+                args, "expected_plan_digest", None
+            ):
+                return _recognized_command_cli_error(
+                    args,
+                    command="zet-title-remap-revert",
+                    lifecycle_action="zet_title_field_local_recovery",
+                    error_class="usage",
+                    reason_code="local_recovery_resume_evidence_mixed",
+                    text_message=(
+                        "Resume or revert reloads the approved private control; "
+                        "do not supply the receipt again."
+                    ),
+                    exit_code=2,
+                )
+        elif not all(str(value or "").strip() for value in evidence_values):
+            return _recognized_command_cli_error(
+                args,
+                command="zet-title-remap-revert",
+                lifecycle_action="zet_title_field_local_recovery",
+                error_class="usage",
+                reason_code="title_field_recovery_receipt_required",
+                text_message=(
+                    "Initial field-local recovery requires the receipt and "
+                    "its exact SHA-256."
+                ),
+                exit_code=2,
+            )
+        elif getattr(args, "expected_plan_digest", None):
+            return _recognized_command_cli_error(
+                args,
+                command="zet-title-remap-revert",
+                lifecycle_action="zet_title_field_local_recovery",
+                error_class="usage",
+                reason_code="local_recovery_mode_mixed",
+                text_message=(
+                    "Field-local recovery uses its native-approved manifest, "
+                    "not the legacy whole-file plan digest."
+                ),
+                exit_code=2,
+            )
+        reporter = CommandProgressReporter(
+            bool(getattr(args, "progress", False)),
+            label="zet-title-field-local-recovery",
+            stage_order=("title-field-audit",),
+        )
+        execution_started = False
+        try:
+            from .local_title_recovery import (
+                zet_title_field_local_execution_plan,
+            )
+
+            def plan_factory():
+                return zet_title_field_local_execution_plan(
+                    Path(args.archive_root),
+                    receipt_path=str(args.receipt),
+                    expected_receipt_sha256=str(
+                        args.expected_receipt_sha256
+                    ),
+                    max_items=int(args.max_items),
+                    build_revert_manifest=True,
+                    progress_callback=reporter.progress,
+                )
+
+            result, execution_started = _execute_local_recovery_cli_mode(
+                args,
+                allowed_domains={"zet_title_field_revert"},
+                plan_factory=(
+                    None
+                    if resume_recovery or revert_recovery
+                    else plan_factory
+                ),
+                expected_manifest_sha256=expected_manifest,
+                resume=resume_recovery,
+                revert=revert_recovery,
+                reporter=reporter,
+            )
+        except ExactHumanApprovalWorkflowError as error:
+            no_effects = _local_recovery_workflow_error_has_no_archive_effects(
+                error
+            )
+            return _recognized_command_cli_error(
+                args,
+                command="zet-title-remap-revert",
+                lifecycle_action="zet_title_field_local_recovery",
+                error_class="precondition" if no_effects else "execution",
+                reason_code=(
+                    "local_recovery_workflow_precondition_failed"
+                    if no_effects
+                    else "local_recovery_execution_state_unknown"
+                ),
+                text_message=(
+                    "The native approval ended before the protected writer; "
+                    "no archive fields were changed."
+                    if no_effects
+                    else "Recovery execution state is unknown. Inspect the "
+                    "durable checkpoint and do not retry automatically."
+                ),
+                effects_state="none" if no_effects else "unknown",
+            )
+        except Exception:
+            return _recognized_command_cli_error(
+                args,
+                command="zet-title-remap-revert",
+                lifecycle_action="zet_title_field_local_recovery",
+                error_class="execution" if execution_started else "precondition",
+                reason_code=(
+                    "local_recovery_execution_state_unknown"
+                    if execution_started
+                    else "local_recovery_failed_safely"
+                ),
+                text_message=(
+                    "Recovery execution state is unknown. Inspect durable "
+                    "checkpoints before any retry."
+                    if execution_started
+                    else "Field-local title recovery was blocked before its "
+                    "writer; private values were not echoed."
+                ),
+                effects_state="unknown" if execution_started else "none",
+            )
+        finally:
+            reporter.close()
+        _print_local_recovery_execution_result(result, args.format)
+        return 0 if result.get("ok") else 1
+
+    if not all(
+        str(getattr(args, name, None) or "").strip()
+        for name in (
+            "receipt",
+            "expected_receipt_sha256",
+            "expected_plan_digest",
+        )
+    ):
+        return _recognized_command_cli_error(
+            args,
+            command="zet-title-remap-revert",
+            lifecycle_action="zet_title_remap_revert",
+            error_class="usage",
+            reason_code="zet_title_remap_revert_arguments_required",
+            text_message=(
+                "Legacy title revert requires receipt, receipt SHA-256, and "
+                "the exact whole-file plan digest."
+            ),
+            exit_code=2,
+        )
     if args.approve:
         return _exact_human_approval_cli_error(
             args,
@@ -16883,6 +17355,144 @@ def _print_zettel_objet_link_result(
         print(f"WARNING: {warning}")
 
 
+def _print_local_recovery_execution_result(
+    result: dict[str, Any],
+    output_format: str,
+) -> None:
+    if output_format == "json":
+        print_json(result)
+        return
+    manifest = result.get("manifest")
+    manifest_item_count = (
+        manifest.get("item_count", 0)
+        if isinstance(manifest, dict)
+        else 0
+    )
+    print(f"WOM local recovery: {result.get('state') or 'blocked'}")
+    print(f"- domain: {result.get('domain') or '-'}")
+    print(f"- items: {result.get('item_count', manifest_item_count)}")
+    print(f"- fields written this run: {result.get('written_field_count', 0)}")
+    print(f"- fields resumed: {result.get('resumed_field_count', 0)}")
+    print("- independent verification: yes" if result.get("independent_verification") else "- independent verification: no")
+
+
+def _local_recovery_exact_progress(
+    reporter: CommandProgressReporter,
+) -> Callable[[ExactOperationProgress], None]:
+    def publish(event: ExactOperationProgress) -> None:
+        document = event.public_document()
+        reporter.progress(
+            "exact-operation-" + str(document["stage"]),
+            str(document["mode"]),
+            int(document["completed_items"]),
+            int(document["total_items"]),
+        )
+
+    return publish
+
+
+def _execute_local_recovery_cli_mode(
+    args: argparse.Namespace,
+    *,
+    allowed_domains: set[str],
+    plan_factory: Callable[[], Any] | None,
+    expected_manifest_sha256: str,
+    resume: bool,
+    revert: bool,
+    reporter: CommandProgressReporter,
+) -> tuple[dict[str, Any], bool]:
+    """Run one existing command family's receipt-bound recovery mode.
+
+    The first apply is bound by the native dialog, so an operator does not
+    have to compare counts or copy a digest.  Resume and revert are exceptional
+    recovery operations and therefore require the original manifest digest.
+    """
+
+    from .local_recovery_execution import (
+        execute_local_recovery,
+        load_local_recovery_plan,
+        resume_local_recovery,
+        verify_local_recovery_state,
+    )
+
+    archive_root = Path(args.archive_root)
+    reviewer = (
+        str(getattr(args, "reviewed_by", None) or "").strip()
+        or "person:local-recovery-operator"
+    )
+    exact_progress = _local_recovery_exact_progress(reporter)
+    if resume or revert:
+        plan = load_local_recovery_plan(
+            archive_root,
+            manifest_sha256=expected_manifest_sha256,
+        )
+        if plan.domain not in allowed_domains:
+            raise ValueError("local recovery domain")
+        if resume:
+            return (
+                resume_local_recovery(
+                    plan,
+                    mode="revert" if revert else "apply",
+                    reviewer_claim=reviewer,
+                    progress_hook=exact_progress,
+                ),
+                True,
+            )
+        verification = verify_local_recovery_state(plan, state="post")
+        if verification.get("all_match") is not True:
+            raise ValueError("local recovery post state")
+        if bool(args.dry_run):
+            return (
+                {
+                    **plan.public_document(),
+                    "state": "ready_to_revert",
+                    "mode": "revert",
+                    "verification": verification,
+                },
+                False,
+            )
+        return (
+            execute_local_recovery(
+                plan,
+                mode="revert",
+                reviewer_claim=reviewer,
+                progress_hook=exact_progress,
+            ),
+            True,
+        )
+
+    if plan_factory is None:
+        raise ValueError("local recovery plan")
+    plan = plan_factory()
+    if plan.domain not in allowed_domains:
+        raise ValueError("local recovery domain")
+    if expected_manifest_sha256 and not secrets.compare_digest(
+        plan.manifest.manifest_sha256,
+        expected_manifest_sha256,
+    ):
+        raise ValueError("local recovery manifest changed")
+    if bool(args.dry_run):
+        return plan.public_document(), False
+    return (
+        execute_local_recovery(
+            plan,
+            reviewer_claim=reviewer,
+            progress_hook=exact_progress,
+        ),
+        True,
+    )
+
+
+def _local_recovery_workflow_error_has_no_archive_effects(
+    error: ExactHumanApprovalWorkflowError,
+) -> bool:
+    return error.code in {
+        "exact_human_approval_cancelled",
+        "exact_human_approval_operation_failed",
+        "exact_human_approval_writer_result_invalid",
+    }
+
+
 def _zettel_objet_link_compound_write_blocked(
     lifecycle_action: str,
 ) -> dict[str, Any]:
@@ -17009,14 +17619,14 @@ def command_zettel_objet_link(args: argparse.Namespace) -> int:
             exit_code=2,
         )
     if args.capture_receipt:
+        resume_recovery = bool(getattr(args, "resume_recovery", False))
+        revert_recovery = bool(getattr(args, "revert_recovery", False))
         mixed_single_arguments = any(
             (
                 args.zettel_id,
                 args.path,
                 args.object_id,
                 args.label,
-                args.expected_plan_sha256,
-                args.reviewed_by,
             )
         )
         if mixed_single_arguments:
@@ -17032,60 +17642,212 @@ def command_zettel_objet_link(args: argparse.Namespace) -> int:
                 ),
                 exit_code=2,
             )
-        if args.approve:
+        if resume_recovery and not args.approve:
+            return _recognized_command_cli_error(
+                args,
+                command="zettel-objet-link",
+                lifecycle_action="zettel_objet_link_recovery_resume",
+                error_class="usage",
+                reason_code="local_recovery_resume_requires_approve",
+                text_message=(
+                    "zettel-objet-link receipt recovery resume requires --approve."
+                ),
+                exit_code=2,
+            )
+        expected_manifest = str(args.expected_plan_sha256 or "").strip().lower()
+        if (resume_recovery or revert_recovery) and SHA256_RE.fullmatch(
+            expected_manifest
+        ) is None:
+            return _recognized_command_cli_error(
+                args,
+                command="zettel-objet-link",
+                lifecycle_action="zettel_objet_link_recovery",
+                error_class="usage",
+                reason_code="local_recovery_manifest_required",
+                text_message=(
+                    "Interrupted resume or revert requires the manifest SHA-256 "
+                    "printed by the original recovery run."
+                ),
+                exit_code=2,
+            )
+        reporter = CommandProgressReporter(
+            bool(getattr(args, "progress", False)),
+            label="zettel-objet-link-recovery",
+            stage_order=(
+                "capture-receipt",
+                "object-manifest",
+                "canonical-index",
+                "classification",
+            ),
+        )
+
+        def exact_progress(event: ExactOperationProgress) -> None:
+            document = event.public_document()
+            reporter.progress(
+                "exact-operation-" + str(document["stage"]),
+                str(document["mode"]),
+                int(document["completed_items"]),
+                int(document["total_items"]),
+            )
+
+        execution_started = False
+        try:
+            from .local_objet_link_recovery import (
+                zettel_objet_link_recovery_execution_plan,
+            )
+            from .local_recovery_execution import (
+                execute_local_recovery,
+                load_local_recovery_plan,
+                resume_local_recovery,
+                verify_local_recovery_state,
+            )
+
+            if resume_recovery:
+                plan = load_local_recovery_plan(
+                    Path(args.archive_root),
+                    manifest_sha256=expected_manifest,
+                )
+                if plan.domain != "zettel_objet_link":
+                    raise ValueError("domain")
+                execution_started = True
+                result = resume_local_recovery(
+                    plan,
+                    mode="revert" if revert_recovery else "apply",
+                    reviewer_claim=(
+                        str(args.reviewed_by or "").strip()
+                        or "person:local-recovery-operator"
+                    ),
+                    progress_hook=exact_progress,
+                )
+            elif revert_recovery:
+                plan = load_local_recovery_plan(
+                    Path(args.archive_root),
+                    manifest_sha256=expected_manifest,
+                )
+                if plan.domain != "zettel_objet_link":
+                    raise ValueError("domain")
+                verification = verify_local_recovery_state(plan, state="post")
+                if verification.get("all_match") is not True:
+                    raise ValueError("post state")
+                if args.dry_run:
+                    result = {
+                        **plan.public_document(),
+                        "state": "ready_to_revert",
+                        "mode": "revert",
+                        "verification": verification,
+                    }
+                else:
+                    execution_started = True
+                    result = execute_local_recovery(
+                        plan,
+                        mode="revert",
+                        reviewer_claim=(
+                            str(args.reviewed_by or "").strip()
+                            or "person:local-recovery-operator"
+                        ),
+                        progress_hook=exact_progress,
+                    )
+            elif args.dry_run:
+                plan = zettel_objet_link_recovery_execution_plan(
+                    Path(args.archive_root),
+                    capture_receipt=args.capture_receipt,
+                    role=args.role or "source_document",
+                    max_items=args.max_items,
+                    progress_callback=reporter.progress,
+                )
+                result = plan.public_document()
+            else:
+                plan = zettel_objet_link_recovery_execution_plan(
+                    Path(args.archive_root),
+                    capture_receipt=args.capture_receipt,
+                    role=args.role or "source_document",
+                    max_items=args.max_items,
+                    progress_callback=reporter.progress,
+                )
+                if expected_manifest and not secrets.compare_digest(
+                    plan.manifest.manifest_sha256,
+                    expected_manifest,
+                ):
+                    raise ValueError("manifest changed")
+                execution_started = True
+                result = execute_local_recovery(
+                    plan,
+                    reviewer_claim=(
+                        str(args.reviewed_by or "").strip()
+                        or "person:local-recovery-operator"
+                    ),
+                    progress_hook=exact_progress,
+                )
+        except ExactHumanApprovalWorkflowError as error:
+            no_effects = _local_recovery_workflow_error_has_no_archive_effects(
+                error
+            )
             return _recognized_command_cli_error(
                 args,
                 command="zettel-objet-link",
                 lifecycle_action="zettel_objet_link_recovery_apply",
-                error_class="precondition",
+                error_class="precondition" if no_effects else "execution",
                 reason_code=(
-                    "compound_exact_human_approval_binding_required"
+                    "local_recovery_workflow_precondition_failed"
+                    if no_effects
+                    else "local_recovery_execution_state_unknown"
                 ),
                 text_message=(
-                    "zettel-objet-link receipt recovery is read-only until its "
-                    "ExactOperationManifest writer is independently reviewed."
+                    "The native approval ended before the protected writer; "
+                    "no archive fields were changed."
+                    if no_effects
+                    else "Recovery execution state is unknown. Inspect the "
+                    "durable checkpoint and do not retry automatically."
                 ),
+                effects_state="none" if no_effects else "unknown",
             )
-        try:
-            from .local_objet_link_recovery import (
-                zettel_objet_link_recovery_plan,
-            )
-
-            reporter = CommandProgressReporter(
-                bool(getattr(args, "progress", False)),
-                label="zettel-objet-link-recovery",
-                stage_order=(
-                    "capture-receipt",
-                    "object-manifest",
-                    "canonical-index",
-                    "classification",
-                ),
-            )
-            try:
-                result = zettel_objet_link_recovery_plan(
-                    Path(args.archive_root),
-                    capture_receipt=args.capture_receipt,
-                    role=args.role or "source_document",
-                    dry_run=True,
-                    max_items=args.max_items,
-                    progress_callback=reporter.progress,
-                )
-            finally:
-                reporter.close()
-        except (OSError, TypeError, ValueError):
+        except Exception:
             return _recognized_command_cli_error(
                 args,
                 command="zettel-objet-link",
-                lifecycle_action="zettel_objet_link_recovery_plan",
-                error_class="precondition",
-                reason_code="zettel_objet_link_recovery_plan_failed",
-                text_message=(
-                    "zettel-objet-link receipt recovery failed safely; no "
-                    "private values were echoed and no archive files were written."
+                lifecycle_action=(
+                    "zettel_objet_link_recovery_apply"
+                    if args.approve
+                    else "zettel_objet_link_recovery_plan"
                 ),
+                error_class=(
+                    "execution" if execution_started else "precondition"
+                ),
+                reason_code=(
+                    "local_recovery_execution_state_unknown"
+                    if execution_started
+                    else "zettel_objet_link_recovery_failed_safely"
+                ),
+                text_message=(
+                    "Recovery execution state is unknown. Inspect durable "
+                    "checkpoints before any retry."
+                    if execution_started
+                    else "zettel-objet-link receipt recovery was blocked "
+                    "before its writer; private values were not echoed."
+                ),
+                effects_state="unknown" if execution_started else "none",
             )
-        _print_zettel_objet_link_result(result, args.format)
+        finally:
+            reporter.close()
+        if args.dry_run:
+            _print_zettel_objet_link_result(result, args.format)
+        else:
+            _print_local_recovery_execution_result(result, args.format)
         return 0 if result.get("ok") else 1
+    if getattr(args, "resume_recovery", False) or getattr(
+        args, "revert_recovery", False
+    ):
+        return _recognized_command_cli_error(
+            args,
+            command="zettel-objet-link",
+            lifecycle_action="zettel_objet_link",
+            error_class="usage",
+            reason_code="local_recovery_flag_requires_capture_receipt",
+            text_message=(
+                "--resume-recovery and --revert-recovery require --capture-receipt."
+            ),
+            exit_code=2,
+        )
     if (
         bool(args.zettel_id) == bool(args.path)
         or not str(args.object_id or "").strip()
@@ -17490,6 +18252,314 @@ def command_external_locator_plan(args: argparse.Namespace) -> int:
 
 
 def command_external_locator_record(args: argparse.Namespace) -> int:
+    source_mirror = getattr(args, "source_mirror", None)
+    markup_receipts = list(getattr(args, "markup_receipt", None) or [])
+    resume_recovery = bool(getattr(args, "resume_recovery", False))
+    revert_recovery = bool(getattr(args, "revert_recovery", False))
+    recovery_mode = bool(
+        source_mirror
+        or markup_receipts
+        or resume_recovery
+        or revert_recovery
+    )
+    if recovery_mode:
+        if bool(args.dry_run) == bool(args.approve):
+            return _recognized_command_cli_error(
+                args,
+                command="external-locator-record",
+                lifecycle_action="external_locator_local_recovery",
+                error_class="usage",
+                reason_code="local_recovery_mode_required",
+                text_message=(
+                    "external-locator-record recovery requires exactly one "
+                    "of --dry-run or --approve."
+                ),
+                exit_code=2,
+            )
+        legacy_arguments = any(
+            getattr(args, name, None)
+            for name in (
+                "zettel_id",
+                "locator_type",
+                "locator_ref",
+                "service_ref",
+                "account_ref",
+                "occurrence_anchor",
+                "expected_plan_sha256",
+            )
+        )
+        if legacy_arguments:
+            return _recognized_command_cli_error(
+                args,
+                command="external-locator-record",
+                lifecycle_action="external_locator_local_recovery",
+                error_class="usage",
+                reason_code="local_recovery_mode_mixed",
+                text_message=(
+                    "Batch recovery evidence cannot be combined with a "
+                    "single locator target or its legacy plan digest."
+                ),
+                exit_code=2,
+            )
+        expected_manifest = str(
+            getattr(args, "expected_manifest_sha256", None) or ""
+        ).strip().lower()
+        if expected_manifest and SHA256_RE.fullmatch(expected_manifest) is None:
+            return _recognized_command_cli_error(
+                args,
+                command="external-locator-record",
+                lifecycle_action="external_locator_local_recovery",
+                error_class="usage",
+                reason_code="local_recovery_manifest_invalid",
+                text_message="The local-recovery manifest SHA-256 is invalid.",
+                exit_code=2,
+            )
+        if (resume_recovery or revert_recovery) and not expected_manifest:
+            return _recognized_command_cli_error(
+                args,
+                command="external-locator-record",
+                lifecycle_action="external_locator_local_recovery",
+                error_class="usage",
+                reason_code="local_recovery_manifest_required",
+                text_message=(
+                    "Interrupted resume or revert requires the manifest "
+                    "SHA-256 printed by the original recovery run."
+                ),
+                exit_code=2,
+            )
+        if resume_recovery and not args.approve:
+            return _recognized_command_cli_error(
+                args,
+                command="external-locator-record",
+                lifecycle_action="external_locator_local_recovery_resume",
+                error_class="usage",
+                reason_code="local_recovery_resume_requires_approve",
+                text_message="Recovery resume requires --approve.",
+                exit_code=2,
+            )
+        if (resume_recovery or revert_recovery) and (
+            source_mirror or markup_receipts
+        ):
+            return _recognized_command_cli_error(
+                args,
+                command="external-locator-record",
+                lifecycle_action="external_locator_local_recovery",
+                error_class="usage",
+                reason_code="local_recovery_resume_evidence_mixed",
+                text_message=(
+                    "Resume or revert reloads the approved private control; "
+                    "do not supply source evidence again."
+                ),
+                exit_code=2,
+            )
+        if not (resume_recovery or revert_recovery) and not (
+            source_mirror or markup_receipts
+        ):
+            return _recognized_command_cli_error(
+                args,
+                command="external-locator-record",
+                lifecycle_action="external_locator_local_recovery",
+                error_class="usage",
+                reason_code="local_recovery_evidence_required",
+                text_message=(
+                    "Batch locator recovery requires --source-mirror and/or "
+                    "one or more --markup-receipt values."
+                ),
+                exit_code=2,
+            )
+        if (
+            getattr(args, "expected_zettel_count", None) is not None
+            or getattr(args, "expected_pair_count", None) is not None
+        ) and not source_mirror:
+            return _recognized_command_cli_error(
+                args,
+                command="external-locator-record",
+                lifecycle_action="external_locator_local_recovery",
+                error_class="usage",
+                reason_code="local_recovery_source_mirror_required",
+                text_message=(
+                    "Locator zettel/pair inventory bounds require "
+                    "--source-mirror."
+                ),
+                exit_code=2,
+            )
+        if (
+            getattr(args, "expected_orphan_row_count", None) is not None
+            and not markup_receipts
+        ):
+            return _recognized_command_cli_error(
+                args,
+                command="external-locator-record",
+                lifecycle_action="external_locator_local_recovery",
+                error_class="usage",
+                reason_code="local_recovery_markup_receipt_required",
+                text_message=(
+                    "The orphan-row inventory bound requires at least one "
+                    "--markup-receipt."
+                ),
+                exit_code=2,
+            )
+        reporter = CommandProgressReporter(
+            bool(getattr(args, "progress", False)),
+            label="external-locator-local-recovery",
+            stage_order=(
+                "source-mirror",
+                "canonical-locators",
+                "locator-classification",
+                "markup-receipts",
+                "orphan-classification",
+            ),
+        )
+        execution_started = False
+        try:
+            from .local_locator_recovery import (
+                notion_locator_local_recovery_execution_plan,
+                notion_locator_mirror_recovery_execution_plan,
+                notion_locator_orphan_recovery_execution_plan,
+            )
+
+            def plan_factory():
+                common = {
+                    "max_items": int(args.max_items),
+                    "progress_callback": reporter.progress,
+                }
+                if source_mirror and markup_receipts:
+                    return notion_locator_local_recovery_execution_plan(
+                        Path(args.archive_root),
+                        source_mirror=Path(source_mirror),
+                        markup_receipts=markup_receipts,
+                        expected_zettel_count=getattr(
+                            args, "expected_zettel_count", None
+                        ),
+                        expected_pair_count=getattr(
+                            args, "expected_pair_count", None
+                        ),
+                        expected_orphan_row_count=getattr(
+                            args, "expected_orphan_row_count", None
+                        ),
+                        **common,
+                    )
+                if source_mirror:
+                    return notion_locator_mirror_recovery_execution_plan(
+                        Path(args.archive_root),
+                        source_mirror=Path(source_mirror),
+                        expected_zettel_count=getattr(
+                            args, "expected_zettel_count", None
+                        ),
+                        expected_pair_count=getattr(
+                            args, "expected_pair_count", None
+                        ),
+                        **common,
+                    )
+                return notion_locator_orphan_recovery_execution_plan(
+                    Path(args.archive_root),
+                    markup_receipts=markup_receipts,
+                    expected_orphan_row_count=getattr(
+                        args, "expected_orphan_row_count", None
+                    ),
+                    **common,
+                )
+
+            result, execution_started = _execute_local_recovery_cli_mode(
+                args,
+                allowed_domains={
+                    "notion_locator_local_recovery",
+                    "notion_locator_mirror",
+                    "notion_locator_orphan",
+                },
+                plan_factory=(
+                    None
+                    if resume_recovery or revert_recovery
+                    else plan_factory
+                ),
+                expected_manifest_sha256=expected_manifest,
+                resume=resume_recovery,
+                revert=revert_recovery,
+                reporter=reporter,
+            )
+        except ExactHumanApprovalWorkflowError as error:
+            no_effects = _local_recovery_workflow_error_has_no_archive_effects(
+                error
+            )
+            return _recognized_command_cli_error(
+                args,
+                command="external-locator-record",
+                lifecycle_action="external_locator_local_recovery",
+                error_class="precondition" if no_effects else "execution",
+                reason_code=(
+                    "local_recovery_workflow_precondition_failed"
+                    if no_effects
+                    else "local_recovery_execution_state_unknown"
+                ),
+                text_message=(
+                    "The native approval ended before the protected writer; "
+                    "no archive fields were changed."
+                    if no_effects
+                    else "Recovery execution state is unknown. Inspect the "
+                    "durable checkpoint and do not retry automatically."
+                ),
+                effects_state="none" if no_effects else "unknown",
+            )
+        except Exception:
+            return _recognized_command_cli_error(
+                args,
+                command="external-locator-record",
+                lifecycle_action="external_locator_local_recovery",
+                error_class="execution" if execution_started else "precondition",
+                reason_code=(
+                    "local_recovery_execution_state_unknown"
+                    if execution_started
+                    else "local_recovery_failed_safely"
+                ),
+                text_message=(
+                    "Recovery execution state is unknown. Inspect durable "
+                    "checkpoints before any retry."
+                    if execution_started
+                    else "Locator recovery was blocked before its writer; "
+                    "private values were not echoed."
+                ),
+                effects_state="unknown" if execution_started else "none",
+            )
+        finally:
+            reporter.close()
+        _print_local_recovery_execution_result(result, args.format)
+        return 0 if result.get("ok") else 1
+
+    if bool(getattr(args, "dry_run", False)):
+        return _recognized_command_cli_error(
+            args,
+            command="external-locator-record",
+            lifecycle_action="external_locator_record",
+            error_class="usage",
+            reason_code="external_locator_record_recovery_evidence_required",
+            text_message=(
+                "Single-locator preview uses external-locator-plan; batch "
+                "recovery dry-run requires source evidence."
+            ),
+            exit_code=2,
+        )
+    if not all(
+        str(getattr(args, name, None) or "").strip()
+        for name in (
+            "zettel_id",
+            "locator_type",
+            "locator_ref",
+            "expected_plan_sha256",
+            "reviewed_by",
+        )
+    ):
+        return _recognized_command_cli_error(
+            args,
+            command="external-locator-record",
+            lifecycle_action="external_locator_record",
+            error_class="usage",
+            reason_code="external_locator_record_arguments_required",
+            text_message=(
+                "Single-locator recording requires target, locator type/value, "
+                "plan digest, reviewer, and --approve."
+            ),
+            exit_code=2,
+        )
     if args.approve:
         return _exact_human_approval_cli_error(
             args,
@@ -22831,7 +23901,8 @@ def print_objet_capture_selection_result(result: dict[str, Any], output_format: 
 
 
 def command_objet_capture(args: argparse.Namespace) -> int:
-    if args.approve:
+    exact_local = bool(getattr(args, "exact_local", False))
+    if args.approve and not exact_local:
         return _exact_human_approval_cli_error(
             args,
             lifecycle_action="objet_capture",
@@ -22849,20 +23920,62 @@ def command_objet_capture(args: argparse.Namespace) -> int:
 
     try:
         if args.dry_run:
-            result = archive_services.objet_capture_dry_run(
+            plan_function = (
+                archive_services.objet_capture_exact_dry_run
+                if exact_local
+                else archive_services.objet_capture_dry_run
+            )
+            result = plan_function(
                 Path(args.archive_root),
                 Path(args.selection),
                 project_intake_receipt=args.project_intake_receipt,
             )
         else:
-            result = archive_services.objet_capture_apply(
-                Path(args.archive_root),
+            archive_root = Path(args.archive_root)
+            preview = archive_services.objet_capture_exact_dry_run(
+                archive_root,
                 Path(args.selection),
-                reviewed_by=args.reviewed_by,
                 project_intake_receipt=args.project_intake_receipt,
             )
-    except (archive_services.ArchiveServiceError, OSError, json.JSONDecodeError) as exc:
-        print(f"Objet capture failed: {exc}", file=sys.stderr)
+            if preview.get("ok") is not True:
+                result = preview
+            else:
+                binding = operation_approval_binding.objet_capture_approval_binding(
+                    preview
+                )
+                context = binding.context(
+                    archive_id=archive_services.read_archive_id(archive_root),
+                    reviewer_claim=str(args.reviewed_by).strip(),
+                )
+
+                def _write_objet_capture(claim) -> dict[str, Any]:
+                    return archive_services.objet_capture_apply(
+                        archive_root,
+                        Path(args.selection),
+                        reviewed_by=args.reviewed_by,
+                        project_intake_receipt=args.project_intake_receipt,
+                        expected_exact_approval_plan_sha256=binding.plan_sha256,
+                        expected_exact_approval_target_binding_sha256=(
+                            binding.target_binding_sha256
+                        ),
+                        exact_human_approval_claim=claim,
+                    )
+
+                result = _execute_exact_human_approved_write(
+                    archive_root,
+                    context,
+                    _write_objet_capture,
+                )
+    except (
+        archive_services.ArchiveServiceError,
+        operation_approval_binding.OperationApprovalBindingError,
+        ExactHumanApprovalError,
+        ExactHumanApprovalWindowsError,
+        ExactHumanApprovalWorkflowError,
+        OSError,
+        json.JSONDecodeError,
+    ):
+        print("Objet capture failed safely.", file=sys.stderr)
         return 1
 
     if args.format == "json":
@@ -27621,7 +28734,6 @@ COMPOUND_APPROVAL_BLOCKED_COMMANDS = frozenset(
         "discard-draft",
         "discard-draft-restore",
         "external-locator-deactivate",
-        "external-locator-record",
         "external-locator-revert",
         "github-repo",
         "identity-reconcile",
@@ -27642,7 +28754,6 @@ COMPOUND_APPROVAL_BLOCKED_COMMANDS = frozenset(
         "object-storage-upload",
         "object-storage-upload-evidence",
         "object-storage-wom-location-reconcile",
-        "objet-capture",
         "objet-capture-batch",
         "objet-capture-enable",
         "objet-capture-selection",
@@ -27662,7 +28773,6 @@ COMPOUND_APPROVAL_BLOCKED_COMMANDS = frozenset(
         "runtime-skill-install",
         "runtime-skill-uninstall",
         "revert-batch",
-        "revert-edge",
         "restore-drill",
         "saved-view-revert",
         "saved-view-write",
@@ -27678,9 +28788,7 @@ COMPOUND_APPROVAL_BLOCKED_COMMANDS = frozenset(
         "zet-revision-restore-write",
         "zet-revision-write",
         "zet-title-remap-recover",
-        "zet-title-remap-revert",
         "zet-title-remap-revert-recover",
-        "zet-title-remap-write",
         "zet-catalog-pass-cleanup",
         "zettel-edge-batch",
         "zettel-objet-link-revert",
@@ -31367,17 +32475,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     zet_title_remap_write.add_argument(
         "--proposal",
-        required=True,
         help="Private JSONL under .wom-scratch/title-remap/; its path and values are never echoed.",
     )
     zet_title_remap_write.add_argument(
         "--expected-proposal-sha256",
-        required=True,
         help="Exact proposal SHA-256 returned by zet-title-remap-plan.",
     )
     zet_title_remap_write.add_argument(
         "--expected-plan-digest",
-        required=True,
         help="Exact complete plan digest returned by zet-title-remap-plan.",
     )
     zet_title_remap_write.add_argument(
@@ -31411,6 +32516,35 @@ def build_parser() -> argparse.ArgumentParser:
         help="Affirm that every proposed title was reviewed; required only with --approve.",
     )
     zet_title_remap_write.add_argument(
+        "--source-mirror",
+        help=(
+            "Private pages.markdown.jsonl for receipt-bound identifier-title "
+            "recovery; its path and values are never echoed."
+        ),
+    )
+    zet_title_remap_write.add_argument(
+        "--expected-identifier-title-count",
+        type=int,
+        help="Optional machine-rechecked identifier-title inventory bound.",
+    )
+    zet_title_remap_write.add_argument(
+        "--expected-manifest-sha256",
+        help=(
+            "Optional initial recovery binding; required only to resume or "
+            "revert an existing approved recovery."
+        ),
+    )
+    zet_title_remap_write.add_argument(
+        "--resume-recovery",
+        action="store_true",
+        help="Resume the one incomplete execution bound to the manifest.",
+    )
+    zet_title_remap_write.add_argument(
+        "--revert-recovery",
+        action="store_true",
+        help="Restore only fields changed by the approved title recovery.",
+    )
+    zet_title_remap_write.add_argument(
         "--progress",
         action="store_true",
         help="Stream content-free proposal, snapshot, write, and receipt progress to stderr.",
@@ -31422,7 +32556,19 @@ def build_parser() -> argparse.ArgumentParser:
         help="Output format.",
     )
     zet_title_remap_write.set_defaults(
-        func=command_zet_title_remap_write
+        func=command_zet_title_remap_write,
+        _wom_approval_scope={
+            "kind": "argument_flag_any_allowlist",
+            "allowed_flags": [
+                "--source-mirror",
+                "--resume-recovery",
+                "--revert-recovery",
+            ],
+            "outside_scope_status": "approval_fixed_closed",
+            "outside_scope_reason_code": (
+                command_status.COMPOUND_APPROVAL_REASON_CODE
+            ),
+        },
     )
 
     zet_title_remap_receipt_audit = subcommands.add_parser(
@@ -31569,17 +32715,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     zet_title_remap_revert.add_argument(
         "--receipt",
-        required=True,
         help="Archive-relative immutable source receipt under receipts/revisions/title-remap/; its path is never echoed.",
     )
     zet_title_remap_revert.add_argument(
         "--expected-receipt-sha256",
-        required=True,
         help="Exact SHA-256 of the reviewed completed title-remap receipt.",
     )
     zet_title_remap_revert.add_argument(
         "--expected-plan-digest",
-        required=True,
         help="Exact plan digest returned by zet-title-remap-revert-plan or the unchanged writer preview.",
     )
     zet_title_remap_revert.add_argument(
@@ -31616,6 +32759,31 @@ def build_parser() -> argparse.ArgumentParser:
         help="Required with --approve: affirm that archive writers are quiescent for this compensation.",
     )
     zet_title_remap_revert.add_argument(
+        "--field-local",
+        action="store_true",
+        help=(
+            "Restore only frontmatter.title from the exact receipt snapshot; "
+            "unrelated later body changes remain untouched."
+        ),
+    )
+    zet_title_remap_revert.add_argument(
+        "--expected-manifest-sha256",
+        help=(
+            "Optional initial field-local binding; required only to resume or "
+            "undo an existing approved field-local recovery."
+        ),
+    )
+    zet_title_remap_revert.add_argument(
+        "--resume-recovery",
+        action="store_true",
+        help="Resume the one incomplete field-local execution.",
+    )
+    zet_title_remap_revert.add_argument(
+        "--revert-recovery",
+        action="store_true",
+        help="Undo only fields changed by the approved field-local recovery.",
+    )
+    zet_title_remap_revert.add_argument(
         "--progress",
         action="store_true",
         help="Stream content-free receipt, audit, snapshot, and write progress to stderr.",
@@ -31627,7 +32795,19 @@ def build_parser() -> argparse.ArgumentParser:
         help="Output format.",
     )
     zet_title_remap_revert.set_defaults(
-        func=command_zet_title_remap_revert
+        func=command_zet_title_remap_revert,
+        _wom_approval_scope={
+            "kind": "argument_flag_any_allowlist",
+            "allowed_flags": [
+                "--field-local",
+                "--resume-recovery",
+                "--revert-recovery",
+            ],
+            "outside_scope_status": "approval_fixed_closed",
+            "outside_scope_reason_code": (
+                command_status.COMPOUND_APPROVAL_REASON_CODE
+            ),
+        },
     )
 
     zet_title_remap_recovery_plan = subcommands.add_parser(
@@ -33028,6 +34208,22 @@ def build_parser() -> argparse.ArgumentParser:
     zettel_objet_link.add_argument("--expected-plan-sha256")
     zettel_objet_link.add_argument("--reviewed-by")
     zettel_objet_link.add_argument(
+        "--resume-recovery",
+        action="store_true",
+        help=(
+            "Resume the one incomplete exact receipt-recovery execution found "
+            "for --expected-plan-sha256; no new native approval is shown."
+        ),
+    )
+    zettel_objet_link.add_argument(
+        "--revert-recovery",
+        action="store_true",
+        help=(
+            "Use the approved recovery control to restore only its changed "
+            "fields. Combine with --resume-recovery only after an interrupted revert."
+        ),
+    )
+    zettel_objet_link.add_argument(
         "--capture-receipt",
         help=(
             "Read-only batch recovery mode using one archive-relative "
@@ -33184,18 +34380,19 @@ def build_parser() -> argparse.ArgumentParser:
 
     external_locator_record = subcommands.add_parser(
         "external-locator-record",
-        help="Approve one digest-bound provider-neutral locator record.",
+        help=(
+            "Approve one digest-bound provider-neutral locator record or run "
+            "receipt-bound batch locator recovery."
+        ),
     )
     external_locator_record.add_argument("archive_root", help="Archive root to update.")
-    external_locator_record.add_argument("--zettel-id", required=True, help="Target zettel id.")
+    external_locator_record.add_argument("--zettel-id", help="Target zettel id.")
     external_locator_record.add_argument(
         "--locator-type",
-        required=True,
         choices=completion_workflows.EXTERNAL_LOCATOR_TYPES,
     )
     external_locator_record.add_argument(
         "--locator-ref",
-        required=True,
         help="Private locator value. Never echoed.",
     )
     external_locator_record.add_argument("--service-ref")
@@ -33203,13 +34400,81 @@ def build_parser() -> argparse.ArgumentParser:
     external_locator_record.add_argument("--occurrence-anchor")
     external_locator_record.add_argument(
         "--expected-plan-sha256",
-        required=True,
         help="Exact plan SHA-256 from a fresh external-locator-plan.",
     )
+    external_locator_record.add_argument(
+        "--source-mirror",
+        help=(
+            "Private pages.markdown.jsonl for batch recovery; its path and "
+            "values are never echoed."
+        ),
+    )
+    external_locator_record.add_argument(
+        "--markup-receipt",
+        action="append",
+        help=(
+            "Archive-relative markup-normalization receipt; repeat to restore "
+            "receipt-proven omission markers in the same batch."
+        ),
+    )
+    external_locator_record.add_argument("--expected-zettel-count", type=int)
+    external_locator_record.add_argument("--expected-pair-count", type=int)
+    external_locator_record.add_argument(
+        "--expected-orphan-row-count",
+        type=int,
+    )
+    external_locator_record.add_argument(
+        "--expected-manifest-sha256",
+        help=(
+            "Optional initial batch-plan binding; required only to resume or "
+            "revert an existing approved recovery."
+        ),
+    )
+    external_locator_record.add_argument(
+        "--resume-recovery",
+        action="store_true",
+        help="Resume the one incomplete execution bound to the manifest.",
+    )
+    external_locator_record.add_argument(
+        "--revert-recovery",
+        action="store_true",
+        help="Restore only fields changed by the approved batch recovery.",
+    )
+    external_locator_record.add_argument(
+        "--max-items",
+        type=int,
+        default=10_000,
+        help="Batch recovery safety bound (1-10000).",
+    )
+    external_locator_record.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Build and verify the batch manifest without writing.",
+    )
     external_locator_record.add_argument("--approve", action="store_true", help="Required approval gate.")
-    external_locator_record.add_argument("--reviewed-by", required=True, help="Safe reviewer id.")
+    external_locator_record.add_argument("--reviewed-by", help="Safe reviewer id.")
+    external_locator_record.add_argument(
+        "--progress",
+        action="store_true",
+        help="Print content-free stages and at-most-10-second heartbeats.",
+    )
     external_locator_record.add_argument("--format", choices=["text", "json"], default="text")
-    external_locator_record.set_defaults(func=command_external_locator_record)
+    external_locator_record.set_defaults(
+        func=command_external_locator_record,
+        _wom_approval_scope={
+            "kind": "argument_flag_any_allowlist",
+            "allowed_flags": [
+                "--source-mirror",
+                "--markup-receipt",
+                "--resume-recovery",
+                "--revert-recovery",
+            ],
+            "outside_scope_status": "approval_fixed_closed",
+            "outside_scope_reason_code": (
+                command_status.COMPOUND_APPROVAL_REASON_CODE
+            ),
+        },
+    )
 
     external_locator_deactivate_plan = subcommands.add_parser(
         "external-locator-deactivate-plan",
@@ -35477,13 +36742,26 @@ def build_parser() -> argparse.ArgumentParser:
     objet_capture.add_argument("--selection", required=True, help="B4 selection manifest JSON path.")
     objet_capture.add_argument("--dry-run", action="store_true", help="Preview the capture plan without writing files.")
     objet_capture.add_argument("--approve", action="store_true", help="Capture bytes, append manifest records, write a receipt.")
+    objet_capture.add_argument(
+        "--exact-local",
+        action="store_true",
+        help="Use the native selection-bound approval path for one local capture.",
+    )
     objet_capture.add_argument("--reviewed-by", help="Reviewer id required for approved capture.")
     objet_capture.add_argument(
         "--project-intake-receipt",
         help="Optional project-intake decisions receipt to validate as capture-session context only.",
     )
     objet_capture.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
-    objet_capture.set_defaults(func=command_objet_capture)
+    objet_capture.set_defaults(
+        func=command_objet_capture,
+        _wom_approval_scope={
+            "kind": "argument_flag_any_allowlist",
+            "allowed_flags": ["--exact-local"],
+            "outside_scope_status": "approval_fixed_closed",
+            "outside_scope_reason_code": command_status.COMPOUND_APPROVAL_REASON_CODE,
+        },
+    )
 
     derive_text = subcommands.add_parser(
         "derive-text",
@@ -36523,9 +37801,22 @@ def build_parser() -> argparse.ArgumentParser:
     revert_edge.add_argument("--receipt", required=True, help="Archive-relative receipts/edges/*.zettel-edge.json path.")
     revert_edge.add_argument("--dry-run", action="store_true", help="Preview the edge removal and revert receipt path without writing files.")
     revert_edge.add_argument("--approve", action="store_true", help="Remove the reviewed edge and write a revert receipt.")
+    revert_edge.add_argument(
+        "--exact-local",
+        action="store_true",
+        help="Use the native receipt-bound approval path for this one edge revert.",
+    )
     revert_edge.add_argument("--reviewed-by", help="Safe reviewer id required with --approve.")
     revert_edge.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
-    revert_edge.set_defaults(func=command_revert_edge)
+    revert_edge.set_defaults(
+        func=command_revert_edge,
+        _wom_approval_scope={
+            "kind": "argument_flag_any_allowlist",
+            "allowed_flags": ["--exact-local"],
+            "outside_scope_status": "approval_fixed_closed",
+            "outside_scope_reason_code": command_status.COMPOUND_APPROVAL_REASON_CODE,
+        },
+    )
 
     revert_batch = subcommands.add_parser(
         "revert-batch",

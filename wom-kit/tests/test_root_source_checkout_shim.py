@@ -58,7 +58,7 @@ class RootSourceCheckoutShimTests(unittest.TestCase):
             self.assertEqual(completed.returncode, 0, completed.stderr)
             payload = json.loads(completed.stdout)
 
-        self.assertEqual(payload["version"], "0.4.6")
+        self.assertEqual(payload["version"], "0.4.7")
         self.assertEqual(Path(payload["paths"][0]).resolve(), SOURCE_PACKAGE)
         self.assertEqual(
             Path(payload["archive_cli"]).resolve().parent,

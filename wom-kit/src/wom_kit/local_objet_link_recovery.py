@@ -18,12 +18,22 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Callable
 
 from . import archive_services, completion_workflows
+from .exact_human_approval import exact_human_approval_archive_identity_sha256
 from .exact_operation_manifest import (
     ExactFieldEffect,
     ExactOperationEvidence,
     ExactOperationItem,
     ExactOperationManifest,
     hash_field_value,
+)
+from .local_recovery_execution import (
+    APPLY_OPERATION,
+    LocalRecoveryFieldSpec,
+    LocalRecoveryPlan,
+    build_local_recovery_plan,
+    local_recovery_ledger_identity_sha256,
+    local_recovery_ledger_relative,
+    local_recovery_zettel_identity_sha256,
 )
 
 
@@ -249,7 +259,8 @@ def zettel_objet_link_recovery_plan(
     max_items: int = MAX_RECEIPT_ITEMS,
     progress_callback: Callable[[str, str, int | None, int | None], None]
     | None = None,
-) -> dict[str, Any]:
+    _build_execution: bool = False,
+) -> dict[str, Any] | LocalRecoveryPlan:
     """Classify every captured Objet without reading object bytes or writing."""
 
     root = archive_services.require_existing_archive_root(archive_root)
@@ -324,6 +335,7 @@ def zettel_objet_link_recovery_plan(
 
     public_items: list[dict[str, Any]] = []
     exact_items: list[ExactOperationItem] = []
+    exact_specs: list[LocalRecoveryFieldSpec] = []
     counts = {
         "exact_link_ready": 0,
         "already_linked": 0,
@@ -408,21 +420,49 @@ def zettel_objet_link_recovery_plan(
                         }
                     )
                 )
-                exact_items.append(
-                    ExactOperationItem(
+                pre_value = _canonical_bytes(assets)
+                post_value = _canonical_bytes(after_assets)
+                source_value = _canonical_bytes(
+                    {
+                        "capture_receipt_sha256": receipt_sha256,
+                        "receipt_ordinal": receipt_ordinal,
+                        "object_id": object_id,
+                        "source_ids": sorted(source_ids),
+                    }
+                )
+                target_identity = local_recovery_zettel_identity_sha256(
+                    archive_id,
+                    exact_target["id"],
+                    exact_target["path"],
+                )
+                exact_item = ExactOperationItem(
                         ordinal=len(exact_items),
                         item_id=f"item:{receipt_ordinal:06d}",
                         target_kind="zettel",
                         target_ref=target_ref,
-                        target_identity_sha256=target_ref,
+                        target_identity_sha256=target_identity,
                         fields=(
                             ExactFieldEffect(
                                 field_ref="frontmatter.assets",
-                                pre_sha256=hash_field_value(_canonical_bytes(assets)),
-                                post_sha256=hash_field_value(_canonical_bytes(after_assets)),
-                                source_sha256=source_sha256,
+                                pre_sha256=hash_field_value(pre_value),
+                                post_sha256=hash_field_value(post_value),
+                                source_sha256=hash_field_value(source_value),
                             ),
                         ),
+                    )
+                exact_items.append(exact_item)
+                exact_specs.append(
+                    LocalRecoveryFieldSpec(
+                        item_id=exact_item.item_id,
+                        target_kind=exact_item.target_kind,
+                        target_ref=exact_item.target_ref,
+                        target_identity_sha256=exact_item.target_identity_sha256,
+                        field_ref="frontmatter.assets",
+                        target_relative=exact_target["path"],
+                        zettel_id=exact_target["id"],
+                        pre_value=pre_value,
+                        post_value=post_value,
+                        source_value=source_value,
                     )
                 )
         counts[state] += 1
@@ -539,18 +579,82 @@ def zettel_objet_link_recovery_plan(
         counts=tuple(sorted(evidence_counts.items())),
         digests=tuple(sorted(population_digests.items())),
     )
+    link_item_count = len(exact_items)
+    ledger_bytes = (
+        _canonical_bytes(
+            {
+                "schema": "wom-kit/zettel-objet-link-recovery-ledger/v0.1",
+                "archive_identity_sha256": (
+                    exact_human_approval_archive_identity_sha256(archive_id)
+                ),
+                "classification_items": public_items,
+                "operation_evidence": operation_evidence.document(),
+                "private_values_echoed": False,
+            }
+        )
+        + b"\n"
+    )
+    ledger_relative = local_recovery_ledger_relative(
+        "zettel_objet_link",
+        ledger_bytes,
+    )
+    ledger_identity = local_recovery_ledger_identity_sha256(
+        archive_id,
+        "zettel_objet_link",
+        ledger_relative,
+    )
+    ledger_source = _canonical_bytes(
+        {
+            "capture_receipt_sha256": receipt_sha256,
+            "operation_evidence_sha256": operation_evidence.evidence_sha256,
+        }
+    )
+    ledger_item = ExactOperationItem(
+        ordinal=len(exact_items),
+        item_id=f"item:{len(receipt_items):06d}:classification",
+        target_kind="local_recovery_ledger",
+        target_ref=_sha(ledger_relative.encode("utf-8")),
+        target_identity_sha256=ledger_identity,
+        fields=(
+            ExactFieldEffect(
+                field_ref="classification.ledger",
+                pre_sha256=hash_field_value(None),
+                post_sha256=hash_field_value(ledger_bytes),
+                source_sha256=hash_field_value(ledger_source),
+            ),
+        ),
+    )
+    exact_items.append(ledger_item)
+    exact_specs.append(
+        LocalRecoveryFieldSpec(
+            item_id=ledger_item.item_id,
+            target_kind=ledger_item.target_kind,
+            target_ref=ledger_item.target_ref,
+            target_identity_sha256=ledger_item.target_identity_sha256,
+            field_ref="classification.ledger",
+            target_relative=ledger_relative,
+            zettel_id=None,
+            pre_value=None,
+            post_value=ledger_bytes,
+            source_value=ledger_source,
+        )
+    )
+    exact_manifest_object = None
     exact_manifest = None
-    if exact_items and not blockers:
-        exact_manifest = ExactOperationManifest.build(
-            operation="zettel_objet_link_recovery",
-            archive_identity_sha256=hash_field_value(archive_id.encode("utf-8")),
+    if not blockers:
+        exact_manifest_object = ExactOperationManifest.build(
+            operation=APPLY_OPERATION,
+            archive_identity_sha256=(
+                exact_human_approval_archive_identity_sha256(archive_id)
+            ),
             items=exact_items,
             operation_evidence=operation_evidence,
-        ).document()
+        )
+        exact_manifest = exact_manifest_object.document()
     if classified_count != len(receipt_items):
         blockers.append("zettel_objet_link_recovery_classification_incomplete")
     state = "blocked" if blockers else "classified"
-    return {
+    result = {
         "ok": not blockers,
         "schema": RECOVERY_SCHEMA,
         "lifecycle_action": "zettel_objet_link_recovery_plan",
@@ -562,6 +666,8 @@ def zettel_objet_link_recovery_plan(
             "classified_item_count": classified_count,
             **counts,
             "exact_manifest_item_count": len(exact_items),
+            "exact_link_manifest_item_count": link_item_count,
+            "classification_ledger_item_count": 1,
             "canonical_zettel_count": len(targets),
             "unreadable_canonical_count": unreadable_count,
             "object_manifest_row_count": len(manifest_records),
@@ -573,10 +679,59 @@ def zettel_objet_link_recovery_plan(
         "blockers": archive_services.unique_preserve_order(blockers),
         "warnings": archive_services.unique_preserve_order(warnings),
         "would_change": (
-            ["frontmatter.assets"] if exact_manifest is not None else []
+            (
+                (["frontmatter.assets"] if link_item_count else [])
+                + ["classification.ledger"]
+            )
+            if exact_manifest is not None
+            else []
         ),
         "privacy_guards": _privacy_guards(),
     }
+    if _build_execution:
+        if exact_manifest_object is None or blockers:
+            raise archive_services.ArchiveServiceError(
+                "zettel_objet_link_recovery_execution_blocked"
+            )
+        warning_codes = []
+        if counts["review_required"]:
+            warning_codes.append("review_items_present")
+        if counts["no_target"]:
+            warning_codes.append("no_target_items_present")
+        return build_local_recovery_plan(
+            root,
+            domain="zettel_objet_link",
+            manifest=exact_manifest_object,
+            specs=exact_specs,
+            warning_codes=warning_codes,
+            public_summary=result["summary"],
+        )
+    return result
+
+
+def zettel_objet_link_recovery_execution_plan(
+    archive_root: Path | str,
+    *,
+    capture_receipt: str,
+    role: str = "source_document",
+    max_items: int = MAX_RECEIPT_ITEMS,
+    progress_callback: Callable[[str, str, int | None, int | None], None]
+    | None = None,
+) -> LocalRecoveryPlan:
+    plan = zettel_objet_link_recovery_plan(
+        archive_root,
+        capture_receipt=capture_receipt,
+        role=role,
+        dry_run=True,
+        max_items=max_items,
+        progress_callback=progress_callback,
+        _build_execution=True,
+    )
+    if type(plan) is not LocalRecoveryPlan:
+        raise archive_services.ArchiveServiceError(
+            "zettel_objet_link_recovery_execution_blocked"
+        )
+    return plan
 
 
 def _privacy_guards() -> dict[str, bool]:
@@ -594,4 +749,7 @@ def _privacy_guards() -> dict[str, bool]:
     }
 
 
-__all__ = ["zettel_objet_link_recovery_plan"]
+__all__ = [
+    "zettel_objet_link_recovery_execution_plan",
+    "zettel_objet_link_recovery_plan",
+]

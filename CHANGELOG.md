@@ -6,6 +6,15 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.4.7 - 2026-08-24
+
+- Added native exact single Objet capture and receipt-bound single-edge revert
+  inside the existing command families; unscoped legacy approvals remain closed.
+- Added resumable, independently verified, field-scoped recovery for captured-
+  object links, external locators, omission markers, and identifier-shaped titles.
+- Kept complete private manifests in ignored-local controls while reducing normal
+  real-scale output to content-free counts and digests.
+
 ## v0.4.6 - 2026-08-24
 
 - Added exact, resumable emergency R2 preservation for local-only Objet bytes,
