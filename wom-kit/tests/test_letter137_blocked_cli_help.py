@@ -46,7 +46,7 @@ class Letter137BlockedCliHelpTests(unittest.TestCase):
         }
         self.assertEqual(
             len(archive_cli.COMPOUND_APPROVAL_BLOCKED_COMMANDS),
-            76,
+            75,
         )
         self.assertNotIn(
             "migrate",
@@ -58,6 +58,10 @@ class Letter137BlockedCliHelpTests(unittest.TestCase):
         )
         self.assertNotIn(
             "project-version-update",
+            archive_cli.COMPOUND_APPROVAL_BLOCKED_COMMANDS,
+        )
+        self.assertNotIn(
+            "object-storage-adopt-existing",
             archive_cli.COMPOUND_APPROVAL_BLOCKED_COMMANDS,
         )
         self.assertIn(
@@ -99,6 +103,7 @@ class Letter137BlockedCliHelpTests(unittest.TestCase):
             "mint-zet",
             "promote",
             "project-version-update",
+            "object-storage-adopt-existing",
             "retire-draft",
             "source-fidelity-session-evidence",
             "migrate",

@@ -53,7 +53,8 @@ record. Each record includes:
 - `canonical_path` and `alias_paths`,
 - `approval_status`,
 - the fixed-close `approval_reason_code` when applicable,
-- `approval_scope` (`null` or an argument/value allowlist plus the fixed-close
+- `approval_scope` (`null`, an argument/value allowlist, or an exactly-one
+  argument-flag allowlist plus the fixed-close
   status outside that allowlist),
 - whether `--dry-run` is exposed, and
 - `invocation_surface_available: true`.
@@ -104,6 +105,12 @@ choice; v0.2 records `approval_scope.argument: --target`, the sole
 allowed value `notion-source-properties`, and the fixed-close status/reason for
 every value outside that scope. The handler independently enforces the same
 boundary.
+
+v0.4.6 adds a second conditional scope without adding a top-level command.
+`object-storage-adopt-existing` is approval-available only when exactly one of
+`--preserve-local-only` or `--formal-adoption` selects the operation-specific
+exact writer. No selected flag, both flags, or the legacy argument family stays
+fixed closed; the handler independently enforces that same boundary.
 
 The `summary` includes:
 

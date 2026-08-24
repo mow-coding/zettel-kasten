@@ -1,8 +1,10 @@
 # WOM-kit Version Truth Source
 
-Status: v0.4.5 Windows native approval hotfix and project-isolated runtime
+Status: v0.4.6 exact R2 recovery and project-isolated runtime
 
-Current checkpoint: Status: v0.4.5 Common Controls v6 activation plus byte-packed Task Dialog ABI
+Current checkpoint: Status: v0.4.6 R2 bytes preservation plus formal adoption
+
+Previous checkpoint: Status: v0.4.5 Common Controls v6 activation plus byte-packed Task Dialog ABI
 
 Previous checkpoint: Status: v0.4.4 machine-verified human decision plus exact project runtime
 
@@ -26,17 +28,18 @@ or runtime workflow. This page defines the safe order for checking them.
 
 ## Current Public Tool
 
-The v0.4.5 URL is a conditional release-artifact contract. Use it only after
+The v0.4.6 URL is a conditional release-artifact contract. Use it only after
 the matching public GitHub Release exists and lists the exact wheel:
 
 ```powershell
-py -m venv .wom-bootstrap-v045
-& .\.wom-bootstrap-v045\Scripts\python.exe -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.5/wom_kit-0.4.5-py3-none-any.whl"
-& .\.wom-bootstrap-v045\Scripts\archive.exe --version
+py -m venv .wom-bootstrap-v046
+& .\.wom-bootstrap-v046\Scripts\python.exe -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.6/wom_kit-0.4.6-py3-none-any.whl"
+& .\.wom-bootstrap-v046\Scripts\archive.exe --version
 ```
 
-Require exactly `archive 0.4.5` from a new process. The installed runtime keeps
-the exact-approved Git writer and Letter 138 source-property backfill, but a
+Require exactly `archive 0.4.6` from a new process. The installed runtime keeps
+the exact-approved Git writer, Letter 138 source-property backfill, and bounded
+R2 recovery modes, but a
 bootstrap install alone changes no archive, remote ref, project-local source
 mirror, pin, shared PATH tool, or other project. Project update is a separate
 native exact-human workflow that creates and activates the project-local

@@ -24,12 +24,37 @@ Before upgrading a real archive:
 
 The archive should never silently rewrite memory.
 
+## v0.4.6 Exact R2 Preservation and Formal Adoption
+
+Install only after the matching public Release lists the exact wheel:
+
+```powershell
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.6/wom_kit-0.4.6-py3-none-any.whl"
+archive --version
+```
+
+Require exactly `archive 0.4.6` from a new process. A dry-run computes and
+binds the evidence but does not read credential values, call the provider, or
+write anything. For local-only byte protection, use the existing
+`object-storage-adopt-existing` family with `--preserve-local-only`; for
+verified key-map reconciliation, use `--formal-adoption`. Do not use the
+legacy adopt approval path, which remains closed.
+
+WOM verifies counts, hashes, drift, remote evidence, checkpoints, and receipts.
+The person does not recount the archive or compare digests; the native window
+asks only whether to run the plainly described exact operation or cancel.
+Publishing or installing the release does not apply either operation to a
+client archive.
+
+See the [v0.4.6 release note](wom-kit/docs/releases/v0.4.6.md) and the
+[object-storage execution contract](wom-kit/docs/object-storage-adapter-execution-contract.md).
+
 ## v0.4.3 Exact Recovery and Git Backup
 
 Install only after the matching public Release lists the exact wheel:
 
 ```powershell
-uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.5/wom_kit-0.4.5-py3-none-any.whl"
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.3/wom_kit-0.4.3-py3-none-any.whl"
 archive --version
 ```
 
