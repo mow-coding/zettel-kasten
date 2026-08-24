@@ -1,6 +1,6 @@
 # Exact Human Approval Contract
 
-Status: v0.4.6 operation-specific R2 decisions plus usable Windows human-decision boundary; v0.4.0 one-use authority baseline preserved
+Status: v0.4.7 exact local capture, edge revert, and recovery decisions plus the v0.4.6 R2 and Windows human-decision boundaries; v0.4.0 one-use authority baseline preserved
 
 ## Purpose
 
