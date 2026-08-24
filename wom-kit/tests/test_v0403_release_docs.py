@@ -158,6 +158,15 @@ class V0406ReleaseDocsTests(unittest.TestCase):
         self.assertNotIn("](../../../", release)
         self.assertNotIn("C:\\Users\\", release)
 
+    def test_release_keeps_private_acceptance_details_out_of_public_note(self) -> None:
+        release = " ".join(RELEASE_PATH.read_text(encoding="utf-8").split())
+        self.assertNotIn("current client evidence snapshot", release.casefold())
+        self.assertIn(
+            "Exact client counts, object identifiers, keys, digests, and paths "
+            "remain only in private acceptance records",
+            release,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -4,10 +4,11 @@ Date: 2026-08-22
 
 ## Context
 
-The archive has 3,374 non-conflicting local-only Objet whose remote bytes are
-not yet evidenced. Formal adoption is blocked by separate metadata conflicts,
-but waiting for all metadata decisions leaves the only known bytes exposed to
-a larger irreversible-loss risk.
+A private acceptance snapshot has a non-conflicting local-only Objet set whose
+remote bytes are not yet evidenced. Formal adoption is blocked by separate
+metadata conflicts, but waiting for all metadata decisions leaves the only
+known bytes exposed to a larger irreversible-loss risk. Exact client counts
+and identifiers remain in private acceptance records.
 
 ## Decision
 
@@ -24,8 +25,8 @@ a larger irreversible-loss risk.
 - Keep the ordinary upload command's 64-call ceiling unchanged. For this exact
   emergency batch only, derive an immutable no-retry call count and bounded
   retry ceiling from every manifest-bound object size and the existing
-  per-object retry maximum, so the reviewed 3,374-item operation is executable
-  rather than silently stopping after 64 calls.
+  per-object retry maximum, so the exact manifest-bound operation is executable
+  rather than silently stopping at the legacy call ceiling.
 - Make each exact target an immutable per-object receipt. Persist the private
   exact plan separately for same-approval resume and publish only aggregate,
   content-free results.
@@ -36,13 +37,12 @@ a larger irreversible-loss risk.
 - Do not provide unconditional remote deletion as rollback. The safe local
   rollback boundary is the field-bound receipt; removing a verified emergency
   copy without a generation-bound provider condition would increase loss risk.
-- Keep 597 strict manifest-scope remote-key-verified objects and 560 official
-  de-duplicated WOM-upload evidence objects under distinct names. The latter
-  includes two legacy receipt-backed records that have no manifest remote key;
-  do not mislabel those two as independently key-verified or re-upload them
-  automatically.
-- Keep all 1,149 duplicate definitions review-only. Classify their evidence,
-  but never infer that equal object ids authorize metadata merging.
+- Keep strict manifest-scope remote-key verification and official
+  de-duplicated WOM-upload evidence under distinct metric names. Legacy
+  receipt-backed records without a manifest remote key must not be mislabeled
+  as independently key-verified or re-uploaded automatically.
+- Keep all duplicate definitions review-only. Classify their evidence, but
+  never infer that equal object ids authorize metadata merging.
 - Resolve credential values and construct the live network sender only inside
   the approved writer boundary. Dry-run reads local bytes for exact hashing but
   never reads secrets or calls the provider.
