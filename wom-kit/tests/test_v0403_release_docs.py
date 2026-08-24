@@ -23,6 +23,33 @@ WHEEL_URL = (
 
 
 class V0407ReleaseDocsTests(unittest.TestCase):
+    def test_current_install_bootstrap_uses_one_exact_release_version(self) -> None:
+        install = (KIT / "docs" / "python-tool-install.md").read_text(
+            encoding="utf-8"
+        )
+        install_ko = (KIT / "docs" / "python-tool-install.ko.md").read_text(
+            encoding="utf-8"
+        )
+        combined = install + "\n" + install_ko
+        for required in (
+            '$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\\bootstrap-v047"',
+            "py -m venv $womBootstrapRoot",
+            r'& "$womBootstrapRoot\Scripts\python.exe"',
+            r'& "$womBootstrapRoot\Scripts\archive.exe" --version',
+            "wom_kit-0.4.7-py3-none-any.whl",
+        ):
+            with self.subTest(required=required):
+                self.assertIn(required, combined)
+        self.assertIn("exactly `archive 0.4.7`", install)
+        self.assertIn("정확히 `archive 0.4.7`", install_ko)
+        self.assertNotIn(".wom-bootstrap-v043", combined)
+        self.assertNotIn("exactly `archive 0.4.3`", install)
+        self.assertNotIn("정확히 `archive 0.4.3`", install_ko)
+        self.assertIn(
+            "outside the inspected project or archive", " ".join(install.split())
+        )
+        self.assertIn("프로젝트·보관함 밖", " ".join(install_ko.split()))
+
     def test_letter138_docs_never_delegate_machine_verification_to_the_person(self) -> None:
         recovery = (
             KIT / "docs" / "notion-source-properties-recovery.md"

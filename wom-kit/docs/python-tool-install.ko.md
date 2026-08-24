@@ -1,6 +1,6 @@
 # WOM-kit Python 도구 설치
 
-상태: v0.4.3 조건부 GitHub wheel 및 정확한 복구 경계
+상태: v0.4.7 검증된 GitHub wheel 및 영수증 결속 로컬 복구
 
 WOM-kit은 명령줄 도구입니다. 일반 앱 프로젝트의 Python 의존성과 섞지 말고
 별도의 격리된 Python 환경에 설치하는 것이 좋습니다.
@@ -24,37 +24,38 @@ archive version <project-or-archive-root> --format json
 업데이트 필요 여부를 결정합니다. 개발·릴리스 검증 때는 별도 임시 가상환경에
 wheel을 설치하고 그 환경의 `Scripts\archive.exe`를 정확한 경로로 실행해야
 합니다. 테스트 과정에서 사용자 공용 PATH 도구를 교체하지 않습니다. 같은
-검증된 v0.4.3 updater는 선택한 프로젝트의
+검증된 project updater는 선택한 프로젝트의
 `.zettel-kasten/runtimes/vX.Y.Z/`에 정확한 릴리스 wheel을 설치하고
 `.zettel-kasten/bin/archive.cmd`를 활성화합니다. 이후 그 프로젝트의 일반 WOM
 명령은 이 launcher로 실행합니다. 다른 프로젝트 폴더와 사용자 공용 PATH
 실행기는 바뀌지 않습니다. 이 경계는 WOM 명령의 프로젝트 런타임 격리이며,
 Windows 사용자 권한이나 WOM 밖의 프로그램까지 격리한다는 뜻은 아닙니다.
 
-아래 v0.4.3 URL은 조건부 계약이며 공개 자산이 실제로 존재한다는 증거가
+아래 v0.4.7 URL은 조건부 계약이며 공개 자산이 실제로 존재한다는 증거가
 아닙니다. 정확히 일치하는 GitHub Release가 존재하고 검증된 wheel을 자산으로
 나열한 뒤에만 사용하세요. 소스 상태와 릴리스 증거의 구분은
-[v0.4.3 릴리스 노트](releases/v0.4.3.md)를 보세요.
+[v0.4.7 릴리스 노트](releases/v0.4.7.md)를 보세요.
 
-이미 설치된 v0.4.2 client에는 Git 읽기 전용 planner가 있지만 v0.4.3의
-정확한 commit/push writer, source-property backfill, 다시 열린 project
-updater는 없습니다. 저장소 파일만 업데이트해도 분리된 `uv tool` 또는
-가상환경 wheel은 바뀌지 않습니다. 검증된 v0.4.3 자산이 실제로 생긴 뒤 그
+설치된 이전 client에는 v0.4.7의 완전한 exact writer와 영수증 결속 로컬
+복구 경로가 없을 수 있습니다. 저장소 파일만 업데이트해도 분리된 `uv tool`
+또는 가상환경 wheel은 바뀌지 않습니다. 검증된 v0.4.7 자산이 실제로 생긴 뒤 그
 정확한 wheel을 설치하고 새 프로세스를 시작하세요.
 
 ## 권장 프로젝트 부트스트랩
 
 정확한 WOM GitHub Release가 실제로 존재하고 검증된 wheel을 자산으로 나열한
 뒤에만 임시 부트스트랩을 만드세요. 버전이 들어간 URL만으로 파일이 실제 공개되었다는
-증거가 되지는 않습니다.
+증거가 되지는 않습니다. 이 임시 환경은 검사할 프로젝트·보관함 밖에 두어야
+프로젝트 입력이나 updater 충돌 항목이 되지 않습니다.
 
 ```powershell
-py -m venv .wom-bootstrap-v043
-& .\.wom-bootstrap-v047\Scripts\python.exe -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.7/wom_kit-0.4.7-py3-none-any.whl"
-& .\.wom-bootstrap-v043\Scripts\archive.exe --version
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v047"
+py -m venv $womBootstrapRoot
+& "$womBootstrapRoot\Scripts\python.exe" -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.7/wom_kit-0.4.7-py3-none-any.whl"
+& "$womBootstrapRoot\Scripts\archive.exe" --version
 ```
 
-새 프로세스가 정확히 `archive 0.4.3`을 보고하면 그 명시적 부트스트랩으로
+새 프로세스가 정확히 `archive 0.4.7`을 보고하면 그 명시적 부트스트랩으로
 `project-version-update`를 실행합니다. 승인 성공 뒤 프로젝트 런타임을
 검증하고 해당 launcher를 사용합니다.
 
@@ -79,7 +80,7 @@ PATH가 공유하는 실행점이지 프로젝트 폴더 전용 명령이 아닙
 
 ### 설치된 이전 전역 CLI 교체
 
-v0.4.3 Release와 wheel이 실제로 공개된 뒤, 격리된 `uv tool` 환경을 교체하고
+v0.4.7 Release와 wheel이 실제로 공개된 뒤, 격리된 `uv tool` 환경을 교체하고
 새 프로세스에서 결과를 확인합니다.
 
 ```powershell
@@ -93,7 +94,7 @@ archive --version
 옵션은 `uv`가 관리하지 않는 실행 파일도 교체할 수 있습니다. [공식 `uv tool
 install` 문서](https://docs.astral.sh/uv/reference/cli/#uv-tool-install)를 보세요.
 
-결과는 정확히 `archive 0.4.3`이어야 합니다. 이것은 전역 CLI만 바꾸는
+결과는 정확히 `archive 0.4.7`이어야 합니다. 이것은 전역 CLI만 바꾸는
 부트스트랩입니다. project-local `.zettel-kasten/source` mirror와 version pin은
 바꾸지 않습니다. project updater는 별도의 exact-human workflow이고,
 collision 변경과 bytecode repair는 계속 고정 차단됩니다. pin을 손으로 고치지
