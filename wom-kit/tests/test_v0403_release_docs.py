@@ -23,6 +23,29 @@ WHEEL_URL = (
 
 
 class V0404ReleaseDocsTests(unittest.TestCase):
+    def test_letter138_docs_never_delegate_machine_verification_to_the_person(self) -> None:
+        recovery = (
+            KIT / "docs" / "notion-source-properties-recovery.md"
+        ).read_text(encoding="utf-8")
+        normalized = " ".join(recovery.split())
+        for required in (
+            "WOM, not the person",
+            "not an approval prerequisite",
+            "machine gates, not a checklist delegated to the person",
+            "does not count categories, compare hashes, or determine canonical completeness",
+            "asks only `복구 실행` or `취소`",
+        ):
+            with self.subTest(required=required):
+                self.assertIn(required, normalized)
+        for forbidden in (
+            "Review that exact private file",
+            "Do not approve unless the digest matches",
+            "after a human reviews those exact unresolved digests",
+            "apply the reviewed plan",
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, normalized)
+
     def test_same_account_project_runtime_scope_is_explicit(self) -> None:
         surfaces = (
             KIT / "docs" / "python-tool-install.md",
