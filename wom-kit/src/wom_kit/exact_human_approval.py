@@ -31,8 +31,10 @@ from typing import Any, Callable, Mapping
 import yaml
 
 from .exact_human_approval_windows import (
+    CURRENT_INTERACTIVE_INTENT_MECHANISM,
     ExactHumanApprovalContext,
     ExactHumanApprovalOperation,
+    LEGACY_INTERACTIVE_INTENT_MECHANISMS,
     _ExactHumanApprovalDecision,
 )
 
@@ -365,10 +367,20 @@ def _validate_claim_document(
         raise _fail("exact_human_approval_claim_document_invalid")
     if result.get("reviewer_identity_authenticated") is not False:
         raise _fail("exact_human_approval_claim_document_invalid")
-    if result.get("interactive_intent") != {
-        "mechanism": "windows_task_dialog_checkbox_and_button",
-        "confirmed": True,
+    interactive_intent = result.get("interactive_intent")
+    if not isinstance(interactive_intent, Mapping) or set(interactive_intent) != {
+        "mechanism",
+        "confirmed",
     }:
+        raise _fail("exact_human_approval_claim_document_invalid")
+    if (
+        interactive_intent.get("mechanism")
+        not in {
+            CURRENT_INTERACTIVE_INTENT_MECHANISM,
+            *LEGACY_INTERACTIVE_INTENT_MECHANISMS,
+        }
+        or interactive_intent.get("confirmed") is not True
+    ):
         raise _fail("exact_human_approval_claim_document_invalid")
     status = result.get("status")
     if status not in {"started", "succeeded", "failed"}:
@@ -1141,7 +1153,7 @@ def _claim_exact_human_approval_core(
                 "reviewer_claim_sha256": reviewer_claim_sha256,
                 "reviewer_identity_authenticated": False,
                 "interactive_intent": {
-                    "mechanism": "windows_task_dialog_checkbox_and_button",
+                    "mechanism": CURRENT_INTERACTIVE_INTENT_MECHANISM,
                     "confirmed": True,
                 },
                 "approved_at": approved_at,

@@ -1,6 +1,6 @@
 # Exact Human Approval Contract
 
-Status: v0.4.0 design and implementation contract
+Status: v0.4.4 human-decision boundary; v0.4.0 one-use authority baseline preserved
 
 ## Purpose
 
@@ -39,9 +39,10 @@ v0.4 exact-human writer binding. Their approval branches fail before private
 archive, project, input, credential, or target reads and before provider calls,
 mutation, or receipt publication. Historical receipts do not reactivate them.
 
-## Review binding
+## Machine verification binding
 
-One approval plan binds only content-free evidence:
+WOM, not the person, verifies and binds the content-free evidence for one
+operation plan:
 
 - operation kind and exact operation-plan digest;
 - body and frontmatter digests when the operation writes a document;
@@ -54,12 +55,20 @@ Private body text, titles, labels, paths, source locators, provider values, and
 credentials are never written into an approval request, popup result, claim,
 CLI result, MCP result, or log.
 
+The person is not asked to count targets, compare digests, or determine whether
+the canonical state is complete. A mismatch, drift, or incomplete machine
+precondition blocks the writer automatically.
+
 ## Human-presence boundary
 
 Dry-run never opens a window and never issues authority. Approval uses a native
-Windows modal owned by the foreground WOM invocation. The modal displays the
-exact safe operation summary, full digests, warnings, and checklist. It requires
-an explicit confirmation in the live approval mode.
+Windows modal owned by the foreground WOM invocation. Its primary surface asks
+one ordinary-language question: whether to perform the described operation now.
+It names the operation's effect, provides one specific action button, and makes
+clear that cancellation performs no change. Full digests, machine review codes,
+warnings, and the reviewer label remain available under collapsed technical
+details and in durable receipts; reading or comparing them is not a human
+precondition. The live dialog has no verification checkbox.
 
 The Windows Python runtime must provide a Comctl32 v6 activation context;
 `TaskDialogIndirect` is a Comctl32 v6 API according to the
@@ -82,10 +91,10 @@ caller key, or arbitrary callback into live authority. Tests reach the private
 cores explicitly with synthetic dependencies; that evidence proves invariants,
 not a production human confirmation.
 
-The modal proves a local explicit confirmation event, not a legal identity,
+The modal proves a local explicit action-button event, not a legal identity,
 biometric identity, or protection from a malicious process already controlling
-the same desktop session. The reviewer id remains a claimed label that the
-human sees and confirms.
+the same desktop session. The reviewer id remains a claimed provenance label;
+it does not delegate machine verification work to the person.
 
 ## One-use claim and durable linkage
 

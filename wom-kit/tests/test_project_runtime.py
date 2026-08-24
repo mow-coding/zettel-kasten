@@ -193,16 +193,16 @@ def _supply_for_dependency(
 
 class ProjectRuntimeTests(unittest.TestCase):
     def test_official_supply_lock_is_strict_and_hash_bound(self) -> None:
-        raw = (KIT_ROOT / "project-runtime-supply-lock-v0.4.3.json").read_bytes()
+        raw = (KIT_ROOT / "project-runtime-supply-lock-v0.4.4.json").read_bytes()
         supply = project_runtime.project_runtime_supply_lock(
             raw,
-            expected_target="v0.4.3",
+            expected_target="v0.4.4",
         )
         self.assertIsNotNone(supply)
         assert supply is not None
         self.assertEqual(
             supply.sha256,
-            "45386eebf1a69d0a9cd5df4c5fc8010f00d7fb2e5b44924b72e1fb8e2a0ec04a",
+            "0b20be30bc02a1083c2254e10effd818777a2548d2eebb538b01b0e443544139",
         )
         self.assertEqual(
             [(item.distribution, item.version, item.size_bytes, item.sha256) for item in supply.artifacts],

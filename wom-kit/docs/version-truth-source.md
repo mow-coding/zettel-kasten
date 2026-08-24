@@ -1,8 +1,10 @@
 # WOM-kit Version Truth Source
 
-Status: v0.4.3 bounded Windows PATH/source provenance and exact project updater
+Status: v0.4.4 human-centered execution decision and project-isolated runtime
 
-Current checkpoint: Status: v0.4.3 PATH shadow diagnosis plus exact-human project update
+Current checkpoint: Status: v0.4.4 machine-verified approval plus exact project runtime
+
+Previous checkpoint: Status: v0.4.3 PATH shadow diagnosis plus exact-human project update
 
 Previous checkpoint: Status: v0.4.2 bounded Git plan/reconciliation with no writer
 
@@ -22,17 +24,17 @@ or runtime workflow. This page defines the safe order for checking them.
 
 ## Current Public Tool
 
-The v0.4.3 URL is a conditional release-artifact contract. Use it only after
+The v0.4.4 URL is a conditional release-artifact contract. Use it only after
 the matching public GitHub Release exists and lists the exact wheel:
 
 ```powershell
-py -m venv .wom-bootstrap-v043
-& .\.wom-bootstrap-v043\Scripts\python.exe -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.3/wom_kit-0.4.3-py3-none-any.whl"
-& .\.wom-bootstrap-v043\Scripts\archive.exe --version
+py -m venv .wom-bootstrap-v044
+& .\.wom-bootstrap-v044\Scripts\python.exe -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.4/wom_kit-0.4.4-py3-none-any.whl"
+& .\.wom-bootstrap-v044\Scripts\archive.exe --version
 ```
 
-Require exactly `archive 0.4.3` from a new process. The installed runtime adds
-the exact-approved Git writer and Letter 138 source-property backfill, but an
+Require exactly `archive 0.4.4` from a new process. The installed runtime keeps
+the exact-approved Git writer and Letter 138 source-property backfill, but a
 bootstrap install alone changes no archive, remote ref, project-local source
 mirror, pin, shared PATH tool, or other project. Project update is a separate
 native exact-human workflow that creates and activates the project-local

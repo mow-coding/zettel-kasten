@@ -24,11 +24,11 @@ class FakeNative:
     def __init__(self, events: list[str], *, approved: bool = True) -> None:
         self.events = events
         self.approved = approved
-        self.contents: list[str] = []
+        self.calls: list[dict[str, str]] = []
 
     def show(self, **kwargs: str) -> tuple[int, bool]:
         self.events.append("dialog")
-        self.contents.append(str(kwargs["content"]))
+        self.calls.append(dict(kwargs))
         if self.approved:
             return APPROVE_BUTTON_ID, True
         return IDCANCEL, False
@@ -188,10 +188,15 @@ class Letter136ExactHumanCliTests(unittest.TestCase):
                 result["exact_human_approval"]["approval_id"],
                 result["exact_human_approval_reference"]["approval_id"],
             )
-            self.assertIn("sha256:" + PLAN_SHA256, native.contents[0])
-            self.assertIn("sha256:" + TARGET_SHA256, native.contents[0])
-            self.assertNotIn("private-session-ref", native.contents[0])
-            self.assertNotIn("private-name.txt", native.contents[0])
+            primary = native.calls[0]["content"]
+            advanced = native.calls[0]["expanded_information"]
+            self.assertNotIn("sha256:" + PLAN_SHA256, primary)
+            self.assertNotIn("sha256:" + TARGET_SHA256, primary)
+            self.assertIn("sha256:" + PLAN_SHA256, advanced)
+            self.assertIn("sha256:" + TARGET_SHA256, advanced)
+            rendered = primary + "\n" + advanced
+            self.assertNotIn("private-session-ref", rendered)
+            self.assertNotIn("private-name.txt", rendered)
 
     def test_session_cancel_never_acquires_key_or_enters_writer(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -337,13 +342,18 @@ class Letter136ExactHumanCliTests(unittest.TestCase):
             self.assertEqual(events, ["preflight", "dialog", "key", "writer"])
             result = json.loads(stdout)
             self.assertEqual(result["exact_human_approval"]["status"], "succeeded")
-            dialog = native.contents[0]
-            self.assertIn("sha256:" + PLAN_SHA256, dialog)
-            self.assertIn("sha256:" + TARGET_SHA256, dialog)
-            self.assertRegex(dialog, r"warning_set_[0-9a-f]{52}")
-            self.assertNotIn("PRIVATE TITLE", dialog)
-            self.assertNotIn("PRIVATE BODY", dialog)
-            self.assertNotIn("private-warning-detail", dialog)
+            primary = native.calls[0]["content"]
+            advanced = native.calls[0]["expanded_information"]
+            self.assertNotIn("sha256:" + PLAN_SHA256, primary)
+            self.assertNotIn("sha256:" + TARGET_SHA256, primary)
+            self.assertNotRegex(primary, r"warning_set_[0-9a-f]{52}")
+            self.assertIn("sha256:" + PLAN_SHA256, advanced)
+            self.assertIn("sha256:" + TARGET_SHA256, advanced)
+            self.assertRegex(advanced, r"warning_set_[0-9a-f]{52}")
+            rendered = primary + "\n" + advanced
+            self.assertNotIn("PRIVATE TITLE", rendered)
+            self.assertNotIn("PRIVATE BODY", rendered)
+            self.assertNotIn("private-warning-detail", rendered)
 
     def test_ai_create_key_failure_is_fixed_and_content_free(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
