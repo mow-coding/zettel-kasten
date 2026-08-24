@@ -20,10 +20,12 @@ import hashlib
 import json
 import os
 import re
+import tempfile
+from contextlib import contextmanager
 from ctypes import wintypes
 from dataclasses import dataclass
 from enum import Enum
-from typing import Protocol
+from typing import Iterator, Protocol
 
 
 TASK_DIALOG_TITLE = "WOM · 실행 확인"
@@ -45,6 +47,27 @@ TDF_ALLOW_DIALOG_CANCELLATION = 0x0008
 TDF_POSITION_RELATIVE_TO_WINDOW = 0x1000
 TDF_SIZE_TO_CONTENT = 0x01000000
 TDCBF_CANCEL_BUTTON = 0x0008
+
+_COMMON_CONTROLS_V6_MANIFEST = b"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+  <assemblyIdentity
+      version="1.0.0.0"
+      processorArchitecture="*"
+      name="WOM.ExactHumanApproval"
+      type="win32" />
+  <dependency>
+    <dependentAssembly>
+      <assemblyIdentity
+          type="win32"
+          name="Microsoft.Windows.Common-Controls"
+          version="6.0.0.0"
+          processorArchitecture="*"
+          publicKeyToken="6595b64144ccf1df"
+          language="*" />
+    </dependentAssembly>
+  </dependency>
+</assembly>
+"""
 
 _SHA256_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 _CODE_RE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
@@ -343,10 +366,17 @@ class _ExactHumanApprovalNative(Protocol):
 
 
 class _TASKDIALOG_BUTTON(ctypes.Structure):
+    # CommCtrl.h surrounds the task-dialog declarations with pshpack1.h.
+    _pack_ = 1
     _fields_ = [("nButtonID", ctypes.c_int), ("pszButtonText", wintypes.LPCWSTR)]
 
 
 class _TASKDIALOGCONFIG(ctypes.Structure):
+    # The native ABI is byte-packed even on 64-bit Windows.  Default ctypes
+    # alignment produces a plausible-looking 176-byte structure that
+    # TaskDialogIndirect rejects with E_INVALIDARG; the SDK layout is 160
+    # bytes on 64-bit Windows.
+    _pack_ = 1
     _fields_ = [
         ("cbSize", wintypes.UINT),
         ("hwndParent", wintypes.HWND),
@@ -372,6 +402,20 @@ class _TASKDIALOGCONFIG(ctypes.Structure):
         ("pfCallback", ctypes.c_void_p),
         ("lpCallbackData", ctypes.c_ssize_t),
         ("cxWidth", wintypes.UINT),
+    ]
+
+
+class _ACTCTXW(ctypes.Structure):
+    _fields_ = [
+        ("cbSize", wintypes.ULONG),
+        ("dwFlags", wintypes.DWORD),
+        ("lpSource", wintypes.LPCWSTR),
+        ("wProcessorArchitecture", wintypes.USHORT),
+        ("wLangId", wintypes.LANGID),
+        ("lpAssemblyDirectory", wintypes.LPCWSTR),
+        ("lpResourceName", wintypes.LPCWSTR),
+        ("lpApplicationName", wintypes.LPCWSTR),
+        ("hModule", wintypes.HMODULE),
     ]
 
 
@@ -401,6 +445,99 @@ def _require_comctl32_v6(comctl32: object) -> None:
         raise _fail("exact_human_approval_activation_context_required")
 
 
+@contextmanager
+def _activate_comctl32_v6(
+    *,
+    loader: object | None = None,
+) -> Iterator[None]:
+    """Activate the v6 side-by-side assembly for this calling thread.
+
+    Python launchers do not reliably embed the Common Controls v6 dependency
+    that ``TaskDialogIndirect`` requires.  A content-free, create-only
+    temporary manifest supplies the exact side-by-side dependency.  The source
+    file is removed immediately after ``CreateActCtxW`` parses it; the returned
+    activation-context handle owns the parsed state until release.
+    """
+
+    selected_loader = loader if loader is not None else getattr(ctypes, "WinDLL", None)
+    if selected_loader is None:
+        raise _fail("exact_human_approval_native_load_failed")
+    manifest_path: str | None = None
+    activation_handle: object | None = None
+    cookie = ctypes.c_size_t(0)
+    activated = False
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="wb",
+            prefix="wom-comctl32-v6-",
+            suffix=".manifest",
+            delete=False,
+        ) as manifest_file:
+            manifest_path = manifest_file.name
+            manifest_file.write(_COMMON_CONTROLS_V6_MANIFEST)
+            manifest_file.flush()
+            os.fsync(manifest_file.fileno())
+
+        kernel32 = selected_loader("kernel32", use_last_error=True)
+        create = kernel32.CreateActCtxW
+        create.argtypes = [ctypes.POINTER(_ACTCTXW)]
+        create.restype = wintypes.HANDLE
+        activate = kernel32.ActivateActCtx
+        activate.argtypes = [wintypes.HANDLE, ctypes.POINTER(ctypes.c_size_t)]
+        activate.restype = wintypes.BOOL
+        deactivate = kernel32.DeactivateActCtx
+        deactivate.argtypes = [wintypes.DWORD, ctypes.c_size_t]
+        deactivate.restype = wintypes.BOOL
+        release = kernel32.ReleaseActCtx
+        release.argtypes = [wintypes.HANDLE]
+        release.restype = None
+
+        descriptor = _ACTCTXW()
+        descriptor.cbSize = ctypes.sizeof(_ACTCTXW)
+        descriptor.lpSource = manifest_path
+        activation_handle = create(ctypes.byref(descriptor))
+        invalid_handle = ctypes.c_void_p(-1).value
+        if activation_handle in {None, invalid_handle}:
+            raise _fail("exact_human_approval_activation_context_required")
+
+        try:
+            os.unlink(manifest_path)
+            manifest_path = None
+        except OSError:
+            # The file contains no private or machine-specific value.  Keep the
+            # bounded fallback cleanup below rather than weakening the native
+            # approval boundary after a valid context has been parsed.
+            pass
+
+        if not activate(activation_handle, ctypes.byref(cookie)):
+            raise _fail("exact_human_approval_activation_context_required")
+        activated = True
+        yield
+        if not deactivate(0, cookie.value):
+            raise _fail("exact_human_approval_activation_context_required")
+        activated = False
+    except ExactHumanApprovalWindowsError:
+        raise
+    except BaseException:
+        raise _fail("exact_human_approval_activation_context_required") from None
+    finally:
+        if activated and activation_handle not in {None, ctypes.c_void_p(-1).value}:
+            try:
+                deactivate(0, cookie.value)
+            except BaseException:
+                pass
+        if activation_handle not in {None, ctypes.c_void_p(-1).value}:
+            try:
+                release(activation_handle)
+            except BaseException:
+                pass
+        if manifest_path is not None:
+            try:
+                os.unlink(manifest_path)
+            except OSError:
+                pass
+
+
 class _CtypesTaskDialogNative:
     """Pointer-size-correct Unicode task-dialog implementation."""
 
@@ -410,25 +547,7 @@ class _CtypesTaskDialogNative:
         loader = getattr(ctypes, "WinDLL", None)
         if loader is None:
             raise _fail("exact_human_approval_native_load_failed")
-        try:
-            self._comctl32 = loader("comctl32", use_last_error=True)
-            self._user32 = loader("user32", use_last_error=True)
-            _require_comctl32_v6(self._comctl32)
-            self._task_dialog = self._comctl32.TaskDialogIndirect
-            self._task_dialog.argtypes = [
-                ctypes.POINTER(_TASKDIALOGCONFIG),
-                ctypes.POINTER(ctypes.c_int),
-                ctypes.POINTER(ctypes.c_int),
-                ctypes.POINTER(wintypes.BOOL),
-            ]
-            self._task_dialog.restype = ctypes.c_long
-            self._get_foreground_window = self._user32.GetForegroundWindow
-            self._get_foreground_window.argtypes = []
-            self._get_foreground_window.restype = wintypes.HWND
-        except ExactHumanApprovalWindowsError:
-            raise
-        except BaseException:
-            raise _fail("exact_human_approval_native_load_failed") from None
+        self._loader = loader
 
     def show(
         self,
@@ -442,56 +561,70 @@ class _CtypesTaskDialogNative:
         footer: str,
         approve_button_text: str,
     ) -> tuple[int, bool]:
-        buttons = (_TASKDIALOG_BUTTON * 1)(
-            _TASKDIALOG_BUTTON(APPROVE_BUTTON_ID, approve_button_text)
-        )
-        button = ctypes.c_int(0)
-        radio = ctypes.c_int(0)
-        verified = wintypes.BOOL(0)
         try:
-            owner = self._get_foreground_window()
-            flags = TDF_ALLOW_DIALOG_CANCELLATION | TDF_SIZE_TO_CONTENT
-            if owner:
-                flags |= TDF_POSITION_RELATIVE_TO_WINDOW
-            config = _TASKDIALOGCONFIG(
-                cbSize=ctypes.sizeof(_TASKDIALOGCONFIG),
-                hwndParent=owner,
-                hInstance=None,
-                dwFlags=flags,
-                dwCommonButtons=TDCBF_CANCEL_BUTTON,
-                pszWindowTitle=title,
-                pszMainIcon=None,
-                pszMainInstruction=main_instruction,
-                pszContent=content,
-                cButtons=1,
-                pButtons=buttons,
-                nDefaultButton=0,
-                cRadioButtons=0,
-                pRadioButtons=None,
-                nDefaultRadioButton=0,
-                pszVerificationText=None,
-                pszExpandedInformation=expanded_information,
-                pszExpandedControlText=expanded_control_text,
-                pszCollapsedControlText=collapsed_control_text,
-                pszFooterIcon=None,
-                pszFooter=footer,
-                pfCallback=None,
-                lpCallbackData=0,
-                cxWidth=0,
-            )
-            result = int(
-                self._task_dialog(
-                    ctypes.byref(config),
-                    ctypes.byref(button),
-                    ctypes.byref(radio),
-                    ctypes.byref(verified),
+            with _activate_comctl32_v6(loader=self._loader):
+                comctl32 = self._loader("comctl32", use_last_error=True)
+                user32 = self._loader("user32", use_last_error=True)
+                _require_comctl32_v6(comctl32)
+                task_dialog = comctl32.TaskDialogIndirect
+                task_dialog.argtypes = [
+                    ctypes.POINTER(_TASKDIALOGCONFIG),
+                    ctypes.POINTER(ctypes.c_int),
+                    ctypes.POINTER(ctypes.c_int),
+                    ctypes.POINTER(wintypes.BOOL),
+                ]
+                task_dialog.restype = ctypes.c_long
+                get_foreground_window = user32.GetForegroundWindow
+                get_foreground_window.argtypes = []
+                get_foreground_window.restype = wintypes.HWND
+
+                buttons = (_TASKDIALOG_BUTTON * 1)(
+                    _TASKDIALOG_BUTTON(APPROVE_BUTTON_ID, approve_button_text)
                 )
-            )
+                button = ctypes.c_int(0)
+                owner = get_foreground_window()
+                flags = TDF_ALLOW_DIALOG_CANCELLATION | TDF_SIZE_TO_CONTENT
+                if owner:
+                    flags |= TDF_POSITION_RELATIVE_TO_WINDOW
+                config = _TASKDIALOGCONFIG(
+                    cbSize=ctypes.sizeof(_TASKDIALOGCONFIG),
+                    hwndParent=owner,
+                    hInstance=None,
+                    dwFlags=flags,
+                    dwCommonButtons=TDCBF_CANCEL_BUTTON,
+                    pszWindowTitle=title,
+                    pszMainIcon=None,
+                    pszMainInstruction=main_instruction,
+                    pszContent=content,
+                    cButtons=1,
+                    pButtons=buttons,
+                    nDefaultButton=0,
+                    cRadioButtons=0,
+                    pRadioButtons=None,
+                    nDefaultRadioButton=0,
+                    pszVerificationText=None,
+                    pszExpandedInformation=expanded_information,
+                    pszExpandedControlText=expanded_control_text,
+                    pszCollapsedControlText=collapsed_control_text,
+                    pszFooterIcon=None,
+                    pszFooter=footer,
+                    pfCallback=None,
+                    lpCallbackData=0,
+                    cxWidth=0,
+                )
+                result = int(
+                    task_dialog(
+                        ctypes.byref(config),
+                        ctypes.byref(button),
+                        None,
+                        None,
+                    )
+                )
         except BaseException:
             raise _fail("exact_human_approval_native_call_failed") from None
         if result < 0:
             raise _fail("exact_human_approval_native_call_failed")
-        return int(button.value), bool(verified.value)
+        return int(button.value), False
 
 
 def _dialog_content(context: ExactHumanApprovalContext) -> str:

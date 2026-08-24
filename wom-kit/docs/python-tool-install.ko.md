@@ -50,7 +50,7 @@ updater는 없습니다. 저장소 파일만 업데이트해도 분리된 `uv to
 
 ```powershell
 py -m venv .wom-bootstrap-v043
-& .\.wom-bootstrap-v044\Scripts\python.exe -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.4/wom_kit-0.4.4-py3-none-any.whl"
+& .\.wom-bootstrap-v045\Scripts\python.exe -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.5/wom_kit-0.4.5-py3-none-any.whl"
 & .\.wom-bootstrap-v043\Scripts\archive.exe --version
 ```
 
@@ -83,7 +83,7 @@ v0.4.3 Release와 wheel이 실제로 공개된 뒤, 격리된 `uv tool` 환경�
 새 프로세스에서 결과를 확인합니다.
 
 ```powershell
-uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.4/wom_kit-0.4.4-py3-none-any.whl"
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.5/wom_kit-0.4.5-py3-none-any.whl"
 archive --version
 ```
 
@@ -106,7 +106,7 @@ collision 변경과 bytecode repair는 계속 고정 차단됩니다. pin을 손
 
 ```powershell
 py -m venv "$HOME\.wom-tools\wom-kit"
-& "$HOME\.wom-tools\wom-kit\Scripts\python.exe" -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.4/wom_kit-0.4.4-py3-none-any.whl"
+& "$HOME\.wom-tools\wom-kit\Scripts\python.exe" -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.5/wom_kit-0.4.5-py3-none-any.whl"
 & "$HOME\.wom-tools\wom-kit\Scripts\archive.exe" --version
 ```
 

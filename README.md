@@ -34,10 +34,10 @@ not re-grow baseline ladders or tag lists here.
 Current public baseline:
 
 ```text
-v0.4.4
+v0.4.5
 ```
 
-Previous public baseline: v0.4.3.
+Previous public baseline: v0.4.4.
 
 Full release history: see [CHANGELOG.md](CHANGELOG.md) and [wom-kit/docs/releases/](wom-kit/docs/releases/).
 
@@ -57,7 +57,7 @@ matching GitHub Release exists and lists this wheel. The versioned URL alone is
 not proof that the asset is available.
 
 ```powershell
-uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.4/wom_kit-0.4.4-py3-none-any.whl"
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.5/wom_kit-0.4.5-py3-none-any.whl"
 archive --version
 ```
 
@@ -98,6 +98,7 @@ approval-gated write, or docs-only), see the
 - v0.4.2 adds CLI-only `git-backup-plan` and `git-backup-reconcile-plan` for a bounded, content-free review of the checked-out Git branch and one anonymous HTTPS remote ref. Both require `--dry-run`, expose no approval or MCP writer, keep `ready_for_write: false`, `writer_available: false`, and `would_change: []`, and do not add, commit, fetch, pull, push, delete, or change a ref. This is only Letter 139's read-only planning foundation, not an end-to-end backup; see the [Git Backup Plan](wom-kit/docs/git-backup-plan.md) and [v0.4.2 release notes](wom-kit/docs/releases/v0.4.2.md),
 - v0.4.3 adds the shared `ExactOperationManifest v1` execution foundation, exact-approved Git commit/non-force-push with remote-ref re-query, approval-bound project update and PATH-shadow diagnosis, draft-only feedback CAS revision, and the lossless local-mirror `source_properties` audit/backfill for Letter 138. Completion still requires the released wheel, real manifest approval, durable write/resume/revert evidence, independent verification, and verified remote backup; see the [Exact Operation Manifest](wom-kit/docs/exact-operation-manifest-v1.md) and [v0.4.3 release notes](wom-kit/docs/releases/v0.4.3.md),
 - v0.4.4 makes native execution confirmation human-centered: WOM verifies counts, hashes, canonical state, completeness, and drift, while the person decides only whether to run the plainly described operation now. Technical bindings remain available under collapsed details and in durable receipts; see the [Exact Human Approval Contract](wom-kit/docs/exact-human-approval-contract.md) and [v0.4.4 release notes](wom-kit/docs/releases/v0.4.4.md),
+- v0.4.5 makes that human-centered confirmation usable from a clean Windows wheel install by activating Common Controls v6 and correcting the byte-packed Task Dialog ABI; it does not weaken machine verification or restore a human digest checklist; see the [v0.4.5 release notes](wom-kit/docs/releases/v0.4.5.md),
 - a Windows-native, spawned-child credential-intake and authenticated lifecycle plus historical v0.3.320 Notion-recovery evidence: the one-use capability, pre-secret-read authenticated claim, endpoint/scope/budget checks, and three-way content-free evidence remain auditable. In v0.4.0 Notion recovery approval is fixed fail-closed before credential read, provider call, or archive mutation with `compound_exact_human_approval_binding_required`; the read-only plan and verified local replay remain available. WOM never accepts a PAT through argv/stdin/environment, searches a workspace broadly, writes to Notion, or rewrites canonical zets; see [Letters 118 and 119](wom-kit/docs/letter118-119-credential-continuity-and-notion-page-recovery.md) and the [Credential Capability Contract](wom-kit/docs/credential-capability-contract.md),
 - one fail-closed current-index authority for protected search, structured `view-zets`, and mint planning; `mint-zet --progress` now emits content-free start and heartbeat evidence to stderr while reserving stdout for the final result, and the separate operator-feedback body companion uses an exact six-section private request plus digest-bound human approval and lifecycle checking without submitting externally or proving real-archive repair; see [Letters 120 and 123](wom-kit/docs/letter120-123-index-lifecycle-and-feedback-body.md),
 - a private source-fidelity gate for every new AI-assisted or AI-generated draft: one manifested content-addressed source, explicit `verbatim`, `faithful_summary`, or `sanitized_derivative` mode, dry-run hashes, and attributed human replay are required before a write; `private_self` verbatim preserves personal source data while credential secrets block, declared AI provenance cannot downgrade to the human route, mint re-verifies the private receipt, and audience metadata never shares or exports anything; see [Source Fidelity And Private Verbatim Preservation](wom-kit/docs/source-fidelity-and-private-verbatim.md),
@@ -519,7 +520,7 @@ WOM, `zettel-kasten`, `zet`, and `ZET` are managed as a versioned protocol famil
 Release tags are compatibility checkpoints:
 
 ```text
-v0.4.4 (current checkpoint)
+v0.4.5 (current checkpoint)
 ```
 
 Public releases from `v0.2.5` onward are tagged as compatibility checkpoints.

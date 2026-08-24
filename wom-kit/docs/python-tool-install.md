@@ -53,7 +53,7 @@ is available:
 
 ```powershell
 py -m venv .wom-bootstrap-v043
-& .\.wom-bootstrap-v044\Scripts\python.exe -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.4/wom_kit-0.4.4-py3-none-any.whl"
+& .\.wom-bootstrap-v045\Scripts\python.exe -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.5/wom_kit-0.4.5-py3-none-any.whl"
 & .\.wom-bootstrap-v043\Scripts\archive.exe --version
 ```
 
@@ -86,7 +86,7 @@ After the v0.4.3 Release and wheel actually exist, replace the isolated
 `uv tool` environment and verify the result from a new process:
 
 ```powershell
-uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.4/wom_kit-0.4.4-py3-none-any.whl"
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.5/wom_kit-0.4.5-py3-none-any.whl"
 archive --version
 ```
 
@@ -108,7 +108,7 @@ Plain `pip` works when it is placed inside a dedicated virtual environment:
 
 ```powershell
 py -m venv "$HOME\.wom-tools\wom-kit"
-& "$HOME\.wom-tools\wom-kit\Scripts\python.exe" -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.4/wom_kit-0.4.4-py3-none-any.whl"
+& "$HOME\.wom-tools\wom-kit\Scripts\python.exe" -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.5/wom_kit-0.4.5-py3-none-any.whl"
 & "$HOME\.wom-tools\wom-kit\Scripts\archive.exe" --version
 ```
 
