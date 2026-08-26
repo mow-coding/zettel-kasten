@@ -1,6 +1,6 @@
 # Exact Human Approval Contract
 
-Status: v0.4.8 interruption-safe integrity recovery plus the v0.4.7 local-recovery and v0.4.6 R2 boundaries; v0.4.0 one-use authority baseline preserved
+Status: v0.4.9 one-file source-intake authority plus the v0.4.8 integrity, v0.4.7 local-recovery, and v0.4.6 R2 boundaries; v0.4.0 one-use authority baseline preserved
 
 ## Purpose
 
@@ -31,13 +31,21 @@ repair; standalone AI scratch cleanup; credential lifecycle selection;
 saved-view write/revert; private objet source-metadata write; identity
 reconciliation; legacy-coordination cleanup; archive migration and revert;
 markup normalization apply/revert/recovery; Principal register/unregister;
-objet-capture enable/revoke/reenable, selection, single capture, and batch;
+objet-capture enable/revoke/reenable, general selection/capture, and batch;
 external import; source registration; ownership transfer; object-storage
 mutation; Notion recovery; external-locator mutation; source-intake
-record/batch; quarantine decisions; and delegation. These routes have no
+batch; quarantine decisions; and delegation. These routes have no
 v0.4 exact-human writer binding. Their approval branches fail before private
 archive, project, input, credential, or target reads and before provider calls,
 mutation, or receipt publication. Historical receipts do not reactivate them.
+
+Operation-specific exceptions do not reopen those general routes. v0.4.9 adds
+one exact create-only `source-intake-record` writer. The existing-intake
+selection and exact-local single-capture paths are separately bound, as are the
+documented local object-storage registration and strict duplicate
+reconciliation paths. Their parser allowlists and exact manifests are the
+authority; batch intake, batch capture, provider mutation, and unscoped legacy
+approval remain closed.
 
 ## Machine verification binding
 

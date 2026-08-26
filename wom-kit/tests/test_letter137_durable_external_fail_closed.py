@@ -517,12 +517,6 @@ class Letter137DurableExternalCliBoundaryTests(
                     "authenticated_notion_page_recovery_execute",
                 ),
                 (
-                    ["source-intake-record", root, "--source-intake-plan", PRIVATE_PLAN, "--approve", "--reviewed-by", PRIVATE_REVIEWER, "--format", "json"],
-                    archive_services,
-                    "source_intake_record",
-                    "source_intake_record",
-                ),
-                (
                     ["source-intake-batch", root, "--manifest", PRIVATE_MANIFEST, "--approve", "--expected-plan-sha256", PRIVATE_DIGEST, "--reviewed-by", PRIVATE_REVIEWER, "--format", "json"],
                     archive_services,
                     "source_intake_batch",
@@ -602,7 +596,6 @@ class Letter137DurableExternalCliBoundaryTests(
                 (["object-storage-upload-evidence-audit", root, "--receipt", PRIVATE_RECEIPT, "--dry-run", "--format", "json"], archive_services, "object_storage_upload_evidence_audit"),
                 (["notion-ancestor-fetch-adapter-run", root, "--tree", PRIVATE_TREE, "--source", "notion", "--dry-run", "--format", "json"], archive_services, "notion_ancestor_fetch_adapter_run"),
                 (["notion-recover", root, "--dry-run", "--format", "json"], archive_services, "notion_recover_plan"),
-                (["source-intake-record", root, "--source-intake-plan", PRIVATE_PLAN, "--dry-run", "--format", "json"], archive_services, "source_intake_record"),
                 (["source-intake-batch", root, "--manifest", PRIVATE_MANIFEST, "--dry-run", "--format", "json"], archive_services, "source_intake_batch"),
                 (["external-locator-plan", root, "--zettel-id", "zet_private", "--locator-type", "source_url", "--locator-ref", PRIVATE_LOCATOR, "--dry-run", "--format", "json"], completion_workflows, "external_locator_plan"),
                 (["external-locator-deactivate-plan", root, "--zettel-id", "zet_private", "--locator-id", PRIVATE_LOCATOR_ID, "--keep-locator-id", PRIVATE_LOCATOR_ID + "-keep", "--dry-run", "--format", "json"], completion_workflows, "external_locator_deactivate_plan"),

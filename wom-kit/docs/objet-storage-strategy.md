@@ -1,7 +1,7 @@
 # Objet Storage Strategy
 
-Status: v0.4.0 read-only planning baseline; setup approval fixed closed
-Date: 2026-08-20
+Status: v0.4.9 exact local setup registration; provider and remote mutation remain closed
+Date: 2026-08-27
 
 This document explains where WOM source/original objets should live when they are too large, private, or binary-heavy for Git.
 
@@ -22,11 +22,12 @@ Remote object storage remains a deferred manual external step unless the user
 explicitly chooses to plan R2, B2, S3, or another provider.
 
 Layout ruling (D2, 2026-07-03): the sibling local objet store is for bulk
-external originals under never-touch protection. In v0.4.0
+external originals under never-touch protection. At the v0.4.0 checkpoint,
 `prehashed-objet-ledger` and `object-storage-upload-evidence` provide dry-run
 review only; approval writes no manifest evidence. Capture review intake stages
-INSIDE the archive root under `staging/incoming/`, but capture approval is fixed
-closed and moves no original into `objects/sha256/`. A raw
+INSIDE the archive root under `staging/incoming/`. The current one-file chain
+opens only the exact intake-record, existing-intake selection, and exact-local
+capture bindings; general and batch capture remain closed. A raw
 in-root `objets/` folder is discouraged; the migration guide lives in
 [artifact-hygiene.md](artifact-hygiene.md) section 5.
 
@@ -62,13 +63,16 @@ archive object-storage <archive-root> --dry-run \
   --format json
 ```
 
-Dry-run returns provider binding metadata, local profile preview, provider setup receipt preview, objet storage policy preview, manual steps, blockers, warnings, and would-change paths. It writes nothing.
+`--profile-id` is required. Resolve it first from a reviewed registry such as
+`profiles/wom-profiles.yml` with `archive profile-resolve`; object-storage does
+not create or guess profile registry entries. Dry-run returns the bounded local
+registration plan and writes nothing.
 
-Stop after the dry-run in v0.4.0. Object-storage setup approval returns
-`compound_exact_human_approval_binding_required` before private archive or
-provider target read and writes no provider binding, local profile hint, or
-setup receipt. Historical v0.2 setup records remain readable but do not grant
-current write authority.
+The exact approval path records only the reviewed provider binding and setup
+receipt, with checkpoints and independent read-back. It does not call the
+provider, create or verify a bucket, read a credential, upload bytes, or write a
+local profile registry. The retired `--write-local-profile` option is hidden
+and fails before planning for compatibility with old invocations.
 
 ## Non-Goals
 

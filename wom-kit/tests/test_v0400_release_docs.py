@@ -133,9 +133,10 @@ class V0400ReleaseDocsTests(unittest.TestCase):
                 "revert-edge",
                 "zet-title-remap-revert",
                 "zet-title-remap-write",
+                "source-intake-record",
             }
         )
-        self.assertEqual(len(current_blocked), 68)
+        self.assertEqual(len(current_blocked), 67)
         self.assertEqual(len(historical_blocked), 79)
         self.assertNotIn("migrate", current_blocked)
         self.assertNotIn("zettel-objet-link", current_blocked)

@@ -260,13 +260,23 @@ class ArchiveCliTests(unittest.TestCase):
             self.addCleanup(platform_patcher.stop)
 
     def run_cli(self, args: list[str], stdin_text: str | None = None) -> tuple[int, str]:
+        effective_args = list(args)
+        # This legacy helper intentionally merges stdout and stderr. Doctor
+        # progress is default-on from v0.4.9, so keep old assertions focused on
+        # the result stream unless a test explicitly asks to inspect progress.
+        if (
+            effective_args[:1] == ["doctor"]
+            and "--progress" not in effective_args
+            and "--no-progress" not in effective_args
+        ):
+            effective_args.append("--no-progress")
         buffer = io.StringIO()
         old_stdin = sys.stdin
         if stdin_text is not None:
             sys.stdin = io.StringIO(stdin_text)
         try:
             with redirect_stdout(buffer), redirect_stderr(buffer):
-                code = archive_cli.main(args)
+                code = archive_cli.main(effective_args)
             return code, buffer.getvalue()
         finally:
             sys.stdin = old_stdin
@@ -12153,7 +12163,7 @@ class ArchiveCliTests(unittest.TestCase):
             ["project_runtime_mismatch"],
         )
         self.assertEqual(result["project_pin"], "v0.4.2")
-        self.assertEqual(result["running_version"], "v0.4.8")
+        self.assertEqual(result["running_version"], "v0.4.9")
         self.assertEqual(
             result["project_runtime_argv"],
             [r".\.zettel-kasten\bin\archive.cmd"],
@@ -36293,25 +36303,13 @@ state:
             self.assertEqual(dry_code, 0, dry_output)
             dry = json.loads(dry_output)
             self.assertTrue(dry["ok"])
-            self.assertEqual(dry["would_change"], [dry["proposed_plan_path"]])
-            self.assertFalse((archive_root / dry["proposed_plan_path"]).exists())
+            self.assertEqual(dry["state"], "ready_for_exact_human_approval")
+            self.assertEqual(dry["receipt_create_count"], 1)
+            self.assertFalse(dry["writes_performed"])
+            self.assertTrue(dry["plan_sha256"].startswith("sha256:"))
             self.assertNotIn(str(selected), dry_output)
             self.assertNotIn("private-file-name.md", dry_output)
             self.assertNotIn("SUPER_SECRET_BODY", dry_output)
-
-            self.assert_cli_compound_writer_fails_closed(
-                archive_root,
-                [
-                    "source-intake-record",
-                    str(archive_root),
-                    "--source-intake-plan",
-                    str(plan_path),
-                    "--approve",
-                    "--reviewed-by",
-                    "person:me",
-                ],
-                lifecycle_action="source_intake_record",
-            )
 
     def test_source_intake_record_resolves_relative_plan_from_archive_root(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -36344,7 +36342,8 @@ state:
             self.assertEqual(code, 0, output)
             result = json.loads(output)
             self.assertTrue(result["ok"])
-            self.assertEqual(result["state"], "ready_to_record")
+            self.assertEqual(result["state"], "ready_for_exact_human_approval")
+            self.assertEqual(result["receipt_create_count"], 1)
             self.assertNotIn(str(selected), output)
             self.assertNotIn("private-file-name.md", output)
 
@@ -36509,9 +36508,11 @@ state:
             self.assertEqual(code, 1, output)
             result = json.loads(output)
             self.assertFalse(result["ok"])
-            self.assertTrue(any("redact-local-paths" in blocker for blocker in result["blockers"]))
-            self.assertEqual(result["would_change"], [])
-            self.assertFalse((archive_root / result["proposed_plan_path"]).exists())
+            self.assertEqual(
+                result["blockers"],
+                ["source_intake_record_plan_unsafe"],
+            )
+            self.assertFalse(result["writes_performed"])
             self.assertNotIn(str(selected), output)
             self.assertNotIn("private-file-name.md", output)
             self.assertNotIn("SUPER_SECRET_BODY", output)

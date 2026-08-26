@@ -109,7 +109,7 @@ class V03320ReleaseDocsTests(unittest.TestCase):
                 )
 
     def test_v03320_is_source_history_not_the_current_packaged_release(self) -> None:
-        self.assertEqual(__version__, "0.4.8")
+        self.assertEqual(__version__, "0.4.9")
         self.assertTrue(RELEASE.is_file())
         self.assertFalse(PACKAGED_RELEASE.exists())
         self.assertEqual(SCHEMA.read_bytes(), PACKAGED_SCHEMA.read_bytes())

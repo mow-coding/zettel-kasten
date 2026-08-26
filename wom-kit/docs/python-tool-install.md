@@ -1,6 +1,6 @@
 # Install WOM-kit As A Python Tool
 
-Status: v0.4.8 verified GitHub wheel and integrity recovery
+Status: v0.4.9 verified GitHub wheel and single-file operability recovery
 
 WOM-kit is a command-line tool. It should live in its own Python environment
 instead of being mixed into an application project's dependencies.
@@ -34,15 +34,15 @@ launcher. Other project folders and the user-shared PATH executable do not
 change. This is WOM's supported project runtime boundary; it does not isolate
 arbitrary non-WOM programs or separate Windows user permissions.
 
-The v0.4.8 URL below is a conditional contract, not proof that an artifact is
+The v0.4.9 URL below is a conditional contract, not proof that an artifact is
 public. Use it only after the matching GitHub Release exists and lists the
-verified wheel. See the [v0.4.8 release note](releases/v0.4.8.md) for the
+verified wheel. See the [v0.4.9 release note](releases/v0.4.9.md) for the
 separate source and release-evidence boundary.
 
-An installed older client may not contain v0.4.8's complete exact writer and
+An installed older client may not contain v0.4.9's complete exact writer and
 receipt-bound local-recovery surfaces.
 Updating repository files alone does not replace the isolated `uv tool` or
-virtual-environment wheel. After the verified v0.4.8 asset exists, install that
+virtual-environment wheel. After the verified v0.4.9 asset exists, install that
 exact wheel and start a new process.
 
 ## Recommended Project Bootstrap
@@ -53,13 +53,13 @@ is available. Keep this temporary environment outside the inspected project or
 archive so it cannot become project input or an updater collision:
 
 ```powershell
-$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v048"
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v049"
 py -m venv $womBootstrapRoot
-& "$womBootstrapRoot\Scripts\python.exe" -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.8/wom_kit-0.4.8-py3-none-any.whl"
+& "$womBootstrapRoot\Scripts\python.exe" -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.9/wom_kit-0.4.9-py3-none-any.whl"
 & "$womBootstrapRoot\Scripts\archive.exe" --version
 ```
 
-After the new process reports exactly `archive 0.4.8`, use that explicit
+After the new process reports exactly `archive 0.4.9`, use that explicit
 bootstrap executable for `project-version-update`. After approval succeeds,
 verify the project runtime and use its launcher:
 
@@ -84,11 +84,11 @@ URL keeps the installed artifact tied to a reviewed repository tag.
 
 ### Replace an installed older global CLI
 
-After the v0.4.8 Release and wheel actually exist, replace the isolated
+After the v0.4.9 Release and wheel actually exist, replace the isolated
 `uv tool` environment and verify the result from a new process:
 
 ```powershell
-uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.8/wom_kit-0.4.8-py3-none-any.whl"
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.9/wom_kit-0.4.9-py3-none-any.whl"
 archive --version
 ```
 
@@ -98,7 +98,7 @@ unmanaged executable collision and a human has reviewed that executable; the
 flag permits replacing executables that `uv` does not manage. See the
 [official `uv tool install` reference](https://docs.astral.sh/uv/reference/cli/#uv-tool-install).
 
-Require exactly `archive 0.4.8`. This is a global CLI-only bootstrap. It does
+Require exactly `archive 0.4.9`. This is a global CLI-only bootstrap. It does
 not change a project-local `.zettel-kasten/source` mirror or version pin. The
 project updater is a separate exact-human workflow; collision mutation and
 bytecode repair remain fixed closed. Do not hand-edit the pin. See [Project
@@ -110,7 +110,7 @@ Plain `pip` works when it is placed inside a dedicated virtual environment:
 
 ```powershell
 py -m venv "$HOME\.wom-tools\wom-kit"
-& "$HOME\.wom-tools\wom-kit\Scripts\python.exe" -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.8/wom_kit-0.4.8-py3-none-any.whl"
+& "$HOME\.wom-tools\wom-kit\Scripts\python.exe" -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.9/wom_kit-0.4.9-py3-none-any.whl"
 & "$HOME\.wom-tools\wom-kit\Scripts\archive.exe" --version
 ```
 
