@@ -1241,11 +1241,15 @@ class CommandProgressReporter:
             label=label,
             detail=detail,
         )
-        self._progress_log_callback = _make_stage_progress_callback(
-            False,
-            label=label,
-            detail="verbose",
-            progress_log_path=progress_log_path,
+        self._progress_log_callback = (
+            _make_stage_progress_callback(
+                False,
+                label=label,
+                detail="verbose",
+                progress_log_path=progress_log_path,
+            )
+            if progress_log_path is not None
+            else None
         )
         self._detail = detail
         self._interval = max(0.01, heartbeat_interval_seconds)
