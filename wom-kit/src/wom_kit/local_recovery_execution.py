@@ -41,6 +41,10 @@ from .exact_human_approval_workflow import (
     _resume_exact_human_approved_write_core,
 )
 from .exact_operation_manifest import (
+    CHECKPOINT_SCHEMA,
+    EXACT_OPERATION_LOCAL_ROOT,
+    EXACT_OPERATION_RECEIPTS_ROOT,
+    FINAL_RECEIPT_SCHEMA,
     ExactFieldEffect,
     ExactOperationApprovalAuthority,
     ExactOperationEvidence,
@@ -53,6 +57,7 @@ from .exact_operation_manifest import (
     exact_operation_execution_sha256,
     exact_operation_writer_lock,
     hash_field_value,
+    inspect_exact_operation_state,
     revert_exact_operation_fields,
     verify_exact_operation,
 )
@@ -73,6 +78,7 @@ LEDGER_ROOT = "profiles/local/local-recovery/ledgers"
 MAX_CONTROL_BYTES = 128 * 1024 * 1024
 MAX_LOCAL_FIELD_BYTES = 16 * 1024 * 1024
 MAX_CANONICAL_BYTES = 16 * 1024 * 1024
+MAX_CONTROL_FILES = 4096
 _SHA256_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 _APPROVAL_ID_RE = re.compile(r"^approval_[0-9a-f]{32}$")
 _DOMAIN_RE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
@@ -90,6 +96,7 @@ class LocalRecoveryError(RuntimeError):
         "local_recovery_target_unsafe",
         "local_recovery_field_unsupported",
         "local_recovery_write_failed",
+        "local_recovery_partial_revert_blocked",
     }
 
     def __init__(self, code: str) -> None:
@@ -253,6 +260,23 @@ class LocalRecoveryFieldSpec:
         if self.field_ref == _MARKER_FIELD:
             if any(type(value) is not str for value in marker_values):
                 raise _fail("local_recovery_plan_invalid")
+            try:
+                version = _marker_projection_version(self.pre_value)
+                if _marker_projection_version(self.post_value) != version:
+                    raise ValueError("version")
+                projection = (
+                    _marker_projection_v1
+                    if version == "v1"
+                    else _marker_projection
+                )
+                if (
+                    projection(self.marker_pre_body or "") != self.pre_value
+                    or projection(self.marker_post_body or "")
+                    != self.post_value
+                ):
+                    raise ValueError("projection")
+            except ValueError:
+                raise _fail("local_recovery_plan_invalid") from None
         elif any(value is not None for value in marker_values):
             raise _fail("local_recovery_plan_invalid")
 
@@ -677,7 +701,7 @@ def _zettel_snapshot(
     return path, raw, frontmatter, body
 
 
-def _marker_projection(body: str) -> bytes:
+def _marker_projection_v1(body: str) -> bytes:
     marker = archive_services.NOTION_IMPORT_LOCATOR_OMISSION_MARKER
     rows: list[dict[str, Any]] = []
     start = 0
@@ -702,6 +726,51 @@ def _marker_projection(body: str) -> bytes:
         )
         start = position + len(marker)
     return _canonical_bytes(rows)
+
+
+def _marker_projection(body: str) -> bytes:
+    marker = archive_services.NOTION_IMPORT_LOCATOR_OMISSION_MARKER
+    legacy_rows = json.loads(_marker_projection_v1(body).decode("ascii"))
+    return _canonical_bytes(
+        {
+            "schema": "wom-kit/source-locator-omission-marker-projection/v0.2",
+            "marker_count": len(legacy_rows),
+            "markers": legacy_rows,
+            # Independent verification must also prove that no unrelated body
+            # content was replaced while adding or removing marker tokens.
+            "body_without_markers_sha256": _sha(
+                body.replace(marker, "").encode("utf-8")
+            ),
+        }
+    )
+
+
+def _marker_projection_version(value: bytes | None) -> str:
+    if type(value) is not bytes:
+        raise ValueError("marker projection")
+    try:
+        document = json.loads(value.decode("ascii"))
+    except (UnicodeError, json.JSONDecodeError):
+        raise ValueError("marker projection") from None
+    if isinstance(document, list):
+        return "v1"
+    if (
+        isinstance(document, dict)
+        and document.get("schema")
+        == "wom-kit/source-locator-omission-marker-projection/v0.2"
+    ):
+        return "v2"
+    raise ValueError("marker projection")
+
+
+def _marker_projection_for_spec(
+    body: str,
+    spec: LocalRecoveryFieldSpec,
+) -> bytes:
+    version = _marker_projection_version(spec.pre_value)
+    if _marker_projection_version(spec.post_value) != version:
+        raise ValueError("marker projection version")
+    return _marker_projection_v1(body) if version == "v1" else _marker_projection(body)
 
 
 def _field_value(
@@ -750,8 +819,148 @@ def _field_value(
             raise ValueError("assets")
         return _canonical_bytes(assets)
     if spec.field_ref == _MARKER_FIELD:
-        return _marker_projection(body)
+        return _marker_projection_for_spec(body, spec)
     raise ValueError("field")
+
+
+def build_observed_post_subset_revert_plan(
+    plan: LocalRecoveryPlan,
+) -> tuple[LocalRecoveryPlan | None, dict[str, Any]]:
+    """Select only exact post-state fields for compensation.
+
+    The original private control supplies pre/post values.  Current targets are
+    read independently; exact post-state fields become a new native-approved
+    subset manifest, exact pre-state fields are left untouched, and any other or
+    unreadable state blocks the whole compensation plan.
+    """
+
+    if type(plan) is not LocalRecoveryPlan or not plan.loaded_from_control:
+        raise _fail("local_recovery_partial_revert_blocked")
+    selected: list[tuple[ExactOperationItem, LocalRecoveryFieldSpec]] = []
+    already_pre_count = 0
+    divergent_count = 0
+    unreadable_count = 0
+    for item, spec in zip(plan.manifest.items, plan.specs):
+        try:
+            observed = hash_field_value(_field_value(plan.archive_root, spec))
+        except Exception:
+            unreadable_count += 1
+            continue
+        field = item.fields[0]
+        if hmac.compare_digest(observed, field.post_sha256):
+            selected.append((item, spec))
+        elif hmac.compare_digest(observed, field.pre_sha256):
+            already_pre_count += 1
+        else:
+            divergent_count += 1
+    report_basis = {
+        "schema": "wom-kit/local-recovery-subset-revert-inspection/v1",
+        "parent_manifest_sha256": plan.manifest.manifest_sha256,
+        "field_count": len(plan.specs),
+        "selected_post_field_count": len(selected),
+        "already_pre_field_count": already_pre_count,
+        "divergent_field_count": divergent_count,
+        "unreadable_field_count": unreadable_count,
+        "private_values_echoed": False,
+        "paths_echoed": False,
+    }
+    report = {
+        **report_basis,
+        "inspection_sha256": _sha(_canonical_bytes(report_basis)),
+    }
+    if divergent_count or unreadable_count:
+        raise _fail("local_recovery_partial_revert_blocked")
+    if not selected:
+        return None, report
+
+    items: list[ExactOperationItem] = []
+    specs: list[LocalRecoveryFieldSpec] = []
+    selection_refs: list[str] = []
+    for ordinal, (source_item, source_spec) in enumerate(selected):
+        item_id = f"item:{ordinal:06d}"
+        field = source_item.fields[0]
+        items.append(
+            ExactOperationItem(
+                ordinal=ordinal,
+                item_id=item_id,
+                target_kind=source_item.target_kind,
+                target_ref=source_item.target_ref,
+                target_identity_sha256=source_item.target_identity_sha256,
+                fields=(
+                    ExactFieldEffect(
+                        field_ref=field.field_ref,
+                        pre_sha256=field.pre_sha256,
+                        post_sha256=field.post_sha256,
+                        source_sha256=field.source_sha256,
+                    ),
+                ),
+            )
+        )
+        specs.append(replace(source_spec, item_id=item_id))
+        selection_refs.append(
+            _sha(
+                _canonical_bytes(
+                    {
+                        "target_ref": source_item.target_ref,
+                        "field_ref": field.field_ref,
+                    }
+                )
+            )
+        )
+    evidence = ExactOperationEvidence(
+        schema="wom-kit/local-recovery-subset-revert-evidence/v1",
+        counts=tuple(
+            sorted(
+                {
+                    "parent_field_count": len(plan.specs),
+                    "selected_post_field_count": len(selected),
+                    "already_pre_field_count": already_pre_count,
+                }.items()
+            )
+        ),
+        digests=tuple(
+            sorted(
+                {
+                    "parent_manifest_sha256": plan.manifest.manifest_sha256,
+                    "selected_field_set_sha256": _sha(
+                        _canonical_bytes(selection_refs)
+                    ),
+                    "state_inspection_sha256": report["inspection_sha256"],
+                }.items()
+            )
+        ),
+    )
+    manifest = ExactOperationManifest.build(
+        operation=APPLY_OPERATION,
+        archive_identity_sha256=plan.manifest.archive_identity_sha256,
+        items=items,
+        operation_evidence=evidence,
+    )
+    return (
+        LocalRecoveryPlan(
+            archive_root=plan.archive_root,
+            archive_id=plan.archive_id,
+            domain=plan.domain,
+            manifest=manifest,
+            specs=tuple(specs),
+            warning_codes=tuple(
+                sorted(
+                    {
+                        *plan.warning_codes,
+                        "observed_post_subset_revert",
+                    }
+                )
+            ),
+            public_summary={
+                **dict(plan.public_summary or {}),
+                "parent_manifest_sha256": plan.manifest.manifest_sha256,
+                "subset_revert_field_count": len(selected),
+                "already_pre_field_count": already_pre_count,
+            },
+            loaded_from_control=True,
+        ),
+        report,
+    )
 
 
 def _frontmatter_value_replacement(raw: bytes, key: str, value: Any) -> bytes:
@@ -831,52 +1040,46 @@ def _split_raw_body(raw: bytes) -> tuple[str, str, str]:
 
 def _marker_transform(current: str, source: str, destination: str) -> str:
     marker = archive_services.NOTION_IMPORT_LOCATOR_OMISSION_MARKER
-    if current == source:
-        return destination
-    source_plain = source.replace(marker, "")
-    destination_plain = destination.replace(marker, "")
+
+    def split_positions(value: str) -> tuple[str, tuple[int, ...]]:
+        parts = value.split(marker)
+        plain = "".join(parts)
+        positions: list[int] = []
+        consumed = 0
+        for part in parts[:-1]:
+            consumed += len(part)
+            positions.append(consumed)
+        return plain, tuple(positions)
+
+    source_plain, source_positions = split_positions(source)
+    destination_plain, destination_positions = split_positions(destination)
+    current_plain, current_positions = split_positions(current)
     if source_plain != destination_plain:
         raise ValueError("marker templates")
-    source_count = source.count(marker)
-    destination_count = destination.count(marker)
-    if source_count == destination_count:
+    if current_plain != source_plain or current_positions != source_positions:
+        raise ValueError("marker current body drift")
+    if source_positions == destination_positions:
         raise ValueError("marker count")
-    result = current
-    template = destination if destination_count > source_count else source
-    plain = template.replace(marker, "")
-    positions: list[int] = []
-    consumed = 0
-    for part in template.split(marker)[:-1]:
-        consumed += len(part)
-        positions.append(consumed)
-    if destination_count > source_count:
-        inserted = 0
-        for position in positions:
-            left = plain[max(0, position - 64) : position]
-            right = plain[position : position + 64]
-            needle = left + right
-            matches = [m.start() for m in re.finditer(re.escape(needle), result)]
-            if len(matches) != 1:
-                raise ValueError("marker anchor")
-            boundary = matches[0] + len(left)
-            result = result[:boundary] + marker + result[boundary:]
-            inserted += 1
-        if inserted != destination_count - source_count:
-            raise ValueError("marker insert")
-    else:
-        removed = 0
-        for position in reversed(positions):
-            left = plain[max(0, position - 64) : position]
-            right = plain[position : position + 64]
-            needle = left + marker + right
-            matches = [m.start() for m in re.finditer(re.escape(needle), result)]
-            if len(matches) != 1:
-                raise ValueError("marker anchor")
-            start = matches[0] + len(left)
-            result = result[:start] + result[start + len(marker) :]
-            removed += 1
-        if removed != source_count - destination_count:
-            raise ValueError("marker remove")
+    if any(
+        position < 0
+        or position > len(destination_plain)
+        or (
+            ordinal > 0
+            and position < destination_positions[ordinal - 1]
+        )
+        for ordinal, position in enumerate(destination_positions)
+    ):
+        raise ValueError("marker position")
+    pieces: list[str] = []
+    cursor = 0
+    for position in destination_positions:
+        pieces.append(destination_plain[cursor:position])
+        pieces.append(marker)
+        cursor = position
+    pieces.append(destination_plain[cursor:])
+    result = "".join(pieces)
+    if result != destination or result.replace(marker, "") != current_plain:
+        raise ValueError("marker non-marker body changed")
     return result
 
 
@@ -912,11 +1115,30 @@ def _zettel_replacement(
                 spec.marker_post_body,
             )
         elif value == spec.pre_value:
-            replacement_body = _marker_transform(
-                current_body,
-                spec.marker_post_body,
-                spec.marker_pre_body,
+            legacy_whole_body_compensation = bool(
+                _marker_projection_version(spec.pre_value) == "v1"
+                and spec.marker_post_body.replace(
+                    archive_services.NOTION_IMPORT_LOCATOR_OMISSION_MARKER,
+                    "",
+                )
+                != spec.marker_pre_body.replace(
+                    archive_services.NOTION_IMPORT_LOCATOR_OMISSION_MARKER,
+                    "",
+                )
             )
+            if legacy_whole_body_compensation:
+                # v0.4.7 accidentally bound a pre-normalization whole body as
+                # the marker destination. Compensation is safe only while the
+                # current body is still byte-for-byte that exact bad result.
+                if current_body != spec.marker_post_body:
+                    raise ValueError("legacy marker compensation drift")
+                replacement_body = spec.marker_pre_body
+            else:
+                replacement_body = _marker_transform(
+                    current_body,
+                    spec.marker_post_body,
+                    spec.marker_pre_body,
+                )
         else:
             raise ValueError("marker payload")
         return (prefix + replacement_body).encode("utf-8")
@@ -1194,32 +1416,136 @@ def _run_with_store(
     payloads = _Payloads(plan.specs)
     writer = _Writer(plan)
     verifier = _Verifier(plan)
-    if mode == "apply":
-        core = apply_exact_operation(
-            manifest,
-            payloads=payloads,
-            writer=writer,
-            verifier=verifier,
-            checkpoint_store=checkpoints,
-            approval_authority=authority,
-            resume=resume,
-            progress_hook=progress_hook,
+    selected_fields = (
+        tuple(
+            (item.item_id, item.fields[0].field_ref)
+            for item in manifest.items
         )
-    else:
-        core = revert_exact_operation_fields(
-            manifest,
-            selected_fields=tuple(
-                (item.item_id, item.fields[0].field_ref)
-                for item in manifest.items
+        if mode == "revert"
+        else None
+    )
+    try:
+        if mode == "apply":
+            core = apply_exact_operation(
+                manifest,
+                payloads=payloads,
+                writer=writer,
+                verifier=verifier,
+                checkpoint_store=checkpoints,
+                approval_authority=authority,
+                resume=resume,
+                progress_hook=progress_hook,
+            )
+        else:
+            core = revert_exact_operation_fields(
+                manifest,
+                selected_fields=selected_fields or (),
+                payloads=payloads,
+                writer=writer,
+                verifier=verifier,
+                checkpoint_store=checkpoints,
+                approval_authority=authority,
+                resume=resume,
+                progress_hook=progress_hook,
+            )
+    except Exception as error:
+        try:
+            inspection = inspect_exact_operation_state(
+                manifest,
+                verifier=verifier,
+                checkpoint_store=checkpoints,
+                mode=mode,
+                selected_fields=selected_fields,
+                approval_authority=authority,
+            )
+        except Exception:
+            raise error
+        reason_code = (
+            error.code
+            if isinstance(error, (ExactOperationManifestError, LocalRecoveryError))
+            else "local_recovery_write_interrupted"
+        )
+        destination_count = inspection["destination_field_count"]
+        source_count = inspection["source_field_count"]
+        unsafe_legacy_marker_apply = bool(
+            mode == "apply"
+            and any(
+                spec.field_ref == _MARKER_FIELD
+                and _marker_projection_version(spec.pre_value) == "v1"
+                and (spec.marker_pre_body or "").replace(
+                    archive_services.NOTION_IMPORT_LOCATOR_OMISSION_MARKER,
+                    "",
+                )
+                != (spec.marker_post_body or "").replace(
+                    archive_services.NOTION_IMPORT_LOCATOR_OMISSION_MARKER,
+                    "",
+                )
+                for spec in plan.specs
+            )
+        )
+        resume_supported = bool(
+            inspection["resume_supported"]
+            and not unsafe_legacy_marker_apply
+        )
+        local_state = {
+            "partially_written": (
+                "partially_reverted" if mode == "revert" else "partially_applied"
             ),
-            payloads=payloads,
-            writer=writer,
-            verifier=verifier,
-            checkpoint_store=checkpoints,
-            approval_authority=authority,
-            resume=resume,
-            progress_hook=progress_hook,
-        )
+            "fully_written_receipt_pending": (
+                "fully_reverted_receipt_pending"
+                if mode == "revert"
+                else "fully_applied_receipt_pending"
+            ),
+            "started_no_fields_written": "started_no_fields_changed",
+            "not_started": "not_started",
+            "requires_review": "requires_review",
+            "completed": "reverted" if mode == "revert" else "applied",
+        }[inspection["state"]]
+        next_safe_actions = []
+        if resume_supported:
+            next_safe_actions.append("resume_same_manifest")
+        if mode == "apply" and inspection["subset_compensation_supported"]:
+            next_safe_actions.append("revert_observed_applied_subset")
+        return {
+            "schema_version": RESULT_SCHEMA,
+            "ok": False,
+            "state": local_state,
+            "domain": plan.domain,
+            "mode": mode,
+            "manifest_sha256": plan.manifest.manifest_sha256,
+            "operation_manifest_sha256": manifest.manifest_sha256,
+            "reason_codes": [reason_code],
+            "execution_state": inspection,
+            "item_count": len(plan.specs),
+            "field_count": sum(len(item.fields) for item in manifest.items),
+            "applied_field_count": (
+                destination_count if mode == "apply" else source_count
+            ),
+            "reverted_field_count": (
+                destination_count if mode == "revert" else 0
+            ),
+            "remaining_field_count": source_count,
+            "divergent_field_count": inspection["divergent_field_count"],
+            "unreadable_field_count": inspection["unreadable_field_count"],
+            "checkpointed_field_count": inspection[
+                "checkpointed_field_count"
+            ],
+            "written_before_checkpoint_field_count": inspection[
+                "written_before_checkpoint_field_count"
+            ],
+            "resume_supported": resume_supported,
+            "subset_revert_supported": (
+                mode == "apply"
+                and inspection["subset_compensation_supported"]
+            ),
+            "next_safe_actions": next_safe_actions,
+            "automatic_retry_allowed": False,
+            "operator_counting_required": False,
+            "provider_called": False,
+            "credential_values_read": False,
+            "private_values_echoed": False,
+            "paths_echoed": False,
+        }
     return {
         "schema_version": RESULT_SCHEMA,
         "ok": core.get("status") == "completed",
@@ -1256,8 +1582,10 @@ def _execute_core(
     authority = _authority(plan, claim, context, mode=mode)
     manifest = _operation_manifest(plan, mode=mode)
     with exact_operation_writer_lock(plan.archive_root) as writer_lock:
-        if mode == "apply":
-            persist_local_recovery_control(plan)
+        # Revert may use an observed-post subset manifest that did not exist
+        # until after the original interruption. Persist its exact private
+        # values only after native approval, just like an initial apply.
+        persist_local_recovery_control(plan)
         _persist_resume_locator(
             plan,
             manifest,
@@ -1382,6 +1710,206 @@ def _locator_documents(
     return documents
 
 
+def _safe_control_entries(root: Path) -> tuple[Path, ...]:
+    controls_root = archive_services.archive_internal_path(root, CONTROL_ROOT)
+    try:
+        info = os.lstat(controls_root)
+    except FileNotFoundError:
+        return ()
+    except OSError:
+        raise _fail("local_recovery_control_invalid") from None
+    if (
+        not stat.S_ISDIR(info.st_mode)
+        or stat.S_ISLNK(info.st_mode)
+        or bool(getattr(info, "st_file_attributes", 0) & 0x400)
+    ):
+        raise _fail("local_recovery_control_invalid")
+    try:
+        entries = tuple(sorted(controls_root.iterdir(), key=lambda path: path.name))
+    except OSError:
+        raise _fail("local_recovery_control_invalid") from None
+    if len(entries) > MAX_CONTROL_FILES:
+        raise _fail("local_recovery_control_invalid")
+    return entries
+
+
+def _strict_resume_checkpoint_present(
+    plan: LocalRecoveryPlan,
+    locator: Mapping[str, Any],
+) -> bool:
+    execution = str(locator.get("execution_sha256") or "")
+    if _SHA256_RE.fullmatch(execution) is None:
+        raise _fail("local_recovery_resume_invalid")
+    name = execution.removeprefix("sha256:")
+    checkpoint = archive_services.archive_internal_path(
+        plan.archive_root,
+        f"{EXACT_OPERATION_LOCAL_ROOT}/checkpoints/{name}.jsonl",
+    )
+    raw, reason = archive_services._bounded_stable_regular_file_read(
+        checkpoint,
+        max_bytes=MAX_CONTROL_BYTES,
+    )
+    if reason == "missing":
+        return False
+    if raw is None or reason is not None or not raw or not raw.endswith(b"\n"):
+        raise _fail("local_recovery_resume_invalid")
+    try:
+        rows = raw.splitlines()
+        if not rows:
+            raise ValueError("empty")
+        for sequence, line in enumerate(rows):
+            document = json.loads(line.decode("ascii"))
+            if (
+                not isinstance(document, dict)
+                or _canonical_bytes(document) != line
+                or document.get("schema") != CHECKPOINT_SCHEMA
+                or document.get("execution_sha256") != execution
+                or document.get("manifest_sha256")
+                != locator.get("operation_manifest_sha256")
+                or document.get("mode") != locator.get("mode")
+                or document.get("sequence") != sequence
+            ):
+                raise ValueError("checkpoint")
+    except (UnicodeError, ValueError, json.JSONDecodeError):
+        raise _fail("local_recovery_resume_invalid") from None
+
+    final_receipt = archive_services.archive_internal_path(
+        plan.archive_root,
+        f"{EXACT_OPERATION_RECEIPTS_ROOT}/{name}.json",
+    )
+    receipt_raw, receipt_reason = archive_services._bounded_stable_regular_file_read(
+        final_receipt,
+        max_bytes=MAX_CANONICAL_BYTES,
+    )
+    if receipt_reason == "missing":
+        return True
+    if (
+        receipt_raw is None
+        or receipt_reason is not None
+        or not receipt_raw.endswith(b"\n")
+    ):
+        raise _fail("local_recovery_resume_invalid")
+    try:
+        receipt = json.loads(receipt_raw[:-1].decode("ascii"))
+    except (UnicodeError, json.JSONDecodeError):
+        raise _fail("local_recovery_resume_invalid") from None
+    if (
+        not isinstance(receipt, dict)
+        or _canonical_line(receipt) != receipt_raw
+        or receipt.get("schema") != FINAL_RECEIPT_SCHEMA
+        or not isinstance(receipt.get("result"), dict)
+        or receipt["result"].get("execution_sha256") != execution
+    ):
+        raise _fail("local_recovery_resume_invalid")
+    return False
+
+
+def discover_local_recovery_plan(
+    archive_root: Path | str,
+    *,
+    allowed_domains: Iterable[str],
+    mode: str,
+    resume: bool = False,
+) -> tuple[LocalRecoveryPlan | None, dict[str, Any]]:
+    """Find one unambiguous recovery control without asking for a digest.
+
+    Discovery is read-only and content-free.  A revert candidate must have at
+    least one field in the exact recorded post-state and no divergent or
+    unreadable fields.  A resume candidate must have exactly one durable,
+    unfinished execution locator.  If evidence is absent, corrupt, or
+    ambiguous, WOM stops instead of guessing.
+    """
+
+    root = archive_services.require_existing_archive_root(archive_root)
+    domains = frozenset(allowed_domains)
+    if (
+        mode not in {"apply", "revert"}
+        or type(resume) is not bool
+        or (not resume and mode != "revert")
+        or not domains
+        or any(_DOMAIN_RE.fullmatch(value) is None for value in domains)
+    ):
+        raise _fail("local_recovery_control_invalid")
+
+    candidates: list[LocalRecoveryPlan] = []
+    already_complete: list[LocalRecoveryPlan] = []
+    blocked_control_count = 0
+    matching_control_count = 0
+    scanned_control_count = 0
+    for path in _safe_control_entries(root):
+        scanned_control_count += 1
+        match = re.fullmatch(r"([0-9a-f]{64})\.json", path.name)
+        if match is None:
+            raise _fail("local_recovery_control_invalid")
+        try:
+            plan = load_local_recovery_plan(
+                root,
+                manifest_sha256="sha256:" + match.group(1),
+            )
+        except LocalRecoveryError:
+            raise _fail("local_recovery_control_invalid") from None
+        if plan.domain not in domains:
+            continue
+        matching_control_count += 1
+        if not resume and mode == "revert":
+            try:
+                subset, _inspection = build_observed_post_subset_revert_plan(plan)
+            except LocalRecoveryError:
+                blocked_control_count += 1
+                continue
+            if subset is None:
+                already_complete.append(plan)
+            else:
+                candidates.append(plan)
+            continue
+
+        try:
+            active = sum(
+                int(_strict_resume_checkpoint_present(plan, locator))
+                for locator in _locator_documents(plan, mode=mode)
+            )
+        except LocalRecoveryError:
+            blocked_control_count += 1
+            continue
+        if active == 1:
+            candidates.append(plan)
+        elif active > 1:
+            blocked_control_count += 1
+
+    selected: LocalRecoveryPlan | None = None
+    state = "local_recovery_control_not_found"
+    if blocked_control_count:
+        state = "local_recovery_control_requires_review"
+    elif len(candidates) == 1:
+        selected = candidates[0]
+        state = "local_recovery_control_selected"
+    elif len(candidates) > 1:
+        state = "local_recovery_control_ambiguous"
+    elif not resume and mode == "revert" and len(already_complete) == 1:
+        selected = already_complete[0]
+        state = "local_recovery_control_selected_already_reverted"
+    elif not resume and mode == "revert" and len(already_complete) > 1:
+        state = "local_recovery_control_ambiguous"
+
+    public = {
+        "schema": "wom-kit/local-recovery-control-discovery/v1",
+        "ok": selected is not None,
+        "state": state,
+        "mode": mode,
+        "action": "resume" if resume else "revert",
+        "auto_discovered": selected is not None,
+        "scanned_control_count": scanned_control_count,
+        "matching_control_count": matching_control_count,
+        "candidate_count": len(candidates),
+        "already_complete_control_count": len(already_complete),
+        "blocked_control_count": blocked_control_count,
+        "operator_counting_required": False,
+        "private_values_echoed": False,
+        "paths_echoed": False,
+    }
+    return selected, public
+
+
 def resume_local_recovery(
     plan: LocalRecoveryPlan,
     *,
@@ -1470,7 +1998,9 @@ __all__ = [
     "LocalRecoveryPlan",
     "REVERT_OPERATION",
     "build_local_recovery_plan",
+    "build_observed_post_subset_revert_plan",
     "combine_local_recovery_plans",
+    "discover_local_recovery_plan",
     "execute_local_recovery",
     "load_local_recovery_plan",
     "local_recovery_context",

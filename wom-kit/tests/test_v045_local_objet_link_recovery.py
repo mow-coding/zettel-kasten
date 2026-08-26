@@ -17,7 +17,10 @@ from wom_kit.exact_operation_manifest import (
     FileExactOperationCheckpointStore,
     exact_operation_writer_lock,
 )
-from wom_kit.local_recovery_execution import _run_with_store
+from wom_kit.local_recovery_execution import (
+    _run_with_store,
+    persist_local_recovery_control,
+)
 
 
 KIT_ROOT = Path(__file__).resolve().parents[1]
@@ -263,6 +266,61 @@ class V045LocalObjetLinkRecoveryTests(unittest.TestCase):
             self.assertEqual(result["domain"], "zettel_objet_link")
             self.assertEqual(result["state"], "ready_for_native_approval")
             self.assertNotIn("items", result["manifest"])
+
+    def test_cli_auto_discovers_and_previews_partial_subset_revert(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self.archive(
+                Path(tmp), source_id=True, matching_title=True
+            )
+            plan = zettel_objet_link_recovery_execution_plan(
+                root,
+                capture_receipt=self.receipt_relative(),
+            )
+            with exact_operation_writer_lock(root) as lock:
+                applied = _run_with_store(
+                    plan,
+                    None,
+                    FileExactOperationCheckpointStore(root, writer_lock=lock),
+                    mode="apply",
+                    resume=False,
+                    progress_hook=None,
+                )
+            self.assertTrue(applied["ok"], applied)
+            ledger = root.joinpath(*plan.specs[-1].target_relative.split("/"))
+            ledger.unlink()
+            persist_local_recovery_control(plan)
+
+            stdout = io.StringIO()
+            stderr = io.StringIO()
+            with redirect_stdout(stdout), redirect_stderr(stderr):
+                code = archive_cli.main(
+                    [
+                        "zettel-objet-link",
+                        str(root),
+                        "--revert-recovery",
+                        "--dry-run",
+                        "--format",
+                        "json",
+                    ]
+                )
+            self.assertEqual(code, 0, (stdout.getvalue(), stderr.getvalue()))
+            result = json.loads(stdout.getvalue())
+            self.assertEqual(result["state"], "ready_to_revert")
+            self.assertEqual(
+                result["subset_revert_inspection"][
+                    "selected_post_field_count"
+                ],
+                1,
+            )
+            self.assertEqual(
+                result["subset_revert_inspection"][
+                    "already_pre_field_count"
+                ],
+                1,
+            )
+            self.assertTrue(
+                result["control_discovery"]["auto_discovered"]
+            )
 
 if __name__ == "__main__":
     unittest.main()

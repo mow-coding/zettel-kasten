@@ -28,6 +28,7 @@ from .local_recovery_execution import (
     APPLY_OPERATION,
     LocalRecoveryFieldSpec,
     LocalRecoveryPlan,
+    _marker_projection as _execution_marker_projection,
     build_local_recovery_plan,
     combine_local_recovery_plans,
     local_recovery_ledger_identity_sha256,
@@ -807,30 +808,7 @@ def _zettel_parts(raw: bytes) -> tuple[dict[str, Any], str]:
 
 
 def _marker_projection(body: str) -> bytes:
-    marker = archive_services.NOTION_IMPORT_LOCATOR_OMISSION_MARKER
-    rows: list[dict[str, Any]] = []
-    start = 0
-    ordinal = 0
-    while True:
-        position = body.find(marker, start)
-        if position < 0:
-            break
-        ordinal += 1
-        rows.append(
-            {
-                "ordinal": ordinal,
-                "before_anchor_sha256": _sha(
-                    body[max(0, position - 64) : position].encode("utf-8")
-                ),
-                "after_anchor_sha256": _sha(
-                    body[
-                        position + len(marker) : position + len(marker) + 64
-                    ].encode("utf-8")
-                ),
-            }
-        )
-        start = position + len(marker)
-    return _canonical_bytes(rows)
+    return _execution_marker_projection(body)
 
 
 def notion_locator_orphan_recovery_plan(
@@ -985,6 +963,10 @@ def notion_locator_orphan_recovery_plan(
             marker = archive_services.NOTION_IMPORT_LOCATOR_OMISSION_MARKER
             before_count = before_body.count(marker)
             after_count = after_body.count(marker)
+            marker_only_transition = bool(
+                before_body.replace(marker, "")
+                == after_body.replace(marker, "")
+            )
             removed_marker_count += max(0, before_count - after_count)
             preexisting_orphan_row_count += max(0, declared - before_count)
             new_orphans = max(
@@ -1010,17 +992,34 @@ def notion_locator_orphan_recovery_plan(
             else:
                 _current_frontmatter, current_body = _zettel_parts(current_raw)
                 current_count = current_body.count(marker)
-                if current_count >= new_orphans:
+                if _marker_projection(current_body) == _marker_projection(
+                    before_body
+                ):
                     state = "normal_maintain"
                     blocker_codes = []
-                elif _sha(current_body.encode("utf-8")) == _sha(
-                    after_body.encode("utf-8")
+                elif (
+                    current_count == after_count
+                    and current_body == after_body
+                    and marker_only_transition
+                    and before_count - after_count == new_orphans
                 ):
                     state = "restore_ready"
                     blocker_codes = []
                 else:
                     state = "review_pending"
-                    blocker_codes = ["current_body_diverged_after_transaction"]
+                    blocker_codes = []
+                    if not marker_only_transition:
+                        blocker_codes.append(
+                            "markup_changed_more_than_omission_markers"
+                        )
+                    if before_count - after_count != new_orphans:
+                        blocker_codes.append(
+                            "removed_marker_count_disagrees_with_orphan_rows"
+                        )
+                    if current_body != after_body:
+                        blocker_codes.append(
+                            "current_body_diverged_after_transaction"
+                        )
             state_counts[state] += new_orphans
             target_ref = _sha(
                 _canonical_bytes(

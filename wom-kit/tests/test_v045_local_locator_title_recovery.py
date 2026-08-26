@@ -22,12 +22,16 @@ from wom_kit.local_title_recovery import (
     zet_identifier_title_recovery_plan,
     zet_title_field_local_execution_plan,
     zet_title_field_local_recovery_plan,
+    zet_title_recovery_execution_plan,
 )
 from wom_kit.exact_operation_manifest import (
     FileExactOperationCheckpointStore,
     exact_operation_writer_lock,
 )
-from wom_kit.local_recovery_execution import _run_with_store
+from wom_kit.local_recovery_execution import (
+    _run_with_store,
+    persist_local_recovery_control,
+)
 
 
 KIT_ROOT = Path(__file__).resolve().parents[1]
@@ -92,6 +96,88 @@ class V045LocalLocatorTitleRecoveryTests(unittest.TestCase):
         ).encode("utf-8")
         path.write_bytes(raw)
         return raw
+
+    def write_title_mirrors(
+        self,
+        parent: Path,
+        *,
+        source_title: str,
+        markdown: str,
+    ) -> Path:
+        markdown_path = parent / "pages.markdown.jsonl"
+        markdown_path.write_text(
+            json.dumps(
+                {
+                    "page_id": SOURCE_ID,
+                    "markdown": markdown,
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        (parent / "pages.index.jsonl").write_text(
+            json.dumps(
+                {
+                    "page_id": SOURCE_ID,
+                    "index": source_title,
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        return markdown_path
+
+    def write_markup_receipt(
+        self,
+        root: Path,
+        *,
+        before: bytes,
+        after: bytes,
+        token: str,
+    ) -> str:
+        before_digest = hashlib.sha256(before).hexdigest()
+        after_digest = hashlib.sha256(after).hexdigest()
+        transaction = (
+            ".wom-scratch/markup-normalization/transactions/" + token * 64
+        )
+        before_relative = (
+            f"{transaction}/snapshots/000000.before.{before_digest}.bin"
+        )
+        after_relative = (
+            f"{transaction}/snapshots/000000.after.{after_digest}.bin"
+        )
+        for relative, raw in (
+            (before_relative, before),
+            (after_relative, after),
+        ):
+            path = root.joinpath(*relative.split("/"))
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(raw)
+        receipt_relative = (
+            "receipts/markup-normalization/" + token * 64 + ".json"
+        )
+        receipt = {
+            "schema": completion_workflows.MARKUP_NORMALIZATION_RECEIPT_SCHEMA,
+            "archive_id": archive_services.read_archive_id(root),
+            "plan_sha256": token * 64,
+            "item_count": 1,
+            "items": [
+                {
+                    "index": 0,
+                    "zettel_id": ZETTEL_ID,
+                    "path": f"zettels/{ZETTEL_ID}.md",
+                    "before_sha256": before_digest,
+                    "after_sha256": after_digest,
+                    "snapshot_path": before_relative,
+                    "before_snapshot_path": before_relative,
+                    "after_snapshot_path": after_relative,
+                }
+            ],
+        }
+        receipt_path = root.joinpath(*receipt_relative.split("/"))
+        receipt_path.parent.mkdir(parents=True, exist_ok=True)
+        receipt_path.write_text(json.dumps(receipt), encoding="utf-8")
+        return receipt_relative
 
     def test_mirror_plan_classifies_complete_pair_population(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -297,7 +383,57 @@ class V045LocalLocatorTitleRecoveryTests(unittest.TestCase):
                 self.zettel_path(root).read_text(encoding="utf-8"),
             )
 
-    def test_suffix_identifier_uses_own_source_id_and_body_agreement(self) -> None:
+    def test_markup_receipt_never_rolls_back_other_normalization_changes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self.archive(Path(tmp))
+            marker = archive_services.NOTION_IMPORT_LOCATOR_OMISSION_MARKER
+            before = self.write_notion_zettel(
+                root,
+                title="Current Human Title",
+                body=(
+                    f'<span style="color:red"></span>\n'
+                    f'<file src="{marker}"></file>\n'
+                ),
+            )
+            valid_reference = (
+                "[Attached objet](wom-objet:sha256:" + "a" * 64 + ")\n"
+            )
+            after = self.write_notion_zettel(
+                root,
+                title="Current Human Title",
+                body=valid_reference,
+            )
+            receipt_relative = self.write_markup_receipt(
+                root,
+                before=before,
+                after=after,
+                token="2",
+            )
+            result = notion_locator_orphan_recovery_plan(
+                root,
+                markup_receipts=[receipt_relative],
+                expected_orphan_row_count=1,
+            )
+            self.assertTrue(result["ok"], result)
+            self.assertEqual(result["summary"]["restore_ready_count"], 0)
+            self.assertEqual(result["summary"]["review_pending_count"], 1)
+            self.assertEqual(
+                result["summary"]["marker_restore_manifest_item_count"], 0
+            )
+            self.assertEqual(result["exact_operation_manifest"]["item_count"], 1)
+            rendered = json.dumps(result)
+            self.assertNotIn(valid_reference.strip(), rendered)
+
+            execution = notion_locator_orphan_recovery_execution_plan(
+                root,
+                markup_receipts=[receipt_relative],
+                expected_orphan_row_count=1,
+            )
+            applied = self.execute(execution, mode="apply")
+            self.assertTrue(applied["ok"], applied)
+            self.assertEqual(self.zettel_path(root).read_bytes(), after)
+
+    def test_suffix_identifier_uses_own_source_index_title_not_body_template(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             parent = Path(tmp)
             root = self.archive(parent)
@@ -305,7 +441,7 @@ class V045LocalLocatorTitleRecoveryTests(unittest.TestCase):
             self.write_notion_zettel(
                 root,
                 title=identifier_title,
-                body=HUMAN_TITLE + "\n\nprivate body\n",
+                body="\\{wrong body title\\}에 대한 정보를 담은 *zet*입니다.\n\nprivate body\n",
             )
             self.assertTrue(
                 archive_services.zet_title_is_identifier_shaped(
@@ -317,16 +453,13 @@ class V045LocalLocatorTitleRecoveryTests(unittest.TestCase):
                     "A normal title (1)"
                 )
             )
-            source_index = parent / "pages.markdown.jsonl"
-            source_index.write_text(
-                json.dumps(
-                    {
-                        "page_id": SOURCE_ID,
-                        "markdown": "## Body\n" + HUMAN_TITLE + "\n",
-                    }
-                )
-                + "\n",
-                encoding="utf-8",
+            source_index = self.write_title_mirrors(
+                parent,
+                source_title=HUMAN_TITLE,
+                markdown=(
+                    "# A body section that is not the source title\n\n"
+                    "\\{wrong body title\\}에 대한 정보를 담은 *zet*입니다.\n"
+                ),
             )
             result = zet_identifier_title_recovery_plan(
                 root,
@@ -377,7 +510,7 @@ class V045LocalLocatorTitleRecoveryTests(unittest.TestCase):
             self.assertFalse(cli_plan["writes"])
             self.assertFalse(cli_plan["private_values_echoed"])
 
-            execution = zet_identifier_title_recovery_execution_plan(
+            execution = zet_title_recovery_execution_plan(
                 root,
                 source_mirror=source_index,
                 expected_identifier_title_count=1,
@@ -388,12 +521,59 @@ class V045LocalLocatorTitleRecoveryTests(unittest.TestCase):
                 self.zettel_path(root)
             )
             self.assertEqual(frontmatter["title"], HUMAN_TITLE)
+            persist_local_recovery_control(execution)
+            stdout = io.StringIO()
+            stderr = io.StringIO()
+            with redirect_stdout(stdout), redirect_stderr(stderr):
+                code = archive_cli.main(
+                    [
+                        "zet-title-remap-write",
+                        str(root),
+                        "--revert-recovery",
+                        "--dry-run",
+                        "--format",
+                        "json",
+                    ]
+                )
+            self.assertEqual(code, 0, (stdout.getvalue(), stderr.getvalue()))
+            preview = json.loads(stdout.getvalue())
+            self.assertEqual(preview["state"], "ready_to_revert")
+            self.assertTrue(
+                preview["control_discovery"]["auto_discovered"]
+            )
             reverted = self.execute(execution, mode="revert")
             self.assertTrue(reverted["ok"], reverted)
             frontmatter, _body = archive_services.require_readable_zettel_content(
                 self.zettel_path(root)
             )
             self.assertEqual(frontmatter["title"], identifier_title)
+
+    def test_identifier_title_without_source_index_value_never_uses_body(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            parent = Path(tmp)
+            root = self.archive(parent)
+            identifier_title = "b" * 32
+            private_body_title = "Private body sentence must not become a title"
+            self.write_notion_zettel(
+                root,
+                title=identifier_title,
+                body=private_body_title + "\n",
+            )
+            source_mirror = self.write_title_mirrors(
+                parent,
+                source_title="",
+                markdown=private_body_title + "\n",
+            )
+            result = zet_identifier_title_recovery_plan(
+                root,
+                source_mirror=source_mirror,
+                expected_identifier_title_count=1,
+            )
+            self.assertTrue(result["ok"], result)
+            self.assertEqual(result["summary"]["exact_recovery_ready_count"], 0)
+            self.assertEqual(result["summary"]["source_title_unavailable_count"], 1)
+            self.assertEqual(result["summary"]["title_change_manifest_item_count"], 0)
+            self.assertNotIn(private_body_title, json.dumps(result))
 
     def test_title_receipt_audit_uses_title_field_not_whole_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
