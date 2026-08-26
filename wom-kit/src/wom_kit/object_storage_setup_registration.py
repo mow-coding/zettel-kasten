@@ -911,6 +911,13 @@ def apply_object_storage_setup_registration(
         "plan_sha256": plan.plan_sha256,
         "manifest_sha256": plan.manifest.manifest_sha256,
         "execution": core,
+        "counts": {
+            "provider_binding_field_change_count": int(
+                plan.provider_original_bytes != plan.provider_post_bytes
+            ),
+            "setup_receipt_create_count": int(not plan.receipt_preexisting),
+            "exact_manifest_item_count": len(plan.manifest.items),
+        },
         "provider_api_called": False,
         "bucket_created": False,
         "bucket_verified": False,

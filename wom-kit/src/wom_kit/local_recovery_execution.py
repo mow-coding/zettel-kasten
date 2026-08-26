@@ -45,6 +45,7 @@ from .exact_operation_manifest import (
     EXACT_OPERATION_LOCAL_ROOT,
     EXACT_OPERATION_RECEIPTS_ROOT,
     FINAL_RECEIPT_SCHEMA,
+    RESULT_SCHEMA as EXACT_OPERATION_RESULT_SCHEMA,
     ExactFieldEffect,
     ExactOperationApprovalAuthority,
     ExactOperationEvidence,
@@ -54,6 +55,7 @@ from .exact_operation_manifest import (
     ExactOperationProgress,
     FileExactOperationCheckpointStore,
     apply_exact_operation,
+    _validate_stable_result_document,
     exact_operation_execution_sha256,
     exact_operation_writer_lock,
     hash_field_value,
@@ -72,8 +74,15 @@ REVERT_OPERATION = "local_recovery_revert"
 CONTROL_SCHEMA = "wom-kit/local-recovery-private-control/v0.1"
 RESULT_SCHEMA = "wom-kit/local-recovery-execution-result/v0.1"
 RESUME_LOCATOR_SCHEMA = "wom-kit/local-recovery-resume-locator/v0.1"
+SUPERSESSION_PENDING_SCHEMA = (
+    "wom-kit/local-recovery-supersession-pending/v0.1"
+)
+SUPERSESSION_FINAL_SCHEMA = (
+    "wom-kit/local-recovery-supersession-final/v0.1"
+)
 CONTROL_ROOT = "profiles/local/local-recovery/controls"
 RESUME_ROOT = "profiles/local/local-recovery/resume"
+SUPERSESSION_ROOT = "profiles/local/local-recovery/supersessions"
 LEDGER_ROOT = "profiles/local/local-recovery/ledgers"
 MAX_CONTROL_BYTES = 128 * 1024 * 1024
 MAX_LOCAL_FIELD_BYTES = 16 * 1024 * 1024
@@ -963,6 +972,81 @@ def build_observed_post_subset_revert_plan(
     )
 
 
+def _subset_parent_plan(
+    plan: LocalRecoveryPlan,
+) -> LocalRecoveryPlan | None:
+    """Return and revalidate the parent of an observed-post compensation.
+
+    A warning string or public-summary digest alone is not enough to turn a
+    normal revert into a superseding compensation.  The subset manifest also
+    carries the parent digest in exact operation evidence, and every selected
+    private field must be a byte-identical member of the persisted parent
+    control.
+    """
+
+    if "observed_post_subset_revert" not in plan.warning_codes:
+        return None
+    evidence = plan.manifest.operation_evidence
+    parent_sha = str(
+        (plan.public_summary or {}).get("parent_manifest_sha256") or ""
+    )
+    evidence_digests = (
+        dict(evidence.digests)
+        if type(evidence) is ExactOperationEvidence
+        else {}
+    )
+    evidence_counts = (
+        dict(evidence.counts)
+        if type(evidence) is ExactOperationEvidence
+        else {}
+    )
+    if (
+        not plan.loaded_from_control
+        or evidence is None
+        or evidence.schema
+        != "wom-kit/local-recovery-subset-revert-evidence/v1"
+        or _SHA256_RE.fullmatch(parent_sha) is None
+        or parent_sha == plan.manifest.manifest_sha256
+        or evidence_digests.get("parent_manifest_sha256") != parent_sha
+        or evidence_counts.get("selected_post_field_count")
+        != len(plan.specs)
+    ):
+        raise _fail("local_recovery_partial_revert_blocked")
+    try:
+        parent = load_local_recovery_plan(
+            plan.archive_root,
+            manifest_sha256=parent_sha,
+        )
+    except LocalRecoveryError:
+        raise _fail("local_recovery_partial_revert_blocked") from None
+    if (
+        parent.archive_id != plan.archive_id
+        or parent.domain != plan.domain
+        or not parent.loaded_from_control
+    ):
+        raise _fail("local_recovery_partial_revert_blocked")
+
+    remaining = list(zip(parent.manifest.items, parent.specs))
+    for subset_item, subset_spec in zip(plan.manifest.items, plan.specs):
+        matches = [
+            index
+            for index, (parent_item, parent_spec) in enumerate(remaining)
+            if (
+                parent_item.target_kind == subset_item.target_kind
+                and parent_item.target_ref == subset_item.target_ref
+                and parent_item.target_identity_sha256
+                == subset_item.target_identity_sha256
+                and parent_item.fields == subset_item.fields
+                and replace(parent_spec, item_id=subset_spec.item_id)
+                == subset_spec
+            )
+        ]
+        if len(matches) != 1:
+            raise _fail("local_recovery_partial_revert_blocked")
+        remaining.pop(matches[0])
+    return parent
+
+
 def _frontmatter_value_replacement(raw: bytes, key: str, value: Any) -> bytes:
     try:
         text = raw.decode("utf-8")
@@ -1403,6 +1487,766 @@ def _persist_resume_locator(
     return relative, execution
 
 
+def _supersession_relative(
+    parent_execution_sha256: str,
+    compensation_execution_sha256: str,
+    *,
+    final: bool,
+) -> str:
+    if (
+        _SHA256_RE.fullmatch(parent_execution_sha256) is None
+        or _SHA256_RE.fullmatch(compensation_execution_sha256) is None
+    ):
+        raise _fail("local_recovery_resume_invalid")
+    suffix = "final" if final else "pending"
+    return (
+        f"{SUPERSESSION_ROOT}/"
+        f"{parent_execution_sha256.removeprefix('sha256:')}."
+        f"{compensation_execution_sha256.removeprefix('sha256:')}."
+        f"{suffix}.json"
+    )
+
+
+def _pending_supersession_document(
+    *,
+    parent: LocalRecoveryPlan,
+    parent_locator: Mapping[str, Any],
+    compensation: LocalRecoveryPlan,
+    compensation_manifest: ExactOperationManifest,
+    compensation_authority: ExactOperationApprovalAuthority,
+    compensation_execution_sha256: str,
+    compensation_locator: Mapping[str, Any],
+) -> dict[str, Any]:
+    parent_execution = str(parent_locator.get("execution_sha256") or "")
+    if (
+        parent_locator.get("mode") != "apply"
+        or parent_locator.get("apply_manifest_sha256")
+        != parent.manifest.manifest_sha256
+        or compensation_locator.get("mode") != "revert"
+        or compensation_locator.get("execution_sha256")
+        != compensation_execution_sha256
+        or compensation_locator.get("apply_manifest_sha256")
+        != compensation.manifest.manifest_sha256
+    ):
+        raise _fail("local_recovery_partial_revert_blocked")
+    basis = {
+        "schema_version": SUPERSESSION_PENDING_SCHEMA,
+        "status": "pending",
+        "parent_apply_manifest_sha256": parent.manifest.manifest_sha256,
+        "parent_apply_operation_manifest_sha256": parent_locator.get(
+            "operation_manifest_sha256"
+        ),
+        "parent_apply_execution_sha256": parent_execution,
+        "parent_apply_approval_id": parent_locator.get("approval_id"),
+        "compensation_manifest_sha256": compensation.manifest.manifest_sha256,
+        "compensation_operation_manifest_sha256": (
+            compensation_manifest.manifest_sha256
+        ),
+        "compensation_execution_sha256": compensation_execution_sha256,
+        "compensation_approval_authority": compensation_authority.document(),
+        "compensation_resume_locator_sha256": _sha(
+            _canonical_bytes(dict(compensation_locator))
+        ),
+        "compensation_field_count": len(compensation.specs),
+        "private_values_echoed": False,
+        "paths_echoed": False,
+    }
+    return {
+        **basis,
+        "supersession_sha256": _sha(_canonical_bytes(basis)),
+    }
+
+
+def _persist_subset_supersession_pending(
+    plan: LocalRecoveryPlan,
+    manifest: ExactOperationManifest,
+    authority: ExactOperationApprovalAuthority,
+    compensation_execution_sha256: str,
+) -> tuple[LocalRecoveryPlan, dict[str, Any]] | None:
+    parent = _subset_parent_plan(plan)
+    if parent is None:
+        if not plan.loaded_from_control:
+            return None
+        parent = plan
+    parent_locators = _locator_documents(parent, mode="apply")
+    active = [
+        locator
+        for locator in parent_locators
+        if _strict_resume_checkpoint_present(
+            parent,
+            locator,
+            respect_supersession=False,
+        )
+    ]
+    if not active and parent.manifest.manifest_sha256 == plan.manifest.manifest_sha256:
+        return None
+    if len(active) != 1:
+        raise _fail("local_recovery_partial_revert_blocked")
+    compensation_locators = [
+        locator
+        for locator in _locator_documents(plan, mode="revert")
+        if locator.get("execution_sha256") == compensation_execution_sha256
+        and locator.get("approval_id") == authority.approval_id
+        and locator.get("operation_manifest_sha256")
+        == manifest.manifest_sha256
+    ]
+    if len(compensation_locators) != 1:
+        raise _fail("local_recovery_partial_revert_blocked")
+    document = _pending_supersession_document(
+        parent=parent,
+        parent_locator=active[0],
+        compensation=plan,
+        compensation_manifest=manifest,
+        compensation_authority=authority,
+        compensation_execution_sha256=compensation_execution_sha256,
+        compensation_locator=compensation_locators[0],
+    )
+    relative = _supersession_relative(
+        document["parent_apply_execution_sha256"],
+        document["compensation_execution_sha256"],
+        final=False,
+    )
+    _create_or_match(plan.archive_root, relative, _canonical_line(document))
+    return parent, document
+
+
+def _safe_supersession_entries(
+    root: Path,
+    *,
+    parent_execution_sha256: str,
+) -> tuple[Path, ...]:
+    if _SHA256_RE.fullmatch(parent_execution_sha256) is None:
+        raise _fail("local_recovery_resume_invalid")
+    directory = archive_services.archive_internal_path(root, SUPERSESSION_ROOT)
+    try:
+        info = os.lstat(directory)
+    except FileNotFoundError:
+        return ()
+    except OSError:
+        raise _fail("local_recovery_resume_invalid") from None
+    if (
+        not stat.S_ISDIR(info.st_mode)
+        or stat.S_ISLNK(info.st_mode)
+        or bool(getattr(info, "st_file_attributes", 0) & 0x400)
+    ):
+        raise _fail("local_recovery_resume_invalid")
+    try:
+        entries = tuple(sorted(directory.iterdir(), key=lambda path: path.name))
+    except OSError:
+        raise _fail("local_recovery_resume_invalid") from None
+    if len(entries) > MAX_CONTROL_FILES:
+        raise _fail("local_recovery_resume_invalid")
+    prefix = parent_execution_sha256.removeprefix("sha256:") + "."
+    return tuple(
+        path
+        for path in entries
+        if path.name.startswith(prefix)
+        and path.name.endswith((".pending.json", ".final.json"))
+    )
+
+
+def _validated_parent_supersession_records(
+    parent: LocalRecoveryPlan,
+    parent_locator: Mapping[str, Any],
+) -> tuple[dict[str, Any], ...]:
+    parent_execution = str(parent_locator.get("execution_sha256") or "")
+    expected_fields = {
+        "schema_version",
+        "status",
+        "parent_apply_manifest_sha256",
+        "parent_apply_operation_manifest_sha256",
+        "parent_apply_execution_sha256",
+        "parent_apply_approval_id",
+        "compensation_manifest_sha256",
+        "compensation_operation_manifest_sha256",
+        "compensation_execution_sha256",
+        "compensation_approval_authority",
+        "compensation_resume_locator_sha256",
+        "compensation_field_count",
+        "private_values_echoed",
+        "paths_echoed",
+        "supersession_sha256",
+    }
+    entries = _safe_supersession_entries(
+        parent.archive_root,
+        parent_execution_sha256=parent_execution,
+    )
+    pending_paths = tuple(
+        path for path in entries if path.name.endswith(".pending.json")
+    )
+    final_paths = tuple(
+        path for path in entries if path.name.endswith(".final.json")
+    )
+    validated: list[dict[str, Any]] = []
+    for path in pending_paths:
+        raw, reason = archive_services._bounded_stable_regular_file_read(
+            path,
+            max_bytes=64 * 1024,
+        )
+        try:
+            if raw is None or reason is not None or not raw.endswith(b"\n"):
+                raise ValueError("read")
+            document = json.loads(raw[:-1].decode("ascii"))
+            if (
+                not isinstance(document, dict)
+                or set(document) != expected_fields
+                or _canonical_line(document) != raw
+            ):
+                raise ValueError("document")
+            supplied = document.pop("supersession_sha256")
+            if (
+                document.get("schema_version")
+                != SUPERSESSION_PENDING_SCHEMA
+                or document.get("status") != "pending"
+                or document.get("parent_apply_manifest_sha256")
+                != parent.manifest.manifest_sha256
+                or document.get("parent_apply_operation_manifest_sha256")
+                != parent_locator.get("operation_manifest_sha256")
+                or document.get("parent_apply_execution_sha256")
+                != parent_execution
+                or document.get("parent_apply_approval_id")
+                != parent_locator.get("approval_id")
+                or type(document.get("compensation_field_count")) is not int
+                or document["compensation_field_count"] <= 0
+                or document.get("private_values_echoed") is not False
+                or document.get("paths_echoed") is not False
+                or path.name
+                != Path(
+                    _supersession_relative(
+                        parent_execution,
+                        str(document.get("compensation_execution_sha256") or ""),
+                        final=False,
+                    )
+                ).name
+                or not isinstance(supplied, str)
+                or not hmac.compare_digest(
+                    supplied,
+                    _sha(_canonical_bytes(document)),
+                )
+            ):
+                raise ValueError("binding")
+            compensation = load_local_recovery_plan(
+                parent.archive_root,
+                manifest_sha256=document["compensation_manifest_sha256"],
+            )
+            rebound_parent = _subset_parent_plan(compensation)
+            if (
+                rebound_parent is None
+                and compensation.loaded_from_control
+                and compensation.manifest.manifest_sha256
+                == parent.manifest.manifest_sha256
+            ):
+                rebound_parent = compensation
+            if (
+                rebound_parent is None
+                or rebound_parent.manifest.manifest_sha256
+                != parent.manifest.manifest_sha256
+                or len(compensation.specs)
+                != document["compensation_field_count"]
+            ):
+                raise ValueError("parent")
+            operation_manifest = _operation_manifest(
+                compensation,
+                mode="revert",
+            )
+            if (
+                operation_manifest.manifest_sha256
+                != document["compensation_operation_manifest_sha256"]
+            ):
+                raise ValueError("operation")
+            raw_authority = document["compensation_approval_authority"]
+            if not isinstance(raw_authority, dict) or set(raw_authority) != {
+                "schema",
+                "approval_id",
+                "context_sha256",
+                "approval_authority_sha256",
+                "binding_sha256",
+            }:
+                raise ValueError("authority")
+            authority = ExactOperationApprovalAuthority(
+                approval_id=raw_authority["approval_id"],
+                context_sha256=raw_authority["context_sha256"],
+                approval_authority_sha256=raw_authority[
+                    "approval_authority_sha256"
+                ],
+                binding_sha256=raw_authority["binding_sha256"],
+            )
+            compensation_execution = exact_operation_execution_sha256(
+                operation_manifest,
+                mode="revert",
+                selected_fields=tuple(
+                    (item.item_id, item.fields[0].field_ref)
+                    for item in operation_manifest.items
+                ),
+                approval_authority=authority,
+            )
+            if (
+                compensation_execution
+                != document["compensation_execution_sha256"]
+                or authority.approval_id
+                != document["compensation_approval_authority"]["approval_id"]
+            ):
+                raise ValueError("execution")
+            matching_locators = [
+                locator
+                for locator in _locator_documents(compensation, mode="revert")
+                if locator.get("execution_sha256") == compensation_execution
+                and locator.get("approval_id") == authority.approval_id
+                and locator.get("operation_manifest_sha256")
+                == operation_manifest.manifest_sha256
+            ]
+            if (
+                len(matching_locators) != 1
+                or _sha(_canonical_bytes(matching_locators[0]))
+                != document["compensation_resume_locator_sha256"]
+            ):
+                raise ValueError("locator")
+            document["supersession_sha256"] = supplied
+            validated.append(document)
+        except (
+            KeyError,
+            TypeError,
+            ValueError,
+            UnicodeError,
+            json.JSONDecodeError,
+            LocalRecoveryError,
+            ExactOperationManifestError,
+        ):
+            raise _fail("local_recovery_resume_invalid") from None
+
+    final_expected_fields = {
+        "schema_version",
+        "status",
+        "parent_apply_manifest_sha256",
+        "parent_apply_execution_sha256",
+        "compensation_manifest_sha256",
+        "compensation_execution_sha256",
+        "pending_supersession_sha256",
+        "compensation_final_receipt_sha256",
+        "parent_pre_state_verified",
+        "parent_pre_verification_sha256",
+        "private_values_echoed",
+        "paths_echoed",
+        "supersession_final_sha256",
+    }
+    matched_pending_hashes: set[str] = set()
+    for path in final_paths:
+        raw, reason = archive_services._bounded_stable_regular_file_read(
+            path,
+            max_bytes=64 * 1024,
+        )
+        try:
+            if raw is None or reason is not None or not raw.endswith(b"\n"):
+                raise ValueError("read")
+            document = json.loads(raw[:-1].decode("ascii"))
+            if (
+                not isinstance(document, dict)
+                or set(document) != final_expected_fields
+                or _canonical_line(document) != raw
+            ):
+                raise ValueError("document")
+            supplied_final = document.pop("supersession_final_sha256")
+            pending_hash = str(
+                document.get("pending_supersession_sha256") or ""
+            )
+            compensation_execution = str(
+                document.get("compensation_execution_sha256") or ""
+            )
+            matching_pending = [
+                pending
+                for pending in validated
+                if pending.get("supersession_sha256") == pending_hash
+                and pending.get("parent_apply_execution_sha256")
+                == parent_execution
+                and pending.get("compensation_manifest_sha256")
+                == document.get("compensation_manifest_sha256")
+                and pending.get("compensation_execution_sha256")
+                == compensation_execution
+            ]
+            if (
+                document.get("schema_version") != SUPERSESSION_FINAL_SCHEMA
+                or document.get("status") != "final"
+                or document.get("parent_apply_manifest_sha256")
+                != parent.manifest.manifest_sha256
+                or document.get("parent_apply_execution_sha256")
+                != parent_execution
+                or document.get("parent_pre_state_verified") is not True
+                or document.get("private_values_echoed") is not False
+                or document.get("paths_echoed") is not False
+                or _SHA256_RE.fullmatch(pending_hash) is None
+                or _SHA256_RE.fullmatch(compensation_execution) is None
+                or _SHA256_RE.fullmatch(
+                    str(document.get("compensation_final_receipt_sha256") or "")
+                )
+                is None
+                or _SHA256_RE.fullmatch(
+                    str(document.get("parent_pre_verification_sha256") or "")
+                )
+                is None
+                or len(matching_pending) != 1
+                or pending_hash in matched_pending_hashes
+                or path.name
+                != Path(
+                    _supersession_relative(
+                        parent_execution,
+                        compensation_execution,
+                        final=True,
+                    )
+                ).name
+                or not isinstance(supplied_final, str)
+                or not hmac.compare_digest(
+                    supplied_final,
+                    _sha(_canonical_bytes(document)),
+                )
+            ):
+                raise ValueError("binding")
+
+            receipt_path = archive_services.archive_internal_path(
+                parent.archive_root,
+                f"{EXACT_OPERATION_RECEIPTS_ROOT}/"
+                f"{compensation_execution.removeprefix('sha256:')}.json",
+            )
+            receipt_raw, receipt_reason = (
+                archive_services._bounded_stable_regular_file_read(
+                    receipt_path,
+                    max_bytes=MAX_CANONICAL_BYTES,
+                )
+            )
+            if (
+                receipt_raw is None
+                or receipt_reason is not None
+                or not receipt_raw.endswith(b"\n")
+            ):
+                raise ValueError("receipt")
+            receipt_document = json.loads(receipt_raw[:-1].decode("ascii"))
+            if not isinstance(receipt_document, dict):
+                raise ValueError("receipt")
+            receipt_basis = dict(receipt_document)
+            supplied_receipt_sha256 = receipt_basis.pop(
+                "receipt_sha256",
+                None,
+            )
+            if (
+                _canonical_line(receipt_document) != receipt_raw
+                or receipt_document.get("schema") != FINAL_RECEIPT_SCHEMA
+                or not isinstance(receipt_document.get("result"), dict)
+                or receipt_document["result"].get("execution_sha256")
+                != compensation_execution
+                or supplied_receipt_sha256
+                != document["compensation_final_receipt_sha256"]
+                or _sha(_canonical_bytes(receipt_basis))
+                != supplied_receipt_sha256
+            ):
+                raise ValueError("receipt")
+            verification = verify_exact_operation(
+                parent.manifest,
+                verifier=_Verifier(parent),
+                state="pre",
+            )
+            if (
+                verification.get("all_match") is not True
+                or _sha(_canonical_bytes(verification))
+                != document["parent_pre_verification_sha256"]
+            ):
+                raise ValueError("verification")
+            matched_pending_hashes.add(pending_hash)
+        except (
+            KeyError,
+            TypeError,
+            ValueError,
+            UnicodeError,
+            json.JSONDecodeError,
+            LocalRecoveryError,
+            ExactOperationManifestError,
+        ):
+            raise _fail("local_recovery_resume_invalid") from None
+    return tuple(validated)
+
+
+def _persist_subset_supersession_final(
+    parent: LocalRecoveryPlan,
+    pending: Mapping[str, Any],
+    result: Mapping[str, Any],
+) -> None:
+    execution = result.get("execution")
+    if not isinstance(execution, Mapping):
+        raise _fail("local_recovery_partial_revert_blocked")
+    compensation_execution = str(execution.get("execution_sha256") or "")
+    final_receipt_sha256 = str(execution.get("final_receipt_sha256") or "")
+    if (
+        result.get("ok") is not True
+        or compensation_execution
+        != pending.get("compensation_execution_sha256")
+        or _SHA256_RE.fullmatch(final_receipt_sha256) is None
+    ):
+        raise _fail("local_recovery_partial_revert_blocked")
+    verification = verify_exact_operation(
+        parent.manifest,
+        verifier=_Verifier(parent),
+        state="pre",
+    )
+    if verification.get("all_match") is not True:
+        raise _fail("local_recovery_partial_revert_blocked")
+    receipt_path = archive_services.archive_internal_path(
+        parent.archive_root,
+        f"{EXACT_OPERATION_RECEIPTS_ROOT}/"
+        f"{compensation_execution.removeprefix('sha256:')}.json",
+    )
+    receipt_raw, receipt_reason = (
+        archive_services._bounded_stable_regular_file_read(
+            receipt_path,
+            max_bytes=MAX_CANONICAL_BYTES,
+        )
+    )
+    try:
+        receipt_document = (
+            json.loads(receipt_raw[:-1].decode("ascii"))
+            if receipt_raw is not None
+            and receipt_reason is None
+            and receipt_raw.endswith(b"\n")
+            else None
+        )
+        receipt_basis = dict(receipt_document or {})
+        supplied_receipt_sha256 = receipt_basis.pop(
+            "receipt_sha256",
+            None,
+        )
+    except (UnicodeError, ValueError, json.JSONDecodeError):
+        receipt_document = None
+        receipt_basis = {}
+        supplied_receipt_sha256 = None
+    if (
+        not isinstance(receipt_document, dict)
+        or _canonical_line(receipt_document) != receipt_raw
+        or receipt_document.get("schema") != FINAL_RECEIPT_SCHEMA
+        or not isinstance(receipt_document.get("result"), dict)
+        or receipt_document["result"].get("execution_sha256")
+        != compensation_execution
+        or supplied_receipt_sha256 != final_receipt_sha256
+        or _sha(_canonical_bytes(receipt_basis)) != final_receipt_sha256
+    ):
+        raise _fail("local_recovery_partial_revert_blocked")
+    basis = {
+        "schema_version": SUPERSESSION_FINAL_SCHEMA,
+        "status": "final",
+        "parent_apply_manifest_sha256": pending[
+            "parent_apply_manifest_sha256"
+        ],
+        "parent_apply_execution_sha256": pending[
+            "parent_apply_execution_sha256"
+        ],
+        "compensation_manifest_sha256": pending[
+            "compensation_manifest_sha256"
+        ],
+        "compensation_execution_sha256": compensation_execution,
+        "pending_supersession_sha256": pending["supersession_sha256"],
+        "compensation_final_receipt_sha256": final_receipt_sha256,
+        "parent_pre_state_verified": True,
+        "parent_pre_verification_sha256": _sha(
+            _canonical_bytes(verification)
+        ),
+        "private_values_echoed": False,
+        "paths_echoed": False,
+    }
+    document = {
+        **basis,
+        "supersession_final_sha256": _sha(_canonical_bytes(basis)),
+    }
+    relative = _supersession_relative(
+        basis["parent_apply_execution_sha256"],
+        compensation_execution,
+        final=True,
+    )
+    _create_or_match(parent.archive_root, relative, _canonical_line(document))
+
+
+def _matching_subset_supersession_pending(
+    plan: LocalRecoveryPlan,
+    authority: ExactOperationApprovalAuthority,
+    compensation_execution_sha256: str,
+) -> tuple[LocalRecoveryPlan, dict[str, Any]] | None:
+    parent = _subset_parent_plan(plan)
+    if parent is None:
+        if not plan.loaded_from_control:
+            return None
+        parent = plan
+    matches: list[dict[str, Any]] = []
+    for parent_locator in _locator_documents(parent, mode="apply"):
+        for document in _validated_parent_supersession_records(
+            parent,
+            parent_locator,
+        ):
+            if (
+                document.get("compensation_manifest_sha256")
+                == plan.manifest.manifest_sha256
+                and document.get("compensation_execution_sha256")
+                == compensation_execution_sha256
+                and document.get("compensation_approval_authority")
+                == authority.document()
+            ):
+                matches.append(document)
+    if len(matches) != 1:
+        raise _fail("local_recovery_resume_invalid")
+    return parent, matches[0]
+
+
+def _completed_subset_supersession_pending(
+    plan: LocalRecoveryPlan,
+    compensation_execution_sha256: str,
+    *,
+    authority: ExactOperationApprovalAuthority | None = None,
+) -> tuple[LocalRecoveryPlan, dict[str, Any], dict[str, Any]] | None:
+    """Recover a compensation that finished before its final supersession.
+
+    The common exact-operation receipt is the durable commit record.  If that
+    receipt exists but the small parent-supersession finalizer was interrupted,
+    the old apply must stay blocked *and* the already approved compensation
+    must remain finishable without replaying any field write.
+    """
+
+    if _SHA256_RE.fullmatch(compensation_execution_sha256) is None:
+        raise _fail("local_recovery_resume_invalid")
+    parent = _subset_parent_plan(plan)
+    if parent is None:
+        if not plan.loaded_from_control:
+            return None
+        parent = plan
+    matches: list[dict[str, Any]] = []
+    for parent_locator in _locator_documents(parent, mode="apply"):
+        for document in _validated_parent_supersession_records(
+            parent,
+            parent_locator,
+        ):
+            if (
+                document.get("compensation_manifest_sha256")
+                == plan.manifest.manifest_sha256
+                and document.get("compensation_execution_sha256")
+                == compensation_execution_sha256
+                and (
+                    authority is None
+                    or document.get("compensation_approval_authority")
+                    == authority.document()
+                )
+            ):
+                matches.append(document)
+    if not matches:
+        return None
+    if len(matches) != 1:
+        raise _fail("local_recovery_resume_invalid")
+    pending = matches[0]
+
+    final_path = archive_services.archive_internal_path(
+        parent.archive_root,
+        _supersession_relative(
+            pending["parent_apply_execution_sha256"],
+            compensation_execution_sha256,
+            final=True,
+        ),
+    )
+    final_raw, final_reason = archive_services._bounded_stable_regular_file_read(
+        final_path,
+        max_bytes=64 * 1024,
+    )
+    if final_reason is None and final_raw is not None:
+        return None
+    if final_reason != "missing" or final_raw is not None:
+        raise _fail("local_recovery_resume_invalid")
+
+    receipt_path = archive_services.archive_internal_path(
+        parent.archive_root,
+        f"{EXACT_OPERATION_RECEIPTS_ROOT}/"
+        f"{compensation_execution_sha256.removeprefix('sha256:')}.json",
+    )
+    raw, reason = archive_services._bounded_stable_regular_file_read(
+        receipt_path,
+        max_bytes=MAX_CANONICAL_BYTES,
+    )
+    if reason == "missing":
+        return None
+    try:
+        if raw is None or reason is not None or not raw.endswith(b"\n"):
+            raise ValueError("receipt")
+        receipt = json.loads(raw[:-1].decode("ascii"))
+        if not isinstance(receipt, dict) or _canonical_line(receipt) != raw:
+            raise ValueError("receipt")
+        receipt_basis = dict(receipt)
+        receipt_sha256 = receipt_basis.pop("receipt_sha256", None)
+        result = receipt.get("result")
+        if not isinstance(result, dict):
+            raise ValueError("result")
+        _validate_stable_result_document(result)
+        result_basis = dict(result)
+        result_sha256 = result_basis.pop("result_sha256", None)
+        operation_manifest = _operation_manifest(plan, mode="revert")
+        raw_authority = pending.get("compensation_approval_authority")
+        if (
+            receipt.get("schema") != FINAL_RECEIPT_SCHEMA
+            or _SHA256_RE.fullmatch(str(receipt_sha256 or "")) is None
+            or _sha(_canonical_bytes(receipt_basis)) != receipt_sha256
+            or result.get("schema") != EXACT_OPERATION_RESULT_SCHEMA
+            or result.get("status") != "completed"
+            or result.get("mode") != "revert"
+            or result.get("manifest_sha256")
+            != operation_manifest.manifest_sha256
+            or result.get("execution_sha256")
+            != compensation_execution_sha256
+            or not isinstance(raw_authority, dict)
+            or result.get("approval_binding_sha256")
+            != raw_authority.get("binding_sha256")
+            or result.get("item_count") != len(operation_manifest.items)
+            or result.get("field_count")
+            != sum(len(item.fields) for item in operation_manifest.items)
+            or result.get("private_values_echoed") is not False
+            or _SHA256_RE.fullmatch(str(result_sha256 or "")) is None
+            or _sha(_canonical_bytes(result_basis)) != result_sha256
+        ):
+            raise ValueError("binding")
+    except (
+        KeyError,
+        TypeError,
+        ValueError,
+        UnicodeError,
+        json.JSONDecodeError,
+        LocalRecoveryError,
+        ExactOperationManifestError,
+    ):
+        raise _fail("local_recovery_resume_invalid") from None
+
+    execution = {
+        **result,
+        "final_receipt_sha256": receipt_sha256,
+        "written_field_count": 0,
+        "resumed_field_count": 0,
+        "progress_delivery_failure_count": 0,
+    }
+    public = {
+        "schema_version": RESULT_SCHEMA,
+        "ok": True,
+        "state": "reverted",
+        "domain": plan.domain,
+        "mode": "revert",
+        "manifest_sha256": plan.manifest.manifest_sha256,
+        "operation_manifest_sha256": operation_manifest.manifest_sha256,
+        "execution": execution,
+        "item_count": len(plan.specs),
+        "field_count": sum(
+            len(item.fields) for item in operation_manifest.items
+        ),
+        "written_field_count": 0,
+        "resumed_field_count": 0,
+        "field_scoped_revert_supported": True,
+        "common_exact_operation_manifest_used": True,
+        "independent_verification": True,
+        "finalized_existing_receipt": True,
+        "operator_counting_required": False,
+        "provider_called": False,
+        "credential_values_read": False,
+        "private_values_echoed": False,
+        "paths_echoed": False,
+    }
+    return parent, pending, public
+
+
 def _run_with_store(
     plan: LocalRecoveryPlan,
     authority: ExactOperationApprovalAuthority,
@@ -1586,17 +2430,27 @@ def _execute_core(
         # until after the original interruption. Persist its exact private
         # values only after native approval, just like an initial apply.
         persist_local_recovery_control(plan)
-        _persist_resume_locator(
+        _resume_relative_path, execution_sha256 = _persist_resume_locator(
             plan,
             manifest,
             authority,
             mode=mode,
         )
+        supersession = (
+            _persist_subset_supersession_pending(
+                plan,
+                manifest,
+                authority,
+                execution_sha256,
+            )
+            if mode == "revert"
+            else None
+        )
         checkpoints = FileExactOperationCheckpointStore(
             plan.archive_root,
             writer_lock=writer_lock,
         )
-        return _run_with_store(
+        result = _run_with_store(
             plan,
             authority,
             checkpoints,
@@ -1604,6 +2458,11 @@ def _execute_core(
             resume=resume,
             progress_hook=progress_hook,
         )
+        if supersession is not None and result.get("ok") is True:
+            parent, pending = supersession
+            _persist_subset_supersession_final(parent, pending, result)
+            result["superseded_parent_apply_execution"] = True
+        return result
 
 
 def execute_local_recovery(
@@ -1736,6 +2595,8 @@ def _safe_control_entries(root: Path) -> tuple[Path, ...]:
 def _strict_resume_checkpoint_present(
     plan: LocalRecoveryPlan,
     locator: Mapping[str, Any],
+    *,
+    respect_supersession: bool = True,
 ) -> bool:
     execution = str(locator.get("execution_sha256") or "")
     if _SHA256_RE.fullmatch(execution) is None:
@@ -1782,6 +2643,11 @@ def _strict_resume_checkpoint_present(
         max_bytes=MAX_CANONICAL_BYTES,
     )
     if receipt_reason == "missing":
+        if respect_supersession and _validated_parent_supersession_records(
+            plan,
+            locator,
+        ):
+            return False
         return True
     if (
         receipt_raw is None
@@ -1864,10 +2730,20 @@ def discover_local_recovery_plan(
             continue
 
         try:
-            active = sum(
-                int(_strict_resume_checkpoint_present(plan, locator))
-                for locator in _locator_documents(plan, mode=mode)
-            )
+            active = 0
+            for locator in _locator_documents(plan, mode=mode):
+                if _strict_resume_checkpoint_present(plan, locator):
+                    active += 1
+                    continue
+                if (
+                    mode == "revert"
+                    and _completed_subset_supersession_pending(
+                        plan,
+                        str(locator.get("execution_sha256") or ""),
+                    )
+                    is not None
+                ):
+                    active += 1
         except LocalRecoveryError:
             blocked_control_count += 1
             continue
@@ -1934,17 +2810,34 @@ def resume_local_recovery(
             plan.archive_root,
             writer_lock=writer_lock,
         )
-        candidates: list[dict[str, Any]] = []
+        candidates: list[
+            tuple[
+                dict[str, Any],
+                tuple[
+                    LocalRecoveryPlan,
+                    dict[str, Any],
+                    dict[str, Any],
+                ]
+                | None,
+            ]
+        ] = []
         for document in _locator_documents(plan, mode=mode):
-            execution = document["execution_sha256"]
-            if (
-                checkpoints.resume_checkpoint_present(execution)
-                and checkpoints.load_final_receipt(execution) is None
-            ):
-                candidates.append(document)
+            if _strict_resume_checkpoint_present(plan, document):
+                candidates.append((document, None))
+                continue
+            finalized = (
+                _completed_subset_supersession_pending(
+                    plan,
+                    str(document.get("execution_sha256") or ""),
+                )
+                if mode == "revert"
+                else None
+            )
+            if finalized is not None:
+                candidates.append((document, finalized))
         if len(candidates) != 1:
             raise _fail("local_recovery_resume_invalid")
-        locator = candidates[0]
+        locator, finalize_only = candidates[0]
 
         def guard(claim: _ClaimedExactHumanApproval) -> bool:
             authority = _authority(plan, claim, context, mode=mode)
@@ -1961,14 +2854,71 @@ def resume_local_recovery(
                 ),
                 approval_authority=authority,
             )
-            return bool(
+            if not (
                 hmac.compare_digest(actual, locator["execution_sha256"])
                 and checkpoints.resume_checkpoint_present(actual)
+            ):
+                return False
+            if finalize_only is None:
+                return True
+            refreshed = _completed_subset_supersession_pending(
+                plan,
+                actual,
+                authority=authority,
+            )
+            if refreshed is None:
+                return False
+            _parent, _pending, completed = refreshed
+            inspection = inspect_exact_operation_state(
+                _operation_manifest(plan, mode="revert"),
+                verifier=_Verifier(plan),
+                checkpoint_store=checkpoints,
+                mode="revert",
+                selected_fields=tuple(
+                    (item.item_id, item.fields[0].field_ref)
+                    for item in plan.manifest.items
+                ),
+                approval_authority=authority,
+            )
+            return bool(
+                inspection.get("state") == "completed"
+                and inspection.get("checkpoint_valid") is True
+                and inspection.get("final_receipt_valid") is True
+                and inspection.get("checkpoint_count")
+                == completed["execution"].get("checkpoint_count")
+                and inspection.get("checkpointed_field_count")
+                == completed["execution"].get("field_count")
+                and completed.get("ok") is True
             )
 
         def writer(claim: _ClaimedExactHumanApproval) -> Mapping[str, Any]:
             authority = _authority(plan, claim, context, mode=mode)
-            return _run_with_store(
+            if finalize_only is not None:
+                refreshed = _completed_subset_supersession_pending(
+                    plan,
+                    locator["execution_sha256"],
+                    authority=authority,
+                )
+                if refreshed is None:
+                    raise _fail("local_recovery_resume_invalid")
+                parent, pending_document, completed = refreshed
+                _persist_subset_supersession_final(
+                    parent,
+                    pending_document,
+                    completed,
+                )
+                completed["superseded_parent_apply_execution"] = True
+                return completed
+            pending = (
+                _matching_subset_supersession_pending(
+                    plan,
+                    authority,
+                    locator["execution_sha256"],
+                )
+                if mode == "revert"
+                else None
+            )
+            resumed = _run_with_store(
                 plan,
                 authority,
                 checkpoints,
@@ -1976,6 +2926,15 @@ def resume_local_recovery(
                 resume=True,
                 progress_hook=progress_hook,
             )
+            if pending is not None and resumed.get("ok") is True:
+                parent, pending_document = pending
+                _persist_subset_supersession_final(
+                    parent,
+                    pending_document,
+                    resumed,
+                )
+                resumed["superseded_parent_apply_execution"] = True
+            return resumed
 
         result = _resume_exact_human_approved_write_core(
             plan.archive_root,

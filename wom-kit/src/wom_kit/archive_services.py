@@ -31659,6 +31659,15 @@ def notion_import_locator_loss_audit(
                             unresolved_reason_codes.append(
                                 "external_locator_occurrence_anchor_incomplete"
                             )
+                        elif occurrence_binding_state == "all_bound":
+                            # An occurrence anchor is a useful diagnostic
+                            # coordinate, but the sidecar schema does not bind
+                            # it to a completed recovery receipt.  Never let a
+                            # manually supplied (or provenance-labelled) anchor
+                            # reduce the unresolved-loss count by itself.
+                            unresolved_reason_codes.append(
+                                "external_locator_occurrence_recovery_receipt_missing"
+                            )
 
                         if (
                             occurrence_total is not None
@@ -31839,7 +31848,7 @@ def notion_import_locator_loss_audit(
         )
     if occurrence_resolution_unknown:
         next_safe_actions.append(
-            "Do not claim an unresolved occurrence count until each omitted occurrence is count-consistent and bound to an exact locator-sidecar occurrence anchor."
+            "Do not claim an unresolved occurrence count until each omitted occurrence is count-consistent and bound to an exact completed recovery receipt; locator-sidecar occurrence anchors alone are diagnostic evidence only."
         )
     if source_page_id_present_count:
         next_safe_actions.append(
@@ -31940,6 +31949,8 @@ def notion_import_locator_loss_audit(
             "source_page_id_join_key_presence_audited": True,
             "external_locator_sidecar_state_audited": True,
             "occurrence_anchor_presence_audited": True,
+            "anchored_locator_sidecar_claimed_resolved": False,
+            "verified_occurrence_recovery_receipt_supported": False,
             "unbound_locator_sidecar_claimed_resolved": False,
             "source_mirror_read_by_this_command": False,
             "provider_locator_reconstruction_implemented": False,

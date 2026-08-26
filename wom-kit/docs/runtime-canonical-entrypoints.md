@@ -1,6 +1,6 @@
 # Runtime Canonical Entry Points
 
-Status: v0.4.7 receipt-bound local recovery, project-isolated runtime, and Git backup checkpoint
+Status: v0.4.8 interruption-safe integrity recovery, project-isolated runtime, and Git backup checkpoint
 
 Previous checkpoint: Status: v0.4.3 exact recovery, project update, and Git backup checkpoint
 
@@ -110,7 +110,7 @@ v0.4.3 GitHub Release wheel has been independently confirmed, use the public
 wheel directly:
 
 ```powershell
-uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.7/wom_kit-0.4.7-py3-none-any.whl"
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.8/wom_kit-0.4.8-py3-none-any.whl"
 archive --version
 ```
 

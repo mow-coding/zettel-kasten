@@ -35,7 +35,7 @@ RESOURCE_MANIFEST_KEYS = frozenset(
 RESOURCE_ROW_KEYS = frozenset({"source", "packaged", "bytes", "sha256"})
 SHA256_RE = re.compile(r"[0-9a-f]{64}\Z")
 RESOURCE_READ_CHUNK_SIZE = 64 * 1024
-WHEEL_INSTALL_CHECK_SCHEMA = "wom-kit/wheel-install-check/v0.3"
+WHEEL_INSTALL_CHECK_SCHEMA = "wom-kit/wheel-install-check/v0.4"
 EXPECTED_UNICODEDATA2_DISTRIBUTION_VERSION = "17.0.1"
 EXPECTED_UNICODEDATA_VERSION = "17.0.0"
 MCP_PROTOCOL_VERSION = "2025-03-26"
@@ -216,6 +216,567 @@ print(
     )
 )
 '''
+INSTALLED_V048_SMOKE_SCHEMA = "wom-kit/installed-v048-wheel-smoke/v0.1"
+INSTALLED_V048_SMOKE_SCRIPT = r'''
+import hashlib
+import io
+import json
+import subprocess
+import sys
+from contextlib import redirect_stderr, redirect_stdout
+from pathlib import Path
+from unittest import mock
+
+from wom_kit import (
+    archive_cli,
+    archive_services,
+    object_storage_setup_registration,
+    objet_capture_selection_exact,
+)
+from wom_kit.exact_human_approval_windows import APPROVE_BUTTON_ID
+from wom_kit.exact_human_approval_workflow import (
+    _execute_exact_human_approved_write_core,
+)
+from wom_kit.exact_operation_manifest import ExactOperationApprovalAuthority
+
+
+ROOT = Path(sys.argv[1])
+ROOT.mkdir(parents=True, exist_ok=False)
+ARCHIVE_ENTRYPOINT = Path(sys.argv[2])
+if not ARCHIVE_ENTRYPOINT.is_file():
+    raise RuntimeError("installed_v048_entrypoint_missing")
+REVIEWER = "person:installed-wheel-smoke"
+PRIVATE_MARKER = "SYNTHETIC_PRIVATE_VALUE_MUST_NOT_ESCAPE"
+
+
+class _NativeApproval:
+    def __init__(self):
+        self.calls = 0
+
+    def show(self, **_kwargs):
+        self.calls += 1
+        return APPROVE_BUTTON_ID, True
+
+
+class _KeyProvider:
+    def __init__(self):
+        self.calls = 0
+
+    def use_key(self, _root, consumer, *, create_if_missing=False):
+        if create_if_missing is not True:
+            raise RuntimeError("installed_v048_key_contract_failed")
+        self.calls += 1
+        key = bytearray(range(32))
+        try:
+            return consumer(memoryview(key))
+        finally:
+            key[:] = b"\0" * len(key)
+
+
+native = _NativeApproval()
+key_provider = _KeyProvider()
+
+
+def _approved_write(root, context, writer):
+    return _execute_exact_human_approved_write_core(
+        root,
+        context,
+        writer,
+        native=native,
+        key_provider=key_provider,
+    )
+
+
+def _run_cli(arguments):
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+    with redirect_stdout(stdout), redirect_stderr(stderr):
+        code = archive_cli.main(arguments)
+    if int(code) != 0 or stderr.getvalue():
+        raise RuntimeError("installed_v048_cli_execution_failed")
+    try:
+        value = json.loads(stdout.getvalue())
+    except json.JSONDecodeError:
+        raise RuntimeError("installed_v048_cli_output_invalid") from None
+    if not isinstance(value, dict) or value.get("ok") is not True:
+        raise RuntimeError("installed_v048_cli_result_failed")
+    serialized = json.dumps(value, sort_keys=True)
+    if PRIVATE_MARKER in serialized or str(ROOT) in serialized:
+        raise RuntimeError("installed_v048_cli_privacy_failed")
+    return value
+
+
+console_entrypoint_dry_run_count = 0
+
+
+def _run_console(arguments):
+    global console_entrypoint_dry_run_count
+    completed = subprocess.run(
+        [str(ARCHIVE_ENTRYPOINT), *arguments],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="strict",
+        check=False,
+        timeout=60,
+    )
+    if completed.returncode != 0 or completed.stderr:
+        raise RuntimeError("installed_v048_console_entrypoint_failed")
+    try:
+        value = json.loads(completed.stdout)
+    except json.JSONDecodeError:
+        raise RuntimeError("installed_v048_console_output_invalid") from None
+    if not isinstance(value, dict) or value.get("ok") is not True:
+        raise RuntimeError("installed_v048_console_result_failed")
+    serialized = json.dumps(value, sort_keys=True)
+    if PRIVATE_MARKER in serialized or str(ROOT) in serialized:
+        raise RuntimeError("installed_v048_console_privacy_failed")
+    console_entrypoint_dry_run_count += 1
+    return value
+
+
+def _write_archive(root, archive_id):
+    root.mkdir(parents=True)
+    (root / "archive.yml").write_text(
+        "archive_id: " + archive_id + "\n",
+        encoding="utf-8",
+    )
+
+
+def _capture_flow():
+    root = ROOT / "capture"
+    archive_id = "archive:test:installed-v048-capture"
+    _write_archive(root, archive_id)
+    staged_relative = "staging/incoming/synthetic.bin"
+    staged_payload = b"installed wheel exact local capture\n"
+    staged = root.joinpath(*staged_relative.split("/"))
+    staged.parent.mkdir(parents=True)
+    staged.write_bytes(staged_payload)
+    source_record = {
+        "ok": True,
+        "dry_run": True,
+        "lifecycle_action": "source_intake_plan",
+        "archive_id": archive_id,
+        "blockers": [],
+        "content_access": dict(
+            archive_services.SOURCE_INTAKE_CONTENT_ACCESS_EXPECTATIONS
+        ),
+        "source_refs_for_draft": [],
+    }
+    source_digest = archive_services.sha256_json_value(source_record)
+    source_relative = archive_services.source_intake_record_path(source_digest)
+    source_path = root.joinpath(*source_relative.split("/"))
+    source_path.parent.mkdir(parents=True)
+    source_path.write_text(
+        json.dumps(source_record, indent=2, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+    plan = objet_capture_selection_exact.plan_existing_intake_capture_selection(
+        root,
+        staged_path=staged_relative,
+        source_intake_receipt=source_relative,
+    )
+    _run_console(
+        [
+            "objet-capture-selection",
+            str(root),
+            "--staged-path",
+            staged_relative,
+            "--source-intake-receipt",
+            source_relative,
+            "--exact-existing-intake",
+            "--dry-run",
+            "--format",
+            "json",
+        ]
+    )
+    before_native = native.calls
+    selection = _run_cli(
+        [
+            "objet-capture-selection",
+            str(root),
+            "--staged-path",
+            staged_relative,
+            "--source-intake-receipt",
+            source_relative,
+            "--exact-existing-intake",
+            "--approve",
+            "--reviewed-by",
+            REVIEWER,
+            "--format",
+            "json",
+        ]
+    )
+    capture = _run_cli(
+        [
+            "objet-capture",
+            str(root),
+            "--selection",
+            plan.selection_relative_path,
+            "--exact-local",
+            "--approve",
+            "--reviewed-by",
+            REVIEWER,
+            "--format",
+            "json",
+        ]
+    )
+    digest = hashlib.sha256(staged_payload).hexdigest()
+    object_path = root / "objects" / "sha256" / digest[:2] / digest
+    if (
+        selection.get("state") != "selection_recorded"
+        or capture.get("summary", {}).get("captured") != 1
+        or object_path.read_bytes() != staged_payload
+        or native.calls - before_native != 2
+    ):
+        raise RuntimeError("installed_v048_capture_evidence_failed")
+    return {
+        "selection_recorded": True,
+        "capture_count": 1,
+        "object_bytes_exact": True,
+        "native_approval_count": 2,
+    }
+
+
+def _authority(seed):
+    return ExactOperationApprovalAuthority.from_reference(
+        {
+            "schema_version": "wom-kit/exact-human-approval-reference/v0.1",
+            "approval_id": "approval_" + seed * 32,
+            "context_sha256": "sha256:" + "b" * 64,
+            "approval_authority_sha256": "sha256:" + "c" * 64,
+            "one_use": True,
+        }
+    )
+
+
+def _storage_flow():
+    root = ROOT / "storage"
+    _write_archive(root, "archive:test:installed-v048-storage")
+    settings = {
+        "provider": "cloudflare-r2",
+        "profile_id": "profile:personal:wheel-smoke",
+        "profile_slug": "wheel-smoke",
+        "storage_account_ref": "storage:account:wheel-smoke",
+        "bucket_name": "zettel-kasten-wheel-smoke-objets",
+        "endpoint_ref": "provider:endpoint:cloudflare-r2",
+    }
+    plan = object_storage_setup_registration.plan_object_storage_setup_registration(
+        root, **settings
+    )
+    _run_console(
+        [
+            "object-storage",
+            str(root),
+            "--provider",
+            settings["provider"],
+            "--profile-id",
+            settings["profile_id"],
+            "--profile-slug",
+            settings["profile_slug"],
+            "--storage-account-ref",
+            settings["storage_account_ref"],
+            "--bucket-name",
+            settings["bucket_name"],
+            "--endpoint-ref",
+            settings["endpoint_ref"],
+            "--dry-run",
+            "--format",
+            "json",
+        ]
+    )
+    original_provider = plan.provider_original_bytes
+    before_native = native.calls
+    result = _run_cli(
+        [
+            "object-storage",
+            str(root),
+            "--provider",
+            settings["provider"],
+            "--profile-id",
+            settings["profile_id"],
+            "--profile-slug",
+            settings["profile_slug"],
+            "--storage-account-ref",
+            settings["storage_account_ref"],
+            "--bucket-name",
+            settings["bucket_name"],
+            "--endpoint-ref",
+            settings["endpoint_ref"],
+            "--approve",
+            "--reviewed-by",
+            REVIEWER,
+            "--format",
+            "json",
+        ]
+    )
+    evidence = object_storage_setup_registration.validate_object_storage_setup_evidence(
+        root,
+        provider_kind=settings["provider"],
+        store_ref=settings["storage_account_ref"],
+    )
+    reverted = object_storage_setup_registration.revert_object_storage_setup_registration(
+        plan,
+        approval_authority=_authority("d"),
+    )
+    provider_path = root / "provider-bindings.yml"
+    current_provider = provider_path.read_bytes() if provider_path.exists() else None
+    receipt_path = root.joinpath(*plan.receipt_relative.split("/"))
+    if (
+        result.get("state") != "setup_registration_completed"
+        or evidence.mode != "exact_registration_v1"
+        or reverted.get("status") != "completed"
+        or current_provider != original_provider
+        or receipt_path.exists()
+        or native.calls - before_native != 1
+    ):
+        raise RuntimeError("installed_v048_storage_evidence_failed")
+    return {
+        "registration_completed": True,
+        "setup_evidence_mode": "exact_registration_v1",
+        "provider_api_called": False,
+        "credential_value_read": False,
+        "exact_revert_completed": True,
+        "original_local_state_restored": True,
+        "native_approval_count": 1,
+        "revert_route": "installed_exact_operation_api",
+    }
+
+
+def _duplicate_flow():
+    root = ROOT / "duplicate"
+    _write_archive(root, "archive:test:installed-v048-duplicate")
+    payload = b"installed wheel strict duplicate pair\n"
+    digest = hashlib.sha256(payload).hexdigest()
+    canonical_key = "objects/sha256/" + digest[:2] + "/" + digest
+    object_path = root.joinpath(*canonical_key.split("/"))
+    object_path.parent.mkdir(parents=True)
+    object_path.write_bytes(payload)
+    common = {
+        "object_id": "sha256:" + digest,
+        "sha256": digest,
+        "size_bytes": len(payload),
+    }
+    canonical = {
+        **common,
+        "logical_key": canonical_key,
+        "mime": "text/plain",
+        "locations": [
+            {
+                "provider": "local",
+                "path": canonical_key,
+                "availability": "available",
+            }
+        ],
+        "provenance": {"source": "canonical-capture", "marker": PRIVATE_MARKER},
+    }
+    external = {
+        **common,
+        "logical_key": (
+            "objects/external/prehashed/private_store/"
+            + digest[:2]
+            + "/"
+            + digest
+        ),
+        "mime": "application/octet-stream",
+        "locations": [
+            {
+                "provider": "external_prehashed",
+                "store_kind": "private_store",
+                "store_ref": PRIVATE_MARKER,
+                "availability": "declared_external",
+            }
+        ],
+        "provenance": {"source": "external-ledger", "marker": PRIVATE_MARKER},
+    }
+    manifest = root / "objects" / "manifests" / "files.jsonl"
+    manifest.parent.mkdir(parents=True)
+    original = b"".join(
+        json.dumps(row, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        + b"\n"
+        for row in (canonical, external)
+    )
+    manifest.write_bytes(original)
+    _run_console(
+        [
+            "duplicate-object-reconcile",
+            str(root),
+            "--dry-run",
+            "--format",
+            "json",
+        ]
+    )
+    before_native = native.calls
+    applied = _run_cli(
+        [
+            "duplicate-object-reconcile",
+            str(root),
+            "--approve",
+            "--reviewed-by",
+            REVIEWER,
+            "--format",
+            "json",
+        ]
+    )
+    reconciled_lines = [
+        line for line in manifest.read_text(encoding="utf-8").splitlines() if line
+    ]
+    if len(reconciled_lines) != 1:
+        raise RuntimeError("installed_v048_duplicate_apply_failed")
+    reconciled = json.loads(reconciled_lines[0])
+    if (
+        applied.get("reconciled_canonical_external_pair_count") != 1
+        or reconciled.get("logical_key") != canonical_key
+        or not isinstance(reconciled.get("_wom_private_duplicate_reconciliation"), dict)
+    ):
+        raise RuntimeError("installed_v048_duplicate_evidence_failed")
+    _run_console(
+        [
+            "duplicate-object-reconcile",
+            str(root),
+            "--revert",
+            "--dry-run",
+            "--format",
+            "json",
+        ]
+    )
+    reverted = _run_cli(
+        [
+            "duplicate-object-reconcile",
+            str(root),
+            "--revert",
+            "--approve",
+            "--reviewed-by",
+            REVIEWER,
+            "--format",
+            "json",
+        ]
+    )
+    if (
+        reverted.get("restored_exact_original_manifest_bytes") is not True
+        or manifest.read_bytes() != original
+        or native.calls - before_native != 2
+    ):
+        raise RuntimeError("installed_v048_duplicate_revert_failed")
+    return {
+        "strict_pair_reconciled_count": 1,
+        "private_evidence_preserved": True,
+        "whole_manifest_revert_completed": True,
+        "original_manifest_bytes_restored": True,
+        "native_approval_count": 2,
+    }
+
+
+with (
+    mock.patch.object(
+        objet_capture_selection_exact,
+        "_execute_exact_human_approved_write",
+        side_effect=_approved_write,
+    ),
+    mock.patch.object(
+        object_storage_setup_registration,
+        "_execute_exact_human_approved_write",
+        side_effect=_approved_write,
+    ),
+    mock.patch.object(
+        archive_cli,
+        "_execute_exact_human_approved_write",
+        side_effect=_approved_write,
+    ),
+):
+    capture_evidence = _capture_flow()
+    storage_evidence = _storage_flow()
+    duplicate_evidence = _duplicate_flow()
+
+if (
+    native.calls != 5
+    or key_provider.calls != 5
+    or console_entrypoint_dry_run_count != 4
+):
+    raise RuntimeError("installed_v048_approval_count_failed")
+
+print(
+    json.dumps(
+        {
+            "ok": True,
+            "schema": "wom-kit/installed-v048-wheel-smoke/v0.1",
+            "entrypoint_route": "installed_archive_cli_main",
+            "installed_console_entrypoint_checked": True,
+            "console_entrypoint_dry_run_count": console_entrypoint_dry_run_count,
+            "approval_seam": "test_only_native_decision_injection",
+            "capture": capture_evidence,
+            "object_storage": storage_evidence,
+            "duplicate_reconciliation": duplicate_evidence,
+            "native_approval_count": native.calls,
+            "provider_api_called": False,
+            "credential_value_read": False,
+            "private_values_echoed": False,
+        },
+        sort_keys=True,
+    )
+)
+'''
+WHEEL_PRIVACY_TEXT_EXTENSIONS = frozenset(
+    {
+        ".cfg",
+        ".cmd",
+        ".csv",
+        ".css",
+        ".html",
+        ".ini",
+        ".js",
+        ".json",
+        ".jsonl",
+        ".md",
+        ".mjs",
+        ".ps1",
+        ".py",
+        ".pyi",
+        ".rst",
+        ".sh",
+        ".sql",
+        ".toml",
+        ".tsv",
+        ".txt",
+        ".xml",
+        ".yaml",
+        ".yml",
+    }
+)
+WHEEL_PRIVACY_TEXT_BASENAMES = frozenset(
+    {"entry_points.txt", "metadata", "record", "top_level.txt", "wheel"}
+)
+WHEEL_PRIVACY_MAX_MEMBER_BYTES = 32 * 1024 * 1024
+WHEEL_PRIVACY_MAX_TOTAL_BYTES = 256 * 1024 * 1024
+WHEEL_WINDOWS_USER_PATH_RE = re.compile(
+    r"(?i)(?:[a-z]:[\\/]+users[\\/]+)(?P<account>[^\\/\r\n]+)"
+)
+WHEEL_WINDOWS_GENERIC_ACCOUNT_SEGMENTS = frozenset(
+    {
+        "%username%",
+        "$env:username",
+        "<user>",
+        "<username>",
+        "{user}",
+        "{username}",
+        "all users",
+        "default",
+        "default user",
+        "public",
+    }
+)
+WHEEL_SECRET_PATTERNS = (
+    re.compile(r"AKIA[0-9A-Z]{16}"),
+    re.compile(r"gh[pousr]_[A-Za-z0-9]{36,}"),
+    re.compile(r"xox[baprs]-[A-Za-z0-9-]{20,}"),
+    re.compile(r"secret_[A-Za-z0-9]{24,}"),
+    re.compile(r"eyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}"),
+    re.compile(
+        r"(?i)\b(?:api[_-]?key|access[_-]?token|client[_-]?secret|password|passwd)"
+        r"[\"']?\s*[:=]\s*[\"'][^\"'\s]{8,}[\"']"
+    ),
+    re.compile("-----BEGIN " + r"(?:RSA |EC |OPENSSH )?" + "PRIVATE KEY-----"),
+)
 WINDOWS_CREATE_SUSPENDED = 0x00000004
 WINDOWS_JOB_TERMINATION_TIMEOUT_MILLISECONDS = 1000
 WINDOWS_FORBIDDEN_SEGMENT_CHARACTERS = frozenset('<>:"|?*')
@@ -694,6 +1255,100 @@ def assert_wheel_resources(wheel: Path) -> dict[str, int]:
         raise
     except Exception as exc:
         raise WheelCheckError("Wheel resource integrity check failed.") from exc
+
+
+def _wheel_member_is_declared_text(name: str) -> bool:
+    basename = PurePosixPath(name).name.casefold()
+    suffix = PurePosixPath(name).suffix.casefold()
+    return (
+        basename in WHEEL_PRIVACY_TEXT_BASENAMES
+        or suffix in WHEEL_PRIVACY_TEXT_EXTENSIONS
+    )
+
+
+def _wheel_member_text(data: bytes, *, declared_text: bool) -> str | None:
+    """Decode text-like bytes without treating opaque binary members as text."""
+
+    if b"\0" in data:
+        if declared_text:
+            raise WheelCheckError("Wheel privacy scan could not verify a text member.")
+        return None
+    try:
+        text = data.decode("utf-8", errors="strict")
+    except UnicodeDecodeError:
+        if declared_text:
+            raise WheelCheckError("Wheel privacy scan could not verify a text member.")
+        return None
+    if declared_text:
+        return text
+    if not text:
+        return text
+    control_count = sum(
+        1
+        for character in text
+        if ord(character) < 32 and character not in "\t\r\n\f"
+    )
+    if control_count * 100 > len(text):
+        return None
+    return text
+
+
+def _contains_specific_windows_user_path(text: str) -> bool:
+    for match in WHEEL_WINDOWS_USER_PATH_RE.finditer(text):
+        account = match.group("account").strip().casefold()
+        if account not in WHEEL_WINDOWS_GENERIC_ACCOUNT_SEGMENTS:
+            return True
+    return False
+
+
+def _assert_wheel_privacy(wheel: Path) -> dict[str, int]:
+    """Scan all declared or content-detected text members without echoing data."""
+
+    text_like_member_count = 0
+    text_like_bytes_scanned = 0
+    total_uncompressed_bytes = 0
+    with zipfile.ZipFile(wheel) as archive:
+        for info in archive.infolist():
+            if info.file_size < 0 or info.file_size > WHEEL_PRIVACY_MAX_MEMBER_BYTES:
+                raise WheelCheckError("Wheel privacy scan exceeded its member bound.")
+            total_uncompressed_bytes += info.file_size
+            if total_uncompressed_bytes > WHEEL_PRIVACY_MAX_TOTAL_BYTES:
+                raise WheelCheckError("Wheel privacy scan exceeded its total bound.")
+            data = _read_zip_member_bytes(
+                archive,
+                info,
+                expected_size=info.file_size,
+                label="Wheel privacy member",
+            )
+            text = _wheel_member_text(
+                data,
+                declared_text=_wheel_member_is_declared_text(info.filename),
+            )
+            if text is None:
+                continue
+            text_like_member_count += 1
+            text_like_bytes_scanned += len(data)
+            if _contains_specific_windows_user_path(text):
+                raise WheelCheckError("Wheel privacy scan detected forbidden content.")
+            if any(pattern.search(text) is not None for pattern in WHEEL_SECRET_PATTERNS):
+                raise WheelCheckError("Wheel privacy scan detected forbidden content.")
+    return {
+        "privacy_text_like_member_count": text_like_member_count,
+        "privacy_text_like_bytes_scanned": text_like_bytes_scanned,
+        "privacy_windows_user_path_match_count": 0,
+        "privacy_secret_pattern_match_count": 0,
+    }
+
+
+def assert_wheel_privacy(wheel: Path) -> dict[str, int]:
+    """Normalize ZIP failures and keep member names and matched bytes private."""
+
+    try:
+        return _assert_wheel_privacy(wheel)
+    except WheelCheckError:
+        raise
+    except Exception as exc:
+        raise WheelCheckError("Wheel privacy scan failed.") from exc
 
 
 def _parse_entrypoint_json_object(text: str, *, label: str) -> dict[str, Any]:
@@ -1568,6 +2223,7 @@ def _wheel_install_success_result(
     entrypoints_checked: list[str],
     entrypoint_evidence: dict[str, Any],
     letter140_link_evidence: dict[str, Any],
+    v048_workflow_evidence: dict[str, Any],
     wheel_filename: str,
     wheel_sha256: str,
     artifact_preserved: bool,
@@ -1582,6 +2238,7 @@ def _wheel_install_success_result(
         "entrypoints_checked": entrypoints_checked,
         "entrypoint_evidence": entrypoint_evidence,
         "installed_letter140_link_workflow": letter140_link_evidence,
+        "installed_v048_recovery_workflows": v048_workflow_evidence,
         "runtime_skill_lifecycle": "passed",
         "onboarding_preview": "passed",
         "onboarding_write": "fixed_closed",
@@ -1636,6 +2293,75 @@ def _check_installed_letter140_link_workflow(
     return evidence
 
 
+def _check_installed_v048_workflows(
+    python: Path,
+    archive_entrypoint: Path,
+    fixture_root: Path,
+    *,
+    cwd: Path,
+) -> dict[str, Any]:
+    """Run v0.4.8 recovery paths from the isolated installed package only."""
+
+    stdout = _run_installed_entrypoint(
+        [
+            str(python),
+            "-I",
+            "-c",
+            INSTALLED_V048_SMOKE_SCRIPT,
+            str(fixture_root),
+            str(archive_entrypoint),
+        ],
+        cwd=cwd,
+        label="installed v0.4.8 recovery workflows",
+    )
+    evidence = _parse_entrypoint_json_object(
+        stdout,
+        label="Installed v0.4.8 recovery workflow output",
+    )
+    expected = {
+        "ok": True,
+        "schema": INSTALLED_V048_SMOKE_SCHEMA,
+        "entrypoint_route": "installed_archive_cli_main",
+        "installed_console_entrypoint_checked": True,
+        "console_entrypoint_dry_run_count": 4,
+        "approval_seam": "test_only_native_decision_injection",
+        "capture": {
+            "selection_recorded": True,
+            "capture_count": 1,
+            "object_bytes_exact": True,
+            "native_approval_count": 2,
+        },
+        "object_storage": {
+            "registration_completed": True,
+            "setup_evidence_mode": "exact_registration_v1",
+            "provider_api_called": False,
+            "credential_value_read": False,
+            "exact_revert_completed": True,
+            "original_local_state_restored": True,
+            "native_approval_count": 1,
+            "revert_route": "installed_exact_operation_api",
+        },
+        "duplicate_reconciliation": {
+            "strict_pair_reconciled_count": 1,
+            "private_evidence_preserved": True,
+            "whole_manifest_revert_completed": True,
+            "original_manifest_bytes_restored": True,
+            "native_approval_count": 2,
+        },
+        "native_approval_count": 5,
+        "provider_api_called": False,
+        "credential_value_read": False,
+        "private_values_echoed": False,
+    }
+    if evidence != expected:
+        raise WheelCheckError(
+            "Installed v0.4.8 workflows did not prove the exact expected "
+            "selection/capture, storage registration/revert, and duplicate "
+            "reconciliation/revert contract."
+        )
+    return evidence
+
+
 def check_wheel(output_dir: Path | None = None) -> dict[str, Any]:
     run(
         [sys.executable, str(SYNC_TOOL), "--check"],
@@ -1667,6 +2393,7 @@ def check_wheel(output_dir: Path | None = None) -> dict[str, Any]:
             raise WheelCheckError(f"Expected one wheel, found {len(wheels)}.")
         wheel = wheels[0]
         wheel_counts = assert_wheel_resources(wheel)
+        wheel_counts.update(assert_wheel_privacy(wheel))
 
         venv = temp_root / "venv"
         run([sys.executable, "-m", "venv", str(venv)], cwd=temp_root, label="venv creation")
@@ -1916,6 +2643,12 @@ def check_wheel(output_dir: Path | None = None) -> dict[str, Any]:
             letter140_fixture,
             cwd=temp_root,
         )
+        v048_workflow_evidence = _check_installed_v048_workflows(
+            python,
+            archive,
+            temp_root / "v048-recovery-archives",
+            cwd=temp_root,
+        )
 
         wheel_sha256 = hashlib.sha256(wheel.read_bytes()).hexdigest()
         artifact_preserved = False
@@ -1937,6 +2670,7 @@ def check_wheel(output_dir: Path | None = None) -> dict[str, Any]:
             entrypoints_checked=entrypoints_checked,
             entrypoint_evidence=entrypoint_evidence,
             letter140_link_evidence=letter140_link_evidence,
+            v048_workflow_evidence=v048_workflow_evidence,
             wheel_filename=wheel.name,
             wheel_sha256=wheel_sha256,
             artifact_preserved=artifact_preserved,

@@ -428,6 +428,7 @@ from .paths import (
 )
 from .exact_human_approval import (
     ExactHumanApprovalError,
+    _audit_exact_human_approval_terminal_record_core,
     exact_human_approval_archive_identity_sha256,
 )
 from .exact_human_approval_windows import (
@@ -8484,6 +8485,7 @@ def _archive_integrity_cli_error(
     *,
     lifecycle_action: str,
     reason_code: str,
+    next_safe_action: str | None = None,
 ) -> int:
     """Return one fixed failure without reflecting a receipt or object id."""
 
@@ -8492,29 +8494,43 @@ def _archive_integrity_cli_error(
         if re.fullmatch(r"[a-z][a-z0-9_]{0,95}", str(reason_code or ""))
         else "archive_integrity_operation_failed"
     )
+    safe_next_action = (
+        next_safe_action
+        if next_safe_action
+        == "rerun_duplicate_revert_resume_with_same_reviewer"
+        else None
+    )
     if getattr(args, "format", None) == "json":
-        print_json(
-            {
-                "ok": False,
-                "state": "blocked",
-                "lifecycle_action": lifecycle_action,
-                "reason_codes": [safe_reason],
-                "private_values_echoed": False,
-            }
-        )
+        result = {
+            "ok": False,
+            "state": "blocked",
+            "lifecycle_action": lifecycle_action,
+            "reason_codes": [safe_reason],
+            "private_values_echoed": False,
+        }
+        if safe_next_action is not None:
+            result["next_safe_actions"] = [safe_next_action]
+        print_json(result)
     else:
         print(
             "Archive integrity operation was blocked. "
             f"Reason code: {safe_reason}.",
             file=sys.stderr,
         )
+        if safe_next_action is not None:
+            print(
+                "Run the same duplicate revert with --resume and the same "
+                "--reviewed-by value; WOM will reuse the existing approval "
+                "without another approval dialog.",
+                file=sys.stderr,
+            )
     return 1
 
 
 def _use_archive_receipt_authentication_key(
     archive_root: Path,
-    consumer: Callable[[memoryview], dict[str, Any]],
-) -> dict[str, Any]:
+    consumer: Callable[[memoryview], Any],
+) -> Any:
     """Use the established callback-only Windows key boundary read-only."""
 
     from .credential_secure_intake_windows import _CtypesWindowsNativeFacade
@@ -8529,40 +8545,96 @@ def _use_archive_receipt_authentication_key(
     )
 
 
+def _duplicate_object_terminal_auditor(
+    archive_root: Path,
+) -> Callable[..., bool]:
+    """Build a lazy read-only auditor; archives with no terminal record need no key."""
+
+    def _audit(
+        reference: Mapping[str, Any],
+        expected_operation: ExactHumanApprovalOperation,
+        expected_plan_sha256: str,
+        expected_target_binding_sha256: str,
+        allowed_statuses: tuple[str, ...],
+        expected_succeeded_evidence: Mapping[str, str] | None,
+        payload: bytes,
+        expected_mac: str,
+    ) -> bool:
+        return bool(
+            _use_archive_receipt_authentication_key(
+                archive_root,
+                lambda key: _audit_exact_human_approval_terminal_record_core(
+                    archive_root,
+                    reference,
+                    expected_operation=expected_operation,
+                    expected_plan_sha256=expected_plan_sha256,
+                    expected_target_binding_sha256=(
+                        expected_target_binding_sha256
+                    ),
+                    allowed_statuses=allowed_statuses,
+                    expected_succeeded_evidence_digests=(
+                        expected_succeeded_evidence
+                    ),
+                    payload=payload,
+                    expected_mac=expected_mac,
+                    receipt_authentication_key=key,
+                ),
+            )
+        )
+
+    return _audit
+
+
 def command_duplicate_object_reconcile(args: argparse.Namespace) -> int:
     """Plan, approve, or exactly revert bounded duplicate reconciliation."""
 
     revert = bool(getattr(args, "revert", False))
+    resume = bool(getattr(args, "resume", False))
     lifecycle_action = (
         "duplicate_object_reconciliation_revert"
         if revert
         else "duplicate_object_reconciliation"
     )
-    if bool(args.dry_run) == bool(args.approve):
+    if sum((bool(args.dry_run), bool(args.approve), resume)) != 1:
         return _archive_integrity_cli_error(
             args,
             lifecycle_action=lifecycle_action,
             reason_code="duplicate_object_execution_mode_invalid",
         )
-    if args.approve and not str(args.reviewed_by or "").strip():
+    if resume and not revert:
+        return _archive_integrity_cli_error(
+            args,
+            lifecycle_action=lifecycle_action,
+            reason_code="duplicate_object_execution_mode_invalid",
+        )
+    if (args.approve or resume) and not str(args.reviewed_by or "").strip():
         return _archive_integrity_cli_error(
             args,
             lifecycle_action=lifecycle_action,
             reason_code="duplicate_object_reviewer_required",
         )
 
+    reporter = CommandProgressReporter(
+        bool(getattr(args, "progress", False)),
+        label="duplicate-object-reconcile",
+    )
+    reporter.progress("duplicate-plan", "start", None, None)
     try:
         archive_root = Path(args.archive_root)
+        terminal_auditor = _duplicate_object_terminal_auditor(archive_root)
         if revert:
             plan = duplicate_object_reconciliation._plan_duplicate_object_reconciliation_revert_core(
-                archive_root
+                archive_root,
+                terminal_auditor=terminal_auditor,
             )
             expected_manifest = plan.manifest_current_sha256
         else:
             plan = duplicate_object_reconciliation._plan_duplicate_object_reconciliation_core(
-                archive_root
+                archive_root,
+                terminal_auditor=terminal_auditor,
             )
             expected_manifest = plan.manifest_sha256
+        reporter.progress("duplicate-plan", "done", None, None)
         preview = plan.public_document()
         if args.dry_run:
             result = preview
@@ -8621,6 +8693,13 @@ def command_duplicate_object_reconcile(args: argparse.Namespace) -> int:
                         context=context,
                     )
 
+                def _finalize_reconciliation(approval_claim) -> None:
+                    duplicate_object_reconciliation._finalize_duplicate_object_reconciliation_revert_core(
+                        plan,
+                        approval_claim,
+                        context=context,
+                    )
+
             else:
                 context = duplicate_object_reconciliation._duplicate_object_reconciliation_context(
                     plan,
@@ -8634,11 +8713,52 @@ def command_duplicate_object_reconcile(args: argparse.Namespace) -> int:
                         context=context,
                     )
 
-            result = _execute_exact_human_approved_write(
-                archive_root,
-                context,
-                _write_reconciliation,
-            )
+            reporter.progress("duplicate-write", "start", None, None)
+            if resume:
+                approval_id = duplicate_object_reconciliation._duplicate_object_reconciliation_revert_resume_approval_id(
+                    plan,
+                    terminal_auditor=terminal_auditor,
+                )
+                resumed = _resume_exact_human_approved_transaction_core(
+                    archive_root,
+                    context,
+                    approval_id,
+                    lambda claim: duplicate_object_reconciliation._duplicate_object_reconciliation_revert_resume_checkpoint_matches(
+                        plan,
+                        claim,
+                        context=context,
+                        expected_claim_status="started",
+                    ),
+                    _write_reconciliation,
+                    lambda claim: duplicate_object_reconciliation._duplicate_object_reconciliation_revert_resume_checkpoint_matches(
+                        plan,
+                        claim,
+                        context=context,
+                        expected_claim_status="succeeded",
+                    ),
+                    _finalize_reconciliation,
+                )
+                result = {
+                    **preview,
+                    **resumed,
+                    "reason_code": (
+                        "duplicate_object_exact_revert_resume_succeeded"
+                    ),
+                    "restored_change_counts": dict(
+                        preview["source_change_counts"]
+                    ),
+                    "restored_exact_original_manifest_bytes": True,
+                }
+            else:
+                result = _execute_exact_human_approved_write(
+                    archive_root,
+                    context,
+                    _write_reconciliation,
+                    claim_succeeded_finalizer=(
+                        _finalize_reconciliation if revert else None
+                    ),
+                )
+            reporter.progress("duplicate-write", "done", None, None)
     except (
         duplicate_object_reconciliation.DuplicateObjectReconciliationError
     ) as exc:
@@ -8646,19 +8766,34 @@ def command_duplicate_object_reconcile(args: argparse.Namespace) -> int:
             args,
             lifecycle_action=lifecycle_action,
             reason_code=exc.code,
+            next_safe_action=(
+                "rerun_duplicate_revert_resume_with_same_reviewer"
+                if revert
+                and not resume
+                and exc.code == "duplicate_object_revert_state_unknown"
+                else None
+            ),
         )
     except (
         ExactHumanApprovalError,
         ExactHumanApprovalWindowsError,
         ExactHumanApprovalWorkflowError,
     ) as exc:
+        error_code = getattr(
+            exc,
+            "code",
+            "exact_human_approval_state_unknown",
+        )
         return _archive_integrity_cli_error(
             args,
             lifecycle_action=lifecycle_action,
-            reason_code=getattr(
-                exc,
-                "code",
-                "exact_human_approval_state_unknown",
+            reason_code=error_code,
+            next_safe_action=(
+                "rerun_duplicate_revert_resume_with_same_reviewer"
+                if revert
+                and not resume
+                and error_code == "exact_human_approval_state_unknown"
+                else None
             ),
         )
     except (OSError, TypeError, ValueError):
@@ -8667,6 +8802,8 @@ def command_duplicate_object_reconcile(args: argparse.Namespace) -> int:
             lifecycle_action=lifecycle_action,
             reason_code="duplicate_object_reconciliation_state_unknown",
         )
+    finally:
+        reporter.close()
 
     if args.format == "json":
         print_json(result)
@@ -23914,6 +24051,21 @@ def command_objet_capture_selection(args: argparse.Namespace) -> int:
         print("objet-capture-selection requires --reviewed-by when --approve is used.", file=sys.stderr)
         return 1
     if exact_existing_intake:
+        reporter = CommandProgressReporter(
+            bool(getattr(args, "progress", False)),
+            label="objet-capture-selection",
+        )
+        reporter.progress("selection-plan", "start", None, None)
+
+        def exact_progress(event: ExactOperationProgress) -> None:
+            document = event.public_document()
+            reporter.progress(
+                "exact-operation-" + str(document["stage"]),
+                str(document["mode"]),
+                int(document["completed_items"]),
+                int(document["total_items"]),
+            )
+
         unsupported_exact_values = [
             args.project_intake_receipt,
             args.derived_text_staged_path,
@@ -23943,6 +24095,7 @@ def command_objet_capture_selection(args: argparse.Namespace) -> int:
                         manifest_id=args.manifest_id,
                     )
                 )
+                reporter.progress("selection-plan", "done", None, None)
                 result = (
                     plan.public_document()
                     if args.dry_run
@@ -23954,6 +24107,7 @@ def command_objet_capture_selection(args: argparse.Namespace) -> int:
                                 args.expected_plan_sha256 or ""
                             ),
                             reviewer_claim=args.reviewed_by or "",
+                            progress_hook=exact_progress,
                         )
                     )
                 )
@@ -23971,6 +24125,7 @@ def command_objet_capture_selection(args: argparse.Namespace) -> int:
                 result = objet_capture_selection_exact.failure_document(
                     str(getattr(error, "code", "") or "")
                 )
+        reporter.close()
         print_objet_capture_selection_exact_result(result, args.format)
         return 0 if result.get("ok") else 1
     pairing_values = [
@@ -24041,7 +24196,12 @@ def print_objet_capture_selection_exact_result(
     print(f"- selected items: {result.get('selected_item_count', 0)}")
     print(
         "- selection recorded: "
-        + ("yes" if result.get("selection_created") else "no")
+        + (
+            "yes"
+            if result.get("writes_performed") is True
+            and result.get("state") == "selection_recorded"
+            else "no"
+        )
     )
     print("- paths shown: no")
     for blocker in result.get("blockers", []):
@@ -30638,7 +30798,16 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "Auto-discover one unambiguous successful reconciliation and "
             "restore its exact original whole-manifest bytes. Use with "
-            "--dry-run or --approve."
+            "--dry-run, --approve, or --resume."
+        ),
+    )
+    duplicate_object_reconcile.add_argument(
+        "--resume",
+        action="store_true",
+        help=(
+            "Resume the one exact pending revert claim without another "
+            "native approval dialog or another manifest write. Requires "
+            "--revert and the same --reviewed-by value."
         ),
     )
     duplicate_object_reconcile.add_argument(
@@ -30657,7 +30826,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
     duplicate_object_reconcile.add_argument(
         "--reviewed-by",
-        help="Safe reviewer claim required with --approve.",
+        help="Safe reviewer claim required with --approve or --resume.",
+    )
+    duplicate_object_reconcile.add_argument(
+        "--progress",
+        action="store_true",
+        help=(
+            "Stream immediate content-free planning/write status and "
+            "10-second heartbeats to stderr."
+        ),
     )
     duplicate_object_reconcile.add_argument(
         "--format",
@@ -36966,6 +37143,14 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     objet_capture_selection.add_argument("--reviewed-by", help="Reviewer id required when --approve is used.")
+    objet_capture_selection.add_argument(
+        "--progress",
+        action="store_true",
+        help=(
+            "Stream immediate content-free exact-selection status and "
+            "10-second heartbeats to stderr."
+        ),
+    )
     objet_capture_selection.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     objet_capture_selection.set_defaults(
         func=command_objet_capture_selection,

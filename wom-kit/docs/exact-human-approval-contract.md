@@ -1,6 +1,6 @@
 # Exact Human Approval Contract
 
-Status: v0.4.7 exact local capture, edge revert, and recovery decisions plus the v0.4.6 R2 and Windows human-decision boundaries; v0.4.0 one-use authority baseline preserved
+Status: v0.4.8 interruption-safe integrity recovery plus the v0.4.7 local-recovery and v0.4.6 R2 boundaries; v0.4.0 one-use authority baseline preserved
 
 ## Purpose
 
@@ -117,7 +117,24 @@ requires reconciliation and must never be reported as clean failure or
 retried automatically. Terminal `failed` is reserved for a future path with
 verifiable before-mutation proof.
 There is no claim expiry: one workflow invocation consumes the one-use
-authority, and a later attempt always requires a new live review.
+authority. A later attempt normally requires a new live review. The narrow
+v0.4.8 exception is `duplicate-object-reconcile --revert --resume`: when one
+authenticated `finalization_pending` revert exists, the command requires the
+same `--reviewed-by` value, discovers and reauthenticates that revert's existing
+`started` or `succeeded` claim, and opens no second native approval dialog. A
+`started` claim resumes the writer idempotently; after the workflow changes the
+claim to `succeeded`, terminal finalization completes. An already `succeeded`
+claim skips the writer and completes only the finalizer. Both branches preserve
+the source journal, perform no second manifest write, and rely on separate
+authenticated terminal-compensation evidence to block forward replay. Missing,
+forged, or ambiguous pending authority fails closed; production read-only
+planning audits existing approval state without creating a key or claim.
+If the initial revert stops as `duplicate_object_revert_state_unknown` or
+`exact_human_approval_state_unknown`, JSON carries only the fixed
+`next_safe_actions` value `rerun_duplicate_revert_resume_with_same_reviewer`
+and text gives that same-reviewer resume instruction. The guidance echoes
+no approval id, private value, or path. An explicit resume failure remains
+fail-closed and does not recursively recommend another resume.
 
 Operation receipts that can safely carry the reference record the content-free
 approval envelope directly. Strict legacy source-fidelity receipts use a

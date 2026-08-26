@@ -340,6 +340,14 @@ class ObjectStorageSetupRegistrationTests(unittest.TestCase):
                 plan, reviewer_claim="person:test"
             )
         self.assertTrue(result["ok"], result)
+        self.assertEqual(
+            result["counts"],
+            {
+                "provider_binding_field_change_count": 1,
+                "setup_receipt_create_count": 1,
+                "exact_manifest_item_count": 2,
+            },
+        )
         self.assertEqual(native.calls, 1)
         self.assertEqual(key_provider.calls, 1)
         self.assertEqual(transport_factory.call_count, 0)
@@ -357,6 +365,54 @@ class ObjectStorageSetupRegistrationTests(unittest.TestCase):
             ).mode,
             "exact_registration_v1",
         )
+
+    def test_success_text_reports_actual_local_registration_counts(self) -> None:
+        native = _Native(True)
+        key_provider = _KeyProvider()
+
+        def injected(root, context, writer):
+            return _execute_exact_human_approved_write_core(
+                root,
+                context,
+                writer,
+                native=native,
+                key_provider=key_provider,
+            )
+
+        with mock.patch.object(
+            setup_registration_module,
+            "_execute_exact_human_approved_write",
+            side_effect=injected,
+        ):
+            code, output = self.run_cli(
+                [
+                    "object-storage",
+                    str(self.root),
+                    "--provider",
+                    PROVIDER,
+                    "--profile-id",
+                    PROFILE_ID,
+                    "--profile-slug",
+                    PROFILE_SLUG,
+                    "--storage-account-ref",
+                    STORE_REF,
+                    "--bucket-name",
+                    BUCKET,
+                    "--endpoint-ref",
+                    ENDPOINT_REF,
+                    "--approve",
+                    "--reviewed-by",
+                    "person:test",
+                    "--format",
+                    "text",
+                ]
+            )
+
+        self.assertEqual(code, 0, output)
+        self.assertIn("Provider binding changes: 1", output)
+        self.assertIn("Setup receipts to create: 1", output)
+        self.assertNotIn("Provider binding changes: 0", output)
+        self.assertNotIn("Setup receipts to create: 0", output)
 
     def test_apply_preserves_unrelated_binding_and_revert_restores_exact_bytes(self) -> None:
         unrelated = {

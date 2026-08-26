@@ -12093,7 +12093,7 @@ class ArchiveCliTests(unittest.TestCase):
             ["project_runtime_mismatch"],
         )
         self.assertEqual(result["project_pin"], "v0.4.2")
-        self.assertEqual(result["running_version"], "v0.4.7")
+        self.assertEqual(result["running_version"], "v0.4.8")
         self.assertEqual(
             result["project_runtime_argv"],
             [r".\.zettel-kasten\bin\archive.cmd"],
@@ -32107,8 +32107,8 @@ state:
             self.assertEqual(summary["occurrence_bound_locator_count"], 3)
             self.assertEqual(summary["occurrence_unbound_locator_count"], 1)
             self.assertEqual(summary["occurrence_bound_anchor_count"], 3)
-            self.assertEqual(summary["occurrence_resolution_known_zettel_count"], 1)
-            self.assertEqual(summary["occurrence_resolution_unknown_zettel_count"], 2)
+            self.assertEqual(summary["occurrence_resolution_known_zettel_count"], 0)
+            self.assertEqual(summary["occurrence_resolution_unknown_zettel_count"], 3)
             self.assertEqual(
                 summary["occurrence_resolution_not_applicable_zettel_count"],
                 1,
@@ -32121,6 +32121,10 @@ state:
             )
             self.assertIn(
                 "external_locator_record_unreadable",
+                summary["unresolved_occurrence_reason_codes"],
+            )
+            self.assertIn(
+                "external_locator_occurrence_recovery_receipt_missing",
                 summary["unresolved_occurrence_reason_codes"],
             )
             self.assertFalse(summary["scan_complete"])
@@ -32148,8 +32152,22 @@ state:
                 markerless_bound["occurrence_binding_state"],
                 "all_bound",
             )
-            self.assertEqual(markerless_bound["unresolved_occurrence_count"], 0)
-            self.assertEqual(markerless_bound["unresolved_occurrence_state"], "known")
+            self.assertIsNone(markerless_bound["unresolved_occurrence_count"])
+            self.assertEqual(markerless_bound["unresolved_occurrence_state"], "unknown")
+            self.assertIn(
+                "external_locator_occurrence_recovery_receipt_missing",
+                markerless_bound["unresolved_occurrence_reason_codes"],
+            )
+            self.assertFalse(
+                result["current_capability"][
+                    "anchored_locator_sidecar_claimed_resolved"
+                ]
+            )
+            self.assertFalse(
+                result["current_capability"][
+                    "verified_occurrence_recovery_receipt_supported"
+                ]
+            )
 
             sidecar_only = next(
                 item
@@ -32200,6 +32218,102 @@ state:
                 "private body text must not echo",
                 "person:private-reviewer",
                 "zet_locator_malformed.json",
+                str(archive_root),
+            ):
+                with self.subTest(forbidden=forbidden):
+                    self.assertNotIn(forbidden, serialized)
+            self.assertEqual(self.snapshot_archive_files(archive_root), before)
+
+    def test_notion_import_locator_loss_audit_never_treats_human_anchors_as_recovery_receipts(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            archive_id = archive_services.read_archive_id(archive_root)
+            private_zettel_id = "zet_locator_human_anchor_only"
+            private_source_id = "private-source-human-anchor-only"
+            private_anchor = "private-human-occurrence-anchor"
+            private_locator_ref = "https://private.example.invalid/human-anchor"
+            private_locator_id = "locator:sha256:" + hashlib.sha256(
+                private_locator_ref.encode("utf-8")
+            ).hexdigest()
+            (archive_root / "inbox" / f"{private_zettel_id}.md").write_text(
+                "\n".join(
+                    [
+                        "---",
+                        f"id: {private_zettel_id}",
+                        "status: canonical",
+                        "facets:",
+                        "  source_system: notion_db3",
+                        f"  source_page_id: {private_source_id}",
+                        "  source_locator_omitted_count: 1",
+                        "---",
+                        "",
+                        "private markerless body must not echo",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            sidecar_dir = archive_root / "ops" / "external-locators"
+            sidecar_dir.mkdir(parents=True, exist_ok=True)
+            (sidecar_dir / f"{private_zettel_id}.json").write_text(
+                json.dumps(
+                    {
+                        "schema": "wom-kit/external-locator-record/v0.3",
+                        "archive_id": archive_id,
+                        "zettel_id": private_zettel_id,
+                        "created_at": "2026-08-25T00:00:00Z",
+                        "updated_at": "2026-08-25T00:00:00Z",
+                        "locators": [
+                            {
+                                "locator_id": private_locator_id,
+                                "locator_type": "source_url",
+                                "locator_ref": private_locator_ref,
+                                "status": "active",
+                                "occurrence_anchor": private_anchor,
+                                "recorded_at": "2026-08-25T00:00:00Z",
+                                "reviewed_by": "person:private-reviewer",
+                                "provenance": {
+                                    "source": "human_reviewed_cli",
+                                    "automatic_recovery_claimed": False,
+                                },
+                            }
+                        ],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            before = self.snapshot_archive_files(archive_root)
+            result = archive_services.notion_import_locator_loss_audit(
+                archive_root,
+                dry_run=True,
+            )
+            markerless = next(
+                item
+                for item in result["items"]
+                if item["markerless_omission_state"] == "present"
+                and item["frontmatter_omitted_count"] == 1
+            )
+
+            self.assertEqual(markerless["occurrence_binding_state"], "all_bound")
+            self.assertEqual(markerless["unresolved_occurrence_state"], "unknown")
+            self.assertIsNone(markerless["unresolved_occurrence_count"])
+            self.assertIn(
+                "external_locator_occurrence_recovery_receipt_missing",
+                markerless["unresolved_occurrence_reason_codes"],
+            )
+            serialized = json.dumps(result, ensure_ascii=False)
+            for forbidden in (
+                private_zettel_id,
+                private_source_id,
+                private_anchor,
+                private_locator_ref,
+                private_locator_id,
+                "private markerless body must not echo",
+                "person:private-reviewer",
                 str(archive_root),
             ):
                 with self.subTest(forbidden=forbidden):
@@ -32381,37 +32495,144 @@ state:
             )
             self.assertNotEqual(manifest.read_bytes(), original)
 
-            preview_code, preview_output = self.run_cli(
-                [
-                    "duplicate-object-reconcile",
-                    str(archive_root),
-                    "--revert",
-                    "--dry-run",
-                    "--format",
-                    "json",
-                ]
-            )
+            with patch.object(
+                archive_cli,
+                "_use_archive_receipt_authentication_key",
+                side_effect=lambda _root, consumer: consumer(
+                    memoryview(bytearray(b"c" * 32))
+                ),
+            ):
+                preview_code, preview_output = self.run_cli(
+                    [
+                        "duplicate-object-reconcile",
+                        str(archive_root),
+                        "--revert",
+                        "--dry-run",
+                        "--format",
+                        "json",
+                    ]
+                )
             self.assertEqual(preview_code, 0, preview_output)
             self.assertEqual(json.loads(preview_output)["candidate_count"], 1)
 
-            revert_code, revert_output = self.run_cli(
-                [
-                    "duplicate-object-reconcile",
-                    str(archive_root),
-                    "--revert",
-                    "--approve",
-                    "--reviewed-by",
-                    "person:test",
-                    "--format",
-                    "json",
-                ]
+            with (
+                patch.object(
+                    archive_cli,
+                    "_use_archive_receipt_authentication_key",
+                    side_effect=lambda _root, consumer: consumer(
+                        memoryview(bytearray(b"c" * 32))
+                    ),
+                ),
+                patch.object(
+                    archive_cli.duplicate_object_reconciliation,
+                    "_finalize_duplicate_object_reconciliation_revert_core",
+                    side_effect=archive_cli.duplicate_object_reconciliation.DuplicateObjectReconciliationError(
+                        "duplicate_object_revert_state_unknown"
+                    ),
+                ),
+            ):
+                interrupted_code, interrupted_output = self.run_cli(
+                    [
+                        "duplicate-object-reconcile",
+                        str(archive_root),
+                        "--revert",
+                        "--approve",
+                        "--reviewed-by",
+                        "person:test",
+                        "--format",
+                        "json",
+                    ]
+                )
+            self.assertEqual(interrupted_code, 1, interrupted_output)
+            interrupted_result = json.loads(interrupted_output)
+            self.assertEqual(
+                interrupted_result["next_safe_actions"],
+                ["rerun_duplicate_revert_resume_with_same_reviewer"],
             )
-            self.assertEqual(revert_code, 0, revert_output)
-            reverted = json.loads(revert_output)
-            self.assertTrue(reverted["restored_exact_original_manifest_bytes"])
+            self.assertEqual(manifest.read_bytes(), original)
+
+            original_resume = (
+                archive_cli._resume_exact_human_approved_transaction_core
+            )
+
+            def resume_with_test_key(*args: Any, **kwargs: Any) -> Any:
+                kwargs["key_provider"] = _ProjectUpdateResumeKeyProvider()
+                return original_resume(*args, **kwargs)
+
+            with (
+                patch.object(
+                    archive_cli,
+                    "_use_archive_receipt_authentication_key",
+                    side_effect=lambda _root, consumer: consumer(
+                        memoryview(bytearray(b"c" * 32))
+                    ),
+                ),
+                patch.object(
+                    archive_cli,
+                    "_resume_exact_human_approved_transaction_core",
+                    side_effect=resume_with_test_key,
+                ),
+                patch.object(
+                    archive_cli.duplicate_object_reconciliation,
+                    "_apply_duplicate_object_reconciliation_revert_core",
+                    side_effect=AssertionError(
+                        "succeeded resume must not re-enter the writer"
+                    ),
+                ),
+            ):
+                wrong_resume_code, wrong_resume_output = self.run_cli(
+                    [
+                        "duplicate-object-reconcile",
+                        str(archive_root),
+                        "--revert",
+                        "--resume",
+                        "--reviewed-by",
+                        "person:wrong-reviewer",
+                        "--format",
+                        "json",
+                    ]
+                )
+                self.assertEqual(manifest.read_bytes(), original)
+                resume_code, resume_output = self.run_cli(
+                    [
+                        "duplicate-object-reconcile",
+                        str(archive_root),
+                        "--revert",
+                        "--resume",
+                        "--reviewed-by",
+                        "person:test",
+                        "--format",
+                        "json",
+                    ]
+                )
+            self.assertEqual(
+                wrong_resume_code,
+                1,
+                wrong_resume_output,
+            )
+            self.assertEqual(resume_code, 0, resume_output)
+            resumed = json.loads(resume_output)
+            self.assertEqual(
+                resumed["reason_code"],
+                "duplicate_object_exact_revert_resume_succeeded",
+            )
+            self.assertEqual(
+                resumed["exact_human_approval_resume_branch"],
+                "succeeded_tail",
+            )
+            self.assertFalse(resumed["native_approval_redisplayed"])
+            self.assertFalse(resumed["domain_writer_reentered"])
+            self.assertTrue(resumed["restored_exact_original_manifest_bytes"])
             self.assertEqual(manifest.read_bytes(), original)
             serialized = "\n".join(
-                (wrong_output, apply_output, preview_output, revert_output)
+                (
+                    wrong_output,
+                    apply_output,
+                    preview_output,
+                    interrupted_output,
+                    wrong_resume_output,
+                    resume_output,
+                )
             )
             self.assertNotIn(private_marker, serialized)
             self.assertNotIn(str(archive_root), serialized)
