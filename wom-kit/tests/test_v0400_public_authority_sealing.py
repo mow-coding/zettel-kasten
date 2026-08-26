@@ -9,6 +9,7 @@ from unittest import mock
 
 import wom_kit
 from wom_kit import (
+    archive_cli,
     archive_services,
     credential_capability,
     credential_continuity,
@@ -69,6 +70,28 @@ class PublicAuthoritySealingTests(unittest.TestCase):
                 lambda _claim: {"ok": True},
                 native=object(),  # type: ignore[call-arg]
                 key_provider=object(),
+            )
+        with self.assertRaises(TypeError):
+            private_workflow(
+                ".",
+                object(),  # type: ignore[arg-type]
+                lambda _claim: {"ok": True},
+                claim_succeeded_finalizer=object(),  # type: ignore[call-arg]
+            )
+
+        duplicate_revert_transaction = (
+            archive_cli
+            ._execute_duplicate_object_revert_exact_human_approved_transaction
+        )
+        self.assertEqual(
+            tuple(inspect.signature(duplicate_revert_transaction).parameters),
+            ("plan", "reviewer_claim"),
+        )
+        with self.assertRaises(TypeError):
+            duplicate_revert_transaction(
+                object(),  # type: ignore[arg-type]
+                reviewer_claim="person:test",
+                claim_succeeded_finalizer=object(),  # type: ignore[call-arg]
             )
 
     def test_credential_adoption_public_surface_cannot_inject_worker(self) -> None:

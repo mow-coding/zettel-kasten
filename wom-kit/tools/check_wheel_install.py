@@ -230,6 +230,7 @@ from unittest import mock
 from wom_kit import (
     archive_cli,
     archive_services,
+    duplicate_object_reconciliation,
     object_storage_setup_registration,
     objet_capture_selection_exact,
 )
@@ -284,6 +285,38 @@ def _approved_write(root, context, writer):
         writer,
         native=native,
         key_provider=key_provider,
+    )
+
+
+def _approved_duplicate_revert_transaction(plan, *, reviewer_claim):
+    context = (
+        duplicate_object_reconciliation
+        ._duplicate_object_reconciliation_revert_context(
+            plan,
+            reviewer_claim=reviewer_claim,
+        )
+    )
+    return _execute_exact_human_approved_write_core(
+        plan.archive_root,
+        context,
+        lambda claim: (
+            duplicate_object_reconciliation
+            ._apply_duplicate_object_reconciliation_revert_core(
+                plan,
+                approval_claim=claim,
+                context=context,
+            )
+        ),
+        native=native,
+        key_provider=key_provider,
+        claim_succeeded_finalizer=lambda claim: (
+            duplicate_object_reconciliation
+            ._finalize_duplicate_object_reconciliation_revert_core(
+                plan,
+                claim,
+                context=context,
+            )
+        ),
     )
 
 
@@ -682,6 +715,11 @@ with (
         archive_cli,
         "_execute_exact_human_approved_write",
         side_effect=_approved_write,
+    ),
+    mock.patch.object(
+        archive_cli,
+        "_execute_duplicate_object_revert_exact_human_approved_transaction",
+        side_effect=_approved_duplicate_revert_transaction,
     ),
 ):
     capture_evidence = _capture_flow()

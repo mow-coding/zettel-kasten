@@ -226,10 +226,19 @@ class ArchiveCliTests(unittest.TestCase):
         project_update_exact_write_patcher = patch.object(
             archive_cli,
             "_execute_project_version_update_exact_human_approved_write",
-            side_effect=self.execute_test_exact_human_write,
+            side_effect=self.execute_test_exact_human_transaction,
         )
         project_update_exact_write_patcher.start()
         self.addCleanup(project_update_exact_write_patcher.stop)
+        duplicate_revert_exact_write_patcher = patch.object(
+            archive_cli,
+            "_execute_duplicate_object_revert_exact_human_approved_transaction",
+            side_effect=(
+                self.execute_test_duplicate_revert_exact_human_transaction
+            ),
+        )
+        duplicate_revert_exact_write_patcher.start()
+        self.addCleanup(duplicate_revert_exact_write_patcher.stop)
         link_exact_write_patcher = patch.object(
             archive_cli,
             "_execute_zettel_objet_link_exact_human_approved_write",
@@ -267,10 +276,25 @@ class ArchiveCliTests(unittest.TestCase):
         root,
         context,
         writer,
+    ):
+        """Exercise the sealed three-argument approval boundary without UI."""
+
+        return ArchiveCliTests.execute_test_exact_human_transaction(
+            root,
+            context,
+            writer,
+            claim_succeeded_finalizer=None,
+        )
+
+    @staticmethod
+    def execute_test_exact_human_transaction(
+        root,
+        context,
+        writer,
         *,
         claim_succeeded_finalizer=None,
     ):
-        """Exercise a CLI writer through a real authenticated claim, without UI."""
+        """Exercise an internal transaction seam with a real claim, without UI."""
 
         claim = claim_exact_human_approval(
             root,
@@ -302,6 +326,42 @@ class ArchiveCliTests(unittest.TestCase):
             return result
         finally:
             claim.close()
+
+    @staticmethod
+    def execute_test_duplicate_revert_exact_human_transaction(
+        plan,
+        *,
+        reviewer_claim,
+    ):
+        """Exercise the fixed duplicate-revert transaction without native UI."""
+
+        context = (
+            archive_cli.duplicate_object_reconciliation
+            ._duplicate_object_reconciliation_revert_context(
+                plan,
+                reviewer_claim=reviewer_claim,
+            )
+        )
+        return ArchiveCliTests.execute_test_exact_human_transaction(
+            plan.archive_root,
+            context,
+            lambda claim: (
+                archive_cli.duplicate_object_reconciliation
+                ._apply_duplicate_object_reconciliation_revert_core(
+                    plan,
+                    approval_claim=claim,
+                    context=context,
+                )
+            ),
+            claim_succeeded_finalizer=lambda claim: (
+                archive_cli.duplicate_object_reconciliation
+                ._finalize_duplicate_object_reconciliation_revert_core(
+                    plan,
+                    claim,
+                    context=context,
+                )
+            ),
+        )
 
     def run_cli_split(self, args: list[str]) -> tuple[int, str, str]:
         stdout = io.StringIO()
@@ -10276,7 +10336,7 @@ class ArchiveCliTests(unittest.TestCase):
                 previous_path = os.environ.get("PATH")
                 os.environ["PATH"] = str(forged_bin)
                 try:
-                    result = self.execute_test_exact_human_write(
+                    result = self.execute_test_exact_human_transaction(
                         root,
                         context,
                         writer,
@@ -10857,7 +10917,7 @@ class ArchiveCliTests(unittest.TestCase):
                         )
                     else:
                         policy_drifted = True
-                    return self.execute_test_exact_human_write(
+                    return self.execute_test_exact_human_transaction(
                         root,
                         context,
                         writer,
@@ -11537,7 +11597,7 @@ class ArchiveCliTests(unittest.TestCase):
             ) -> Any:
                 nonlocal approval_started
                 approval_started = True
-                return self.execute_test_exact_human_write(
+                return self.execute_test_exact_human_transaction(
                     root,
                     context,
                     writer,
@@ -11808,7 +11868,7 @@ class ArchiveCliTests(unittest.TestCase):
                 *,
                 claim_succeeded_finalizer: Any = None,
             ) -> Any:
-                return self.execute_test_exact_human_write(
+                return self.execute_test_exact_human_transaction(
                     root,
                     context,
                     writer,
