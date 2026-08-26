@@ -142,7 +142,7 @@ Before planning object storage for WOM objets, the AI should run:
 archive object-storage <archive-root> --dry-run --provider <provider> --profile-id <profile-id> --profile-slug <ascii-slug> --storage-account-ref <safe-ref> --format json
 ```
 
-The v0.2.21 planner proposes a private bucket/container such as `zettel-kasten-<normalized-profile-slug>-objets`, an `archives/<archive_id>/objets/` prefix, provider binding metadata, local profile hints, a setup receipt preview, an objet storage policy preview, and manual steps. Dry-run writes nothing. In v0.4.0 approval returns `compound_exact_human_approval_binding_required` before private target/provider reads or mutation and writes no provider metadata or receipt; it also does not create buckets, start OAuth, call provider APIs, upload, sync, copy, hash, or import source files.
+`--profile-id` is required and must first be resolved from a reviewed registry, normally `profiles/wom-profiles.yml`, with `profile-resolve`. The command does not invent an id or create that registry. Dry-run writes nothing. The exact approval path records only the reviewed local provider binding and setup receipt; it does not create buckets, start OAuth, call provider APIs, read credentials, upload, sync, copy, hash, or import source files. The retired `--write-local-profile` interface is not a profile-registry writer and is intentionally unsupported.
 
 But the AI should not silently:
 

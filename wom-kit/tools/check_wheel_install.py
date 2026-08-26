@@ -216,8 +216,8 @@ print(
     )
 )
 '''
-INSTALLED_V048_SMOKE_SCHEMA = "wom-kit/installed-v048-wheel-smoke/v0.1"
-INSTALLED_V048_SMOKE_SCRIPT = r'''
+INSTALLED_V049_SMOKE_SCHEMA = "wom-kit/installed-v049-wheel-smoke/v0.1"
+INSTALLED_V049_SMOKE_SCRIPT = r'''
 import hashlib
 import io
 import json
@@ -233,6 +233,7 @@ from wom_kit import (
     duplicate_object_reconciliation,
     object_storage_setup_registration,
     objet_capture_selection_exact,
+    source_intake_record_exact,
 )
 from wom_kit.exact_human_approval_windows import APPROVE_BUTTON_ID
 from wom_kit.exact_human_approval_workflow import (
@@ -245,7 +246,7 @@ ROOT = Path(sys.argv[1])
 ROOT.mkdir(parents=True, exist_ok=False)
 ARCHIVE_ENTRYPOINT = Path(sys.argv[2])
 if not ARCHIVE_ENTRYPOINT.is_file():
-    raise RuntimeError("installed_v048_entrypoint_missing")
+    raise RuntimeError("installed_v049_entrypoint_missing")
 REVIEWER = "person:installed-wheel-smoke"
 PRIVATE_MARKER = "SYNTHETIC_PRIVATE_VALUE_MUST_NOT_ESCAPE"
 
@@ -265,7 +266,7 @@ class _KeyProvider:
 
     def use_key(self, _root, consumer, *, create_if_missing=False):
         if create_if_missing is not True:
-            raise RuntimeError("installed_v048_key_contract_failed")
+            raise RuntimeError("installed_v049_key_contract_failed")
         self.calls += 1
         key = bytearray(range(32))
         try:
@@ -336,16 +337,16 @@ def _run_cli(arguments):
     with redirect_stdout(stdout), redirect_stderr(stderr):
         code = archive_cli.main(arguments)
     if int(code) != 0 or stderr.getvalue():
-        raise RuntimeError("installed_v048_cli_execution_failed")
+        raise RuntimeError("installed_v049_cli_execution_failed")
     try:
         value = json.loads(stdout.getvalue())
     except json.JSONDecodeError:
-        raise RuntimeError("installed_v048_cli_output_invalid") from None
+        raise RuntimeError("installed_v049_cli_output_invalid") from None
     if not isinstance(value, dict) or value.get("ok") is not True:
-        raise RuntimeError("installed_v048_cli_result_failed")
+        raise RuntimeError("installed_v049_cli_result_failed")
     serialized = json.dumps(value, sort_keys=True)
     if PRIVATE_MARKER in serialized or str(ROOT) in serialized:
-        raise RuntimeError("installed_v048_cli_privacy_failed")
+        raise RuntimeError("installed_v049_cli_privacy_failed")
     return value
 
 
@@ -364,16 +365,16 @@ def _run_console(arguments):
         timeout=60,
     )
     if completed.returncode != 0 or completed.stderr:
-        raise RuntimeError("installed_v048_console_entrypoint_failed")
+        raise RuntimeError("installed_v049_console_entrypoint_failed")
     try:
         value = json.loads(completed.stdout)
     except json.JSONDecodeError:
-        raise RuntimeError("installed_v048_console_output_invalid") from None
+        raise RuntimeError("installed_v049_console_output_invalid") from None
     if not isinstance(value, dict) or value.get("ok") is not True:
-        raise RuntimeError("installed_v048_console_result_failed")
+        raise RuntimeError("installed_v049_console_result_failed")
     serialized = json.dumps(value, sort_keys=True)
     if PRIVATE_MARKER in serialized or str(ROOT) in serialized:
-        raise RuntimeError("installed_v048_console_privacy_failed")
+        raise RuntimeError("installed_v049_console_privacy_failed")
     console_entrypoint_dry_run_count += 1
     return value
 
@@ -388,37 +389,63 @@ def _write_archive(root, archive_id):
 
 def _capture_flow():
     root = ROOT / "capture"
-    archive_id = "archive:test:installed-v048-capture"
+    archive_id = "archive:test:installed-v049-capture"
     _write_archive(root, archive_id)
     staged_relative = "staging/incoming/synthetic.bin"
     staged_payload = b"installed wheel exact local capture\n"
     staged = root.joinpath(*staged_relative.split("/"))
     staged.parent.mkdir(parents=True)
     staged.write_bytes(staged_payload)
-    source_record = {
-        "ok": True,
-        "dry_run": True,
-        "lifecycle_action": "source_intake_plan",
-        "archive_id": archive_id,
-        "blockers": [],
-        "content_access": dict(
-            archive_services.SOURCE_INTAKE_CONTENT_ACCESS_EXPECTATIONS
-        ),
-        "source_refs_for_draft": [],
-    }
-    source_digest = archive_services.sha256_json_value(source_record)
-    source_relative = archive_services.source_intake_record_path(source_digest)
-    source_path = root.joinpath(*source_relative.split("/"))
-    source_path.parent.mkdir(parents=True)
-    source_path.write_text(
+    source_record = archive_services.source_intake_plan(
+        root,
+        local_path=staged,
+        redact_local_paths=True,
+    )
+    source_plan_path = root / "workbench" / "source-intake-plan.json"
+    source_plan_path.parent.mkdir(parents=True)
+    source_plan_path.write_text(
         json.dumps(source_record, indent=2, ensure_ascii=False) + "\n",
         encoding="utf-8",
+    )
+    source_plan = source_intake_record_exact.plan_source_intake_record(
+        root,
+        source_plan_path,
+    )
+    if not source_plan.approveable or source_plan.receipt_relative_path is None:
+        raise RuntimeError("installed_v049_source_intake_plan_failed")
+    source_relative = source_plan.receipt_relative_path
+    _run_console(
+        [
+            "source-intake-record",
+            str(root),
+            "--source-intake-plan",
+            str(source_plan_path),
+            "--dry-run",
+            "--format",
+            "json",
+        ]
+    )
+    before_native = native.calls
+    source_intake = _run_cli(
+        [
+            "source-intake-record",
+            str(root),
+            "--source-intake-plan",
+            str(source_plan_path),
+            "--approve",
+            "--reviewed-by",
+            REVIEWER,
+            "--format",
+            "json",
+        ]
     )
     plan = objet_capture_selection_exact.plan_existing_intake_capture_selection(
         root,
         staged_path=staged_relative,
         source_intake_receipt=source_relative,
     )
+    if not plan.approveable or plan.selection_relative_path is None:
+        raise RuntimeError("installed_v049_capture_selection_plan_failed")
     _run_console(
         [
             "objet-capture-selection",
@@ -433,7 +460,6 @@ def _capture_flow():
             "json",
         ]
     )
-    before_native = native.calls
     selection = _run_cli(
         [
             "objet-capture-selection",
@@ -467,17 +493,19 @@ def _capture_flow():
     digest = hashlib.sha256(staged_payload).hexdigest()
     object_path = root / "objects" / "sha256" / digest[:2] / digest
     if (
-        selection.get("state") != "selection_recorded"
+        source_intake.get("state") != "source_intake_recorded"
+        or selection.get("state") != "selection_recorded"
         or capture.get("summary", {}).get("captured") != 1
         or object_path.read_bytes() != staged_payload
-        or native.calls - before_native != 2
+        or native.calls - before_native != 3
     ):
-        raise RuntimeError("installed_v048_capture_evidence_failed")
+        raise RuntimeError("installed_v049_capture_evidence_failed")
     return {
+        "source_intake_recorded": True,
         "selection_recorded": True,
         "capture_count": 1,
         "object_bytes_exact": True,
-        "native_approval_count": 2,
+        "native_approval_count": 3,
     }
 
 
@@ -495,7 +523,7 @@ def _authority(seed):
 
 def _storage_flow():
     root = ROOT / "storage"
-    _write_archive(root, "archive:test:installed-v048-storage")
+    _write_archive(root, "archive:test:installed-v049-storage")
     settings = {
         "provider": "cloudflare-r2",
         "profile_id": "profile:personal:wheel-smoke",
@@ -573,7 +601,7 @@ def _storage_flow():
         or receipt_path.exists()
         or native.calls - before_native != 1
     ):
-        raise RuntimeError("installed_v048_storage_evidence_failed")
+        raise RuntimeError("installed_v049_storage_evidence_failed")
     return {
         "registration_completed": True,
         "setup_evidence_mode": "exact_registration_v1",
@@ -588,7 +616,7 @@ def _storage_flow():
 
 def _duplicate_flow():
     root = ROOT / "duplicate"
-    _write_archive(root, "archive:test:installed-v048-duplicate")
+    _write_archive(root, "archive:test:installed-v049-duplicate")
     payload = b"installed wheel strict duplicate pair\n"
     digest = hashlib.sha256(payload).hexdigest()
     canonical_key = "objects/sha256/" + digest[:2] + "/" + digest
@@ -665,14 +693,14 @@ def _duplicate_flow():
         line for line in manifest.read_text(encoding="utf-8").splitlines() if line
     ]
     if len(reconciled_lines) != 1:
-        raise RuntimeError("installed_v048_duplicate_apply_failed")
+        raise RuntimeError("installed_v049_duplicate_apply_failed")
     reconciled = json.loads(reconciled_lines[0])
     if (
         applied.get("reconciled_canonical_external_pair_count") != 1
         or reconciled.get("logical_key") != canonical_key
         or not isinstance(reconciled.get("_wom_private_duplicate_reconciliation"), dict)
     ):
-        raise RuntimeError("installed_v048_duplicate_evidence_failed")
+        raise RuntimeError("installed_v049_duplicate_evidence_failed")
     with mock.patch.object(
         archive_cli,
         "_use_archive_receipt_authentication_key",
@@ -705,7 +733,7 @@ def _duplicate_flow():
         or manifest.read_bytes() != original
         or native.calls - before_native != 2
     ):
-        raise RuntimeError("installed_v048_duplicate_revert_failed")
+        raise RuntimeError("installed_v049_duplicate_revert_failed")
     return {
         "strict_pair_reconciled_count": 1,
         "private_evidence_preserved": True,
@@ -716,6 +744,11 @@ def _duplicate_flow():
 
 
 with (
+    mock.patch.object(
+        source_intake_record_exact,
+        "_execute_exact_human_approved_write",
+        side_effect=_approved_write,
+    ),
     mock.patch.object(
         objet_capture_selection_exact,
         "_execute_exact_human_approved_write",
@@ -742,17 +775,17 @@ with (
     duplicate_evidence = _duplicate_flow()
 
 if (
-    native.calls != 5
-    or key_provider.calls != 5
-    or console_entrypoint_dry_run_count != 3
+    native.calls != 6
+    or key_provider.calls != 6
+    or console_entrypoint_dry_run_count != 4
 ):
-    raise RuntimeError("installed_v048_approval_count_failed")
+    raise RuntimeError("installed_v049_approval_count_failed")
 
 print(
     json.dumps(
         {
             "ok": True,
-            "schema": "wom-kit/installed-v048-wheel-smoke/v0.1",
+            "schema": "wom-kit/installed-v049-wheel-smoke/v0.1",
             "entrypoint_route": "installed_archive_cli_main",
             "installed_console_entrypoint_checked": True,
             "console_entrypoint_dry_run_count": console_entrypoint_dry_run_count,
@@ -2276,7 +2309,7 @@ def _wheel_install_success_result(
     entrypoints_checked: list[str],
     entrypoint_evidence: dict[str, Any],
     letter140_link_evidence: dict[str, Any],
-    v048_workflow_evidence: dict[str, Any],
+    v049_workflow_evidence: dict[str, Any],
     wheel_filename: str,
     wheel_sha256: str,
     artifact_preserved: bool,
@@ -2291,7 +2324,7 @@ def _wheel_install_success_result(
         "entrypoints_checked": entrypoints_checked,
         "entrypoint_evidence": entrypoint_evidence,
         "installed_letter140_link_workflow": letter140_link_evidence,
-        "installed_v048_recovery_workflows": v048_workflow_evidence,
+        "installed_v049_recovery_workflows": v049_workflow_evidence,
         "runtime_skill_lifecycle": "passed",
         "onboarding_preview": "passed",
         "onboarding_write": "fixed_closed",
@@ -2346,43 +2379,44 @@ def _check_installed_letter140_link_workflow(
     return evidence
 
 
-def _check_installed_v048_workflows(
+def _check_installed_v049_workflows(
     python: Path,
     archive_entrypoint: Path,
     fixture_root: Path,
     *,
     cwd: Path,
 ) -> dict[str, Any]:
-    """Run v0.4.8 recovery paths from the isolated installed package only."""
+    """Run current v0.4.9 recovery paths from the isolated installed package only."""
 
     stdout = _run_installed_entrypoint(
         [
             str(python),
             "-I",
             "-c",
-            INSTALLED_V048_SMOKE_SCRIPT,
+            INSTALLED_V049_SMOKE_SCRIPT,
             str(fixture_root),
             str(archive_entrypoint),
         ],
         cwd=cwd,
-        label="installed v0.4.8 recovery workflows",
+        label="installed v0.4.9 recovery workflows",
     )
     evidence = _parse_entrypoint_json_object(
         stdout,
-        label="Installed v0.4.8 recovery workflow output",
+        label="Installed v0.4.9 recovery workflow output",
     )
     expected = {
         "ok": True,
-        "schema": INSTALLED_V048_SMOKE_SCHEMA,
+        "schema": INSTALLED_V049_SMOKE_SCHEMA,
         "entrypoint_route": "installed_archive_cli_main",
         "installed_console_entrypoint_checked": True,
-        "console_entrypoint_dry_run_count": 3,
+        "console_entrypoint_dry_run_count": 4,
         "approval_seam": "test_only_native_decision_injection",
         "capture": {
+            "source_intake_recorded": True,
             "selection_recorded": True,
             "capture_count": 1,
             "object_bytes_exact": True,
-            "native_approval_count": 2,
+            "native_approval_count": 3,
         },
         "object_storage": {
             "registration_completed": True,
@@ -2401,15 +2435,15 @@ def _check_installed_v048_workflows(
             "original_manifest_bytes_restored": True,
             "native_approval_count": 2,
         },
-        "native_approval_count": 5,
+        "native_approval_count": 6,
         "provider_api_called": False,
         "credential_value_read": False,
         "private_values_echoed": False,
     }
     if evidence != expected:
         raise WheelCheckError(
-            "Installed v0.4.8 workflows did not prove the exact expected "
-            "selection/capture, storage registration/revert, and duplicate "
+            "Installed v0.4.9 workflows did not prove the exact expected "
+            "source-intake/selection/capture, storage registration/revert, and duplicate "
             "reconciliation/revert contract."
         )
     return evidence
@@ -2673,6 +2707,7 @@ def check_wheel(output_dir: Path | None = None) -> dict[str, Any]:
                 str(doctor_fixture),
                 "--strict",
                 "--summary",
+                "--no-progress",
                 "--format",
                 "json",
             ],
@@ -2696,10 +2731,10 @@ def check_wheel(output_dir: Path | None = None) -> dict[str, Any]:
             letter140_fixture,
             cwd=temp_root,
         )
-        v048_workflow_evidence = _check_installed_v048_workflows(
+        v049_workflow_evidence = _check_installed_v049_workflows(
             python,
             archive,
-            temp_root / "v048-recovery-archives",
+            temp_root / "v049-recovery-archives",
             cwd=temp_root,
         )
 
@@ -2723,7 +2758,7 @@ def check_wheel(output_dir: Path | None = None) -> dict[str, Any]:
             entrypoints_checked=entrypoints_checked,
             entrypoint_evidence=entrypoint_evidence,
             letter140_link_evidence=letter140_link_evidence,
-            v048_workflow_evidence=v048_workflow_evidence,
+            v049_workflow_evidence=v049_workflow_evidence,
             wheel_filename=wheel.name,
             wheel_sha256=wheel_sha256,
             artifact_preserved=artifact_preserved,

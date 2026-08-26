@@ -183,6 +183,104 @@ class ObjectStorageSetupRegistrationTests(unittest.TestCase):
         self.assertFalse(first["closed_actions"]["bucket_verified"])
         self.assertFalse(first["closed_actions"]["credential_value_read"])
 
+    def test_cli_help_marks_profile_id_required_and_hides_legacy_local_profile(
+        self,
+    ) -> None:
+        code, output = self.run_cli(["object-storage", "--help"])
+        normalized = " ".join(output.split())
+
+        self.assertEqual(code, 0, output)
+        self.assertIn("--profile-id PROFILE_ID", output)
+        self.assertNotIn("[--profile-id PROFILE_ID]", output)
+        self.assertIn("profile-resolve", normalized)
+        self.assertIn("profiles/wom-profiles.yml", normalized)
+        self.assertIn("does not create a registry", normalized)
+        self.assertNotIn("--write-local-profile", output)
+
+    def test_cli_missing_profile_id_uses_standard_error_envelope(self) -> None:
+        code, output = self.run_cli(
+            [
+                "object-storage",
+                str(self.root),
+                "--dry-run",
+                "--provider",
+                PROVIDER,
+                "--storage-account-ref",
+                STORE_REF,
+                "--format",
+                "json",
+            ]
+        )
+
+        self.assertEqual(code, 2, output)
+        result = json.loads(output)
+        self.assertEqual(result["schema"], "wom-kit/cli-error/v0.1")
+        self.assertEqual(result["state"], "blocked")
+        self.assertEqual(result["status_class"], "blocked")
+        self.assertEqual(result["command"], "object-storage")
+        self.assertEqual(result["lifecycle_action"], "cli_argument_validation")
+        self.assertEqual(result["error_class"], "usage")
+        self.assertEqual(result["reason_codes"], ["cli_required_arguments_missing"])
+        self.assertEqual(result["exit_code"], 2)
+        self.assertEqual(result["effects_state"], "none")
+        self.assertEqual(result["files_written"], [])
+        self.assertEqual(result["missing_arguments"], ["--profile-id"])
+        self.assertFalse(result["private_values_echoed"])
+
+    def test_hidden_local_profile_tombstone_rejects_dry_run_and_approve_before_plan(
+        self,
+    ) -> None:
+        base = [
+            "object-storage",
+            str(self.root),
+            "--provider",
+            PROVIDER,
+            "--profile-id",
+            PROFILE_ID,
+            "--profile-slug",
+            PROFILE_SLUG,
+            "--storage-account-ref",
+            STORE_REF,
+            "--write-local-profile",
+            "--format",
+            "json",
+        ]
+        before = _snapshot(self.root)
+
+        for mode in (
+            ["--dry-run"],
+            ["--approve", "--reviewed-by", "person:test"],
+        ):
+            with self.subTest(mode=mode[0]), mock.patch.object(
+                setup_registration_module,
+                "plan_object_storage_setup_registration",
+                side_effect=AssertionError("legacy flag must stop before planning"),
+            ) as planner:
+                code, output = self.run_cli(base + mode)
+
+            self.assertEqual(code, 1, output)
+            result = json.loads(output)
+            self.assertEqual(result["schema"], "wom-kit/cli-error/v0.1")
+            self.assertEqual(result["state"], "blocked")
+            self.assertEqual(result["status_class"], "blocked")
+            self.assertEqual(result["command"], "object-storage")
+            self.assertEqual(result["error_class"], "policy")
+            self.assertEqual(
+                result["reason_codes"],
+                ["object_storage_setup_registration_local_profile_unsupported"],
+            )
+            self.assertEqual(
+                result["reason_code"],
+                "object_storage_setup_registration_local_profile_unsupported",
+            )
+            self.assertEqual(result["exit_code"], 1)
+            self.assertEqual(result["effects_state"], "none")
+            self.assertEqual(result["files_written"], [])
+            self.assertEqual(result["missing_arguments"], [])
+            self.assertFalse(result["private_values_echoed"])
+            self.assertEqual(planner.call_count, 0)
+            self.assertEqual(_snapshot(self.root), before)
+
     def test_cli_hash_is_optional_expert_binding_and_local_profile_is_closed(self) -> None:
         base = [
             "object-storage",

@@ -15,7 +15,8 @@ KIT = ROOT / "wom-kit"
 RESOURCE_ROOT = KIT / "src" / "wom_kit" / "_resources"
 MANIFEST_PATH = RESOURCE_ROOT / "resource-manifest.json"
 RELEASE_PATH = KIT / "docs" / "releases" / "v0.4.8.md"
-PACKAGED_RELEASE_PATH = RESOURCE_ROOT / "release-notes" / "v0.4.8.md"
+CURRENT_RELEASE_PATH = KIT / "docs" / "releases" / "v0.4.9.md"
+CURRENT_PACKAGED_RELEASE_PATH = RESOURCE_ROOT / "release-notes" / "v0.4.9.md"
 HISTORICAL_V0407_RELEASE = KIT / "docs" / "releases" / "v0.4.7.md"
 DECISION_PATH = (
     KIT / "docs" / "archive-infra-decision-log-2026-08-26-v048-integrity-recovery.md"
@@ -26,7 +27,7 @@ WHEEL_URL = (
 )
 
 
-class V0408ReleaseDocsTests(unittest.TestCase):
+class V0408AndCurrentReleaseDocsTests(unittest.TestCase):
     def test_current_install_bootstrap_uses_one_exact_release_version(self) -> None:
         install = (KIT / "docs" / "python-tool-install.md").read_text(
             encoding="utf-8"
@@ -36,16 +37,16 @@ class V0408ReleaseDocsTests(unittest.TestCase):
         )
         combined = install + "\n" + install_ko
         for required in (
-            '$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\\bootstrap-v048"',
+            '$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\\bootstrap-v049"',
             "py -m venv $womBootstrapRoot",
             r'& "$womBootstrapRoot\Scripts\python.exe"',
             r'& "$womBootstrapRoot\Scripts\archive.exe" --version',
-            "wom_kit-0.4.8-py3-none-any.whl",
+            "wom_kit-0.4.9-py3-none-any.whl",
         ):
             with self.subTest(required=required):
                 self.assertIn(required, combined)
-        self.assertIn("exactly `archive 0.4.8`", install)
-        self.assertIn("정확히 `archive 0.4.8`", install_ko)
+        self.assertIn("exactly `archive 0.4.9`", install)
+        self.assertIn("정확히 `archive 0.4.9`", install_ko)
         self.assertNotIn(".wom-bootstrap-v043", combined)
         self.assertNotIn("exactly `archive 0.4.3`", install)
         self.assertNotIn("정확히 `archive 0.4.3`", install_ko)
@@ -99,9 +100,9 @@ class V0408ReleaseDocsTests(unittest.TestCase):
                 self.assertIn(token, combined)
 
     def test_version_sources_and_wheel_contract_are_synchronized(self) -> None:
-        self.assertEqual(__version__, "0.4.8")
+        self.assertEqual(__version__, "0.4.9")
         self.assertIn(
-            'version = "0.4.8"',
+            'version = "0.4.9"',
             (KIT / "pyproject.toml").read_text(encoding="utf-8"),
         )
         for version_file in (
@@ -110,33 +111,37 @@ class V0408ReleaseDocsTests(unittest.TestCase):
         ):
             with self.subTest(version_file=version_file):
                 self.assertIn(
-                    '__version__ = "0.4.8"',
+                    '__version__ = "0.4.9"',
                     version_file.read_text(encoding="utf-8"),
                 )
         self.assertIn(
-            'PACKAGE_VERSION = "0.4.8"',
+            'PACKAGE_VERSION = "0.4.9"',
             (KIT / "tests" / "test_wheel_install.py").read_text(encoding="utf-8"),
         )
         citation = (ROOT / "CITATION.cff").read_text(encoding="utf-8")
-        self.assertIn('version: "0.4.8"', citation)
-        self.assertIn('date-released: "2026-08-26"', citation)
+        self.assertIn('version: "0.4.9"', citation)
+        self.assertIn('date-released: "2026-08-27"', citation)
         versioning = (ROOT / "VERSIONING.md").read_text(encoding="utf-8")
-        self.assertIn("Current public baseline:\n\n```text\nv0.4.8", versioning)
+        self.assertIn("Current public baseline:\n\n```text\nv0.4.9", versioning)
 
     def test_current_release_and_resources_are_packaged_exactly(self) -> None:
-        self.assertEqual(RELEASE_PATH.read_bytes(), PACKAGED_RELEASE_PATH.read_bytes())
+        self.assertEqual(
+            CURRENT_RELEASE_PATH.read_bytes(),
+            CURRENT_PACKAGED_RELEASE_PATH.read_bytes(),
+        )
         release_names = sorted(
             path.name
             for path in (RESOURCE_ROOT / "release-notes").glob("v*.md")
         )
-        self.assertEqual(release_names, ["v0.4.8.md"])
+        self.assertEqual(release_names, ["v0.4.9.md"])
 
         manifest = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
-        self.assertEqual(manifest["version"], "0.4.8")
+        self.assertEqual(manifest["version"], "0.4.9")
         self.assertEqual(manifest["file_count"], len(manifest["files"]))
         packaged_paths = [row["packaged"] for row in manifest["files"]]
         self.assertEqual(len(packaged_paths), len(set(packaged_paths)))
-        self.assertIn("release-notes/v0.4.8.md", packaged_paths)
+        self.assertIn("release-notes/v0.4.9.md", packaged_paths)
+        self.assertNotIn("release-notes/v0.4.8.md", packaged_paths)
         self.assertNotIn("release-notes/v0.4.7.md", packaged_paths)
         self.assertNotIn("release-notes/v0.4.2.md", packaged_paths)
         for row in manifest["files"]:
@@ -187,6 +192,25 @@ class V0408ReleaseDocsTests(unittest.TestCase):
         ):
             with self.subTest(token=token):
                 self.assertIn(token.casefold(), combined.casefold())
+
+    def test_v049_release_defines_current_scope_and_privacy_boundaries(self) -> None:
+        release = CURRENT_RELEASE_PATH.read_text(encoding="utf-8")
+        normalized = " ".join(release.split())
+        for required in (
+            "source-intake-record",
+            "exact create-only manifest",
+            "Doctor findings declare their freshness",
+            "--profile-id",
+            "reported high-risk batch writers remain fixed closed",
+            "Performance needs separate profiling and proof",
+            "wom_kit-0.4.9-py3-none-any.whl",
+            "does not modify a client archive",
+        ):
+            with self.subTest(required=required):
+                self.assertIn(required.casefold(), normalized.casefold())
+        self.assertNotRegex(normalized, r"(?i)letter\s*\d+")
+        self.assertNotRegex(normalized, r"\b[0-9a-f]{64}\b")
+        self.assertNotIn("C:\\Users\\", release)
 
     def test_current_docs_keep_interruption_and_occurrence_truth_exact(self) -> None:
         matrix = (KIT / "docs" / "capability-matrix.md").read_text(
@@ -273,10 +297,12 @@ class V0408ReleaseDocsTests(unittest.TestCase):
                 self.assertIn(f"schemas/{source.name}", packaged_paths)
 
     def test_release_note_links_are_github_release_safe(self) -> None:
-        release = RELEASE_PATH.read_text(encoding="utf-8")
-        self.assertNotIn("](../", release)
-        self.assertNotIn("](../../../", release)
-        self.assertNotIn("C:\\Users\\", release)
+        for release_path in (RELEASE_PATH, CURRENT_RELEASE_PATH):
+            release = release_path.read_text(encoding="utf-8")
+            with self.subTest(release=release_path.name):
+                self.assertNotIn("](../", release)
+                self.assertNotIn("](../../../", release)
+                self.assertNotIn("C:\\Users\\", release)
 
     def test_v0407_release_history_is_byte_immutable(self) -> None:
         self.assertEqual(

@@ -1,6 +1,6 @@
 # Agent Operator Capabilities Manifest
 
-Status: v0.4.8 parser-derived integrity-recovery inventory
+Status: v0.4.9 parser-derived one-file operability inventory
 
 `archive capabilities --machine` lets an AI operator ask one practical question:
 
@@ -43,7 +43,7 @@ includes:
 - runnable status.
 
 v0.4.1 introduced `data.approval_status_inventory` with schema
-`wom-kit/command-approval-status-inventory/v0.1`. The v0.4.8 release returns
+`wom-kit/command-approval-status-inventory/v0.1`. The v0.4.9 release returns
 the successor v0.2 shape, which adds machine-readable conditional
 approval scope. Unlike the legacy flattened
 command summary, this inventory walks canonical executable paths at every
@@ -72,14 +72,14 @@ These are parser facts, not execution promises. `approval_available` does not
 mean that archive-specific prerequisites have passed. `approval_not_exposed`
 does not mean that the command is read-only.
 
-For the v0.4.8 parser, the inventory snapshot is:
+For the v0.4.9 parser, the inventory snapshot is:
 
 ```text
 canonical executable command paths: 315
 alias invocation paths:              259
 all invocation paths:                574
-approval_available:                   46
-approval_fixed_closed:                68
+approval_available:                   47
+approval_fixed_closed:                67
 approval_not_exposed:                201
 conditional approval paths:             9
 dry_run_exposed:                     271
@@ -117,6 +117,12 @@ setup registration only: that writer records local metadata and a receipt but
 does not read credentials, call a provider, create a bucket, upload, copy, or
 sync. These changes produce 46 approval-available paths, 68 fixed-closed paths,
 and nine conditional scopes without changing the 315 canonical command paths.
+
+v0.4.9 reopens only the strict one-file `source-intake-record` exact-human
+route. It produces 47 approval-available paths and 67 fixed-closed paths while
+all batch intake/capture writers remain closed. Doctor may use this inventory
+to report requested dry-run mode and same-argument approval mode separately;
+that metadata executes nothing and does not prove archive prerequisites.
 
 The `summary` includes:
 

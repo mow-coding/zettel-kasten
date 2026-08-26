@@ -6,6 +6,30 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.4.9 - 2026-08-27
+
+- Completed the exact single-file intake chain by opening
+  `source-intake-record` as a create-only manifest writer and proving the
+  installed-wheel path through exact selection and byte capture.
+- Rejected unknown or unsafe intake-plan content, duplicate keys, non-finite or
+  over-bounded JSON, links/reparse points, changing inputs, and collisions
+  before durable recording.
+- Refused to treat pre-seeded matching receipt bytes as authenticated completed
+  work; those bytes stay in an explicit completion-evidence-required state.
+- Made doctor progress and bounded heartbeats visible by default, attached
+  parser-derived mode availability to suggested commands, and made a changed
+  or unverified object-manifest snapshot invalidate stale findings.
+- Required Doctor progress logs to use a new file outside the archive and kept
+  the exclusive file handle for the run so path replacement cannot redirect
+  later events. Diagnostic output is create-only, including against manifest
+  path or hardlink aliases.
+- Made object-storage profile identity visibly required, documented registry
+  resolution, and removed the unsupported local-profile promise from help
+  while retaining an early fail-closed legacy tombstone.
+- Kept batch writers and doctor performance optimization explicitly outside
+  this release, and kept development/release activity separate from client
+  archive execution.
+
 ## v0.4.8 - 2026-08-26
 
 - Made interrupted exact operations report durable progress and safely

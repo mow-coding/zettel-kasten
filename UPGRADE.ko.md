@@ -2,6 +2,40 @@
 
 [English Upgrade Guide](UPGRADE.md)
 
+## v0.4.9 안전한 단일 파일 경로 완성
+
+일치하는 공개 Release가 정확한 wheel을 자산으로 나열한 뒤에만 설치합니다.
+
+```powershell
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.9/wom_kit-0.4.9-py3-none-any.whl"
+archive --version
+```
+
+새 프로세스에서 정확히 `archive 0.4.9`인지 확인합니다. 설치만으로 보관함은
+바뀌지 않습니다. 검토한 local 파일 하나는 intake 근거 기록, exact capture
+selection, 선택 byte 보존이라는 세 번의 별도 native 결정을 거쳐 안전하게
+반입할 수 있습니다. doctor는 기본적으로 내용 없는 진행 상황을 보여주고,
+실행 중 object manifest가 바뀌면 기존 결과를 stale로 무효화하며, 추천된
+dry-run이 실행 가능한지와 이후 승인이 닫혀 있는지를 구분합니다.
+object-storage는 먼저 확인한 profile id를 필수로 받으며 profile registry를
+만들었다고 속이지 않습니다.
+
+이 exact writer를 실행하기 전부터 같은 receipt 바이트가 이미 있었다면 승인
+완료 증거로 보지 않습니다. WOM은 그 파일을 바꾸지 않고 완료 증거가 필요하다고
+보고하며, intake chain이 성공했다고 속이지 않습니다.
+
+`--progress-log`는 이제 보관함 밖의 새 파일만 받습니다. 실행할 때마다 새로운
+외부 로그 경로를 사용해야 하며, 기존 파일이나 보관함 내부 경로는 Doctor가
+시작하기 전에 거부합니다. 따라서 관찰용 로그나 hardlink 별칭이 보관함 근거를
+덮어쓸 수 없습니다. 실행 중에는 처음 독점 생성한 파일 손잡이를 계속 사용하므로
+표시 경로가 나중에 교체되어도 이후 진행 기록이 다른 파일로 향하지 않습니다.
+
+Doctor `--output`도 보관함 안의 새 상대 경로만 받습니다. 기존 보관함 파일이나
+기존 hardlink 별칭은 절대 덮어쓰지 않습니다.
+
+배치 intake/capture는 계속 닫혀 있고 heartbeat가 doctor 성능 최적화의 증거는
+아닙니다. [v0.4.9 릴리스 노트](wom-kit/docs/releases/v0.4.9.md)를 보세요.
+
 ## v0.4.8 추측 없는 무결성 복구
 
 일치하는 공개 Release가 정확한 wheel을 자산으로 나열한 뒤에만 설치합니다.

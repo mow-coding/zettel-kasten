@@ -397,6 +397,7 @@ from uuid import UUID
 from . import (
     __version__,
     approval_integrity,
+    archive_doctor,
     archive_services,
     artifact_lifecycle_inventory,
     command_status,
@@ -417,6 +418,7 @@ from . import (
     runtime_guidance,
     runtime_skill_install,
     saved_view_workflows,
+    source_intake_record_exact,
     source_fidelity_session_evidence,
 )
 from .paths import (
@@ -714,9 +716,11 @@ class Diagnostic:
     hint: str | None = None
     suggested_command: str | None = None
     compatibility_target: str | None = None
+    details: dict[str, Any] | None = None
+    suggested_command_status: dict[str, Any] | None = None
 
-    def as_dict(self) -> dict[str, str | None]:
-        data = {
+    def as_dict(self) -> dict[str, Any]:
+        data: dict[str, Any] = {
             "severity": self.severity,
             "code": self.code,
             "message": self.message,
@@ -728,6 +732,10 @@ class Diagnostic:
             data["suggested_command"] = self.suggested_command
         if self.compatibility_target is not None:
             data["compatibility_target"] = self.compatibility_target
+        if self.details is not None:
+            data["details"] = self.details
+        if self.suggested_command_status is not None:
+            data["suggested_command_status"] = self.suggested_command_status
         return data
 
 
@@ -1089,9 +1097,13 @@ def _make_stage_progress_callback(
     progress_log_path: str | Path | None = None,
 ) -> ProgressCallback | None:
     log_path = Path(progress_log_path) if progress_log_path is not None else None
+    log_handle = None
     if log_path is not None:
         log_path.parent.mkdir(parents=True, exist_ok=True)
-        log_path.write_text("", encoding="utf-8")
+        # Retain the exclusively-created handle for the callback lifetime.
+        # Reopening by path would let a post-initialization path replacement
+        # redirect observational output into an archive-owned file.
+        log_handle = log_path.open("x", encoding="utf-8", newline="\n")
     if not enabled and log_path is None:
         return None
     started = time.monotonic()
@@ -1162,27 +1174,27 @@ def _make_stage_progress_callback(
                     remaining = max(0, total - current)
                     eta = remaining / rate_per_second if rate_per_second else 0.0
                     eta_text = f"{eta:.1f}s"
-        if log_path is not None:
-            with log_path.open("a", encoding="utf-8") as handle:
-                handle.write(
-                    json.dumps(
-                        {
-                            "label": label,
-                            "stage": stage,
-                            "message": message,
-                            "current": current,
-                            "total": total,
-                            "elapsed_seconds": round(elapsed, 3),
-                            "stage_elapsed_seconds": round(stage_elapsed, 3),
-                            "unit": unit if current is not None and total else None,
-                            "rate_per_second": round(rate_per_second, 6) if rate_per_second is not None else None,
-                            "eta": eta_text,
-                        },
-                        ensure_ascii=False,
-                        sort_keys=True,
-                    )
-                    + "\n"
+        if log_handle is not None:
+            log_handle.write(
+                json.dumps(
+                    {
+                        "label": label,
+                        "stage": stage,
+                        "message": message,
+                        "current": current,
+                        "total": total,
+                        "elapsed_seconds": round(elapsed, 3),
+                        "stage_elapsed_seconds": round(stage_elapsed, 3),
+                        "unit": unit if current is not None and total else None,
+                        "rate_per_second": round(rate_per_second, 6) if rate_per_second is not None else None,
+                        "eta": eta_text,
+                    },
+                    ensure_ascii=False,
+                    sort_keys=True,
                 )
+                + "\n"
+            )
+            log_handle.flush()
         if not should_print_to_stderr(stage, message, current, total, now):
             return
         last_stderr_by_stage[stage] = now
@@ -1198,6 +1210,18 @@ def _make_stage_progress_callback(
         else:
             print(f"[{label}] {stage}: {message} elapsed={elapsed:.1f}s", file=sys.stderr, flush=True)
 
+    def close_progress() -> None:
+        nonlocal log_handle
+        handle = log_handle
+        log_handle = None
+        if handle is None:
+            return
+        try:
+            handle.flush()
+        finally:
+            handle.close()
+
+    setattr(progress, "close", close_progress)
     return progress
 
 
@@ -1209,8 +1233,21 @@ class CommandProgressReporter:
         label: str,
         heartbeat_interval_seconds: float = 10.0,
         stage_order: tuple[str, ...] | None = None,
+        detail: str = "compact",
+        progress_log_path: str | Path | None = None,
     ) -> None:
-        self._callback = _make_stage_progress_callback(enabled, label=label, detail="compact")
+        self._stderr_callback = _make_stage_progress_callback(
+            enabled,
+            label=label,
+            detail=detail,
+        )
+        self._progress_log_callback = _make_stage_progress_callback(
+            False,
+            label=label,
+            detail="verbose",
+            progress_log_path=progress_log_path,
+        )
+        self._detail = detail
         self._interval = max(0.01, heartbeat_interval_seconds)
         self._state_lock = threading.Lock()
         self._callback_lock = threading.Lock()
@@ -1231,7 +1268,7 @@ class CommandProgressReporter:
             for index, stage in enumerate(self._stage_order, start=1)
         }
         self._thread: threading.Thread | None = None
-        if self._callback is not None:
+        if self._stderr_callback is not None or self._progress_log_callback is not None:
             self._thread = threading.Thread(
                 target=self._heartbeat_loop,
                 name=f"wom-{label}-heartbeat",
@@ -1240,9 +1277,12 @@ class CommandProgressReporter:
             self._thread.start()
 
     def progress(self, stage: str, message: str, current: int | None, total: int | None) -> None:
-        if self._callback is None:
+        if self._stderr_callback is None and self._progress_log_callback is None:
             return
+        self._emit_log(stage, message, current, total)
         if stage == "edge-receipt-source-load-detail":
+            if self._detail == "verbose":
+                self._emit_stderr(stage, message, current, total)
             return
         edge_source_summary = self._edge_receipt_source_summary(stage, message)
         local_profile_summary = self._local_profile_secret_safety_summary(stage, message)
@@ -1307,14 +1347,17 @@ class CommandProgressReporter:
                     forward = False
                 else:
                     self._last_forwarded_progress = progress_key
+        if self._detail == "verbose":
+            self._emit_stderr(stage, message, current, total)
+            return
         if safe_message == "working" or safe_message.startswith("working ") or not forward:
             return
-        self._emit(stage, safe_message, current, total)
+        self._emit_stderr(stage, safe_message, current, total)
 
-    def _emit(self, stage: str, message: str, current: int | None, total: int | None) -> None:
+    def _emit_stderr(self, stage: str, message: str, current: int | None, total: int | None) -> None:
         """Keep progress-stream failures observational, never transactional."""
         with self._callback_lock:
-            callback = self._callback
+            callback = self._stderr_callback
             if callback is None:
                 return
             try:
@@ -1323,8 +1366,23 @@ class CommandProgressReporter:
                 # stderr can disappear when a PTY or agent transport closes.
                 # Disable future progress instead of changing command meaning.
                 _neutralize_failed_standard_stream(sys.stderr)
-                self._callback = None
-                self._stop.set()
+                self._stderr_callback = None
+
+    def _emit_log(self, stage: str, message: str, current: int | None, total: int | None) -> None:
+        with self._callback_lock:
+            callback = self._progress_log_callback
+            if callback is None:
+                return
+            try:
+                callback(stage, message, current, total)
+            except (OSError, UnicodeError, ValueError):
+                closer = getattr(callback, "close", None)
+                if callable(closer):
+                    try:
+                        closer()
+                    except (OSError, UnicodeError, ValueError):
+                        pass
+                self._progress_log_callback = None
 
     @staticmethod
     def _content_free_message(message: str, current: int | None, total: int | None) -> str:
@@ -1441,12 +1499,22 @@ class CommandProgressReporter:
             stage_annotation = self._stage_annotation(stage, "heartbeat")
             if stage_annotation:
                 message += f" {stage_annotation}"
-            self._emit(stage, message, current, total)
+            self._emit_stderr(stage, message, current, total)
+            self._emit_log(stage, message, current, total)
 
     def close(self) -> None:
         self._stop.set()
         if self._thread is not None:
             self._thread.join(timeout=max(1.0, self._interval * 2))
+        with self._callback_lock:
+            callback = self._progress_log_callback
+            self._progress_log_callback = None
+            closer = getattr(callback, "close", None)
+            if callable(closer):
+                try:
+                    closer()
+                except (OSError, UnicodeError, ValueError):
+                    pass
 
 
 MINT_PUBLIC_PROGRESS_STAGES = (
@@ -1688,6 +1756,10 @@ class Doctor:
         self.diagnostics: list[Diagnostic] = []
         self.archive_config: dict[str, Any] = {}
         self.manifest_objects: dict[str, dict[str, Any]] = {}
+        self.object_manifest_snapshot: archive_doctor.DoctorInputSnapshot | None = None
+        self.object_manifest_revalidation: archive_doctor.DoctorInputRevalidation | None = None
+        self._object_manifest_raw: bytes | None = None
+        self._object_manifest_records_loaded = False
         self.allowed_link_types = self._load_allowed_link_types()
         self.edge_receipt_paths_by_source_segment: dict[str, list[tuple[Path, str]]] | None = None
         self.edge_receipts_by_source: dict[str, list[dict[str, Any]]] = {}
@@ -1722,32 +1794,105 @@ class Doctor:
         return dict(self._read_observations)
 
     def run(self) -> list[Diagnostic]:
-        if not self.archive_root.exists():
-            self.error("archive_root_missing", "Archive root does not exist.", self.archive_root)
-            return self.diagnostics
-        if not self.archive_root.is_dir():
-            self.error("archive_root_not_directory", "Archive root is not a directory.", self.archive_root)
-            return self.diagnostics
-
-        self.info("archive_root", f"Inspecting archive root: {self.archive_root}", self.archive_root)
-        self.info(
-            "doctor_version_compatibility",
-            f"release v{__version__} / schema {archive_services.FRONTMATTER_V03_TARGET} / compatible? yes",
-        )
-        if self.validate_scope.active():
-            self.info("validate_scope", f"Scoped validation: {self.validate_scope.summary()}")
-            for warning in self.validate_scope.warnings:
-                self.warn("validate_scope_warning", warning)
-            for blocker in self.validate_scope.blockers:
-                self.error("validate_scope_blocked", blocker)
-            if self.validate_scope.blockers:
+        try:
+            if not self.archive_root.exists():
+                self.error("archive_root_missing", "Archive root does not exist.", self.archive_root)
+                return self.diagnostics
+            if not self.archive_root.is_dir():
+                self.error("archive_root_not_directory", "Archive root is not a directory.", self.archive_root)
                 return self.diagnostics
 
-        stages = self._scoped_stages() if self.validate_scope.active() else self._full_stages()
-        for stage_name, stage_func in stages:
-            self._run_stage(stage_name, stage_func)
-        self._finish_edge_receipt_source_load_progress()
-        return self.diagnostics
+            self.info("archive_root", f"Inspecting archive root: {self.archive_root}", self.archive_root)
+            self.info(
+                "doctor_version_compatibility",
+                f"release v{__version__} / schema {archive_services.FRONTMATTER_V03_TARGET} / compatible? yes",
+            )
+            if self.validate_scope.active():
+                self.info("validate_scope", f"Scoped validation: {self.validate_scope.summary()}")
+                for warning in self.validate_scope.warnings:
+                    self.warn("validate_scope_warning", warning)
+                for blocker in self.validate_scope.blockers:
+                    self.error("validate_scope_blocked", blocker)
+                if self.validate_scope.blockers:
+                    return self.diagnostics
+
+            stages = self._scoped_stages() if self.validate_scope.active() else self._full_stages()
+            for stage_name, stage_func in stages:
+                self._run_stage(stage_name, stage_func)
+            return self.diagnostics
+        finally:
+            self._finish_edge_receipt_source_load_progress()
+            self._finalize_object_manifest_snapshot()
+            self._attach_suggested_command_statuses()
+
+    def _finalize_object_manifest_snapshot(self) -> None:
+        if self.object_manifest_snapshot is None or self.object_manifest_revalidation is not None:
+            return
+        revalidation = archive_doctor.revalidate_doctor_object_manifest_snapshot(
+            self.archive_root,
+            self.object_manifest_snapshot,
+        )
+        self.object_manifest_revalidation = revalidation
+        details = revalidation.as_dict()
+        if revalidation.state == "current":
+            self.info(
+                "doctor_input_snapshot_current",
+                "Object-manifest findings are current as of the completion revalidation timestamp.",
+                details=details,
+            )
+            return
+        if revalidation.state == "stale":
+            self.error(
+                "doctor_input_snapshot_stale",
+                "Object-manifest input changed while doctor was running; related findings are stale and must be rerun.",
+                details=details,
+            )
+            return
+        self.error(
+            "doctor_input_snapshot_unverified",
+            "Object-manifest freshness could not be verified at doctor completion; related findings are not current.",
+            details=details,
+        )
+
+    def _attach_suggested_command_statuses(self) -> None:
+        targets = [
+            item
+            for item in self.diagnostics
+            if item.suggested_command is not None and item.suggested_command_status is None
+        ]
+        if not targets:
+            return
+        try:
+            parser = build_parser()
+            inventory = command_status.build_command_status_inventory(
+                parser,
+                COMPOUND_APPROVAL_BLOCKED_COMMANDS,
+            )
+        except (TypeError, ValueError):
+            parser = None
+            inventory = None
+        for item in targets:
+            if inventory is None:
+                item.suggested_command_status = (
+                    command_status._unresolved_suggested_command_status(
+                        reason_code="command_status_inventory_unavailable",
+                        requested_mode="unspecified",
+                    )
+                )
+                continue
+            try:
+                item.suggested_command_status = command_status.resolve_suggested_command_mode(
+                    inventory,
+                    item.suggested_command or "",
+                    trusted_parser=parser,
+                )
+            except (TypeError, ValueError):
+                item.suggested_command_status = (
+                    command_status._unresolved_suggested_command_status(
+                        reason_code="suggested_command_status_unavailable",
+                        requested_mode="unspecified",
+                    )
+                )
 
     def _full_stages(self) -> list[tuple[str, Callable[[], None]]]:
         return [
@@ -1995,6 +2140,7 @@ class Doctor:
         hint: str | None = None,
         suggested_command: str | None = None,
         compatibility_target: str | None = None,
+        details: dict[str, Any] | None = None,
     ) -> None:
         self.diagnostics.append(
             Diagnostic(
@@ -2005,6 +2151,7 @@ class Doctor:
                 hint,
                 suggested_command,
                 compatibility_target,
+                details,
             )
         )
 
@@ -2016,13 +2163,32 @@ class Doctor:
         *,
         hint: str | None = None,
         suggested_command: str | None = None,
+        details: dict[str, Any] | None = None,
     ) -> None:
         self.diagnostics.append(
-            Diagnostic("WARN", code, message, self._display_path(path), hint, suggested_command)
+            Diagnostic(
+                "WARN",
+                code,
+                message,
+                self._display_path(path),
+                hint,
+                suggested_command,
+                None,
+                details,
+            )
         )
 
-    def info(self, code: str, message: str, path: Path | str | None = None) -> None:
-        self.diagnostics.append(Diagnostic("INFO", code, message, self._display_path(path)))
+    def info(
+        self,
+        code: str,
+        message: str,
+        path: Path | str | None = None,
+        *,
+        details: dict[str, Any] | None = None,
+    ) -> None:
+        self.diagnostics.append(
+            Diagnostic("INFO", code, message, self._display_path(path), details=details)
+        )
 
     def _display_path(self, path: Path | str | None) -> str | None:
         if path is None:
@@ -2484,12 +2650,43 @@ class Doctor:
         except sqlite3.Error as exc:
             self.error("sqlite_schema_invalid", f"SQLite schema failed to parse: {exc}", path)
 
-    def _check_object_manifest(self) -> None:
+    def _capture_object_manifest_bytes(self) -> bytes | None:
+        if self.object_manifest_snapshot is not None:
+            return self._object_manifest_raw
         path = self.archive_root / "objects" / "manifests" / "files.jsonl"
-        if not path.is_file():
+        raw, snapshot = archive_doctor.capture_doctor_object_manifest_snapshot(
+            self.archive_root,
+        )
+        self.object_manifest_snapshot = snapshot
+        self._object_manifest_raw = raw
+        if snapshot.state == "unavailable":
+            self.error(
+                snapshot.reason_code or "object_manifest_snapshot_unavailable",
+                "Object manifest could not be captured as one bounded stable regular-file snapshot.",
+                path,
+                details=snapshot.as_dict(),
+            )
+        return raw
+
+    def _load_object_manifest_records(self, *, audit: bool) -> None:
+        if self._object_manifest_records_loaded:
+            return
+        self._object_manifest_records_loaded = True
+        path = self.archive_root / "objects" / "manifests" / "files.jsonl"
+        raw = self._capture_object_manifest_bytes()
+        if raw is None:
+            return
+        try:
+            text = raw.decode("utf-8")
+        except UnicodeDecodeError:
+            self.error(
+                "object_manifest_utf8_invalid",
+                "Object manifest exact snapshot is not valid UTF-8.",
+                path,
+            )
             return
 
-        for line_number, raw_line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+        for line_number, raw_line in enumerate(text.splitlines(), start=1):
             line = raw_line.strip()
             if not line:
                 continue
@@ -2498,9 +2695,20 @@ class Doctor:
             except json.JSONDecodeError as exc:
                 self.error("object_manifest_json_invalid", f"Invalid JSON on line {line_number}: {exc}", path)
                 continue
+            if not isinstance(record, dict):
+                self.error(
+                    "object_manifest_record_invalid",
+                    f"Object manifest line {line_number} must be a JSON object.",
+                    path,
+                )
+                continue
+            object_id = record.get("object_id")
+            if not audit:
+                if isinstance(object_id, str):
+                    self.manifest_objects.setdefault(object_id.lower(), record)
+                continue
             self._check_schema(record, "object-manifest-entry.schema.json", path)
 
-            object_id = record.get("object_id")
             sha256 = record.get("sha256")
             if not isinstance(object_id, str) or not OBJECT_ID_RE.match(object_id):
                 self.error("object_id_invalid", f"Invalid object_id on line {line_number}: {object_id}", path)
@@ -2509,9 +2717,10 @@ class Doctor:
                 self.error("sha256_invalid", f"Invalid sha256 on line {line_number}: {sha256}", path)
             if isinstance(sha256, str) and object_id != f"sha256:{sha256}":
                 self.error("object_id_sha_mismatch", f"object_id and sha256 mismatch on line {line_number}.", path)
-            if object_id in self.manifest_objects:
+            normalized_object_id = object_id.lower()
+            if normalized_object_id in self.manifest_objects:
                 self.error("object_id_duplicate", f"Duplicate object_id in manifest: {object_id}", path)
-            self.manifest_objects[object_id] = record
+            self.manifest_objects[normalized_object_id] = record
 
             if "logical_key" not in record:
                 self.error("object_logical_key_missing", f"Object missing logical_key: {object_id}", path)
@@ -2519,6 +2728,9 @@ class Doctor:
                 self.warn("object_locations_missing", f"Object has no locations list: {object_id}", path)
 
             self._check_local_object_locations(record, path)
+
+    def _check_object_manifest(self) -> None:
+        self._load_object_manifest_records(audit=True)
 
     def _check_derived_text_manifest(self) -> None:
         path = self.archive_root / archive_services.DERIVED_TEXT_MANIFEST_RELATIVE_PATH
@@ -3343,12 +3555,8 @@ class Doctor:
         total = len(paths)
         # §4.1 / RC3: audit the wom_uploaded MANIFEST LOCATION each success receipt
         # advanced, not just the receipt. Build an object_id -> record lookup once.
-        manifest_by_object_id: dict[str, dict[str, Any]] = {}
-        for record in archive_services.load_manifest_records(self.archive_root):
-            if isinstance(record, dict):
-                object_id = str(record.get("object_id") or "").lower()
-                if object_id:
-                    manifest_by_object_id.setdefault(object_id, record)
+        self._load_object_manifest_records(audit=False)
+        manifest_by_object_id = self.manifest_objects
         for index, path in enumerate(paths, start=1):
             if index == 1 or index == total or index % 250 == 0:
                 self._progress(
@@ -4364,14 +4572,45 @@ def command_doctor(args: argparse.Namespace) -> int:
     except ValueError as exc:
         print(str(exc), file=sys.stderr)
         return 2
-    progress_callback = make_doctor_progress_callback(
-        bool(getattr(args, "progress", False)),
-        detail=str(getattr(args, "progress_detail", "compact")),
-        progress_log_path=getattr(args, "progress_log", None),
-    )
     archive_root = Path(args.archive_root)
-    doctor = Doctor(archive_root, progress_callback=progress_callback)
-    diagnostics = doctor.run()
+    if getattr(args, "output", None):
+        try:
+            _validate_doctor_output_target(str(args.output), archive_root)
+        except (OSError, ValueError) as exc:
+            print(f"Failed to write doctor output file: {exc}", file=sys.stderr)
+            return 1
+    doctor = Doctor(archive_root)
+    progress_log_path = getattr(args, "progress_log", None)
+    try:
+        if progress_log_path is not None:
+            _validate_doctor_progress_log_path(progress_log_path, archive_root)
+        reporter = CommandProgressReporter(
+            bool(getattr(args, "progress", True)),
+            label="doctor",
+            heartbeat_interval_seconds=5.0,
+            stage_order=(
+                "doctor-run",
+                *(stage_name for stage_name, _stage_func in doctor._full_stages()),
+                "snapshot-revalidation",
+            ),
+            detail=str(getattr(args, "progress_detail", "compact")),
+            progress_log_path=progress_log_path,
+        )
+    except (OSError, ValueError):
+        print(
+            "Failed to initialize doctor progress log: "
+            "--progress-log must be a new file outside the archive root.",
+            file=sys.stderr,
+        )
+        return 1
+    doctor.progress_callback = reporter.progress
+    reporter.progress("doctor-run", "start", None, None)
+    try:
+        diagnostics = doctor.run()
+        reporter.progress("snapshot-revalidation", "done", None, None)
+        reporter.progress("doctor-run", "done", None, None)
+    finally:
+        reporter.close()
     errors = [item for item in diagnostics if item.severity == "ERROR"]
     warnings = [item for item in diagnostics if item.severity == "WARN"]
     shown_diagnostics = filter_diagnostics_by_level(diagnostics, diagnostic_levels)
@@ -4391,6 +4630,11 @@ def command_doctor(args: argparse.Namespace) -> int:
         diagnostic_level=diagnostic_level_label,
         output_path=output_path,
         progress_log_path=str(args.progress_log) if getattr(args, "progress_log", None) else None,
+        input_revalidation=(
+            doctor.object_manifest_revalidation.as_dict()
+            if doctor.object_manifest_revalidation is not None
+            else None
+        ),
     )
 
     if summary_only:
@@ -4405,9 +4649,13 @@ def command_doctor(args: argparse.Namespace) -> int:
         shown_warnings = [item for item in shown_diagnostics if item.severity == "WARN"]
         print_diagnostics(shown_diagnostics, shown_errors, shown_warnings)
 
-    if errors or (args.strict and warnings):
-        return 1
-    return 0
+    exit_code = 1 if errors or (args.strict and warnings) else 0
+    if doctor.object_manifest_revalidation is not None:
+        exit_code = archive_doctor.doctor_exit_code_with_snapshot(
+            exit_code,
+            doctor.object_manifest_revalidation,
+        )
+    return exit_code
 
 
 def command_version(args: argparse.Namespace) -> int:
@@ -7966,12 +8214,33 @@ def command_github_repo(args: argparse.Namespace) -> int:
 def _object_storage_setup_registration_cli_error(
     args: argparse.Namespace, reason_code: str
 ) -> int:
+    error_class = (
+        "policy"
+        if reason_code
+        == "object_storage_setup_registration_local_profile_unsupported"
+        else "usage"
+        if reason_code
+        in {
+            "object_storage_setup_registration_approval_required",
+            "object_storage_setup_registration_plan_invalid",
+        }
+        else "precondition"
+    )
     document = {
+        "schema": "wom-kit/cli-error/v0.1",
         "ok": False,
         "dry_run": bool(getattr(args, "dry_run", False)),
         "lifecycle_action": "object_storage_setup_registration",
         "state": "blocked",
+        "status_class": "blocked",
+        "command": "object-storage",
+        "error_class": error_class,
+        "reason_codes": [reason_code],
         "reason_code": reason_code,
+        "exit_code": 1,
+        "effects_state": "none",
+        "files_written": [],
+        "missing_arguments": [],
         "provider_api_called": False,
         "bucket_created": False,
         "bucket_verified": False,
@@ -7986,13 +8255,13 @@ def _object_storage_setup_registration_cli_error(
 
 
 def command_object_storage(args: argparse.Namespace) -> int:
+    if bool(getattr(args, "write_local_profile", False)):
+        return _object_storage_setup_registration_cli_error(
+            args, "object_storage_setup_registration_local_profile_unsupported"
+        )
     if bool(args.dry_run) == bool(args.approve):
         return _object_storage_setup_registration_cli_error(
             args, "object_storage_setup_registration_plan_invalid"
-        )
-    if args.approve and bool(args.write_local_profile):
-        return _object_storage_setup_registration_cli_error(
-            args, "object_storage_setup_registration_local_profile_unsupported"
         )
     expected_plan = str(getattr(args, "expected_plan_sha256", None) or "").strip().lower()
     reviewer = str(getattr(args, "reviewed_by", None) or "").strip()
@@ -14274,26 +14543,63 @@ def command_authoring_conventions(args: argparse.Namespace) -> int:
 
 
 def command_source_intake_record(args: argparse.Namespace) -> int:
-    if args.approve:
-        return _exact_human_approval_cli_error(
-            args,
-            lifecycle_action="source_intake_record",
-            reason_code="compound_exact_human_approval_binding_required",
+    reporter = CommandProgressReporter(
+        bool(getattr(args, "progress", False)),
+        label="source-intake-record",
+    )
+    reporter.progress("source-intake-record-plan", "start", None, None)
+
+    def exact_progress(event: ExactOperationProgress) -> None:
+        document = event.public_document()
+        reporter.progress(
+            "exact-operation-" + str(document["stage"]),
+            str(document["mode"]),
+            int(document["completed_items"]),
+            int(document["total_items"]),
         )
+
     try:
-        result = archive_services.source_intake_record(
+        if args.dry_run == args.approve:
+            raise source_intake_record_exact.SourceIntakeRecordExactError(
+                "source_intake_record_request_invalid"
+            )
+        if args.approve and not args.reviewed_by:
+            raise source_intake_record_exact.SourceIntakeRecordExactError(
+                "source_intake_record_approval_required"
+            )
+        plan = source_intake_record_exact.plan_source_intake_record(
             Path(args.archive_root),
             Path(args.source_intake_plan),
-            dry_run=args.dry_run,
-            approve=args.approve,
-            reviewed_by=args.reviewed_by,
         )
-    except (archive_services.ArchiveServiceError, OSError) as exc:
-        print(str(exc), file=sys.stderr)
-        return 1
+        reporter.progress("source-intake-record-plan", "done", None, None)
+        result = (
+            plan.public_document()
+            if args.dry_run
+            else source_intake_record_exact.execute_source_intake_record(
+                plan,
+                expected_plan_sha256=args.expected_plan_sha256 or "",
+                reviewer_claim=args.reviewed_by or "",
+                progress_hook=exact_progress,
+            )
+        )
+    except (
+        source_intake_record_exact.SourceIntakeRecordExactError,
+        operation_approval_binding.OperationApprovalBindingError,
+        ExactHumanApprovalError,
+        ExactHumanApprovalWindowsError,
+        ExactHumanApprovalWorkflowError,
+        ExactOperationManifestError,
+        archive_services.ArchiveServiceError,
+        OSError,
+    ) as error:
+        result = source_intake_record_exact.failure_document(
+            str(getattr(error, "code", "") or "")
+        )
+    finally:
+        reporter.close()
 
     print_source_intake_record_result(result, args.format)
-    return 0 if result.get("ok", True) else 1
+    return 0 if result.get("ok") else 1
 
 
 def command_source_intake_batch(args: argparse.Namespace) -> int:
@@ -14345,23 +14651,11 @@ def print_source_intake_record_result(result: dict[str, Any], output_format: str
     if output_format == "json":
         print_json(result)
         return
-    mode = "dry-run ready" if result.get("dry_run") else "recorded"
-    if not result.get("ok", True):
-        mode = "blocked"
-    print(f"Source intake record {mode}.")
-    print(f"Archive: {result.get('archive_id') or '-'}")
+    print(f"Source intake record {result.get('state') or 'blocked'}.")
     print(f"Plan SHA-256: {result.get('source_intake_plan_sha256') or '-'}")
-    if result.get("plan_path"):
-        print(f"Plan path: {result['plan_path']}")
-    else:
-        print(f"Proposed plan path: {result.get('proposed_plan_path') or '-'}")
-    writes = result.get("files_written") or []
-    if writes:
-        print("Files written:")
-        for path in writes:
-            print(f"- {path}")
-    else:
-        print("Writes: none")
+    print(f"Exact operation manifest: {result.get('plan_sha256') or '-'}")
+    print(f"Receipts created: {result.get('receipt_create_count', 0)}")
+    print(f"Writes performed: {bool(result.get('writes_performed'))}")
     if result.get("blockers"):
         print("Blockers:")
         for blocker in result["blockers"]:
@@ -27720,6 +28014,7 @@ def doctor_summary_payload(
     diagnostic_level: str,
     output_path: str | None,
     progress_log_path: str | None,
+    input_revalidation: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     counts = diagnostic_severity_counts(diagnostics)
     ok = counts["ERROR"] == 0 and not (strict and counts["WARN"] > 0)
@@ -27766,6 +28061,8 @@ def doctor_summary_payload(
             "tracking_policy": "local_progress_artifact_not_archive_receipt",
             "git_guidance": "Do not commit by default; keep locally, summarize into feedback, or delete after review.",
         }
+    if input_revalidation is not None:
+        result["input_revalidation"] = input_revalidation
     return result
 
 
@@ -28929,14 +29226,106 @@ def _cleanup_zet_catalog_pass_output_file_legacy_core(
 
 
 def _write_doctor_output_file(path_arg: str, archive_root: Path, diagnostics: list[Diagnostic]) -> str:
-    output_path = resolve_archive_relative_path(archive_root, path_arg)
+    output_path, protected_manifest = _validate_doctor_output_target(
+        path_arg,
+        archive_root,
+    )
     output_path.parent.mkdir(parents=True, exist_ok=True)
     payload = [item.as_dict() for item in diagnostics]
-    output_path.write_text(
-        json.dumps(payload, indent=2, ensure_ascii=False, default=str) + "\n",
-        encoding="utf-8",
+    output_bytes = (
+        json.dumps(payload, indent=2, ensure_ascii=False, default=str) + "\n"
+    ).encode("utf-8")
+    _write_doctor_output_bytes(
+        output_path,
+        output_bytes,
+        protected_manifest=protected_manifest,
     )
     return display_output_path(output_path, archive_root)
+
+
+def _validate_doctor_output_target(
+    path_arg: str,
+    archive_root: Path,
+) -> tuple[Path, Path]:
+    output_path = resolve_archive_relative_path(archive_root, path_arg)
+    protected_manifest = (
+        archive_root.resolve()
+        / archive_doctor.DOCTOR_OBJECT_MANIFEST_RELATIVE_PATH
+    ).resolve()
+    if output_path.resolve() == protected_manifest:
+        raise ValueError("--output cannot overwrite the doctor object-manifest input.")
+    try:
+        aliases_manifest = output_path.exists() and protected_manifest.exists() and os.path.samefile(
+            output_path,
+            protected_manifest,
+        )
+    except OSError:
+        raise ValueError("--output target identity could not be verified safely.") from None
+    if aliases_manifest:
+        raise ValueError("--output cannot alias the doctor object-manifest input.")
+    if output_path.exists():
+        raise ValueError("--output must name a new archive-relative file.")
+    return output_path, protected_manifest
+
+
+def _write_doctor_output_bytes(
+    output_path: Path,
+    payload: bytes,
+    *,
+    protected_manifest: Path,
+) -> None:
+    flags = os.O_WRONLY | getattr(os, "O_BINARY", 0)
+    try:
+        descriptor = os.open(
+            output_path,
+            flags | os.O_CREAT | os.O_EXCL,
+            0o600,
+        )
+    except FileExistsError:
+        raise ValueError(
+            "--output target already exists or changed during safe creation."
+        ) from None
+    try:
+        output_stat = os.fstat(descriptor)
+        try:
+            manifest_stat = os.stat(protected_manifest)
+        except FileNotFoundError:
+            manifest_stat = None
+        if manifest_stat is not None and (
+            output_stat.st_dev,
+            output_stat.st_ino,
+        ) == (
+            manifest_stat.st_dev,
+            manifest_stat.st_ino,
+        ):
+            raise ValueError("--output cannot alias the doctor object-manifest input.")
+        view = memoryview(payload)
+        written = 0
+        while written < len(view):
+            count = os.write(descriptor, view[written:])
+            if count <= 0:
+                raise OSError("doctor_output_write_incomplete")
+            written += count
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def _validate_doctor_progress_log_path(
+    path_arg: str | Path,
+    archive_root: Path,
+) -> None:
+    """Keep an observational log from truncating any archive-owned file."""
+
+    log_path = Path(path_arg)
+    candidate = log_path if log_path.is_absolute() else Path.cwd() / log_path
+    resolved_log = candidate.resolve()
+    resolved_archive = archive_root.resolve()
+    try:
+        resolved_log.relative_to(resolved_archive)
+    except ValueError:
+        return
+    raise ValueError("doctor_progress_log_inside_archive")
 
 
 def print_doctor_summary_text(summary: dict[str, Any]) -> None:
@@ -28947,6 +29336,21 @@ def print_doctor_summary_text(summary: dict[str, Any]) -> None:
         f"{data['info_count']} info(s), {data['diagnostic_count']} diagnostic(s)."
     )
     print(f"OK: {str(summary['ok']).lower()}")
+    revalidation = (
+        summary.get("input_revalidation")
+        if isinstance(summary.get("input_revalidation"), dict)
+        else None
+    )
+    if revalidation:
+        print(f"Object-manifest result state: {revalidation.get('state')}")
+        print(f"Observed at: {revalidation.get('observed_at')}")
+        print(f"Revalidated at: {revalidation.get('revalidated_at')}")
+        print(f"Observed identity: {revalidation.get('observed_identity') or '-'}")
+        print(
+            "Freshness scope: "
+            f"{revalidation.get('freshness_scope')} "
+            f"(full_archive_atomic_snapshot={str(bool(revalidation.get('full_archive_atomic_snapshot'))).lower()})"
+        )
     output = summary.get("output") if isinstance(summary.get("output"), dict) else None
     if output:
         print(f"Full diagnostics written to: {output.get('path')}")
@@ -28967,6 +29371,17 @@ def print_diagnostics(diagnostics: list[Diagnostic], errors: list[Diagnostic], w
             print(f"  hint: {item.hint}")
         if item.suggested_command:
             print(f"  suggested_command: {item.suggested_command}")
+        if item.suggested_command_status:
+            status = item.suggested_command_status
+            print(
+                "  suggested_command_status: "
+                f"requested_mode={status.get('requested_mode')} "
+                f"requested_mode_available={status.get('requested_mode_available')} "
+                "approval_mode_available_for_arguments="
+                f"{status.get('approval_mode_available_for_arguments')} "
+                "prerequisites_evaluated="
+                f"{status.get('prerequisites_evaluated')}"
+            )
         if item.compatibility_target:
             print(f"  compatibility_target: {item.compatibility_target}")
     print(f"\nSummary: {len(errors)} error(s), {len(warnings)} warning(s).")
@@ -29169,7 +29584,6 @@ COMPOUND_APPROVAL_BLOCKED_COMMANDS = frozenset(
         "saved-view-write",
         "scan-source",
         "source-intake-batch",
-        "source-intake-record",
         "tiro-lossless-recovery-capture",
         "tiro-lossless-recovery-fetch-run",
         "transfer-ownership",
@@ -30108,7 +30522,9 @@ def build_parser() -> argparse.ArgumentParser:
     doctor.add_argument("archive_root", nargs="?", default=".", help="Archive root to inspect.")
     doctor.add_argument("--strict", action="store_true", help="Treat warnings as a failing result.")
     doctor.add_argument("--json", action="store_true", help="Print diagnostics as JSON.")
-    doctor.add_argument("--progress", action="store_true", help="Stream compact stage progress to stderr.")
+    doctor.set_defaults(progress=True)
+    doctor.add_argument("--progress", dest="progress", action="store_true", help="Stream compact stage progress to stderr (default).")
+    doctor.add_argument("--no-progress", dest="progress", action="store_false", help="Disable doctor progress and heartbeat output on stderr.")
     doctor.add_argument(
         "--progress-detail",
         choices=["compact", "verbose"],
@@ -30117,11 +30533,17 @@ def build_parser() -> argparse.ArgumentParser:
     )
     doctor.add_argument(
         "--progress-log",
-        help="Write the full progress event stream as JSONL while stderr obeys --progress-detail.",
+        help=(
+            "Write the full progress event stream to a new JSONL file outside "
+            "the archive root while stderr obeys --progress-detail."
+        ),
     )
     doctor.add_argument(
         "--output",
-        help="Write full diagnostics JSON to an archive-relative file; stdout prints only a small summary.",
+        help=(
+            "Write full diagnostics JSON to a new archive-relative file; "
+            "existing files are never overwritten and stdout prints only a small summary."
+        ),
     )
     doctor.add_argument("--summary", action="store_true", help="Print only a compact doctor summary to stdout.")
     doctor.add_argument("--errors-only", action="store_true", help="Only print ERROR diagnostics on stdout.")
@@ -30570,7 +30992,18 @@ def build_parser() -> argparse.ArgumentParser:
     object_storage.add_argument("archive_root", help="Archive root to plan for.")
     object_storage.add_argument("--dry-run", action="store_true", help="Preview local metadata and manual object storage steps without writing files.")
     object_storage.add_argument("--provider", help="Provider kind: cloudflare-r2, aws-s3, backblaze-b2, google-cloud-storage, or generic-s3.")
-    object_storage.add_argument("--profile-id", help="Resolved WOM profile id.")
+    object_storage.add_argument(
+        "--profile-id",
+        required=True,
+        help=(
+            "Required stable WOM profile id. Resolve it first with "
+            "'archive profile-resolve --registry <path> --target <query> "
+            "--format json'. If no registry exists, review or create "
+            "profiles/wom-profiles.yml; this command does not create a "
+            "registry or infer an id. Do not pass an email, path, URL, token, "
+            "or secret."
+        ),
+    )
     object_storage.add_argument("--profile-slug", help="ASCII profile slug used in the proposed bucket/container name.")
     object_storage.add_argument("--storage-account-ref", help="Safe storage account reference such as storage:account:example.")
     object_storage.add_argument("--bucket-name", help="Override bucket/container name. Must pass conservative lowercase safety rules.")
@@ -30600,7 +31033,7 @@ def build_parser() -> argparse.ArgumentParser:
     object_storage.add_argument(
         "--write-local-profile",
         action="store_true",
-        help="Unsupported by the bounded v0.4.8 registration writer; retained only to reject legacy invocations explicitly.",
+        help=argparse.SUPPRESS,
     )
     object_storage.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     object_storage.set_defaults(func=command_object_storage)
@@ -32693,6 +33126,15 @@ def build_parser() -> argparse.ArgumentParser:
     source_intake_record.add_argument("--dry-run", action="store_true", help="Preview validation without writing files.")
     source_intake_record.add_argument("--approve", action="store_true", help="Write the reviewed source-intake plan record.")
     source_intake_record.add_argument("--reviewed-by", help="Reviewer id required when --approve is used.")
+    source_intake_record.add_argument(
+        "--expected-plan-sha256",
+        help="Optional expert binding to the exact manifest SHA-256 shown by --dry-run.",
+    )
+    source_intake_record.add_argument(
+        "--progress",
+        action="store_true",
+        help="Print content-free progress and heartbeats to stderr.",
+    )
     source_intake_record.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     source_intake_record.set_defaults(func=command_source_intake_record)
 
