@@ -2913,6 +2913,150 @@ class CompletionWorkflowTests(unittest.TestCase):
                 receipt_plan["blockers"],
             )
 
+    def test_external_locator_stable_reader_preserves_schema_compatibility(
+        self,
+    ) -> None:
+        for schema in (
+            "wom-kit/external-locator-record/v0.1",
+            "wom-kit/external-locator-record/v0.2",
+            "wom-kit/external-locator-record/v0.3",
+        ):
+            with (
+                self.subTest(schema=schema),
+                tempfile.TemporaryDirectory() as tmp,
+            ):
+                archive_root = self.fake_archive(Path(tmp) / "archive")
+                zettel_id = "zet_20110228_fake_school_record"
+                row = self.locator_fixture_row("a")
+                if schema.endswith("/v0.1"):
+                    row.pop("service_ref")
+                    row.pop("occurrence_anchor")
+                record_path = self.write_locator_record_fixture(
+                    archive_root,
+                    zettel_id,
+                    [row],
+                    schema=schema,
+                )
+
+                record, raw, error = completion_workflows._read_locator_record(
+                    archive_root,
+                    zettel_id,
+                )
+
+                self.assertIsNone(error)
+                self.assertEqual(raw, record_path.read_bytes())
+                self.assertEqual(record["schema"], schema)
+                self.assertEqual(record["locators"], [row])
+
+    def test_external_locator_stable_reader_rejects_oversize_and_special(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.fake_archive(Path(tmp) / "archive")
+            zettel_id = "zet_20110228_fake_school_record"
+            record_path = self.write_locator_record_fixture(
+                archive_root,
+                zettel_id,
+                [self.locator_fixture_row("a")],
+            )
+            oversized_bytes = (
+                b"{"
+                + b"x"
+                * completion_workflows.EXTERNAL_LOCATOR_RECORD_MAX_BYTES
+            )
+            record_path.write_bytes(oversized_bytes)
+
+            oversized = completion_workflows._read_locator_record(
+                archive_root,
+                zettel_id,
+            )
+
+            self.assertEqual(
+                oversized,
+                (None, None, "external_locator_record_unsafe"),
+            )
+
+            record_path.unlink()
+            record_path.mkdir()
+            special = completion_workflows._read_locator_record(
+                archive_root,
+                zettel_id,
+            )
+            self.assertEqual(
+                special,
+                (None, None, "external_locator_record_unsafe"),
+            )
+
+    def test_external_locator_stable_reader_rejects_symlink(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.fake_archive(Path(tmp) / "archive")
+            zettel_id = "zet_20110228_fake_school_record"
+            record_path = (
+                archive_root
+                / completion_workflows.EXTERNAL_LOCATOR_DIR
+                / f"{zettel_id}.json"
+            )
+            record_path.parent.mkdir(parents=True, exist_ok=True)
+            private_target = Path(tmp) / "private-sidecar.json"
+            private_value = "private locator content must not echo"
+            private_target.write_text(private_value, encoding="utf-8")
+            try:
+                record_path.symlink_to(private_target)
+            except OSError as exc:
+                self.skipTest(f"symlink creation unavailable: {exc}")
+
+            linked = completion_workflows._read_locator_record(
+                archive_root,
+                zettel_id,
+            )
+
+            self.assertEqual(
+                linked,
+                (None, None, "external_locator_record_unsafe"),
+            )
+            self.assertNotIn(private_value, json.dumps(linked))
+
+    def test_external_locator_stable_reader_rejects_replacement_during_read(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.fake_archive(Path(tmp) / "archive")
+            zettel_id = "zet_20110228_fake_school_record"
+            record_path = self.write_locator_record_fixture(
+                archive_root,
+                zettel_id,
+                [self.locator_fixture_row("a")],
+            )
+            replacement_path = Path(tmp) / "replacement.json"
+            private_value = "private replacement content must not echo"
+            replacement_path.write_text(private_value, encoding="utf-8")
+            original_stat = completion_workflows.os.lstat(record_path)
+            replacement_stat = completion_workflows.os.lstat(replacement_path)
+            observed_stats = iter((original_stat, replacement_stat))
+
+            def replacement_observed(_path: Path) -> object:
+                return next(observed_stats)
+
+            with mock.patch.object(
+                completion_workflows,
+                "_locator_internal_path",
+                return_value=record_path,
+            ), mock.patch.object(
+                completion_workflows.os,
+                "lstat",
+                side_effect=replacement_observed,
+            ):
+                result = completion_workflows._read_locator_record(
+                    archive_root,
+                    zettel_id,
+                )
+
+            self.assertEqual(
+                result,
+                (None, None, "external_locator_record_changed"),
+            )
+            self.assertNotIn(private_value, json.dumps(result))
+
     def test_objet_capture_batch_uses_one_reviewed_plan_and_converges(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.fake_archive(Path(tmp) / "archive")

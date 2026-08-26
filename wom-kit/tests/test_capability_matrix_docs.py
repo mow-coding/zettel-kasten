@@ -9,7 +9,7 @@ from wom_kit import __version__
 
 KIT_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = KIT_ROOT.parent
-EXPECTED_CURRENT_VERSION = "0.4.7"
+EXPECTED_CURRENT_VERSION = "0.4.8"
 EXPECTED_CURRENT_TAG = f"v{EXPECTED_CURRENT_VERSION}"
 CURRENT_VERSION = f"v{__version__}"
 CURRENT_RELEASE_NOTE = f"{EXPECTED_CURRENT_TAG}.md"
@@ -20,7 +20,7 @@ CURRENT_WHEEL_URL = (
     f"wom_kit-{EXPECTED_CURRENT_VERSION}-py3-none-any.whl"
 )
 CURRENT_RUNTIME_STATUS = (
-    f"Status: {CURRENT_VERSION} receipt-bound local recovery, "
+    f"Status: {CURRENT_VERSION} interruption-safe integrity recovery, "
     "project-isolated runtime, and Git backup checkpoint"
 )
 CURRENT_MATRIX_VERSION = f"Version: {CURRENT_VERSION} implementation and release scope"

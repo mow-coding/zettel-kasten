@@ -115,6 +115,55 @@ class ObjectStoragePreservationTests(unittest.TestCase):
             "archive_id: archive:test:object-storage-preservation\n",
             encoding="utf-8",
         )
+        archive_id = archive_services.read_archive_id(root)
+        binding = archive_services.build_object_storage_provider_binding(
+            archive_id=archive_id,
+            profile_id="profile:test:object-storage-preservation",
+            profile_slug="object-storage-preservation",
+            provider_kind="cloudflare-r2",
+            storage_account_ref="storage:account:test",
+            bucket_name="zettel-kasten-object-storage-preservation-objets",
+            region="auto",
+            endpoint_ref="provider:endpoint:cloudflare-r2",
+            objet_prefix=f"archives/{archive_id}/objets/",
+            visibility="private",
+        )
+        (root / "provider-bindings.yml").write_text(
+            archive_services.dump_yaml(
+                {
+                    "version": "provider-bindings/v0.1",
+                    "archive_id": archive_id,
+                    "bindings": [binding],
+                }
+            ),
+            encoding="utf-8",
+        )
+        receipt_relative = archive_services.object_storage_provider_setup_receipt_path(
+            "zettel-kasten-object-storage-preservation-objets"
+        )
+        receipt = archive_services.build_object_storage_provider_setup_receipt(
+            archive_id=archive_id,
+            profile_id="profile:test:object-storage-preservation",
+            profile_slug="object-storage-preservation",
+            provider_kind="cloudflare-r2",
+            storage_account_ref="storage:account:test",
+            bucket_name="zettel-kasten-object-storage-preservation-objets",
+            region="auto",
+            endpoint_ref="provider:endpoint:cloudflare-r2",
+            objet_prefix=f"archives/{archive_id}/objets/",
+            visibility="private",
+            receipt_path=receipt_relative,
+            reviewed_by="person:test",
+            timestamp="2026-08-25T00:00:00+09:00",
+            dry_run=False,
+            manual_steps=[],
+        )
+        receipt_path = root / receipt_relative
+        receipt_path.parent.mkdir(parents=True, exist_ok=True)
+        receipt_path.write_text(
+            json.dumps(receipt, ensure_ascii=True, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
         return root
 
     def _local_row(self, root: Path, raw: bytes, *, logical_suffix: str = "local") -> dict:
@@ -520,6 +569,42 @@ class ObjectStoragePreservationTests(unittest.TestCase):
                     manifest_sha256=plan.manifest.manifest_sha256,
                 )
             self.assertEqual(captured.exception.code, "object_storage_preservation_plan_changed")
+
+    def test_control_and_remote_verification_require_current_setup_evidence(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = self._root(Path(temporary))
+            local = self._local_row(root, b"setup-gated-resume")
+            self._write_rows(root, [local])
+            plan = _plan_core(
+                root,
+                provider_kind="cloudflare-r2",
+                store_ref="storage:account:test",
+            )
+            _persist_control(plan)
+            for receipt in (root / "receipts" / "providers").glob(
+                "*.object-storage-setup.json"
+            ):
+                receipt.unlink()
+
+            with self.assertRaises(ObjectStoragePreservationError) as load_error:
+                load_object_storage_bytes_preservation_plan(
+                    root,
+                    manifest_sha256=plan.manifest.manifest_sha256,
+                )
+            self.assertEqual(
+                load_error.exception.code,
+                "object_storage_preservation_setup_evidence_missing",
+            )
+
+            transport = _MemoryTransport()
+            with self.assertRaises(ObjectStoragePreservationError) as verify_error:
+                verify_object_storage_bytes_preservation(plan, transport=transport)
+            self.assertEqual(
+                verify_error.exception.code,
+                "object_storage_preservation_setup_evidence_missing",
+            )
+            self.assertEqual(transport.head_calls, 0)
+            self.assertEqual(transport.put_calls, 0)
 
     def test_cli_extends_adopt_family_with_content_free_preservation_preview(self):
         with tempfile.TemporaryDirectory() as temporary:
