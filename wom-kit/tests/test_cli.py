@@ -2270,43 +2270,46 @@ class ArchiveCliTests(unittest.TestCase):
                 progress_log_path=progress_log,
             )
             assert compact is not None
-            with redirect_stderr(compact_stream):
-                compact("edge-receipt-index", "start", None, None)
-                compact("edge-receipt-index", "scanned", 0, 21539)
-                for current in range(250, 21539, 250):
-                    compact("edge-receipt-index", "scanned", current, 21539)
-                compact("edge-receipt-index", "done", 21539, 21539)
-                compact("edge-receipt-source-load", "start", None, None)
-                candidate_total = 0
-                for source_index in range(20):
-                    candidate_count = (source_index % 5) + 1
-                    candidate_total += candidate_count
-                    compact("edge-receipt-source-load-detail", "start", None, None)
-                    compact("edge-receipt-source-load-detail", "loaded", 0, candidate_count)
-                    compact(
-                        "edge-receipt-source-load-detail",
-                        "loaded",
-                        candidate_count,
-                        candidate_count,
-                    )
-                    compact(
-                        "edge-receipt-source-load-detail",
-                        "done",
-                        candidate_count,
-                        candidate_count,
-                    )
+            try:
+                with redirect_stderr(compact_stream):
+                    compact("edge-receipt-index", "start", None, None)
+                    compact("edge-receipt-index", "scanned", 0, 21539)
+                    for current in range(250, 21539, 250):
+                        compact("edge-receipt-index", "scanned", current, 21539)
+                    compact("edge-receipt-index", "done", 21539, 21539)
+                    compact("edge-receipt-source-load", "start", None, None)
+                    candidate_total = 0
+                    for source_index in range(20):
+                        candidate_count = (source_index % 5) + 1
+                        candidate_total += candidate_count
+                        compact("edge-receipt-source-load-detail", "start", None, None)
+                        compact("edge-receipt-source-load-detail", "loaded", 0, candidate_count)
+                        compact(
+                            "edge-receipt-source-load-detail",
+                            "loaded",
+                            candidate_count,
+                            candidate_count,
+                        )
+                        compact(
+                            "edge-receipt-source-load-detail",
+                            "done",
+                            candidate_count,
+                            candidate_count,
+                        )
+                        compact(
+                            "edge-receipt-source-load",
+                            f"aggregate sources={source_index + 1} candidates={candidate_total} cache_hits=0",
+                            None,
+                            None,
+                        )
                     compact(
                         "edge-receipt-source-load",
-                        f"aggregate sources={source_index + 1} candidates={candidate_total} cache_hits=0",
+                        f"done sources=20 candidates={candidate_total} cache_hits=0",
                         None,
                         None,
                     )
-                compact(
-                    "edge-receipt-source-load",
-                    f"done sources=20 candidates={candidate_total} cache_hits=0",
-                    None,
-                    None,
-                )
+            finally:
+                compact.close()  # type: ignore[attr-defined]
 
             compact_lines = compact_stream.getvalue().splitlines()
             self.assertEqual(len(compact_lines), 4)
@@ -4124,8 +4127,11 @@ class ArchiveCliTests(unittest.TestCase):
                 progress_log_path=log_path,
             )
             assert progress is not None
-            with redirect_stderr(stream):
-                progress("mint-receipts", "edge receipt index cache hit", 523, 8583)
+            try:
+                with redirect_stderr(stream):
+                    progress("mint-receipts", "edge receipt index cache hit", 523, 8583)
+            finally:
+                progress.close()  # type: ignore[attr-defined]
             lines = log_path.read_text(encoding="utf-8").splitlines()
 
         self.assertEqual(stream.getvalue(), "")
