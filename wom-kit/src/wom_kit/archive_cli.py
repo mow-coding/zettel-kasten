@@ -8585,6 +8585,61 @@ def _duplicate_object_terminal_auditor(
     return _audit
 
 
+def _execute_duplicate_object_revert_exact_human_approved_transaction(
+    plan: (
+        duplicate_object_reconciliation
+        ._DuplicateObjectReconciliationRevertPlan
+    ),
+    *,
+    reviewer_claim: str,
+) -> dict[str, Any]:
+    """Run the fixed duplicate-revert writer and finalizer in production.
+
+    This operation-specific boundary intentionally accepts no writer,
+    finalizer, native UI, or authentication-key provider. In particular, the
+    authenticated succeeded claim cannot be handed to a caller-supplied
+    finalizer through the reusable approval wrapper.
+    """
+
+    context = (
+        duplicate_object_reconciliation
+        ._duplicate_object_reconciliation_revert_context(
+            plan,
+            reviewer_claim=reviewer_claim,
+        )
+    )
+
+    def _writer(approval_claim) -> dict[str, Any]:
+        return (
+            duplicate_object_reconciliation
+            ._apply_duplicate_object_reconciliation_revert_core(
+                plan,
+                approval_claim=approval_claim,
+                context=context,
+            )
+        )
+
+    def _finalizer(approval_claim) -> None:
+        (
+            duplicate_object_reconciliation
+            ._finalize_duplicate_object_reconciliation_revert_core(
+                plan,
+                approval_claim,
+                context=context,
+            )
+        )
+
+    return _execute_exact_human_approved_write_core(
+        plan.archive_root,
+        context,
+        _writer,
+        native=None,
+        key_provider=None,
+        post_decision_boundary=None,
+        claim_succeeded_finalizer=_finalizer,
+    )
+
+
 def command_duplicate_object_reconcile(args: argparse.Namespace) -> int:
     """Plan, approve, or exactly revert bounded duplicate reconciliation."""
 
@@ -8750,14 +8805,19 @@ def command_duplicate_object_reconcile(args: argparse.Namespace) -> int:
                     "restored_exact_original_manifest_bytes": True,
                 }
             else:
-                result = _execute_exact_human_approved_write(
-                    archive_root,
-                    context,
-                    _write_reconciliation,
-                    claim_succeeded_finalizer=(
-                        _finalize_reconciliation if revert else None
-                    ),
-                )
+                if revert:
+                    result = (
+                        _execute_duplicate_object_revert_exact_human_approved_transaction(
+                            plan,
+                            reviewer_claim=reviewer,
+                        )
+                    )
+                else:
+                    result = _execute_exact_human_approved_write(
+                        archive_root,
+                        context,
+                        _write_reconciliation,
+                    )
             reporter.progress("duplicate-write", "done", None, None)
     except (
         duplicate_object_reconciliation.DuplicateObjectReconciliationError
