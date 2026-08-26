@@ -315,15 +315,15 @@ class NotionPropertyBackfillCliTests(unittest.TestCase):
         )
         self.assertEqual(
             inventory["counts"]["approval_available_command_count"],
-            44,
+            46,
         )
         self.assertEqual(
             inventory["counts"]["approval_fixed_closed_command_count"],
-            70,
+            68,
         )
         self.assertEqual(
             inventory["counts"]["conditional_approval_command_count"],
-            7,
+            9,
         )
 
         code, stdout, stderr = self.run_cli(

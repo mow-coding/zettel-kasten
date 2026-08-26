@@ -38,6 +38,7 @@ from .exact_operation_manifest import (
     ExactOperationItem,
     ExactOperationManifest,
     ExactOperationManifestError,
+    ExactOperationProgress,
     FileExactOperationCheckpointStore,
     apply_exact_operation,
     exact_operation_writer_lock,
@@ -818,6 +819,8 @@ def _execute_core(
     plan: ExistingIntakeCaptureSelectionPlan,
     claim: _ClaimedExactHumanApproval,
     context: ExactHumanApprovalContext,
+    *,
+    progress_hook: Callable[[ExactOperationProgress], None] | None = None,
 ) -> dict[str, Any]:
     authority = _authority(plan, claim, context)
     fresh = plan_existing_intake_capture_selection(
@@ -849,7 +852,7 @@ def _execute_core(
             verifier=_Verifier(fresh),
             checkpoint_store=checkpoints,
             approval_authority=authority,
-            progress_hook=None,
+            progress_hook=progress_hook,
         )
     return {
         "schema_version": RESULT_SCHEMA,
@@ -881,6 +884,7 @@ def execute_existing_intake_capture_selection(
     *,
     expected_plan_sha256: str = "",
     reviewer_claim: str,
+    progress_hook: Callable[[ExactOperationProgress], None] | None = None,
 ) -> dict[str, Any]:
     if not plan.approveable or plan.manifest is None:
         raise _fail("existing_intake_capture_selection_plan_blocked")
@@ -894,7 +898,12 @@ def execute_existing_intake_capture_selection(
     return _execute_exact_human_approved_write(
         plan.archive_root,
         context,
-        lambda claim: _execute_core(plan, claim, context),
+        lambda claim: _execute_core(
+            plan,
+            claim,
+            context,
+            progress_hook=progress_hook,
+        ),
     )
 
 

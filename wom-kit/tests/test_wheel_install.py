@@ -102,7 +102,7 @@ def patch_zip_member_name_bytes(wheel: Path, old_name: str, new_name: str) -> No
 
 
 class InstalledEntrypointTests(unittest.TestCase):
-    PACKAGE_VERSION = "0.4.7"
+    PACKAGE_VERSION = "0.4.8"
     SERVER_NAME = "zettel-kasten-archive-mcp"
 
     def setUp(self) -> None:
@@ -847,12 +847,16 @@ class InstalledEntrypointTests(unittest.TestCase):
                         cwd=self.temp_root,
                     )
 
-    def test_success_result_assembly_preserves_v03_contract(self) -> None:
+    def test_success_result_assembly_preserves_v04_contract(self) -> None:
         wheel_counts = {
             "manifested_resource_count": 103,
             "verified_resource_count": 103,
             "verified_resource_bytes": 123456,
             "wheel_file_count": 120,
+            "privacy_text_like_member_count": 119,
+            "privacy_text_like_bytes_scanned": 234567,
+            "privacy_windows_user_path_match_count": 0,
+            "privacy_secret_pattern_match_count": 0,
         }
         evidence = {
             "agreement": {
@@ -871,6 +875,14 @@ class InstalledEntrypointTests(unittest.TestCase):
             "receipt_lookup": "passed",
             "validated_receipt_count": 1,
         }
+        v048_evidence = {
+            "ok": True,
+            "schema": check_wheel_install.INSTALLED_V048_SMOKE_SCHEMA,
+            "entrypoint_route": "installed_archive_cli_main",
+            "installed_console_entrypoint_checked": True,
+            "console_entrypoint_dry_run_count": 4,
+            "approval_seam": "test_only_native_decision_injection",
+        }
         result = check_wheel_install._wheel_install_success_result(
             package_version=self.PACKAGE_VERSION,
             wheel_counts=wheel_counts,
@@ -882,6 +894,7 @@ class InstalledEntrypointTests(unittest.TestCase):
             ],
             entrypoint_evidence=evidence,
             letter140_link_evidence=letter140_evidence,
+            v048_workflow_evidence=v048_evidence,
             wheel_filename="wom_kit-0.3.296-py3-none-any.whl",
             wheel_sha256="a" * 64,
             artifact_preserved=True,
@@ -891,7 +904,7 @@ class InstalledEntrypointTests(unittest.TestCase):
             result,
             {
                 "ok": True,
-                "schema": "wom-kit/wheel-install-check/v0.3",
+                "schema": "wom-kit/wheel-install-check/v0.4",
                 "package_version": self.PACKAGE_VERSION,
                 **wheel_counts,
                 "entrypoints_checked": [
@@ -902,6 +915,7 @@ class InstalledEntrypointTests(unittest.TestCase):
                 ],
                 "entrypoint_evidence": evidence,
                 "installed_letter140_link_workflow": letter140_evidence,
+                "installed_v048_recovery_workflows": v048_evidence,
                 "runtime_skill_lifecycle": "passed",
                 "onboarding_preview": "passed",
                 "onboarding_write": "fixed_closed",
@@ -973,7 +987,89 @@ class InstalledEntrypointTests(unittest.TestCase):
                     cwd=self.temp_root,
                 )
 
-    def test_main_uses_v03_success_and_failure_envelopes(self) -> None:
+    def test_installed_v048_workflows_require_exact_evidence(self) -> None:
+        compile(
+            check_wheel_install.INSTALLED_V048_SMOKE_SCRIPT,
+            "<installed-v048-wheel-smoke>",
+            "exec",
+        )
+        python = self.scripts / "python.exe"
+        fixture_root = self.temp_root / "v048-fixture"
+        archive_entrypoint = check_wheel_install.executable(
+            self.scripts, "archive"
+        )
+        expected = {
+            "ok": True,
+            "schema": check_wheel_install.INSTALLED_V048_SMOKE_SCHEMA,
+            "entrypoint_route": "installed_archive_cli_main",
+            "installed_console_entrypoint_checked": True,
+            "console_entrypoint_dry_run_count": 4,
+            "approval_seam": "test_only_native_decision_injection",
+            "capture": {
+                "selection_recorded": True,
+                "capture_count": 1,
+                "object_bytes_exact": True,
+                "native_approval_count": 2,
+            },
+            "object_storage": {
+                "registration_completed": True,
+                "setup_evidence_mode": "exact_registration_v1",
+                "provider_api_called": False,
+                "credential_value_read": False,
+                "exact_revert_completed": True,
+                "original_local_state_restored": True,
+                "native_approval_count": 1,
+                "revert_route": "installed_exact_operation_api",
+            },
+            "duplicate_reconciliation": {
+                "strict_pair_reconciled_count": 1,
+                "private_evidence_preserved": True,
+                "whole_manifest_revert_completed": True,
+                "original_manifest_bytes_restored": True,
+                "native_approval_count": 2,
+            },
+            "native_approval_count": 5,
+            "provider_api_called": False,
+            "credential_value_read": False,
+            "private_values_echoed": False,
+        }
+        with mock.patch.object(
+            check_wheel_install,
+            "_run_installed_entrypoint",
+            return_value=json.dumps(expected),
+        ) as run_mock:
+            evidence = check_wheel_install._check_installed_v048_workflows(
+                python,
+                archive_entrypoint,
+                fixture_root,
+                cwd=self.temp_root,
+            )
+
+        self.assertEqual(evidence, expected)
+        command = run_mock.call_args.args[0]
+        self.assertEqual(command[:3], [str(python), "-I", "-c"])
+        self.assertEqual(command[-2:], [str(fixture_root), str(archive_entrypoint)])
+        self.assertIn("archive_cli.main", command[3])
+        self.assertIn("objet-capture-selection", command[3])
+        self.assertIn("object-storage", command[3])
+        self.assertIn("duplicate-object-reconcile", command[3])
+
+        invalid = dict(expected)
+        invalid["native_approval_count"] = 4
+        with mock.patch.object(
+            check_wheel_install,
+            "_run_installed_entrypoint",
+            return_value=json.dumps(invalid),
+        ):
+            with self.assertRaises(check_wheel_install.WheelCheckError):
+                check_wheel_install._check_installed_v048_workflows(
+                    python,
+                    archive_entrypoint,
+                    fixture_root,
+                    cwd=self.temp_root,
+                )
+
+    def test_main_uses_v04_success_and_failure_envelopes(self) -> None:
         success = {
             "ok": True,
             "schema": check_wheel_install.WHEEL_INSTALL_CHECK_SCHEMA,
@@ -1142,6 +1238,108 @@ class WheelResourceIntegrityTests(unittest.TestCase):
                 "verified_resource_bytes": sum(map(len, BASE_RESOURCES.values())),
                 "wheel_file_count": len(BASE_RESOURCES) + 3,
             },
+        )
+
+        privacy = check_wheel_install.assert_wheel_privacy(wheel)
+        with zipfile.ZipFile(wheel) as archive:
+            expected_text_bytes = sum(
+                info.file_size for info in archive.infolist()
+            )
+        self.assertEqual(
+            privacy,
+            {
+                "privacy_text_like_member_count": len(BASE_RESOURCES) + 3,
+                "privacy_text_like_bytes_scanned": expected_text_bytes,
+                "privacy_windows_user_path_match_count": 0,
+                "privacy_secret_pattern_match_count": 0,
+            },
+        )
+
+    def test_privacy_scan_rejects_windows_user_paths_without_echoing_them(self) -> None:
+        _, manifest_bytes = self.baseline()
+        private_value = (
+            "C:"
+            + "\\Us"
+            + "ers\\"
+            + "private-"
+            + "account"
+            + "\\archive"
+        )
+        wheel = self.write_wheel(
+            manifest_bytes=manifest_bytes,
+            extra_members=[
+                ("wom_kit/private_fixture.txt", private_value.encode("utf-8")),
+            ],
+        )
+
+        with self.assertRaises(check_wheel_install.WheelCheckError) as caught:
+            check_wheel_install.assert_wheel_privacy(wheel)
+
+        message = str(caught.exception)
+        self.assertEqual(message, "Wheel privacy scan detected forbidden content.")
+        self.assertNotIn(private_value, message)
+        self.assertNotIn("private_fixture.txt", message)
+
+    def test_privacy_scan_allows_documented_generic_windows_user_placeholder(self) -> None:
+        _, manifest_bytes = self.baseline()
+        generic_account = "<" + "user" + ">"
+        documented_path = (
+            "C:"
+            + "\\Us"
+            + "ers\\"
+            + generic_account
+            + "\\synthetic-archive"
+        )
+        wheel = self.write_wheel(
+            manifest_bytes=manifest_bytes,
+            extra_members=[
+                (
+                    "wom_kit/documented-example.txt",
+                    documented_path.encode("utf-8"),
+                ),
+            ],
+        )
+
+        result = check_wheel_install.assert_wheel_privacy(wheel)
+
+        self.assertEqual(result["privacy_windows_user_path_match_count"], 0)
+
+    def test_privacy_scan_rejects_secret_patterns_in_all_text_like_members(self) -> None:
+        _, manifest_bytes = self.baseline()
+        private_value = "synthetic-private-credential-value"
+        cases = (
+            ("wom_kit/config.json", '{"access_token":"' + private_value + '"}'),
+            ("wom_kit/extension.opaque", "password='" + private_value + "'"),
+        )
+        for member, content in cases:
+            with self.subTest(member=member):
+                wheel = self.write_wheel(
+                    manifest_bytes=manifest_bytes,
+                    extra_members=[(member, content.encode("utf-8"))],
+                )
+                with self.assertRaises(check_wheel_install.WheelCheckError) as caught:
+                    check_wheel_install.assert_wheel_privacy(wheel)
+                message = str(caught.exception)
+                self.assertEqual(
+                    message,
+                    "Wheel privacy scan detected forbidden content.",
+                )
+                self.assertNotIn(private_value, message)
+                self.assertNotIn(member, message)
+
+    def test_privacy_scan_fails_closed_for_invalid_declared_text(self) -> None:
+        _, manifest_bytes = self.baseline()
+        wheel = self.write_wheel(
+            manifest_bytes=manifest_bytes,
+            extra_members=[("wom_kit/invalid.txt", b"\xff\xfe")],
+        )
+
+        with self.assertRaises(check_wheel_install.WheelCheckError) as caught:
+            check_wheel_install.assert_wheel_privacy(wheel)
+
+        self.assertEqual(
+            str(caught.exception),
+            "Wheel privacy scan could not verify a text member.",
         )
 
     def test_duplicate_zip_member_is_rejected_even_outside_resource_tree(self) -> None:

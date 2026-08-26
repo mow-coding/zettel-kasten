@@ -240,6 +240,8 @@ def _execute_exact_human_approved_write(
     archive_root: Path | str,
     context: ExactHumanApprovalContext,
     writer: Callable[[_ClaimedExactHumanApproval], Mapping[str, Any]],
+    *,
+    claim_succeeded_finalizer: _ClaimSucceededFinalizer | None = None,
 ) -> dict[str, Any]:
     """Run one writer through the non-injectable production approval boundary."""
 
@@ -250,7 +252,7 @@ def _execute_exact_human_approved_write(
         native=None,
         key_provider=None,
         post_decision_boundary=None,
-        claim_succeeded_finalizer=None,
+        claim_succeeded_finalizer=claim_succeeded_finalizer,
     )
 
 

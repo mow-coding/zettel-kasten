@@ -456,13 +456,12 @@ class Letter137DurableExternalCliBoundaryTests(
         with tempfile.TemporaryDirectory() as tmp:
             root_path = self._root(Path(tmp))
             root = str(root_path)
+            # ``object-storage`` now owns a separate exact-approved local-only
+            # setup-registration contract.  Its provider-free writer and
+            # dry-run are covered by test_object_storage_setup_registration;
+            # this legacy list remains limited to still-fixed-closed external
+            # writers.
             calls = (
-                (
-                    ["object-storage", root, "--approve", "--reviewed-by", PRIVATE_REVIEWER, "--format", "json"],
-                    archive_services,
-                    "approve_object_storage_setup_plan",
-                    "object_storage_setup",
-                ),
                 (
                     ["prehashed-objet-ledger", root, "--ledger", PRIVATE_LEDGER, "--approve", "--reviewed-by", PRIVATE_REVIEWER, "--format", "json"],
                     archive_services,
@@ -591,8 +590,10 @@ class Letter137DurableExternalCliBoundaryTests(
         with tempfile.TemporaryDirectory() as tmp:
             root_path = self._root(Path(tmp))
             root = str(root_path)
+            # The local-only ``object-storage`` dry-run is covered by its
+            # dedicated v0.4.8 registration tests, not this legacy dispatcher
+            # compatibility list.
             calls = (
-                (["object-storage", root, "--dry-run", "--format", "json"], archive_services, "object_storage_setup_plan"),
                 (["prehashed-objet-ledger", root, "--ledger", PRIVATE_LEDGER, "--dry-run", "--format", "json"], archive_services, "prehashed_objet_ledger_register"),
                 (["object-storage-upload-evidence", root, "--ledger", PRIVATE_LEDGER, "--dry-run", "--format", "json"], archive_services, "object_storage_upload_evidence_register"),
                 (["object-storage-upload", root, "--store-ref", PRIVATE_STORE, "--dry-run", "--format", "json"], archive_services, "object_storage_upload_run"),

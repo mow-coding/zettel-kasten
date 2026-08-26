@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import json
 import tempfile
+import time
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
@@ -338,6 +339,137 @@ class ExistingIntakeCaptureSelectionTests(unittest.TestCase):
             self.private_name,
         ):
             self.assertNotIn(forbidden, serialized)
+
+    def test_progress_starts_before_slow_hash_and_heartbeats_without_private_values(
+        self,
+    ) -> None:
+        original_reporter = archive_cli.CommandProgressReporter
+        original_preview = archive_services.objet_capture_selection_manifest
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        preview_observed_start = False
+
+        def fast_reporter(enabled, **kwargs):
+            kwargs["heartbeat_interval_seconds"] = 0.01
+            return original_reporter(enabled, **kwargs)
+
+        def slow_preview(*args, **kwargs):
+            nonlocal preview_observed_start
+            preview_observed_start = "selection-plan: start" in stderr.getvalue()
+            deadline = time.monotonic() + 1.0
+            while (
+                "selection-plan: heartbeat" not in stderr.getvalue()
+                and time.monotonic() < deadline
+            ):
+                time.sleep(0.005)
+            return original_preview(*args, **kwargs)
+
+        with (
+            mock.patch.object(
+                archive_cli,
+                "CommandProgressReporter",
+                side_effect=fast_reporter,
+            ),
+            mock.patch.object(
+                archive_services,
+                "objet_capture_selection_manifest",
+                side_effect=slow_preview,
+            ),
+            redirect_stdout(stdout),
+            redirect_stderr(stderr),
+        ):
+            code = archive_cli.main(
+                [
+                    "objet-capture-selection",
+                    str(self.root),
+                    "--staged-path",
+                    self.staged_relative,
+                    "--source-intake-receipt",
+                    self.receipt_relative,
+                    "--exact-existing-intake",
+                    "--dry-run",
+                    "--progress",
+                    "--format",
+                    "json",
+                ]
+            )
+
+        progress = stderr.getvalue()
+        self.assertEqual(code, 0, progress)
+        self.assertTrue(preview_observed_start, progress)
+        self.assertIn("selection-plan: start", progress)
+        self.assertIn("selection-plan: heartbeat", progress)
+        self.assertLess(
+            progress.index("selection-plan: start"),
+            progress.index("selection-plan: heartbeat"),
+        )
+        for forbidden in (
+            str(self.root),
+            self.staged_relative,
+            self.receipt_relative,
+            self.private_name,
+            self._plan().manifest.manifest_sha256,
+        ):
+            self.assertNotIn(forbidden, progress)
+
+    def test_success_text_reports_write_and_exact_execution_emits_progress(self) -> None:
+        native = _Native(approved=True)
+        key_provider = _KeyProvider()
+        exact_events = []
+        original_apply = objet_capture_selection_exact.apply_exact_operation
+
+        def observed_apply(*args, **kwargs):
+            hook = kwargs.get("progress_hook")
+            self.assertTrue(callable(hook))
+
+            def capture(event):
+                exact_events.append(event.public_document())
+                hook(event)
+
+            kwargs["progress_hook"] = capture
+            return original_apply(*args, **kwargs)
+
+        with (
+            mock.patch.object(
+                objet_capture_selection_exact,
+                "_execute_exact_human_approved_write",
+                side_effect=self._workflow(native, key_provider),
+            ),
+            mock.patch.object(
+                objet_capture_selection_exact,
+                "apply_exact_operation",
+                side_effect=observed_apply,
+            ),
+        ):
+            code, stdout, stderr = self._run_cli(
+                [
+                    "objet-capture-selection",
+                    str(self.root),
+                    "--staged-path",
+                    self.staged_relative,
+                    "--source-intake-receipt",
+                    self.receipt_relative,
+                    "--exact-existing-intake",
+                    "--approve",
+                    "--reviewed-by",
+                    REVIEWER,
+                    "--progress",
+                    "--format",
+                    "text",
+                ]
+            )
+
+        self.assertEqual(code, 0, stderr)
+        self.assertIn("- selection recorded: yes", stdout)
+        self.assertTrue(exact_events)
+        self.assertIn("exact-operation-", stderr)
+        for forbidden in (
+            str(self.root),
+            self.staged_relative,
+            self.receipt_relative,
+            self.private_name,
+        ):
+            self.assertNotIn(forbidden, stderr)
 
     def test_legacy_general_selection_approval_remains_fixed_closed(self) -> None:
         before = self._snapshot(self.root)

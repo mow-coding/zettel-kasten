@@ -1,6 +1,6 @@
 # Agent Operator Capabilities Manifest
 
-Status: v0.4.7 parser-derived conditional local-recovery inventory
+Status: v0.4.8 parser-derived integrity-recovery inventory
 
 `archive capabilities --machine` lets an AI operator ask one practical question:
 
@@ -43,7 +43,7 @@ includes:
 - runnable status.
 
 v0.4.1 introduced `data.approval_status_inventory` with schema
-`wom-kit/command-approval-status-inventory/v0.1`. The v0.4.7 release returns
+`wom-kit/command-approval-status-inventory/v0.1`. The v0.4.8 release returns
 the successor v0.2 shape, which adds machine-readable conditional
 approval scope. Unlike the legacy flattened
 command summary, this inventory walks canonical executable paths at every
@@ -72,39 +72,28 @@ These are parser facts, not execution promises. `approval_available` does not
 mean that archive-specific prerequisites have passed. `approval_not_exposed`
 does not mean that the command is read-only.
 
-For the v0.4.7 parser, the inventory snapshot is:
+For the v0.4.8 parser, the inventory snapshot is:
 
 ```text
 canonical executable command paths: 315
 alias invocation paths:              259
 all invocation paths:                574
-approval_available:                   44
-approval_fixed_closed:                70
+approval_available:                   46
+approval_fixed_closed:                68
 approval_not_exposed:                201
+conditional approval paths:             9
 dry_run_exposed:                     271
 unmatched fixed-close entries:         0
 ```
 
-The 78 v0.4.2 fixed-close entries preserve the v0.4.0 boundary except that
-`zettel-objet-link` is now operation-specifically bound and available for local
-exact-human approval. `zettel-objet-link-revert`, Objet capture writers, and
-the project update/collision/bytecode writers remain fixed closed. The
-historical v0.4.0 release count was 79. The additional available path is the
-existing `git-backup-reconcile-plan` family, whose approval mode requires a
-complete private exact Git selection and stored non-interactive credentials;
-it does not add a new top-level command or an MCP writer.
+The historical v0.4.0 release count remains 79 fixed-close command paths.
+Later releases reopen only exact, operation-specific routes while each handler
+independently enforces the same boundary. Parser availability is not permission
+to skip archive prerequisites, approval, or post-write verification.
 
-Candidate v0.4.3 changes this parser snapshot to 36 `approval_available` and 77
-`approval_fixed_closed`: top-level `migrate` leaves the fixed-close inventory
-because the single `notion-source-properties` target now has an
-operation-specific exact-human writer. This is conditional target availability,
-not global migration authority. The `migrate` handler still returns
-`compound_exact_human_approval_binding_required` before mutation for every
-other approved target. The earlier v0.1 inventory could not express that target
-choice; v0.2 records `approval_scope.argument: --target`, the sole
-allowed value `notion-source-properties`, and the fixed-close status/reason for
-every value outside that scope. The handler independently enforces the same
-boundary.
+v0.4.3 made `migrate` conditional on the sole exact-supported target. The v0.2
+inventory records the allowed argument value and the fixed-close status/reason
+for every value outside that scope.
 
 v0.4.6 adds a second conditional scope without adding a top-level command.
 `object-storage-adopt-existing` is approval-available only when exactly one of
@@ -120,6 +109,14 @@ when one of their explicitly listed recovery-mode flags is present. The v0.2
 inventory represents this as `argument_flag_any_allowlist`; every legacy mode
 outside those flags remains fixed closed, and each handler independently
 enforces the same boundary.
+
+v0.4.8 adds exact existing-intake selection under `objet-capture-selection`
+and advertises only the supported rejection mode under
+`relation-candidate-decide`. It also reopens `object-storage` for exact local
+setup registration only: that writer records local metadata and a receipt but
+does not read credentials, call a provider, create a bucket, upload, copy, or
+sync. These changes produce 46 approval-available paths, 68 fixed-closed paths,
+and nine conditional scopes without changing the 315 canonical command paths.
 
 The `summary` includes:
 

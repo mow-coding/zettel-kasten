@@ -6,6 +6,41 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.4.8 - 2026-08-26
+
+- Made interrupted exact operations report durable progress and safely
+  auto-discover one unambiguous resume or revert control instead of requiring
+  an operator to reconstruct technical state.
+- Corrected title recovery to use only paired source-index evidence, limited
+  omission-marker repair to the exact marker token, and bounded locator-sidecar
+  reads against oversized, changing, linked, reparse-point, or non-regular
+  evidence. Locator occurrence anchors remain diagnostic-only because no
+  verified occurrence-recovery receipt is supported yet.
+- Added exact create-only capture selection from existing intake evidence and
+  exact local object-storage setup registration without credential reads,
+  provider calls, bucket creation, upload, copy, or sync.
+- Added lossless strict duplicate-pair reconciliation that retains both source
+  definitions and provenance in private evidence, leaves ambiguous groups for
+  review, and can restore the exact original whole-manifest bytes. Revert also
+  handles one authenticated interrupted journal before or after receipt
+  publication, revalidates the original approval, preserves that journal, and
+  writes separate authenticated terminal-compensation evidence that blocks
+  forward replay.
+- Added `--revert --resume --reviewed-by <same-reviewer>` for one authenticated
+  `finalization_pending` duplicate revert. It reuses the existing claim without
+  another native approval: `started` resumes the writer idempotently before
+  claim success and terminal finalization, while `succeeded` runs only the
+  finalizer. Neither branch writes the manifest again, and the public planner
+  uses the production terminal auditor without creating missing approval state.
+- Added one content-free next action for an initial unknown-state duplicate
+  revert: JSON returns `rerun_duplicate_revert_resume_with_same_reviewer` and
+  text explains the same-reviewer `--resume` command without echoing an id,
+  path, or private value. An explicit failed resume does not repeat the advice.
+- Made field-recovery revert durably supersede an unfinished parent apply so its
+  old resume path cannot run over the restored state.
+- Kept release installation separate from client execution: publishing and
+  installing v0.4.8 modifies no client archive.
+
 ## v0.4.7 - 2026-08-24
 
 - Added native exact single Objet capture and receipt-bound single-edge revert
