@@ -54,6 +54,7 @@ EXTERNAL_LOCATOR_RECEIPTS_DIR = "receipts/external-locators"
 EXTERNAL_LOCATOR_SNAPSHOT_DIR = (
     ".wom-scratch/external-locators/snapshots"
 )
+EXTERNAL_LOCATOR_RECORD_MAX_BYTES = 16 * 1024 * 1024
 EXTERNAL_LOCATOR_TYPES = (
     "source_url",
     "provider_page_id",
@@ -475,6 +476,147 @@ _EXTERNAL_LOCATOR_ROW_COORDINATE_LIMITS = {
 }
 
 
+class _LocatorRecordReadError(OSError):
+    """Carry one fixed sidecar-read failure code without private content."""
+
+    def __init__(self, code: str) -> None:
+        self.code = code
+        super().__init__(code)
+
+
+def _locator_record_stat_is_unsafe(value: os.stat_result) -> bool:
+    reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+    return bool(
+        not stat.S_ISREG(value.st_mode)
+        or stat.S_ISLNK(value.st_mode)
+        or (
+            reparse_flag
+            and getattr(value, "st_file_attributes", 0) & reparse_flag
+        )
+        or int(getattr(value, "st_ino", 0)) <= 0
+    )
+
+
+def _locator_record_same_file(
+    left: os.stat_result,
+    right: os.stat_result,
+) -> bool:
+    return bool(
+        int(left.st_dev) == int(right.st_dev)
+        and int(left.st_ino) == int(right.st_ino)
+        and stat.S_IFMT(left.st_mode) == stat.S_IFMT(right.st_mode)
+    )
+
+
+def _locator_record_generation(value: os.stat_result) -> tuple[int, ...]:
+    """Describe one opened descriptor generation around a bounded read."""
+
+    return (
+        int(value.st_size),
+        int(getattr(value, "st_mtime_ns", 0)),
+        int(getattr(value, "st_ctime_ns", 0)),
+        int(getattr(value, "st_birthtime_ns", 0)),
+        int(getattr(value, "st_nlink", 0)),
+        int(getattr(value, "st_file_attributes", 0)),
+    )
+
+
+def _locator_record_named_generation(
+    value: os.stat_result,
+) -> tuple[int, ...]:
+    """Compare named and opened state without Windows' divergent ctime view."""
+
+    return (
+        int(value.st_size),
+        int(getattr(value, "st_mtime_ns", 0)),
+        int(getattr(value, "st_birthtime_ns", 0)),
+        int(getattr(value, "st_nlink", 0)),
+        int(getattr(value, "st_file_attributes", 0)),
+    )
+
+
+def _read_locator_record_bytes_stable(path: Path) -> bytes:
+    """Read one bounded regular sidecar while proving its stable identity."""
+
+    descriptor: int | None = None
+    opened = False
+    try:
+        before = os.lstat(path)
+        if (
+            _locator_record_stat_is_unsafe(before)
+            or before.st_size < 0
+            or before.st_size > EXTERNAL_LOCATOR_RECORD_MAX_BYTES
+        ):
+            raise _LocatorRecordReadError("external_locator_record_unsafe")
+
+        flags = os.O_RDONLY | getattr(os, "O_BINARY", 0)
+        flags |= getattr(os, "O_NOFOLLOW", 0)
+        descriptor = os.open(path, flags)
+        opened = True
+        opened_before = os.fstat(descriptor)
+        if (
+            _locator_record_stat_is_unsafe(opened_before)
+            or not _locator_record_same_file(before, opened_before)
+            or _locator_record_named_generation(before)
+            != _locator_record_named_generation(opened_before)
+            or opened_before.st_size < 0
+            or opened_before.st_size > EXTERNAL_LOCATOR_RECORD_MAX_BYTES
+        ):
+            raise _LocatorRecordReadError("external_locator_record_unsafe")
+
+        chunks: list[bytes] = []
+        total = 0
+        while True:
+            remaining = EXTERNAL_LOCATOR_RECORD_MAX_BYTES + 1 - total
+            chunk = os.read(descriptor, min(65_536, remaining))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            total += len(chunk)
+            if total > EXTERNAL_LOCATOR_RECORD_MAX_BYTES:
+                raise _LocatorRecordReadError(
+                    "external_locator_record_unsafe"
+                )
+
+        opened_after = os.fstat(descriptor)
+        after = os.lstat(path)
+        if (
+            _locator_record_stat_is_unsafe(opened_after)
+            or _locator_record_stat_is_unsafe(after)
+            or not _locator_record_same_file(opened_before, opened_after)
+            or not _locator_record_same_file(opened_after, after)
+            or _locator_record_generation(opened_before)
+            != _locator_record_generation(opened_after)
+            or _locator_record_named_generation(opened_after)
+            != _locator_record_named_generation(after)
+        ):
+            raise _LocatorRecordReadError("external_locator_record_changed")
+        raw = b"".join(chunks)
+        if len(raw) != opened_after.st_size:
+            raise _LocatorRecordReadError("external_locator_record_changed")
+        return raw
+    except _LocatorRecordReadError:
+        raise
+    except FileNotFoundError:
+        raise _LocatorRecordReadError(
+            "external_locator_record_changed"
+            if opened
+            else "external_locator_record_missing"
+        ) from None
+    except OSError:
+        raise _LocatorRecordReadError(
+            "external_locator_record_changed"
+            if opened
+            else "external_locator_record_unreadable"
+        ) from None
+    finally:
+        if descriptor is not None:
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+
+
 def _locator_internal_path(root: Path, relative_path: str) -> Path:
     """Resolve one locator-owned path without following a lexical reparse hop."""
     try:
@@ -744,14 +886,14 @@ def _read_locator_record(
         path = _locator_internal_path(root, _record_relative(zettel_id))
     except archive_services.ArchiveServiceError:
         return None, None, "external_locator_record_unsafe"
-    if not path.exists():
-        return None, None, None
-    if not path.is_file() or path.is_symlink():
-        return None, None, "external_locator_record_unsafe"
     try:
-        raw = path.read_bytes()
+        raw = _read_locator_record_bytes_stable(path)
         loaded = json.loads(raw.decode("utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+    except _LocatorRecordReadError as exc:
+        if exc.code == "external_locator_record_missing":
+            return None, None, None
+        return None, None, exc.code
+    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError):
         return None, None, "external_locator_record_unreadable"
     if not _locator_record_is_valid(
         loaded,
