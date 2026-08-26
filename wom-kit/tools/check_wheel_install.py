@@ -278,6 +278,16 @@ native = _NativeApproval()
 key_provider = _KeyProvider()
 
 
+def _use_test_receipt_authentication_key(_root, consumer):
+    """Use the smoke test key without persisting it outside this process."""
+
+    key = bytearray(range(32))
+    try:
+        return consumer(memoryview(key))
+    finally:
+        key[:] = b"\0" * len(key)
+
+
 def _approved_write(root, context, writer):
     return _execute_exact_human_approved_write_core(
         root,
@@ -663,28 +673,33 @@ def _duplicate_flow():
         or not isinstance(reconciled.get("_wom_private_duplicate_reconciliation"), dict)
     ):
         raise RuntimeError("installed_v048_duplicate_evidence_failed")
-    _run_console(
-        [
-            "duplicate-object-reconcile",
-            str(root),
-            "--revert",
-            "--dry-run",
-            "--format",
-            "json",
-        ]
-    )
-    reverted = _run_cli(
-        [
-            "duplicate-object-reconcile",
-            str(root),
-            "--revert",
-            "--approve",
-            "--reviewed-by",
-            REVIEWER,
-            "--format",
-            "json",
-        ]
-    )
+    with mock.patch.object(
+        archive_cli,
+        "_use_archive_receipt_authentication_key",
+        side_effect=_use_test_receipt_authentication_key,
+    ):
+        _run_cli(
+            [
+                "duplicate-object-reconcile",
+                str(root),
+                "--revert",
+                "--dry-run",
+                "--format",
+                "json",
+            ]
+        )
+        reverted = _run_cli(
+            [
+                "duplicate-object-reconcile",
+                str(root),
+                "--revert",
+                "--approve",
+                "--reviewed-by",
+                REVIEWER,
+                "--format",
+                "json",
+            ]
+        )
     if (
         reverted.get("restored_exact_original_manifest_bytes") is not True
         or manifest.read_bytes() != original
@@ -729,7 +744,7 @@ with (
 if (
     native.calls != 5
     or key_provider.calls != 5
-    or console_entrypoint_dry_run_count != 4
+    or console_entrypoint_dry_run_count != 3
 ):
     raise RuntimeError("installed_v048_approval_count_failed")
 
@@ -2361,7 +2376,7 @@ def _check_installed_v048_workflows(
         "schema": INSTALLED_V048_SMOKE_SCHEMA,
         "entrypoint_route": "installed_archive_cli_main",
         "installed_console_entrypoint_checked": True,
-        "console_entrypoint_dry_run_count": 4,
+        "console_entrypoint_dry_run_count": 3,
         "approval_seam": "test_only_native_decision_injection",
         "capture": {
             "selection_recorded": True,

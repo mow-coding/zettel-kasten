@@ -880,7 +880,7 @@ class InstalledEntrypointTests(unittest.TestCase):
             "schema": check_wheel_install.INSTALLED_V048_SMOKE_SCHEMA,
             "entrypoint_route": "installed_archive_cli_main",
             "installed_console_entrypoint_checked": True,
-            "console_entrypoint_dry_run_count": 4,
+            "console_entrypoint_dry_run_count": 3,
             "approval_seam": "test_only_native_decision_injection",
         }
         result = check_wheel_install._wheel_install_success_result(
@@ -1003,7 +1003,7 @@ class InstalledEntrypointTests(unittest.TestCase):
             "schema": check_wheel_install.INSTALLED_V048_SMOKE_SCHEMA,
             "entrypoint_route": "installed_archive_cli_main",
             "installed_console_entrypoint_checked": True,
-            "console_entrypoint_dry_run_count": 4,
+            "console_entrypoint_dry_run_count": 3,
             "approval_seam": "test_only_native_decision_injection",
             "capture": {
                 "selection_recorded": True,
