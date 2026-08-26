@@ -407,10 +407,12 @@ from . import (
     human_artifact_registry,
     legacy_coordination_cleanup as legacy_cleanup,
     notion_property_backfill,
+    objet_capture_selection_exact,
     operation_control,
     operation_approval_binding,
     object_storage_adoption,
     object_storage_preservation,
+    object_storage_setup_registration,
     project_runtime,
     runtime_guidance,
     runtime_skill_install,
@@ -578,6 +580,7 @@ ALLOWED_ZETTEL_STATUS = {"draft", "canonical", "archived", "redacted"}
 CANONICAL_REQUIRES_VALUES = {"human_minting", "human_promotion"}
 OBJECT_ID_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+LOCAL_RECOVERY_SHA256_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 DERIVED_TEXT_ID_RE = re.compile(r"^derived-text:sha256:[0-9a-f]{64}$")
 FRONTMATTER_RE = re.compile(r"\A---[ \t]*\r?\n(.*?)\r?\n---[ \t]*\r?\n", re.DOTALL)
 SECRET_VALUE_RE = re.compile(
@@ -7959,80 +7962,111 @@ def command_github_repo(args: argparse.Namespace) -> int:
     return 0 if result.get("ok", True) else 1
 
 
+def _object_storage_setup_registration_cli_error(
+    args: argparse.Namespace, reason_code: str
+) -> int:
+    document = {
+        "ok": False,
+        "dry_run": bool(getattr(args, "dry_run", False)),
+        "lifecycle_action": "object_storage_setup_registration",
+        "state": "blocked",
+        "reason_code": reason_code,
+        "provider_api_called": False,
+        "bucket_created": False,
+        "bucket_verified": False,
+        "credential_value_read": False,
+        "private_values_echoed": False,
+    }
+    if getattr(args, "format", "text") == "json":
+        print_json(document)
+    else:
+        print(reason_code, file=sys.stderr)
+    return 1
+
+
 def command_object_storage(args: argparse.Namespace) -> int:
-    if args.approve:
-        return _exact_human_approval_cli_error(
-            args,
-            lifecycle_action="object_storage_setup",
-            reason_code="compound_exact_human_approval_binding_required",
+    if bool(args.dry_run) == bool(args.approve):
+        return _object_storage_setup_registration_cli_error(
+            args, "object_storage_setup_registration_plan_invalid"
         )
-    if args.dry_run and args.approve:
-        print("Use either --dry-run or --approve, not both.", file=sys.stderr)
-        return 1
-    if not args.dry_run and not args.approve:
-        print("Object storage setup requires --dry-run or --approve.", file=sys.stderr)
-        return 1
-    if args.approve and not args.reviewed_by:
-        print("Object storage setup requires --reviewed-by when --approve is used.", file=sys.stderr)
-        return 1
+    if args.approve and bool(args.write_local_profile):
+        return _object_storage_setup_registration_cli_error(
+            args, "object_storage_setup_registration_local_profile_unsupported"
+        )
+    expected_plan = str(getattr(args, "expected_plan_sha256", None) or "").strip().lower()
+    reviewer = str(getattr(args, "reviewed_by", None) or "").strip()
+    if args.approve and not reviewer:
+        return _object_storage_setup_registration_cli_error(
+            args, "object_storage_setup_registration_approval_required"
+        )
+    if expected_plan and re.fullmatch(r"sha256:[0-9a-f]{64}", expected_plan) is None:
+        return _object_storage_setup_registration_cli_error(
+            args, "object_storage_setup_registration_plan_invalid"
+        )
 
     try:
+        plan = object_storage_setup_registration.plan_object_storage_setup_registration(
+            Path(args.archive_root),
+            provider=args.provider,
+            profile_id=args.profile_id,
+            profile_slug=args.profile_slug,
+            storage_account_ref=args.storage_account_ref,
+            bucket_name=args.bucket_name,
+            region=args.region,
+            endpoint_ref=args.endpoint_ref,
+            objet_prefix=args.objet_prefix,
+            visibility=args.visibility,
+        )
         if args.dry_run:
-            result = archive_services.object_storage_setup_plan(
-                Path(args.archive_root),
-                provider=args.provider,
-                profile_id=args.profile_id,
-                profile_slug=args.profile_slug,
-                storage_account_ref=args.storage_account_ref,
-                bucket_name=args.bucket_name,
-                region=args.region,
-                endpoint_ref=args.endpoint_ref,
-                objet_prefix=args.objet_prefix,
-                visibility=args.visibility,
-            )
+            result = plan.public_document()
         else:
-            result = archive_services.approve_object_storage_setup_plan(
-                Path(args.archive_root),
-                reviewed_by=args.reviewed_by,
-                write_local_profile=args.write_local_profile,
-                provider=args.provider,
-                profile_id=args.profile_id,
-                profile_slug=args.profile_slug,
-                storage_account_ref=args.storage_account_ref,
-                bucket_name=args.bucket_name,
-                region=args.region,
-                endpoint_ref=args.endpoint_ref,
-                objet_prefix=args.objet_prefix,
-                visibility=args.visibility,
+            if expected_plan and not secrets.compare_digest(
+                expected_plan, plan.plan_sha256
+            ):
+                return _object_storage_setup_registration_cli_error(
+                    args, "object_storage_setup_registration_plan_changed"
+                )
+            result = object_storage_setup_registration.execute_object_storage_setup_registration(
+                plan, reviewer_claim=reviewer
             )
-    except (archive_services.ArchiveServiceError, OSError) as exc:
-        print(str(exc), file=sys.stderr)
-        return 1
+    except object_storage_setup_registration.ObjectStorageSetupRegistrationError as exc:
+        return _object_storage_setup_registration_cli_error(args, exc.code)
+    except (
+        ExactHumanApprovalError,
+        ExactHumanApprovalWindowsError,
+        ExactHumanApprovalWorkflowError,
+        ExactOperationManifestError,
+        OSError,
+    ) as exc:
+        return _object_storage_setup_registration_cli_error(
+            args,
+            str(
+                getattr(
+                    exc,
+                    "code",
+                    "object_storage_setup_registration_plan_invalid",
+                )
+            ),
+        )
 
     if args.format == "json":
         print_json(result)
     else:
-        mode = "dry-run" if result["dry_run"] else "approved"
-        state = "passed" if result["ok"] else "blocked"
-        print(f"Object storage setup {mode} {state}.")
-        print(f"Archive: {result['archive_id']}")
-        print(f"Profile: {result.get('profile_id') or '-'}")
-        print(f"Provider: {result.get('provider') or '-'}")
-        print(f"Bucket: {result.get('proposed_bucket_name') or '-'}")
-        print(f"Objet prefix: {result.get('proposed_objet_prefix') or '-'}")
-        if result.get("receipt_path"):
-            print(f"Receipt: {result['receipt_path']}")
-        elif result.get("provider_setup_receipt_preview"):
-            print(f"Proposed receipt: {result['provider_setup_receipt_preview']['receipt_path']}")
-        if result.get("blockers"):
-            print("Blockers:")
-            for blocker in result["blockers"]:
-                print(f"- {blocker}")
-        if result.get("warnings"):
-            print("Warnings:")
-            for warning in result["warnings"]:
-                print(f"- {warning}")
-    return 0 if result.get("ok", True) else 1
+        state = str(result.get("state") or "unknown")
+        counts = result.get("counts")
+        counts = counts if isinstance(counts, dict) else {}
+        print(f"Object storage local setup registration: {state}.")
+        print(
+            "Provider binding changes: "
+            + str(counts.get("provider_binding_field_change_count", 0))
+        )
+        print(
+            "Setup receipts to create: "
+            + str(counts.get("setup_receipt_create_count", 0))
+        )
+        print("Provider API called: no")
+        print("Bucket created or verified: no")
+    return 0 if result.get("ok", False) else 1
 
 
 def command_object_storage_recommendation(args: argparse.Namespace) -> int:
@@ -8496,9 +8530,14 @@ def _use_archive_receipt_authentication_key(
 
 
 def command_duplicate_object_reconcile(args: argparse.Namespace) -> int:
-    """Plan or exactly approve removal of byte-identical duplicate rows."""
+    """Plan, approve, or exactly revert bounded duplicate reconciliation."""
 
-    lifecycle_action = "duplicate_object_reconciliation"
+    revert = bool(getattr(args, "revert", False))
+    lifecycle_action = (
+        "duplicate_object_reconciliation_revert"
+        if revert
+        else "duplicate_object_reconciliation"
+    )
     if bool(args.dry_run) == bool(args.approve):
         return _archive_integrity_cli_error(
             args,
@@ -8514,11 +8553,16 @@ def command_duplicate_object_reconcile(args: argparse.Namespace) -> int:
 
     try:
         archive_root = Path(args.archive_root)
-        plan = (
-            duplicate_object_reconciliation._plan_duplicate_object_reconciliation_core(
+        if revert:
+            plan = duplicate_object_reconciliation._plan_duplicate_object_reconciliation_revert_core(
                 archive_root
             )
-        )
+            expected_manifest = plan.manifest_current_sha256
+        else:
+            plan = duplicate_object_reconciliation._plan_duplicate_object_reconciliation_core(
+                archive_root
+            )
+            expected_manifest = plan.manifest_sha256
         preview = plan.public_document()
         if args.dry_run:
             result = preview
@@ -8529,36 +8573,66 @@ def command_duplicate_object_reconcile(args: argparse.Namespace) -> int:
             expected_manifest_sha256 = str(
                 args.expected_manifest_sha256 or ""
             ).strip().lower()
-            if not (
-                plan.approveable
-                and secrets.compare_digest(
-                    expected_plan_sha256,
-                    plan.plan_sha256,
+            if (
+                expected_plan_sha256
+                and (
+                    LOCAL_RECOVERY_SHA256_RE.fullmatch(
+                        expected_plan_sha256
+                    )
+                    is None
+                    or not secrets.compare_digest(
+                        expected_plan_sha256,
+                        plan.plan_sha256,
+                    )
                 )
-                and secrets.compare_digest(
-                    expected_manifest_sha256,
-                    plan.manifest_sha256,
+            ) or (
+                expected_manifest_sha256
+                and (
+                    LOCAL_RECOVERY_SHA256_RE.fullmatch(
+                        expected_manifest_sha256
+                    )
+                    is None
+                    or not secrets.compare_digest(
+                        expected_manifest_sha256,
+                        expected_manifest,
+                    )
                 )
-            ):
+            ) or (not revert and not plan.approveable):
                 return _archive_integrity_cli_error(
                     args,
                     lifecycle_action=lifecycle_action,
-                    reason_code="duplicate_object_plan_invalid",
+                    reason_code=(
+                        "duplicate_object_revert_plan_invalid"
+                        if revert
+                        else "duplicate_object_plan_invalid"
+                    ),
                 )
             reviewer = str(args.reviewed_by).strip()
-            context = (
-                duplicate_object_reconciliation._duplicate_object_reconciliation_context(
+            if revert:
+                context = duplicate_object_reconciliation._duplicate_object_reconciliation_revert_context(
                     plan,
                     reviewer_claim=reviewer,
                 )
-            )
 
-            def _write_reconciliation(approval_claim) -> dict[str, Any]:
-                return duplicate_object_reconciliation._apply_duplicate_object_reconciliation_core(
+                def _write_reconciliation(approval_claim) -> dict[str, Any]:
+                    return duplicate_object_reconciliation._apply_duplicate_object_reconciliation_revert_core(
+                        plan,
+                        approval_claim=approval_claim,
+                        context=context,
+                    )
+
+            else:
+                context = duplicate_object_reconciliation._duplicate_object_reconciliation_context(
                     plan,
-                    approval_claim=approval_claim,
-                    context=context,
+                    reviewer_claim=reviewer,
                 )
+
+                def _write_reconciliation(approval_claim) -> dict[str, Any]:
+                    return duplicate_object_reconciliation._apply_duplicate_object_reconciliation_core(
+                        plan,
+                        approval_claim=approval_claim,
+                        context=context,
+                    )
 
             result = _execute_exact_human_approved_write(
                 archive_root,
@@ -8598,20 +8672,60 @@ def command_duplicate_object_reconcile(args: argparse.Namespace) -> int:
         print_json(result)
     else:
         print(
-            "Duplicate-object reconciliation: "
+            (
+                "Duplicate-object reconciliation revert: "
+                if revert
+                else "Duplicate-object reconciliation: "
+            )
             + str(result.get("reason_code") or "unknown")
             + "."
         )
-        print(f"Plan SHA-256: {result.get('plan_sha256') or '-'}")
-        print(
-            "Exact duplicate rows removable/removed: "
-            + str(
-                result.get(
-                    "removed_exact_duplicate_row_count",
-                    result.get("removable_row_count", 0),
+        if revert:
+            restored = result.get("restored_change_counts")
+            if not isinstance(restored, dict):
+                restored = result.get("source_change_counts")
+            restored = restored if isinstance(restored, dict) else {}
+            print(
+                "Exact duplicate rows restored: "
+                + str(
+                    restored.get(
+                        "exact_duplicate_rows",
+                        restored.get("exact_duplicate_rows_removed", 0),
+                    )
                 )
             )
-        )
+            print(
+                "Canonical/external pairs restored: "
+                + str(
+                    restored.get(
+                        "canonical_external_pairs",
+                        restored.get("canonical_external_pairs_reconciled", 0),
+                    )
+                )
+            )
+        else:
+            print(
+                "Exact duplicate rows removable/removed: "
+                + str(
+                    result.get(
+                        "removed_exact_duplicate_row_count",
+                        result.get("exact_duplicate_row_count_removable", 0),
+                    )
+                )
+            )
+            print(
+                "Canonical/external pairs reconcilable/reconciled: "
+                + str(
+                    result.get(
+                        "reconciled_canonical_external_pair_count",
+                        result.get("canonical_external_pair_group_count", 0),
+                    )
+                )
+            )
+            print(
+                "Groups still requiring review: "
+                + str(result.get("unresolved_group_count", 0))
+            )
         approval = result.get("exact_human_approval")
         if isinstance(approval, dict):
             print(f"Exact approval: {approval.get('status') or '-'}")
@@ -14473,7 +14587,10 @@ def command_zet_title_remap_write(args: argparse.Namespace) -> int:
         expected_manifest = str(
             getattr(args, "expected_manifest_sha256", None) or ""
         ).strip().lower()
-        if expected_manifest and SHA256_RE.fullmatch(expected_manifest) is None:
+        if (
+            expected_manifest
+            and LOCAL_RECOVERY_SHA256_RE.fullmatch(expected_manifest) is None
+        ):
             return _recognized_command_cli_error(
                 args,
                 command="zet-title-remap-write",
@@ -14481,19 +14598,6 @@ def command_zet_title_remap_write(args: argparse.Namespace) -> int:
                 error_class="usage",
                 reason_code="local_recovery_manifest_invalid",
                 text_message="The local-recovery manifest SHA-256 is invalid.",
-                exit_code=2,
-            )
-        if (resume_recovery or revert_recovery) and not expected_manifest:
-            return _recognized_command_cli_error(
-                args,
-                command="zet-title-remap-write",
-                lifecycle_action="zet_title_local_recovery",
-                error_class="usage",
-                reason_code="local_recovery_manifest_required",
-                text_message=(
-                    "Interrupted resume or revert requires the manifest "
-                    "SHA-256 printed by the original recovery run."
-                ),
                 exit_code=2,
             )
         if resume_recovery and not args.approve:
@@ -15039,7 +15143,10 @@ def command_zet_title_remap_revert(
         expected_manifest = str(
             getattr(args, "expected_manifest_sha256", None) or ""
         ).strip().lower()
-        if expected_manifest and SHA256_RE.fullmatch(expected_manifest) is None:
+        if (
+            expected_manifest
+            and LOCAL_RECOVERY_SHA256_RE.fullmatch(expected_manifest) is None
+        ):
             return _recognized_command_cli_error(
                 args,
                 command="zet-title-remap-revert",
@@ -15047,19 +15154,6 @@ def command_zet_title_remap_revert(
                 error_class="usage",
                 reason_code="local_recovery_manifest_invalid",
                 text_message="The local-recovery manifest SHA-256 is invalid.",
-                exit_code=2,
-            )
-        if (resume_recovery or revert_recovery) and not expected_manifest:
-            return _recognized_command_cli_error(
-                args,
-                command="zet-title-remap-revert",
-                lifecycle_action="zet_title_field_local_recovery",
-                error_class="usage",
-                reason_code="local_recovery_manifest_required",
-                text_message=(
-                    "Interrupted resume or revert requires the manifest "
-                    "SHA-256 printed by the original field-local run."
-                ),
                 exit_code=2,
             )
         if resume_recovery and not args.approve:
@@ -17373,6 +17467,32 @@ def _print_local_recovery_execution_result(
     print(f"- items: {result.get('item_count', manifest_item_count)}")
     print(f"- fields written this run: {result.get('written_field_count', 0)}")
     print(f"- fields resumed: {result.get('resumed_field_count', 0)}")
+    if result.get("manifest_sha256"):
+        print(f"- manifest sha256: {result['manifest_sha256']}")
+    if result.get("ok") is False:
+        print(f"- fields applied: {result.get('applied_field_count', 0)}")
+        print(f"- fields reverted: {result.get('reverted_field_count', 0)}")
+        print(f"- fields remaining: {result.get('remaining_field_count', 0)}")
+        print(f"- fields divergent: {result.get('divergent_field_count', 0)}")
+        print(f"- fields unreadable: {result.get('unreadable_field_count', 0)}")
+        print(
+            "- durable field checkpoints: "
+            f"{result.get('checkpointed_field_count', 0)}"
+        )
+        print(
+            "- writes observed before checkpoint: "
+            f"{result.get('written_before_checkpoint_field_count', 0)}"
+        )
+        print(
+            "- resume available: "
+            + ("yes" if result.get("resume_supported") else "no")
+        )
+        print(
+            "- exact subset revert available: "
+            + ("yes" if result.get("subset_revert_supported") else "no")
+        )
+        for action in result.get("next_safe_actions", []):
+            print(f"NEXT: {action}")
     print("- independent verification: yes" if result.get("independent_verification") else "- independent verification: no")
 
 
@@ -17404,11 +17524,14 @@ def _execute_local_recovery_cli_mode(
     """Run one existing command family's receipt-bound recovery mode.
 
     The first apply is bound by the native dialog, so an operator does not
-    have to compare counts or copy a digest.  Resume and revert are exceptional
-    recovery operations and therefore require the original manifest digest.
+    have to compare counts or copy a digest.  Resume and revert automatically
+    select one unambiguous durable private control.  An explicit digest remains
+    available only to disambiguate multiple valid historical controls.
     """
 
     from .local_recovery_execution import (
+        build_observed_post_subset_revert_plan,
+        discover_local_recovery_plan,
         execute_local_recovery,
         load_local_recovery_plan,
         resume_local_recovery,
@@ -17422,44 +17545,98 @@ def _execute_local_recovery_cli_mode(
     )
     exact_progress = _local_recovery_exact_progress(reporter)
     if resume or revert:
-        plan = load_local_recovery_plan(
-            archive_root,
-            manifest_sha256=expected_manifest_sha256,
-        )
+        control_discovery = None
+        if expected_manifest_sha256:
+            plan = load_local_recovery_plan(
+                archive_root,
+                manifest_sha256=expected_manifest_sha256,
+            )
+        else:
+            plan, control_discovery = discover_local_recovery_plan(
+                archive_root,
+                allowed_domains=allowed_domains,
+                mode="revert" if revert else "apply",
+                resume=resume,
+            )
+            if plan is None:
+                return (
+                    {
+                        "schema_version": (
+                            "wom-kit/local-recovery-execution-result/v0.1"
+                        ),
+                        "ok": False,
+                        "state": control_discovery["state"],
+                        "mode": "revert" if revert else "apply",
+                        "reason_codes": [control_discovery["state"]],
+                        "control_discovery": control_discovery,
+                        "operator_counting_required": False,
+                        "automatic_retry_allowed": False,
+                        "private_values_echoed": False,
+                        "paths_echoed": False,
+                    },
+                    False,
+                )
         if plan.domain not in allowed_domains:
             raise ValueError("local recovery domain")
         if resume:
-            return (
-                resume_local_recovery(
-                    plan,
-                    mode="revert" if revert else "apply",
-                    reviewer_claim=reviewer,
-                    progress_hook=exact_progress,
-                ),
-                True,
-            )
-        verification = verify_local_recovery_state(plan, state="post")
-        if verification.get("all_match") is not True:
-            raise ValueError("local recovery post state")
-        if bool(args.dry_run):
-            return (
-                {
-                    **plan.public_document(),
-                    "state": "ready_to_revert",
-                    "mode": "revert",
-                    "verification": verification,
-                },
-                False,
-            )
-        return (
-            execute_local_recovery(
+            resumed = resume_local_recovery(
                 plan,
-                mode="revert",
+                mode="revert" if revert else "apply",
                 reviewer_claim=reviewer,
                 progress_hook=exact_progress,
-            ),
-            True,
+            )
+            if control_discovery is not None:
+                resumed["control_discovery"] = control_discovery
+            return resumed, True
+        parent_manifest_sha256 = plan.manifest.manifest_sha256
+        verification = verify_local_recovery_state(plan, state="post")
+        subset_inspection = None
+        if verification.get("all_match") is not True:
+            plan, subset_inspection = build_observed_post_subset_revert_plan(
+                plan
+            )
+            if plan is None:
+                already_reverted = {
+                        "schema_version": (
+                            "wom-kit/local-recovery-execution-result/v0.1"
+                        ),
+                        "ok": True,
+                        "state": "already_reverted",
+                        "mode": "revert",
+                        "manifest_sha256": parent_manifest_sha256,
+                        "subset_revert_inspection": subset_inspection,
+                        "written_field_count": 0,
+                        "reverted_field_count": 0,
+                        "operator_counting_required": False,
+                        "private_values_echoed": False,
+                        "paths_echoed": False,
+                    }
+                if control_discovery is not None:
+                    already_reverted["control_discovery"] = control_discovery
+                return already_reverted, False
+        if bool(args.dry_run):
+            preview = {
+                **plan.public_document(),
+                "state": "ready_to_revert",
+                "mode": "revert",
+                "verification": verification,
+                "parent_manifest_sha256": parent_manifest_sha256,
+                "subset_revert_inspection": subset_inspection,
+            }
+            if control_discovery is not None:
+                preview["control_discovery"] = control_discovery
+            return preview, False
+        execution = execute_local_recovery(
+            plan,
+            mode="revert",
+            reviewer_claim=reviewer,
+            progress_hook=exact_progress,
         )
+        execution["parent_manifest_sha256"] = parent_manifest_sha256
+        execution["subset_revert_inspection"] = subset_inspection
+        if control_discovery is not None:
+            execution["control_discovery"] = control_discovery
+        return execution, True
 
     if plan_factory is None:
         raise ValueError("local recovery plan")
@@ -17618,9 +17795,9 @@ def command_zettel_objet_link(args: argparse.Namespace) -> int:
             ),
             exit_code=2,
         )
-    if args.capture_receipt:
-        resume_recovery = bool(getattr(args, "resume_recovery", False))
-        revert_recovery = bool(getattr(args, "revert_recovery", False))
+    resume_recovery = bool(getattr(args, "resume_recovery", False))
+    revert_recovery = bool(getattr(args, "revert_recovery", False))
+    if args.capture_receipt or resume_recovery or revert_recovery:
         mixed_single_arguments = any(
             (
                 args.zettel_id,
@@ -17642,6 +17819,19 @@ def command_zettel_objet_link(args: argparse.Namespace) -> int:
                 ),
                 exit_code=2,
             )
+        if (resume_recovery or revert_recovery) and args.capture_receipt:
+            return _recognized_command_cli_error(
+                args,
+                command="zettel-objet-link",
+                lifecycle_action="zettel_objet_link_recovery",
+                error_class="usage",
+                reason_code="local_recovery_resume_evidence_mixed",
+                text_message=(
+                    "Resume or revert reloads the approved private control; "
+                    "do not supply the capture receipt again."
+                ),
+                exit_code=2,
+            )
         if resume_recovery and not args.approve:
             return _recognized_command_cli_error(
                 args,
@@ -17655,7 +17845,7 @@ def command_zettel_objet_link(args: argparse.Namespace) -> int:
                 exit_code=2,
             )
         expected_manifest = str(args.expected_plan_sha256 or "").strip().lower()
-        if (resume_recovery or revert_recovery) and SHA256_RE.fullmatch(
+        if expected_manifest and LOCAL_RECOVERY_SHA256_RE.fullmatch(
             expected_manifest
         ) is None:
             return _recognized_command_cli_error(
@@ -17663,11 +17853,8 @@ def command_zettel_objet_link(args: argparse.Namespace) -> int:
                 command="zettel-objet-link",
                 lifecycle_action="zettel_objet_link_recovery",
                 error_class="usage",
-                reason_code="local_recovery_manifest_required",
-                text_message=(
-                    "Interrupted resume or revert requires the manifest SHA-256 "
-                    "printed by the original recovery run."
-                ),
+                reason_code="local_recovery_manifest_invalid",
+                text_message="The local-recovery manifest SHA-256 is invalid.",
                 exit_code=2,
             )
         reporter = CommandProgressReporter(
@@ -17681,103 +17868,34 @@ def command_zettel_objet_link(args: argparse.Namespace) -> int:
             ),
         )
 
-        def exact_progress(event: ExactOperationProgress) -> None:
-            document = event.public_document()
-            reporter.progress(
-                "exact-operation-" + str(document["stage"]),
-                str(document["mode"]),
-                int(document["completed_items"]),
-                int(document["total_items"]),
-            )
-
         execution_started = False
         try:
             from .local_objet_link_recovery import (
                 zettel_objet_link_recovery_execution_plan,
             )
-            from .local_recovery_execution import (
-                execute_local_recovery,
-                load_local_recovery_plan,
-                resume_local_recovery,
-                verify_local_recovery_state,
-            )
 
-            if resume_recovery:
-                plan = load_local_recovery_plan(
-                    Path(args.archive_root),
-                    manifest_sha256=expected_manifest,
-                )
-                if plan.domain != "zettel_objet_link":
-                    raise ValueError("domain")
-                execution_started = True
-                result = resume_local_recovery(
-                    plan,
-                    mode="revert" if revert_recovery else "apply",
-                    reviewer_claim=(
-                        str(args.reviewed_by or "").strip()
-                        or "person:local-recovery-operator"
-                    ),
-                    progress_hook=exact_progress,
-                )
-            elif revert_recovery:
-                plan = load_local_recovery_plan(
-                    Path(args.archive_root),
-                    manifest_sha256=expected_manifest,
-                )
-                if plan.domain != "zettel_objet_link":
-                    raise ValueError("domain")
-                verification = verify_local_recovery_state(plan, state="post")
-                if verification.get("all_match") is not True:
-                    raise ValueError("post state")
-                if args.dry_run:
-                    result = {
-                        **plan.public_document(),
-                        "state": "ready_to_revert",
-                        "mode": "revert",
-                        "verification": verification,
-                    }
-                else:
-                    execution_started = True
-                    result = execute_local_recovery(
-                        plan,
-                        mode="revert",
-                        reviewer_claim=(
-                            str(args.reviewed_by or "").strip()
-                            or "person:local-recovery-operator"
-                        ),
-                        progress_hook=exact_progress,
-                    )
-            elif args.dry_run:
-                plan = zettel_objet_link_recovery_execution_plan(
+            def plan_factory():
+                return zettel_objet_link_recovery_execution_plan(
                     Path(args.archive_root),
                     capture_receipt=args.capture_receipt,
                     role=args.role or "source_document",
                     max_items=args.max_items,
                     progress_callback=reporter.progress,
                 )
-                result = plan.public_document()
-            else:
-                plan = zettel_objet_link_recovery_execution_plan(
-                    Path(args.archive_root),
-                    capture_receipt=args.capture_receipt,
-                    role=args.role or "source_document",
-                    max_items=args.max_items,
-                    progress_callback=reporter.progress,
-                )
-                if expected_manifest and not secrets.compare_digest(
-                    plan.manifest.manifest_sha256,
-                    expected_manifest,
-                ):
-                    raise ValueError("manifest changed")
-                execution_started = True
-                result = execute_local_recovery(
-                    plan,
-                    reviewer_claim=(
-                        str(args.reviewed_by or "").strip()
-                        or "person:local-recovery-operator"
-                    ),
-                    progress_hook=exact_progress,
-                )
+
+            result, execution_started = _execute_local_recovery_cli_mode(
+                args,
+                allowed_domains={"zettel_objet_link"},
+                plan_factory=(
+                    None
+                    if resume_recovery or revert_recovery
+                    else plan_factory
+                ),
+                expected_manifest_sha256=expected_manifest,
+                resume=resume_recovery,
+                revert=revert_recovery,
+                reporter=reporter,
+            )
         except ExactHumanApprovalWorkflowError as error:
             no_effects = _local_recovery_workflow_error_has_no_archive_effects(
                 error
@@ -17829,25 +17947,8 @@ def command_zettel_objet_link(args: argparse.Namespace) -> int:
             )
         finally:
             reporter.close()
-        if args.dry_run:
-            _print_zettel_objet_link_result(result, args.format)
-        else:
-            _print_local_recovery_execution_result(result, args.format)
+        _print_local_recovery_execution_result(result, args.format)
         return 0 if result.get("ok") else 1
-    if getattr(args, "resume_recovery", False) or getattr(
-        args, "revert_recovery", False
-    ):
-        return _recognized_command_cli_error(
-            args,
-            command="zettel-objet-link",
-            lifecycle_action="zettel_objet_link",
-            error_class="usage",
-            reason_code="local_recovery_flag_requires_capture_receipt",
-            text_message=(
-                "--resume-recovery and --revert-recovery require --capture-receipt."
-            ),
-            exit_code=2,
-        )
     if (
         bool(args.zettel_id) == bool(args.path)
         or not str(args.object_id or "").strip()
@@ -18304,7 +18405,10 @@ def command_external_locator_record(args: argparse.Namespace) -> int:
         expected_manifest = str(
             getattr(args, "expected_manifest_sha256", None) or ""
         ).strip().lower()
-        if expected_manifest and SHA256_RE.fullmatch(expected_manifest) is None:
+        if (
+            expected_manifest
+            and LOCAL_RECOVERY_SHA256_RE.fullmatch(expected_manifest) is None
+        ):
             return _recognized_command_cli_error(
                 args,
                 command="external-locator-record",
@@ -18312,19 +18416,6 @@ def command_external_locator_record(args: argparse.Namespace) -> int:
                 error_class="usage",
                 reason_code="local_recovery_manifest_invalid",
                 text_message="The local-recovery manifest SHA-256 is invalid.",
-                exit_code=2,
-            )
-        if (resume_recovery or revert_recovery) and not expected_manifest:
-            return _recognized_command_cli_error(
-                args,
-                command="external-locator-record",
-                lifecycle_action="external_locator_local_recovery",
-                error_class="usage",
-                reason_code="local_recovery_manifest_required",
-                text_message=(
-                    "Interrupted resume or revert requires the manifest "
-                    "SHA-256 printed by the original recovery run."
-                ),
                 exit_code=2,
             )
         if resume_recovery and not args.approve:
@@ -23807,7 +23898,10 @@ def command_project_bytecode_repair(args: argparse.Namespace) -> int:
 
 
 def command_objet_capture_selection(args: argparse.Namespace) -> int:
-    if args.approve:
+    exact_existing_intake = bool(
+        getattr(args, "exact_existing_intake", False)
+    )
+    if args.approve and not exact_existing_intake:
         return _exact_human_approval_cli_error(
             args,
             lifecycle_action="objet_capture_selection_record",
@@ -23819,6 +23913,66 @@ def command_objet_capture_selection(args: argparse.Namespace) -> int:
     if args.approve and not args.reviewed_by:
         print("objet-capture-selection requires --reviewed-by when --approve is used.", file=sys.stderr)
         return 1
+    if exact_existing_intake:
+        unsupported_exact_values = [
+            args.project_intake_receipt,
+            args.derived_text_staged_path,
+            args.derivation_kind,
+            args.tool_name,
+            args.tool_version,
+            args.review_status,
+            args.model_name,
+            args.model_version,
+            args.confidence,
+            args.language,
+            True if args.born_digital else None,
+        ]
+        if any(value is not None for value in unsupported_exact_values):
+            result = objet_capture_selection_exact.failure_document(
+                "existing_intake_capture_selection_request_invalid"
+            )
+        else:
+            try:
+                plan = (
+                    objet_capture_selection_exact
+                    .plan_existing_intake_capture_selection(
+                        Path(args.archive_root),
+                        staged_path=args.staged_path,
+                        source_intake_receipt=args.source_intake_receipt,
+                        item_id=args.item_id,
+                        manifest_id=args.manifest_id,
+                    )
+                )
+                result = (
+                    plan.public_document()
+                    if args.dry_run
+                    else (
+                        objet_capture_selection_exact
+                        .execute_existing_intake_capture_selection(
+                            plan,
+                            expected_plan_sha256=(
+                                args.expected_plan_sha256 or ""
+                            ),
+                            reviewer_claim=args.reviewed_by or "",
+                        )
+                    )
+                )
+            except (
+                objet_capture_selection_exact
+                .ExistingIntakeCaptureSelectionError,
+                operation_approval_binding.OperationApprovalBindingError,
+                ExactHumanApprovalError,
+                ExactHumanApprovalWindowsError,
+                ExactHumanApprovalWorkflowError,
+                ExactOperationManifestError,
+                archive_services.ArchiveServiceError,
+                OSError,
+            ) as error:
+                result = objet_capture_selection_exact.failure_document(
+                    str(getattr(error, "code", "") or "")
+                )
+        print_objet_capture_selection_exact_result(result, args.format)
+        return 0 if result.get("ok") else 1
     pairing_values = [
         args.derivation_kind,
         args.tool_name,
@@ -23873,6 +24027,25 @@ def command_objet_capture_selection(args: argparse.Namespace) -> int:
 
     print_objet_capture_selection_result(result, args.format)
     return 0 if result.get("ok", True) else 1
+
+
+def print_objet_capture_selection_exact_result(
+    result: dict[str, Any],
+    output_format: str,
+) -> None:
+    if output_format == "json":
+        print_json(result)
+        return
+    print(f"Exact Objet capture selection: {result.get('state') or '-'}")
+    print(f"- capability: {result.get('capability_scope') or '-'}")
+    print(f"- selected items: {result.get('selected_item_count', 0)}")
+    print(
+        "- selection recorded: "
+        + ("yes" if result.get("selection_created") else "no")
+    )
+    print("- paths shown: no")
+    for blocker in result.get("blockers", []):
+        print(f"BLOCKED: {blocker}")
 
 
 def print_objet_capture_selection_result(result: dict[str, Any], output_format: str) -> None:
@@ -28750,13 +28923,11 @@ COMPOUND_APPROVAL_BLOCKED_COMMANDS = frozenset(
         "notion-objet-link-convert",
         "notion-page-recovery",
         "notion-recover",
-        "object-storage",
         "object-storage-upload",
         "object-storage-upload-evidence",
         "object-storage-wom-location-reconcile",
         "objet-capture-batch",
         "objet-capture-enable",
-        "objet-capture-selection",
         "objet-source-metadata-write",
         "onboard",
         "prehashed-objet-ledger",
@@ -30199,9 +30370,17 @@ def build_parser() -> argparse.ArgumentParser:
     )
     object_storage.add_argument("--reviewed-by", help="Reviewer id required with --approve.")
     object_storage.add_argument(
+        "--expected-plan-sha256",
+        help=(
+            "Optional expert drift binding to the exact sha256 plan digest from "
+            "dry-run. Normal use relies on the native approval dialog and does "
+            "not require copying a hash."
+        ),
+    )
+    object_storage.add_argument(
         "--write-local-profile",
         action="store_true",
-        help="Write ignored local object storage account hints under profiles/local/ when approving.",
+        help="Unsupported by the bounded v0.4.8 registration writer; retained only to reject legacy invocations explicitly.",
     )
     object_storage.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     object_storage.set_defaults(func=command_object_storage)
@@ -30432,7 +30611,8 @@ def build_parser() -> argparse.ArgumentParser:
         aliases=["duplicate-object-reconciliation"],
         help=(
             "Classify duplicate object-manifest rows and, after local native "
-            "approval, remove only byte-identical repeats."
+            "approval, remove byte-identical repeats or losslessly reconcile "
+            "strict canonical-local/external-prehashed pairs."
         ),
     )
     duplicate_object_reconcile.add_argument(
@@ -30449,16 +30629,31 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help=(
             "Open the local native exact-approval dialog and apply only an "
-            "unchanged byte-identical-row plan."
+            "unchanged exact plan. No digest copying is required."
+        ),
+    )
+    duplicate_object_reconcile.add_argument(
+        "--revert",
+        action="store_true",
+        help=(
+            "Auto-discover one unambiguous successful reconciliation and "
+            "restore its exact original whole-manifest bytes. Use with "
+            "--dry-run or --approve."
         ),
     )
     duplicate_object_reconcile.add_argument(
         "--expected-plan-sha256",
-        help="Exact sha256:<64 hex> plan from the preceding --dry-run.",
+        help=(
+            "Optional expert drift binding from a preceding JSON dry-run; "
+            "ordinary native approval does not require it."
+        ),
     )
     duplicate_object_reconcile.add_argument(
         "--expected-manifest-sha256",
-        help="Exact manifest_sha256 from the same preceding --dry-run.",
+        help=(
+            "Optional expert manifest drift binding from the same JSON "
+            "dry-run; ordinary native approval does not require it."
+        ),
     )
     duplicate_object_reconcile.add_argument(
         "--reviewed-by",
@@ -32518,7 +32713,8 @@ def build_parser() -> argparse.ArgumentParser:
     zet_title_remap_write.add_argument(
         "--source-mirror",
         help=(
-            "Private pages.markdown.jsonl for receipt-bound identifier-title "
+            "Private mirror with paired pages.index.jsonl title values and "
+            "pages.markdown.jsonl source joins for receipt-bound identifier-title "
             "recovery; its path and values are never echoed."
         ),
     )
@@ -32530,8 +32726,8 @@ def build_parser() -> argparse.ArgumentParser:
     zet_title_remap_write.add_argument(
         "--expected-manifest-sha256",
         help=(
-            "Optional initial recovery binding; required only to resume or "
-            "revert an existing approved recovery."
+            "Optional disambiguation for resume or revert. Omit it when WOM "
+            "can find exactly one safe private recovery control."
         ),
     )
     zet_title_remap_write.add_argument(
@@ -32623,9 +32819,9 @@ def build_parser() -> argparse.ArgumentParser:
     zet_title_remap_receipt_audit.add_argument(
         "--source-mirror",
         help=(
-            "Optional private pages.markdown.jsonl used to plan identifier-title "
-            "recovery from the first body paragraph joined by each zettel's "
-            "own source page id."
+            "Optional private mirror used to join each zettel's own source page "
+            "id to the dedicated pages.index.jsonl title field; body paragraphs "
+            "are never used as replacement titles."
         ),
     )
     zet_title_remap_receipt_audit.add_argument(
@@ -32769,8 +32965,8 @@ def build_parser() -> argparse.ArgumentParser:
     zet_title_remap_revert.add_argument(
         "--expected-manifest-sha256",
         help=(
-            "Optional initial field-local binding; required only to resume or "
-            "undo an existing approved field-local recovery."
+            "Optional disambiguation for resume or undo. Omit it when WOM can "
+            "find exactly one safe private recovery control."
         ),
     )
     zet_title_remap_revert.add_argument(
@@ -34211,8 +34407,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--resume-recovery",
         action="store_true",
         help=(
-            "Resume the one incomplete exact receipt-recovery execution found "
-            "for --expected-plan-sha256; no new native approval is shown."
+            "Resume the one unambiguous incomplete exact receipt-recovery "
+            "execution; no capture receipt or new native approval is needed."
         ),
     )
     zettel_objet_link.add_argument(
@@ -34220,14 +34416,16 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help=(
             "Use the approved recovery control to restore only its changed "
-            "fields. Combine with --resume-recovery only after an interrupted revert."
+            "fields; WOM auto-selects one safe control. Combine with "
+            "--resume-recovery only after an interrupted revert."
         ),
     )
     zettel_objet_link.add_argument(
         "--capture-receipt",
         help=(
-            "Read-only batch recovery mode using one archive-relative "
-            "receipts/objet-capture/*.json authority."
+            "Initial batch recovery evidence: one archive-relative "
+            "receipts/objet-capture/*.json authority. Do not repeat it for "
+            "resume or revert."
         ),
     )
     zettel_objet_link.add_argument(
@@ -34426,8 +34624,8 @@ def build_parser() -> argparse.ArgumentParser:
     external_locator_record.add_argument(
         "--expected-manifest-sha256",
         help=(
-            "Optional initial batch-plan binding; required only to resume or "
-            "revert an existing approved recovery."
+            "Optional disambiguation for resume or revert. Omit it when WOM "
+            "can find exactly one safe private recovery control."
         ),
     )
     external_locator_record.add_argument(
@@ -36575,7 +36773,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     relation_candidate_decide = subcommands.add_parser(
         "relation-candidate-decide",
-        help="Record one digest-bound human accept/reject judgment and write an accepted edge.",
+        help=(
+            "Record one digest-bound human rejection judgment. "
+            "Accept remains fixed closed until its compound edge-and-judgment "
+            "effects have an exact approval binding."
+        ),
     )
     relation_candidate_decide.add_argument("archive_root", help="Archive root to update.")
     relation_candidate_decide.add_argument("--from-zettel", required=True)
@@ -36591,7 +36793,18 @@ def build_parser() -> argparse.ArgumentParser:
     relation_candidate_decide.add_argument("--approve", action="store_true")
     relation_candidate_decide.add_argument("--reviewed-by", required=True)
     relation_candidate_decide.add_argument("--format", choices=["text", "json"], default="text")
-    relation_candidate_decide.set_defaults(func=command_relation_candidate_decide)
+    relation_candidate_decide.set_defaults(
+        func=command_relation_candidate_decide,
+        _wom_approval_scope={
+            "kind": "argument_value_allowlist",
+            "argument": "--decision",
+            "allowed_values": ["reject"],
+            "outside_scope_status": "approval_fixed_closed",
+            "outside_scope_reason_code": (
+                command_status.COMPOUND_APPROVAL_REASON_CODE
+            ),
+        },
+    )
 
     markup_style_guide = subcommands.add_parser(
         "markup-style-guide",
@@ -36729,10 +36942,42 @@ def build_parser() -> argparse.ArgumentParser:
     objet_capture_selection.add_argument("--language", help="Optional BCP-47-ish language tag for the paired text, e.g. ko or en.")
     objet_capture_selection.add_argument("--born-digital", action="store_true", help="Mark the paired text as extracted from born-digital content.")
     objet_capture_selection.add_argument("--dry-run", action="store_true", help="Preview the selection manifest without writing.")
-    objet_capture_selection.add_argument("--approve", action="store_true", help="Write the reviewed selection manifest only; does not run capture.")
+    objet_capture_selection.add_argument(
+        "--approve",
+        action="store_true",
+        help=(
+            "Write one exact selection only with --exact-existing-intake. "
+            "Every legacy approval branch remains fixed closed."
+        ),
+    )
+    objet_capture_selection.add_argument(
+        "--exact-existing-intake",
+        action="store_true",
+        help=(
+            "Use the native exact writer only when a valid source-intake "
+            "record already exists; this does not create intake evidence."
+        ),
+    )
+    objet_capture_selection.add_argument(
+        "--expected-plan-sha256",
+        help=(
+            "Optional expert drift binding from a prior dry-run. Ordinary "
+            "operators can omit it and decide in the native approval dialog."
+        ),
+    )
     objet_capture_selection.add_argument("--reviewed-by", help="Reviewer id required when --approve is used.")
     objet_capture_selection.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
-    objet_capture_selection.set_defaults(func=command_objet_capture_selection)
+    objet_capture_selection.set_defaults(
+        func=command_objet_capture_selection,
+        _wom_approval_scope={
+            "kind": "argument_flag_any_allowlist",
+            "allowed_flags": ["--exact-existing-intake"],
+            "outside_scope_status": "approval_fixed_closed",
+            "outside_scope_reason_code": (
+                command_status.COMPOUND_APPROVAL_REASON_CODE
+            ),
+        },
+    )
 
     objet_capture = subcommands.add_parser(
         "objet-capture",

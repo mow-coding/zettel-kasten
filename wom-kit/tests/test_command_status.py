@@ -414,6 +414,10 @@ class CommandStatusArchiveParserTests(unittest.TestCase):
             command_status.APPROVAL_AVAILABLE,
         )
         self.assertEqual(
+            by_path["object-storage"]["approval_status"],
+            command_status.APPROVAL_AVAILABLE,
+        )
+        self.assertEqual(
             by_path["git-backup-reconcile-plan"]["approval_status"],
             command_status.APPROVAL_AVAILABLE,
         )
@@ -440,8 +444,21 @@ class CommandStatusArchiveParserTests(unittest.TestCase):
                 ),
             },
         )
+        self.assertEqual(
+            by_path["relation-candidate-decide"]["approval_scope"],
+            {
+                "kind": "argument_value_allowlist",
+                "argument": "--decision",
+                "allowed_values": ["reject"],
+                "outside_scope_status": "approval_fixed_closed",
+                "outside_scope_reason_code": (
+                    "compound_exact_human_approval_binding_required"
+                ),
+            },
+        )
         expected_local_recovery_scopes = {
             "objet-capture": ["--exact-local"],
+            "objet-capture-selection": ["--exact-existing-intake"],
             "revert-edge": ["--exact-local"],
             "external-locator-record": [
                 "--markup-receipt",
@@ -475,7 +492,7 @@ class CommandStatusArchiveParserTests(unittest.TestCase):
                 )
         self.assertEqual(
             exposed["counts"]["conditional_approval_command_count"],
-            7,
+            9,
         )
 
 
