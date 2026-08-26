@@ -1,8 +1,10 @@
 # WOM-kit Version Truth Source
 
-Status: v0.4.7 receipt-bound local recovery and project-isolated runtime
+Status: v0.4.8 integrity recovery and project-isolated runtime
 
-Current checkpoint: Status: v0.4.7 exact local capture and field-scoped recovery
+Current checkpoint: Status: v0.4.8 interruption-safe integrity recovery
+
+Previous checkpoint: Status: v0.4.7 exact local capture and field-scoped recovery
 
 Previous checkpoint: Status: v0.4.6 R2 bytes preservation plus formal adoption
 
@@ -30,18 +32,18 @@ or runtime workflow. This page defines the safe order for checking them.
 
 ## Current Public Tool
 
-The v0.4.7 URL is a conditional release-artifact contract. Use it only after
+The v0.4.8 URL is a conditional release-artifact contract. Use it only after
 the matching public GitHub Release exists and lists the exact wheel:
 
 ```powershell
-py -m venv .wom-bootstrap-v047
-& .\.wom-bootstrap-v047\Scripts\python.exe -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.7/wom_kit-0.4.7-py3-none-any.whl"
-& .\.wom-bootstrap-v047\Scripts\archive.exe --version
+py -m venv .wom-bootstrap-v048
+& .\.wom-bootstrap-v048\Scripts\python.exe -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.8/wom_kit-0.4.8-py3-none-any.whl"
+& .\.wom-bootstrap-v048\Scripts\archive.exe --version
 ```
 
-Require exactly `archive 0.4.7` from a new process. The installed runtime keeps
-the exact-approved Git writer, Letter 138 source-property backfill, and bounded
-R2 and receipt-bound local recovery modes, but a
+Require exactly `archive 0.4.8` from a new process. The installed runtime keeps
+the exact-approved Git writer, source-property backfill, bounded R2 recovery,
+receipt-bound local recovery, and interruption-safe integrity repair, but a
 bootstrap install alone changes no archive, remote ref, project-local source
 mirror, pin, shared PATH tool, or other project. Project update is a separate
 native exact-human workflow that creates and activates the project-local

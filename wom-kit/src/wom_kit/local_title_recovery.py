@@ -5,7 +5,6 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-import unicodedata
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable
 
@@ -591,52 +590,60 @@ def zet_title_field_local_recovery_plan(
     return result
 
 
-def _normalize_title(value: Any) -> str | None:
-    if not isinstance(value, str):
-        return None
-    text = " ".join(unicodedata.normalize("NFKC", value).split())
-    return text.casefold() or None
-
-
-def _first_body_paragraph(body: str) -> str | None:
-    for raw_line in body.splitlines():
-        line = raw_line.strip()
-        if not line or re.match(r"^#{1,6}\s+", line):
-            continue
-        return line
-    return None
-
-
 def _source_title_index(
     source_mirror: Path | str,
     *,
     progress_callback: Callable[[str, str, int | None, int | None], None]
     | None = None,
 ) -> tuple[bytes, dict[str, dict[str, Any]], int]:
-    path = Path(source_mirror)
-    if path.name != "pages.markdown.jsonl":
+    markdown_path = Path(source_mirror)
+    if markdown_path.name != "pages.markdown.jsonl":
         raise archive_services.ArchiveServiceError(
             "identifier_title_source_index_invalid"
         )
-    raw, reason = archive_services._bounded_stable_regular_file_read(
-        path,
+    title_path = markdown_path.with_name("pages.index.jsonl")
+    markdown_raw, markdown_reason = (
+        archive_services._bounded_stable_regular_file_read(
+            markdown_path,
+            max_bytes=MAX_SOURCE_INDEX_BYTES,
+        )
+    )
+    title_raw, title_reason = archive_services._bounded_stable_regular_file_read(
+        title_path,
         max_bytes=MAX_SOURCE_INDEX_BYTES,
     )
-    if raw is None or reason is not None:
+    if (
+        markdown_raw is None
+        or markdown_reason is not None
+        or title_raw is None
+        or title_reason is not None
+    ):
         raise archive_services.ArchiveServiceError(
             "identifier_title_source_index_invalid"
         )
-    lines = raw.splitlines()
-    if not lines or len(lines) > MAX_SOURCE_INDEX_ROWS:
+    markdown_lines = markdown_raw.splitlines()
+    title_lines = title_raw.splitlines()
+    if (
+        not markdown_lines
+        or not title_lines
+        or len(markdown_lines) > MAX_SOURCE_INDEX_ROWS
+        or len(title_lines) > MAX_SOURCE_INDEX_ROWS
+    ):
         raise archive_services.ArchiveServiceError(
             "identifier_title_source_index_invalid"
         )
-    index: dict[str, dict[str, Any]] = {}
+    markdown_index: dict[str, str] = {}
     if progress_callback is not None:
-        progress_callback("title-source-index", "start", 0, len(lines))
-    for ordinal, line in enumerate(lines, start=1):
+        progress_callback(
+            "title-source-index",
+            "start",
+            0,
+            len(markdown_lines) + len(title_lines),
+        )
+
+    def parse(line: bytes, ordinal: int) -> dict[str, Any]:
         try:
-            row = json.loads(
+            document = json.loads(
                 line.decode("utf-8-sig" if ordinal == 1 else "utf-8"),
                 object_pairs_hook=_reject_duplicate_pairs,
                 parse_constant=_reject_nonfinite,
@@ -650,10 +657,15 @@ def _source_title_index(
             raise archive_services.ArchiveServiceError(
                 "identifier_title_source_index_invalid"
             ) from exc
-        if not isinstance(row, dict):
+        if not isinstance(document, dict):
             raise archive_services.ArchiveServiceError(
                 "identifier_title_source_index_invalid"
             )
+        return document
+
+    total_rows = len(markdown_lines) + len(title_lines)
+    for ordinal, line in enumerate(markdown_lines, start=1):
+        row = parse(line, ordinal)
         source_id = archive_services._normalize_notion_locator_source_page_id(
             row.get("page_id")
         )
@@ -661,30 +673,82 @@ def _source_title_index(
         if (
             source_id is None
             or not isinstance(markdown, str)
+            or source_id in markdown_index
+        ):
+            raise archive_services.ArchiveServiceError(
+                "identifier_title_source_index_invalid"
+            )
+        markdown_index[source_id] = _sha(line)
+        if progress_callback is not None and (
+            ordinal == 1
+            or ordinal == len(markdown_lines)
+            or ordinal % 250 == 0
+        ):
+            progress_callback(
+                "title-source-index", "scanned", ordinal, total_rows
+            )
+
+    index: dict[str, dict[str, Any]] = {}
+    for index_ordinal, line in enumerate(title_lines, start=1):
+        row = parse(line, index_ordinal)
+        source_id = archive_services._normalize_notion_locator_source_page_id(
+            row.get("page_id")
+        )
+        source_title = row.get("index")
+        if (
+            source_id is None
+            or not isinstance(source_title, str)
             or source_id in index
         ):
             raise archive_services.ArchiveServiceError(
                 "identifier_title_source_index_invalid"
             )
+        markdown_row_sha256 = markdown_index.get(source_id)
+        if markdown_row_sha256 is None:
+            raise archive_services.ArchiveServiceError(
+                "identifier_title_source_index_invalid"
+            )
+        title_row_sha256 = _sha(line)
         index[source_id] = {
-            "lines": [
-                line.strip()
-                for line in markdown.splitlines()
-                if line.strip()
-            ],
-            "row_sha256": _sha(line),
+            "title": source_title,
+            "title_sha256": _title_sha(source_title),
+            "title_row_sha256": title_row_sha256,
+            "markdown_row_sha256": markdown_row_sha256,
+            "row_sha256": _sha(
+                _canonical_bytes(
+                    {
+                        "title_row_sha256": title_row_sha256,
+                        "markdown_row_sha256": markdown_row_sha256,
+                    }
+                )
+            ),
         }
+        completed = len(markdown_lines) + index_ordinal
         if progress_callback is not None and (
-            ordinal == 1 or ordinal == len(lines) or ordinal % 250 == 0
+            index_ordinal == 1
+            or index_ordinal == len(title_lines)
+            or index_ordinal % 250 == 0
         ):
             progress_callback(
-                "title-source-index", "scanned", ordinal, len(lines)
+                "title-source-index", "scanned", completed, total_rows
             )
+    if set(index) != set(markdown_index):
+        raise archive_services.ArchiveServiceError(
+            "identifier_title_source_index_invalid"
+        )
+    source_evidence = _canonical_bytes(
+        {
+            "schema": "wom-kit/identifier-title-source-mirror/v1",
+            "markdown_sha256": _sha(markdown_raw),
+            "title_index_sha256": _sha(title_raw),
+            "page_id_set_sha256": _sha(_canonical_bytes(sorted(index))),
+        }
+    )
     if progress_callback is not None:
         progress_callback(
-            "title-source-index", "done", len(lines), len(lines)
+            "title-source-index", "done", total_rows, total_rows
         )
-    return raw, index, len(lines)
+    return source_evidence, index, len(index)
 
 
 def zet_identifier_title_recovery_plan(
@@ -752,7 +816,7 @@ def zet_identifier_title_recovery_plan(
     for path_ordinal, path in enumerate(paths, start=1):
         try:
             relative = archive_services.archive_relative_path(path, root)
-            raw, current_title, frontmatter, body = _read_current_title(
+            raw, current_title, frontmatter, _body = _read_current_title(
                 root, relative
             )
         except archive_services.ArchiveServiceError:
@@ -769,19 +833,7 @@ def zet_identifier_title_recovery_plan(
             if source_page_id is not None
             else None
         )
-        first_paragraph = _first_body_paragraph(body)
-        replacement = first_paragraph
-        source_lines = source.get("lines") if source is not None else None
-        source_line_match = bool(
-            isinstance(source_lines, list)
-            and isinstance(replacement, str)
-            and any(
-                _normalize_title(re.sub(r"^#{1,6}\s+", "", line))
-                == _normalize_title(replacement)
-                for line in source_lines
-                if isinstance(line, str)
-            )
-        )
+        replacement = source.get("title") if source is not None else None
         if (
             source is None
             or not isinstance(replacement, str)
@@ -798,10 +850,6 @@ def zet_identifier_title_recovery_plan(
             )
             if title_blockers or normalized_candidate is None:
                 blocker_codes.append("source_title_not_safe_for_remap")
-            if not source_line_match:
-                blocker_codes.append(
-                    "body_first_paragraph_disagrees_with_source_mirror"
-                )
             if source_state != "exact":
                 blocker_codes.append("own_source_page_id_not_exact")
             state = (
@@ -848,9 +896,11 @@ def zet_identifier_title_recovery_plan(
                 {
                     "source_page_id": source_page_id,
                     "source_row_sha256": source["row_sha256"],
-                    "body_first_paragraph_sha256": _sha(
-                        first_paragraph.encode("utf-8")
-                    ),
+                    "source_title_sha256": source["title_sha256"],
+                    "source_title_row_sha256": source["title_row_sha256"],
+                    "source_markdown_row_sha256": source[
+                        "markdown_row_sha256"
+                    ],
                 }
             )
             identity = local_recovery_zettel_identity_sha256(

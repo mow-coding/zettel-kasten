@@ -103,18 +103,17 @@ class V0401ReleaseDocsTests(unittest.TestCase):
 
     def test_current_parser_combines_all_released_writers(self) -> None:
         blocked = archive_cli.COMPOUND_APPROVAL_BLOCKED_COMMANDS
-        self.assertEqual(len(blocked), 70)
+        self.assertEqual(len(blocked), 68)
         self.assertNotIn("migrate", blocked)
         self.assertNotIn("zettel-objet-link", blocked)
         self.assertIn("zettel-objet-link-revert", blocked)
         self.assertNotIn("project-version-update", blocked)
         self.assertNotIn("object-storage-adopt-existing", blocked)
+        self.assertNotIn("object-storage", blocked)
         self.assertNotIn("objet-capture", blocked)
+        self.assertNotIn("objet-capture-selection", blocked)
         self.assertNotIn("revert-edge", blocked)
-        for command in (
-            "objet-capture-selection",
-            "objet-capture-batch",
-        ):
+        for command in ("objet-capture-batch",):
             self.assertIn(command, blocked)
 
         inventory = command_status.build_command_status_inventory(
@@ -125,10 +124,10 @@ class V0401ReleaseDocsTests(unittest.TestCase):
         self.assertEqual(counts["canonical_executable_command_count"], 315)
         self.assertEqual(counts["alias_invocation_path_count"], 259)
         self.assertEqual(counts["invocation_path_count"], 574)
-        self.assertEqual(counts["approval_available_command_count"], 44)
-        self.assertEqual(counts["approval_fixed_closed_command_count"], 70)
+        self.assertEqual(counts["approval_available_command_count"], 46)
+        self.assertEqual(counts["approval_fixed_closed_command_count"], 68)
         self.assertEqual(counts["approval_not_exposed_command_count"], 201)
-        self.assertEqual(counts["conditional_approval_command_count"], 7)
+        self.assertEqual(counts["conditional_approval_command_count"], 9)
         self.assertEqual(counts["dry_run_exposed_command_count"], 271)
         self.assertEqual(counts["unmatched_fixed_closed_command_count"], 0)
         by_path = {
@@ -157,6 +156,14 @@ class V0401ReleaseDocsTests(unittest.TestCase):
         self.assertEqual(
             by_path["revert-edge"]["approval_scope"]["allowed_flags"],
             ["--exact-local"],
+        )
+        self.assertEqual(
+            by_path["objet-capture-selection"]["approval_scope"]["allowed_flags"],
+            ["--exact-existing-intake"],
+        )
+        self.assertEqual(
+            by_path["relation-candidate-decide"]["approval_scope"]["allowed_values"],
+            ["reject"],
         )
         self.assertEqual(
             by_path["migrate"]["approval_status"],

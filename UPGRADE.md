@@ -24,6 +24,55 @@ Before upgrading a real archive:
 
 The archive should never silently rewrite memory.
 
+## v0.4.8 Integrity Recovery Without Guesswork
+
+Install only after the matching public Release lists the exact wheel:
+
+```powershell
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.8/wom_kit-0.4.8-py3-none-any.whl"
+archive --version
+```
+
+Require exactly `archive 0.4.8` from a new process. Installing the wheel does
+not change an archive. v0.4.8 makes interrupted exact operations explain their
+durable state and find one unambiguous resume or revert control automatically.
+It also narrows title and marker recovery to the correct source field, rejects
+unsafe locator sidecars, creates capture selections only from existing intake
+evidence, records local object-storage setup without contacting a provider,
+and reconciles only strictly proven duplicate pairs without losing either
+definition.
+
+Locator occurrence anchors are still diagnostic hints, not recovery proof;
+v0.4.8 has no verified occurrence-recovery receipt contract. When a supported
+field recovery is reverted, WOM durably closes an unfinished parent apply so it
+cannot resume afterward. Duplicate reconciliation can likewise revert one
+authenticated interrupted journal from before or after receipt publication,
+after revalidating the original approval.
+
+If that duplicate revert reports `finalization_pending`, resume only the same
+pending operation:
+
+```powershell
+archive duplicate-object-reconcile <archive-root> --revert --resume --reviewed-by <same-reviewer> --format json
+```
+
+WOM reauthenticates the existing claim and opens no second approval window. A
+`started` claim resumes idempotently; a `succeeded` claim completes only the
+finalizer. The resume path does not write the manifest again.
+
+If the first revert stops in an unknown state, use its fixed safe action
+`rerun_duplicate_revert_resume_with_same_reviewer`. The text output gives the
+same instruction without exposing an approval id, private value, or path. A
+failed explicit resume does not ask you to loop and retry it again.
+
+The person chooses only the plain operation or cancel. WOM performs the counts,
+hashes, drift checks, source binding, and independent verification. A client
+archive changes only after the released project runtime runs that explicitly
+chosen project-scoped operation; publication or installation is not recovery
+evidence.
+
+See the [v0.4.8 release note](wom-kit/docs/releases/v0.4.8.md).
+
 ## v0.4.7 Receipt-Bound Local Recovery
 
 Install only after the matching public Release lists the exact wheel:

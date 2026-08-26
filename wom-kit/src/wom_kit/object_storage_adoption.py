@@ -20,6 +20,7 @@ from typing import Any, Callable, Mapping, Sequence
 
 from . import archive_services
 from . import object_storage_preservation as preservation
+from . import object_storage_setup_registration
 from .exact_human_approval import (
     ExactHumanApprovalError,
     _ClaimedExactHumanApproval,
@@ -84,6 +85,8 @@ class ObjectStorageAdoptionError(RuntimeError):
         "object_storage_adoption_receipt_conflict",
         "object_storage_adoption_control_invalid",
         "object_storage_adoption_resume_invalid",
+        "object_storage_adoption_setup_evidence_missing",
+        "object_storage_adoption_setup_evidence_mismatch",
     }
 
     def __init__(self, code: str) -> None:
@@ -525,6 +528,29 @@ def _operation_evidence(
     }
 
 
+def _require_setup_evidence(
+    root: Path,
+    *,
+    provider_kind: str,
+    store_ref: str,
+) -> object_storage_setup_registration.ObjectStorageSetupEvidence:
+    """Require current archive-scoped setup evidence before provider work."""
+
+    try:
+        return object_storage_setup_registration.validate_object_storage_setup_evidence(
+            root,
+            provider_kind=provider_kind,
+            store_ref=store_ref,
+        )
+    except object_storage_setup_registration.ObjectStorageSetupRegistrationError as exc:
+        code = (
+            "object_storage_adoption_setup_evidence_missing"
+            if exc.code == "object_storage_setup_evidence_missing"
+            else "object_storage_adoption_setup_evidence_mismatch"
+        )
+        raise _fail(code) from None
+
+
 def plan_object_storage_formal_adoption(
     archive_root: Path | str,
     *,
@@ -548,6 +574,11 @@ def plan_object_storage_formal_adoption(
         or not archive_services.safe_object_storage_ref(store)
     ):
         raise _fail("object_storage_adoption_plan_invalid")
+    _require_setup_evidence(
+        root,
+        provider_kind=provider,
+        store_ref=store,
+    )
     key_map_file = Path(key_map_path)
     key_map_sha = _plain_file_sha256(
         key_map_file, max_bytes=_MAX_KEY_MAP_BYTES, code="object_storage_adoption_key_map_invalid"
@@ -1337,6 +1368,11 @@ def load_object_storage_formal_adoption_plan(
         or not isinstance(raw_specs, list)
     ):
         raise _fail("object_storage_adoption_control_invalid")
+    _require_setup_evidence(
+        root,
+        provider_kind=provider,
+        store_ref=store,
+    )
     specs: list[FormalAdoptionSpec] = []
     for raw_spec in raw_specs:
         try:
@@ -1441,6 +1477,11 @@ def load_object_storage_formal_adoption_plan(
 
 
 def _fresh_revalidated(plan: ObjectStorageFormalAdoptionPlan) -> ObjectStorageFormalAdoptionPlan:
+    _require_setup_evidence(
+        plan.archive_root,
+        provider_kind=plan.provider_kind,
+        store_ref=plan.store_ref,
+    )
     if plan.loaded_from_control:
         return plan
     if plan.key_map_path is None or plan.manifest is None:
@@ -1583,9 +1624,10 @@ def resume_object_storage_formal_adoption(
         )
 
         def writer(claim: _ClaimedExactHumanApproval) -> Mapping[str, Any]:
-            authority = _assert_approved(plan, claim, context)
+            current = _fresh_revalidated(plan)
+            authority = _assert_approved(current, claim, context)
             actual = exact_operation_execution_sha256(
-                plan.manifest, approval_authority=authority
+                current.manifest, approval_authority=authority
             )
             if not hmac.compare_digest(actual, execution_sha256):
                 raise _fail("object_storage_adoption_resume_invalid")
@@ -1594,7 +1636,7 @@ def resume_object_storage_formal_adoption(
             except Exception:
                 raise _fail("object_storage_adoption_remote_unavailable") from None
             return _apply_with_store(
-                plan,
+                current,
                 authority,
                 transport,
                 checkpoints,
@@ -1620,6 +1662,11 @@ def verify_object_storage_formal_adoption(
 ) -> dict[str, Any]:
     if plan.manifest is None:
         raise _fail("object_storage_adoption_plan_invalid")
+    _require_setup_evidence(
+        plan.archive_root,
+        provider_kind=plan.provider_kind,
+        store_ref=plan.store_ref,
+    )
     _payloads, _writer, verifier = _execution_adapters(plan, transport)
     result = verify_exact_operation(
         plan.manifest, verifier=verifier, state="post", heartbeat=heartbeat

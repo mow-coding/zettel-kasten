@@ -52,6 +52,13 @@ APPROVAL_INTEGRITY_MAC_DOMAIN = (
 APPROVAL_INTEGRITY_MAC_MAX_PAYLOAD_BYTES = 128 * 1024
 APPROVAL_LINK_MAC_DOMAIN = b"wom-kit/exact-human-approval-link-mac/v0.1\x00"
 APPROVAL_LINK_MAC_MAX_PAYLOAD_BYTES = 32 * 1024
+TERMINAL_RECORD_AUTHENTICATION_SCHEMA_VERSION = (
+    "wom-kit/exact-human-approval-terminal-record-authentication/v0.1"
+)
+TERMINAL_RECORD_MAC_DOMAIN = (
+    b"wom-kit/exact-human-approval-terminal-record-mac/v0.1\x00"
+)
+TERMINAL_RECORD_MAC_MAX_PAYLOAD_BYTES = 128 * 1024
 
 _AUTHENTICATION_DOMAIN = b"wom-kit/exact-human-approval-claim/v0.1\x00"
 _AUTHORITY_DOMAIN = b"wom-kit/exact-human-approval-authority/v0.1\x00"
@@ -90,6 +97,8 @@ class ExactHumanApprovalError(RuntimeError):
         "exact_human_approval_integrity_reference_invalid",
         "exact_human_approval_link_payload_invalid",
         "exact_human_approval_link_mac_invalid",
+        "exact_human_approval_terminal_record_payload_invalid",
+        "exact_human_approval_terminal_record_mac_invalid",
     }
 
     def __init__(self, code: str) -> None:
@@ -118,6 +127,29 @@ def _canonical_bytes(document: Mapping[str, Any]) -> bytes:
 
 def _sha256(raw: bytes) -> str:
     return "sha256:" + hashlib.sha256(raw).hexdigest()
+
+
+def _terminal_record_payload(payload: bytes) -> bytes:
+    """Accept only one bounded canonical JSON object as terminal evidence."""
+
+    if (
+        type(payload) is not bytes
+        or not payload
+        or len(payload) > TERMINAL_RECORD_MAC_MAX_PAYLOAD_BYTES
+    ):
+        raise _fail("exact_human_approval_terminal_record_payload_invalid")
+    try:
+        document = json.loads(payload.decode("utf-8"))
+    except (UnicodeError, json.JSONDecodeError):
+        raise _fail(
+            "exact_human_approval_terminal_record_payload_invalid"
+        ) from None
+    if not isinstance(document, Mapping) or not hmac.compare_digest(
+        payload,
+        _canonical_bytes(document),
+    ):
+        raise _fail("exact_human_approval_terminal_record_payload_invalid")
+    return payload
 
 
 def _is_reparse(info: os.stat_result) -> bool:
@@ -610,6 +642,181 @@ def _read_claim(
     return document
 
 
+def _exact_public_reference_is_valid(reference: Any) -> bool:
+    return bool(
+        isinstance(reference, Mapping)
+        and set(reference)
+        == {
+            "schema_version",
+            "approval_id",
+            "context_sha256",
+            "approval_authority_sha256",
+            "one_use",
+        }
+        and reference.get("schema_version") == REFERENCE_SCHEMA_VERSION
+        and type(reference.get("approval_id")) is str
+        and _APPROVAL_ID_RE.fullmatch(reference["approval_id"]) is not None
+        and type(reference.get("context_sha256")) is str
+        and _SHA256_RE.fullmatch(reference["context_sha256"]) is not None
+        and type(reference.get("approval_authority_sha256")) is str
+        and _SHA256_RE.fullmatch(reference["approval_authority_sha256"])
+        is not None
+        and reference.get("one_use") is True
+    )
+
+
+def _claim_succeeded_evidence_digests(
+    document: Mapping[str, Any],
+    reference: Mapping[str, Any],
+) -> dict[str, str] | None:
+    if document.get("status") != "succeeded":
+        return None
+    authentication = document.get("authentication")
+    mac = (
+        authentication.get("mac")
+        if isinstance(authentication, Mapping)
+        else None
+    )
+    if type(mac) is not str or re.fullmatch(
+        r"hmac-sha256:[0-9a-f]{64}", mac
+    ) is None:
+        return None
+    return {
+        "approval_reference_sha256": _sha256(_canonical_bytes(reference)),
+        "claim_receipt_sha256": _sha256(_canonical_bytes(document)),
+        "claim_mac_sha256": _sha256(mac.encode("ascii")),
+    }
+
+
+def _audit_exact_human_approval_terminal_record_core(
+    archive_root: Path | str,
+    reference: Mapping[str, Any],
+    *,
+    expected_operation: ExactHumanApprovalOperation,
+    expected_plan_sha256: str,
+    expected_target_binding_sha256: str,
+    allowed_statuses: frozenset[str] | set[str] | tuple[str, ...] | list[str],
+    expected_succeeded_evidence_digests: Mapping[str, str] | None,
+    payload: bytes,
+    expected_mac: str,
+    receipt_authentication_key: memoryview,
+) -> bool:
+    """Audit one terminal record without creating state or exposing key bytes.
+
+    Every caller-controlled mismatch, missing claim, unsafe path, or invalid
+    authentication result fails closed as ``False``.  The only key copy made
+    by this function is wiped before it returns.
+    """
+
+    key: bytearray | None = None
+    try:
+        if (
+            not _exact_public_reference_is_valid(reference)
+            or type(expected_operation) is not ExactHumanApprovalOperation
+            or type(expected_plan_sha256) is not str
+            or _SHA256_RE.fullmatch(expected_plan_sha256) is None
+            or type(expected_target_binding_sha256) is not str
+            or _SHA256_RE.fullmatch(expected_target_binding_sha256) is None
+            or type(allowed_statuses)
+            not in {frozenset, set, tuple, list}
+            or not allowed_statuses
+            or any(
+                type(status) is not str
+                or status not in {"started", "succeeded"}
+                for status in allowed_statuses
+            )
+            or len(set(allowed_statuses)) != len(allowed_statuses)
+            or type(expected_mac) is not str
+            or re.fullmatch(r"hmac-sha256:[0-9a-f]{64}", expected_mac)
+            is None
+            or type(receipt_authentication_key) is not memoryview
+        ):
+            return False
+        raw = _terminal_record_payload(payload)
+        evidence = expected_succeeded_evidence_digests
+        if evidence is not None and (
+            not isinstance(evidence, Mapping)
+            or set(evidence)
+            != {
+                "approval_reference_sha256",
+                "claim_receipt_sha256",
+                "claim_mac_sha256",
+            }
+            or any(
+                type(value) is not str or _SHA256_RE.fullmatch(value) is None
+                for value in evidence.values()
+            )
+        ):
+            return False
+
+        key = _validated_key(receipt_authentication_key)
+        root, archive_id = _archive_identity(archive_root)
+        claims_root = _claims_root(root, create=False)
+        document = _read_claim(
+            claims_root / f"{reference['approval_id']}.json",
+            archive_id=archive_id,
+            key=key,
+        )
+        context = document.get("context")
+        if not isinstance(context, Mapping) or not bool(
+            document.get("status") in set(allowed_statuses)
+            and hmac.compare_digest(
+                document.get("approval_id", ""), reference["approval_id"]
+            )
+            and hmac.compare_digest(
+                document.get("context_sha256", ""),
+                reference["context_sha256"],
+            )
+            and hmac.compare_digest(
+                document.get("approval_authority_sha256", ""),
+                reference["approval_authority_sha256"],
+            )
+            and context.get("operation") == expected_operation.value
+            and hmac.compare_digest(
+                context.get("archive_identity_sha256", ""),
+                exact_human_approval_archive_identity_sha256(archive_id),
+            )
+            and hmac.compare_digest(
+                context.get("plan_sha256", ""), expected_plan_sha256
+            )
+            and hmac.compare_digest(
+                context.get("target_binding_sha256", ""),
+                expected_target_binding_sha256,
+            )
+        ):
+            return False
+
+        if evidence is not None:
+            actual_evidence = _claim_succeeded_evidence_digests(
+                document,
+                reference,
+            )
+            if actual_evidence is None or not all(
+                hmac.compare_digest(actual_evidence[name], evidence[name])
+                for name in (
+                    "approval_reference_sha256",
+                    "claim_receipt_sha256",
+                    "claim_mac_sha256",
+                )
+            ):
+                return False
+
+        actual_mac = "hmac-sha256:" + hmac.new(
+            key,
+            TERMINAL_RECORD_MAC_DOMAIN
+            + _canonical_bytes(reference)
+            + raw,
+            hashlib.sha256,
+        ).hexdigest()
+        return hmac.compare_digest(actual_mac, expected_mac)
+    except Exception:
+        return False
+    finally:
+        if key is not None:
+            for index in range(len(key)):
+                key[index] = 0
+
+
 def _exclusive_create(path: Path, raw: bytes) -> None:
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
     if hasattr(os, "O_BINARY"):
@@ -945,6 +1152,67 @@ class _ClaimedExactHumanApproval:
             expected_target_binding_sha256=expected_target_binding_sha256,
         )
 
+    def exact_terminal_record_mac(self, payload: bytes) -> str:
+        """Authenticate canonical terminal evidence while started or succeeded."""
+
+        raw = _terminal_record_payload(payload)
+        with self._lock:
+            if self._status not in {"started", "succeeded"}:
+                raise _fail("exact_human_approval_claim_state_invalid")
+            self._assert_current_status(self._status)
+            return "hmac-sha256:" + hmac.new(
+                self._key,
+                TERMINAL_RECORD_MAC_DOMAIN
+                + _canonical_bytes(self.public_reference())
+                + raw,
+                hashlib.sha256,
+            ).hexdigest()
+
+    def exact_terminal_record_matches(
+        self,
+        reference: Mapping[str, Any],
+        expected_operation: ExactHumanApprovalOperation,
+        expected_plan_sha256: str,
+        expected_target_binding_sha256: str,
+        allowed_statuses: frozenset[str]
+        | set[str]
+        | tuple[str, ...]
+        | list[str],
+        expected_succeeded_evidence: Mapping[str, str] | None,
+        payload: bytes,
+        expected_mac: str,
+    ) -> bool:
+        """Audit another archive-local terminal record without exposing the key."""
+
+        with self._lock:
+            try:
+                if self._status not in {"started", "succeeded"}:
+                    return False
+                self._assert_current_status(self._status)
+                archive_root = (
+                    self._bound_archive_root
+                    if self._bound_archive_root is not None
+                    else self._path.parents[4]
+                )
+                return _audit_exact_human_approval_terminal_record_core(
+                    archive_root,
+                    reference,
+                    expected_operation=expected_operation,
+                    expected_plan_sha256=expected_plan_sha256,
+                    expected_target_binding_sha256=(
+                        expected_target_binding_sha256
+                    ),
+                    allowed_statuses=allowed_statuses,
+                    expected_succeeded_evidence_digests=(
+                        expected_succeeded_evidence
+                    ),
+                    payload=payload,
+                    expected_mac=expected_mac,
+                    receipt_authentication_key=memoryview(self._key),
+                )
+            except Exception:
+                return False
+
     def assert_ready_for_context(
         self, context: ExactHumanApprovalContext
     ) -> dict[str, Any]:
@@ -986,25 +1254,10 @@ class _ClaimedExactHumanApproval:
         with self._lock:
             current = self._assert_current_status("succeeded")
             reference = self.public_reference()
-            authentication = current.get("authentication")
-            mac = (
-                authentication.get("mac")
-                if isinstance(authentication, Mapping)
-                else None
-            )
-            if type(mac) is not str or re.fullmatch(
-                r"hmac-sha256:[0-9a-f]{64}", mac
-            ) is None:
+            evidence = _claim_succeeded_evidence_digests(current, reference)
+            if evidence is None:
                 raise _fail("exact_human_approval_claim_authentication_invalid")
-            return {
-                "approval_reference_sha256": _sha256(
-                    _canonical_bytes(reference)
-                ),
-                "claim_receipt_sha256": _sha256(
-                    _canonical_bytes(current)
-                ),
-                "claim_mac_sha256": _sha256(mac.encode("ascii")),
-            }
+            return evidence
 
     def _finalize(self, *, status: str, failure_code: str | None) -> None:
         with self._lock:
@@ -1378,6 +1631,9 @@ __all__ = [
     "ExactHumanApprovalError",
     "REFERENCE_SCHEMA_VERSION",
     "SUMMARY_SCHEMA_VERSION",
+    "TERMINAL_RECORD_AUTHENTICATION_SCHEMA_VERSION",
+    "TERMINAL_RECORD_MAC_DOMAIN",
+    "TERMINAL_RECORD_MAC_MAX_PAYLOAD_BYTES",
     "exact_human_approval_archive_identity_sha256",
     "exact_human_approval_context_sha256",
 ]

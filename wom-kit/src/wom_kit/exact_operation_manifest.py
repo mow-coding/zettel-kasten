@@ -749,6 +749,13 @@ class ExactOperationCheckpointStore(Protocol):
         heartbeat: Callable[[], None],
     ) -> str: ...
 
+    def load_final_receipt(
+        self,
+        execution_sha256: str,
+        *,
+        heartbeat: Callable[[], None] | None = None,
+    ) -> dict[str, Any] | None: ...
+
 
 @dataclass(frozen=True)
 class ExactOperationProgress:
@@ -2537,6 +2544,217 @@ def verify_exact_operation(
     return {**result_basis, "verification_sha256": _digest_document(result_basis)}
 
 
+def inspect_exact_operation_state(
+    manifest: ExactOperationManifest,
+    *,
+    verifier: ExactOperationIndependentVerifier,
+    checkpoint_store: ExactOperationCheckpointStore,
+    mode: ExecutionMode = "apply",
+    selected_fields: Iterable[tuple[str, str]] | None = None,
+    approval_authority: ExactOperationApprovalAuthority | None = None,
+    heartbeat: Callable[[], None] | None = None,
+) -> dict[str, Any]:
+    """Report durable and independently observed progress without private values.
+
+    This is the reconciliation surface for an execution that did not return its
+    normal final receipt.  Checkpoint progress and current target state are kept
+    separate so a write that reached disk immediately before a process exit is
+    still visible.  Invalid checkpoints disable automatic resume but do not hide
+    independently observed pre/post/divergent counts.
+    """
+
+    if type(manifest) is not ExactOperationManifest or mode not in {
+        "apply",
+        "revert",
+    }:
+        raise _fail("exact_operation_manifest_invalid")
+    if (
+        approval_authority is not None
+        and type(approval_authority) is not ExactOperationApprovalAuthority
+    ):
+        raise _fail("exact_operation_manifest_invalid")
+    callback = heartbeat or (lambda: None)
+    selection = _selection(
+        manifest,
+        mode=mode,
+        selected_fields=selected_fields,
+    )
+    execution_sha256 = _execution_sha256(
+        manifest,
+        mode=mode,
+        selection=selection,
+        approval_authority=approval_authority,
+    )
+    checkpoint_state: _CheckpointState | None = None
+    checkpoint_valid = True
+    try:
+        checkpoint_state = _load_checkpoint_state(
+            manifest,
+            mode=mode,
+            execution_sha256=execution_sha256,
+            selection=selection,
+            checkpoint_store=checkpoint_store,
+            heartbeat=callback,
+            approval_authority=approval_authority,
+        )
+    except ExactOperationManifestError:
+        checkpoint_valid = False
+
+    final_receipt_present = False
+    final_receipt_valid = True
+    try:
+        final_receipt_present = (
+            checkpoint_store.load_final_receipt(
+                execution_sha256,
+                heartbeat=callback,
+            )
+            is not None
+        )
+    except Exception:
+        final_receipt_valid = False
+
+    observed_by_field: dict[tuple[int, str], str] = {}
+    destination_field_count = 0
+    source_field_count = 0
+    divergent_field_count = 0
+    unreadable_field_count = 0
+    destination_item_count = 0
+    source_item_count = 0
+    for item, fields in selection:
+        item_destination = True
+        item_source = True
+        for field in fields:
+            try:
+                observed = _read_hash(
+                    verifier,
+                    item,
+                    field,
+                    heartbeat=callback,
+                )
+            except ExactOperationManifestError:
+                unreadable_field_count += 1
+                item_destination = False
+                item_source = False
+                continue
+            observed_by_field[(item.ordinal, field.field_ref)] = observed
+            destination = _expected_hash(field, mode=mode, destination=True)
+            source = _expected_hash(field, mode=mode, destination=False)
+            if hmac.compare_digest(observed, destination):
+                destination_field_count += 1
+                item_source = False
+            elif hmac.compare_digest(observed, source):
+                source_field_count += 1
+                item_destination = False
+            else:
+                divergent_field_count += 1
+                item_destination = False
+                item_source = False
+        destination_item_count += int(item_destination)
+        source_item_count += int(item_source)
+
+    checkpointed_field_count = (
+        checkpoint_state.completed_field_count
+        if checkpoint_state is not None
+        else 0
+    )
+    checkpointed_item_count = (
+        len(checkpoint_state.verified_items)
+        if checkpoint_state is not None
+        else 0
+    )
+    checkpoint_count = (
+        len(checkpoint_state.rows) if checkpoint_state is not None else 0
+    )
+    checkpoint_state_mismatch_count = 0
+    if checkpoint_state is not None:
+        for item, fields in selection:
+            for field in fields:
+                if (
+                    field.field_ref
+                    in checkpoint_state.completed_fields[item.ordinal]
+                    and observed_by_field.get((item.ordinal, field.field_ref))
+                    != _expected_hash(field, mode=mode, destination=True)
+                ):
+                    checkpoint_state_mismatch_count += 1
+
+    resume_supported = False
+    if (
+        checkpoint_state is not None
+        and checkpoint_state.rows
+        and not final_receipt_present
+        and final_receipt_valid
+        and not divergent_field_count
+        and not unreadable_field_count
+        and not checkpoint_state_mismatch_count
+    ):
+        try:
+            _preflight_target_states(
+                selection,
+                mode=mode,
+                verifier=verifier,
+                checkpoint_state=checkpoint_state,
+                resume=True,
+                heartbeat=callback,
+            )
+        except ExactOperationManifestError:
+            resume_supported = False
+        else:
+            resume_supported = True
+
+    total_fields = sum(len(fields) for _, fields in selection)
+    if divergent_field_count or unreadable_field_count:
+        state = "requires_review"
+    elif destination_field_count == total_fields:
+        state = (
+            "completed"
+            if final_receipt_present and final_receipt_valid
+            else "fully_written_receipt_pending"
+        )
+    elif source_field_count == total_fields:
+        state = (
+            "started_no_fields_written" if checkpoint_count else "not_started"
+        )
+    else:
+        state = "partially_written"
+    result_basis = {
+        "schema": "wom-kit/exact-operation-state-inspection/v1",
+        "state": state,
+        "mode": mode,
+        "manifest_sha256": manifest.manifest_sha256,
+        "execution_sha256": execution_sha256,
+        "item_count": len(selection),
+        "field_count": total_fields,
+        "destination_item_count": destination_item_count,
+        "source_item_count": source_item_count,
+        "destination_field_count": destination_field_count,
+        "source_field_count": source_field_count,
+        "divergent_field_count": divergent_field_count,
+        "unreadable_field_count": unreadable_field_count,
+        "checkpoint_valid": checkpoint_valid,
+        "checkpoint_count": checkpoint_count,
+        "checkpointed_item_count": checkpointed_item_count,
+        "checkpointed_field_count": checkpointed_field_count,
+        "checkpoint_state_mismatch_count": checkpoint_state_mismatch_count,
+        "written_before_checkpoint_field_count": max(
+            0,
+            destination_field_count - checkpointed_field_count,
+        ),
+        "final_receipt_present": final_receipt_present,
+        "final_receipt_valid": final_receipt_valid,
+        "resume_supported": resume_supported,
+        "subset_compensation_supported": bool(
+            destination_field_count
+            and not divergent_field_count
+            and not unreadable_field_count
+        ),
+        "private_values_echoed": False,
+    }
+    return {
+        **result_basis,
+        "inspection_sha256": _digest_document(result_basis),
+    }
+
+
 def _run_exact_operation(
     manifest: ExactOperationManifest,
     *,
@@ -2954,6 +3172,7 @@ __all__ = [
     "exact_operation_execution_sha256",
     "exact_operation_writer_lock",
     "hash_field_value",
+    "inspect_exact_operation_state",
     "revert_exact_operation_fields",
     "verify_exact_operation",
 ]

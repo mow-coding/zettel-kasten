@@ -31434,7 +31434,19 @@ def notion_import_locator_loss_audit(
     progress_callback: Callable[[str, str, int | None, int | None], None]
     | None = None,
 ) -> dict[str, Any]:
-    """Census omitted-locator markers without returning their surrounding text."""
+    """Census locator-loss evidence without returning private coordinates.
+
+    Historical body markers are only one evidence surface.  A later recovery
+    may have preserved a locator in an external sidecar without changing the
+    body, and older imports may declare omissions without retaining a marker.
+    This audit therefore classifies all three surfaces while keeping every
+    per-zettel identifier, path, locator, and occurrence anchor private.
+    """
+
+    # completion_workflows imports archive_services at module import time.  Keep
+    # this import lazy so the audit can reuse the canonical sidecar reader
+    # without introducing a module-import cycle.
+    from . import completion_workflows
 
     root = require_existing_archive_root(archive_root)
     archive_id = read_archive_id(root)
@@ -31449,7 +31461,9 @@ def notion_import_locator_loss_audit(
     redacted_zettel_count = 0
     unreadable_zettel_count = 0
     affected: list[dict[str, Any]] = []
+    classified: list[dict[str, Any]] = []
     body_text_read = False
+    external_locator_sidecar_bytes_read = False
 
     zettel_paths = iter_zettel_paths(root)
     zettel_total = len(zettel_paths)
@@ -31469,6 +31483,61 @@ def notion_import_locator_loss_audit(
             elif notion_import_frontmatter_is_notion(frontmatter):
                 notion_import_zettel_count += 1
 
+                declared_count = notion_import_locator_omitted_count(
+                    frontmatter
+                )
+                source_page_values = notion_import_frontmatter_values_for_key(
+                    frontmatter, "source_page_id"
+                )
+                source_page_id_present = any(
+                    isinstance(value, (str, int))
+                    and not isinstance(value, bool)
+                    and bool(str(value).strip())
+                    for value in source_page_values
+                )
+                source_system_bucket = notion_import_source_system_bucket(
+                    frontmatter
+                )
+
+                raw_zettel_id = frontmatter.get("id")
+                safe_zettel_id = (
+                    raw_zettel_id
+                    if isinstance(raw_zettel_id, str)
+                    and ZETTEL_EDGE_ZETTEL_ID_RE.fullmatch(raw_zettel_id)
+                    else None
+                )
+                sidecar_record: dict[str, Any] | None = None
+                sidecar_error: str | None = None
+                if safe_zettel_id is None:
+                    sidecar_state = "malformed"
+                    sidecar_error = "canonical_zettel_id_invalid"
+                else:
+                    (
+                        sidecar_record,
+                        sidecar_raw,
+                        sidecar_error,
+                    ) = completion_workflows._read_locator_record(
+                        root,
+                        safe_zettel_id,
+                    )
+                    external_locator_sidecar_bytes_read = (
+                        external_locator_sidecar_bytes_read
+                        or sidecar_raw is not None
+                        or sidecar_error
+                        in {
+                            "external_locator_record_changed",
+                            "external_locator_record_invalid",
+                            "external_locator_record_unreadable",
+                        }
+                    )
+                    if sidecar_error is not None:
+                        sidecar_state = "malformed"
+                    elif sidecar_record is not None:
+                        sidecar_state = "present"
+                    else:
+                        sidecar_state = "absent"
+
+                marker_count: int | None = None
                 try:
                     text = path.read_text(encoding="utf-8-sig")
                 except (OSError, UnicodeError):
@@ -31483,49 +31552,184 @@ def notion_import_locator_loss_audit(
                         marker_count = body.count(
                             NOTION_IMPORT_LOCATOR_OMISSION_MARKER
                         )
-                        if marker_count > 0:
-                            declared_count = notion_import_locator_omitted_count(
-                                frontmatter
+
+                active_locator_count: int | None = None
+                occurrence_bound_locator_count: int | None = None
+                occurrence_unbound_locator_count: int | None = None
+                occurrence_bound_anchor_count: int | None = None
+                if sidecar_record is not None:
+                    active_rows = [
+                        row
+                        for row in sidecar_record.get("locators", [])
+                        if isinstance(row, dict)
+                        and row.get("status") == "active"
+                    ]
+                    anchors = [
+                        str(row["occurrence_anchor"])
+                        for row in active_rows
+                        if isinstance(row.get("occurrence_anchor"), str)
+                        and bool(str(row["occurrence_anchor"]).strip())
+                    ]
+                    active_locator_count = len(active_rows)
+                    occurrence_bound_locator_count = len(anchors)
+                    occurrence_unbound_locator_count = (
+                        active_locator_count - occurrence_bound_locator_count
+                    )
+                    occurrence_bound_anchor_count = len(set(anchors))
+                    if active_locator_count == 0:
+                        occurrence_binding_state = "no_active_locators"
+                    elif occurrence_bound_locator_count == 0:
+                        occurrence_binding_state = "all_unbound"
+                    elif occurrence_unbound_locator_count == 0:
+                        occurrence_binding_state = "all_bound"
+                    else:
+                        occurrence_binding_state = "mixed"
+                elif sidecar_state == "absent":
+                    occurrence_binding_state = "sidecar_absent"
+                else:
+                    occurrence_binding_state = "unknown"
+
+                if marker_count is None:
+                    historical_marker_state = "unknown"
+                    markerless_omission_state = "unknown"
+                    count_state = "unknown"
+                else:
+                    historical_marker_state = (
+                        "present" if marker_count > 0 else "absent"
+                    )
+                    markerless_omission_state = (
+                        "present"
+                        if marker_count == 0 and declared_count > 0
+                        else "absent"
+                    )
+                    count_state = notion_import_locator_count_state(
+                        marker_count,
+                        declared_count,
+                    )
+
+                should_classify = bool(
+                    marker_count is None
+                    or marker_count > 0
+                    or declared_count > 0
+                    or sidecar_state in {"present", "malformed"}
+                )
+                if should_classify:
+                    unresolved_reason_codes: list[str] = []
+                    has_omission_signal = bool(
+                        marker_count is None
+                        or marker_count > 0
+                        or declared_count > 0
+                    )
+                    if not has_omission_signal:
+                        unresolved_occurrence_count: int | None = 0
+                        unresolved_occurrence_state = "not_applicable"
+                    else:
+                        occurrence_total: int | None = None
+                        if marker_count is None:
+                            unresolved_reason_codes.append(
+                                "canonical_body_unreadable"
                             )
-                            count_state = notion_import_locator_count_state(
-                                marker_count, declared_count
+                        elif marker_count == declared_count:
+                            occurrence_total = marker_count
+                        elif marker_count == 0 and declared_count > 0:
+                            occurrence_total = declared_count
+                        else:
+                            unresolved_reason_codes.append(
+                                "marker_frontmatter_count_mismatch"
                             )
-                            source_page_values = (
-                                notion_import_frontmatter_values_for_key(
-                                    frontmatter, "source_page_id"
-                                )
+
+                        if sidecar_state == "absent":
+                            unresolved_reason_codes.append(
+                                "external_locator_sidecar_absent"
                             )
-                            source_page_id_present = any(
-                                isinstance(value, (str, int))
-                                and not isinstance(value, bool)
-                                and bool(str(value).strip())
-                                for value in source_page_values
+                        elif sidecar_state == "malformed":
+                            unresolved_reason_codes.append(
+                                sidecar_error
+                                or "external_locator_sidecar_malformed"
                             )
-                            zettel_id = notion_source_map_safe_zettel_id(
-                                frontmatter.get("id")
+                        elif occurrence_binding_state == "no_active_locators":
+                            unresolved_reason_codes.append(
+                                "external_locator_sidecar_no_active_locators"
                             )
-                            zettel_path = archive_relative_path(path, root)
-                            affected.append(
-                                {
-                                    "zettel": drop_none_values(
-                                        {"id": zettel_id, "path": zettel_path}
-                                    ),
-                                    "body_marker_count": marker_count,
-                                    "frontmatter_omitted_count": declared_count,
-                                    "count_state": count_state,
-                                    "source_system_bucket": (
-                                        notion_import_source_system_bucket(
-                                            frontmatter
-                                        )
-                                    ),
-                                    "source_page_id_present": source_page_id_present,
-                                    "source_evidence_state": (
-                                        "source_page_join_key_preserved"
-                                        if source_page_id_present
-                                        else "source_page_join_key_missing"
-                                    ),
-                                }
+                        elif occurrence_binding_state == "all_unbound":
+                            unresolved_reason_codes.append(
+                                "external_locator_occurrence_anchor_absent"
                             )
+                        elif occurrence_binding_state == "mixed":
+                            unresolved_reason_codes.append(
+                                "external_locator_occurrence_anchor_incomplete"
+                            )
+                        elif occurrence_binding_state == "all_bound":
+                            # An occurrence anchor is a useful diagnostic
+                            # coordinate, but the sidecar schema does not bind
+                            # it to a completed recovery receipt.  Never let a
+                            # manually supplied (or provenance-labelled) anchor
+                            # reduce the unresolved-loss count by itself.
+                            unresolved_reason_codes.append(
+                                "external_locator_occurrence_recovery_receipt_missing"
+                            )
+
+                        if (
+                            occurrence_total is not None
+                            and occurrence_binding_state == "all_bound"
+                            and occurrence_bound_anchor_count is not None
+                            and occurrence_bound_anchor_count
+                            > occurrence_total
+                        ):
+                            unresolved_reason_codes.append(
+                                "external_locator_occurrence_anchor_count_exceeds_omissions"
+                            )
+
+                        if unresolved_reason_codes:
+                            unresolved_occurrence_count = None
+                            unresolved_occurrence_state = "unknown"
+                        else:
+                            unresolved_occurrence_count = (
+                                int(occurrence_total or 0)
+                                - int(occurrence_bound_anchor_count or 0)
+                            )
+                            unresolved_occurrence_state = "known"
+
+                    item = {
+                        "historical_marker_state": historical_marker_state,
+                        "body_marker_count": marker_count,
+                        "frontmatter_omitted_count": declared_count,
+                        "markerless_omission_state": markerless_omission_state,
+                        "count_state": count_state,
+                        "source_system_bucket": source_system_bucket,
+                        "source_page_id_present": source_page_id_present,
+                        "source_evidence_state": (
+                            "source_page_join_key_preserved"
+                            if source_page_id_present
+                            else "source_page_join_key_missing"
+                        ),
+                        "sidecar_state": sidecar_state,
+                        "sidecar_active_locator_count": active_locator_count,
+                        "occurrence_binding_state": occurrence_binding_state,
+                        "occurrence_bound_locator_count": (
+                            occurrence_bound_locator_count
+                        ),
+                        "occurrence_unbound_locator_count": (
+                            occurrence_unbound_locator_count
+                        ),
+                        "occurrence_bound_anchor_count": (
+                            occurrence_bound_anchor_count
+                        ),
+                        "unresolved_occurrence_count": (
+                            unresolved_occurrence_count
+                        ),
+                        "unresolved_occurrence_state": (
+                            unresolved_occurrence_state
+                        ),
+                        "unresolved_occurrence_reason_codes": (
+                            unique_preserve_order(unresolved_reason_codes)
+                        ),
+                    }
+                    classified.append(item)
+                    if marker_count is not None and marker_count > 0:
+                        # Preserve the original marker-bearing counters while
+                        # making their item rows identifier-free.
+                        affected.append(item)
         if progress_callback is not None and (
             path_index == 1
             or path_index == zettel_total
@@ -31551,6 +31755,14 @@ def notion_import_locator_loss_audit(
             "locator-loss census is incomplete because one or more zettels were unreadable."
         )
 
+    sidecar_malformed_zettel_count = sum(
+        1 for item in classified if item["sidecar_state"] == "malformed"
+    )
+    if sidecar_malformed_zettel_count:
+        blockers.append(
+            "locator-loss census is incomplete because one or more external locator sidecars or canonical identifiers were malformed."
+        )
+
     counts_by_state: dict[str, int] = {}
     counts_by_source_system: dict[str, int] = {}
     for item in affected:
@@ -31571,16 +31783,60 @@ def notion_import_locator_loss_audit(
     source_page_id_missing_count = len(affected) - source_page_id_present_count
     mismatch_count = len(affected) - counts_by_state.get("exact", 0)
 
+    markerless = [
+        item
+        for item in classified
+        if item["markerless_omission_state"] == "present"
+    ]
+    loss_items = [
+        item
+        for item in classified
+        if item["historical_marker_state"] in {"present", "unknown"}
+        or item["markerless_omission_state"] in {"present", "unknown"}
+    ]
+    occurrence_resolution_unknown = [
+        item
+        for item in loss_items
+        if item["unresolved_occurrence_state"] == "unknown"
+    ]
+    if occurrence_resolution_unknown:
+        unresolved_occurrence_count: int | None = None
+        unresolved_occurrence_state = "unknown"
+    else:
+        unresolved_occurrence_count = sum(
+            int(item["unresolved_occurrence_count"] or 0)
+            for item in loss_items
+        )
+        unresolved_occurrence_state = "known"
+    unresolved_occurrence_reason_codes = unique_preserve_order(
+        reason
+        for item in occurrence_resolution_unknown
+        for reason in item["unresolved_occurrence_reason_codes"]
+    )
+
+    occurrence_binding_counts: dict[str, int] = {}
+    for item in classified:
+        state = str(item["occurrence_binding_state"])
+        occurrence_binding_counts[state] = (
+            occurrence_binding_counts.get(state, 0) + 1
+        )
+
     priority = {
         "source_page_join_key_missing": 0,
         "source_page_join_key_preserved": 1,
     }
     ordered = sorted(
-        affected,
+        classified,
         key=lambda item: (
+            0 if item["unresolved_occurrence_state"] == "unknown" else 1,
             priority.get(str(item["source_evidence_state"]), 2),
             0 if item["count_state"] != "exact" else 1,
-            str(item["zettel"].get("path") or item["zettel"].get("id") or ""),
+            str(item["historical_marker_state"]),
+            str(item["markerless_omission_state"]),
+            str(item["sidecar_state"]),
+            str(item["occurrence_binding_state"]),
+            int(item["body_marker_count"] or 0),
+            int(item["frontmatter_omitted_count"] or 0),
         ),
     )
     returned_items = ordered[:max_items]
@@ -31588,7 +31844,11 @@ def notion_import_locator_loss_audit(
     next_safe_actions: list[str] = []
     if blockers:
         next_safe_actions.append(
-            "Fix unreadable zettels before treating the locator-loss census as complete."
+            "Fix unreadable canonical files and malformed locator sidecars before treating the locator-loss census as complete."
+        )
+    if occurrence_resolution_unknown:
+        next_safe_actions.append(
+            "Do not claim an unresolved occurrence count until each omitted occurrence is count-consistent and bound to an exact completed recovery receipt; locator-sidecar occurrence anchors alone are diagnostic evidence only."
         )
     if source_page_id_present_count:
         next_safe_actions.append(
@@ -31622,16 +31882,76 @@ def notion_import_locator_loss_audit(
             "source_page_id_missing_count": source_page_id_missing_count,
             "counts_by_state": dict(sorted(counts_by_state.items())),
             "counts_by_source_system": dict(sorted(counts_by_source_system.items())),
+            "classified_zettel_count": len(classified),
+            "historical_marker_zettel_count": len(affected),
+            "historical_marker_occurrence_count": body_marker_count,
+            "markerless_omission_zettel_count": len(markerless),
+            "markerless_declared_omission_count": sum(
+                int(item["frontmatter_omitted_count"])
+                for item in markerless
+            ),
+            "sidecar_present_zettel_count": sum(
+                1 for item in classified if item["sidecar_state"] == "present"
+            ),
+            "sidecar_absent_zettel_count": sum(
+                1 for item in classified if item["sidecar_state"] == "absent"
+            ),
+            "sidecar_malformed_zettel_count": sidecar_malformed_zettel_count,
+            "sidecar_active_locator_count": sum(
+                int(item["sidecar_active_locator_count"] or 0)
+                for item in classified
+            ),
+            "occurrence_binding_counts": dict(
+                sorted(occurrence_binding_counts.items())
+            ),
+            "occurrence_bound_locator_count": sum(
+                int(item["occurrence_bound_locator_count"] or 0)
+                for item in classified
+            ),
+            "occurrence_unbound_locator_count": sum(
+                int(item["occurrence_unbound_locator_count"] or 0)
+                for item in classified
+            ),
+            "occurrence_bound_anchor_count": sum(
+                int(item["occurrence_bound_anchor_count"] or 0)
+                for item in classified
+            ),
+            "occurrence_resolution_known_zettel_count": sum(
+                1
+                for item in loss_items
+                if item["unresolved_occurrence_state"] == "known"
+            ),
+            "occurrence_resolution_unknown_zettel_count": len(
+                occurrence_resolution_unknown
+            ),
+            "occurrence_resolution_not_applicable_zettel_count": sum(
+                1
+                for item in classified
+                if item["unresolved_occurrence_state"] == "not_applicable"
+            ),
+            "unresolved_occurrence_count": unresolved_occurrence_count,
+            "unresolved_occurrence_state": unresolved_occurrence_state,
+            "unresolved_occurrence_reason_codes": (
+                unresolved_occurrence_reason_codes
+            ),
             "redacted_zettel_count": redacted_zettel_count,
             "unreadable_zettel_count": unreadable_zettel_count,
-            "scan_complete": unreadable_zettel_count == 0,
+            "scan_complete": (
+                unreadable_zettel_count == 0
+                and sidecar_malformed_zettel_count == 0
+            ),
             "returned_item_count": len(returned_items),
-            "items_truncated": len(returned_items) < len(affected),
+            "items_truncated": len(returned_items) < len(classified),
         },
         "items": returned_items,
         "current_capability": {
             "locator_loss_census_available": True,
             "source_page_id_join_key_presence_audited": True,
+            "external_locator_sidecar_state_audited": True,
+            "occurrence_anchor_presence_audited": True,
+            "anchored_locator_sidecar_claimed_resolved": False,
+            "verified_occurrence_recovery_receipt_supported": False,
+            "unbound_locator_sidecar_claimed_resolved": False,
             "source_mirror_read_by_this_command": False,
             "provider_locator_reconstruction_implemented": False,
             "retroactive_body_write_implemented": False,
@@ -31644,6 +31964,16 @@ def notion_import_locator_loss_audit(
             "provider_locator_text_echoed": False,
             "source_page_id_values_echoed": False,
             "frontmatter_values_echoed": False,
+            "zettel_ids_echoed": False,
+            "zettel_paths_echoed": False,
+            "external_locator_sidecar_bytes_read": (
+                external_locator_sidecar_bytes_read
+            ),
+            "external_locator_values_echoed": False,
+            "external_locator_ids_echoed": False,
+            "external_locator_refs_echoed": False,
+            "external_locator_paths_echoed": False,
+            "external_locator_occurrence_anchors_echoed": False,
             "page_titles_echoed": False,
             "absolute_local_paths_echoed": False,
             "account_ids_echoed": False,

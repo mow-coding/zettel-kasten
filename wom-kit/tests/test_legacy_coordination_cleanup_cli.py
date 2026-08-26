@@ -93,7 +93,10 @@ class LegacyCoordinationCleanupCliTests(unittest.TestCase):
             for action in command._actions
             if "--approve" in action.option_strings
         )
-        self.assertIn("unavailable in v0.4.7", approve_action.help.lower())
+        self.assertIn(
+            f"unavailable in v{archive_cli.__version__}",
+            approve_action.help.lower(),
+        )
         self.assertIn("dry-run, plan, or audit", approve_action.help.lower())
 
         with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
@@ -302,7 +305,10 @@ class LegacyCoordinationCleanupCliTests(unittest.TestCase):
         self.assertTrue(expected_options.issubset(set(command["options"])))
         self.assertNotIn("--target", command["options"])
         self.assertNotIn("--path", command["options"])
-        self.assertIn("unavailable in v0.4.7", command["help"].lower())
+        self.assertIn(
+            f"unavailable in v{archive_cli.__version__}",
+            command["help"].lower(),
+        )
         self.assertIn("collab/ is never traversed or changed", command["help"].lower())
 
     @unittest.skipUnless(os.name == "nt", "approved apply is Windows-only")

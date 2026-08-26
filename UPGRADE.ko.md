@@ -2,6 +2,52 @@
 
 [English Upgrade Guide](UPGRADE.md)
 
+## v0.4.8 추측 없는 무결성 복구
+
+일치하는 공개 Release가 정확한 wheel을 자산으로 나열한 뒤에만 설치합니다.
+
+```powershell
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.8/wom_kit-0.4.8-py3-none-any.whl"
+archive --version
+```
+
+새 프로세스에서 정확히 `archive 0.4.8`인지 확인합니다. wheel 설치만으로
+보관함은 바뀌지 않습니다. v0.4.8은 중단된 exact 작업의 내구성 상태를 설명하고
+안전한 resume 또는 revert control 하나를 자동으로 찾습니다. title·marker
+복구는 올바른 source field만 바꾸고, 위험한 locator sidecar는 거부합니다.
+기존 intake 근거가 있을 때만 capture selection을 만들며, provider에 접속하지
+않고 local object-storage 설정을 기록합니다. duplicate pair는 모든 엄격한
+검사를 통과할 때만 두 정의의 근거를 보존하면서 정합합니다.
+
+locator occurrence anchor는 아직 진단 단서일 뿐 복구 증거가 아닙니다. v0.4.8에는
+검증된 occurrence-recovery receipt 계약이 없습니다. 지원되는 필드 복구를
+되돌리면 WOM은 끝나지 않은 부모 apply를 내구적으로 닫아 이후 다시 resume되지
+않게 합니다. duplicate 정합도 원래 승인을 다시 검증한 뒤 receipt 공개 전후의
+인증된 중단 journal 하나를 되돌릴 수 있습니다.
+
+그 duplicate revert가 `finalization_pending`을 보고하면 같은 pending 작업만
+재개합니다.
+
+```powershell
+archive duplicate-object-reconcile <archive-root> --revert --resume --reviewed-by <same-reviewer> --format json
+```
+
+WOM은 기존 claim을 다시 인증하며 두 번째 승인창을 열지 않습니다. `started`
+claim은 멱등적으로 writer를 재개하고, `succeeded` claim은 finalizer만 끝냅니다.
+resume 경로는 manifest를 다시 쓰지 않습니다.
+
+첫 revert가 unknown state로 멈추면 고정 안전 행동
+`rerun_duplicate_revert_resume_with_same_reviewer`를 따릅니다. text 출력도 승인
+ID·비공개 값·경로를 노출하지 않고 같은 안내를 제공합니다. 명시적으로 실행한
+resume 자체가 실패하면 다시 무한 재시도하라고 안내하지 않습니다.
+
+사람은 쉬운 작업 설명을 보고 실행 또는 취소만 선택합니다. 개수·해시·drift·
+source 결속·독립 검증은 WOM이 담당합니다. 공개나 설치는 복구 증거가 아니며,
+클라이언트 보관함은 출시된 project runtime에서 명시적으로 선택한 project-scoped
+작업을 실행한 뒤에만 바뀝니다.
+
+[v0.4.8 릴리스 노트](wom-kit/docs/releases/v0.4.8.md)를 보세요.
+
 ## v0.4.7 영수증 결속 로컬 복구
 
 일치하는 공개 Release가 정확한 wheel을 자산으로 나열한 뒤에만 설치합니다.

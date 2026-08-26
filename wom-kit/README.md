@@ -10,12 +10,12 @@ It is not a website, SaaS app, dashboard, or visual note-taking product. The int
 
 ## Install The Command-Line Tool
 
-The exact v0.4.7 GitHub Release, when present, uses the self-contained wheel
+The exact v0.4.8 GitHub Release, when present, uses the self-contained wheel
 below. Confirm that the release exists and lists the wheel before installing
 it. The versioned URL alone is not proof that the asset is available.
 
 ```powershell
-uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.7/wom_kit-0.4.7-py3-none-any.whl"
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.8/wom_kit-0.4.8-py3-none-any.whl"
 archive --version
 ```
 
@@ -52,11 +52,17 @@ them adopted. Formal adoption verifies exact key-map entries, writes immutable
 evidence, performs one final manifest projection, and leaves every conflicting
 definition in review. The legacy compound approval path remains closed.
 
-v0.4.7 reopens native exact single Objet capture and receipt-bound single-edge
-revert, then connects captured-object links, locators, omission markers, and
-identifier-title recovery to one resumable field-scoped writer. Ordinary output
-shows content-free counts and digests while complete controls stay private and
-ignored locally. Installing the wheel alone changes no client archive.
+v0.4.8 makes interrupted exact operations report their durable state and
+auto-discover one unambiguous resume or revert control. Title repair now trusts
+only the paired source index, marker repair changes only the marker token, and
+locator sidecars use a bounded stable reader while occurrence anchors remain
+diagnostic-only. Existing intake evidence can mint one exact capture selection,
+local object-storage setup can be registered without a provider call, and
+strict duplicate pairs can be reconciled without losing either definition and
+reverted from exact completed or authenticated interrupted evidence. A pending
+revert resumes with `--revert --resume --reviewed-by <same-reviewer>`, reusing
+the authenticated claim without another native dialog or another manifest
+write. Installing the wheel alone changes no client archive.
 
 The v0.4.1 checkpoint opened `zettel-objet-link --approve` through the same local exact-human
 boundary. The command requires a fresh exact plan digest and reviewer, then
@@ -67,8 +73,9 @@ control artifact. It publishes a v0.2 receipt with an embedded
 `zettel_objet_link` exact-human approval reference. It echoes no label or zettel
 body, reads no object bytes, calls no provider, and exposes no MCP writer.
 
-The matching structured link revert and Objet capture enable/selection/batch
-remain fixed closed outside the new exact-local single-capture mode. Project
+The matching structured link revert, Objet capture enable/batch, and every
+legacy capture-selection approval remain fixed closed. Only the exact existing-
+intake selection mode and the exact-local single-capture mode are open. Project
 collision preservation and bytecode repair also remain
 separate from the reopened exact project updater. The parser-derived current
 inventory is the authority for every approval-available, fixed-closed, or
@@ -86,6 +93,7 @@ and repaired high-risk failures can use `wom-kit/cli-error/v0.1`: exit `2` is a
 usage failure, exit `1` is policy/precondition failure, and
 `effects_state: unknown` means an exact-human workflow had started and its
 durable claim requires reconciliation rather than automatic retry. See the
+[`v0.4.8 release note`](docs/releases/v0.4.8.md),
 [`v0.4.7 release note`](docs/releases/v0.4.7.md),
 [`v0.4.6 release note`](docs/releases/v0.4.6.md),
 [`v0.4.5 release note`](docs/releases/v0.4.5.md),
