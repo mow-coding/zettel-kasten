@@ -2,11 +2,19 @@
 
 상태: 공개 navigation baseline
 날짜: 2026-05-27
-갱신: 2026-08-22
+갱신: 2026-08-27
 철학 갱신: 2026-07-15
 하네스 호환 경계 갱신: 2026-07-16
 
-현재 v0.4.3 변경점: `ExactOperationManifest v1`이 정확한 승인, checkpoint,
+현재 v0.4.9 변경점: 일반적인 단일 파일 반입 경로가 세 번의 분리된 네이티브
+승인을 거쳐 정확한 source-intake 영수증, 기존 intake 기반 selection, 선택한
+로컬 bytes의 capture까지 이어집니다. Doctor는 제한된 progress를 기본 출력하고,
+중복 진단을 하나의 안정된 object-manifest byte snapshot에 결속하며, 종료 전에
+입력이 바뀌거나 재검증할 수 없으면 실패합니다. object-storage setup은 명시적인
+profile ID가 필요하고 로컬 setup만 기록합니다. batch writer와 보관함 전체 성능
+개선은 아직 증명되지 않은 열린 작업입니다.
+
+과거 v0.4.3 변경점: `ExactOperationManifest v1`이 정확한 승인, checkpoint,
 resume, 독립 검증, 필드 단위 revert를 위한 공통 기반을 제공합니다. 기존 Git
 계획 계열은 정확한 commit·non-force push·원격 ref 재조회를 추가하고,
 `archive migrate`는 Letter 138의 손실 없는 `source_properties` 보강을,
@@ -24,8 +32,7 @@ force-push, remote URL/credential 노출, MCP writer는 없습니다. dry-run은
 아무것도 쓰지 않으며, 일치한 `ls-remote` 결과는 계정 소유권이나 branch
 policy/provider audit log가 아니라 Git transport 근거입니다.
 
-같은 v0.4.3 후보의 Letter 138 변경점(현재 작업 트리에 구현됐지만 아직
-릴리스되지 않음):
+v0.4.3 릴리스에는 과거 Letter 138 변경점도 포함됐습니다:
 `archive migrate --target notion-source-properties`가 Letter 138의 로컬
 Notion `source_properties` 복구를 계획하고, 승인 후 적용하고, 중단 시 재개하고,
 독립 검증하고, 해당 필드만 되돌릴 수 있습니다. 첫 dry-run이 집계 acceptance의
@@ -493,6 +500,7 @@ local archive
 - [v0.2.11 Delegate Capability Contract Work Log](../plans/work-log-2026-05-23-delegate-capability-contract.md)
 - [Changelog](../../CHANGELOG.md)
 - [Release Notes](releases/)
+- [v0.4.9 릴리스 노트](releases/v0.4.9.md)
 - [v0.4.8 릴리스 노트](releases/v0.4.8.md)
 - [v0.4.7 릴리스 노트](releases/v0.4.7.md)
 - [v0.4.6 릴리스 노트](releases/v0.4.6.md)

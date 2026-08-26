@@ -465,7 +465,7 @@ github-repo --dry-run
 object-storage --dry-run
   Plan private object storage for WOM objets without writing files, creating buckets, calling provider APIs, uploading, syncing, copying, hashing, or importing source content.
 
-  In v0.4.0 object-storage approval is fixed fail-closed before private target read or mutation with `compound_exact_human_approval_binding_required`; it writes no provider metadata or setup receipt.
+  The current operation-specific approval records only one exact local provider binding and setup receipt. It requires `--profile-id`, calls no provider, creates no bucket, reads no credential, uploads no bytes, and does not write a local profile registry. The retired `--write-local-profile` flag fails before planning or archive access; provider and unscoped mutation routes remain fixed closed.
 
 mint-zet --dry-run
   Check minting readiness, re-verify source fidelity when present, and preview canonical path, mint receipt, draft snapshot, and safe current fidelity-plan digest without writing.
@@ -834,7 +834,7 @@ python -m wom_kit.archive_cli object-storage .\tmp-my-archive `
   --format json
 ```
 
-The default bucket/container proposal is `zettel-kasten-<normalized-profile-slug>-objets`, with `archives/<archive_id>/objets/` as the default prefix. In v0.4.0 object-storage approval is fixed fail-closed before private target read or mutation and writes no provider binding, profile hint, or setup receipt.
+The default bucket/container proposal is `zettel-kasten-<normalized-profile-slug>-objets`, with `archives/<archive_id>/objets/` as the default prefix. `--profile-id` is required; resolve it with `profile-resolve` from a reviewed registry such as `profiles/wom-profiles.yml`. Since v0.4.8, approval can record only the exact local provider binding and setup receipt. It does not create the profile registry or bucket, read credentials, call the provider, upload bytes, or verify remote storage. The unsupported legacy `--write-local-profile` option is intentionally absent from help and fails before planning.
 
 Plan a source/objet reference before drafting:
 

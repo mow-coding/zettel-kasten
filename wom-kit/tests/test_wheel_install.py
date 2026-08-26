@@ -102,7 +102,7 @@ def patch_zip_member_name_bytes(wheel: Path, old_name: str, new_name: str) -> No
 
 
 class InstalledEntrypointTests(unittest.TestCase):
-    PACKAGE_VERSION = "0.4.8"
+    PACKAGE_VERSION = "0.4.9"
     SERVER_NAME = "zettel-kasten-archive-mcp"
 
     def setUp(self) -> None:
@@ -875,12 +875,12 @@ class InstalledEntrypointTests(unittest.TestCase):
             "receipt_lookup": "passed",
             "validated_receipt_count": 1,
         }
-        v048_evidence = {
+        v049_evidence = {
             "ok": True,
-            "schema": check_wheel_install.INSTALLED_V048_SMOKE_SCHEMA,
+            "schema": check_wheel_install.INSTALLED_V049_SMOKE_SCHEMA,
             "entrypoint_route": "installed_archive_cli_main",
             "installed_console_entrypoint_checked": True,
-            "console_entrypoint_dry_run_count": 3,
+            "console_entrypoint_dry_run_count": 4,
             "approval_seam": "test_only_native_decision_injection",
         }
         result = check_wheel_install._wheel_install_success_result(
@@ -894,7 +894,7 @@ class InstalledEntrypointTests(unittest.TestCase):
             ],
             entrypoint_evidence=evidence,
             letter140_link_evidence=letter140_evidence,
-            v048_workflow_evidence=v048_evidence,
+            v049_workflow_evidence=v049_evidence,
             wheel_filename="wom_kit-0.3.296-py3-none-any.whl",
             wheel_sha256="a" * 64,
             artifact_preserved=True,
@@ -915,7 +915,7 @@ class InstalledEntrypointTests(unittest.TestCase):
                 ],
                 "entrypoint_evidence": evidence,
                 "installed_letter140_link_workflow": letter140_evidence,
-                "installed_v048_recovery_workflows": v048_evidence,
+                "installed_v049_recovery_workflows": v049_evidence,
                 "runtime_skill_lifecycle": "passed",
                 "onboarding_preview": "passed",
                 "onboarding_write": "fixed_closed",
@@ -987,29 +987,30 @@ class InstalledEntrypointTests(unittest.TestCase):
                     cwd=self.temp_root,
                 )
 
-    def test_installed_v048_workflows_require_exact_evidence(self) -> None:
+    def test_installed_v049_workflows_require_exact_evidence(self) -> None:
         compile(
-            check_wheel_install.INSTALLED_V048_SMOKE_SCRIPT,
-            "<installed-v048-wheel-smoke>",
+            check_wheel_install.INSTALLED_V049_SMOKE_SCRIPT,
+            "<installed-v049-wheel-smoke>",
             "exec",
         )
         python = self.scripts / "python.exe"
-        fixture_root = self.temp_root / "v048-fixture"
+        fixture_root = self.temp_root / "v049-fixture"
         archive_entrypoint = check_wheel_install.executable(
             self.scripts, "archive"
         )
         expected = {
             "ok": True,
-            "schema": check_wheel_install.INSTALLED_V048_SMOKE_SCHEMA,
+            "schema": check_wheel_install.INSTALLED_V049_SMOKE_SCHEMA,
             "entrypoint_route": "installed_archive_cli_main",
             "installed_console_entrypoint_checked": True,
-            "console_entrypoint_dry_run_count": 3,
+            "console_entrypoint_dry_run_count": 4,
             "approval_seam": "test_only_native_decision_injection",
             "capture": {
+                "source_intake_recorded": True,
                 "selection_recorded": True,
                 "capture_count": 1,
                 "object_bytes_exact": True,
-                "native_approval_count": 2,
+                "native_approval_count": 3,
             },
             "object_storage": {
                 "registration_completed": True,
@@ -1028,7 +1029,7 @@ class InstalledEntrypointTests(unittest.TestCase):
                 "original_manifest_bytes_restored": True,
                 "native_approval_count": 2,
             },
-            "native_approval_count": 5,
+            "native_approval_count": 6,
             "provider_api_called": False,
             "credential_value_read": False,
             "private_values_echoed": False,
@@ -1038,7 +1039,7 @@ class InstalledEntrypointTests(unittest.TestCase):
             "_run_installed_entrypoint",
             return_value=json.dumps(expected),
         ) as run_mock:
-            evidence = check_wheel_install._check_installed_v048_workflows(
+            evidence = check_wheel_install._check_installed_v049_workflows(
                 python,
                 archive_entrypoint,
                 fixture_root,
@@ -1050,9 +1051,17 @@ class InstalledEntrypointTests(unittest.TestCase):
         self.assertEqual(command[:3], [str(python), "-I", "-c"])
         self.assertEqual(command[-2:], [str(fixture_root), str(archive_entrypoint)])
         self.assertIn("archive_cli.main", command[3])
+        self.assertIn("source-intake-record", command[3])
         self.assertIn("objet-capture-selection", command[3])
         self.assertIn("object-storage", command[3])
         self.assertIn("duplicate-object-reconcile", command[3])
+        self.assertLess(
+            command[3].index("source_intake = _run_cli("),
+            command[3].index(
+                "plan = objet_capture_selection_exact."
+                "plan_existing_intake_capture_selection("
+            ),
+        )
 
         invalid = dict(expected)
         invalid["native_approval_count"] = 4
@@ -1062,12 +1071,18 @@ class InstalledEntrypointTests(unittest.TestCase):
             return_value=json.dumps(invalid),
         ):
             with self.assertRaises(check_wheel_install.WheelCheckError):
-                check_wheel_install._check_installed_v048_workflows(
+                check_wheel_install._check_installed_v049_workflows(
                     python,
                     archive_entrypoint,
                     fixture_root,
                     cwd=self.temp_root,
                 )
+
+    def test_installed_strict_doctor_explicitly_disables_default_progress(self) -> None:
+        source = Path(check_wheel_install.__file__).read_text(encoding="utf-8")
+        doctor_start = source.index('label="installed strict doctor"')
+        doctor_command = source[source.rfind("doctor = run(", 0, doctor_start):doctor_start]
+        self.assertIn('"--no-progress"', doctor_command)
 
     def test_main_uses_v04_success_and_failure_envelopes(self) -> None:
         success = {

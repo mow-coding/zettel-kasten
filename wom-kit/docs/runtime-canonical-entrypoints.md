@@ -1,6 +1,6 @@
 # Runtime Canonical Entry Points
 
-Status: v0.4.8 interruption-safe integrity recovery, project-isolated runtime, and Git backup checkpoint
+Status: v0.4.9 one-file intake operability, Doctor snapshot truth, and exact local storage setup
 
 Previous checkpoint: Status: v0.4.3 exact recovery, project update, and Git backup checkpoint
 
@@ -32,7 +32,21 @@ The underlying raw context packet remains available through:
 archive runtime-context <archive-root> --format json
 ```
 
-## v0.4.3 Current Runtime Delta
+## v0.4.9 Current Runtime Delta
+
+The ordinary one-file intake path is now complete. `source-intake-record`
+creates one canonical intake receipt through an exact create-only manifest and
+native approval. The existing exact intake selection and exact-local capture
+routes can then preserve the selected bytes. Batch intake and batch capture
+writers remain fixed closed.
+
+Doctor reports bounded progress by default, parses one stable object-manifest
+byte snapshot, and revalidates that exact input before completion. A changed or
+unreadable input makes the result stale or unverified and non-successful. The
+object-storage setup parser requires `--profile-id`; its retired hidden
+`--write-local-profile` flag fails before planning or archive access.
+
+## v0.4.3 Historical Runtime Delta
 
 The existing Git command family retains its read-only review basis and adds an
 exact-approved commit/non-force-push writer:
@@ -76,14 +90,15 @@ archive capabilities --machine --format json
 
 Its `data.approval_status_inventory` distinguishes
 `approval_available`, `approval_fixed_closed`, and `approval_not_exposed` for
-every canonical executable command path and its aliases. In v0.4.3 the parser
-matches all 76 supplied fixed-close entries, reports zero unmatched entries,
-and exposes 38 operation-specific approval routes. The generated inventory,
+every canonical executable command path and its aliases. The current parser
+reports 315 canonical executable paths: 47 operation-specific approval routes,
+67 fixed-closed routes, and 201 routes without an approval mode. The generated
+inventory,
 rather than a copied historical number, is authoritative.
 This is parser evidence only: it does not evaluate archive prerequisites, and
 `approval_not_exposed` does not mean that a command is read-only.
 
-In the v0.4.3 Letter 138 candidate, `migrate` becomes parser-level
+At the v0.4.3 Letter 138 checkpoint, `migrate` became parser-level
 `approval_available` only because `--target notion-source-properties` has an
 operation-specific binding. The v0.2 inventory does not execute or evaluate a
 chosen target, but its machine-readable `approval_scope` says that only this
@@ -99,18 +114,20 @@ read plus its exact unique matching record set,
 exact before snapshot, create-only receipt generation, and persistent
 per-zettel control artifact. MCP exposes no link writer.
 
-`zettel-objet-link-revert`, all Objet capture mutation routes, and project
-collision/bytecode-repair writers remain fixed closed. Their documented plans,
-previews, and audits remain available; approval still returns
+`zettel-objet-link-revert`, the general and batch Objet capture mutation
+routes, and project collision/bytecode-repair writers remain fixed closed. The
+operation-specific exact existing-intake selection and exact-local single-
+capture routes are separate available paths. Other documented plans, previews,
+and audits remain available; a closed approval still returns
 `compound_exact_human_approval_binding_required`. `project-version-update`
 itself is separately reopened with an exact target/tag/source/rollback binding.
 
 When an older global CLI must be replaced and the exact public
-v0.4.3 GitHub Release wheel has been independently confirmed, use the public
+v0.4.9 GitHub Release wheel has been independently confirmed, use the public
 wheel directly:
 
 ```powershell
-uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.8/wom_kit-0.4.8-py3-none-any.whl"
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.9/wom_kit-0.4.9-py3-none-any.whl"
 archive --version
 ```
 
