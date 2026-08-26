@@ -24,6 +24,42 @@ Before upgrading a real archive:
 
 The archive should never silently rewrite memory.
 
+## v0.4.9 Finish the Safe Single-File Path
+
+Install only after the matching public Release lists the exact wheel:
+
+```powershell
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.9/wom_kit-0.4.9-py3-none-any.whl"
+archive --version
+```
+
+Require exactly `archive 0.4.9` from a new process. Installation changes no
+archive. For one reviewed local file, v0.4.9 can record exact intake evidence,
+create an exact capture selection, and preserve the selected bytes through
+three separate native decisions. Doctor now reports content-free progress by
+default, invalidates object-manifest findings when that input changes during
+the run, and distinguishes a runnable suggested dry-run from a still-closed
+approval mode. Object-storage setup now requires a resolved profile id and
+does not pretend to create a profile registry.
+
+Matching receipt bytes that existed before this exact writer ran are not proof
+of a completed approval. WOM leaves them unchanged and reports that completion
+evidence is required instead of claiming the intake chain succeeded.
+
+`--progress-log` now requires a new file outside the archive root. Choose a
+fresh external log path for each run; WOM rejects an existing file or any path
+inside the archive before Doctor starts. This prevents an observational log
+or hardlink alias from overwriting archive evidence. WOM retains the original
+exclusive handle for the run, so replacing the visible path later cannot
+redirect subsequent progress events.
+
+Doctor `--output` likewise requires a new archive-relative file. It never
+overwrites an existing archive file, including an existing hardlink alias.
+
+Batch intake/capture remains fixed closed, and heartbeat is not proof that the
+reported doctor runtime has been optimized. See the
+[v0.4.9 release note](wom-kit/docs/releases/v0.4.9.md).
+
 ## v0.4.8 Integrity Recovery Without Guesswork
 
 Install only after the matching public Release lists the exact wheel:

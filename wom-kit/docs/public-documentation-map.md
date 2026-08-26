@@ -2,11 +2,19 @@
 
 Status: public navigation baseline
 Date: 2026-06-02
-Updated: 2026-08-22
+Updated: 2026-08-27
 Philosophy clarified: 2026-07-15
 Harness compatibility clarified: 2026-07-16
 
-Current v0.4.3 delta: `ExactOperationManifest v1` supplies one exact-approved,
+Current v0.4.9 delta: the ordinary one-file intake chain now records one exact
+source-intake receipt, creates one exact existing-intake selection, and captures
+the selected local bytes through three separate native approvals. Doctor emits
+bounded progress, binds duplicate findings to one stable object-manifest byte
+snapshot, and fails when that input is stale or unverified. Object-storage setup
+requires an explicit profile ID and records local setup only. Batch writers and
+whole-archive performance optimization remain unproven and closed work.
+
+Historical v0.4.3 delta: `ExactOperationManifest v1` supplies one exact-approved,
 checkpointed, resumable, independently verified, field-scoped-revert base.
 The existing Git planning family adds exact commit/non-force-push and remote-ref
 re-query, `archive migrate` adds Letter 138 lossless `source_properties`
@@ -24,8 +32,7 @@ credential, or exposes an MCP writer. Plain dry-run remains write-free, and a
 matching `ls-remote` result remains Git-transport evidence rather than account,
 branch-policy, or provider audit-log proof.
 
-The same v0.4.3 candidate also contains the Letter 138 delta (implemented in
-the working tree, not yet released):
+The v0.4.3 release also contained the historical Letter 138 delta:
 `archive migrate --target notion-source-properties` can now plan, apply,
 resume, independently verify, and field-revert the Letter 138 local Notion
 `source_properties` recovery. A first dry-run stages the exact aggregate
@@ -507,6 +514,7 @@ These documents record public-safe work already performed.
 - [v0.2.11 Delegate Capability Contract Work Log](../plans/work-log-2026-05-23-delegate-capability-contract.md)
 - [Changelog](../../CHANGELOG.md)
 - [Release Notes](releases/)
+- [v0.4.9 Release Note](releases/v0.4.9.md)
 - [v0.4.8 Release Note](releases/v0.4.8.md)
 - [v0.4.7 Release Note](releases/v0.4.7.md)
 - [v0.4.6 Release Note](releases/v0.4.6.md)

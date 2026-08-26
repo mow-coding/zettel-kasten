@@ -10,12 +10,12 @@ It is not a website, SaaS app, dashboard, or visual note-taking product. The int
 
 ## Install The Command-Line Tool
 
-The exact v0.4.8 GitHub Release, when present, uses the self-contained wheel
+The exact v0.4.9 GitHub Release, when present, uses the self-contained wheel
 below. Confirm that the release exists and lists the wheel before installing
 it. The versioned URL alone is not proof that the asset is available.
 
 ```powershell
-uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.8/wom_kit-0.4.8-py3-none-any.whl"
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.9/wom_kit-0.4.9-py3-none-any.whl"
 archive --version
 ```
 
@@ -51,6 +51,14 @@ binds and independently rehashes content-addressed remote bytes without calling
 them adopted. Formal adoption verifies exact key-map entries, writes immutable
 evidence, performs one final manifest projection, and leaves every conflicting
 definition in review. The legacy compound approval path remains closed.
+
+v0.4.9 opens the one-file `source-intake-record` apply/resume path through the
+same exact-human boundary, without opening batch intake writers. Doctor now
+shows bounded progress, binds its object-manifest findings to one exact byte
+snapshot, and exits nonzero when that input is stale or cannot be revalidated.
+Object-storage setup requires an explicit profile ID and rejects its retired
+hidden write flag before planning. Installing the wheel alone changes no
+client archive.
 
 v0.4.8 makes interrupted exact operations report their durable state and
 auto-discover one unambiguous resume or revert control. Title repair now trusts
@@ -93,6 +101,7 @@ and repaired high-risk failures can use `wom-kit/cli-error/v0.1`: exit `2` is a
 usage failure, exit `1` is policy/precondition failure, and
 `effects_state: unknown` means an exact-human workflow had started and its
 durable claim requires reconciliation rather than automatic retry. See the
+[`v0.4.9 release note`](docs/releases/v0.4.9.md),
 [`v0.4.8 release note`](docs/releases/v0.4.8.md),
 [`v0.4.7 release note`](docs/releases/v0.4.7.md),
 [`v0.4.6 release note`](docs/releases/v0.4.6.md),
@@ -697,7 +706,7 @@ onboard
   Plan first archive setup with --dry-run. In v0.4.0 approval is fixed closed before target/template/provider reads and creates nothing.
 
 doctor
-  Inspect an archive for missing files, invalid frontmatter, schema problems, manifest problems, unsafe zettel references, and minting-rule warnings. Use `--progress` for long real-archive checks. Compact edge-receipt progress now keeps index lifecycle plus aggregate source/candidate/cache-hit heartbeats and one final summary; use `--progress-detail verbose` or `--progress-log` for each source candidate batch.
+  Inspect an archive for missing files, invalid frontmatter, schema problems, manifest problems, unsafe zettel references, and minting-rule warnings. Progress and bounded heartbeats are on by default for long real-archive checks; use `--no-progress` only when stderr must stay quiet. Compact edge-receipt progress keeps index lifecycle plus aggregate source/candidate/cache-hit heartbeats and one final summary; use `--progress-detail verbose` or `--progress-log` for each source candidate batch. Object-manifest findings are bound to the exact bytes parsed and become stale/non-successful if that manifest changes before completion.
 
 profile-list
   List a local WOM profile registry without writing files. Local registry and archive paths are redacted by default.
@@ -943,10 +952,10 @@ tiro-import-plan
   Plan Tiro meeting transcript and audio-objet import from an archive-internal manifest. Dry-run only; preserves meeting metadata, speaker turns, timestamps, confidence, and optional audio objet refs as structure, but echoes no transcript text, participant names, source URLs, audio filenames, local paths, account ids, emails, tokens, or secrets. It calls no Tiro API, reads no audio bytes, writes no derived text, drafts no zets, and mints nothing.
 
 source-intake-record
-  Validate a reviewed source-intake dry-run JSON plan. In v0.4.0 approval returns `compound_exact_human_approval_binding_required` before private input/archive reads or mutation and writes no plan record or receipt.
+  Validate a reviewed source-intake dry-run JSON plan. The v0.4.9 one-file path uses an exact create-only manifest, native approval, durable checkpoints, fresh input re-derivation, and independent read-back. Batch intake remains fixed closed.
 
 objet-capture-selection
-  Build a reviewed selection-manifest preview for one staged file after source-intake recording. In v0.4.0 approval is fixed fail-closed before private staged-file or receipt reads and writes no selection JSON.
+  Build a reviewed selection-manifest preview for one staged file after source-intake recording. The operation-specific `--exact-existing-intake` approval path is available; general and batch selection routes remain fixed closed.
 
 derive-text capture
   Preview an already extracted text file for one existing object_id. In v0.4.0 single and batch approval are fixed closed before private reads and write no body, manifest row, index update, or receipt. It does not run OCR, ASR, parser, LLM vision, provider APIs, drafting, or minting.
@@ -1385,11 +1394,11 @@ The first implemented vocabulary is deliberately small: `derivation_kind` is one
 
 `archive source-intake --project-intake-receipt <receipt> --dry-run` can carry that reviewed session receipt into a one-locator metadata plan. The receipt must pass the same status check, and the resulting `project_intake_context` includes only receipt path, session id, reviewer metadata, decision hash, checklist coverage, and readiness. It does not include answer values and does not approve source capture, draft creation, minting, provider calls, or cleanup.
 
-`archive source-intake-record --source-intake-plan <json-file> --dry-run` validates a reviewed `source-intake --dry-run` JSON file without storing it. It blocks unredacted local paths, provider URLs, tokens, and secrets. In v0.4.0 approval returns `compound_exact_human_approval_binding_required` before private plan/archive read or mutation, so it writes no source receipt. It does not read file bodies, calculate content hashes, capture objets, create drafts, mint zets, call providers, upload, or clean.
+`archive source-intake-record --source-intake-plan <json-file> --dry-run|--approve` validates a reviewed `source-intake --dry-run` JSON file and, after one native approval, can create its canonical receipt. The v0.4.9 writer is create-only and binds exact receipt bytes, checkpoints, fresh input re-derivation, and independent read-back. It rejects unknown fields, unredacted local paths, provider URLs, tokens, secrets, duplicate JSON keys, changing or linked inputs, and target collisions. It does not read file bodies, capture objets, create drafts, mint zets, call providers, upload, or clean.
 
 `archive objet-capture --project-intake-receipt <receipt> --dry-run` can preview carrying the same reviewed session receipt into an explicit capture selection. A selection manifest may also include `project_intake_receipt_path`; if both are present they must match. In v0.4.0 approval returns `compound_exact_human_approval_binding_required` before private receipt/selection/staged-byte reads or mutation, so it writes no object, manifest row, derived text, or capture receipt.
 
-For external project migrations, v0.4.0 supports the review spine through the read-only source-intake and capture previews. `source-intake-record`, `objet-capture-selection`, and `objet-capture` approval are fixed closed, so there is no executable migration chain from those previews into a draft. `create-draft` and `mint-zet` remain separately bound operations for already reviewed, manifested source authority; a preview never authorizes either.
+For one reviewed local file, v0.4.9 supports the complete three-decision path: exact `source-intake-record`, `objet-capture-selection --exact-existing-intake`, then `objet-capture --exact-local`. Each effect has its own native decision and verification. Batch intake/capture remains fixed closed. `create-draft` and `mint-zet` are still separate operations; preserving bytes never authorizes publication.
 
 `archive human-artifact-store --surface-kind <kind> --dry-run` previews the contract for a user-facing human artifact app or surface. Supported kinds are `wordpress`, `joplin`, `notion`, `obsidian`, `evernote`, `generic_markdown`, and `generic_workspace`. The command keeps three roles separate: raw/original data, human-readable artifacts, and system/AI artifacts such as manifests, source maps, receipts, indexes, hashes, and version history. It writes nothing, calls no providers, starts no OAuth, creates or updates no notes, publishes no posts, uploads no files, mints no zets, and runs no ZET transport.
 
