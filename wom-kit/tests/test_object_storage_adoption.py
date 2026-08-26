@@ -77,6 +77,55 @@ class ObjectStorageFormalAdoptionPlanTests(unittest.TestCase):
         (root / "archive.yml").write_text(
             "archive_id: archive:test:object-storage-adoption\n", encoding="utf-8"
         )
+        archive_id = archive_services.read_archive_id(root)
+        binding = archive_services.build_object_storage_provider_binding(
+            archive_id=archive_id,
+            profile_id="profile:test:object-storage-adoption",
+            profile_slug="object-storage-adoption",
+            provider_kind="cloudflare-r2",
+            storage_account_ref="storage:account:test",
+            bucket_name="zettel-kasten-object-storage-adoption-objets",
+            region="auto",
+            endpoint_ref="provider:endpoint:cloudflare-r2",
+            objet_prefix=f"archives/{archive_id}/objets/",
+            visibility="private",
+        )
+        (root / "provider-bindings.yml").write_text(
+            archive_services.dump_yaml(
+                {
+                    "version": "provider-bindings/v0.1",
+                    "archive_id": archive_id,
+                    "bindings": [binding],
+                }
+            ),
+            encoding="utf-8",
+        )
+        receipt_relative = archive_services.object_storage_provider_setup_receipt_path(
+            "zettel-kasten-object-storage-adoption-objets"
+        )
+        receipt = archive_services.build_object_storage_provider_setup_receipt(
+            archive_id=archive_id,
+            profile_id="profile:test:object-storage-adoption",
+            profile_slug="object-storage-adoption",
+            provider_kind="cloudflare-r2",
+            storage_account_ref="storage:account:test",
+            bucket_name="zettel-kasten-object-storage-adoption-objets",
+            region="auto",
+            endpoint_ref="provider:endpoint:cloudflare-r2",
+            objet_prefix=f"archives/{archive_id}/objets/",
+            visibility="private",
+            receipt_path=receipt_relative,
+            reviewed_by="person:test",
+            timestamp="2026-08-25T00:00:00+09:00",
+            dry_run=False,
+            manual_steps=[],
+        )
+        receipt_path = root / receipt_relative
+        receipt_path.parent.mkdir(parents=True, exist_ok=True)
+        receipt_path.write_text(
+            json.dumps(receipt, ensure_ascii=True, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
         return root
 
     @staticmethod
@@ -462,6 +511,51 @@ class ObjectStorageFormalAdoptionPlanTests(unittest.TestCase):
             )
             self.assertTrue(loaded.loaded_from_control)
             self.assertEqual(loaded.manifest.document(), plan.manifest.document())
+
+    def test_control_and_remote_verification_require_current_setup_evidence(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            parent = Path(temporary)
+            root = self._root(parent)
+            row = self._row(
+                b"setup-gated-adoption",
+                logical_key="pending",
+                mime="application/octet-stream",
+                locations=[
+                    {"provider": "object_storage", "availability": "declared_uploaded"}
+                ],
+            )
+            self._write_rows(root, [row])
+            remote_key = f"custom/{row['sha256']}"
+            key_map = self._write_map(
+                parent, [{"sha256": row["sha256"], "remote_key": remote_key}]
+            )
+            plan = plan_object_storage_formal_adoption(
+                root, key_map_path=key_map, store_ref="storage:account:test"
+            )
+            _persist_control(plan)
+            for receipt in (root / "receipts" / "providers").glob(
+                "*.object-storage-setup.json"
+            ):
+                receipt.unlink()
+
+            with self.assertRaises(ObjectStorageAdoptionError) as load_error:
+                load_object_storage_formal_adoption_plan(
+                    root, manifest_sha256=plan.manifest.manifest_sha256
+                )
+            self.assertEqual(
+                load_error.exception.code,
+                "object_storage_adoption_setup_evidence_missing",
+            )
+
+            transport = _MemoryHeadTransport({remote_key: len(b"setup-gated-adoption")})
+            with self.assertRaises(ObjectStorageAdoptionError) as verify_error:
+                verify_object_storage_formal_adoption(plan, transport=transport)
+            self.assertEqual(
+                verify_error.exception.code,
+                "object_storage_adoption_setup_evidence_missing",
+            )
+            self.assertEqual(transport.head_calls, 0)
+            self.assertEqual(transport.put_calls, 0)
 
     def test_remote_mismatch_fails_before_receipt_or_manifest_write(self):
         with tempfile.TemporaryDirectory() as temporary:

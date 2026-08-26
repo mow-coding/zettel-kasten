@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, Sequence
 
 from . import archive_services
+from . import object_storage_setup_registration
 from .exact_human_approval import (
     ExactHumanApprovalError,
     _ClaimedExactHumanApproval,
@@ -101,6 +102,8 @@ class ObjectStoragePreservationError(RuntimeError):
         "object_storage_preservation_receipt_conflict",
         "object_storage_preservation_control_invalid",
         "object_storage_preservation_resume_invalid",
+        "object_storage_preservation_setup_evidence_missing",
+        "object_storage_preservation_setup_evidence_mismatch",
     }
 
     def __init__(self, code: str) -> None:
@@ -953,6 +956,29 @@ def _manifest_for_specs(
     )
 
 
+def _require_setup_evidence(
+    root: Path,
+    *,
+    provider_kind: str,
+    store_ref: str,
+) -> object_storage_setup_registration.ObjectStorageSetupEvidence:
+    """Require current archive-scoped setup evidence before provider work."""
+
+    try:
+        return object_storage_setup_registration.validate_object_storage_setup_evidence(
+            root,
+            provider_kind=provider_kind,
+            store_ref=store_ref,
+        )
+    except object_storage_setup_registration.ObjectStorageSetupRegistrationError as exc:
+        code = (
+            "object_storage_preservation_setup_evidence_missing"
+            if exc.code == "object_storage_setup_evidence_missing"
+            else "object_storage_preservation_setup_evidence_mismatch"
+        )
+        raise _fail(code) from None
+
+
 def _plan_core(
     archive_root: Path | str,
     *,
@@ -975,6 +1001,11 @@ def _plan_core(
         or not archive_services.safe_object_storage_ref(normalized_store)
     ):
         raise _fail("object_storage_preservation_plan_invalid")
+    _require_setup_evidence(
+        root,
+        provider_kind=normalized_provider,
+        store_ref=normalized_store,
+    )
     rows, groups = _read_manifest_groups(root, progress=progress)
     inventory, unique_rows = _inventory(rows, groups)
     specs, already_recorded, review_count = _build_specs(
@@ -1512,6 +1543,11 @@ def load_object_storage_bytes_preservation_plan(
         != exact_human_approval_archive_identity_sha256(current_archive_id)
     ):
         raise _fail("object_storage_preservation_control_invalid")
+    _require_setup_evidence(
+        root,
+        provider_kind=provider_kind,
+        store_ref=store_ref,
+    )
     rows, groups = _read_manifest_groups(root, progress=None)
     current_inventory, _current_unique_rows = _inventory(rows, groups)
     if (
@@ -1614,6 +1650,11 @@ def _fresh_revalidated(
     *,
     progress_hook: Callable[[ExactOperationProgress], None] | None,
 ) -> ObjectStorageBytesPreservationPlan:
+    _require_setup_evidence(
+        plan.archive_root,
+        provider_kind=plan.provider_kind,
+        store_ref=plan.store_ref,
+    )
     if plan.loaded_from_control:
         return plan
     if plan.manifest is None:
@@ -1806,9 +1847,10 @@ def resume_object_storage_bytes_preservation(
         checkpoints = FileExactOperationCheckpointStore(plan.archive_root, writer_lock=writer_lock)
 
         def _writer(claim: _ClaimedExactHumanApproval) -> Mapping[str, Any]:
-            authority = _assert_approved(plan, claim, context)
+            current = _fresh_revalidated(plan, progress_hook=progress_hook)
+            authority = _assert_approved(current, claim, context)
             actual = exact_operation_execution_sha256(
-                plan.manifest,
+                current.manifest,
                 approval_authority=authority,
             )
             if not hmac.compare_digest(actual, execution_sha256):
@@ -1818,7 +1860,7 @@ def resume_object_storage_bytes_preservation(
             except Exception:
                 raise _fail("object_storage_preservation_remote_unavailable") from None
             return _apply_with_store(
-                plan,
+                current,
                 authority,
                 transport,
                 checkpoints,
@@ -1844,6 +1886,11 @@ def verify_object_storage_bytes_preservation(
 ) -> dict[str, Any]:
     if type(plan) is not ObjectStorageBytesPreservationPlan or plan.manifest is None:
         raise _fail("object_storage_preservation_plan_invalid")
+    _require_setup_evidence(
+        plan.archive_root,
+        provider_kind=plan.provider_kind,
+        store_ref=plan.store_ref,
+    )
     _payloads, _writer, verifier = _execution_adapters(plan, transport)
     result = verify_exact_operation(
         plan.manifest,
