@@ -70773,9 +70773,19 @@ class ObjetCaptureTests(unittest.TestCase):
     maxDiff = None
 
     def run_cli(self, args: list[str]) -> tuple[int, str]:
+        effective_args = list(args)
+        # This legacy helper merges stdout and stderr. Doctor progress is
+        # default-on from v0.4.9, so keep result assertions machine-readable
+        # unless a test explicitly requests progress or split streams.
+        if (
+            effective_args[:1] == ["doctor"]
+            and "--progress" not in effective_args
+            and "--no-progress" not in effective_args
+        ):
+            effective_args.append("--no-progress")
         buffer = io.StringIO()
         with redirect_stdout(buffer), redirect_stderr(buffer):
-            code = archive_cli.main(args)
+            code = archive_cli.main(effective_args)
         return code, buffer.getvalue()
 
     def run_cli_split(self, args: list[str]) -> tuple[int, str, str]:
