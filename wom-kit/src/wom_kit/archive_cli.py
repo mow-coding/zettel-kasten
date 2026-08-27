@@ -1757,7 +1757,13 @@ class Doctor:
         validate_scope: ValidationScope | None = None,
         progress_callback: ProgressCallback | None = None,
         use_zettel_index_cache: bool = False,
+        object_byte_verification_mode: str = "deep",
     ) -> None:
+        if (
+            object_byte_verification_mode
+            not in archive_doctor.DOCTOR_OBJECT_BYTE_VERIFICATION_MODES
+        ):
+            raise ValueError("doctor_object_byte_verification_mode_invalid")
         self.archive_root = archive_root.resolve()
         self.diagnostics: list[Diagnostic] = []
         self.archive_config: dict[str, Any] = {}
@@ -1772,8 +1778,10 @@ class Doctor:
         self.validate_scope = validate_scope or ValidationScope()
         self.progress_callback = progress_callback
         self.use_zettel_index_cache = use_zettel_index_cache
+        self.object_byte_verification_mode = object_byte_verification_mode
         self._zettel_index_cache: dict[str, dict[str, Any] | None] = {}
         self._file_sha256_cache: dict[str, str] = {}
+        self._zettel_text_cache: dict[str, str] = {}
         self._zettel_frontmatter_cache: dict[str, dict[str, Any] | None] = {}
         self._zettel_bom_cache: dict[str, bool] = {}
         self._file_sha256_cache_hits = 0
@@ -1790,6 +1798,8 @@ class Doctor:
         self._edge_source_sources_loaded = 0
         self._edge_source_candidates_loaded = 0
         self._edge_source_cache_hits = 0
+        self._object_byte_reference_count = 0
+        self._object_byte_states_by_path: dict[str, str] = {}
         self._read_observations = {
             "zettel_bodies_read": False,
             "objet_bytes_read": False,
@@ -1877,6 +1887,7 @@ class Doctor:
         except (TypeError, ValueError):
             parser = None
             inventory = None
+        statuses_by_command: dict[str, dict[str, Any]] = {}
         for item in targets:
             if inventory is None:
                 item.suggested_command_status = (
@@ -1886,10 +1897,16 @@ class Doctor:
                     )
                 )
                 continue
+            suggested_command = item.suggested_command or ""
+            if suggested_command in statuses_by_command:
+                item.suggested_command_status = statuses_by_command[
+                    suggested_command
+                ]
+                continue
             try:
                 item.suggested_command_status = command_status.resolve_suggested_command_mode(
                     inventory,
-                    item.suggested_command or "",
+                    suggested_command,
                     trusted_parser=parser,
                 )
             except (TypeError, ValueError):
@@ -1899,6 +1916,7 @@ class Doctor:
                         requested_mode="unspecified",
                     )
                 )
+            statuses_by_command[suggested_command] = item.suggested_command_status
 
     def _full_stages(self) -> list[tuple[str, Callable[[], None]]]:
         return [
@@ -2076,6 +2094,12 @@ class Doctor:
                 progress_callback(f"hashed {progress_label} file bytes")
         return self._file_sha256_cache[key]
 
+    def _load_zettel_text_cached(self, path: Path) -> str:
+        key = self._file_cache_key(path)
+        if key not in self._zettel_text_cache:
+            self._zettel_text_cache[key] = path.read_text(encoding="utf-8")
+        return self._zettel_text_cache[key]
+
     def _remember_zettel_frontmatter(
         self,
         path: Path,
@@ -2103,7 +2127,7 @@ class Doctor:
         self._zettel_frontmatter_cache_misses += 1
         if progress_callback is not None:
             progress_callback("target frontmatter reading text")
-        text = path.read_text(encoding="utf-8-sig")
+        text = self._load_zettel_text_cached(path)
         if progress_callback is not None:
             progress_callback("target frontmatter checking bom")
         self._zettel_has_bom_cached(path)
@@ -2317,6 +2341,7 @@ class Doctor:
             target_path,
             expected_sha,
             edge_receipts=edge_receipts,
+            target_text=self._load_zettel_text_cached(target_path),
             progress_callback=progress_callback,
         )
 
@@ -2737,6 +2762,51 @@ class Doctor:
 
     def _check_object_manifest(self) -> None:
         self._load_object_manifest_records(audit=True)
+        verification = self.object_byte_verification_summary()
+        if verification.bytes_unverified:
+            self.info(
+                "local_object_bytes_unverified",
+                (
+                    "Operational Doctor checked local object paths, presence, and size, "
+                    "but did not read current object bytes. This result is not a byte-integrity "
+                    "proof; rerun with --object-byte-verification deep for a current SHA-256 check."
+                ),
+                details=verification.as_dict(),
+            )
+        elif verification.rehashed_now:
+            self.info(
+                "local_object_bytes_rehashed_now",
+                "Deep Doctor rehashed every unique current local object file in this run.",
+                details=verification.as_dict(),
+            )
+        else:
+            self.info(
+                "local_object_bytes_not_applicable",
+                "Doctor found no present local object file requiring byte verification.",
+                details=verification.as_dict(),
+            )
+
+    def object_byte_verification_summary(
+        self,
+    ) -> archive_doctor.DoctorObjectByteVerification:
+        states = tuple(self._object_byte_states_by_path.values())
+        return archive_doctor.DoctorObjectByteVerification(
+            mode=self.object_byte_verification_mode,
+            local_reference_count=self._object_byte_reference_count,
+            unique_local_file_count=len(states),
+            rehashed_now=states.count("rehashed_now"),
+            attested_unchanged=states.count("attested_unchanged"),
+            bytes_unverified=states.count("bytes_unverified"),
+        )
+
+    def _record_object_byte_state(self, path: Path, state: str) -> None:
+        if state not in archive_doctor.DOCTOR_OBJECT_BYTE_VERIFICATION_STATES:
+            raise ValueError("doctor_object_byte_verification_state_invalid")
+        key = self._file_cache_key(path)
+        prior = self._object_byte_states_by_path.get(key)
+        if prior == "rehashed_now":
+            return
+        self._object_byte_states_by_path[key] = state
 
     def _check_derived_text_manifest(self) -> None:
         path = self.archive_root / archive_services.DERIVED_TEXT_MANIFEST_RELATIVE_PATH
@@ -2802,7 +2872,7 @@ class Doctor:
                     self.error("derived_text_path_unsafe", f"Derived text path is unsafe: {text_logical_key} ({exc})", path)
                 else:
                     if text_path.is_file() and isinstance(text_sha256, str) and SHA256_RE.match(text_sha256):
-                        actual_sha = sha256_file(text_path)
+                        actual_sha = self._sha256_file_cached(text_path)
                         if actual_sha != text_sha256:
                             self.error("derived_text_sha_mismatch", f"Derived text SHA-256 mismatch: {text_logical_key}", text_path)
                     elif not text_path.is_file():
@@ -2822,6 +2892,7 @@ class Doctor:
                 continue
             if location.get("provider") != "local":
                 continue
+            self._object_byte_reference_count += 1
             relative_path = location.get("path")
             if not isinstance(relative_path, str):
                 self.warn("local_object_path_missing", f"Local object location missing path: {object_id}", manifest_path)
@@ -2837,10 +2908,16 @@ class Doctor:
             if isinstance(expected_size, int) and local_path.stat().st_size != expected_size:
                 self.error("local_object_size_mismatch", f"Local object size mismatch: {relative_path}", local_path)
             if isinstance(expected_sha, str):
-                self._read_observations["objet_bytes_read"] = True
-                actual_sha = sha256_file(local_path)
-                if actual_sha != expected_sha:
-                    self.error("local_object_sha_mismatch", f"Local object SHA-256 mismatch: {relative_path}", local_path)
+                if self.object_byte_verification_mode == "deep":
+                    self._read_observations["objet_bytes_read"] = True
+                    actual_sha = self._sha256_file_cached(local_path)
+                    self._record_object_byte_state(local_path, "rehashed_now")
+                    if actual_sha != expected_sha:
+                        self.error("local_object_sha_mismatch", f"Local object SHA-256 mismatch: {relative_path}", local_path)
+                else:
+                    self._record_object_byte_state(local_path, "bytes_unverified")
+            else:
+                self._record_object_byte_state(local_path, "bytes_unverified")
 
     def _check_source_maps(self) -> None:
         root = self.archive_root / "source-maps"
@@ -3012,7 +3089,7 @@ class Doctor:
                 self.error("provider_url_in_zettel", "Zettel appears to contain a provider URL or local absolute path.", path)
         else:
             self._read_observations["zettel_bodies_read"] = True
-            text = path.read_text(encoding="utf-8")
+            text = self._load_zettel_text_cached(path)
             self._zettel_bom_cache[self._file_cache_key(path)] = text.startswith("\ufeff")
             if contains_forbidden_location_reference(text):
                 self.error("provider_url_in_zettel", "Zettel appears to contain a provider URL or local absolute path.", path)
@@ -3834,7 +3911,9 @@ class Doctor:
                     required=True,
                 )
                 if source_path is not None:
-                    source_frontmatter = parse_frontmatter(source_path.read_text(encoding="utf-8"))
+                    source_frontmatter = parse_frontmatter(
+                        self._load_zettel_text_cached(source_path)
+                    )
                     if source_frontmatter is not None:
                         source_data = self._load_yaml_text(source_frontmatter, source_path)
                         edges = source_data.get("edges") if isinstance(source_data, dict) else None
@@ -4386,6 +4465,9 @@ class Doctor:
         return relative.endswith(".local.yml") or relative.endswith(".local.yaml") or relative.startswith(LOCAL_PROFILE_ROOTS)
 
     def _file_contains_secret_value(self, path: Path, *, stage: str, progress_label: str) -> bool:
+        cached_text = self._zettel_text_cache.get(self._file_cache_key(path))
+        if cached_text is not None:
+            return contains_secret_value(cached_text)
         bytes_read = 0
         tail = ""
         last_progress = time.monotonic()
@@ -4585,7 +4667,12 @@ def command_doctor(args: argparse.Namespace) -> int:
         except (OSError, ValueError) as exc:
             print(f"Failed to write doctor output file: {exc}", file=sys.stderr)
             return 1
-    doctor = Doctor(archive_root)
+    doctor = Doctor(
+        archive_root,
+        object_byte_verification_mode=str(
+            getattr(args, "object_byte_verification", "operational")
+        ),
+    )
     progress_log_path = getattr(args, "progress_log", None)
     try:
         if progress_log_path is not None:
@@ -4640,6 +4727,9 @@ def command_doctor(args: argparse.Namespace) -> int:
             doctor.object_manifest_revalidation.as_dict()
             if doctor.object_manifest_revalidation is not None
             else None
+        ),
+        object_byte_verification=(
+            doctor.object_byte_verification_summary().as_dict()
         ),
     )
 
@@ -28187,6 +28277,7 @@ def doctor_summary_payload(
     output_path: str | None,
     progress_log_path: str | None,
     input_revalidation: dict[str, Any] | None = None,
+    object_byte_verification: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     counts = diagnostic_severity_counts(diagnostics)
     ok = counts["ERROR"] == 0 and not (strict and counts["WARN"] > 0)
@@ -28235,6 +28326,8 @@ def doctor_summary_payload(
         }
     if input_revalidation is not None:
         result["input_revalidation"] = input_revalidation
+    if object_byte_verification is not None:
+        result["object_byte_verification"] = object_byte_verification
     return result
 
 
@@ -29523,6 +29616,25 @@ def print_doctor_summary_text(summary: dict[str, Any]) -> None:
             f"{revalidation.get('freshness_scope')} "
             f"(full_archive_atomic_snapshot={str(bool(revalidation.get('full_archive_atomic_snapshot'))).lower()})"
         )
+    byte_verification = (
+        summary.get("object_byte_verification")
+        if isinstance(summary.get("object_byte_verification"), dict)
+        else None
+    )
+    if byte_verification:
+        states = (
+            byte_verification.get("states")
+            if isinstance(byte_verification.get("states"), dict)
+            else {}
+        )
+        print(
+            "Local object bytes: "
+            f"{byte_verification.get('result_state')} "
+            f"(mode={byte_verification.get('mode')}, "
+            f"rehashed_now={states.get('rehashed_now', 0)}, "
+            f"attested_unchanged={states.get('attested_unchanged', 0)}, "
+            f"bytes_unverified={states.get('bytes_unverified', 0)})"
+        )
     output = summary.get("output") if isinstance(summary.get("output"), dict) else None
     if output:
         print(f"Full diagnostics written to: {output.get('path')}")
@@ -30721,6 +30833,15 @@ def build_parser() -> argparse.ArgumentParser:
         "--diagnostic-level",
         default="all",
         help="Comma-separated stdout diagnostic severities to print: ERROR,WARN,INFO, or all. Exit status still uses all diagnostics.",
+    )
+    doctor.add_argument(
+        "--object-byte-verification",
+        choices=["operational", "deep"],
+        default="operational",
+        help=(
+            "Choose operational path/presence/size checks (default; current bytes are "
+            "reported unverified) or deep current-byte SHA-256 verification."
+        ),
     )
     doctor.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
     doctor.set_defaults(func=command_doctor)

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, datetime
+from functools import lru_cache
 import json
 from pathlib import Path
 from typing import Any
@@ -27,7 +28,15 @@ class SchemaIssue:
     data_path: str
 
 
+@lru_cache(maxsize=None)
 def load_schema(schema_name: str) -> dict[str, Any]:
+    """Load each immutable packaged schema at most once per process.
+
+    Doctor validates many records against the same small schema set.  The
+    validator only reads schema dictionaries, so reusing the parsed document
+    avoids repeated package-resource I/O without changing validation meaning.
+    """
+
     path = SCHEMAS_ROOT / schema_name
     return json.loads(path.read_text(encoding="utf-8"))
 
