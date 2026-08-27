@@ -2,6 +2,42 @@
 
 [English Upgrade Guide](UPGRADE.md)
 
+## v0.4.10 제한된 배치 반입과 캡처
+
+일치하는 공개 Release가 정확한 wheel을 자산으로 나열한 뒤에만 설치합니다.
+
+```powershell
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.10/wom_kit-0.4.10-py3-none-any.whl"
+archive --version
+```
+
+새 프로세스에서 정확히 `archive 0.4.10`인지 확인합니다. 설치만으로 보관함은
+바뀌지 않습니다. 클라이언트가 해당 프로젝트 runtime에서 project-scoped 배치
+명령을 실행합니다. 개발 작업이 컴퓨터 공용 실행 파일을 바꾸거나 클라이언트
+대신 실제 복구를 수행하지 않습니다.
+
+검토한 로컬 항목 1–1,000개는 중요한 사람 결정 두 번으로 처리합니다.
+`source-intake-batch`가 전체 intake 영수증과 정확한 capture 요청을 함께 만들고,
+성공 결과의 내용 없는 source-intake execution SHA-256을
+`objet-capture-batch`에 전달합니다. WOM이 요청 경로와 인증된 완료 근거를
+자동으로 다시 검증하므로, 사람은 파일 수를 세거나 해시·영수증 경로를 맞추지
+않습니다. 이 배치 경로의 모든 source는 capture handoff를 만들 수 있는 보관함
+상대경로여야 합니다. 외부 source가 섞인 배치는 승인 전에 멈추며, 그 목적에는
+변경하지 않은 v0.4.9 단일 파일 metadata-intake 경로를 사용합니다.
+
+승인 뒤 intake가 멈추면 같은 manifest와 같은 검토자 그대로 `--resume`을 붙여
+재개합니다. 사람이 approval id, execution digest, 비공개 receipt 경로를 찾아
+복사하지 않습니다. WOM이 인증된 후보 하나만 자동으로 찾고, 다른 프로젝트
+버전으로 실행한 resume는 차단합니다. capture가 멈추거나 일부만 반영되었다면
+예전 승인을 자동 재사용하지 않습니다. 현재 상태에서 새 exact capture dry-run을
+만들고 쉬운 배치 작업 설명을 확인한 뒤 새 native 결정을 합니다. 이미 검증된
+Objet와 manifest row는 중복 없이 정합됩니다.
+
+합성 1,000개 planning gate는 42.926초에 끝났고 첫 상태와 제한된 heartbeat를
+유지했습니다. 남은 Windows 항목별 path/configuration 재구성 비용은 v0.4.11로
+미뤘으며 v0.4.10은 그 비용까지 최적화했다고 주장하지 않습니다.
+[v0.4.10 릴리스 노트](wom-kit/docs/releases/v0.4.10.md)를 보세요.
+
 ## v0.4.9 안전한 단일 파일 경로 완성
 
 일치하는 공개 Release가 정확한 wheel을 자산으로 나열한 뒤에만 설치합니다.

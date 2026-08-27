@@ -517,12 +517,6 @@ class Letter137DurableExternalCliBoundaryTests(
                     "authenticated_notion_page_recovery_execute",
                 ),
                 (
-                    ["source-intake-batch", root, "--manifest", PRIVATE_MANIFEST, "--approve", "--expected-plan-sha256", PRIVATE_DIGEST, "--reviewed-by", PRIVATE_REVIEWER, "--format", "json"],
-                    archive_services,
-                    "source_intake_batch",
-                    "source_intake_batch",
-                ),
-                (
                     ["external-locator-record", root, "--zettel-id", "zet_private", "--locator-type", "source_url", "--locator-ref", PRIVATE_LOCATOR, "--expected-plan-sha256", PRIVATE_DIGEST, "--approve", "--reviewed-by", PRIVATE_REVIEWER, "--format", "json"],
                     completion_workflows,
                     "external_locator_record",
@@ -570,6 +564,108 @@ class Letter137DurableExternalCliBoundaryTests(
                     )
             self.assertEqual(_snapshot(root_path), before)
 
+    def test_source_intake_batch_routes_to_native_exact_adapter_only(
+        self,
+    ) -> None:
+        plan = mock.Mock()
+        plan.public_document.return_value = {
+            "ok": True,
+            "state": "ready_for_exact_human_approval",
+            "batch_id": "batch-safe",
+            "item_count": 1,
+            "blockers": [],
+        }
+        applied = {
+            "ok": True,
+            "state": "completed",
+            "batch_id": "batch-safe",
+            "item_count": 1,
+            "blockers": [],
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            root_path = self._root(Path(tmp))
+            root = str(root_path)
+            before = _snapshot(root_path)
+            common = [
+                "source-intake-batch",
+                root,
+                "--manifest",
+                PRIVATE_MANIFEST,
+                "--no-progress",
+                "--format",
+                "json",
+            ]
+            with (
+                mock.patch.object(
+                    archive_cli.source_intake_batch_exact,
+                    "plan_source_intake_batch",
+                    return_value=plan,
+                ) as exact_plan,
+                mock.patch.object(
+                    archive_services,
+                    "source_intake_batch",
+                    side_effect=AssertionError("legacy plan entered"),
+                ) as legacy_plan,
+            ):
+                args = self.parser.parse_args([*common, "--dry-run"])
+                stdout = io.StringIO()
+                stderr = io.StringIO()
+                with redirect_stdout(stdout), redirect_stderr(stderr):
+                    code = args.func(args)
+            self.assertEqual(code, 0, stderr.getvalue())
+            self.assertTrue(json.loads(stdout.getvalue())["ok"])
+            exact_plan.assert_called_once_with(
+                Path(root),
+                Path(PRIVATE_MANIFEST),
+            )
+            legacy_plan.assert_not_called()
+
+            with (
+                mock.patch.object(
+                    archive_cli.source_intake_batch_exact,
+                    "plan_source_intake_batch",
+                    return_value=plan,
+                ) as exact_plan,
+                mock.patch.object(
+                    archive_cli.source_intake_batch_exact,
+                    "execute_source_intake_batch",
+                    return_value=dict(applied),
+                ) as exact_execute,
+                mock.patch.object(
+                    archive_services,
+                    "source_intake_batch",
+                    side_effect=AssertionError("legacy writer entered"),
+                ) as legacy_apply,
+            ):
+                args = self.parser.parse_args(
+                    [
+                        *common,
+                        "--approve",
+                        "--expected-plan-sha256",
+                        PRIVATE_DIGEST,
+                        "--reviewed-by",
+                        PRIVATE_REVIEWER,
+                    ]
+                )
+                stdout = io.StringIO()
+                stderr = io.StringIO()
+                with redirect_stdout(stdout), redirect_stderr(stderr):
+                    code = args.func(args)
+            self.assertEqual(code, 0, stderr.getvalue())
+            self.assertTrue(json.loads(stdout.getvalue())["ok"])
+            exact_plan.assert_called_once_with(
+                Path(root),
+                Path(PRIVATE_MANIFEST),
+            )
+            exact_execute.assert_called_once_with(
+                plan,
+                expected_plan_sha256=PRIVATE_DIGEST,
+                reviewer_claim=PRIVATE_REVIEWER,
+                progress_hook=mock.ANY,
+            )
+            legacy_apply.assert_not_called()
+            self.assertEqual(_snapshot(root_path), before)
+
     def test_read_only_plans_dry_runs_and_audits_still_dispatch(self) -> None:
         safe_result = {
             "ok": True,
@@ -596,7 +692,6 @@ class Letter137DurableExternalCliBoundaryTests(
                 (["object-storage-upload-evidence-audit", root, "--receipt", PRIVATE_RECEIPT, "--dry-run", "--format", "json"], archive_services, "object_storage_upload_evidence_audit"),
                 (["notion-ancestor-fetch-adapter-run", root, "--tree", PRIVATE_TREE, "--source", "notion", "--dry-run", "--format", "json"], archive_services, "notion_ancestor_fetch_adapter_run"),
                 (["notion-recover", root, "--dry-run", "--format", "json"], archive_services, "notion_recover_plan"),
-                (["source-intake-batch", root, "--manifest", PRIVATE_MANIFEST, "--dry-run", "--format", "json"], archive_services, "source_intake_batch"),
                 (["external-locator-plan", root, "--zettel-id", "zet_private", "--locator-type", "source_url", "--locator-ref", PRIVATE_LOCATOR, "--dry-run", "--format", "json"], completion_workflows, "external_locator_plan"),
                 (["external-locator-deactivate-plan", root, "--zettel-id", "zet_private", "--locator-id", PRIVATE_LOCATOR_ID, "--keep-locator-id", PRIVATE_LOCATOR_ID + "-keep", "--dry-run", "--format", "json"], completion_workflows, "external_locator_deactivate_plan"),
                 (["external-locator-revert", root, "--receipt", PRIVATE_RECEIPT, "--dry-run", "--format", "json"], completion_workflows, "external_locator_revert_plan"),

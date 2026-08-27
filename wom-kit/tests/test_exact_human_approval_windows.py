@@ -147,6 +147,75 @@ class ExactHumanApprovalWindowsTests(unittest.TestCase):
                 for machine_value in (SHA_A, SHA_B, SHA_C, "machine_verified"):
                     self.assertNotIn(machine_value, primary)
 
+    def test_batch_dialogs_state_the_full_multiple_item_scope(self) -> None:
+        cases = (
+            (
+                ExactHumanApprovalOperation.source_intake_batch,
+                (
+                    "원본 배치(최대 1,000개)",
+                    "바이트를 다시 읽어 해시를 확인",
+                    "바이트를 보관하거나 복사하지 않습니다",
+                    "영수증(N개)",
+                    "요청 1개",
+                    "배치 반입 근거 기록",
+                ),
+                (
+                    "메타데이터 계획 하나만",
+                    "본문을 읽거나 복사하지 않고",
+                    "단일 오브제",
+                ),
+            ),
+            (
+                ExactHumanApprovalOperation.objet_capture_batch,
+                (
+                    "원본 배치 전체",
+                    "배치 전체의 원본 바이트를 보존",
+                    "manifest와 영수증",
+                    "외부 서비스(provider) 호출",
+                    "원격 업로드",
+                    "제텔 연결",
+                    "초안 생성",
+                    "정본 발행",
+                    "배치 전체 보존",
+                ),
+                (
+                    "단일 오브제",
+                    "원본 파일을 오브제로",
+                    "선택 기록 하나만",
+                ),
+            ),
+        )
+        for operation, expected, forbidden in cases:
+            with self.subTest(operation=operation.value):
+                context = ExactHumanApprovalContext(
+                    operation=operation,
+                    archive_identity_sha256=SHA_A,
+                    plan_sha256=SHA_B,
+                    target_binding_sha256=SHA_C,
+                    reviewer_claim="person:local-operator",
+                    review_binding_codes=("complete_batch_item_set",),
+                )
+                native = _FakeNative((2, False))
+                request_exact_human_approval(
+                    context,
+                    intent=ExactHumanApprovalIntent.live_write,
+                    native=native,
+                )
+                call = native.calls[0]
+                rendered = "\n".join(
+                    str(call[name])
+                    for name in (
+                        "main_instruction",
+                        "content",
+                        "approve_button_text",
+                        "expanded_information",
+                    )
+                )
+                for value in expected:
+                    self.assertIn(value, rendered)
+                for value in forbidden:
+                    self.assertNotIn(value, rendered)
+
     def test_notion_recovery_explains_scope_without_delegating_verification(self) -> None:
         context = ExactHumanApprovalContext(
             operation=ExactHumanApprovalOperation.notion_property_backfill,

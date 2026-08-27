@@ -24,6 +24,46 @@ Before upgrading a real archive:
 
 The archive should never silently rewrite memory.
 
+## v0.4.10 Bounded Batch Intake and Capture
+
+Install only after the matching public Release lists the exact wheel:
+
+```powershell
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.10/wom_kit-0.4.10-py3-none-any.whl"
+archive --version
+```
+
+Require exactly `archive 0.4.10` from a new process. Installation changes no
+archive. The client runs the project-scoped batch commands in the intended
+project runtime; development does not replace a computer-wide executable or
+perform client recovery on the client's behalf.
+
+For 1–1,000 reviewed local items, v0.4.10 reduces the work to two human
+decisions. `source-intake-batch` records the complete intake batch and generates
+the exact capture request. Its successful output returns the content-free
+source-intake execution SHA-256 used by `objet-capture-batch`; WOM derives the
+request path and revalidates the authenticated completion chain automatically.
+The person does not count files, compare hashes, or reconstruct receipt paths.
+Every batch source must already be archive-relative so that this handoff can be
+generated. A batch containing an external source stops before approval; use the
+unchanged v0.4.9 single-file metadata-intake route when that is the intended
+operation.
+
+If intake stops after approval, rerun the exact unchanged command and reviewer
+with `--resume`; do not find or copy an approval id or execution digest. WOM
+authenticates and resumes only one unambiguous candidate, and blocks a resume
+from the wrong project runtime. If capture stops or only partly converges, do
+not automatically retry it or reuse the old approval. Run a fresh exact capture
+dry-run against current state, review its plain-language batch effect, and make
+a new native decision. Existing verified objects converge without duplicate
+rows.
+
+The 1,000-item synthetic planning gate completed in 42.926 seconds and retained
+early status plus bounded heartbeats. Remaining per-item Windows
+path/configuration reconstruction is deferred to v0.4.11; v0.4.10 does not
+claim that cost is optimized. See the
+[v0.4.10 release note](wom-kit/docs/releases/v0.4.10.md).
+
 ## v0.4.9 Finish the Safe Single-File Path
 
 Install only after the matching public Release lists the exact wheel:

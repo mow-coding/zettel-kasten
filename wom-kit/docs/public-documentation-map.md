@@ -6,13 +6,22 @@ Updated: 2026-08-27
 Philosophy clarified: 2026-07-15
 Harness compatibility clarified: 2026-07-16
 
-Current v0.4.9 delta: the ordinary one-file intake chain now records one exact
+Current v0.4.10 delta: bounded 1–1,000 item local intake and capture now form a
+two-decision pipeline. The intake operation writes every exact receipt plus one
+generated capture request through checkpoints and same-claim resume. Capture
+accepts only the authenticated upstream approval, checkpoint chain, final
+receipt, current receipts and bytes, and same archive identity. Partial capture
+requires a fresh exact plan and new decision. Synthetic 508- and 1,000-item
+planning completed under 43 seconds; remaining per-item Windows reconstruction
+cost is deferred to v0.4.11. Publishing or installing the release changes no
+client archive.
+
+Historical v0.4.9 delta: the ordinary one-file intake chain records one exact
 source-intake receipt, creates one exact existing-intake selection, and captures
 the selected local bytes through three separate native approvals. Doctor emits
 bounded progress, binds duplicate findings to one stable object-manifest byte
 snapshot, and fails when that input is stale or unverified. Object-storage setup
-requires an explicit profile ID and records local setup only. Batch writers and
-whole-archive performance optimization remain unproven and closed work.
+requires an explicit profile ID and records local setup only.
 
 Historical v0.4.3 delta: `ExactOperationManifest v1` supplies one exact-approved,
 checkpointed, resumable, independently verified, field-scoped-revert base.
@@ -514,6 +523,7 @@ These documents record public-safe work already performed.
 - [v0.2.11 Delegate Capability Contract Work Log](../plans/work-log-2026-05-23-delegate-capability-contract.md)
 - [Changelog](../../CHANGELOG.md)
 - [Release Notes](releases/)
+- [v0.4.10 Release Note](releases/v0.4.10.md)
 - [v0.4.9 Release Note](releases/v0.4.9.md)
 - [v0.4.8 Release Note](releases/v0.4.8.md)
 - [v0.4.7 Release Note](releases/v0.4.7.md)
