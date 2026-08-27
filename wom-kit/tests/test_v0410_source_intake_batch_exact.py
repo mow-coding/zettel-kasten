@@ -477,7 +477,15 @@ class SourceIntakeBatchExactTests(unittest.TestCase):
             self.request_path,
         )
         target = self.root.joinpath(*plan.items[0].receipt_relative_path.split("/"))
-        attacker = self.root / "receipts" / "ops" / "attacker"
+        self.assertEqual(
+            sorted(path.name for path in target.parent.iterdir()),
+            [".gitkeep"],
+        )
+        (target.parent / ".gitkeep").unlink()
+        target.parent.rmdir()
+        # Keep the attacker outside the receipt tree so this fixture replaces
+        # only the exact receipt parent and does not add trusted-sibling state.
+        attacker = self.root / "attacker-receipts"
         attacker.mkdir(parents=True)
         target.parent.parent.mkdir(parents=True, exist_ok=True)
         self.assertFalse(target.parent.exists())

@@ -191,3 +191,19 @@ These are pre-commit local results. Required hosted Ubuntu and Windows CI,
 merge-SHA tagging, GitHub Release publication, anonymous artifact download, and
 downloaded-wheel re-verification remain release conditions and are not claimed
 complete in this checkpoint.
+
+## First hosted-CI correction
+
+The first PR run passed release readiness, both Ubuntu shard 2/2 jobs, and the
+first completed Windows shards, but both Ubuntu shard 1/2 jobs found the same
+new-test fixture error. The prebound-receipt-parent symlink test assumed the
+receipt parent did not exist. The checked-in fake archive intentionally contains
+`receipts/sources/.gitkeep`, so that assertion failed before a symlink was ever
+created and before production writer code ran.
+
+The fixture now proves that `.gitkeep` is the only child, removes it and its
+temporary parent in the copied archive, creates the attacker directory outside
+the trusted receipt tree, installs the symlink, invokes the real batch writer,
+and verifies that no attacker-side receipt appears. The corrected test passed
+in a read-only-mounted Linux Python 3.12 container. No production behavior or
+client data changed. A complete fresh hosted CI run is still required.
