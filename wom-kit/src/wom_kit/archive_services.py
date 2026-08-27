@@ -49011,6 +49011,7 @@ def target_sha_evolved_by_edge_receipts(
     expected_sha: str,
     *,
     edge_receipts: list[dict[str, Any]] | None = None,
+    target_text: str | None = None,
     progress_callback: Callable[[str], None] | None = None,
 ) -> bool:
     try:
@@ -49028,9 +49029,12 @@ def target_sha_evolved_by_edge_receipts(
         return False
 
     try:
-        if progress_callback is not None:
-            progress_callback("reading target zettel for edge evolution")
-        target_text = target_path.read_text(encoding="utf-8")
+        if target_text is None:
+            if progress_callback is not None:
+                progress_callback("reading target zettel for edge evolution")
+            target_text = target_path.read_text(encoding="utf-8")
+        elif progress_callback is not None:
+            progress_callback("using cached target zettel for edge evolution")
         frontmatter, body = require_readable_zettel_text(target_text)
     except (OSError, UnicodeError, ArchiveServiceError):
         if progress_callback is not None:

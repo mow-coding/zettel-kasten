@@ -29,9 +29,95 @@ DOCTOR_INPUT_REVALIDATION_SCHEMA = "wom-kit/doctor-input-revalidation/v0.1"
 DOCTOR_INPUT_SNAPSHOT_BASIS = (
     "sha256_exact_bytes_parsed_by_object_manifest_stage"
 )
+DOCTOR_OBJECT_BYTE_VERIFICATION_SCHEMA = (
+    "wom-kit/doctor-object-byte-verification/v0.1"
+)
+DOCTOR_OBJECT_BYTE_VERIFICATION_MODES = frozenset({"operational", "deep"})
+DOCTOR_OBJECT_BYTE_VERIFICATION_STATES = (
+    "rehashed_now",
+    "attested_unchanged",
+    "bytes_unverified",
+)
 
 _SNAPSHOT_STATES = frozenset({"present", "absent", "unavailable"})
 _REVALIDATION_STATES = frozenset({"current", "stale", "unverified"})
+
+
+@dataclass(frozen=True)
+class DoctorObjectByteVerification:
+    """Content-free truth statement for local object-byte verification.
+
+    ``attested_unchanged`` is part of the stable result vocabulary, but a
+    caller must not increment it until WOM has a durable, independently
+    revalidated deep-byte attestation contract.  The current Doctor therefore
+    reports zero for that state instead of treating size or timestamps as a
+    byte-integrity proof.
+    """
+
+    mode: str
+    local_reference_count: int
+    unique_local_file_count: int
+    rehashed_now: int
+    attested_unchanged: int
+    bytes_unverified: int
+
+    def __post_init__(self) -> None:
+        if self.mode not in DOCTOR_OBJECT_BYTE_VERIFICATION_MODES:
+            raise ValueError("doctor_object_byte_verification_mode_invalid")
+        counts = (
+            self.local_reference_count,
+            self.unique_local_file_count,
+            self.rehashed_now,
+            self.attested_unchanged,
+            self.bytes_unverified,
+        )
+        if any(type(value) is not int or value < 0 for value in counts):
+            raise ValueError("doctor_object_byte_verification_count_invalid")
+        if self.local_reference_count < self.unique_local_file_count:
+            raise ValueError(
+                "doctor_object_byte_verification_reference_count_invalid"
+            )
+        if self.attested_unchanged != 0:
+            raise ValueError(
+                "doctor_object_byte_verification_attestation_unsupported"
+            )
+        if (
+            self.rehashed_now
+            + self.attested_unchanged
+            + self.bytes_unverified
+            != self.unique_local_file_count
+        ):
+            raise ValueError("doctor_object_byte_verification_partition_invalid")
+
+    @property
+    def result_state(self) -> str:
+        if self.bytes_unverified:
+            return "bytes_unverified"
+        if self.attested_unchanged:
+            return "attested_unchanged"
+        if self.rehashed_now:
+            return "rehashed_now"
+        return "not_applicable"
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "schema": DOCTOR_OBJECT_BYTE_VERIFICATION_SCHEMA,
+            "mode": self.mode,
+            "result_state": self.result_state,
+            "local_reference_count": self.local_reference_count,
+            "unique_local_file_count": self.unique_local_file_count,
+            "states": {
+                "rehashed_now": self.rehashed_now,
+                "attested_unchanged": self.attested_unchanged,
+                "bytes_unverified": self.bytes_unverified,
+            },
+            "all_unique_local_files_rehashed_this_run": bool(
+                self.unique_local_file_count > 0
+                and self.rehashed_now == self.unique_local_file_count
+            ),
+            "attestation_reuse_supported": False,
+            "size_or_timestamp_treated_as_byte_proof": False,
+        }
 
 
 def _utc_timestamp(value: str | None = None) -> str:
