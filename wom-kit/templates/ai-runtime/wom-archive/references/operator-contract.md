@@ -503,11 +503,11 @@ archive source-intake <archive-root> --dry-run --format json
 
 Use exactly one locator mode. Continue with `create-draft --dry-run` only after `ok` is true and the returned plan has no blockers.
 
-In v0.4.0 `source-intake-record` approval is fixed fail-closed before private
-plan/archive read or mutation with
-`compound_exact_human_approval_binding_required`; it writes no source receipt.
-The source-intake dry-run itself is review evidence, not capture or draft
-authority.
+The general legacy source-registration route remains fixed closed. v0.4.9
+opens only the exact one-file `source-intake-record` route: it requires a fresh
+plan digest and native human decision, and it records metadata without
+capturing source bytes. The source-intake dry-run itself is review evidence,
+not capture or draft authority.
 
 The same gate applies BEFORE physically copying any local file into the archive or an objet store, not just before drafting:
 
@@ -515,37 +515,55 @@ The same gate applies BEFORE physically copying any local file into the archive 
 archive source-intake <archive-root> --dry-run --local-path <local-file> --format json
 ```
 
-For many reviewed local files, replace per-file planning and recording loops
-with one bounded manifest and one exact review gate:
+For 1-1,000 reviewed local files, replace per-file planning and recording loops
+with the v0.4.10 two-decision batch workflow. The first decision is exact
+source-intake recording:
 
 ```text
 archive source-intake-batch <archive-root> --manifest <archive-relative-json> --dry-run --format json
+archive source-intake-batch <archive-root> --manifest <same-json> --expected-plan-sha256 <exact-plan-sha256> --approve --reviewed-by <actor> --format json
 ```
 
 Relative item paths resolve from the archive root. The request is capped at
-1,000 items. In v0.4.0 batch approval is fixed fail-closed before private item
-read or mutation with `compound_exact_human_approval_binding_required`; it
-stores no per-item plan or aggregate receipt.
+1,000 items. One native decision records the exact item receipts and a
+generated capture request. Output and durable evidence echo no path, filename,
+body, credential, or provider value. Retain the successful content-free
+source-intake execution SHA-256.
 
-Follow the returned `next_safe_actions` only as a staging/preview guide. In
-v0.4.0 `objet-capture-selection`, `objet-capture`, and
-`objet-capture-enable` approval branches are fixed fail-closed before private
-input read or mutation with `compound_exact_human_approval_binding_required`.
-A source-intake or capture preview is never authority to copy, capture, import,
-or upload, and a raw in-root `objets/` folder is not an approved destination.
-
-For one reviewed request containing many ordinary staged files, prefer:
+If that intake write was interrupted, keep the request bytes unchanged and
+resume the authenticated claim without manual ids or another native decision:
 
 ```text
-archive objet-capture-batch <archive-root> --manifest <archive-relative-json> --dry-run --format json
+archive source-intake-batch <archive-root> --manifest <same-json> --resume --reviewed-by <same-actor> --format json
 ```
 
-The complete request is structurally checked before source bytes are opened.
-The dry-run is bounded to 2,000 items. In v0.4.0 approval is fixed fail-closed
-before private source read or mutation with
-`compound_exact_human_approval_binding_required`; it writes no object, manifest
-row, item receipt, or batch receipt. Historical partial/recovery evidence stays
-auditable and never authorizes automatic replay.
+WOM must discover exactly one valid started claim for the same archive,
+request, manifest, and reviewer. Ambiguous, absent, changed, or unauthenticated
+evidence blocks the resume.
+
+Follow returned `next_safe_actions` only. General/unscoped legacy
+`objet-capture-selection`, `objet-capture`, and `objet-capture-enable`
+approval branches remain fixed closed. The narrow v0.4.9 exact one-file chain
+and the v0.4.10 authenticated batch chain are the only exceptions. A preview
+alone is never authority to copy, capture, import, or upload, and a raw in-root
+`objets/` folder is not an approved destination.
+
+After a successful batch intake, use its execution SHA-256 for the separate
+capture decision. Do not select or reconstruct the generated request by hand:
+
+```text
+archive objet-capture-batch <archive-root> --source-intake-execution-sha256 <intake-execution-sha256> --dry-run --format json
+archive objet-capture-batch <archive-root> --source-intake-execution-sha256 <same-intake-execution-sha256> --expected-plan-sha256 <exact-capture-plan-sha256> --approve --reviewed-by <actor> --format json
+```
+
+WOM derives the request and verifies the authenticated upstream claim,
+checkpoint chain, final receipt, current intake receipts, staged bytes, and
+archive identity before offering the second native decision. If capture is
+interrupted or its outcome is uncertain, preserve the archive and run a fresh
+capture dry-run followed by a new approval. Never reuse the previous capture
+approval, invoke same-claim capture resume, or attempt bounded per-item replay.
+Neither decision authorizes provider access, upload, linking, drafting,
+minting, or cleanup.
 
 Object-storage plans and audits remain available, but v0.4.0 fixed-closes
 approval for `object-storage`, `prehashed-objet-ledger`,

@@ -40075,7 +40075,10 @@ def _write_activity_group_bytes_new_file_bound(
     binding: dict[str, Any],
     path: Path,
     raw: bytes,
+    *,
+    heartbeat: Callable[[], None] | None = None,
 ) -> None:
+    callback = heartbeat or (lambda: None)
     if path.parent != binding.get("path"):
         raise OSError("activity_group_bound_parent_mismatch")
     descriptor = binding.get("descriptor")
@@ -40083,34 +40086,170 @@ def _write_activity_group_bytes_new_file_bound(
         flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
         flags |= getattr(os, "O_BINARY", 0)
         flags |= getattr(os, "O_NOFOLLOW", 0)
-        file_descriptor = os.open(
-            path.name,
-            flags,
-            0o600,
-            dir_fd=descriptor,
-        )
+        temporary_name: str | None = None
+        file_descriptor: int | None = None
         try:
+            for _ in range(8):
+                candidate = f".{path.name}.{secrets.token_hex(8)}.tmp"
+                try:
+                    file_descriptor = os.open(
+                        candidate,
+                        flags,
+                        0o600,
+                        dir_fd=descriptor,
+                    )
+                    temporary_name = candidate
+                    break
+                except FileExistsError:
+                    continue
+            if file_descriptor is None or temporary_name is None:
+                raise OSError("activity_group_bound_temp_reservation_failed")
+            opened = os.fstat(file_descriptor)
+            if not stat.S_ISREG(opened.st_mode) or int(opened.st_nlink) != 1:
+                raise OSError("activity_group_bound_temp_unsafe")
             offset = 0
             while offset < len(raw):
-                written = os.write(file_descriptor, raw[offset:])
+                callback()
+                written = os.write(
+                    file_descriptor,
+                    raw[offset : offset + 64 * 1024],
+                )
                 if written <= 0:
                     raise OSError(
                         "activity_group_bound_write_incomplete"
                     )
                 offset += written
+            callback()
             os.fsync(file_descriptor)
-        finally:
+            completed = os.fstat(file_descriptor)
+            if (
+                (completed.st_dev, completed.st_ino)
+                != (opened.st_dev, opened.st_ino)
+                or int(completed.st_nlink) != 1
+                or int(completed.st_size) != len(raw)
+            ):
+                raise OSError("activity_group_bound_temp_changed")
             os.close(file_descriptor)
-        os.fsync(descriptor)
+            file_descriptor = None
+
+            os.link(
+                temporary_name,
+                path.name,
+                src_dir_fd=descriptor,
+                dst_dir_fd=descriptor,
+                follow_symlinks=False,
+            )
+            published = os.stat(
+                path.name,
+                dir_fd=descriptor,
+                follow_symlinks=False,
+            )
+            if (
+                not stat.S_ISREG(published.st_mode)
+                or (published.st_dev, published.st_ino)
+                != (completed.st_dev, completed.st_ino)
+                or int(published.st_size) != len(raw)
+                or int(published.st_nlink) != 2
+            ):
+                raise OSError("activity_group_bound_publication_changed")
+            os.fsync(descriptor)
+            os.unlink(temporary_name, dir_fd=descriptor)
+            temporary_name = None
+            os.fsync(descriptor)
+            final = os.stat(
+                path.name,
+                dir_fd=descriptor,
+                follow_symlinks=False,
+            )
+            if (
+                not stat.S_ISREG(final.st_mode)
+                or (final.st_dev, final.st_ino)
+                != (completed.st_dev, completed.st_ino)
+                or int(final.st_size) != len(raw)
+                or int(final.st_nlink) != 1
+            ):
+                raise OSError("activity_group_bound_publication_changed")
+        finally:
+            if file_descriptor is not None:
+                os.close(file_descriptor)
+            if temporary_name is not None:
+                try:
+                    os.unlink(temporary_name, dir_fd=descriptor)
+                except FileNotFoundError:
+                    pass
         return
 
-    # The Windows ancestor chain is held without delete sharing. O_EXCL makes
-    # a concurrently created file or reparse entry a refusal, not a target.
-    with path.open("xb") as handle:
-        handle.write(raw)
-        handle.flush()
-        os.fsync(handle.fileno())
-    fsync_directory(path.parent)
+    # On Windows the ancestor chain is held without delete sharing. Build the
+    # complete bytes under a private sibling name, then publish with a
+    # create-only hard link. A crash can leave only a private temp or a complete
+    # final file; it cannot expose a truncated final receipt.
+    temporary_path: Path | None = None
+    completed: os.stat_result | None = None
+    try:
+        for _ in range(8):
+            candidate = path.with_name(
+                f".{path.name}.{secrets.token_hex(8)}.tmp"
+            )
+            try:
+                with candidate.open("xb") as handle:
+                    temporary_path = candidate
+                    opened = os.fstat(handle.fileno())
+                    if (
+                        not stat.S_ISREG(opened.st_mode)
+                        or int(opened.st_nlink) != 1
+                    ):
+                        raise OSError("activity_group_bound_temp_unsafe")
+                    offset = 0
+                    while offset < len(raw):
+                        callback()
+                        written = handle.write(raw[offset : offset + 64 * 1024])
+                        if written is None or written <= 0:
+                            raise OSError(
+                                "activity_group_bound_write_incomplete"
+                            )
+                        offset += written
+                    handle.flush()
+                    callback()
+                    os.fsync(handle.fileno())
+                    completed = os.fstat(handle.fileno())
+                break
+            except FileExistsError:
+                continue
+        if temporary_path is None or completed is None:
+            raise OSError("activity_group_bound_temp_reservation_failed")
+        if (
+            (completed.st_dev, completed.st_ino)
+            != (opened.st_dev, opened.st_ino)
+            or int(completed.st_nlink) != 1
+            or int(completed.st_size) != len(raw)
+        ):
+            raise OSError("activity_group_bound_temp_changed")
+        os.link(temporary_path, path, follow_symlinks=False)
+        published = os.lstat(path)
+        if (
+            not stat.S_ISREG(published.st_mode)
+            or (published.st_dev, published.st_ino)
+            != (completed.st_dev, completed.st_ino)
+            or int(published.st_size) != len(raw)
+            or int(published.st_nlink) != 2
+        ):
+            raise OSError("activity_group_bound_publication_changed")
+        fsync_directory(path.parent)
+        temporary_path.unlink()
+        temporary_path = None
+        fsync_directory(path.parent)
+        final = os.lstat(path)
+        if (
+            not stat.S_ISREG(final.st_mode)
+            or (final.st_dev, final.st_ino)
+            != (completed.st_dev, completed.st_ino)
+            or int(final.st_size) != len(raw)
+            or int(final.st_nlink) != 1
+        ):
+            raise OSError("activity_group_bound_publication_changed")
+    finally:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
 
 
 @contextmanager
@@ -99315,19 +99454,36 @@ def wom_kit_runtime_tracked_python_integrity(
         result["reason_code"] = inventory["reason_code"]
         return result
 
+    total_source_bytes = 0
     for relative_path in sorted(tracked_paths):
-        hash_ok, actual_object_id = _wom_kit_project_update_git(
-            mirror_path,
-            ["hash-object", "--no-filters", "--", relative_path],
-            runner=runner,
+        path = mirror_path.joinpath(*PurePosixPath(relative_path).parts)
+        raw_bytes = _wom_kit_read_bounded_real_bytes(
+            project_root,
+            path,
+            max_bytes=WOM_KIT_RUNTIME_MAX_PYTHON_SOURCE_BYTES,
         )
-        if (
-            not hash_ok
-            or not re.fullmatch(r"[0-9a-fA-F]{40,64}", actual_object_id)
-        ):
+        if raw_bytes is None:
             result["reason_code"] = "project_tracked_python_bytes_unavailable"
             return result
-        if actual_object_id.lower() != head_entries[relative_path][1]:
+        total_source_bytes += len(raw_bytes)
+        if total_source_bytes > WOM_KIT_RUNTIME_MAX_TOTAL_PYTHON_SOURCE_BYTES:
+            result["reason_code"] = "project_tracked_python_bytes_unavailable"
+            return result
+        expected_object_id = head_entries[relative_path][1]
+        if len(expected_object_id) not in {40, 64}:
+            result["reason_code"] = "project_tracked_python_bytes_unavailable"
+            return result
+        object_hasher = (
+            hashlib.sha1()
+            if len(expected_object_id) == 40
+            else hashlib.sha256()
+        )
+        object_hasher.update(f"blob {len(raw_bytes)}\0".encode("ascii"))
+        object_hasher.update(raw_bytes)
+        if not hmac.compare_digest(
+            object_hasher.hexdigest(),
+            expected_object_id,
+        ):
             result["reason_code"] = "project_tracked_python_bytes_mismatch"
             return result
     result["tracked_python_worktree_bytes_match_head"] = True
@@ -116402,12 +116558,22 @@ def runtime_context_write_action_routes() -> list[dict[str, Any]]:
         },
         {
             "action": "capture_reviewed_objet_batch",
-            "when": "one reviewed request contains many staged files that should use one whole-request preflight",
-            "preview_command": "archive objet-capture-batch <archive-root> --manifest <archive-relative-json> --dry-run --format json",
-            "approved_command": "archive objet-capture-batch <archive-root> --manifest <same-json> --expected-plan-sha256 <sha256> --approve --reviewed-by <human-actor> --format json",
+            "when": "one private reviewed request contains 1-1000 local files to intake and capture through two separate exact decisions",
+            "preview_command": "archive source-intake-batch <archive-root> --manifest <private-request.json> --dry-run --format json",
+            "approved_command": "archive source-intake-batch <archive-root> --manifest <same-request.json> --expected-plan-sha256 <exact-intake-plan-sha256> --approve --reviewed-by <human-actor> --format json",
+            "intake_resume_command": "archive source-intake-batch <archive-root> --manifest <same-request.json> --resume --reviewed-by <same-human-actor> --format json",
+            "capture_preview_command": "archive objet-capture-batch <archive-root> --source-intake-execution-sha256 <completed-intake-execution-sha256> --dry-run --format json",
+            "capture_approved_command": "archive objet-capture-batch <archive-root> --source-intake-execution-sha256 <same-intake-execution-sha256> --expected-plan-sha256 <exact-capture-plan-sha256> --approve --reviewed-by <human-actor> --format json",
             "requires_human_approval": True,
+            "separate_human_decision_count": 2,
             "whole_manifest_preflight": True,
-            "convergence_model": "bounded_per_item_with_replay",
+            "convergence_model": "two_decision_authenticated_intake_and_fresh_capture_approval",
+            "intake_convergence_model": "automatic_authenticated_same_claim_resume",
+            "intake_resume_manual_ids_required": False,
+            "intake_resume_requires_new_human_decision": False,
+            "capture_convergence_model": "fresh_dry_run_and_new_approval_after_interruption",
+            "capture_same_claim_resume_allowed": False,
+            "capture_per_item_replay_allowed": False,
             "all_or_nothing_claimed": False,
             "direct_file_write_allowed": False,
             "receipt_required": True,
@@ -136502,9 +136668,10 @@ def staged_cleanup_check(
         "summary": counts,
         "next_safe_actions": [
             "When state is not_safe_to_cleanup, do not delete or move the staged folder.",
-            "For missing or incomplete paired-capture evidence, run archive objet-capture-batch <archive-root> --manifest <retained-batch-request.json> --dry-run --format json; never edit manifests or receipts manually.",
+            "For missing or incomplete paired-capture evidence, preserve the archive and obtain one completed v0.4.10 source-intake-batch execution for the unchanged reviewed request; never edit manifests or receipts manually.",
+            "Run archive objet-capture-batch <archive-root> --source-intake-execution-sha256 <completed-intake-execution-sha256> --dry-run --format json; review it, then use a new separate capture approval bound to that fresh plan digest.",
             "For missing or invalid ordinary capture receipts, run archive objet-capture <archive-root> --selection <retained-selection.json> --dry-run --format json, review it, then use a separate approval so replay can mint fresh evidence.",
-            "After reviewing that fresh plan, use a separate objet-capture-batch approval with its new plan digest, then run a fresh staged-cleanup-check.",
+            "After a partial or uncertain batch capture, never reuse the prior approval or replay individual items; run the same source-execution-bound capture dry-run, obtain a new approval, then run a fresh staged-cleanup-check.",
             "When source bytes changed during text normalization, preserve the raw staged bytes as an ordinary objet; a deferred entry must remain staged and blocks folder cleanup.",
             "Run archive doctor --strict and resolve any errors before cleanup.",
             "Run wom-kit/tools/check_artifact_hygiene.py and resolve unresolved blockers.",
@@ -136600,6 +136767,9 @@ def objet_capture_apply(
     selection_path: Path | str,
     *,
     reviewed_by: str,
+    approval_operation: ExactHumanApprovalOperation = (
+        ExactHumanApprovalOperation.objet_capture
+    ),
     project_intake_receipt: str | None = None,
     selection_document: dict[str, Any] | None = None,
     expected_exact_approval_plan_sha256: str | None = None,
@@ -136607,6 +136777,11 @@ def objet_capture_apply(
     exact_human_approval_claim: _ClaimedExactHumanApproval | None = None,
 ) -> dict[str, Any]:
     try:
+        if approval_operation not in (
+            ExactHumanApprovalOperation.objet_capture,
+            ExactHumanApprovalOperation.objet_capture_batch,
+        ):
+            raise ArchiveServiceError("operation_approval_plan_invalid")
         _require_exact_human_approval_inputs_before_archive_read(
             claim=exact_human_approval_claim,
             expected_plan_sha256=expected_exact_approval_plan_sha256,
@@ -136636,7 +136811,10 @@ def objet_capture_apply(
     try:
         approval_receipt = _require_exact_human_operation_approval(
             root,
-            objet_capture_approval_binding(preview),
+            objet_capture_approval_binding(
+                preview,
+                operation=approval_operation,
+            ),
             reviewer_claim=reviewed_by,
             expected_plan_sha256=expected_exact_approval_plan_sha256,
             expected_target_binding_sha256=(

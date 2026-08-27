@@ -25,9 +25,9 @@ from wom_kit import archive_cli, archive_services, completion_workflows
 
 class ObjetCaptureBatchDerivedTextTests(unittest.TestCase):
     def setUp(self) -> None:
-        # These are pre-v0.4 durability/recovery fixtures. Keep the public
-        # approval surfaces fixed-closed and opt this test class into the two
-        # underscore-only historical engines explicitly.
+        # These are pre-v0.4 durability/recovery fixtures. Opt the domain-level
+        # tests into the two underscore-only historical engines explicitly;
+        # public CLI routing is separately asserted against the exact adapter.
         batch_apply = mock.patch.object(
             completion_workflows,
             "objet_capture_batch_apply",
@@ -2289,9 +2289,38 @@ class ObjetCaptureBatchDerivedTextTests(unittest.TestCase):
             self.assertEqual(self.line_count(files_manifest), original_before + 1)
             self.assertEqual(self.line_count(derived_manifest), derived_before + 1)
 
-    def test_cli_apply_is_fixed_closed_before_partial_service_projection(
+    def test_cli_apply_routes_to_exact_adapter_before_legacy_projection(
         self,
     ) -> None:
+        plan = mock.Mock()
+        applied = {
+            "ok": True,
+            "state": "completed",
+            "summary": {
+                "batch_id": "letter128-exact-apply",
+                "terminal_item_count": 2,
+                "captured_item_count": 2,
+                "already_present_item_count": 0,
+                "partial_item_count": 0,
+                "blocked_item_count": 0,
+                "evidence_incomplete_item_count": 0,
+                "outcome_unverified_item_count": 0,
+                "capture_summary": {
+                    "captured": 2,
+                    "repair_appended": 0,
+                    "re_materialized": 0,
+                    "skipped": 0,
+                    "blocked": 0,
+                    "derived_text_written": 1,
+                    "derived_text_skipped": 1,
+                    "derived_text_blocked": 0,
+                },
+                "convergence_model": "fresh_exact_dry_run_then_reapproval",
+            },
+            "blockers": [],
+            "warnings": [],
+            "writes_may_have_occurred": True,
+        }
         args = SimpleNamespace(
             dry_run=False,
             approve=True,
@@ -2300,6 +2329,7 @@ class ObjetCaptureBatchDerivedTextTests(unittest.TestCase):
             archive_root="unused",
             manifest="unused.json",
             format="text",
+            progress=False,
         )
         stdout = io.StringIO()
         stderr = io.StringIO()
@@ -2307,25 +2337,63 @@ class ObjetCaptureBatchDerivedTextTests(unittest.TestCase):
             mock.patch.object(
                 completion_workflows,
                 "objet_capture_batch_apply",
-                return_value={"ok": True, "files_written": ["unexpected"]},
-            ) as service,
+                side_effect=AssertionError("legacy writer entered"),
+            ) as legacy_service,
+            mock.patch.object(
+                archive_cli.objet_capture_batch_exact,
+                "plan_objet_capture_batch",
+                return_value=plan,
+            ) as exact_plan,
+            mock.patch.object(
+                archive_cli.objet_capture_batch_exact,
+                "execute_objet_capture_batch",
+                return_value=applied,
+            ) as exact_execute,
             mock.patch.object(sys, "stdout", stdout),
             mock.patch.object(sys, "stderr", stderr),
         ):
             return_code = archive_cli.command_objet_capture_batch(args)
-        self.assertEqual(return_code, 1)
-        self.assertEqual(stdout.getvalue(), "")
-        self.assertEqual(
-            stderr.getvalue(),
-            "Exact compound human-approval binding is not implemented for "
-            "this command; the write did not start. Use its dry-run or plan "
-            "mode only.\n",
+        self.assertEqual(return_code, 0)
+        self.assertEqual(stderr.getvalue(), "")
+        self.assertIn(
+            "- terminal captured/already present/partial/blocked/"
+            "outcome unverified: 2/0/0/0/0",
+            stdout.getvalue(),
         )
-        service.assert_not_called()
+        self.assertIn(
+            "- local capture written/repaired/rematerialized/skipped/blocked: "
+            "2/0/0/0/0",
+            stdout.getvalue(),
+        )
+        self.assertIn(
+            "- derived text written/skipped/blocked: 1/1/0",
+            stdout.getvalue(),
+        )
+        exact_plan.assert_called_once()
+        exact_execute.assert_called_once_with(
+            plan,
+            expected_plan_sha256="a" * 64,
+            reviewer_claim="person:letter128",
+            progress_hook=mock.ANY,
+        )
+        legacy_service.assert_not_called()
 
-    def test_cli_apply_json_is_fixed_closed_before_recovery_service_projection(
+    def test_cli_apply_json_projects_exact_adapter_outcome_unverified(
         self,
     ) -> None:
+        plan = mock.Mock()
+        failed = {
+            "ok": False,
+            "state": "outcome_unverified",
+            "summary": {
+                "batch_id": "letter128-exact-unverified",
+                "item_count": 2,
+            },
+            "blockers": ["objet_capture_batch_outcome_unverified"],
+            "warnings": [],
+            "outcome_unverified": True,
+            "writes_may_have_occurred": True,
+        }
         args = SimpleNamespace(
             dry_run=False,
             approve=True,
@@ -2334,6 +2402,7 @@ class ObjetCaptureBatchDerivedTextTests(unittest.TestCase):
             archive_root="unused",
             manifest="unused.json",
             format="json",
+            progress=False,
         )
         stdout = io.StringIO()
         stderr = io.StringIO()
@@ -2341,34 +2410,33 @@ class ObjetCaptureBatchDerivedTextTests(unittest.TestCase):
             mock.patch.object(
                 completion_workflows,
                 "objet_capture_batch_apply",
-                return_value={"ok": True, "files_written": ["unexpected"]},
-            ) as service,
+                side_effect=AssertionError("legacy recovery projection entered"),
+            ) as legacy_service,
+            mock.patch.object(
+                archive_cli.objet_capture_batch_exact,
+                "plan_objet_capture_batch",
+                return_value=plan,
+            ) as exact_plan,
+            mock.patch.object(
+                archive_cli.objet_capture_batch_exact,
+                "execute_objet_capture_batch",
+                return_value=failed,
+            ) as exact_execute,
             mock.patch.object(sys, "stdout", stdout),
             mock.patch.object(sys, "stderr", stderr),
         ):
             return_code = archive_cli.command_objet_capture_batch(args)
         self.assertEqual(return_code, 1)
         self.assertEqual(stderr.getvalue(), "")
-        self.assertEqual(
-            json.loads(stdout.getvalue()),
-            {
-                "schema": "wom-kit/cli-error/v0.1",
-                "ok": False,
-                "state": "blocked",
-                "command": None,
-                "error_class": "policy",
-                "status_class": "blocked",
-                "effects_state": "none",
-                "exit_code": 1,
-                "lifecycle_action": "objet_capture_batch",
-                "reason_codes": [
-                    "compound_exact_human_approval_binding_required"
-                ],
-                "files_written": [],
-                "private_values_echoed": False,
-            },
+        self.assertEqual(json.loads(stdout.getvalue()), failed)
+        exact_plan.assert_called_once()
+        exact_execute.assert_called_once_with(
+            plan,
+            expected_plan_sha256="c" * 64,
+            reviewer_claim="person:letter128",
+            progress_hook=mock.ANY,
         )
-        service.assert_not_called()
+        legacy_service.assert_not_called()
 
     def test_cli_dry_run_text_keeps_ready_blocked_projection(self) -> None:
         plan_result = {
@@ -2393,15 +2461,23 @@ class ObjetCaptureBatchDerivedTextTests(unittest.TestCase):
             archive_root="unused",
             manifest="unused.json",
             format="text",
+            progress=False,
         )
+        exact_plan = mock.Mock()
+        exact_plan.public_document.return_value = plan_result
         stdout = io.StringIO()
         stderr = io.StringIO()
         with (
             mock.patch.object(
                 completion_workflows,
                 "objet_capture_batch_plan",
-                return_value=plan_result,
-            ),
+                side_effect=AssertionError("legacy plan entered"),
+            ) as legacy_plan,
+            mock.patch.object(
+                archive_cli.objet_capture_batch_exact,
+                "plan_objet_capture_batch",
+                return_value=exact_plan,
+            ) as exact_service,
             mock.patch.object(sys, "stdout", stdout),
             mock.patch.object(sys, "stderr", stderr),
         ):
@@ -2411,6 +2487,8 @@ class ObjetCaptureBatchDerivedTextTests(unittest.TestCase):
         self.assertEqual(stderr.getvalue(), "")
         self.assertIn("- ready/blocked: 2/0", rendered)
         self.assertNotIn("written/skipped/blocked", rendered)
+        exact_service.assert_called_once()
+        legacy_plan.assert_not_called()
 
     def test_replay_is_idempotent_and_reports_both_skips(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

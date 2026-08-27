@@ -102,7 +102,7 @@ def patch_zip_member_name_bytes(wheel: Path, old_name: str, new_name: str) -> No
 
 
 class InstalledEntrypointTests(unittest.TestCase):
-    PACKAGE_VERSION = "0.4.9"
+    PACKAGE_VERSION = "0.4.10"
     SERVER_NAME = "zettel-kasten-archive-mcp"
 
     def setUp(self) -> None:
@@ -883,6 +883,12 @@ class InstalledEntrypointTests(unittest.TestCase):
             "console_entrypoint_dry_run_count": 4,
             "approval_seam": "test_only_native_decision_injection",
         }
+        v0410_batch_evidence = {
+            "ok": True,
+            "schema": check_wheel_install.INSTALLED_V0410_BATCH_SMOKE_SCHEMA,
+            "item_count": 3,
+            "fresh_separate_approvals": True,
+        }
         result = check_wheel_install._wheel_install_success_result(
             package_version=self.PACKAGE_VERSION,
             wheel_counts=wheel_counts,
@@ -895,6 +901,7 @@ class InstalledEntrypointTests(unittest.TestCase):
             entrypoint_evidence=evidence,
             letter140_link_evidence=letter140_evidence,
             v049_workflow_evidence=v049_evidence,
+            v0410_batch_workflow_evidence=v0410_batch_evidence,
             wheel_filename="wom_kit-0.3.296-py3-none-any.whl",
             wheel_sha256="a" * 64,
             artifact_preserved=True,
@@ -916,6 +923,7 @@ class InstalledEntrypointTests(unittest.TestCase):
                 "entrypoint_evidence": evidence,
                 "installed_letter140_link_workflow": letter140_evidence,
                 "installed_v049_recovery_workflows": v049_evidence,
+                "installed_v0410_batch_workflow": v0410_batch_evidence,
                 "runtime_skill_lifecycle": "passed",
                 "onboarding_preview": "passed",
                 "onboarding_write": "fixed_closed",
@@ -1074,6 +1082,82 @@ class InstalledEntrypointTests(unittest.TestCase):
                 check_wheel_install._check_installed_v049_workflows(
                     python,
                     archive_entrypoint,
+                    fixture_root,
+                    cwd=self.temp_root,
+                )
+
+    def test_installed_v0410_batch_workflow_requires_exact_evidence(self) -> None:
+        compile(
+            check_wheel_install.INSTALLED_V0410_BATCH_SMOKE_SCRIPT,
+            "<installed-v0410-batch-wheel-smoke>",
+            "exec",
+        )
+        python = self.scripts / "python.exe"
+        fixture_root = self.temp_root / "v0410-batch-fixture"
+        expected = {
+            "ok": True,
+            "schema": check_wheel_install.INSTALLED_V0410_BATCH_SMOKE_SCHEMA,
+            "entrypoint_route": "installed_archive_cli_main",
+            "item_count": 3,
+            "source_receipt_count": 3,
+            "prepared_capture_request_count": 1,
+            "derived_prepared_request_only": True,
+            "source_native_approval_count": 1,
+            "capture_native_approval_count": 1,
+            "fresh_separate_approvals": True,
+            "capture_terminal_item_count": 3,
+            "captured_item_count": 3,
+            "object_bytes_exact": True,
+            "no_progress_invocation_count": 4,
+            "stderr_empty": True,
+            "provider_api_called": False,
+            "production_credential_store_accessed": False,
+            "test_only_ephemeral_approval_key_used": True,
+            "credential_material_used_for_local_authentication": True,
+            "credential_values_echoed": False,
+            "private_values_echoed": False,
+            "absolute_paths_echoed": False,
+        }
+        with mock.patch.object(
+            check_wheel_install,
+            "_run_installed_entrypoint",
+            return_value=json.dumps(expected),
+        ) as run_mock:
+            evidence = (
+                check_wheel_install._check_installed_v0410_batch_workflow(
+                    python,
+                    fixture_root,
+                    cwd=self.temp_root,
+                )
+            )
+
+        self.assertEqual(evidence, expected)
+        command = run_mock.call_args.args[0]
+        self.assertEqual(command[:3], [str(python), "-I", "-c"])
+        self.assertEqual(command[-1], str(fixture_root))
+        self.assertIn("source-intake-batch", command[3])
+        self.assertIn("objet-capture-batch", command[3])
+        self.assertIn('"--no-progress"', command[3])
+        self.assertNotIn('"--manifest",\n    prepared_ref', command[3])
+        self.assertLess(
+            command[3].index("source_result = _run_cli("),
+            command[3].index("capture_plan = _run_cli("),
+        )
+        self.assertLess(
+            command[3].index("before_capture_approval = native.calls"),
+            command[3].index("capture_result = _run_cli("),
+        )
+
+        invalid = dict(expected)
+        invalid["fresh_separate_approvals"] = False
+        with mock.patch.object(
+            check_wheel_install,
+            "_run_installed_entrypoint",
+            return_value=json.dumps(invalid),
+        ):
+            with self.assertRaises(check_wheel_install.WheelCheckError):
+                check_wheel_install._check_installed_v0410_batch_workflow(
+                    python,
                     fixture_root,
                     cwd=self.temp_root,
                 )

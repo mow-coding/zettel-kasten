@@ -817,6 +817,58 @@ def _audit_exact_human_approval_terminal_record_core(
                 key[index] = 0
 
 
+def audit_exact_human_approval_succeeded_terminal_record_read_only(
+    archive_root: Path | str,
+    reference: Mapping[str, Any],
+    *,
+    expected_operation: ExactHumanApprovalOperation,
+    expected_plan_sha256: str,
+    expected_target_binding_sha256: str,
+    payload: bytes,
+    expected_mac: str,
+    key_provider: Any | None = None,
+) -> bool:
+    """Authenticate one succeeded archive-local claim without creating state.
+
+    The key remains inside the provider callback.  A missing key, malformed or
+    non-succeeded claim, archive mismatch, unsafe claim path, context mismatch,
+    or terminal-MAC mismatch is intentionally projected only as ``False``.
+    """
+
+    try:
+        if key_provider is None:
+            from .exact_human_approval_workflow import _production_key_provider
+
+            selected = _production_key_provider()
+        else:
+            selected = key_provider
+        use_key = getattr(selected, "use_key", None)
+        if not callable(use_key):
+            return False
+        return bool(
+            use_key(
+                archive_root,
+                lambda key: _audit_exact_human_approval_terminal_record_core(
+                    archive_root,
+                    reference,
+                    expected_operation=expected_operation,
+                    expected_plan_sha256=expected_plan_sha256,
+                    expected_target_binding_sha256=(
+                        expected_target_binding_sha256
+                    ),
+                    allowed_statuses=frozenset({"succeeded"}),
+                    expected_succeeded_evidence_digests=None,
+                    payload=payload,
+                    expected_mac=expected_mac,
+                    receipt_authentication_key=key,
+                ),
+                create_if_missing=False,
+            )
+        )
+    except Exception:
+        return False
+
+
 def _exclusive_create(path: Path, raw: bytes) -> None:
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
     if hasattr(os, "O_BINARY"):
@@ -1634,6 +1686,7 @@ __all__ = [
     "TERMINAL_RECORD_AUTHENTICATION_SCHEMA_VERSION",
     "TERMINAL_RECORD_MAC_DOMAIN",
     "TERMINAL_RECORD_MAC_MAX_PAYLOAD_BYTES",
+    "audit_exact_human_approval_succeeded_terminal_record_read_only",
     "exact_human_approval_archive_identity_sha256",
     "exact_human_approval_context_sha256",
 ]

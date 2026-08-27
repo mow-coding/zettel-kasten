@@ -95,6 +95,7 @@ class ExactHumanApprovalOperation(Enum):
     zettel_edge_revert = "zettel_edge_revert"
     zettel_objet_link = "zettel_objet_link"
     objet_capture = "objet_capture"
+    objet_capture_batch = "objet_capture_batch"
     objet_capture_selection_record = "objet_capture_selection_record"
     retire_draft = "retire_draft"
     warning_override = "warning_override"
@@ -108,6 +109,7 @@ class ExactHumanApprovalOperation(Enum):
     notion_property_backfill_revert = "notion_property_backfill_revert"
     object_storage_setup_registration = "object_storage_setup_registration"
     source_intake_record = "source_intake_record"
+    source_intake_batch = "source_intake_batch"
     object_storage_bytes_preservation = "object_storage_bytes_preservation"
     object_storage_formal_adoption = "object_storage_formal_adoption"
     local_recovery = "local_recovery"
@@ -155,6 +157,7 @@ _OPERATION_LABELS = {
     ExactHumanApprovalOperation.zettel_edge_revert: "제텔 연결 되돌리기",
     ExactHumanApprovalOperation.zettel_objet_link: "제텔-오브제 연결 생성",
     ExactHumanApprovalOperation.objet_capture: "단일 오브제 보존",
+    ExactHumanApprovalOperation.objet_capture_batch: "오브제 배치 전체 보존",
     ExactHumanApprovalOperation.objet_capture_selection_record: "오브제 선택 기록",
     ExactHumanApprovalOperation.retire_draft: "초안 폐기",
     ExactHumanApprovalOperation.warning_override: "경고 예외 적용",
@@ -170,6 +173,7 @@ _OPERATION_LABELS = {
         "오브제 저장소 로컬 설정 등록"
     ),
     ExactHumanApprovalOperation.source_intake_record: "새 원본 반입 근거 기록",
+    ExactHumanApprovalOperation.source_intake_batch: "새 원본 배치 반입 근거 기록",
     ExactHumanApprovalOperation.object_storage_bytes_preservation: (
         "오브제 원격 바이트 긴급 보존"
     ),
@@ -188,6 +192,9 @@ _OPERATION_QUESTIONS = {
     ExactHumanApprovalOperation.zettel_edge_revert: "이 제텔 연결만 되돌릴까요?",
     ExactHumanApprovalOperation.zettel_objet_link: "이 제텔과 오브제를 연결할까요?",
     ExactHumanApprovalOperation.objet_capture: "검증된 원본 파일을 오브제로 보존할까요?",
+    ExactHumanApprovalOperation.objet_capture_batch: (
+        "검증된 원본 배치 전체를 오브제로 보존할까요?"
+    ),
     ExactHumanApprovalOperation.objet_capture_selection_record: (
         "검증된 원본 파일의 오브제 선택 기록을 만들까요?"
     ),
@@ -222,6 +229,9 @@ _OPERATION_QUESTIONS = {
     ),
     ExactHumanApprovalOperation.source_intake_record: (
         "검토한 새 원본의 반입 근거를 기록할까요?"
+    ),
+    ExactHumanApprovalOperation.source_intake_batch: (
+        "검토한 새 원본 배치(최대 1,000개)의 반입 근거를 기록할까요?"
     ),
     ExactHumanApprovalOperation.object_storage_bytes_preservation: (
         "원격 사본이 확인되지 않은 오브제 바이트를 먼저 보존할까요?"
@@ -258,6 +268,11 @@ _OPERATION_SUMMARIES = {
     ),
     ExactHumanApprovalOperation.objet_capture: (
         "검증된 선택 manifest의 원본 바이트만 보존하고 manifest와 영수증을 남깁니다."
+    ),
+    ExactHumanApprovalOperation.objet_capture_batch: (
+        "검증된 배치 전체의 원본 바이트를 보존하고 manifest와 영수증을 남깁니다. "
+        "외부 서비스(provider) 호출, 원격 업로드, 제텔 연결, 초안 생성, "
+        "정본 발행은 하지 않습니다."
     ),
     ExactHumanApprovalOperation.objet_capture_selection_record: (
         "기존 source-intake 근거와 원본 바이트에 결속된 선택 기록 하나만 만듭니다. "
@@ -303,6 +318,11 @@ _OPERATION_SUMMARIES = {
         "본문을 읽거나 복사하지 않고, 검토한 메타데이터 계획 하나만 "
         "새 영수증으로 기록합니다."
     ),
+    ExactHumanApprovalOperation.source_intake_batch: (
+        "최대 1,000개 원본의 바이트를 다시 읽어 해시를 확인하지만, 이 반입 단계에서는 "
+        "그 바이트를 보관하거나 복사하지 않습니다. 검토된 각 항목의 메타데이터 "
+        "영수증(N개)과 이어지는 오브제 보존용 요청 1개만 기록합니다."
+    ),
     ExactHumanApprovalOperation.object_storage_bytes_preservation: (
         "확인된 로컬 오브제 바이트만 content-addressed 원격 key에 보존하고 "
         "다시 내려받아 검증합니다. 정식 연결로 표시하지 않습니다."
@@ -329,6 +349,7 @@ _OPERATION_APPROVE_BUTTONS = {
     ExactHumanApprovalOperation.zettel_edge_revert: "관계 되돌리기",
     ExactHumanApprovalOperation.zettel_objet_link: "연결 만들기",
     ExactHumanApprovalOperation.objet_capture: "오브제 보존",
+    ExactHumanApprovalOperation.objet_capture_batch: "배치 전체 보존",
     ExactHumanApprovalOperation.objet_capture_selection_record: "선택 기록 만들기",
     ExactHumanApprovalOperation.retire_draft: "초안 폐기",
     ExactHumanApprovalOperation.warning_override: "계속 실행",
@@ -342,6 +363,7 @@ _OPERATION_APPROVE_BUTTONS = {
     ExactHumanApprovalOperation.notion_property_backfill_revert: "복구 되돌리기",
     ExactHumanApprovalOperation.object_storage_setup_registration: "로컬 설정 등록",
     ExactHumanApprovalOperation.source_intake_record: "반입 근거 기록",
+    ExactHumanApprovalOperation.source_intake_batch: "배치 반입 근거 기록",
     ExactHumanApprovalOperation.object_storage_bytes_preservation: "바이트 보존",
     ExactHumanApprovalOperation.object_storage_formal_adoption: "정식 채택",
     ExactHumanApprovalOperation.local_recovery: "복구 실행",

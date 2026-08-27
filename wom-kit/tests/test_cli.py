@@ -261,11 +261,16 @@ class ArchiveCliTests(unittest.TestCase):
 
     def run_cli(self, args: list[str], stdin_text: str | None = None) -> tuple[int, str]:
         effective_args = list(args)
-        # This legacy helper intentionally merges stdout and stderr. Doctor
-        # progress is default-on from v0.4.9, so keep old assertions focused on
-        # the result stream unless a test explicitly asks to inspect progress.
+        # This legacy helper intentionally merges stdout and stderr. Progress
+        # is default-on for these long-running commands, so keep old assertions
+        # focused on the result stream unless a test explicitly inspects it.
         if (
-            effective_args[:1] == ["doctor"]
+            effective_args[:1]
+            in (
+                ["doctor"],
+                ["source-intake-batch"],
+                ["objet-capture-batch"],
+            )
             and "--progress" not in effective_args
             and "--no-progress" not in effective_args
         ):
@@ -7045,21 +7050,50 @@ class ArchiveCliTests(unittest.TestCase):
             mirror_root = fixture["mirror_root"].resolve()
             wrapper_path = fixture["wrapper_path"].resolve()
 
-            code, output = self.run_cli(
-                [
-                    "version",
-                    str(project_root),
-                    "--no-redact-local-paths",
-                    "--format",
-                    "json",
-                ]
+            real_project_update_git = (
+                archive_services._wom_kit_project_update_git
             )
+            observed_git_args: list[list[str]] = []
+
+            def observe_project_update_git(
+                root: Path,
+                args: list[str],
+                **kwargs: Any,
+            ) -> tuple[bool, str]:
+                observed_git_args.append(list(args))
+                return real_project_update_git(root, args, **kwargs)
+
+            with patch.object(
+                archive_services,
+                "_wom_kit_project_update_git",
+                side_effect=observe_project_update_git,
+            ):
+                code, output = self.run_cli(
+                    [
+                        "version",
+                        str(project_root),
+                        "--no-redact-local-paths",
+                        "--format",
+                        "json",
+                    ]
+                )
             result = json.loads(output)
             self.assertEqual(code, 1, output)
             self.assertEqual(
                 result["runtime_alignment"]["status"],
                 "project_scoped_bridge_available",
                 output,
+            )
+            self.assertFalse(
+                result["source_probe_budget"]["budget_exhausted"],
+                output,
+            )
+            self.assertFalse(
+                any(
+                    args[:3] == ["hash-object", "--no-filters", "--"]
+                    for args in observed_git_args
+                ),
+                observed_git_args,
             )
             self.assertIn(
                 "bridge_argv",
@@ -12169,7 +12203,7 @@ class ArchiveCliTests(unittest.TestCase):
             ["project_runtime_mismatch"],
         )
         self.assertEqual(result["project_pin"], "v0.4.2")
-        self.assertEqual(result["running_version"], "v0.4.9")
+        self.assertEqual(result["running_version"], "v0.4.10")
         self.assertEqual(
             result["project_runtime_argv"],
             [r".\.zettel-kasten\bin\archive.cmd"],
@@ -36393,7 +36427,7 @@ state:
             self.assertNotIn(str(first), json.dumps(first_plan))
             self.assertNotIn(str(second), json.dumps(second_plan))
 
-    def test_source_intake_batch_plans_records_and_replays_distinct_files(self) -> None:
+    def test_source_intake_batch_exact_plan_binds_distinct_files_privately(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")
             incoming = archive_root / "staging" / "batch-input"
@@ -36430,32 +36464,31 @@ state:
             )
             self.assertEqual(dry_code, 0, dry_output)
             dry = json.loads(dry_output)
-            self.assertEqual(dry["state"], "ready_to_record")
-            self.assertEqual(dry["summary"]["item_count"], 3)
-            self.assertEqual(dry["summary"]["ready_item_count"], 3)
-            self.assertEqual(len({item["source_intake_plan_sha256"] for item in dry["items"]}), 3)
-            self.assertFalse(dry["summary"]["all_or_nothing_claimed"])
-            self.assertEqual(dry["summary"]["convergence_model"], "bounded_per_item_with_replay")
-            self.assertFalse(dry["privacy_guards"]["file_bodies_read"])
-            self.assertFalse(dry["privacy_guards"]["content_hashes_calculated"])
+            self.assertEqual(dry["state"], "ready_for_exact_human_approval")
+            self.assertEqual(dry["item_count"], 3)
+            self.assertEqual(dry["ready_to_create_count"], 3)
+            self.assertEqual(
+                len(
+                    {
+                        item["source_intake_plan_sha256"]
+                        for item in dry["items"]
+                    }
+                ),
+                3,
+            )
+            self.assertTrue(dry["source_bytes_hashed"])
+            self.assertFalse(dry["source_bytes_retained"])
+            self.assertFalse(dry["private_values_echoed"])
+            self.assertTrue(dry["paths_echoed"])
+            self.assertFalse(dry["absolute_paths_echoed"])
+            self.assertFalse(dry["source_paths_echoed"])
+            self.assertTrue(dry["prepared_capture_request"]["ready"])
             self.assertNotIn("SAME_PRIVATE_BODY", dry_output)
             for name in names:
                 self.assertNotIn(name, dry_output)
-
-            self.assert_cli_compound_writer_fails_closed(
-                archive_root,
-                [
-                    "source-intake-batch",
-                    str(archive_root),
-                    "--manifest",
-                    "workbench/source-intake-batch.json",
-                    "--approve",
-                    "--expected-plan-sha256",
-                    dry["source_intake_batch_plan_sha256"],
-                    "--reviewed-by",
-                    "person:me",
-                ],
-                lifecycle_action="source_intake_batch",
+            self.assertNotIn(
+                "source-intake-batch",
+                archive_cli.COMPOUND_APPROVAL_BLOCKED_COMMANDS,
             )
 
     def test_json_format_parse_error_is_content_free_stdout_json(self) -> None:
@@ -70780,11 +70813,16 @@ class ObjetCaptureTests(unittest.TestCase):
 
     def run_cli(self, args: list[str]) -> tuple[int, str]:
         effective_args = list(args)
-        # This legacy helper merges stdout and stderr. Doctor progress is
-        # default-on from v0.4.9, so keep result assertions machine-readable
+        # This legacy helper merges stdout and stderr. Progress is default-on
+        # for long-running commands, so keep result assertions machine-readable
         # unless a test explicitly requests progress or split streams.
         if (
-            effective_args[:1] == ["doctor"]
+            effective_args[:1]
+            in (
+                ["doctor"],
+                ["source-intake-batch"],
+                ["objet-capture-batch"],
+            )
             and "--progress" not in effective_args
             and "--no-progress" not in effective_args
         ):

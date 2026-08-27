@@ -1,6 +1,6 @@
 # Exact Human Approval Contract
 
-Status: v0.4.9 one-file source-intake authority plus the v0.4.8 integrity, v0.4.7 local-recovery, and v0.4.6 R2 boundaries; v0.4.0 one-use authority baseline preserved
+Status: v0.4.10 bounded batch intake/capture authority plus prior exact-operation boundaries; v0.4.0 one-use authority baseline preserved
 
 ## Purpose
 
@@ -13,7 +13,9 @@ implemented: AI-assisted draft creation, source-fidelity session-evidence
 approval, minting, promotion, zettel-edge writes, draft retirement, warning
 overrides, human-artifact registry changes, duplicate-object reconciliation,
 and approval-integrity repair. Compound and batch mutations remain fail-closed
-until one approval can bind the complete compound target set.
+unless an explicitly documented operation-specific manifest binds the complete
+target set. v0.4.10 adds only the bounded local intake/capture exception defined
+below; it does not reopen any other compound writer.
 
 The fixed v0.4.0 fail-closed set includes mint, draft-retirement, and edge
 batches; edge and batch reverts; canonical revision write and restore write;
@@ -39,13 +41,17 @@ v0.4 exact-human writer binding. Their approval branches fail before private
 archive, project, input, credential, or target reads and before provider calls,
 mutation, or receipt publication. Historical receipts do not reactivate them.
 
-Operation-specific exceptions do not reopen those general routes. v0.4.9 adds
-one exact create-only `source-intake-record` writer. The existing-intake
-selection and exact-local single-capture paths are separately bound, as are the
-documented local object-storage registration and strict duplicate
-reconciliation paths. Their parser allowlists and exact manifests are the
-authority; batch intake, batch capture, provider mutation, and unscoped legacy
-approval remain closed.
+Operation-specific exceptions do not reopen those general routes. v0.4.9 added
+one exact create-only `source-intake-record` writer. v0.4.10 separately opens
+only bounded 1–1,000 item `source-intake-batch` and its generated local
+`objet-capture-batch` handoff. Intake uses one exact manifest, native decision,
+durable checkpoints, same-claim resume, and independent verification. Capture
+requires a second native decision and accepts only the authenticated upstream
+claim, checkpoint chain, final receipt, current receipts and bytes, and same
+archive identity. A partial capture requires a fresh exact dry-run and new
+decision; automatic retry and same-claim resume remain unavailable. Provider
+mutation and every unscoped legacy approval remain closed. Their parser
+allowlists and exact evidence contracts are the authority.
 
 ## Machine verification binding
 
