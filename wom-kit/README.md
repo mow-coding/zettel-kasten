@@ -10,12 +10,12 @@ It is not a website, SaaS app, dashboard, or visual note-taking product. The int
 
 ## Install The Command-Line Tool
 
-The exact v0.4.9 GitHub Release, when present, uses the self-contained wheel
+The exact v0.4.10 GitHub Release, when present, uses the self-contained wheel
 below. Confirm that the release exists and lists the wheel before installing
 it. The versioned URL alone is not proof that the asset is available.
 
 ```powershell
-uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.9/wom_kit-0.4.9-py3-none-any.whl"
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.10/wom_kit-0.4.10-py3-none-any.whl"
 archive --version
 ```
 
@@ -52,7 +52,25 @@ them adopted. Formal adoption verifies exact key-map entries, writes immutable
 evidence, performs one final manifest projection, and leaves every conflicting
 definition in review. The legacy compound approval path remains closed.
 
-v0.4.9 opens the one-file `source-intake-record` apply/resume path through the
+v0.4.10 opens bounded 1–1,000 item `source-intake-batch` and
+`objet-capture-batch` execution as two separate exact-human decisions. Intake
+accepts archive-relative sources and records every item plus one generated
+capture request in one checkpointed manifest; a batch that cannot produce the
+handoff fails before approval. An interrupted intake uses the same unchanged request and reviewer
+with `--resume`; WOM automatically discovers and resumes only one unambiguous
+authenticated claim, without manual approval or execution ids and without a
+new native decision. Both resume forms are project-runtime guarded. Capture accepts only
+the generated request backed by the authenticated upstream claim, checkpoint
+chain, final receipt, current receipts and bytes, and the same archive identity.
+Each native dialog identifies the complete reviewed batch, and that operation
+identity remains bound through the lower writer and durable receipt. An
+interrupted capture requires a fresh exact dry-run and new approval; it is
+never automatically retried or called same-claim resume. Synthetic 508- and
+1,000-item planning completed in 33.995 and 42.926 seconds. Remaining per-item
+Windows reconstruction cost is deferred to v0.4.11. Installing the wheel alone
+changes no client archive.
+
+v0.4.9 opened the one-file `source-intake-record` apply/resume path through the
 same exact-human boundary, without opening batch intake writers. Doctor now
 shows bounded progress, binds its object-manifest findings to one exact byte
 snapshot, and exits nonzero when that input is stale or cannot be revalidated.
@@ -81,9 +99,11 @@ control artifact. It publishes a v0.2 receipt with an embedded
 `zettel_objet_link` exact-human approval reference. It echoes no label or zettel
 body, reads no object bytes, calls no provider, and exposes no MCP writer.
 
-The matching structured link revert, Objet capture enable/batch, and every
-legacy capture-selection approval remain fixed closed. Only the exact existing-
-intake selection mode and the exact-local single-capture mode are open. Project
+The matching structured link revert, Objet capture enable, and every unscoped
+legacy capture-selection approval remain fixed closed. The exact existing-
+intake selection and exact-local single-capture modes remain open for one-file
+work; v0.4.10 separately opens only the authenticated two-decision batch route.
+Project
 collision preservation and bytecode repair also remain
 separate from the reopened exact project updater. The parser-derived current
 inventory is the authority for every approval-available, fixed-closed, or
@@ -101,6 +121,7 @@ and repaired high-risk failures can use `wom-kit/cli-error/v0.1`: exit `2` is a
 usage failure, exit `1` is policy/precondition failure, and
 `effects_state: unknown` means an exact-human workflow had started and its
 durable claim requires reconciliation rather than automatic retry. See the
+[`v0.4.10 release note`](docs/releases/v0.4.10.md),
 [`v0.4.9 release note`](docs/releases/v0.4.9.md),
 [`v0.4.8 release note`](docs/releases/v0.4.8.md),
 [`v0.4.7 release note`](docs/releases/v0.4.7.md),
@@ -952,7 +973,13 @@ tiro-import-plan
   Plan Tiro meeting transcript and audio-objet import from an archive-internal manifest. Dry-run only; preserves meeting metadata, speaker turns, timestamps, confidence, and optional audio objet refs as structure, but echoes no transcript text, participant names, source URLs, audio filenames, local paths, account ids, emails, tokens, or secrets. It calls no Tiro API, reads no audio bytes, writes no derived text, drafts no zets, and mints nothing.
 
 source-intake-record
-  Validate a reviewed source-intake dry-run JSON plan. The v0.4.9 one-file path uses an exact create-only manifest, native approval, durable checkpoints, fresh input re-derivation, and independent read-back. Batch intake remains fixed closed.
+  Validate a reviewed source-intake dry-run JSON plan. The v0.4.9 one-file path uses an exact create-only manifest, native approval, durable checkpoints, fresh input re-derivation, and independent read-back.
+
+source-intake-batch
+  Validate and record 1–1,000 reviewed local intake items plus one generated capture request through a single exact manifest and native decision. Resume an unchanged interrupted intake with the same `--manifest`, `--resume`, and `--reviewed-by`; WOM discovers the one authenticated started claim automatically, with no manual approval or execution ids and no new decision. It echoes no source path, filename, body, or provider value.
+
+objet-capture-batch
+  Derive the prepared request from a completed source-intake execution SHA-256, authenticate and revalidate its claim/checkpoint/final-receipt chain plus current receipts, bytes, and archive identity, then preview or approve one local capture batch. Partial capture requires a fresh exact dry-run and new approval; automatic retry and same-claim resume are unavailable.
 
 objet-capture-selection
   Build a reviewed selection-manifest preview for one staged file after source-intake recording. The operation-specific `--exact-existing-intake` approval path is available; general and batch selection routes remain fixed closed.
@@ -1396,9 +1423,11 @@ The first implemented vocabulary is deliberately small: `derivation_kind` is one
 
 `archive source-intake-record --source-intake-plan <json-file> --dry-run|--approve` validates a reviewed `source-intake --dry-run` JSON file and, after one native approval, can create its canonical receipt. The v0.4.9 writer is create-only and binds exact receipt bytes, checkpoints, fresh input re-derivation, and independent read-back. It rejects unknown fields, unredacted local paths, provider URLs, tokens, secrets, duplicate JSON keys, changing or linked inputs, and target collisions. It does not read file bodies, capture objets, create drafts, mint zets, call providers, upload, or clean.
 
+`archive source-intake-batch <archive-root> --manifest <json-file> --dry-run|--approve` is the v0.4.10 bounded local batch path. One batch-specific native intake decision records 1–1,000 exact receipt targets plus one generated capture request through `ExactOperationManifest v1`; every source must be archive-relative, and a batch that cannot generate the request fails before approval. Duplicate physical files, changed inputs, links/reparse points, and target collisions also fail before write. If intake is interrupted, rerun the unchanged request as `archive source-intake-batch <archive-root> --manifest <same-json-file> --resume --reviewed-by <same-actor>`; WOM discovers and authenticates the one resumable claim automatically, so operators supply no approval id, execution digest, plan digest, or second native decision. A mismatched project runtime cannot resume. The successful result returns a content-free execution SHA-256. `archive objet-capture-batch <archive-root> --source-intake-execution-sha256 <digest> --dry-run|--approve` derives that request and verifies the authenticated intake claim, checkpoint chain, final receipt, current intake receipts, current staged bytes, and same archive identity. Capture uses its own batch-specific native decision, bound through the lower writer and durable receipt. A partial or uncertain capture requires a fresh dry-run and new approval, never automatic retry, same-claim resume, or bounded per-item replay. Neither command mints, links, publishes, calls a provider, uploads, or cleans. The unchanged v0.4.9 single-file metadata route remains available for a separately reviewed external source.
+
 `archive objet-capture --project-intake-receipt <receipt> --dry-run` can preview carrying the same reviewed session receipt into an explicit capture selection. A selection manifest may also include `project_intake_receipt_path`; if both are present they must match. In v0.4.0 approval returns `compound_exact_human_approval_binding_required` before private receipt/selection/staged-byte reads or mutation, so it writes no object, manifest row, derived text, or capture receipt.
 
-For one reviewed local file, v0.4.9 supports the complete three-decision path: exact `source-intake-record`, `objet-capture-selection --exact-existing-intake`, then `objet-capture --exact-local`. Each effect has its own native decision and verification. Batch intake/capture remains fixed closed. `create-draft` and `mint-zet` are still separate operations; preserving bytes never authorizes publication.
+For one reviewed local file, v0.4.9 supports the historical three-decision path: exact `source-intake-record`, `objet-capture-selection --exact-existing-intake`, then `objet-capture --exact-local`. For 1–1,000 reviewed local files, v0.4.10 adds the separate two-decision batch path described above. `create-draft` and `mint-zet` remain separate operations; preserving bytes never authorizes publication.
 
 `archive human-artifact-store --surface-kind <kind> --dry-run` previews the contract for a user-facing human artifact app or surface. Supported kinds are `wordpress`, `joplin`, `notion`, `obsidian`, `evernote`, `generic_markdown`, and `generic_workspace`. The command keeps three roles separate: raw/original data, human-readable artifacts, and system/AI artifacts such as manifests, source maps, receipts, indexes, hashes, and version history. It writes nothing, calls no providers, starts no OAuth, creates or updates no notes, publishes no posts, uploads no files, mints no zets, and runs no ZET transport.
 

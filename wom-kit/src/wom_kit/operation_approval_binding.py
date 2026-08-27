@@ -745,7 +745,16 @@ def zettel_edge_revert_approval_binding(
 
 def objet_capture_approval_binding(
     dry_run: Mapping[str, Any],
+    *,
+    operation: ExactHumanApprovalOperation = (
+        ExactHumanApprovalOperation.objet_capture
+    ),
 ) -> ExactOperationApprovalBinding:
+    if operation not in (
+        ExactHumanApprovalOperation.objet_capture,
+        ExactHumanApprovalOperation.objet_capture_batch,
+    ):
+        raise _fail("operation_approval_plan_invalid")
     plan = _plain_mapping(dry_run)
     if (
         plan.get("ok") is not True
@@ -767,12 +776,12 @@ def objet_capture_approval_binding(
     }
     basis = {
         "schema_version": BINDING_SCHEMA_VERSION,
-        "operation": "objet_capture",
+        "operation": operation.value,
         "target": target_projection,
         "warnings": plan.get("warnings"),
     }
     return ExactOperationApprovalBinding(
-        operation=ExactHumanApprovalOperation.objet_capture,
+        operation=operation,
         plan_sha256=_sha256(basis),
         target_binding_sha256=_sha256(target_projection),
         warning_codes=_warning_codes(plan.get("warnings")),

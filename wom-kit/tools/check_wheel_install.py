@@ -802,6 +802,334 @@ print(
     )
 )
 '''
+INSTALLED_V0410_BATCH_SMOKE_SCHEMA = (
+    "wom-kit/installed-v0410-batch-wheel-smoke/v0.1"
+)
+INSTALLED_V0410_BATCH_SMOKE_SCRIPT = r'''
+import hashlib
+import io
+import json
+import sys
+from contextlib import redirect_stderr, redirect_stdout
+from pathlib import Path
+from unittest import mock
+
+from wom_kit import (
+    archive_cli,
+    objet_capture_batch_exact,
+    source_intake_batch_exact,
+)
+from wom_kit.exact_human_approval_windows import APPROVE_BUTTON_ID
+from wom_kit.exact_human_approval_workflow import (
+    _execute_exact_human_approved_write_core,
+)
+
+
+ROOT = Path(sys.argv[1])
+ROOT.mkdir(parents=True, exist_ok=False)
+REVIEWER = "person:installed-v0410-batch-smoke"
+PRIVATE_MARKER = b"SYNTHETIC_PRIVATE_V0410_BATCH_VALUE_MUST_NOT_ESCAPE"
+ITEM_COUNT = 3
+
+
+class _NativeApproval:
+    def __init__(self):
+        self.calls = 0
+
+    def show(self, **_kwargs):
+        self.calls += 1
+        return APPROVE_BUTTON_ID, True
+
+
+class _WriteKeyProvider:
+    def __init__(self):
+        self.calls = 0
+
+    def use_key(self, _root, consumer, *, create_if_missing=False):
+        if create_if_missing is not True:
+            raise RuntimeError("installed_v0410_write_key_contract_failed")
+        self.calls += 1
+        key = bytearray(range(32))
+        try:
+            return consumer(memoryview(key))
+        finally:
+            key[:] = b"\0" * len(key)
+
+
+class _ReadKeyProvider:
+    def __init__(self):
+        self.calls = 0
+
+    def use_key(self, _root, consumer, *, create_if_missing=False):
+        if create_if_missing is not False:
+            raise RuntimeError("installed_v0410_read_key_contract_failed")
+        self.calls += 1
+        key = bytearray(range(32))
+        try:
+            return consumer(memoryview(key))
+        finally:
+            key[:] = b"\0" * len(key)
+
+
+native = _NativeApproval()
+write_keys = _WriteKeyProvider()
+read_keys = _ReadKeyProvider()
+no_progress_invocation_count = 0
+
+
+def _approved_write(root, context, writer):
+    return _execute_exact_human_approved_write_core(
+        root,
+        context,
+        writer,
+        native=native,
+        key_provider=write_keys,
+    )
+
+
+def _run_cli(arguments):
+    global no_progress_invocation_count
+    if "--no-progress" not in arguments:
+        raise RuntimeError("installed_v0410_no_progress_flag_missing")
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+    with redirect_stdout(stdout), redirect_stderr(stderr):
+        code = archive_cli.main(arguments)
+    if int(code) != 0:
+        raise RuntimeError("installed_v0410_cli_execution_failed")
+    if stderr.getvalue():
+        raise RuntimeError("installed_v0410_no_progress_stderr_failed")
+    try:
+        value = json.loads(stdout.getvalue())
+    except json.JSONDecodeError:
+        raise RuntimeError("installed_v0410_cli_output_invalid") from None
+    if not isinstance(value, dict) or value.get("ok") is not True:
+        raise RuntimeError("installed_v0410_cli_result_failed")
+    serialized = json.dumps(value, ensure_ascii=False, sort_keys=True)
+    forbidden = (
+        PRIVATE_MARKER.decode("ascii"),
+        str(ROOT),
+        str(ROOT).replace("\\", "\\\\"),
+        ROOT.as_posix(),
+        "staging/incoming/item-",
+    )
+    if any(marker in serialized for marker in forbidden):
+        raise RuntimeError("installed_v0410_cli_privacy_failed")
+    no_progress_invocation_count += 1
+    return value
+
+
+(ROOT / "archive.yml").write_text(
+    "archive_id: archive:test:installed-v0410-batch\n",
+    encoding="utf-8",
+)
+staging = ROOT / "staging" / "incoming"
+staging.mkdir(parents=True)
+payloads = []
+request_items = []
+for index in range(ITEM_COUNT):
+    payload = PRIVATE_MARKER + b"-" + str(index).encode("ascii") + b"\n"
+    relative = "staging/incoming/item-" + str(index) + ".bin"
+    ROOT.joinpath(*relative.split("/")).write_bytes(payload)
+    payloads.append(payload)
+    request_items.append(
+        {
+            "item_id": "installed-item-" + str(index),
+            "local_path": relative,
+            "source_role": "primary_source",
+        }
+    )
+
+request = {
+    "schema": "wom-kit/source-intake-batch-request/v0.1",
+    "batch_id": "installed-v0410-three-item-batch",
+    "items": request_items,
+}
+request_path = ROOT / "workbench" / "source-intake-batch-request.json"
+request_path.parent.mkdir()
+request_path.write_text(
+    json.dumps(request, ensure_ascii=True, sort_keys=True, separators=(",", ":")),
+    encoding="utf-8",
+)
+
+source_common = [
+    "source-intake-batch",
+    str(ROOT),
+    "--manifest",
+    str(request_path),
+    "--no-progress",
+    "--format",
+    "json",
+]
+source_plan = _run_cli([*source_common, "--dry-run"])
+if (
+    source_plan.get("item_count") != ITEM_COUNT
+    or source_plan.get("ready_to_create_count") != ITEM_COUNT
+    or source_plan.get("prepared_capture_request", {}).get("ready") is not True
+):
+    raise RuntimeError("installed_v0410_source_plan_failed")
+
+before_source_approval = native.calls
+with mock.patch.object(
+    source_intake_batch_exact,
+    "_execute_exact_human_approved_write",
+    side_effect=_approved_write,
+):
+    source_result = _run_cli(
+        [
+            *source_common,
+            "--approve",
+            "--reviewed-by",
+            REVIEWER,
+            "--expected-plan-sha256",
+            source_plan["plan_sha256"],
+        ]
+    )
+source_approval_count = native.calls - before_source_approval
+prepared = source_result.get("prepared_capture_request", {})
+prepared_ref = prepared.get("request_ref")
+if (
+    source_result.get("state") != "completed"
+    or source_result.get("receipt_create_count") != ITEM_COUNT
+    or source_plan.get("provider_calls_performed") is not False
+    or source_plan.get("credential_material_used_for_local_authentication")
+    is not False
+    or source_plan.get("credential_values_echoed") is not False
+    or "credential_values_read" in source_plan
+    or source_result.get("provider_calls_performed") is not False
+    or source_result.get("credential_material_used_for_local_authentication")
+    is not True
+    or source_result.get("credential_values_echoed") is not False
+    or "credential_values_read" in source_result
+    or prepared.get("state") != "prepared_and_verified"
+    or prepared.get("requires_new_capture_approval") is not True
+    or prepared.get("same_claim_reused") is not False
+    or not isinstance(prepared_ref, str)
+):
+    raise RuntimeError("installed_v0410_source_apply_failed")
+
+capture_requests = list(
+    (ROOT / "receipts" / "ops" / "source-intake-batches" / "capture-requests")
+    .glob("*.objet-capture-request.json")
+)
+if (
+    len(capture_requests) != 1
+    or capture_requests[0]
+    != ROOT.joinpath(*prepared_ref.split("/"))
+):
+    raise RuntimeError("installed_v0410_derived_request_failed")
+
+capture_common = [
+    "objet-capture-batch",
+    str(ROOT),
+    "--source-intake-execution-sha256",
+    source_result["execution_sha256"],
+    "--no-progress",
+    "--format",
+    "json",
+]
+with (
+    mock.patch(
+        "wom_kit.exact_human_approval_workflow._production_key_provider",
+        return_value=read_keys,
+    ) as production_key_factory,
+    mock.patch.object(
+        objet_capture_batch_exact,
+        "_execute_exact_human_approved_write",
+        side_effect=_approved_write,
+    ),
+):
+    capture_plan = _run_cli([*capture_common, "--dry-run"])
+    before_capture_approval = native.calls
+    capture_result = _run_cli(
+        [
+            *capture_common,
+            "--approve",
+            "--reviewed-by",
+            REVIEWER,
+            "--expected-plan-sha256",
+            capture_plan["plan_sha256"],
+        ]
+    )
+    production_key_factory_calls = production_key_factory.call_count
+capture_approval_count = native.calls - before_capture_approval
+
+for payload in payloads:
+    digest = hashlib.sha256(payload).hexdigest()
+    object_path = ROOT / "objects" / "sha256" / digest[:2] / digest
+    if object_path.read_bytes() != payload:
+        raise RuntimeError("installed_v0410_object_bytes_failed")
+
+claims_root = ROOT / "profiles" / "local" / "exact-human-approvals" / "claims"
+claims = [
+    json.loads(path.read_text(encoding="utf-8"))
+    for path in sorted(claims_root.glob("approval_*.json"))
+]
+claim_operations = {
+    claim.get("context", {}).get("operation")
+    for claim in claims
+    if isinstance(claim, dict)
+}
+if (
+    source_approval_count != 1
+    or capture_approval_count != 1
+    or native.calls != 2
+    or write_keys.calls != 2
+    or read_keys.calls != 3
+    or production_key_factory_calls != 3
+    or len(claims) != 2
+    or any(claim.get("status") != "succeeded" for claim in claims)
+    or claim_operations != {"source_intake_batch", "objet_capture_batch"}
+):
+    raise RuntimeError("installed_v0410_fresh_approval_chain_failed")
+
+capture_summary = capture_result.get("summary", {})
+if (
+    capture_plan.get("summary", {}).get("item_count") != ITEM_COUNT
+    or capture_plan.get("source_intake_completion", {}).get("verified") is not True
+    or capture_plan.get("provider_calls_performed") is not False
+    or capture_plan.get("credential_values_echoed") is not False
+    or capture_result.get("state") != "completed"
+    or capture_summary.get("terminal_item_count") != ITEM_COUNT
+    or capture_summary.get("captured_item_count") != ITEM_COUNT
+    or capture_result.get("source_intake_completion", {}).get("verified") is not True
+    or capture_result.get("credential_material_used_for_local_authentication")
+    is not True
+    or capture_result.get("credential_values_echoed") is not False
+    or capture_result.get("provider_calls_performed") is not False
+):
+    raise RuntimeError("installed_v0410_capture_evidence_failed")
+
+print(
+    json.dumps(
+        {
+            "ok": True,
+            "schema": "wom-kit/installed-v0410-batch-wheel-smoke/v0.1",
+            "entrypoint_route": "installed_archive_cli_main",
+            "item_count": ITEM_COUNT,
+            "source_receipt_count": source_result["receipt_create_count"],
+            "prepared_capture_request_count": len(capture_requests),
+            "derived_prepared_request_only": True,
+            "source_native_approval_count": source_approval_count,
+            "capture_native_approval_count": capture_approval_count,
+            "fresh_separate_approvals": True,
+            "capture_terminal_item_count": capture_summary["terminal_item_count"],
+            "captured_item_count": capture_summary["captured_item_count"],
+            "object_bytes_exact": True,
+            "no_progress_invocation_count": no_progress_invocation_count,
+            "stderr_empty": True,
+            "provider_api_called": False,
+            "production_credential_store_accessed": False,
+            "test_only_ephemeral_approval_key_used": True,
+            "credential_material_used_for_local_authentication": True,
+            "credential_values_echoed": False,
+            "private_values_echoed": False,
+            "absolute_paths_echoed": False,
+        },
+        sort_keys=True,
+    )
+)
+'''
 WHEEL_PRIVACY_TEXT_EXTENSIONS = frozenset(
     {
         ".cfg",
@@ -2310,6 +2638,7 @@ def _wheel_install_success_result(
     entrypoint_evidence: dict[str, Any],
     letter140_link_evidence: dict[str, Any],
     v049_workflow_evidence: dict[str, Any],
+    v0410_batch_workflow_evidence: dict[str, Any],
     wheel_filename: str,
     wheel_sha256: str,
     artifact_preserved: bool,
@@ -2325,6 +2654,7 @@ def _wheel_install_success_result(
         "entrypoint_evidence": entrypoint_evidence,
         "installed_letter140_link_workflow": letter140_link_evidence,
         "installed_v049_recovery_workflows": v049_workflow_evidence,
+        "installed_v0410_batch_workflow": v0410_batch_workflow_evidence,
         "runtime_skill_lifecycle": "passed",
         "onboarding_preview": "passed",
         "onboarding_write": "fixed_closed",
@@ -2386,7 +2716,7 @@ def _check_installed_v049_workflows(
     *,
     cwd: Path,
 ) -> dict[str, Any]:
-    """Run current v0.4.9 recovery paths from the isolated installed package only."""
+    """Run current v0.4.10 recovery paths from the isolated installed package only."""
 
     stdout = _run_installed_entrypoint(
         [
@@ -2398,11 +2728,11 @@ def _check_installed_v049_workflows(
             str(archive_entrypoint),
         ],
         cwd=cwd,
-        label="installed v0.4.9 recovery workflows",
+        label="installed v0.4.10 recovery workflows",
     )
     evidence = _parse_entrypoint_json_object(
         stdout,
-        label="Installed v0.4.9 recovery workflow output",
+        label="Installed v0.4.10 recovery workflow output",
     )
     expected = {
         "ok": True,
@@ -2442,9 +2772,65 @@ def _check_installed_v049_workflows(
     }
     if evidence != expected:
         raise WheelCheckError(
-            "Installed v0.4.9 workflows did not prove the exact expected "
+            "Installed v0.4.10 workflows did not prove the exact expected "
             "source-intake/selection/capture, storage registration/revert, and duplicate "
             "reconciliation/revert contract."
+        )
+    return evidence
+
+
+def _check_installed_v0410_batch_workflow(
+    python: Path,
+    fixture_root: Path,
+    *,
+    cwd: Path,
+) -> dict[str, Any]:
+    """Exercise the two-approval v0.4.10 batch chain from the installed wheel."""
+
+    stdout = _run_installed_entrypoint(
+        [
+            str(python),
+            "-I",
+            "-c",
+            INSTALLED_V0410_BATCH_SMOKE_SCRIPT,
+            str(fixture_root),
+        ],
+        cwd=cwd,
+        label="installed v0.4.10 source-intake/capture batch workflow",
+    )
+    evidence = _parse_entrypoint_json_object(
+        stdout,
+        label="Installed v0.4.10 batch workflow output",
+    )
+    expected = {
+        "ok": True,
+        "schema": INSTALLED_V0410_BATCH_SMOKE_SCHEMA,
+        "entrypoint_route": "installed_archive_cli_main",
+        "item_count": 3,
+        "source_receipt_count": 3,
+        "prepared_capture_request_count": 1,
+        "derived_prepared_request_only": True,
+        "source_native_approval_count": 1,
+        "capture_native_approval_count": 1,
+        "fresh_separate_approvals": True,
+        "capture_terminal_item_count": 3,
+        "captured_item_count": 3,
+        "object_bytes_exact": True,
+        "no_progress_invocation_count": 4,
+        "stderr_empty": True,
+        "provider_api_called": False,
+        "production_credential_store_accessed": False,
+        "test_only_ephemeral_approval_key_used": True,
+        "credential_material_used_for_local_authentication": True,
+        "credential_values_echoed": False,
+        "private_values_echoed": False,
+        "absolute_paths_echoed": False,
+    }
+    if evidence != expected:
+        raise WheelCheckError(
+            "Installed v0.4.10 batch workflow did not prove the exact expected "
+            "three-file, derived-request, fresh-two-approval, byte-preservation, "
+            "no-progress, and privacy contract."
         )
     return evidence
 
@@ -2737,6 +3123,13 @@ def check_wheel(output_dir: Path | None = None) -> dict[str, Any]:
             temp_root / "v049-recovery-archives",
             cwd=temp_root,
         )
+        v0410_batch_workflow_evidence = (
+            _check_installed_v0410_batch_workflow(
+                python,
+                temp_root / "v0410-batch-archive",
+                cwd=temp_root,
+            )
+        )
 
         wheel_sha256 = hashlib.sha256(wheel.read_bytes()).hexdigest()
         artifact_preserved = False
@@ -2759,6 +3152,7 @@ def check_wheel(output_dir: Path | None = None) -> dict[str, Any]:
             entrypoint_evidence=entrypoint_evidence,
             letter140_link_evidence=letter140_link_evidence,
             v049_workflow_evidence=v049_workflow_evidence,
+            v0410_batch_workflow_evidence=v0410_batch_workflow_evidence,
             wheel_filename=wheel.name,
             wheel_sha256=wheel_sha256,
             artifact_preserved=artifact_preserved,

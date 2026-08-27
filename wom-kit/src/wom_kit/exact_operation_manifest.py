@@ -35,6 +35,12 @@ VERIFICATION_SCHEMA = "wom-kit/exact-operation-verification/v1"
 RESULT_SCHEMA = "wom-kit/exact-operation-result/v1"
 FINAL_RECEIPT_SCHEMA = "wom-kit/exact-operation-final-receipt/v1"
 APPROVAL_AUTHORITY_SCHEMA = "wom-kit/exact-operation-approval-authority/v1"
+COMPLETION_AUTHENTICATION_SCHEMA = (
+    "wom-kit/exact-operation-completion-authentication/v1"
+)
+COMPLETION_AUTHENTICATION_PAYLOAD_SCHEMA = (
+    "wom-kit/exact-operation-completion-authentication-payload/v1"
+)
 
 EXACT_OPERATION_LOCAL_ROOT = "profiles/local/exact-operations"
 EXACT_OPERATION_RECEIPTS_ROOT = "receipts/ops/exact-operations"
@@ -67,10 +73,12 @@ _MAX_FIELD_VALUE_BYTES = 64 * 1024 * 1024
 _MAX_CANONICAL_BYTES = 64 * 1024 * 1024
 _MAX_CHECKPOINT_FILE_BYTES = 256 * 1024 * 1024
 _MAX_OPERATION_EVIDENCE_ENTRIES = 256
+_MAX_COMPLETION_AUTHENTICATION_PAYLOAD_BYTES = 128 * 1024
 _LOCK_BYTES = b"wom-kit/exact-operation-writer-lock/v1\n"
 
 FieldValue = bytes | None
 ExecutionMode = Literal["apply", "revert"]
+CompletionAuthenticator = Callable[[bytes], Mapping[str, Any]]
 ProgressStage = Literal[
     "preflight",
     "heartbeat",
@@ -1654,30 +1662,282 @@ class FileExactOperationCheckpointStore:
             document = _strict_json_document(raw[:-1])
         except (UnicodeError, ValueError, json.JSONDecodeError):
             raise _fail("exact_operation_result_receipt_failed") from None
-        if (
-            document.get("schema") != FINAL_RECEIPT_SCHEMA
-            or not isinstance(document.get("result"), Mapping)
-            or document["result"].get("execution_sha256") != execution_sha256
-            or type(document.get("receipt_sha256")) is not str
-        ):
-            raise _fail("exact_operation_result_receipt_failed")
-        _validate_stable_result_document(document["result"])
-        supplied = _digest(
-            document["receipt_sha256"],
+        return validate_exact_operation_final_receipt_document(
+            document,
+            expected_execution_sha256=execution_sha256,
+        )
+
+
+def validate_exact_operation_final_receipt_document(
+    document: Mapping[str, Any],
+    *,
+    expected_execution_sha256: str | None = None,
+) -> dict[str, Any]:
+    """Validate one already-read final receipt without creating store state.
+
+    Domain adapters sometimes need to prove that an earlier exact operation
+    completed before they can safely plan a downstream operation.  Requiring
+    a :class:`FileExactOperationCheckpointStore` for that read would create
+    private directories and acquire a writer lock during a dry-run.  This pure
+    validator keeps those downstream checks read-only while reusing exactly
+    the same final-receipt contract as the checkpoint store.
+    """
+
+    if not isinstance(document, Mapping):
+        raise _fail("exact_operation_result_receipt_failed")
+    normalized = dict(document)
+    result = normalized.get("result")
+    expected = (
+        _digest(
+            expected_execution_sha256,
             code="exact_operation_result_receipt_failed",
         )
-        basis = dict(document)
-        basis.pop("receipt_sha256")
-        if not hmac.compare_digest(supplied, _digest_document(basis)):
+        if expected_execution_sha256 is not None
+        else None
+    )
+    if (
+        normalized.get("schema") != FINAL_RECEIPT_SCHEMA
+        or not isinstance(result, Mapping)
+        or type(normalized.get("receipt_sha256")) is not str
+        or (
+            expected is not None
+            and result.get("execution_sha256") != expected
+        )
+    ):
+        raise _fail("exact_operation_result_receipt_failed")
+    _validate_stable_result_document(result)
+    supplied = _digest(
+        normalized["receipt_sha256"],
+        code="exact_operation_result_receipt_failed",
+    )
+    basis = dict(normalized)
+    basis.pop("receipt_sha256")
+    if not hmac.compare_digest(supplied, _digest_document(basis)):
+        raise _fail("exact_operation_result_receipt_failed")
+    return normalized
+
+
+def load_exact_operation_final_receipt_read_only(
+    archive_root: Path | str,
+    execution_sha256: str,
+    *,
+    heartbeat: Callable[[], None] | None = None,
+) -> dict[str, Any] | None:
+    """Read one completed exact-operation receipt without creating state.
+
+    This is the dry-run-safe counterpart of
+    :meth:`FileExactOperationCheckpointStore.load_final_receipt`.  It preserves
+    the same no-link directory chain, bounded stable-file read, trailing-newline,
+    duplicate-key, canonical result, and self-hash checks without acquiring a
+    writer lock or creating missing directories.
+    """
+
+    root = _exact_operation_archive_root(archive_root)
+    expected = _digest(
+        execution_sha256,
+        code="exact_operation_result_receipt_failed",
+    )
+    current = root
+    for part in Path(EXACT_OPERATION_RECEIPTS_ROOT).parts:
+        current = current / part
+        try:
+            info = os.lstat(current)
+        except FileNotFoundError:
+            return None
+        except OSError:
+            raise _fail("exact_operation_result_receipt_failed") from None
+        if (
+            not stat.S_ISDIR(info.st_mode)
+            or stat.S_ISLNK(info.st_mode)
+            or _path_is_reparse(info)
+        ):
             raise _fail("exact_operation_result_receipt_failed")
-        return document
+    path = current / (expected.removeprefix("sha256:") + ".json")
+    try:
+        raw = _read_plain_file(
+            path,
+            max_bytes=_MAX_CANONICAL_BYTES,
+            heartbeat=heartbeat or (lambda: None),
+        )
+    except FileNotFoundError:
+        return None
+    except OSError:
+        raise _fail("exact_operation_result_receipt_failed") from None
+    if not raw.endswith(b"\n"):
+        raise _fail("exact_operation_result_receipt_failed")
+    try:
+        document = _strict_json_document(raw[:-1])
+    except (UnicodeError, ValueError, json.JSONDecodeError):
+        raise _fail("exact_operation_result_receipt_failed") from None
+    validated = validate_exact_operation_final_receipt_document(
+        document,
+        expected_execution_sha256=expected,
+    )
+    checkpoint_rows = _load_exact_operation_checkpoints_read_only(
+        root,
+        expected,
+        heartbeat=heartbeat,
+    )
+    checkpoint_authority = _validate_final_checkpoint_evidence(
+        checkpoint_rows,
+        result=validated["result"],
+    )
+    authentication = validated["result"].get("completion_authentication")
+    if authentication is not None:
+        if checkpoint_authority is None:
+            raise _fail("exact_operation_result_receipt_failed")
+        try:
+            authentication_authority = ExactOperationApprovalAuthority.from_reference(
+                authentication["approval_reference"]
+            )
+        except (ExactOperationManifestError, KeyError, TypeError):
+            raise _fail("exact_operation_result_receipt_failed") from None
+        if checkpoint_authority != authentication_authority:
+            raise _fail("exact_operation_result_receipt_failed")
+    return validated
+
+
+def _load_exact_operation_checkpoints_read_only(
+    archive_root: Path,
+    execution_sha256: str,
+    *,
+    heartbeat: Callable[[], None] | None,
+) -> list[dict[str, Any]]:
+    """Strictly read the checkpoint JSONL paired with one final receipt."""
+
+    callback = heartbeat or (lambda: None)
+    current = archive_root
+    for part in (*Path(EXACT_OPERATION_LOCAL_ROOT).parts, "checkpoints"):
+        current = current / part
+        try:
+            if not _plain_directory(current):
+                raise _fail("exact_operation_result_receipt_failed")
+        except (FileNotFoundError, OSError):
+            raise _fail("exact_operation_result_receipt_failed") from None
+    path = current / (
+        _digest(
+            execution_sha256,
+            code="exact_operation_result_receipt_failed",
+        ).removeprefix("sha256:")
+        + ".jsonl"
+    )
+    try:
+        raw = _read_plain_file(
+            path,
+            max_bytes=_MAX_CHECKPOINT_FILE_BYTES,
+            heartbeat=callback,
+        )
+    except (FileNotFoundError, OSError):
+        raise _fail("exact_operation_result_receipt_failed") from None
+    if not raw or not raw.endswith(b"\n"):
+        raise _fail("exact_operation_result_receipt_failed")
+    rows: list[dict[str, Any]] = []
+    try:
+        for line in raw.splitlines(keepends=True):
+            callback()
+            if not line.endswith(b"\n") or line == b"\n":
+                raise ValueError("invalid_jsonl_record")
+            rows.append(_strict_json_document(line[:-1]))
+    except (UnicodeError, ValueError, json.JSONDecodeError):
+        raise _fail("exact_operation_result_receipt_failed") from None
+    # Recheck the directory chain after the stable file read so a parent-path
+    # substitution during the read cannot silently become trusted evidence.
+    current = archive_root
+    for part in (*Path(EXACT_OPERATION_LOCAL_ROOT).parts, "checkpoints"):
+        current = current / part
+        try:
+            if not _plain_directory(current):
+                raise _fail("exact_operation_result_receipt_failed")
+        except (FileNotFoundError, OSError):
+            raise _fail("exact_operation_result_receipt_failed") from None
+    return rows
+
+
+def _load_resume_checkpoint_rows_read_only(
+    archive_root: Path,
+    execution_sha256: str,
+    *,
+    heartbeat: Callable[[], None] | None,
+) -> list[dict[str, Any]] | None:
+    """Read one partial checkpoint chain without creating recovery state.
+
+    ``None`` means that the exact digest-named checkpoint does not exist.  An
+    existing but empty, malformed, linked, reparse-backed, or unstable file is
+    never treated as absence: it is an invalid recovery candidate.
+    """
+
+    callback = heartbeat or (lambda: None)
+    root = _exact_operation_archive_root(archive_root)
+    parts = (*Path(EXACT_OPERATION_LOCAL_ROOT).parts, "checkpoints")
+    current = root
+    for part in parts:
+        current = current / part
+        try:
+            info = os.lstat(current)
+        except FileNotFoundError:
+            return None
+        except OSError:
+            raise _fail("exact_operation_checkpoint_invalid") from None
+        if (
+            not stat.S_ISDIR(info.st_mode)
+            or stat.S_ISLNK(info.st_mode)
+            or _path_is_reparse(info)
+        ):
+            raise _fail("exact_operation_checkpoint_invalid")
+
+    path = current / (
+        _digest(
+            execution_sha256,
+            code="exact_operation_checkpoint_invalid",
+        ).removeprefix("sha256:")
+        + ".jsonl"
+    )
+    try:
+        raw = _read_plain_file(
+            path,
+            max_bytes=_MAX_CHECKPOINT_FILE_BYTES,
+            heartbeat=callback,
+        )
+    except FileNotFoundError:
+        return None
+    except OSError:
+        raise _fail("exact_operation_checkpoint_invalid") from None
+    if not raw or not raw.endswith(b"\n"):
+        raise _fail("exact_operation_checkpoint_invalid")
+
+    rows: list[dict[str, Any]] = []
+    try:
+        for line in raw.splitlines(keepends=True):
+            callback()
+            if not line.endswith(b"\n") or line == b"\n":
+                raise ValueError("invalid_jsonl_record")
+            rows.append(_strict_json_document(line[:-1]))
+    except (UnicodeError, ValueError, json.JSONDecodeError):
+        raise _fail("exact_operation_checkpoint_invalid") from None
+
+    # Match the final-receipt reader's parent-chain recheck.  No directory,
+    # writer lock, checkpoint file, or key is created by this read surface.
+    current = root
+    for part in parts:
+        current = current / part
+        try:
+            info = os.lstat(current)
+        except OSError:
+            raise _fail("exact_operation_checkpoint_invalid") from None
+        if (
+            not stat.S_ISDIR(info.st_mode)
+            or stat.S_ISLNK(info.st_mode)
+            or _path_is_reparse(info)
+        ):
+            raise _fail("exact_operation_checkpoint_invalid")
+    return rows
 
 
 def _validate_final_checkpoint_evidence(
     rows: Sequence[Mapping[str, Any]],
     *,
     result: Mapping[str, Any],
-) -> None:
+) -> ExactOperationApprovalAuthority | None:
     """Require a complete generic checkpoint chain before final publication."""
 
     if (
@@ -1705,6 +1965,7 @@ def _validate_final_checkpoint_evidence(
     }
     previous: str | None = None
     approval_document: dict[str, Any] | None = None
+    checkpoint_authority: ExactOperationApprovalAuthority | None = None
     approval_initialized = False
     current_item: tuple[int, str] | None = None
     current_fields: set[str] = set()
@@ -1771,6 +2032,9 @@ def _validate_final_checkpoint_evidence(
             raise _fail("exact_operation_result_receipt_failed")
         if not approval_initialized:
             approval_document = row_approval
+            checkpoint_authority = (
+                parsed_authority if raw_approval is not None else None
+            )
             approval_initialized = True
         elif row_approval != approval_document:
             raise _fail("exact_operation_result_receipt_failed")
@@ -1835,9 +2099,14 @@ def _validate_final_checkpoint_evidence(
         or len(field_receipts) != result["field_receipt_count"]
         or _digest_document(field_receipts)
         != result["field_receipt_set_sha256"]
+        or (
+            "checkpoint_chain_sha256" in result
+            and previous != result["checkpoint_chain_sha256"]
+        )
         or expected_approval_binding != result["approval_binding_sha256"]
     ):
         raise _fail("exact_operation_result_receipt_failed")
+    return checkpoint_authority
 
 
 @dataclass
@@ -2069,6 +2338,179 @@ def _field_receipt_sha256(
     )
 
 
+def _completion_authentication_payload_bytes(
+    result_basis: Mapping[str, Any],
+    *,
+    operation: str,
+    target_binding_sha256: str,
+) -> bytes:
+    """Return the fixed-domain payload authenticated by the live claim.
+
+    ``result_basis`` is the complete stable result before ``result_sha256`` and
+    ``completion_authentication`` are added.  Binding the whole basis prevents
+    a self-hash-only receipt from substituting different operation evidence,
+    counts, execution identity, approval authority, or verification evidence.
+    """
+
+    if not isinstance(result_basis, Mapping):
+        raise _fail("exact_operation_result_receipt_failed")
+    normalized_operation = _bounded_text(operation, code_pattern=_CODE_RE)
+    normalized_target = _digest(
+        target_binding_sha256,
+        code="exact_operation_result_receipt_failed",
+    )
+    try:
+        raw = (
+            json.dumps(
+                {
+                    "schema": COMPLETION_AUTHENTICATION_PAYLOAD_SCHEMA,
+                    "operation": normalized_operation,
+                    "target_binding_sha256": normalized_target,
+                    "result": dict(result_basis),
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+                allow_nan=False,
+            ).encode("utf-8")
+            + b"\n"
+        )
+    except (TypeError, ValueError, UnicodeError):
+        raise _fail("exact_operation_result_receipt_failed") from None
+    if not raw or len(raw) > _MAX_COMPLETION_AUTHENTICATION_PAYLOAD_BYTES:
+        raise _fail("exact_operation_result_receipt_failed")
+    return raw
+
+
+def exact_operation_completion_authentication_payload(
+    result: Mapping[str, Any],
+) -> bytes:
+    """Reconstruct the exact terminal-MAC payload from one stable result.
+
+    This helper performs structural validation but deliberately does not read
+    the archive claim key.  Downstream domains pass the returned bytes to the
+    exact-human approval audit helper, which authenticates the succeeded claim.
+    """
+
+    if not isinstance(result, Mapping):
+        raise _fail("exact_operation_result_receipt_failed")
+    normalized = dict(result)
+    authentication = normalized.get("completion_authentication")
+    if not isinstance(authentication, Mapping):
+        raise _fail("exact_operation_result_receipt_failed")
+    basis = dict(normalized)
+    basis.pop("result_sha256", None)
+    basis.pop("completion_authentication", None)
+    return _completion_authentication_payload_bytes(
+        basis,
+        operation=authentication.get("operation"),
+        target_binding_sha256=authentication.get("target_binding_sha256"),
+    )
+
+
+def _completion_authentication_document(
+    result_basis: Mapping[str, Any],
+    *,
+    operation: str,
+    target_binding_sha256: str,
+    approval_authority: ExactOperationApprovalAuthority,
+    authenticator: CompletionAuthenticator,
+) -> dict[str, Any]:
+    payload = _completion_authentication_payload_bytes(
+        result_basis,
+        operation=operation,
+        target_binding_sha256=target_binding_sha256,
+    )
+    try:
+        supplied = authenticator(payload)
+    except Exception:
+        raise _fail("exact_operation_result_receipt_failed") from None
+    if not isinstance(supplied, Mapping) or set(supplied) != {
+        "approval_reference",
+        "terminal_mac",
+    }:
+        raise _fail("exact_operation_result_receipt_failed")
+    reference = supplied.get("approval_reference")
+    terminal_mac = supplied.get("terminal_mac")
+    try:
+        parsed_authority = ExactOperationApprovalAuthority.from_reference(reference)
+    except ExactOperationManifestError:
+        raise _fail("exact_operation_result_receipt_failed") from None
+    if parsed_authority != approval_authority or (
+        type(terminal_mac) is not str
+        or re.fullmatch(r"hmac-sha256:[0-9a-f]{64}", terminal_mac) is None
+    ):
+        raise _fail("exact_operation_result_receipt_failed")
+    return {
+        "schema": COMPLETION_AUTHENTICATION_SCHEMA,
+        "operation": operation,
+        "target_binding_sha256": target_binding_sha256,
+        "approval_reference": dict(reference),
+        "payload_sha256": "sha256:" + hashlib.sha256(payload).hexdigest(),
+        "terminal_mac": terminal_mac,
+        "private_values_echoed": False,
+    }
+
+
+def _validate_completion_authentication_document(
+    value: Mapping[str, Any],
+    *,
+    result_basis: Mapping[str, Any],
+    approval_binding_sha256: str | None,
+) -> dict[str, Any]:
+    if not isinstance(value, Mapping):
+        raise _fail("exact_operation_result_receipt_failed")
+    authentication = dict(value)
+    if set(authentication) != {
+        "schema",
+        "operation",
+        "target_binding_sha256",
+        "approval_reference",
+        "payload_sha256",
+        "terminal_mac",
+        "private_values_echoed",
+    } or (
+        authentication.get("schema") != COMPLETION_AUTHENTICATION_SCHEMA
+        or authentication.get("private_values_echoed") is not False
+        or approval_binding_sha256 is None
+    ):
+        raise _fail("exact_operation_result_receipt_failed")
+    operation = _bounded_text(
+        authentication.get("operation"),
+        code_pattern=_CODE_RE,
+    )
+    target_binding = _digest(
+        authentication.get("target_binding_sha256"),
+        code="exact_operation_result_receipt_failed",
+    )
+    supplied_payload_sha256 = _digest(
+        authentication.get("payload_sha256"),
+        code="exact_operation_result_receipt_failed",
+    )
+    terminal_mac = authentication.get("terminal_mac")
+    if type(terminal_mac) is not str or re.fullmatch(
+        r"hmac-sha256:[0-9a-f]{64}", terminal_mac
+    ) is None:
+        raise _fail("exact_operation_result_receipt_failed")
+    try:
+        authority = ExactOperationApprovalAuthority.from_reference(
+            authentication.get("approval_reference")
+        )
+    except ExactOperationManifestError:
+        raise _fail("exact_operation_result_receipt_failed") from None
+    if not hmac.compare_digest(authority.binding_sha256, approval_binding_sha256):
+        raise _fail("exact_operation_result_receipt_failed")
+    payload = _completion_authentication_payload_bytes(
+        result_basis,
+        operation=operation,
+        target_binding_sha256=target_binding,
+    )
+    actual_payload_sha256 = "sha256:" + hashlib.sha256(payload).hexdigest()
+    if not hmac.compare_digest(supplied_payload_sha256, actual_payload_sha256):
+        raise _fail("exact_operation_result_receipt_failed")
+    return authentication
+
+
 def _validate_stable_result_document(value: Mapping[str, Any]) -> dict[str, Any]:
     if not isinstance(value, Mapping):
         raise _fail("exact_operation_result_receipt_failed")
@@ -2089,10 +2531,15 @@ def _validate_stable_result_document(value: Mapping[str, Any]) -> dict[str, Any]
         "private_values_echoed",
         "result_sha256",
     }
-    if frozenset(result) not in {
-        frozenset(required_keys),
-        frozenset(required_keys | {"operation_evidence"}),
-    }:
+    optional_keys = frozenset(
+        {
+            "operation_evidence",
+            "checkpoint_chain_sha256",
+            "completion_authentication",
+        }
+    )
+    extras = frozenset(result) - frozenset(required_keys)
+    if not required_keys.issubset(result) or not extras.issubset(optional_keys):
         raise _fail("exact_operation_result_receipt_failed")
     if (
         result.get("schema") != RESULT_SCHEMA
@@ -2120,6 +2567,24 @@ def _validate_stable_result_document(value: Mapping[str, Any]) -> dict[str, Any]
             ExactOperationEvidence.from_document(result["operation_evidence"])
         except ExactOperationManifestError:
             raise _fail("exact_operation_result_receipt_failed") from None
+    if "completion_authentication" in result:
+        if "checkpoint_chain_sha256" not in result:
+            raise _fail("exact_operation_result_receipt_failed")
+        result_basis = dict(result)
+        result_basis.pop("result_sha256")
+        completion_authentication = result_basis.pop(
+            "completion_authentication"
+        )
+        _validate_completion_authentication_document(
+            completion_authentication,
+            result_basis=result_basis,
+            approval_binding_sha256=approval_binding_sha256,
+        )
+    if "checkpoint_chain_sha256" in result:
+        _digest(
+            result["checkpoint_chain_sha256"],
+            code="exact_operation_result_receipt_failed",
+        )
     for name in (
         "item_count",
         "field_count",
@@ -2325,6 +2790,81 @@ def _load_checkpoint_state(
         verified,
         previous,
     )
+
+
+def validate_exact_operation_resume_checkpoint_read_only(
+    archive_root: Path | str,
+    manifest: ExactOperationManifest,
+    *,
+    execution_sha256: str,
+    approval_authority: ExactOperationApprovalAuthority,
+    heartbeat: Callable[[], None] | None = None,
+) -> bool:
+    """Authenticate one digest-bound partial execution without side effects.
+
+    The execution digest is recomputed from ``manifest`` and the authenticated
+    approval authority before the private checkpoint filename is considered.
+    Missing evidence returns ``False``.  Existing malformed or forged evidence
+    raises the fixed checkpoint-invalid error and can never become a candidate.
+    """
+
+    if (
+        type(manifest) is not ExactOperationManifest
+        or type(approval_authority) is not ExactOperationApprovalAuthority
+        or type(execution_sha256) is not str
+        or _SHA256_RE.fullmatch(execution_sha256) is None
+    ):
+        raise _fail("exact_operation_checkpoint_invalid")
+    expected_execution = exact_operation_execution_sha256(
+        manifest,
+        mode="apply",
+        approval_authority=approval_authority,
+    )
+    if not hmac.compare_digest(expected_execution, execution_sha256):
+        raise _fail("exact_operation_checkpoint_invalid")
+
+    callback = heartbeat or (lambda: None)
+    root = _exact_operation_archive_root(archive_root)
+    rows = _load_resume_checkpoint_rows_read_only(
+        root,
+        execution_sha256,
+        heartbeat=callback,
+    )
+    if rows is None:
+        return False
+
+    class _ReadOnlyCheckpointRows:
+        def load(
+            self,
+            requested_execution_sha256: str,
+            *,
+            heartbeat: Callable[[], None],
+        ) -> Sequence[Mapping[str, Any]]:
+            heartbeat()
+            if not hmac.compare_digest(
+                requested_execution_sha256,
+                execution_sha256,
+            ):
+                raise _fail("exact_operation_checkpoint_invalid")
+            return tuple(dict(row) for row in rows or ())
+
+    selection = _selection(
+        manifest,
+        mode="apply",
+        selected_fields=None,
+    )
+    state = _load_checkpoint_state(
+        manifest,
+        mode="apply",
+        execution_sha256=execution_sha256,
+        selection=selection,
+        checkpoint_store=_ReadOnlyCheckpointRows(),
+        heartbeat=callback,
+        approval_authority=approval_authority,
+    )
+    if not state.rows:
+        raise _fail("exact_operation_checkpoint_invalid")
+    return True
 
 
 def _append_checkpoint(
@@ -2765,6 +3305,7 @@ def _run_exact_operation(
     verifier: ExactOperationIndependentVerifier,
     checkpoint_store: ExactOperationCheckpointStore,
     approval_authority: ExactOperationApprovalAuthority | None,
+    completion_authenticator: CompletionAuthenticator | None,
     resume: bool,
     progress_hook: Callable[[ExactOperationProgress], None] | None,
 ) -> dict[str, Any]:
@@ -2775,6 +3316,10 @@ def _run_exact_operation(
     if (
         approval_authority is not None
         and type(approval_authority) is not ExactOperationApprovalAuthority
+    ):
+        raise _fail("exact_operation_manifest_invalid")
+    if completion_authenticator is not None and (
+        approval_authority is None or not callable(completion_authenticator)
     ):
         raise _fail("exact_operation_manifest_invalid")
     publisher = _ProgressPublisher(progress_hook)
@@ -3035,6 +3580,9 @@ def _run_exact_operation(
         "item_count": len(selection),
         "field_count": total_fields,
         "checkpoint_count": len(checkpoint_state.rows),
+        "checkpoint_chain_sha256": checkpoint_state.rows[-1][
+            "checkpoint_sha256"
+        ],
         "field_receipt_count": len(field_receipts),
         "field_receipt_set_sha256": _digest_document(field_receipts),
         "independent_verification_sha256": verification["verification_sha256"],
@@ -3043,6 +3591,17 @@ def _run_exact_operation(
     if manifest.operation_evidence is not None:
         stable_result_basis["operation_evidence"] = (
             manifest.operation_evidence.document()
+        )
+    if completion_authenticator is not None:
+        assert approval_authority is not None
+        stable_result_basis["completion_authentication"] = (
+            _completion_authentication_document(
+                stable_result_basis,
+                operation=manifest.operation,
+                target_binding_sha256=manifest.target_set_sha256,
+                approval_authority=approval_authority,
+                authenticator=completion_authenticator,
+            )
         )
     stable_result = {
         **stable_result_basis,
@@ -3098,6 +3657,7 @@ def apply_exact_operation(
     verifier: ExactOperationIndependentVerifier,
     checkpoint_store: ExactOperationCheckpointStore,
     approval_authority: ExactOperationApprovalAuthority | None = None,
+    completion_authenticator: CompletionAuthenticator | None = None,
     resume: bool = False,
     progress_hook: Callable[[ExactOperationProgress], None] | None = None,
 ) -> dict[str, Any]:
@@ -3110,6 +3670,7 @@ def apply_exact_operation(
         verifier=verifier,
         checkpoint_store=checkpoint_store,
         approval_authority=approval_authority,
+        completion_authenticator=completion_authenticator,
         resume=resume,
         progress_hook=progress_hook,
     )
@@ -3124,6 +3685,7 @@ def revert_exact_operation_fields(
     verifier: ExactOperationIndependentVerifier,
     checkpoint_store: ExactOperationCheckpointStore,
     approval_authority: ExactOperationApprovalAuthority | None = None,
+    completion_authenticator: CompletionAuthenticator | None = None,
     resume: bool = False,
     progress_hook: Callable[[ExactOperationProgress], None] | None = None,
 ) -> dict[str, Any]:
@@ -3136,6 +3698,7 @@ def revert_exact_operation_fields(
         verifier=verifier,
         checkpoint_store=checkpoint_store,
         approval_authority=approval_authority,
+        completion_authenticator=completion_authenticator,
         resume=resume,
         progress_hook=progress_hook,
     )
@@ -3145,6 +3708,8 @@ __all__ = [
     "ABSENT_FIELD_SHA256",
     "APPROVAL_AUTHORITY_SCHEMA",
     "CHECKPOINT_SCHEMA",
+    "COMPLETION_AUTHENTICATION_PAYLOAD_SCHEMA",
+    "COMPLETION_AUTHENTICATION_SCHEMA",
     "EXACT_OPERATION_LOCAL_ROOT",
     "EXACT_OPERATION_RECEIPTS_ROOT",
     "EXACT_OPERATION_WRITER_LOCK",
@@ -3164,6 +3729,7 @@ __all__ = [
     "ExactOperationProgress",
     "ExactOperationTargetWriter",
     "ExactOperationWriterLock",
+    "CompletionAuthenticator",
     "FileExactOperationCheckpointStore",
     "MANIFEST_SCHEMA",
     "RESULT_SCHEMA",
@@ -3175,4 +3741,8 @@ __all__ = [
     "inspect_exact_operation_state",
     "revert_exact_operation_fields",
     "verify_exact_operation",
+    "exact_operation_completion_authentication_payload",
+    "validate_exact_operation_final_receipt_document",
+    "load_exact_operation_final_receipt_read_only",
+    "validate_exact_operation_resume_checkpoint_read_only",
 ]
