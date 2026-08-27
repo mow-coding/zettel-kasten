@@ -173,12 +173,35 @@ class OperationApprovalBindingTests(unittest.TestCase):
             "warnings": [],
         }
         first_capture = objet_capture_approval_binding(capture_plan)
+        batch_capture = objet_capture_approval_binding(
+            capture_plan,
+            operation=ExactHumanApprovalOperation.objet_capture_batch,
+        )
+        self.assertIs(
+            first_capture.operation,
+            ExactHumanApprovalOperation.objet_capture,
+        )
+        self.assertIs(
+            batch_capture.operation,
+            ExactHumanApprovalOperation.objet_capture_batch,
+        )
+        self.assertNotEqual(first_capture.plan_sha256, batch_capture.plan_sha256)
+        self.assertEqual(
+            first_capture.target_binding_sha256,
+            batch_capture.target_binding_sha256,
+        )
         changed_capture = copy.deepcopy(capture_plan)
         changed_capture["items"][0]["source_sha256"] = "8" * 64
         self.assertNotEqual(
             first_capture.target_binding_sha256,
             objet_capture_approval_binding(changed_capture).target_binding_sha256,
         )
+        with self.assertRaises(OperationApprovalBindingError) as invalid:
+            objet_capture_approval_binding(
+                capture_plan,
+                operation=ExactHumanApprovalOperation.mint_zet,
+            )
+        self.assertEqual(invalid.exception.code, "operation_approval_plan_invalid")
 
     def test_retire_binding_covers_all_four_durable_refs(self) -> None:
         refs = {

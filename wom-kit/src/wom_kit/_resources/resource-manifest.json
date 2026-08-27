@@ -1,6 +1,6 @@
 {
   "schema": "wom-kit/package-resource-manifest/v0.1",
-  "version": "0.4.9",
+  "version": "0.4.10",
   "source_of_truth": "wom-kit source resource directories",
   "file_count": 165,
   "files": [
@@ -703,8 +703,8 @@
     {
       "source": "templates/ai-runtime/wom-archive/references/capture-draft-and-publication.md",
       "packaged": "templates/ai-runtime/wom-archive/references/capture-draft-and-publication.md",
-      "bytes": 9624,
-      "sha256": "55644b68dd662ecc7165a30e0a66716d370aae77bede417d2798146ad19ffd40"
+      "bytes": 9615,
+      "sha256": "f197787aaaef21bdf8343524436ea834b8953fb943346276b987890dd3df7646"
     },
     {
       "source": "templates/ai-runtime/wom-archive/references/foreign-sharing-and-trust.md",
@@ -715,8 +715,8 @@
     {
       "source": "templates/ai-runtime/wom-archive/references/operator-contract.md",
       "packaged": "templates/ai-runtime/wom-archive/references/operator-contract.md",
-      "bytes": 75781,
-      "sha256": "1c9d54c81d01dfe05eca9a7f981c5f23fbabbedc2439ed1d339dfa0939d06a42"
+      "bytes": 76988,
+      "sha256": "06eabe5af0b971c6b501f8267168584da63322920d419d5a49d6612458298cbe"
     },
     {
       "source": "templates/ai-runtime/wom-archive/references/reading-memory-and-revision.md",
@@ -989,10 +989,10 @@
       "sha256": "d619dc26af3216498c8392dfe838b0fe752d4bad9da998a58ca682d668fc510c"
     },
     {
-      "source": "docs/releases/v0.4.9.md",
-      "packaged": "release-notes/v0.4.9.md",
-      "bytes": 4675,
-      "sha256": "3e70e53abca7b11258b9ae64c5b809b2f313d5d2a18813fffecc8a6ba2b84e70"
+      "source": "docs/releases/v0.4.10.md",
+      "packaged": "release-notes/v0.4.10.md",
+      "bytes": 5194,
+      "sha256": "6e9e51d358db437ddd438fda2f3ab074e04d8387b0204feef1c30d0ba35dde55"
     }
   ]
 }

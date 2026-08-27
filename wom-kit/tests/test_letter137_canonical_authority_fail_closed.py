@@ -529,24 +529,6 @@ class Letter137CanonicalAuthorityCliBoundaryTests(
                 ),
                 (
                     [
-                        "objet-capture-batch",
-                        root,
-                        "--manifest",
-                        PRIVATE_MANIFEST,
-                        "--approve",
-                        "--expected-plan-sha256",
-                        PRIVATE_DIGEST,
-                        "--reviewed-by",
-                        PRIVATE_REVIEWER,
-                        "--format",
-                        "json",
-                    ],
-                    completion_workflows,
-                    "objet_capture_batch_apply",
-                    "objet_capture_batch",
-                ),
-                (
-                    [
                         "markup-normalization",
                         root,
                         "--expected-plan-sha256",
@@ -737,6 +719,104 @@ class Letter137CanonicalAuthorityCliBoundaryTests(
                     )
             self.assertEqual(_snapshot(root_path), before)
 
+    def test_objet_capture_batch_routes_to_native_exact_adapter_only(
+        self,
+    ) -> None:
+        plan = mock.Mock()
+        plan.public_document.return_value = {
+            "ok": True,
+            "state": "ready_for_exact_human_approval",
+            "summary": {"batch_id": "batch-safe", "item_count": 1},
+            "blockers": [],
+            "warnings": [],
+        }
+        applied = {
+            "ok": True,
+            "state": "completed",
+            "summary": {"batch_id": "batch-safe", "item_count": 1},
+            "blockers": [],
+            "warnings": [],
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            root_path = self._root(Path(tmp))
+            root = str(root_path)
+            before = _snapshot(root_path)
+            common = [
+                "objet-capture-batch",
+                root,
+                "--manifest",
+                PRIVATE_MANIFEST,
+                "--source-intake-execution-sha256",
+                PRIVATE_DIGEST,
+                "--no-progress",
+                "--format",
+                "json",
+            ]
+            with (
+                mock.patch.object(
+                    archive_cli.objet_capture_batch_exact,
+                    "plan_objet_capture_batch",
+                    return_value=plan,
+                ) as exact_plan,
+                mock.patch.object(
+                    completion_workflows,
+                    "objet_capture_batch_plan",
+                    side_effect=AssertionError("legacy plan entered"),
+                ) as legacy_plan,
+            ):
+                args = self.parser.parse_args([*common, "--dry-run"])
+                stdout = io.StringIO()
+                stderr = io.StringIO()
+                with redirect_stdout(stdout), redirect_stderr(stderr):
+                    code = args.func(args)
+            self.assertEqual(code, 0, stderr.getvalue())
+            self.assertTrue(json.loads(stdout.getvalue())["ok"])
+            exact_plan.assert_called_once()
+            legacy_plan.assert_not_called()
+
+            with (
+                mock.patch.object(
+                    archive_cli.objet_capture_batch_exact,
+                    "plan_objet_capture_batch",
+                    return_value=plan,
+                ) as exact_plan,
+                mock.patch.object(
+                    archive_cli.objet_capture_batch_exact,
+                    "execute_objet_capture_batch",
+                    return_value=dict(applied),
+                ) as exact_execute,
+                mock.patch.object(
+                    completion_workflows,
+                    "objet_capture_batch_apply",
+                    side_effect=AssertionError("legacy writer entered"),
+                ) as legacy_apply,
+            ):
+                args = self.parser.parse_args(
+                    [
+                        *common,
+                        "--approve",
+                        "--expected-plan-sha256",
+                        PRIVATE_DIGEST,
+                        "--reviewed-by",
+                        PRIVATE_REVIEWER,
+                    ]
+                )
+                stdout = io.StringIO()
+                stderr = io.StringIO()
+                with redirect_stdout(stdout), redirect_stderr(stderr):
+                    code = args.func(args)
+            self.assertEqual(code, 0, stderr.getvalue())
+            self.assertTrue(json.loads(stdout.getvalue())["ok"])
+            exact_plan.assert_called_once()
+            exact_execute.assert_called_once_with(
+                plan,
+                expected_plan_sha256=PRIVATE_DIGEST,
+                reviewer_claim=PRIVATE_REVIEWER,
+                progress_hook=mock.ANY,
+            )
+            legacy_apply.assert_not_called()
+            self.assertEqual(_snapshot(root_path), before)
+
     def test_text_blocker_says_binding_is_unimplemented_and_write_did_not_start(
         self,
     ) -> None:
@@ -834,19 +914,6 @@ class Letter137CanonicalAuthorityCliBoundaryTests(
                     ],
                     saved_view_workflows,
                     "saved_view_revert_plan",
-                ),
-                (
-                    [
-                        "objet-capture-batch",
-                        root,
-                        "--manifest",
-                        PRIVATE_MANIFEST,
-                        "--dry-run",
-                        "--format",
-                        "json",
-                    ],
-                    completion_workflows,
-                    "objet_capture_batch_plan",
                 ),
                 (
                     [

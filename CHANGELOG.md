@@ -6,6 +6,31 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.4.10 - 2026-08-27
+
+- Opened bounded 1–1,000 item `source-intake-batch` execution through one
+  exact batch-specific native decision, durable authenticated checkpoints,
+  ID-free unambiguous same-claim intake resume, and one generated capture
+  request. A batch that cannot generate that request now fails before approval.
+- Opened the corresponding `objet-capture-batch` path only when the generated
+  request is backed by the authenticated upstream approval, checkpoint chain,
+  final receipt, current intake receipts, current staged bytes, and the same
+  archive identity.
+- Kept capture recovery honest: interrupted or partial capture requires a fresh
+  exact dry-run and new native decision; it is never automatically retried or
+  mislabeled as same-claim resume.
+- Bound both batch-specific approval identities through the lower writers and
+  durable receipts, kept reconciliation strictly read-only, blocked resume from
+  a mismatched project runtime, and made create-only publication and uncertain
+  post-write reporting fail closed.
+- Removed quadratic request rereads. Synthetic Windows planning completed in
+  33.995 seconds for 508 items and 42.926 seconds for 1,000 items, while
+  preserving early status and bounded content-free heartbeat output.
+- Deferred the remaining per-item Windows path/configuration reconstruction
+  bottleneck to v0.4.11 and kept release installation separate from client
+  archive execution. Verified the two-decision path from an isolated installed
+  wheel without reading or writing a client archive.
+
 ## v0.4.9 - 2026-08-27
 
 - Completed the exact single-file intake chain by opening

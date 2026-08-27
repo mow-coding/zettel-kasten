@@ -9,7 +9,7 @@ from wom_kit import __version__
 
 KIT_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = KIT_ROOT.parent
-EXPECTED_CURRENT_VERSION = "0.4.9"
+EXPECTED_CURRENT_VERSION = "0.4.10"
 EXPECTED_CURRENT_TAG = f"v{EXPECTED_CURRENT_VERSION}"
 CURRENT_VERSION = f"v{__version__}"
 CURRENT_RELEASE_NOTE = f"{EXPECTED_CURRENT_TAG}.md"
@@ -20,8 +20,8 @@ CURRENT_WHEEL_URL = (
     f"wom_kit-{EXPECTED_CURRENT_VERSION}-py3-none-any.whl"
 )
 CURRENT_RUNTIME_STATUS = (
-    f"Status: {CURRENT_VERSION} one-file intake operability, "
-    "Doctor snapshot truth, and exact local storage setup"
+    f"Status: {CURRENT_VERSION} bounded batch operability, "
+    "authenticated handoff, and fresh capture recovery"
 )
 CURRENT_MATRIX_VERSION = f"Version: {CURRENT_VERSION} implementation and release scope"
 MATRIX_PATH = KIT_ROOT / "docs" / "capability-matrix.md"
@@ -4311,7 +4311,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "apply exact-human available in v0.4.1; revert fixed closed",
             "v0.4.1 adds an operation-specific exact-human binding only for apply",
             "Objet capture selection manifest",
-            f"still fixed closed in {CURRENT_VERSION}",
+            f"authenticated exact-human local writer in {CURRENT_VERSION}",
             "Bounded multi-item Objet capture",
             "Notion objet locator bridge",
             "read-only in v0.4.0",

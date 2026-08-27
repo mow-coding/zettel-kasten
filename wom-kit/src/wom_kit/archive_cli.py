@@ -408,6 +408,7 @@ from . import (
     human_artifact_registry,
     legacy_coordination_cleanup as legacy_cleanup,
     notion_property_backfill,
+    objet_capture_batch_exact,
     objet_capture_selection_exact,
     operation_control,
     operation_approval_binding,
@@ -418,6 +419,7 @@ from . import (
     runtime_guidance,
     runtime_skill_install,
     saved_view_workflows,
+    source_intake_batch_exact,
     source_intake_record_exact,
     source_fidelity_session_evidence,
 )
@@ -14607,48 +14609,159 @@ def command_source_intake_record(args: argparse.Namespace) -> int:
 
 
 def command_source_intake_batch(args: argparse.Namespace) -> int:
-    if args.approve:
-        return _exact_human_approval_cli_error(
-            args,
-            lifecycle_action="source_intake_batch",
-            reason_code="compound_exact_human_approval_binding_required",
+    reporter = CommandProgressReporter(
+        bool(getattr(args, "progress", True)),
+        label="source-intake-batch",
+    )
+    reporter.progress("source-intake-batch-plan", "start", None, None)
+
+    def exact_progress(event: ExactOperationProgress) -> None:
+        document = event.public_document()
+        reporter.progress(
+            "exact-operation-" + str(document["stage"]),
+            str(document["mode"]),
+            int(document["completed_items"]),
+            int(document["total_items"]),
         )
+
     try:
-        result = archive_services.source_intake_batch(
+        resume_approval_id = str(
+            getattr(args, "resume_approval_id", "") or ""
+        ).strip()
+        automatic_resume = bool(getattr(args, "resume", False))
+        reconcile = bool(getattr(args, "reconcile", False))
+        execution_sha256 = str(
+            getattr(args, "execution_sha256", "") or ""
+        ).strip()
+        mode_count = sum(
+            (
+                bool(args.dry_run),
+                bool(args.approve),
+                automatic_resume,
+                bool(resume_approval_id),
+                reconcile,
+            )
+        )
+        if mode_count != 1:
+            raise source_intake_batch_exact.SourceIntakeBatchExactError(
+                "source_intake_batch_request_invalid"
+            )
+        if args.approve and (
+            not args.reviewed_by or not args.expected_plan_sha256
+        ):
+            raise source_intake_batch_exact.SourceIntakeBatchExactError(
+                "source_intake_batch_approval_required"
+            )
+        if resume_approval_id and (
+            not args.reviewed_by or not execution_sha256
+        ):
+            raise source_intake_batch_exact.SourceIntakeBatchExactError(
+                "source_intake_batch_resume_invalid"
+            )
+        if automatic_resume and not args.reviewed_by:
+            raise source_intake_batch_exact.SourceIntakeBatchExactError(
+                "source_intake_batch_resume_invalid"
+            )
+        if reconcile and not execution_sha256:
+            raise source_intake_batch_exact.SourceIntakeBatchExactError(
+                "source_intake_batch_resume_invalid"
+            )
+        if execution_sha256 and not resume_approval_id and not reconcile:
+            raise source_intake_batch_exact.SourceIntakeBatchExactError(
+                "source_intake_batch_request_invalid"
+            )
+
+        plan = source_intake_batch_exact.plan_source_intake_batch(
             Path(args.archive_root),
             Path(args.manifest),
-            dry_run=args.dry_run,
-            approve=args.approve,
-            expected_plan_sha256=args.expected_plan_sha256,
-            reviewed_by=args.reviewed_by,
         )
-    except (archive_services.ArchiveServiceError, OSError, ValueError) as exc:
-        print(str(exc), file=sys.stderr)
-        return 1
+        reporter.progress("source-intake-batch-plan", "done", None, None)
+        if args.dry_run:
+            result = plan.public_document()
+        elif args.approve:
+            result = source_intake_batch_exact.execute_source_intake_batch(
+                plan,
+                expected_plan_sha256=args.expected_plan_sha256 or "",
+                reviewer_claim=args.reviewed_by or "",
+                progress_hook=exact_progress,
+            )
+        elif automatic_resume:
+            result = source_intake_batch_exact.resume_source_intake_batch_auto(
+                plan,
+                reviewer_claim=args.reviewed_by or "",
+                progress_hook=exact_progress,
+            )
+        elif resume_approval_id:
+            result = source_intake_batch_exact.resume_source_intake_batch(
+                plan,
+                reviewer_claim=args.reviewed_by or "",
+                approval_id=resume_approval_id,
+                execution_sha256=execution_sha256,
+                progress_hook=exact_progress,
+            )
+        else:
+            result = source_intake_batch_exact.reconcile_source_intake_batch(
+                plan,
+                execution_sha256=execution_sha256,
+            )
+    except (
+        source_intake_batch_exact.SourceIntakeBatchExactError,
+        operation_approval_binding.OperationApprovalBindingError,
+        ExactHumanApprovalError,
+        ExactHumanApprovalWindowsError,
+        ExactHumanApprovalWorkflowError,
+        ExactOperationManifestError,
+        archive_services.ArchiveServiceError,
+        OSError,
+    ) as error:
+        result = source_intake_batch_exact.failure_document(
+            str(getattr(error, "code", "") or "")
+        )
+    finally:
+        reporter.close()
 
     if args.format == "json":
         print_json(result)
     else:
-        print(f"Source intake batch {result.get('state') or '-'}.")
-        print(f"Archive: {result.get('archive_id') or '-'}")
+        print(f"Source intake batch: {result.get('state') or 'blocked'}")
         print(f"Batch: {result.get('batch_id') or '-'}")
-        print(f"Plan SHA-256: {result.get('source_intake_batch_plan_sha256') or '-'}")
-        summary = result.get("summary") if isinstance(result.get("summary"), dict) else {}
+        print(f"Plan SHA-256: {result.get('plan_sha256') or '-'}")
         print(
             "Items: "
-            f"{summary.get('item_count', 0)} total, "
-            f"{summary.get('ready_item_count', 0)} ready, "
-            f"{summary.get('blocked_item_count', 0)} blocked"
+            f"{result.get('item_count', 0)} total, "
+            f"{result.get('ready_to_create_count', 0)} ready, "
+            f"{result.get('target_collision_count', 0)} collision"
         )
-        if result.get("files_written"):
-            print(f"Files written: {len(result['files_written'])}")
-        elif result.get("would_change"):
-            print(f"Would change: {len(result['would_change'])} file(s)")
+        print(f"Writes performed: {bool(result.get('writes_performed'))}")
+        prepared = result.get("prepared_capture_request")
+        if (
+            isinstance(prepared, dict)
+            and prepared.get("ready") is True
+            and isinstance(prepared.get("intake_execution_sha256"), str)
+        ):
+            print("Next: review the freshly calculated Objet capture plan.")
+            print(
+                "Use --source-intake-execution-sha256 "
+                + prepared["intake_execution_sha256"]
+                + "; WOM derives and verifies the prepared request automatically."
+            )
         if result.get("blockers"):
             print("Blockers:")
             for blocker in result["blockers"]:
                 print(f"- {blocker}")
-    return 0 if result.get("ok", True) else 1
+        for action in result.get("next_safe_actions", []):
+            if (
+                isinstance(action, dict)
+                and action.get("action")
+                == "rerun_unchanged_request_with_resume"
+            ):
+                print(
+                    "Next safe action: rerun this unchanged batch request "
+                    "with --resume. WOM will automatically require exactly "
+                    "one authenticated candidate; do not inspect private "
+                    "folders or copy approval/execution IDs."
+                )
+    return 0 if result.get("ok") else 1
 
 
 def print_source_intake_record_result(result: dict[str, Any], output_format: str) -> None:
@@ -23826,54 +23939,87 @@ def command_staged_cleanup_check(args: argparse.Namespace) -> int:
 
 
 def command_objet_capture_batch(args: argparse.Namespace) -> int:
-    if args.approve:
-        return _exact_human_approval_cli_error(
-            args,
-            lifecycle_action="objet_capture_batch",
-            reason_code="compound_exact_human_approval_binding_required",
+    reporter = CommandProgressReporter(
+        bool(getattr(args, "progress", True)),
+        label="objet-capture-batch",
+    )
+    reporter.progress("objet-capture-batch-plan", "start", None, None)
+
+    def batch_progress(
+        event: objet_capture_batch_exact.ObjetCaptureBatchProgress,
+    ) -> None:
+        document = event.public_document()
+        reporter.progress(
+            str(document["stage"]),
+            str(document["event"]),
+            int(document["current"]),
+            int(document["total"]),
         )
-    if args.dry_run == args.approve:
-        print(
-            "objet-capture-batch requires exactly one of --dry-run or --approve.",
-            file=sys.stderr,
-        )
-        return 1
-    if args.approve and (
-        not args.reviewed_by or not args.expected_plan_sha256
-    ):
-        print(
-            "objet-capture-batch approval requires --reviewed-by and --expected-plan-sha256.",
-            file=sys.stderr,
-        )
-        return 1
+
     try:
-        if args.dry_run:
-            result = completion_workflows.objet_capture_batch_plan(
-                Path(args.archive_root),
-                manifest_path=args.manifest,
+        if args.dry_run == args.approve:
+            raise objet_capture_batch_exact.ObjetCaptureBatchExactError(
+                "objet_capture_batch_plan_blocked"
             )
-        else:
-            result = completion_workflows.objet_capture_batch_apply(
-                Path(args.archive_root),
-                manifest_path=args.manifest,
+        if args.approve and (
+            not args.reviewed_by or not args.expected_plan_sha256
+        ):
+            raise objet_capture_batch_exact.ObjetCaptureBatchExactError(
+                "objet_capture_batch_reviewer_invalid"
+            )
+        plan = objet_capture_batch_exact.plan_objet_capture_batch(
+            Path(args.archive_root),
+            Path(args.manifest) if args.manifest else None,
+            intake_execution_sha256=str(
+                getattr(args, "source_intake_execution_sha256", "") or ""
+            ),
+            progress_hook=batch_progress,
+        )
+        reporter.progress("objet-capture-batch-plan", "done", None, None)
+        result = (
+            plan.public_document()
+            if args.dry_run
+            else objet_capture_batch_exact.execute_objet_capture_batch(
+                plan,
                 expected_plan_sha256=args.expected_plan_sha256,
-                reviewed_by=args.reviewed_by,
+                reviewer_claim=args.reviewed_by or "",
+                progress_hook=batch_progress,
             )
-    except Exception:
-        print("objet-capture-batch failed safely.", file=sys.stderr)
-        return 1
+        )
+    except (
+        objet_capture_batch_exact.ObjetCaptureBatchExactError,
+        operation_approval_binding.OperationApprovalBindingError,
+        ExactHumanApprovalError,
+        ExactHumanApprovalWindowsError,
+        ExactHumanApprovalWorkflowError,
+        archive_services.ArchiveServiceError,
+        OSError,
+    ) as error:
+        result = objet_capture_batch_exact.failure_document(
+            str(getattr(error, "code", "") or "")
+        )
+    finally:
+        reporter.close()
     if args.format == "json":
         print_json(result)
     else:
         summary = result.get("summary") if isinstance(result.get("summary"), dict) else {}
+        capture_summary = (
+            summary.get("capture_summary")
+            if isinstance(summary.get("capture_summary"), dict)
+            else {}
+        )
         print(f"Objet capture batch: {result.get('state') or '-'}")
         print(f"- batch: {summary.get('batch_id') or '-'}")
-        print(f"- items: {summary.get('item_count', 0)}")
+        print(
+            "- items: "
+            f"{summary.get('terminal_item_count', summary.get('item_count', 0))}"
+        )
         if args.dry_run:
             print(f"- ready/blocked: {summary.get('ready_item_count', 0)}/{summary.get('blocked_item_count', 0)}")
         else:
-            def actual_count(key: str) -> str:
-                value = summary.get(key)
+            def actual_count(source: dict[str, Any], key: str) -> str:
+                value = source.get(key)
                 return (
                     str(value)
                     if isinstance(value, int)
@@ -23883,20 +24029,42 @@ def command_objet_capture_batch(args: argparse.Namespace) -> int:
                 )
 
             print(
-                "- original written/skipped/blocked: "
-                f"{actual_count('original_written_item_count')}/"
-                f"{actual_count('original_skipped_item_count')}/"
-                f"{actual_count('original_blocked_item_count')}"
+                "- terminal captured/already present/partial/blocked/"
+                "outcome unverified: "
+                f"{actual_count(summary, 'captured_item_count')}/"
+                f"{actual_count(summary, 'already_present_item_count')}/"
+                f"{actual_count(summary, 'partial_item_count')}/"
+                f"{actual_count(summary, 'blocked_item_count')}/"
+                f"{actual_count(summary, 'outcome_unverified_item_count')}"
             )
             print(
-                "- derived text written/skipped/blocked: "
-                f"{actual_count('derived_text_written_item_count')}/"
-                f"{actual_count('derived_text_skipped_item_count')}/"
-                f"{actual_count('derived_text_blocked_item_count')}"
+                "- local capture written/repaired/rematerialized/skipped/blocked: "
+                f"{actual_count(capture_summary, 'captured')}/"
+                f"{actual_count(capture_summary, 'repair_appended')}/"
+                f"{actual_count(capture_summary, 're_materialized')}/"
+                f"{actual_count(capture_summary, 'skipped')}/"
+                f"{actual_count(capture_summary, 'blocked')}"
             )
+            if any(
+                key in capture_summary
+                for key in (
+                    "derived_text_written",
+                    "derived_text_skipped",
+                    "derived_text_blocked",
+                )
+            ):
+                print(
+                    "- derived text written/skipped/blocked: "
+                    f"{actual_count(capture_summary, 'derived_text_written')}/"
+                    f"{actual_count(capture_summary, 'derived_text_skipped')}/"
+                    f"{actual_count(capture_summary, 'derived_text_blocked')}"
+                )
         print(f"- convergence: {summary.get('convergence_model') or '-'}")
-        if summary.get("plan_sha256"):
-            print(f"- plan sha256: {summary['plan_sha256']}")
+        if result.get("plan_sha256") or summary.get("plan_sha256"):
+            print(
+                "- plan sha256: "
+                + str(result.get("plan_sha256") or summary["plan_sha256"])
+            )
         for key, label in (
             ("writes_may_have_occurred", "writes may have occurred"),
             ("outcome_unverified", "outcome unverified"),
@@ -29565,7 +29733,6 @@ COMPOUND_APPROVAL_BLOCKED_COMMANDS = frozenset(
         "object-storage-upload",
         "object-storage-upload-evidence",
         "object-storage-wom-location-reconcile",
-        "objet-capture-batch",
         "objet-capture-enable",
         "objet-source-metadata-write",
         "onboard",
@@ -29587,7 +29754,6 @@ COMPOUND_APPROVAL_BLOCKED_COMMANDS = frozenset(
         "saved-view-revert",
         "saved-view-write",
         "scan-source",
-        "source-intake-batch",
         "tiro-lossless-recovery-capture",
         "tiro-lossless-recovery-fetch-run",
         "transfer-ownership",
@@ -33156,11 +33322,57 @@ def build_parser() -> argparse.ArgumentParser:
     source_intake_batch.add_argument("--approve", action="store_true", help="Record the reviewed item plans and batch receipt.")
     source_intake_batch.add_argument(
         "--expected-plan-sha256",
-        help="Complete source_intake_batch_plan_sha256 from the reviewed dry-run; required with --approve.",
+        help="Complete plan_sha256 from the reviewed dry-run; required with --approve.",
     )
-    source_intake_batch.add_argument("--reviewed-by", help="Safe reviewer id required with --approve.")
+    source_intake_batch.add_argument(
+        "--reviewed-by",
+        help="Safe reviewer id required with --approve or --resume.",
+    )
+    source_intake_batch.add_argument(
+        "--resume",
+        action="store_true",
+        help=(
+            "Resume exactly one authenticated interrupted run for this unchanged "
+            "manifest and reviewer; no private-folder inspection or copied IDs."
+        ),
+    )
+    source_intake_batch.add_argument(
+        "--resume-approval-id",
+        help=(
+            "Expert compatibility path: resume one explicitly identified "
+            "authenticated started claim. Prefer --resume."
+        ),
+    )
+    source_intake_batch.add_argument(
+        "--execution-sha256",
+        help="Exact execution SHA-256 required with --resume-approval-id or --reconcile.",
+    )
+    source_intake_batch.add_argument(
+        "--reconcile",
+        action="store_true",
+        help="Verify an existing exact-operation final receipt without writing.",
+    )
+    source_intake_batch_progress = (
+        source_intake_batch.add_mutually_exclusive_group()
+    )
+    source_intake_batch_progress.add_argument(
+        "--progress",
+        dest="progress",
+        action="store_true",
+        help="Print content-free progress and heartbeats to stderr (default).",
+    )
+    source_intake_batch_progress.add_argument(
+        "--no-progress",
+        dest="progress",
+        action="store_false",
+        help="Disable progress output.",
+    )
+    source_intake_batch.set_defaults(progress=True)
     source_intake_batch.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
-    source_intake_batch.set_defaults(func=command_source_intake_batch)
+    source_intake_batch.set_defaults(
+        func=command_source_intake_batch,
+        _wom_project_runtime_resume_effect=True,
+    )
 
     list_zettels = subcommands.add_parser("list-zettels", help="List draft and/or canonical zettels.")
     list_zettels.add_argument("archive_root", help="Archive root to inspect.")
@@ -37583,13 +37795,43 @@ def build_parser() -> argparse.ArgumentParser:
     objet_capture_batch.add_argument("archive_root", help="Archive root receiving the batch.")
     objet_capture_batch.add_argument(
         "--manifest",
+        help=(
+            "Optional exact prepared request path. By default WOM derives the "
+            "digest-named request from the completed source-intake execution."
+        ),
+    )
+    objet_capture_batch.add_argument(
+        "--source-intake-execution-sha256",
         required=True,
-        help="Batch request JSON. Relative paths resolve from the archive root.",
+        help=(
+            "Execution SHA-256 returned by the completed source-intake-batch; "
+            "WOM verifies its exact final receipt automatically."
+        ),
     )
     objet_capture_batch.add_argument("--dry-run", action="store_true", help="Build and preflight the complete selection without writes.")
-    objet_capture_batch.add_argument("--approve", action="store_true", help="Persist the reviewed selection and execute capture.")
+    objet_capture_batch.add_argument(
+        "--approve",
+        action="store_true",
+        help="Capture the reviewed local bytes and publish exact capture evidence.",
+    )
     objet_capture_batch.add_argument("--expected-plan-sha256", help="Exact SHA-256 from a fresh batch dry-run.")
     objet_capture_batch.add_argument("--reviewed-by", help="Safe reviewer id required for approval.")
+    objet_capture_batch_progress = (
+        objet_capture_batch.add_mutually_exclusive_group()
+    )
+    objet_capture_batch_progress.add_argument(
+        "--progress",
+        dest="progress",
+        action="store_true",
+        help="Print content-free progress and heartbeats to stderr (default).",
+    )
+    objet_capture_batch_progress.add_argument(
+        "--no-progress",
+        dest="progress",
+        action="store_false",
+        help="Disable progress output.",
+    )
+    objet_capture_batch.set_defaults(progress=True)
     objet_capture_batch.add_argument("--format", choices=["text", "json"], default="text")
     objet_capture_batch.set_defaults(func=command_objet_capture_batch)
 
@@ -40548,8 +40790,16 @@ def _project_write_runtime_guard(
     runtime_effect = getattr(args, "_wom_project_runtime_effect", None)
     if runtime_effect == "bootstrap_update":
         return None
-    if runtime_effect != "project_write" and not bool(
-        getattr(args, "approve", False)
+    resume_write_effect = bool(
+        getattr(args, "_wom_project_runtime_resume_effect", False)
+    ) and bool(
+        getattr(args, "resume", False)
+        or str(getattr(args, "resume_approval_id", "") or "").strip()
+    )
+    if (
+        runtime_effect != "project_write"
+        and not bool(getattr(args, "approve", False))
+        and not resume_write_effect
     ):
         return None
     candidate_attributes = (

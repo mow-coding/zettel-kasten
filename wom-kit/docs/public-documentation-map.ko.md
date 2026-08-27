@@ -6,13 +6,20 @@
 철학 갱신: 2026-07-15
 하네스 호환 경계 갱신: 2026-07-16
 
-현재 v0.4.9 변경점: 일반적인 단일 파일 반입 경로가 세 번의 분리된 네이티브
+현재 v0.4.10 변경점: 로컬 항목 1–1,000개의 intake와 capture가 중요한 결정 두
+번으로 이어집니다. intake 작업은 모든 exact 영수증과 생성된 capture 요청 하나를
+checkpoint와 같은-claim resume로 기록합니다. capture는 인증된 이전 승인,
+checkpoint chain, 최종 영수증, 현재 영수증과 bytes, 같은 보관함 identity가 모두
+맞는 요청만 받습니다. 일부 capture 뒤에는 새 exact plan과 새 결정이 필요합니다.
+합성 508·1,000개 plan은 43초 안에 끝났고, 남은 Windows 항목별 재구성 비용은
+v0.4.11로 미뤘습니다. 공개나 설치만으로 클라이언트 보관함은 바뀌지 않습니다.
+
+과거 v0.4.9 변경점: 일반적인 단일 파일 반입 경로가 세 번의 분리된 네이티브
 승인을 거쳐 정확한 source-intake 영수증, 기존 intake 기반 selection, 선택한
 로컬 bytes의 capture까지 이어집니다. Doctor는 제한된 progress를 기본 출력하고,
 중복 진단을 하나의 안정된 object-manifest byte snapshot에 결속하며, 종료 전에
 입력이 바뀌거나 재검증할 수 없으면 실패합니다. object-storage setup은 명시적인
-profile ID가 필요하고 로컬 setup만 기록합니다. batch writer와 보관함 전체 성능
-개선은 아직 증명되지 않은 열린 작업입니다.
+profile ID가 필요하고 로컬 setup만 기록합니다.
 
 과거 v0.4.3 변경점: `ExactOperationManifest v1`이 정확한 승인, checkpoint,
 resume, 독립 검증, 필드 단위 revert를 위한 공통 기반을 제공합니다. 기존 Git
@@ -500,6 +507,7 @@ local archive
 - [v0.2.11 Delegate Capability Contract Work Log](../plans/work-log-2026-05-23-delegate-capability-contract.md)
 - [Changelog](../../CHANGELOG.md)
 - [Release Notes](releases/)
+- [v0.4.10 릴리스 노트](releases/v0.4.10.md)
 - [v0.4.9 릴리스 노트](releases/v0.4.9.md)
 - [v0.4.8 릴리스 노트](releases/v0.4.8.md)
 - [v0.4.7 릴리스 노트](releases/v0.4.7.md)

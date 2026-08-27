@@ -1,6 +1,6 @@
 # Runtime Canonical Entry Points
 
-Status: v0.4.9 one-file intake operability, Doctor snapshot truth, and exact local storage setup
+Status: v0.4.10 bounded batch operability, authenticated handoff, and fresh capture recovery
 
 Previous checkpoint: Status: v0.4.3 exact recovery, project update, and Git backup checkpoint
 
@@ -32,7 +32,18 @@ The underlying raw context packet remains available through:
 archive runtime-context <archive-root> --format json
 ```
 
-## v0.4.9 Current Runtime Delta
+## v0.4.10 Current Runtime Delta
+
+`source-intake-batch` records 1–1,000 reviewed local intake items plus one
+generated capture request through a single exact manifest and native decision.
+`objet-capture-batch` derives that request from the returned intake execution
+SHA-256 and accepts it only after authenticating the claim, checkpoint chain,
+final receipt, current intake receipts and bytes, and same archive identity.
+The person approves those two plain-language effects; WOM verifies the machine
+evidence. Intake can resume the same unchanged claim. Partial capture instead
+requires a fresh exact dry-run and new native decision, with no automatic retry.
+
+## v0.4.9 Historical Runtime Delta
 
 The ordinary one-file intake path is now complete. `source-intake-record`
 creates one canonical intake receipt through an exact create-only manifest and
@@ -91,8 +102,8 @@ archive capabilities --machine --format json
 Its `data.approval_status_inventory` distinguishes
 `approval_available`, `approval_fixed_closed`, and `approval_not_exposed` for
 every canonical executable command path and its aliases. The current parser
-reports 315 canonical executable paths: 47 operation-specific approval routes,
-67 fixed-closed routes, and 201 routes without an approval mode. The generated
+reports 315 canonical executable paths: 49 operation-specific approval routes,
+65 fixed-closed routes, and 201 routes without an approval mode. The generated
 inventory,
 rather than a copied historical number, is authoritative.
 This is parser evidence only: it does not evaluate archive prerequisites, and
@@ -114,20 +125,20 @@ read plus its exact unique matching record set,
 exact before snapshot, create-only receipt generation, and persistent
 per-zettel control artifact. MCP exposes no link writer.
 
-`zettel-objet-link-revert`, the general and batch Objet capture mutation
-routes, and project collision/bytecode-repair writers remain fixed closed. The
-operation-specific exact existing-intake selection and exact-local single-
-capture routes are separate available paths. Other documented plans, previews,
-and audits remain available; a closed approval still returns
+`zettel-objet-link-revert`, unscoped legacy Objet-capture mutation modes, and
+project collision/bytecode-repair writers remain fixed closed. The
+operation-specific exact existing-intake selection, exact-local single capture,
+and v0.4.10 authenticated local batch path are separate available routes. Other
+documented plans, previews, and audits remain available; a closed approval still returns
 `compound_exact_human_approval_binding_required`. `project-version-update`
 itself is separately reopened with an exact target/tag/source/rollback binding.
 
 When an older global CLI must be replaced and the exact public
-v0.4.9 GitHub Release wheel has been independently confirmed, use the public
+v0.4.10 GitHub Release wheel has been independently confirmed, use the public
 wheel directly:
 
 ```powershell
-uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.9/wom_kit-0.4.9-py3-none-any.whl"
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.10/wom_kit-0.4.10-py3-none-any.whl"
 archive --version
 ```
 

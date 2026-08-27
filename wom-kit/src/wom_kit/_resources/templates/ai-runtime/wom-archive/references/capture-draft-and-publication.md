@@ -1,7 +1,6 @@
 # Capture, Draft, And Publication
 
-Use this reference for files, AI conversation logs, transcripts, OCR material,
-generated documents, drafts, minting, revisions, and retirement.
+Use this reference for files, AI conversation logs, transcripts, OCR material, generated documents, drafts, minting, revisions, and retirement.
 
 ## Preserve Source Before Summarizing It
 
@@ -11,41 +10,42 @@ Run source intake before copying or interpreting material as an archive source:
 archive source-intake <archive-root> --dry-run --local-path <local-file> --format json
 ```
 
-For many reviewed local files, put safe item ids and local paths in a private
-`wom-kit/source-intake-batch-request/v0.1` manifest, then use one plan and one
-approval gate:
+For 1-1,000 reviewed local files, put safe item ids and local paths in one private
+`wom-kit/source-intake-batch-request/v0.1` request. Preserve those request bytes:
 
 ```text
 archive source-intake-batch <archive-root> --manifest <archive-local-json> --dry-run --format json
-archive source-intake-batch <archive-root> --manifest <archive-local-json> --approve --expected-plan-sha256 <sha256:...> --reviewed-by <actor> --format json
+archive source-intake-batch <archive-root> --manifest <same-json> --approve --expected-plan-sha256 <exact-plan-sha256> --reviewed-by <actor> --format json
 ```
 
-The manifest's relative paths resolve from the archive root. Output and durable
-receipts omit those path values and file bodies. The batch creates the same
-individual source-intake plan records used by later capture and explicitly
-claims only bounded per-item replay convergence, not atomic all-or-nothing execution.
-
-For many reviewed originals, optionally paired with extracted text, use one
-closed-shape `objet-capture-batch` request and preserve every pairing field:
+Relative paths resolve from the archive root. Output and receipts omit paths and
+bodies. This decision records every intake receipt and one capture request. Keep
+the returned content-free execution SHA-256. If interrupted, keep the request
+unchanged; do not locate ids by hand or request another native decision. Use:
 
 ```text
-archive objet-capture-batch <archive-root> --manifest <archive-relative-json> --dry-run --format json
-archive objet-capture-batch <archive-root> --manifest <same-json> --expected-plan-sha256 <exact-plan-sha256> --approve --reviewed-by <actor> --format json
+archive source-intake-batch <archive-root> --manifest <same-json> --resume --reviewed-by <same-actor> --format json
 ```
 
-A paired item includes `derived_text_staged_path`, derivation/tool/review fields,
-and optional model/confidence/language/born-digital metadata. Do not rebuild the
-reviewed selection. Close original and derived requested, written-or-ready,
-skipped, and blocked counts separately. Result states `partial`,
-`evidence_incomplete`, or `recovery_required`, and blocker
-`batch_capture_outcome_unverified`, require only returned safe actions; never
-guess or replay automatically. The same request may skip existing originals
-and finish derived text. If staging is gone, use durable capture receipt object
-IDs in a reviewed `derive-text capture --from-manifest`, not a recopy.
+WOM discovers one unambiguous authenticated started claim, revalidates the same
+archive and request, and resumes only it. Otherwise stop at the public blocker.
 
-Stage selected bytes inside the archive root, prepare one reviewed capture
-selection, and preview capture before approval. A source-intake plan is not
-permission to copy, capture, import, or upload anything.
+Capture is a separate second decision. Do not rebuild its manifest; pass the
+intake execution SHA-256 so WOM derives and authenticates the request:
+
+```text
+archive objet-capture-batch <archive-root> --source-intake-execution-sha256 <intake-execution-sha256> --dry-run --format json
+archive objet-capture-batch <archive-root> --source-intake-execution-sha256 <same-intake-execution-sha256> --expected-plan-sha256 <exact-capture-plan-sha256> --approve --reviewed-by <actor> --format json
+```
+
+It revalidates the intake claim, checkpoints, final receipt, current receipts
+and bytes, and archive identity. Capture interruption never uses same-claim or
+per-item replay: preserve the archive, rerun the capture dry-run, and obtain
+a new native approval. Neither decision authorizes providers, uploads, links, drafts, minting,
+or cleanup.
+
+Stage selected bytes inside the archive root, prepare one reviewed capture selection,
+and preview it. A source-intake plan does not authorize copy, capture, import, or upload.
 
 AI conversation JSONL and AI-generated working documents may be preserved as
 objets when they are relevant evidence. Normally keep the original objet and a
