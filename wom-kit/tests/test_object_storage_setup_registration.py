@@ -708,6 +708,162 @@ class ObjectStorageSetupRegistrationTests(unittest.TestCase):
         self.assertNotIn(BUCKET, rendered)
         self.assertNotIn(STORE_REF, rendered)
 
+    def test_provider_status_and_readiness_use_exact_content_free_evidence(self) -> None:
+        plan = self.plan()
+        applied = apply_object_storage_setup_registration(
+            plan, approval_authority=_authority()
+        )
+        self.assertTrue(applied["ok"], applied)
+        before = _snapshot(self.root)
+
+        status = archive_services.provider_setup_status(self.root)
+        readiness = archive_services.object_storage_adapter_readiness_plan(
+            self.root, dry_run=True
+        )
+        private_selector_readiness = (
+            archive_services.object_storage_adapter_readiness_plan(
+                self.root,
+                provider_ref=str(plan.proposed_binding["binding_id"]),
+                dry_run=True,
+            )
+        )
+
+        self.assertEqual(_snapshot(self.root), before)
+        self.assertTrue(status["ok"], status)
+        self.assertEqual(status["status"], "ready")
+        self.assertEqual(status["receipt_count"], 1)
+        item = next(
+            row
+            for row in status["providers"]
+            if row.get("provider") == "object_storage"
+        )
+        self.assertEqual(item["status"], "metadata_and_receipt_present")
+        self.assertEqual(item["reason_code"], "object_storage_setup_evidence_valid")
+        self.assertEqual(item["setup_evidence_mode"], "exact_registration_v1")
+        self.assertTrue(item["setup_receipt_present"])
+        self.assertRegex(item["provider_binding_sha256"], r"^sha256:[0-9a-f]{64}$")
+        self.assertRegex(item["receipt_sha256"], r"^sha256:[0-9a-f]{64}$")
+        self.assertRegex(item["binding_ref_sha256"], r"^sha256:[0-9a-f]{64}$")
+        self.assertIsNone(item["binding_id"])
+        self.assertEqual(item["resource"], {})
+        self.assertIsNone(item["expected_receipt_path"])
+        self.assertIsNone(item["receipt_path"])
+        self.assertFalse(item["private_values_echoed"])
+        self.assertFalse(item["resource_details_echoed"])
+        self.assertFalse(item["receipt_path_echoed"])
+
+        self.assertTrue(readiness["ok"], readiness)
+        self.assertEqual(readiness["readiness_state"], "ready_for_future_adapter")
+        summary = readiness["provider_summary"]
+        self.assertTrue(summary["selected_provider_setup_ready"])
+        self.assertTrue(summary["selected_provider_setup_receipt_present"])
+        self.assertFalse(readiness["closed_actions"]["provider_api_called"])
+        self.assertFalse(readiness["closed_actions"]["credential_value_read"])
+        self.assertEqual(readiness["would_change"], [])
+        self.assertTrue(private_selector_readiness["ok"], private_selector_readiness)
+        self.assertTrue(private_selector_readiness["provider_ref_supplied"])
+
+        rendered = json.dumps(
+            {
+                "status": status,
+                "readiness": readiness,
+                "private_selector_readiness": private_selector_readiness,
+            },
+            sort_keys=True,
+        )
+        for private in (
+            BUCKET,
+            STORE_REF,
+            ENDPOINT_REF,
+            PROFILE_ID,
+            PROFILE_SLUG,
+            plan.receipt_relative,
+            archive_services.OBJECT_STORAGE_PROVIDER_TOKEN_ENVS[PROVIDER],
+            str(self.root),
+        ):
+            self.assertNotIn(private, rendered)
+
+    def test_malformed_exact_receipt_never_falls_back_or_echoes_private_values(
+        self,
+    ) -> None:
+        self.install_historical_bridge(mismatch=False)
+        legacy_path = next(
+            (self.root / "receipts" / "providers").glob(
+                "*.object-storage-setup.json"
+            )
+        )
+        plan = self.plan()
+        applied = apply_object_storage_setup_registration(
+            plan, approval_authority=_authority()
+        )
+        self.assertTrue(applied["ok"], applied)
+
+        secret_sentinel = "provider-private-secret-sentinel"
+        exact_path = self.root / plan.receipt_relative
+        exact_path.write_text(
+            json.dumps({"secret": secret_sentinel}) + "\n",
+            encoding="utf-8",
+        )
+        nonstandard_legacy = legacy_path.with_name("nonstandard-private.json")
+        nonstandard_document = json.loads(legacy_path.read_text(encoding="utf-8"))
+        nonstandard_document["provider_private_scalar"] = secret_sentinel
+        nonstandard_legacy.write_text(
+            json.dumps(nonstandard_document, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        before = _snapshot(self.root)
+
+        status = archive_services.provider_setup_status(self.root)
+        readiness = archive_services.object_storage_adapter_readiness_plan(
+            self.root, dry_run=True
+        )
+
+        self.assertEqual(_snapshot(self.root), before)
+        self.assertFalse(status["ok"], status)
+        self.assertEqual(status["status"], "blocked")
+        item = next(
+            row
+            for row in status["providers"]
+            if row.get("provider") == "object_storage"
+        )
+        self.assertEqual(item["status"], "metadata_receipt_mismatch")
+        self.assertEqual(
+            item["reason_code"], "object_storage_setup_evidence_mismatch"
+        )
+        self.assertEqual(
+            item["blockers"], ["object_storage_setup_evidence_mismatch"]
+        )
+        self.assertIsNone(item["setup_evidence_mode"])
+        self.assertFalse(item["setup_receipt_present"])
+        self.assertIsNone(item["receipt_sha256"])
+        self.assertFalse(readiness["ok"], readiness)
+        self.assertIn(
+            "object_storage_setup_evidence_mismatch", readiness["blockers"]
+        )
+        self.assertIn(
+            "object_storage_provider_setup_not_ready", readiness["blockers"]
+        )
+        self.assertFalse(readiness["closed_actions"]["provider_api_called"])
+        self.assertFalse(readiness["closed_actions"]["credential_value_read"])
+
+        rendered = json.dumps(
+            {"status": status, "readiness": readiness}, sort_keys=True
+        )
+        for private in (
+            BUCKET,
+            STORE_REF,
+            ENDPOINT_REF,
+            PROFILE_ID,
+            PROFILE_SLUG,
+            secret_sentinel,
+            plan.receipt_relative,
+            legacy_path.relative_to(self.root).as_posix(),
+            nonstandard_legacy.relative_to(self.root).as_posix(),
+            str(self.root),
+        ):
+            self.assertNotIn(private, rendered)
+        self.assertNotIn("strict_historical_bridge", rendered)
+
     def test_historical_bridge_rejects_incomplete_or_extended_receipts(self) -> None:
         self.install_historical_bridge(mismatch=False)
         receipt_path = next(
