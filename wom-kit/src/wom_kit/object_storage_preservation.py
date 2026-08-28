@@ -746,7 +746,7 @@ def _existing_receipt_matches(
     store_ref: str,
     inventory_sha256: str,
 ) -> bool:
-    """Conservatively validate immutable v0.1 or current v0.2 evidence."""
+    """Validate immutable v0.1/v0.2/v0.3 evidence with exact version shapes."""
 
     if document.get("schema_version") == LEGACY_RECEIPT_SCHEMA:
         return dict(document) == _legacy_receipt_document(
@@ -756,7 +756,8 @@ def _existing_receipt_matches(
             store_ref=store_ref,
             inventory_sha256=inventory_sha256,
         )
-    if document.get("schema_version") not in {PREVIOUS_RECEIPT_SCHEMA, RECEIPT_SCHEMA}:
+    schema_version = document.get("schema_version")
+    if schema_version not in {PREVIOUS_RECEIPT_SCHEMA, RECEIPT_SCHEMA}:
         return False
     required = {
         "schema_version",
@@ -784,11 +785,7 @@ def _existing_receipt_matches(
         "provider_url_echoed",
         "local_path_echoed",
     }
-    extended_count_contract = (
-        "provider_put_call_charged_count" in document
-        or "provider_put_call_count_evidence" in document
-    )
-    if extended_count_contract:
+    if schema_version == RECEIPT_SCHEMA:
         required |= {
             "provider_put_call_charged_count",
             "provider_put_call_count_evidence",

@@ -1878,6 +1878,73 @@ class ObjectStoragePreservationTests(unittest.TestCase):
             )
         Draft202012Validator(schema).validate(receipt)
 
+    def test_existing_receipt_versions_require_exact_shapes(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = self._root(Path(temporary))
+            self._write_rows(root, [self._local_row(root, b"receipt-version-shape")])
+            plan = _plan_core(
+                root,
+                provider_kind="cloudflare-r2",
+                store_ref="storage:account:test",
+            )
+            spec = plan.specs[0]
+            common = {
+                "receipt_token": spec.receipt_token,
+                "object_id": spec.object_id,
+                "size_bytes": spec.size_bytes,
+                "provider_kind": plan.provider_kind,
+                "store_ref": plan.store_ref,
+                "inventory_sha256": plan.source_inventory_sha256,
+            }
+            legacy = preservation_module._legacy_receipt_document(
+                object_id=spec.object_id,
+                size_bytes=spec.size_bytes,
+                provider_kind=plan.provider_kind,
+                store_ref=plan.store_ref,
+                inventory_sha256=plan.source_inventory_sha256,
+            )
+            current = preservation_module._receipt_document(
+                manifest_sha256=plan.manifest.manifest_sha256,
+                receipt_token=spec.receipt_token,
+                object_id=spec.object_id,
+                size_bytes=spec.size_bytes,
+                provider_kind=plan.provider_kind,
+                store_ref=plan.store_ref,
+                inventory_sha256=plan.source_inventory_sha256,
+                preservation_status="bytes_preserved",
+                classified_at="2026-08-29T00:00:00Z",
+                provider_put_call_count=1,
+                provider_put_call_charged_count=1,
+                provider_put_call_count_evidence="exact_observed",
+                remote_state="verified_match",
+            )
+            previous = dict(current)
+            previous["schema_version"] = preservation_module.PREVIOUS_RECEIPT_SCHEMA
+            previous.pop("provider_put_call_charged_count")
+            previous.pop("provider_put_call_count_evidence")
+
+            for genuine in (legacy, previous, current):
+                with self.subTest(genuine=genuine["schema_version"]):
+                    self.assertTrue(
+                        preservation_module._existing_receipt_matches(
+                            genuine, **common
+                        )
+                    )
+
+            v3_shape_with_v2_label = dict(current)
+            v3_shape_with_v2_label["schema_version"] = (
+                preservation_module.PREVIOUS_RECEIPT_SCHEMA
+            )
+            v2_shape_with_v3_label = dict(previous)
+            v2_shape_with_v3_label["schema_version"] = preservation_module.RECEIPT_SCHEMA
+            for mixed in (v3_shape_with_v2_label, v2_shape_with_v3_label):
+                with self.subTest(mixed=mixed["schema_version"]):
+                    self.assertFalse(
+                        preservation_module._existing_receipt_matches(
+                            mixed, **common
+                        )
+                    )
+
     def test_v01_receipt_contract_is_immutable_and_conservatively_reused(self):
         kit_root = Path(__file__).resolve().parents[1]
         source_path = (
