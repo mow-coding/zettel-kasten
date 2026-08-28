@@ -351,9 +351,29 @@ class Letter136ExactHumanCliTests(unittest.TestCase):
             self.assertIn("sha256:" + TARGET_SHA256, advanced)
             self.assertRegex(advanced, r"warning_set_[0-9a-f]{52}")
             rendered = primary + "\n" + advanced
-            self.assertNotIn("PRIVATE TITLE", rendered)
+            self.assertIn("초안: zet_20260820_exact_human_test", primary)
+            self.assertIn("제목: PRIVATE TITLE MUST NOT LEAK", primary)
+            self.assertNotIn("PRIVATE TITLE", advanced)
             self.assertNotIn("PRIVATE BODY", rendered)
             self.assertNotIn("private-warning-detail", rendered)
+            machine_output = stdout + stderr
+            self.assertNotIn("PRIVATE TITLE", machine_output)
+            self.assertNotIn("PRIVATE BODY", machine_output)
+            self.assertNotIn("private-warning-detail", machine_output)
+            claims = list(
+                (
+                    root
+                    / "profiles"
+                    / "local"
+                    / "exact-human-approvals"
+                    / "claims"
+                ).glob("*.json")
+            )
+            self.assertEqual(len(claims), 1)
+            durable_approval_evidence = claims[0].read_text(encoding="utf-8")
+            self.assertNotIn("PRIVATE TITLE", durable_approval_evidence)
+            self.assertNotIn("PRIVATE BODY", durable_approval_evidence)
+            self.assertNotIn("private-warning-detail", durable_approval_evidence)
 
     def test_ai_create_key_failure_is_fixed_and_content_free(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

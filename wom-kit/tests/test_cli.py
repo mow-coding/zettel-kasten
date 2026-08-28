@@ -4669,7 +4669,10 @@ class ArchiveCliTests(unittest.TestCase):
 
             doctor._check_local_profile_and_secret_safety()
 
-        self.assertIn("archive_path_escapes_root", {item.code for item in doctor.diagnostics})
+        self.assertIn(
+            "doctor_secret_scan_file_unsafe",
+            {item.code for item in doctor.diagnostics},
+        )
 
     def test_doctor_ignored_scan_path_allows_outside_paths(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

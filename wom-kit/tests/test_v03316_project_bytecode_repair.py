@@ -8,10 +8,11 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from wom_kit import completion_workflows
+from wom_kit import completion_workflows, project_runtime
 
 from . import test_completion_workflows as _completion_tests
 from . import test_letter129_project_update_collision_batch_core as _batch_core
+from . import test_project_runtime as _project_runtime_tests
 
 
 class Letter129ProjectBytecodeRepairTests(unittest.TestCase):
@@ -773,6 +774,28 @@ class Letter129BoundRepairCanaryTests(unittest.TestCase):
             (
                 fixture["metadata_root"] / "installed-version.txt"
             ).write_text(target + "\n", encoding="utf-8")
+            _project_runtime_tests._write_receipt_bound_runtime(
+                fixture["project_root"],
+                version=target.removeprefix("v"),
+            )
+            launcher = (
+                fixture["project_root"]
+                / project_runtime.PROJECT_RUNTIME_LAUNCHER_RELATIVE
+            )
+            launcher.parent.mkdir(parents=True, exist_ok=True)
+            launcher.write_bytes(project_runtime.launcher_bytes(target))
+            runtime_inspection = project_runtime.inspect_runtime(
+                fixture["project_root"],
+                target,
+            )
+            self.assertTrue(
+                runtime_inspection["receipt_candidate_valid"],
+                runtime_inspection,
+            )
+            self.assertTrue(
+                runtime_inspection["live_payload_aligned"],
+                runtime_inspection,
+            )
 
             inspect_code, inspect_output = run_cli(
                 [
@@ -814,24 +837,37 @@ class Letter129BoundRepairCanaryTests(unittest.TestCase):
             plan = json.loads(plan_output)
             self.assertTrue(plan["summary"]["collision_binding_verified"])
 
-            repair_code, repair_output = run_cli(
-                [
-                    "project-bytecode-repair",
-                    project_root,
-                    "--target",
-                    target,
-                    "--expected-materialization-plan-sha256",
-                    materialization_plan_sha256,
-                    "--expected-plan-sha256",
-                    plan["summary"]["plan_sha256"],
-                    "--approve",
-                    "--reviewed-by",
-                    "person:letter-129-cli-canary",
-                    "--affirm-external-writers-quiescent",
-                    "--format",
-                    "json",
-                ]
-            )
+            # This in-process CLI harness cannot actually originate from the
+            # synthetic runtime interpreter.  Keep the real static receipt and
+            # live-payload checks above, and model only that process-bound fact
+            # so this canary reaches the command's separate fixed-close gate.
+            with patch.object(
+                project_runtime,
+                "current_project_runtime_binding",
+                return_value={
+                    "bound": True,
+                    "reason_code": "current_project_runtime_bound",
+                },
+            ) as runtime_binding:
+                repair_code, repair_output = run_cli(
+                    [
+                        "project-bytecode-repair",
+                        project_root,
+                        "--target",
+                        target,
+                        "--expected-materialization-plan-sha256",
+                        materialization_plan_sha256,
+                        "--expected-plan-sha256",
+                        plan["summary"]["plan_sha256"],
+                        "--approve",
+                        "--reviewed-by",
+                        "person:letter-129-cli-canary",
+                        "--affirm-external-writers-quiescent",
+                        "--format",
+                        "json",
+                    ]
+                )
+            runtime_binding.assert_called_once()
             self.assertEqual(repair_code, 1, repair_output)
             repaired = json.loads(repair_output)
             self.assertEqual(repaired["state"], "blocked")

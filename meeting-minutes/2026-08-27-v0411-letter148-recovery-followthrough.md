@@ -185,3 +185,21 @@ than a workflow timeout error. The matrix assertion kept scanning after the
 the new Doctor scale job's 10-minute timeout. The parser now stops at the
 `tests` job's `steps:` boundary. The production workflow timeout values were
 already correct and were not changed.
+
+The next Ubuntu/Python 3.12 candidate run exposed three additional stale test
+fixtures, all of which were corrected without changing production safety
+behavior. First, the secret-safety test expected the older
+`archive_path_escapes_root` diagnostic for an outbound symlink. The current
+descriptor-first scanner rejects symlink, reparse, and non-regular entries as
+`doctor_secret_scan_file_unsafe` before opening or following them; the test now
+asserts that stronger fail-closed boundary. Second, the create-draft approval
+test still prohibited the title from the native dialog. The v0.4.11 contract
+intentionally shows the plan-bound draft identity and title locally, so the
+test now requires that preview while separately proving the title, body, and
+warning prose do not enter machine details, stdout/stderr, or the durable
+approval claim. Third, the Letter 129 repair canary changed only the project
+pin and therefore hit the v0.4.3+ runtime guard before reaching its own
+fixed-close assertion. Its fixture now materializes and validates a receipt-
+bound synthetic runtime and canonical launcher; only the in-process origin
+fact is modeled so the test can reach the separate compound-approval blocker.
+No production runtime guard was bypassed or weakened.
