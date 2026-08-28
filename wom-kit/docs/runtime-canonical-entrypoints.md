@@ -1,6 +1,6 @@
 # Runtime Canonical Entry Points
 
-Status: v0.4.10 bounded batch operability, authenticated handoff, and fresh capture recovery
+Status: v0.4.11 live runtime binding, Deep Doctor evidence, and operator truth
 
 Previous checkpoint: Status: v0.4.3 exact recovery, project update, and Git backup checkpoint
 
@@ -32,7 +32,28 @@ The underlying raw context packet remains available through:
 archive runtime-context <archive-root> --format json
 ```
 
-## v0.4.10 Current Runtime Delta
+## v0.4.11 Current Runtime Delta
+
+Project alignment requires independent receipt, freshly observed installed-
+payload tree, installed module inventory, canonical launcher, current
+executable/module/prefix and isolated Python flags, project pin, and running-
+version evidence. The common write guard uses the same check. A shared PATH
+executable with the same version string therefore does not replace the project
+launcher as authority.
+
+Deep Doctor is still the default. It reads each unique objet once through a
+stable descriptor-bound SHA-256 pass and accepts later zet evolution only
+through an exact chronological direct-receipt chain. Operational mode is an
+explicit structure-only option and reports that byte integrity is unverified;
+`--strict` requires Deep. Local-recovery state evidence without completion
+chronology remains ERROR. Native decisions use canonical WOM language and a
+local-only target preview, while public and durable output stays content-free.
+Read-only fixed-closed previews do not grant write authority.
+
+The repeated full-tree `zettel-objet-link` and generation-bound index authority
+are v0.4.12 work; v0.4.11 does not remove their current race or identity gates.
+
+## v0.4.10 Historical Runtime Delta
 
 `source-intake-batch` records 1–1,000 reviewed local intake items plus one
 generated capture request through a single exact manifest and native decision.
@@ -134,11 +155,11 @@ documented plans, previews, and audits remain available; a closed approval still
 itself is separately reopened with an exact target/tag/source/rollback binding.
 
 When an older global CLI must be replaced and the exact public
-v0.4.10 GitHub Release wheel has been independently confirmed, use the public
+v0.4.11 GitHub Release wheel has been independently confirmed, use the public
 wheel directly:
 
 ```powershell
-uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.10/wom_kit-0.4.10-py3-none-any.whl"
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.11/wom_kit-0.4.11-py3-none-any.whl"
 archive --version
 ```
 

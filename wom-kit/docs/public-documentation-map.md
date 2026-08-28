@@ -2,19 +2,26 @@
 
 Status: public navigation baseline
 Date: 2026-06-02
-Updated: 2026-08-27
+Updated: 2026-08-28
 Philosophy clarified: 2026-07-15
 Harness compatibility clarified: 2026-07-16
 
-Current v0.4.10 delta: bounded 1–1,000 item local intake and capture now form a
-two-decision pipeline. The intake operation writes every exact receipt plus one
-generated capture request through checkpoints and same-claim resume. Capture
-accepts only the authenticated upstream approval, checkpoint chain, final
-receipt, current receipts and bytes, and same archive identity. Partial capture
-requires a fresh exact plan and new decision. Synthetic 508- and 1,000-item
-planning completed under 43 seconds; remaining per-item Windows reconstruction
-cost is deferred to v0.4.11. Publishing or installing the release changes no
-client archive.
+Current v0.4.11 delta: project alignment now requires fresh installed-payload,
+module-inventory, launcher, current-process, pin, and running-version evidence.
+Deep Doctor remains the byte-verifying default, accepts later SHA evolution only
+through exact chronological evidence, and keeps local-recovery state evidence
+without chronology as ERROR. Native decisions use canonical WOM language and a
+local-only target preview; the document read surface adds a WOM-safe Markdown
+projection without changing canonical bytes. Fixed-closed previews state their
+authority honestly. The repeated full-tree link and generation-bound index
+architecture remain v0.4.12 work. Publishing or installing the release changes
+no client archive.
+
+Historical v0.4.10 delta: bounded 1–1,000 item local intake and capture form a
+two-decision pipeline. Intake writes every exact receipt plus one generated
+capture request through checkpoints and same-claim resume. Capture accepts only
+the authenticated upstream completion chain, and partial capture requires a
+fresh exact plan and decision.
 
 Historical v0.4.9 delta: the ordinary one-file intake chain records one exact
 source-intake receipt, creates one exact existing-intake selection, and captures
@@ -523,6 +530,7 @@ These documents record public-safe work already performed.
 - [v0.2.11 Delegate Capability Contract Work Log](../plans/work-log-2026-05-23-delegate-capability-contract.md)
 - [Changelog](../../CHANGELOG.md)
 - [Release Notes](releases/)
+- [v0.4.11 Release Note](releases/v0.4.11.md)
 - [v0.4.10 Release Note](releases/v0.4.10.md)
 - [v0.4.9 Release Note](releases/v0.4.9.md)
 - [v0.4.8 Release Note](releases/v0.4.8.md)

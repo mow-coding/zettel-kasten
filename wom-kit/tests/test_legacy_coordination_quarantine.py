@@ -197,14 +197,13 @@ class LegacyCoordinationQuarantineTests(unittest.TestCase):
                 doctor._check_local_profile_and_secret_safety()
 
             walked_directories: list[Path] = []
-            original_walk = os.walk
+            original_scandir = os.scandir
 
-            def guarded_walk(*args: object, **kwargs: object):
-                for row in original_walk(*args, **kwargs):
-                    walked_directories.append(Path(row[0]))
-                    yield row
+            def guarded_scandir(path: os.PathLike[str] | str):
+                walked_directories.append(Path(path))
+                return original_scandir(path)
 
-            with patch.object(archive_cli.os, "walk", side_effect=guarded_walk):
+            with patch.object(archive_cli.os, "scandir", side_effect=guarded_scandir):
                 doctor._check_symlink_boundaries()
 
             self.assertFalse(

@@ -1,6 +1,6 @@
 # WOM Philosophy Implementation Evidence
 
-Status: v0.4.10 review of the v0.3.252 public traceability checkpoint
+Status: v0.4.11 review of the v0.3.252 public traceability checkpoint
 Date: 2026-08-27
 
 ## Purpose

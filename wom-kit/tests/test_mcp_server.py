@@ -8338,7 +8338,17 @@ class McpServerTests(unittest.TestCase):
                 self.assertFalse(result["isError"])
                 content = result["structuredContent"]
                 self.assertTrue(content["ok"])
-                self.assertEqual(content["status"], "ready_for_human_review")
+                self.assertEqual(content["status"], "approval_fixed_closed")
+                self.assertEqual(
+                    content["proposal_validation_status"],
+                    "ready_for_human_review",
+                )
+                self.assertFalse(
+                    content["approval_contract"]["approved_write_implemented"]
+                )
+                self.assertFalse(
+                    content["approval_contract"]["actionable_handoff_available"]
+                )
                 self.assertFalse(content["write_boundary"]["files_written"])
                 self.assertFalse(content["privacy_guards"]["zettel_id_echoed"])
                 serialized = json.dumps(response, ensure_ascii=False)

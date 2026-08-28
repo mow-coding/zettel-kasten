@@ -21,6 +21,7 @@ import json
 import os
 import re
 import tempfile
+import unicodedata
 from contextlib import contextmanager
 from ctypes import wintypes
 from dataclasses import dataclass
@@ -76,6 +77,9 @@ _REVIEWER_CLAIM_RE = re.compile(
 )
 _MAX_WARNING_ITEMS = 256
 _MAX_WARNING_BYTES = 256 * 1024
+_TARGET_PREVIEW_KINDS = frozenset({"draft", "zet", "zet_edge", "zet_objet"})
+_MAX_TARGET_PREVIEW_CHARACTERS = 240
+_MAX_TARGET_PREVIEW_UTF8_BYTES = 1024
 
 
 class ExactHumanApprovalIntent(Enum):
@@ -116,6 +120,68 @@ class ExactHumanApprovalOperation(Enum):
     local_recovery_revert = "local_recovery_revert"
 
 
+def _validated_target_preview_text(value: str | None) -> str | None:
+    if value is None:
+        return None
+    if type(value) is not str:
+        raise _fail("exact_human_approval_context_invalid")
+    normalized = unicodedata.normalize("NFC", value).strip()
+    if (
+        not normalized
+        or len(normalized) > _MAX_TARGET_PREVIEW_CHARACTERS
+        or len(normalized.encode("utf-8")) > _MAX_TARGET_PREVIEW_UTF8_BYTES
+        or any(
+            character in "\r\n\t"
+            or unicodedata.category(character) in {
+                "Cc",
+                "Cf",
+                "Cs",
+                "Zl",
+                "Zp",
+            }
+            for character in normalized
+        )
+    ):
+        raise _fail("exact_human_approval_context_invalid")
+    return normalized
+
+
+@dataclass(frozen=True)
+class ExactHumanApprovalTargetPreview:
+    """Small local-only identity shown beside one exact approval question.
+
+    Values come from the already validated operation plan. They are never
+    written into the public binding document, approval receipt, log, or result.
+    The preview intentionally accepts identity-sized labels only, not zet body
+    text, source excerpts, provider locators, or absolute filesystem paths.
+    """
+
+    kind: str
+    primary: str
+    secondary: str | None = None
+    relation: str | None = None
+
+    def __post_init__(self) -> None:
+        if type(self.kind) is not str or self.kind not in _TARGET_PREVIEW_KINDS:
+            raise _fail("exact_human_approval_context_invalid")
+        object.__setattr__(self, "primary", _validated_target_preview_text(self.primary))
+        object.__setattr__(
+            self,
+            "secondary",
+            _validated_target_preview_text(self.secondary),
+        )
+        object.__setattr__(
+            self,
+            "relation",
+            _validated_target_preview_text(self.relation),
+        )
+        if self.kind in {"zet_edge", "zet_objet"} and self.secondary is None:
+            raise _fail("exact_human_approval_context_invalid")
+
+    def __repr__(self) -> str:
+        return f"<ExactHumanApprovalTargetPreview kind={self.kind} values=local-only>"
+
+
 def exact_human_approval_warning_codes(
     warnings: tuple[str, ...] | list[str],
 ) -> tuple[str, ...]:
@@ -151,19 +217,19 @@ def exact_human_approval_warning_codes(
 
 _OPERATION_LABELS = {
     ExactHumanApprovalOperation.create_draft: "AI 초안 생성",
-    ExactHumanApprovalOperation.promote_zet: "제텔 승격",
-    ExactHumanApprovalOperation.mint_zet: "제텔 발행",
-    ExactHumanApprovalOperation.zettel_edge: "제텔 연결 생성",
-    ExactHumanApprovalOperation.zettel_edge_revert: "제텔 연결 되돌리기",
-    ExactHumanApprovalOperation.zettel_objet_link: "제텔-오브제 연결 생성",
+    ExactHumanApprovalOperation.promote_zet: "zet 승격",
+    ExactHumanApprovalOperation.mint_zet: "zet 발행",
+    ExactHumanApprovalOperation.zettel_edge: "zet 엣지 생성",
+    ExactHumanApprovalOperation.zettel_edge_revert: "zet 엣지 되돌리기",
+    ExactHumanApprovalOperation.zettel_objet_link: "zet-오브제 연결 생성",
     ExactHumanApprovalOperation.objet_capture: "단일 오브제 보존",
     ExactHumanApprovalOperation.objet_capture_batch: "오브제 배치 전체 보존",
     ExactHumanApprovalOperation.objet_capture_selection_record: "오브제 선택 기록",
-    ExactHumanApprovalOperation.retire_draft: "초안 폐기",
+    ExactHumanApprovalOperation.retire_draft: "발행된 초안 퇴역",
     ExactHumanApprovalOperation.warning_override: "경고 예외 적용",
     ExactHumanApprovalOperation.source_fidelity_session_evidence: "세션 근거 보존",
     ExactHumanApprovalOperation.human_artifact_lifecycle: "사람 작업물 수명주기 변경",
-    ExactHumanApprovalOperation.duplicate_object_reconcile: "중복 객체 정리",
+    ExactHumanApprovalOperation.duplicate_object_reconcile: "중복 오브제 정리",
     ExactHumanApprovalOperation.integrity_repair: "무결성 보충 또는 철회",
     ExactHumanApprovalOperation.project_version_update: "프로젝트 WOM-kit 버전 갱신",
     ExactHumanApprovalOperation.git_backup: "Git 원격 백업",
@@ -186,11 +252,11 @@ _OPERATION_LABELS = {
 
 _OPERATION_QUESTIONS = {
     ExactHumanApprovalOperation.create_draft: "AI 초안을 만들까요?",
-    ExactHumanApprovalOperation.promote_zet: "이 초안을 제텔로 승격할까요?",
-    ExactHumanApprovalOperation.mint_zet: "이 제텔을 정본으로 발행할까요?",
-    ExactHumanApprovalOperation.zettel_edge: "이 제텔 연결을 만들까요?",
-    ExactHumanApprovalOperation.zettel_edge_revert: "이 제텔 연결만 되돌릴까요?",
-    ExactHumanApprovalOperation.zettel_objet_link: "이 제텔과 오브제를 연결할까요?",
+    ExactHumanApprovalOperation.promote_zet: "이 초안을 zet로 승격할까요?",
+    ExactHumanApprovalOperation.mint_zet: "이 zet를 정본으로 발행할까요?",
+    ExactHumanApprovalOperation.zettel_edge: "이 두 zet 사이에 엣지를 만들까요?",
+    ExactHumanApprovalOperation.zettel_edge_revert: "이 두 zet 사이의 엣지만 되돌릴까요?",
+    ExactHumanApprovalOperation.zettel_objet_link: "이 zet와 오브제를 연결할까요?",
     ExactHumanApprovalOperation.objet_capture: "검증된 원본 파일을 오브제로 보존할까요?",
     ExactHumanApprovalOperation.objet_capture_batch: (
         "검증된 원본 배치 전체를 오브제로 보존할까요?"
@@ -198,7 +264,7 @@ _OPERATION_QUESTIONS = {
     ExactHumanApprovalOperation.objet_capture_selection_record: (
         "검증된 원본 파일의 오브제 선택 기록을 만들까요?"
     ),
-    ExactHumanApprovalOperation.retire_draft: "이 초안을 폐기할까요?",
+    ExactHumanApprovalOperation.retire_draft: "발행을 마친 이 초안을 퇴역시킬까요?",
     ExactHumanApprovalOperation.warning_override: "경고를 확인하고 계속할까요?",
     ExactHumanApprovalOperation.source_fidelity_session_evidence: (
         "이 세션 근거를 보존할까요?"
@@ -207,7 +273,7 @@ _OPERATION_QUESTIONS = {
         "이 사람 작업물의 상태를 변경할까요?"
     ),
     ExactHumanApprovalOperation.duplicate_object_reconcile: (
-        "검증된 중복 객체 정리를 실행할까요?"
+        "검증된 중복 오브제 정리를 실행할까요?"
     ),
     ExactHumanApprovalOperation.integrity_repair: (
         "검증된 무결성 복구를 실행할까요?"
@@ -252,26 +318,26 @@ _OPERATION_SUMMARIES = {
         "새 초안을 만들며 기존 정본은 변경하지 않습니다."
     ),
     ExactHumanApprovalOperation.promote_zet: (
-        "검증된 초안을 제텔 단계로 옮깁니다."
+        "검증된 초안을 zet 단계로 옮깁니다."
     ),
     ExactHumanApprovalOperation.mint_zet: (
-        "검증된 제텔을 정본으로 발행하고 영수증을 남깁니다."
+        "검증된 zet를 정본으로 발행하고 영수증을 남깁니다."
     ),
     ExactHumanApprovalOperation.zettel_edge: (
-        "검증된 두 제텔 사이에 선택한 관계만 추가합니다."
+        "검증된 두 zet 사이에 선택한 엣지만 추가합니다."
     ),
     ExactHumanApprovalOperation.zettel_edge_revert: (
-        "선택한 관계 영수증과 현재 제텔이 일치할 때 그 관계만 제거합니다."
+        "선택한 엣지 영수증과 현재 zet가 일치할 때 그 엣지만 제거합니다."
     ),
     ExactHumanApprovalOperation.zettel_objet_link: (
-        "검증된 제텔과 오브제 사이에 선택한 연결만 추가합니다."
+        "검증된 zet와 오브제 사이에 선택한 연결만 추가합니다."
     ),
     ExactHumanApprovalOperation.objet_capture: (
         "검증된 선택 manifest의 원본 바이트만 보존하고 manifest와 영수증을 남깁니다."
     ),
     ExactHumanApprovalOperation.objet_capture_batch: (
         "검증된 배치 전체의 원본 바이트를 보존하고 manifest와 영수증을 남깁니다. "
-        "외부 서비스(provider) 호출, 원격 업로드, 제텔 연결, 초안 생성, "
+        "외부 서비스(provider) 호출, 원격 업로드, zet 연결, 초안 생성, "
         "정본 발행은 하지 않습니다."
     ),
     ExactHumanApprovalOperation.objet_capture_selection_record: (
@@ -279,7 +345,7 @@ _OPERATION_SUMMARIES = {
         "오브제 보존 자체는 실행하지 않습니다."
     ),
     ExactHumanApprovalOperation.retire_draft: (
-        "검증된 초안만 폐기하며 정본은 변경하지 않습니다."
+        "정본 발행이 확인된 원본 초안만 퇴역시키며 정본은 변경하지 않습니다."
     ),
     ExactHumanApprovalOperation.warning_override: (
         "WOM이 표시한 경고가 있는 작업을 예외적으로 계속합니다."
@@ -291,7 +357,7 @@ _OPERATION_SUMMARIES = {
         "검증된 사람 작업물의 선택된 상태만 변경합니다."
     ),
     ExactHumanApprovalOperation.duplicate_object_reconcile: (
-        "확실한 근거로 묶인 중복 객체만 정리하고 불명확한 항목은 건드리지 않습니다."
+        "확실한 근거로 묶인 중복 오브제만 정리하고 불명확한 항목은 건드리지 않습니다."
     ),
     ExactHumanApprovalOperation.integrity_repair: (
         "WOM이 검증한 대상과 필드만 복구합니다."
@@ -303,7 +369,7 @@ _OPERATION_SUMMARIES = {
         "검토된 변경만 커밋하고 force push 없이 원격 상태를 다시 검증합니다."
     ),
     ExactHumanApprovalOperation.notion_property_backfill: (
-        "확실히 매핑된 제텔의 source_properties 필드만 복구합니다. "
+        "확실히 매핑된 zet의 source_properties 필드만 복구합니다. "
         "매핑되지 않거나 검토가 필요한 항목은 변경하지 않습니다."
     ),
     ExactHumanApprovalOperation.notion_property_backfill_revert: (
@@ -343,15 +409,15 @@ _OPERATION_SUMMARIES = {
 
 _OPERATION_APPROVE_BUTTONS = {
     ExactHumanApprovalOperation.create_draft: "초안 만들기",
-    ExactHumanApprovalOperation.promote_zet: "제텔로 승격",
+    ExactHumanApprovalOperation.promote_zet: "zet로 승격",
     ExactHumanApprovalOperation.mint_zet: "정본 발행",
-    ExactHumanApprovalOperation.zettel_edge: "관계 만들기",
-    ExactHumanApprovalOperation.zettel_edge_revert: "관계 되돌리기",
+    ExactHumanApprovalOperation.zettel_edge: "엣지 만들기",
+    ExactHumanApprovalOperation.zettel_edge_revert: "엣지 되돌리기",
     ExactHumanApprovalOperation.zettel_objet_link: "연결 만들기",
     ExactHumanApprovalOperation.objet_capture: "오브제 보존",
     ExactHumanApprovalOperation.objet_capture_batch: "배치 전체 보존",
     ExactHumanApprovalOperation.objet_capture_selection_record: "선택 기록 만들기",
-    ExactHumanApprovalOperation.retire_draft: "초안 폐기",
+    ExactHumanApprovalOperation.retire_draft: "초안 퇴역",
     ExactHumanApprovalOperation.warning_override: "계속 실행",
     ExactHumanApprovalOperation.source_fidelity_session_evidence: "근거 보존",
     ExactHumanApprovalOperation.human_artifact_lifecycle: "상태 변경",
@@ -415,6 +481,7 @@ class ExactHumanApprovalContext:
     reviewer_claim: str
     review_binding_codes: tuple[str, ...]
     warning_codes: tuple[str, ...] = ()
+    target_preview: ExactHumanApprovalTargetPreview | None = None
 
     def __post_init__(self) -> None:
         if type(self.operation) is not ExactHumanApprovalOperation:
@@ -435,6 +502,8 @@ class ExactHumanApprovalContext:
             raise _fail("exact_human_approval_context_invalid")
         _validate_codes(self.review_binding_codes)
         _validate_codes(self.warning_codes)
+        if self.target_preview is not None and type(self.target_preview) is not ExactHumanApprovalTargetPreview:
+            raise _fail("exact_human_approval_context_invalid")
 
     def __repr__(self) -> str:
         return (
@@ -740,9 +809,36 @@ class _CtypesTaskDialogNative:
 
 
 def _dialog_content(context: ExactHumanApprovalContext) -> str:
+    target_preview = ""
+    preview = context.target_preview
+    if preview is not None:
+        if preview.kind == "draft":
+            preview_lines = [f"초안: {preview.primary}"]
+            if preview.secondary is not None:
+                preview_lines.append(f"제목: {preview.secondary}")
+        elif preview.kind == "zet":
+            preview_lines = [f"zet: {preview.primary}"]
+            if preview.secondary is not None:
+                preview_lines.append(f"제목: {preview.secondary}")
+        elif preview.kind == "zet_edge":
+            preview_lines = [
+                f"출발 zet: {preview.primary}",
+                f"도착 zet: {preview.secondary}",
+            ]
+            if preview.relation is not None:
+                preview_lines.append(f"엣지: {preview.relation}")
+        else:
+            preview_lines = [
+                f"zet: {preview.primary}",
+                f"오브제: {preview.secondary}",
+            ]
+            if preview.relation is not None:
+                preview_lines.append(f"연결 역할: {preview.relation}")
+        target_preview = "확인할 대상\n" + "\n".join(preview_lines) + "\n\n"
     return (
         "WOM이 대상, 현재 상태, 적용할 변경을 자동으로 검증했습니다.\n\n"
         f"{_OPERATION_SUMMARIES[context.operation]}\n\n"
+        f"{target_preview}"
         "사람이 결정할 일은 이 작업을 지금 실행할지 여부뿐입니다. "
         "대상이나 상태가 달라지면 WOM이 쓰기 전에 자동으로 중단합니다."
     )
@@ -849,5 +945,6 @@ __all__ = [
     "ExactHumanApprovalContext",
     "ExactHumanApprovalIntent",
     "ExactHumanApprovalOperation",
+    "ExactHumanApprovalTargetPreview",
     "ExactHumanApprovalWindowsError",
 ]

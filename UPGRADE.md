@@ -24,6 +24,46 @@ Before upgrading a real archive:
 
 The archive should never silently rewrite memory.
 
+## v0.4.11 Runtime Truth and Deep Verification
+
+Install only after the matching public Release lists the exact wheel and its
+exact-scale Doctor evidence has passed:
+
+```powershell
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.11/wom_kit-0.4.11-py3-none-any.whl"
+archive --version
+```
+
+Require exactly `archive 0.4.11` from a new process. This global command is a
+bootstrap, not proof that a client project has been updated. Use it only to run
+the reviewed `project-version-update`, then invoke ordinary project work through
+that project's `.zettel-kasten/bin/archive.cmd`. v0.4.11 checks the fresh
+installed payload, module inventory, launcher, current process, project pin,
+and running version together; a computer-wide command with the same version
+number is not accepted as the project runtime.
+
+Deep Doctor remains the default and hashes every unique objet once. Choose
+Operational mode only when a faster structural inspection is sufficient; its
+result explicitly says that full byte integrity is not verified, and it cannot
+be used with `--strict`. A mint-lifecycle SHA mismatch is softened only when
+one exact chronological direct-receipt chain reaches the current bytes.
+Local-recovery state evidence without bound completion chronology remains an
+ERROR that needs review.
+
+Native decisions now show the local zet, draft, edge, or objet target using WOM
+terminology without copying that private preview into public output or durable
+receipts. The document read surface escapes accidental range tildes and
+unmatched emphasis only in its display projection; canonical zet bytes remain
+unchanged. Read-only revision/discard previews do not grant write authority,
+and fixed-closed writers remain closed.
+
+The repeated full-tree `zettel-objet-link` and incremental index architecture
+remain v0.4.12 work. v0.4.11 does not speed that path by removing identity,
+duplicate-ID, watcher, or stable-point checks. Publishing, installing, or
+testing this release does not modify a client archive; the client decides when
+to update and when to run project-scoped checks. See the
+[v0.4.11 release note](wom-kit/docs/releases/v0.4.11.md).
+
 ## v0.4.10 Bounded Batch Intake and Capture
 
 Install only after the matching public Release lists the exact wheel:

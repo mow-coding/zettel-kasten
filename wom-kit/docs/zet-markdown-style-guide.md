@@ -1,7 +1,7 @@
 # zet Markdown Style Guide
 
-Status: v0.3.184 zet Markdown authoring and frontmatter viewer checkpoint
-Extended: v0.3.301 human-record integrity rules
+Status: v0.4.11 zet Markdown authoring and safe human-view checkpoint
+Extended: v0.3.301 human-record integrity rules; v0.4.11 display projection
 
 WOM zets are Markdown-compatible today. That is useful for authoring and import
 compatibility, but it means AI writers must avoid punctuation that Markdown
@@ -38,8 +38,14 @@ A ~~ B
 A~B
 ```
 
-Many Markdown renderers treat double tilde as strikethrough. In WOM zet
-authoring, `~~text~~` is reserved for intentional strikethrough only.
+GFM can treat tilde delimiter runs as strikethrough. In WOM zet authoring,
+`~~text~~` is reserved for intentional strikethrough only. Existing Korean
+range forms such as `3~5` and `서울~부산` remain valid canonical prose; a human
+document view escapes their display copy automatically in v0.4.11.
+
+An incomplete `**` run can also make a Markdown surface emphasize unintended
+later text. Completed `**bold**` remains intentional markup. An unmatched
+`**` is escaped only in the display copy.
 
 ## AI Authoring Contract
 
@@ -79,7 +85,22 @@ Human-facing viewers should hide frontmatter by default or show it in a folded
 metadata panel. AI assistants should lead with the body or overview and mention
 frontmatter only when it affects the user's decision.
 
+In v0.4.11 an unpaged `--section document` read also returns WOM-safe Markdown:
+
+- single range tildes and unmatched `~~` or `**` are backslash-escaped;
+- completed `~~strike~~`, completed `**bold**`, inline code, fenced code, and
+  indented code are preserved;
+- the canonical file and canonical body hash stay unchanged;
+- `--section body` remains the exact decoded canonical body route;
+- bounded pages remain canonical source pages so cursors and the complete body
+  hash never mix canonical and derived text.
+
+The result's `display` and `integrity` fields distinguish the source hash from
+the returned display hash. The projection is not a new zet, repair, or write.
+
 ## Safety Boundary
 
-The command is read-only. It does not read zet bodies, write zets, mint zets,
-call providers, or inspect private source material.
+The style-guide command itself is read-only and does not read zet bodies. The
+separate `read-zettel --section document` command reads only the selected local
+zet and derives its display copy in memory; neither command writes zets, mints
+zets, or calls providers.

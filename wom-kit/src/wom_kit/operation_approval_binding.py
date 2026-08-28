@@ -25,6 +25,7 @@ from .exact_human_approval import (
 from .exact_human_approval_windows import (
     ExactHumanApprovalContext,
     ExactHumanApprovalOperation,
+    ExactHumanApprovalTargetPreview,
     exact_human_approval_warning_codes,
 )
 
@@ -275,6 +276,27 @@ def _warning_codes(value: Any) -> tuple[str, ...]:
     return tuple(sorted(safe))[:32]
 
 
+def _target_preview_text(value: Any) -> str | None:
+    return value if type(value) is str and value.strip() else None
+
+
+def _target_preview_leaf(value: Any) -> str | None:
+    text = _target_preview_text(value)
+    if text is None:
+        return None
+    return text.replace("\\", "/").rstrip("/").rsplit("/", 1)[-1] or None
+
+
+def _required_target_preview_identity(*values: Any) -> str:
+    """Choose one already-bound local identity or fail before approval."""
+
+    for value in values:
+        text = _target_preview_text(value)
+        if text is not None:
+            return text
+    raise _fail("operation_approval_plan_invalid")
+
+
 def _runtime_distribution_key(value: str) -> str:
     return re.sub(r"[-_.]+", "-", value).casefold()
 
@@ -385,6 +407,7 @@ class ExactOperationApprovalBinding:
     target_binding_sha256: str
     warning_codes: tuple[str, ...]
     review_binding_codes: tuple[str, ...]
+    target_preview: ExactHumanApprovalTargetPreview | None = None
 
     def context(
         self,
@@ -402,6 +425,7 @@ class ExactOperationApprovalBinding:
             reviewer_claim=reviewer_claim,
             review_binding_codes=self.review_binding_codes,
             warning_codes=self.warning_codes,
+            target_preview=self.target_preview,
         )
 
     def public_document(self) -> dict[str, Any]:
@@ -504,6 +528,10 @@ def mint_zet_approval_binding(
             )
         ),
     }
+    preview_identity = _required_target_preview_identity(
+        _target_preview_leaf(plan.get("proposed_canonical_path")),
+        plan.get("zettel_id"),
+    )
     return ExactOperationApprovalBinding(
         operation=ExactHumanApprovalOperation.mint_zet,
         plan_sha256=_sha256(basis),
@@ -515,6 +543,10 @@ def mint_zet_approval_binding(
             "mint_target_set",
             "near_duplicate_evidence",
             "warning_codes",
+        ),
+        target_preview=ExactHumanApprovalTargetPreview(
+            kind="zet",
+            primary=preview_identity,
         ),
     )
 
@@ -631,6 +663,13 @@ def _promotion_approval_binding(
                 "promotion_plan",
             )
         ),
+        target_preview=ExactHumanApprovalTargetPreview(
+            kind="zet",
+            primary=(
+                _target_preview_leaf(required_text["proposed_canonical_path"])
+                or required_text["zettel_id"]
+            ),
+        ),
     )
 
 
@@ -689,6 +728,19 @@ def zettel_edge_approval_binding(
         "warnings": plan.get("warnings"),
         "would_change_digest": _sha256(plan.get("would_change")),
     }
+    source_preview = _required_target_preview_identity(
+        _target_preview_leaf(source.get("path")),
+        source.get("zettel_id"),
+    )
+    target_preview = _required_target_preview_identity(
+        _target_preview_leaf(target.get("path")),
+        target.get("zettel_id"),
+        target.get("ref"),
+        proposed_edge.get("target"),
+    )
+    relation_preview = _required_target_preview_identity(
+        proposed_edge.get("type")
+    )
     return ExactOperationApprovalBinding(
         operation=ExactHumanApprovalOperation.zettel_edge,
         plan_sha256=_sha256(basis),
@@ -699,6 +751,12 @@ def zettel_edge_approval_binding(
             "edge_target_digest",
             "source_current_digest",
             "warning_codes",
+        ),
+        target_preview=ExactHumanApprovalTargetPreview(
+            kind="zet_edge",
+            primary=source_preview,
+            secondary=target_preview,
+            relation=relation_preview,
         ),
     )
 
@@ -730,6 +788,14 @@ def zettel_edge_revert_approval_binding(
         "would_change_digest": _sha256(plan.get("would_change")),
         "warnings": plan.get("warnings"),
     }
+    source_preview = _required_target_preview_identity(
+        _target_preview_leaf(source.get("path")),
+        source.get("zettel_id"),
+    )
+    target_preview = _required_target_preview_identity(
+        edge.get("target_ref"),
+        edge.get("target"),
+    )
     return ExactOperationApprovalBinding(
         operation=ExactHumanApprovalOperation.zettel_edge_revert,
         plan_sha256=_sha256(basis),
@@ -739,6 +805,12 @@ def zettel_edge_revert_approval_binding(
             "edge_receipt_digest",
             "edge_target_digest",
             "source_current_digest",
+        ),
+        target_preview=ExactHumanApprovalTargetPreview(
+            kind="zet_edge",
+            primary=source_preview,
+            secondary=target_preview,
+            relation=_target_preview_text(edge.get("type")),
         ),
     )
 
@@ -1033,6 +1105,15 @@ def zettel_objet_link_approval_binding(
             "warning_codes",
             "zettel_objet_target_set",
         ),
+        target_preview=ExactHumanApprovalTargetPreview(
+            kind="zet_objet",
+            primary=(
+                _target_preview_leaf(required_text["zettel_path"])
+                or required_text["zettel_id"]
+            ),
+            secondary=object_id,
+            relation=required_text["role"],
+        ),
     )
 
 
@@ -1044,8 +1125,10 @@ def retire_draft_approval_binding(
         raise _fail("operation_approval_plan_blocked")
     receipt = _plain_mapping(plan.get("receipt_preview"))
     refs: dict[str, str] = {}
+    receipt_refs: dict[str, dict[str, Any]] = {}
     for name in ("source", "target", "mint_receipt", "snapshot"):
-        refs[name] = _sha_ref(_plain_mapping(receipt.get(name)).get("sha256"))
+        receipt_refs[name] = _plain_mapping(receipt.get(name))
+        refs[name] = _sha_ref(receipt_refs[name].get("sha256"))
     target = {
         "reference_sha256": refs,
         "retire_receipt_digest": _sha256(plan.get("retire_receipt_path")),
@@ -1059,6 +1142,10 @@ def retire_draft_approval_binding(
         "receipt_preview_digest": _sha256(receipt),
         "would_change_digest": _sha256(plan.get("would_change")),
     }
+    preview_identity = _required_target_preview_identity(
+        _target_preview_leaf(receipt_refs["source"].get("path")),
+        plan.get("zettel_id"),
+    )
     return ExactOperationApprovalBinding(
         operation=ExactHumanApprovalOperation.retire_draft,
         plan_sha256=_sha256(basis),
@@ -1070,6 +1157,10 @@ def retire_draft_approval_binding(
             "mint_receipt_digest",
             "snapshot_digest",
             "warning_codes",
+        ),
+        target_preview=ExactHumanApprovalTargetPreview(
+            kind="draft",
+            primary=preview_identity,
         ),
     )
 

@@ -185,18 +185,55 @@ jobs:
             exit 1
           fi
 
+  doctor_scale:
+    name: Letter 148 Doctor scale gate (Ubuntu py3.12)
+    if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      PYTHONPATH: wom-kit/src
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - name: Install runtime dependencies
+        run: >-
+          python -m pip install --disable-pip-version-check
+          -r wom-kit/cli/requirements.txt
+
+      - name: Run exact Letter 148 Doctor scale benchmark
+        run: >-
+          python -B wom-kit/tools/benchmark_doctor_letter148_scale.py
+          --full-scale
+          --format json
+
+      - name: Assert benchmark left the worktree clean
+        shell: bash
+        run: |
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "::error::The Doctor scale benchmark modified repository files."
+            git status --porcelain
+            exit 1
+          fi
+
   required:
     name: Required CI
     if: always() && (github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch')
     needs:
       - gate
       - tests
+      - doctor_scale
     runs-on: ubuntu-latest
     steps:
       - name: Require every gate and test shard
         env:
           GATE_RESULT: ${{ needs.gate.result }}
           TESTS_RESULT: ${{ needs.tests.result }}
+          DOCTOR_SCALE_RESULT: ${{ needs.doctor_scale.result }}
         run: |
           test "$GATE_RESULT" = "success"
           test "$TESTS_RESULT" = "success"
+          test "$DOCTOR_SCALE_RESULT" = "success"
