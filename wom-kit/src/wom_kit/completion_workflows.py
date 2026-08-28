@@ -3383,6 +3383,37 @@ class _ZettelObjetLinkWindowsDirectoryWatcher:
             raise OSError("zettel_objet_link_directory_watcher_ambiguous")
         self._verified = True
 
+    def poll_clean(self) -> None:
+        """Check a pending watch without cancelling its continuous authority.
+
+        A reusable read projection must keep the same notification request
+        armed between lookups.  ``GetOverlappedResult(..., False)`` leaves an
+        incomplete request pending, while every completed or ambiguous state
+        means that the projection can no longer be trusted.
+        """
+
+        if not self._active or self._verified:
+            raise OSError("zettel_objet_link_directory_watcher_state_invalid")
+        from ctypes import wintypes
+
+        transferred = wintypes.DWORD()
+        if self._get_result(
+            self._handle,
+            self._ctypes.byref(self._overlapped),
+            self._ctypes.byref(transferred),
+            False,
+        ):
+            self._active = False
+            raise OSError("zettel_objet_link_directory_changed")
+        error = self._ctypes.get_last_error()
+        error_io_incomplete = 996
+        error_operation_aborted = 995
+        if error == error_io_incomplete:
+            return
+        if error == error_operation_aborted:
+            self._active = False
+        raise OSError("zettel_objet_link_directory_watcher_ambiguous")
+
     def close(self) -> None:
         if self._active and self._handle is not None:
             cancel_succeeded = bool(

@@ -8,14 +8,15 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
-from wom_kit import archive_services
+from wom_kit import archive_services, completion_workflows
 
 
 KIT_ROOT = Path(__file__).resolve().parents[1]
 FIXTURE = KIT_ROOT / "examples" / "fake-life-archive"
 ZETTEL_ID = "zet_20240504_fake_lunch_thought"
+DRAFT_ZETTEL_ID = "zet_20260519_draft_ai_lunch_note"
 OBJECT_ID = (
     "sha256:"
     "9dabf9b965a3f789b1b36100f3f70515ce8dfd81b411b1503e1e2c3304303647"
@@ -23,6 +24,9 @@ OBJECT_ID = (
 
 
 class V0412ArchiveIndexProjectionTests(unittest.TestCase):
+    def tearDown(self) -> None:
+        archive_services._close_all_zettel_objet_link_projection_sessions()
+
     def archive(self, parent: Path) -> Path:
         root = parent / "archive"
         shutil.copytree(FIXTURE, root)
@@ -702,6 +706,272 @@ class V0412ArchiveIndexProjectionTests(unittest.TestCase):
                 lookup["reason_codes"],
                 ["zettel_tree_changed_during_plan"],
             )
+
+    def test_warm_lookup_uses_session_without_full_zettel_tree_scan(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = self.archive(Path(temp_dir))
+            archive_services.index_archive(root)
+            projection = archive_services.build_zettel_objet_link_authority_projection(
+                root
+            )
+            self.assertTrue(projection["ok"], projection)
+
+            with patch.object(
+                archive_services,
+                "strict_live_zettel_stat_snapshot",
+                side_effect=AssertionError("warm lookup rescanned the Zet tree"),
+            ):
+                lookup = (
+                    archive_services.lookup_zettel_objet_link_authority_projection(
+                        root,
+                        dict(projection),
+                        zettel_id=ZETTEL_ID,
+                        object_id=OBJECT_ID,
+                    )
+                )
+
+            self.assertTrue(lookup["ok"], lookup)
+
+    def test_warm_lookup_rejects_out_of_band_index_status_tamper(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = self.archive(Path(temp_dir))
+            archive_services.index_archive(root)
+            projection = archive_services.build_zettel_objet_link_authority_projection(
+                root
+            )
+            self.assertTrue(projection["ok"], projection)
+
+            conn = archive_services.connect_archive_index(
+                root / archive_services.INDEX_RELATIVE_PATH,
+                write=True,
+            )
+            try:
+                conn.execute(
+                    "UPDATE zettels SET status = 'review' "
+                    "WHERE status = 'draft' AND zettel_id <> ?",
+                    (ZETTEL_ID,),
+                )
+                self.assertEqual(conn.execute("SELECT changes()").fetchone()[0], 1)
+                conn.commit()
+            finally:
+                conn.close()
+
+            lookup = archive_services.lookup_zettel_objet_link_authority_projection(
+                root,
+                projection,
+                zettel_id=ZETTEL_ID,
+                object_id=OBJECT_ID,
+            )
+
+            self.assertFalse(lookup["ok"], lookup)
+            self.assertEqual(
+                lookup["reason_codes"],
+                ["zettel_identity_projection_stale"],
+            )
+
+    def test_slow_lookup_binds_selected_status_to_zettel_bytes(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = self.archive(Path(temp_dir))
+            archive_services.index_archive(root)
+            projection = archive_services.build_zettel_objet_link_authority_projection(
+                root
+            )
+            self.assertTrue(projection["ok"], projection)
+            archive_services._close_all_zettel_objet_link_projection_sessions()
+
+            conn = archive_services.connect_archive_index(
+                root / archive_services.INDEX_RELATIVE_PATH,
+                write=True,
+            )
+            try:
+                conn.execute(
+                    "UPDATE zettels SET status = 'review' WHERE zettel_id = ?",
+                    (DRAFT_ZETTEL_ID,),
+                )
+                self.assertEqual(conn.execute("SELECT changes()").fetchone()[0], 1)
+                conn.commit()
+            finally:
+                conn.close()
+
+            lookup = archive_services.lookup_zettel_objet_link_authority_projection(
+                root,
+                dict(projection),
+                zettel_id=DRAFT_ZETTEL_ID,
+                object_id=OBJECT_ID,
+            )
+
+            self.assertFalse(lookup["ok"], lookup)
+            self.assertEqual(
+                lookup["reason_codes"],
+                ["zettel_tree_changed_during_plan"],
+            )
+
+    def test_projection_watcher_is_armed_before_database_proof(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = self.archive(Path(temp_dir))
+            archive_services.index_archive(root)
+            original_init = archive_services._ZettelObjetLinkProjectionWatcher.__init__
+            changed = False
+
+            def init_then_change_database(watcher, watched_root):
+                nonlocal changed
+                original_init(watcher, watched_root)
+                conn = archive_services.connect_archive_index(
+                    root / archive_services.INDEX_RELATIVE_PATH,
+                    write=True,
+                )
+                try:
+                    conn.execute(
+                        "UPDATE zettels SET status = 'review' "
+                        "WHERE status = 'draft' AND zettel_id <> ?",
+                        (ZETTEL_ID,),
+                    )
+                    self.assertEqual(
+                        conn.execute("SELECT changes()").fetchone()[0],
+                        1,
+                    )
+                    conn.commit()
+                finally:
+                    conn.close()
+                changed = True
+
+            with patch.object(
+                archive_services._ZettelObjetLinkProjectionWatcher,
+                "__init__",
+                new=init_then_change_database,
+            ):
+                projection = (
+                    archive_services.build_zettel_objet_link_authority_projection(
+                        root
+                    )
+                )
+
+            self.assertTrue(changed)
+            self.assertFalse(projection["ok"], projection)
+            self.assertEqual(
+                projection["reason_codes"],
+                ["zettel_identity_projection_stale"],
+            )
+
+    def test_foreign_pid_session_cleanup_never_acquires_inherited_lock(self) -> None:
+        class PoisonedInheritedLock:
+            def __enter__(self):
+                raise AssertionError("inherited projection lock was acquired")
+
+            def __exit__(self, exc_type, exc, traceback):
+                return False
+
+        watcher = Mock()
+        session = archive_services._ZettelObjetLinkProjectionSession(
+            key=("synthetic-root", "synthetic-digest"),
+            watcher=watcher,
+            pid=os.getpid() + 1,
+            created_monotonic=0.0,
+            last_used_monotonic=0.0,
+            lock=PoisonedInheritedLock(),
+        )
+
+        archive_services._close_zettel_objet_link_projection_sessions([session])
+
+        watcher.close.assert_called_once_with()
+
+    def test_after_fork_reset_replaces_poisoned_global_guard(self) -> None:
+        class PoisonedInheritedGuard:
+            def __enter__(self):
+                raise AssertionError("inherited registry guard was acquired")
+
+            def __exit__(self, exc_type, exc, traceback):
+                return False
+
+        watcher = Mock()
+        session = archive_services._ZettelObjetLinkProjectionSession(
+            key=("synthetic-root", "synthetic-digest"),
+            watcher=watcher,
+            pid=os.getpid() - 1,
+            created_monotonic=0.0,
+            last_used_monotonic=0.0,
+            lock=PoisonedInheritedGuard(),
+        )
+        poisoned = PoisonedInheritedGuard()
+        archive_services._ZETTEL_OBJET_LINK_PROJECTION_SESSIONS[session.key] = (
+            session
+        )
+        archive_services._ZETTEL_OBJET_LINK_PROJECTION_SESSION_GUARD = poisoned
+
+        archive_services._reset_zettel_objet_link_projection_sessions_after_fork()
+
+        self.assertEqual(
+            archive_services._ZETTEL_OBJET_LINK_PROJECTION_SESSIONS,
+            {},
+        )
+        self.assertIsNot(
+            archive_services._ZETTEL_OBJET_LINK_PROJECTION_SESSION_GUARD,
+            poisoned,
+        )
+        with archive_services._ZETTEL_OBJET_LINK_PROJECTION_SESSION_GUARD:
+            pass
+        watcher.close.assert_called_once_with()
+
+    def test_linux_session_watcher_filters_only_index_authority_files(self) -> None:
+        watcher = object.__new__(archive_services._ArchiveIndexLinuxInotifyWatcher)
+        watcher._include_database = True
+
+        self.assertTrue(
+            watcher._event_is_relevant(
+                "archive-root",
+                archive_services._ArchiveIndexLinuxInotifyWatcher._IN_MOVED_TO,
+                "db",
+            )
+        )
+        for name in (
+            "archive-index.sqlite",
+            "archive-index.sqlite-journal",
+            "archive-index.sqlite-wal",
+        ):
+            with self.subTest(name=name):
+                self.assertTrue(
+                    watcher._event_is_relevant(
+                        "database-parent",
+                        archive_services._ArchiveIndexLinuxInotifyWatcher._IN_MODIFY,
+                        name,
+                    )
+                )
+        self.assertFalse(
+            watcher._event_is_relevant(
+                "database-parent",
+                archive_services._ArchiveIndexLinuxInotifyWatcher._IN_CREATE,
+                "archive-index.sqlite-shm",
+            )
+        )
+
+    @unittest.skipUnless(os.name == "nt", "Windows watcher checkpoint contract")
+    def test_windows_watcher_poll_keeps_pending_request_armed(self) -> None:
+        watcher = object.__new__(
+            completion_workflows._ZettelObjetLinkWindowsDirectoryWatcher
+        )
+        watcher._active = True
+        watcher._verified = False
+        watcher._handle = 123
+        watcher._overlapped = object()
+        watcher._ctypes = Mock()
+        watcher._ctypes.byref.side_effect = lambda value: value
+        watcher._ctypes.get_last_error.return_value = 996
+        watcher._get_result = Mock(return_value=False)
+        watcher._cancel_io = Mock(
+            side_effect=AssertionError("poll_clean cancelled the pending watch")
+        )
+        watcher._wait = Mock(
+            side_effect=AssertionError("poll_clean waited on the pending watch")
+        )
+
+        watcher.poll_clean()
+        watcher.poll_clean()
+
+        self.assertTrue(watcher._active)
+        self.assertFalse(watcher._verified)
+        self.assertEqual(watcher._get_result.call_count, 2)
+        watcher._cancel_io.assert_not_called()
+        watcher._wait.assert_not_called()
 
     @unittest.skipUnless(os.name == "nt", "Windows subtree watcher race")
     def test_current_check_rejects_first_and_closing_lstat_append_races(

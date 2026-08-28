@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import atexit
 import json
 import copy
 import base64
@@ -53534,10 +53535,13 @@ class _ArchiveIndexLinuxInotifyWatcher:
         | _IN_IGNORED
     )
 
-    def __init__(self, root: Path) -> None:
+    def __init__(self, root: Path, *, include_database: bool = False) -> None:
         if not sys.platform.startswith("linux"):
             raise OSError("archive_index_watcher_wrong_platform")
+        if type(include_database) is not bool:
+            raise OSError("archive_index_watcher_invalid")
         self._fd: int | None = None
+        self._include_database = include_database
         self._roles_by_watch_descriptor: dict[int, str] = {}
         libc = ctypes.CDLL(None, use_errno=True)
         init = getattr(libc, "inotify_init1", None)
@@ -53566,6 +53570,11 @@ class _ArchiveIndexLinuxInotifyWatcher:
                 root / "objects" / "manifests",
                 role="manifest-parent",
             )
+            if include_database:
+                self._watch_optional_directory(
+                    root / "db",
+                    role="database-parent",
+                )
             for folder in ("zettels", "inbox"):
                 self._watch_optional_zettel_tree(root / folder)
         except BaseException:
@@ -53666,11 +53675,20 @@ class _ArchiveIndexLinuxInotifyWatcher:
         if role == "zettel-tree":
             return True
         if role == "archive-root":
-            return name in {"zettels", "inbox", "objects"}
+            names = {"zettels", "inbox", "objects"}
+            if self._include_database:
+                names.add("db")
+            return name in names
         if role == "objects":
             return name == "manifests"
         if role == "manifest-parent":
             return name == "files.jsonl"
+        if role == "database-parent":
+            return name in {
+                "archive-index.sqlite",
+                "archive-index.sqlite-journal",
+                "archive-index.sqlite-wal",
+            }
         return True
 
     def verify_clean(self) -> None:
@@ -53913,6 +53931,398 @@ def _close_archive_index_authority_fence(
             authority_fence.close()
         except OSError:
             pass
+
+
+class _ZettelObjetLinkProjectionSessionChanged(OSError):
+    """One content-free reason that invalidates a warm projection session."""
+
+    def __init__(self, reason_code: str) -> None:
+        super().__init__(reason_code)
+        self.reason_code = reason_code
+
+
+class _ZettelObjetLinkProjectionWatcher:
+    """Keep only share-delete change watches between bounded link lookups.
+
+    The ordinary authority fence intentionally holds non-delete-sharing path
+    handles while it proves a snapshot.  Keeping that full fence in a cache
+    would prevent a Windows archive directory from being renamed or removed.
+    This lighter bundle retains only notification handles, all of which use
+    delete sharing, plus the exact root identity observed while the build
+    fence is still active.
+    """
+
+    def __init__(self, root: Path) -> None:
+        root = Path(root).resolve()
+        self._root = root
+        self._watchers: list[tuple[Any, str]] = []
+        self._closed = False
+        try:
+            from .completion_workflows import (
+                _ZettelObjetLinkWindowsDirectoryWatcher,
+                _zettel_objet_link_directory_stability_token,
+                _zettel_objet_link_directory_token_identity,
+            )
+
+            with ExitStack() as bindings:
+                root_binding = bindings.enter_context(
+                    _activity_group_bound_directory_chain(root, root)
+                )
+                self.root_identity = (
+                    _zettel_objet_link_directory_token_identity(
+                        _zettel_objet_link_directory_stability_token(
+                            root_binding
+                        )
+                    )
+                )
+                if os.name == "nt":
+                    watcher_type = _ZettelObjetLinkWindowsDirectoryWatcher
+
+                    def add_windows(
+                        path: Path,
+                        *,
+                        watch_subtree: bool,
+                        names_only: bool,
+                        reason_code: str,
+                    ) -> None:
+                        try:
+                            binding = bindings.enter_context(
+                                _activity_group_bound_directory_chain(root, path)
+                            )
+                        except FileNotFoundError:
+                            return
+                        watcher = watcher_type(
+                            binding,
+                            watch_subtree=watch_subtree,
+                            names_only=names_only,
+                        )
+                        self._watchers.append((watcher, reason_code))
+
+                    add_windows(
+                        root,
+                        watch_subtree=False,
+                        names_only=True,
+                        reason_code="zettel_identity_projection_stale",
+                    )
+                    for folder in ("zettels", "inbox"):
+                        add_windows(
+                            root / folder,
+                            watch_subtree=True,
+                            names_only=False,
+                            reason_code="zettel_tree_changed_during_plan",
+                        )
+                    add_windows(
+                        root / "objects",
+                        watch_subtree=False,
+                        names_only=True,
+                        reason_code="zettel_identity_projection_stale",
+                    )
+                    add_windows(
+                        root / "objects" / "manifests",
+                        watch_subtree=False,
+                        names_only=False,
+                        reason_code="manifest_changed",
+                    )
+                    add_windows(
+                        root / "db",
+                        watch_subtree=False,
+                        names_only=False,
+                        reason_code="zettel_identity_projection_stale",
+                    )
+                elif sys.platform.startswith("linux"):
+                    watcher = _ArchiveIndexLinuxInotifyWatcher(
+                        root,
+                        include_database=True,
+                    )
+                    self._watchers.append(
+                        (watcher, "zettel_identity_projection_stale")
+                    )
+                else:
+                    raise OSError("archive_index_watcher_unavailable")
+            if not self._watchers:
+                raise OSError("archive_index_watcher_unavailable")
+        except BaseException:
+            self.close()
+            raise
+
+    def assert_root_identity(self, binding: Mapping[str, Any]) -> None:
+        if self._closed:
+            raise _ZettelObjetLinkProjectionSessionChanged(
+                "zettel_identity_projection_stale"
+            )
+        try:
+            from .completion_workflows import (
+                _zettel_objet_link_directory_stability_token,
+                _zettel_objet_link_directory_token_identity,
+            )
+
+            current = _zettel_objet_link_directory_token_identity(
+                _zettel_objet_link_directory_stability_token(dict(binding))
+            )
+        except (OSError, TypeError, ValueError):
+            raise _ZettelObjetLinkProjectionSessionChanged(
+                "zettel_identity_projection_stale"
+            ) from None
+        if current != self.root_identity:
+            raise _ZettelObjetLinkProjectionSessionChanged(
+                "zettel_identity_projection_stale"
+            )
+
+    def poll_clean(self) -> None:
+        if self._closed:
+            raise _ZettelObjetLinkProjectionSessionChanged(
+                "zettel_identity_projection_stale"
+            )
+        for watcher, reason_code in self._watchers:
+            try:
+                if os.name == "nt":
+                    watcher.poll_clean()
+                else:
+                    watcher.verify_clean()
+            except OSError:
+                raise _ZettelObjetLinkProjectionSessionChanged(
+                    reason_code
+                ) from None
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        first_error: OSError | None = None
+        for watcher, _reason_code in reversed(self._watchers):
+            try:
+                watcher.close()
+            except OSError as exc:
+                if first_error is None:
+                    first_error = exc
+        self._watchers.clear()
+        if first_error is not None:
+            raise first_error
+
+
+ZETTEL_OBJET_LINK_PROJECTION_SESSION_TTL_SECONDS = 300.0
+ZETTEL_OBJET_LINK_PROJECTION_SESSION_MAX = 4
+
+
+@dataclass
+class _ZettelObjetLinkProjectionSession:
+    key: tuple[str, str]
+    watcher: _ZettelObjetLinkProjectionWatcher
+    pid: int
+    created_monotonic: float
+    last_used_monotonic: float
+    lock: threading.RLock
+
+    def close(self) -> None:
+        self.watcher.close()
+
+
+_ZETTEL_OBJET_LINK_PROJECTION_SESSION_GUARD = threading.RLock()
+_ZETTEL_OBJET_LINK_PROJECTION_SESSIONS: dict[
+    tuple[str, str], _ZettelObjetLinkProjectionSession
+] = {}
+
+
+def _zettel_objet_link_projection_session_key(
+    root: Path,
+    projection: Mapping[str, Any],
+) -> tuple[str, str] | None:
+    try:
+        generation = str(projection.get("generation") or "")
+        live_snapshot_sha256 = str(
+            projection.get("live_snapshot_sha256") or ""
+        )
+        manifest_sha256 = str(projection.get("manifest_sha256") or "")
+        manifest_record_count = int(
+            projection.get("manifest_record_count", -1)
+        )
+        raw_manifest_generation = projection.get("manifest_file_generation")
+        if not isinstance(raw_manifest_generation, Mapping):
+            return None
+        manifest_generation = {
+            field: int(raw_manifest_generation[field])
+            for field in (
+                "file_dev",
+                "file_ino",
+                "file_ctime_ns",
+                "file_size",
+                "file_mtime_ns",
+            )
+        }
+    except (KeyError, TypeError, ValueError):
+        return None
+    if (
+        projection.get("ok") is not True
+        or projection.get("schema")
+        != ZETTEL_OBJET_LINK_AUTHORITY_PROJECTION_SCHEMA
+        or INDEX_GENERATION_RE.fullmatch(generation) is None
+        or INDEX_SNAPSHOT_SHA256_RE.fullmatch(live_snapshot_sha256) is None
+        or INDEX_SNAPSHOT_SHA256_RE.fullmatch(manifest_sha256) is None
+        or manifest_record_count < 0
+        or any(value < 0 for value in manifest_generation.values())
+    ):
+        return None
+    binding = {
+        "schema": ZETTEL_OBJET_LINK_AUTHORITY_PROJECTION_SCHEMA,
+        "generation": generation,
+        "live_snapshot_sha256": live_snapshot_sha256,
+        "manifest_sha256": manifest_sha256,
+        "manifest_record_count": manifest_record_count,
+        "manifest_file_generation": manifest_generation,
+    }
+    resolved = str(Path(root).resolve())
+    root_key = resolved.casefold() if os.name == "nt" else resolved
+    digest = hashlib.sha256(
+        json.dumps(
+            binding,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    return root_key, digest
+
+
+def _close_zettel_objet_link_projection_sessions(
+    sessions: Iterable[_ZettelObjetLinkProjectionSession],
+) -> None:
+    for session in sessions:
+        try:
+            if session.pid != os.getpid():
+                # A lock inherited from a multi-threaded parent may be
+                # permanently owned by a thread that does not exist in the
+                # forked child.  The child is single-threaded here, so close
+                # its inherited watcher descriptor without touching that
+                # poisoned lock.
+                session.close()
+                continue
+            # A pruned/replaced session may still be serving one bounded
+            # lookup.  Wait for that lookup's linearization point before
+            # closing its watcher handles.
+            with session.lock:
+                session.close()
+        except OSError:
+            pass
+
+
+def _prune_zettel_objet_link_projection_sessions(
+    *,
+    now: float,
+) -> list[_ZettelObjetLinkProjectionSession]:
+    stale: list[_ZettelObjetLinkProjectionSession] = []
+    for key, session in list(_ZETTEL_OBJET_LINK_PROJECTION_SESSIONS.items()):
+        if (
+            session.pid != os.getpid()
+            or now - session.last_used_monotonic
+            > ZETTEL_OBJET_LINK_PROJECTION_SESSION_TTL_SECONDS
+        ):
+            stale.append(session)
+            del _ZETTEL_OBJET_LINK_PROJECTION_SESSIONS[key]
+    while (
+        len(_ZETTEL_OBJET_LINK_PROJECTION_SESSIONS)
+        > ZETTEL_OBJET_LINK_PROJECTION_SESSION_MAX
+    ):
+        oldest_key = min(
+            _ZETTEL_OBJET_LINK_PROJECTION_SESSIONS,
+            key=lambda key: _ZETTEL_OBJET_LINK_PROJECTION_SESSIONS[
+                key
+            ].last_used_monotonic,
+        )
+        stale.append(_ZETTEL_OBJET_LINK_PROJECTION_SESSIONS.pop(oldest_key))
+    return stale
+
+
+def _register_zettel_objet_link_projection_session(
+    root: Path,
+    projection: Mapping[str, Any],
+    watcher: _ZettelObjetLinkProjectionWatcher,
+) -> bool:
+    key = _zettel_objet_link_projection_session_key(root, projection)
+    if key is None:
+        return False
+    now = time.monotonic()
+    stale: list[_ZettelObjetLinkProjectionSession] = []
+    with _ZETTEL_OBJET_LINK_PROJECTION_SESSION_GUARD:
+        for existing_key, existing in list(
+            _ZETTEL_OBJET_LINK_PROJECTION_SESSIONS.items()
+        ):
+            if existing_key == key or existing_key[0] == key[0]:
+                stale.append(existing)
+                del _ZETTEL_OBJET_LINK_PROJECTION_SESSIONS[existing_key]
+        _ZETTEL_OBJET_LINK_PROJECTION_SESSIONS[key] = (
+            _ZettelObjetLinkProjectionSession(
+                key=key,
+                watcher=watcher,
+                pid=os.getpid(),
+                created_monotonic=now,
+                last_used_monotonic=now,
+                lock=threading.RLock(),
+            )
+        )
+        stale.extend(
+            _prune_zettel_objet_link_projection_sessions(now=now)
+        )
+    _close_zettel_objet_link_projection_sessions(stale)
+    return True
+
+
+def _get_zettel_objet_link_projection_session(
+    root: Path,
+    projection: Mapping[str, Any],
+) -> _ZettelObjetLinkProjectionSession | None:
+    key = _zettel_objet_link_projection_session_key(root, projection)
+    if key is None:
+        return None
+    now = time.monotonic()
+    stale: list[_ZettelObjetLinkProjectionSession] = []
+    with _ZETTEL_OBJET_LINK_PROJECTION_SESSION_GUARD:
+        stale.extend(
+            _prune_zettel_objet_link_projection_sessions(now=now)
+        )
+        session = _ZETTEL_OBJET_LINK_PROJECTION_SESSIONS.get(key)
+        if session is not None:
+            session.last_used_monotonic = now
+    _close_zettel_objet_link_projection_sessions(stale)
+    return session
+
+
+def _invalidate_zettel_objet_link_projection_session(
+    session: _ZettelObjetLinkProjectionSession,
+) -> None:
+    removed: _ZettelObjetLinkProjectionSession | None = None
+    with _ZETTEL_OBJET_LINK_PROJECTION_SESSION_GUARD:
+        if _ZETTEL_OBJET_LINK_PROJECTION_SESSIONS.get(session.key) is session:
+            removed = _ZETTEL_OBJET_LINK_PROJECTION_SESSIONS.pop(session.key)
+    if removed is not None:
+        _close_zettel_objet_link_projection_sessions([removed])
+
+
+def _close_all_zettel_objet_link_projection_sessions() -> None:
+    with _ZETTEL_OBJET_LINK_PROJECTION_SESSION_GUARD:
+        sessions = list(_ZETTEL_OBJET_LINK_PROJECTION_SESSIONS.values())
+        _ZETTEL_OBJET_LINK_PROJECTION_SESSIONS.clear()
+    _close_zettel_objet_link_projection_sessions(sessions)
+
+
+def _reset_zettel_objet_link_projection_sessions_after_fork() -> None:
+    """Drop inherited watcher descriptors without acquiring parent locks."""
+
+    global _ZETTEL_OBJET_LINK_PROJECTION_SESSION_GUARD
+    sessions = list(_ZETTEL_OBJET_LINK_PROJECTION_SESSIONS.values())
+    _ZETTEL_OBJET_LINK_PROJECTION_SESSIONS.clear()
+    _ZETTEL_OBJET_LINK_PROJECTION_SESSION_GUARD = threading.RLock()
+    for session in sessions:
+        try:
+            session.close()
+        except OSError:
+            pass
+
+
+atexit.register(_close_all_zettel_objet_link_projection_sessions)
+if hasattr(os, "register_at_fork"):
+    os.register_at_fork(
+        after_in_child=_reset_zettel_objet_link_projection_sessions_after_fork
+    )
 
 
 def _strict_live_zettel_stat_scan(
@@ -54601,9 +55011,14 @@ def build_zettel_objet_link_authority_projection(
     if _authority_fence is None:
         mutation_guard: _ArchiveIndexReadMutationGuard | None = None
         authority_fence: _ArchiveIndexAuthorityFence | None = None
+        projection_watcher: _ZettelObjetLinkProjectionWatcher | None = None
         try:
             mutation_guard = _ArchiveIndexReadMutationGuard(root)
             authority_fence = _ArchiveIndexAuthorityFence(root)
+            # Arm every session source watch before the recursive proof.  In
+            # particular, the ordinary full fence does not watch out-of-band
+            # SQLite writes, so arming after the proof would leave a real gap.
+            projection_watcher = _ZettelObjetLinkProjectionWatcher(root)
             result = build_zettel_objet_link_authority_projection(
                 root,
                 progress_callback=progress_callback,
@@ -54612,11 +55027,24 @@ def build_zettel_objet_link_authority_projection(
             authority_fence.arm_closing_guard()
             authority_fence.verify_clean()
             mutation_guard.verify_clean()
+            projection_watcher.poll_clean()
+            if projection_watcher is not None and result.get("ok"):
+                if _register_zettel_objet_link_projection_session(
+                    root,
+                    result,
+                    projection_watcher,
+                ):
+                    projection_watcher = None
         except OSError:
             return _zettel_objet_link_authority_failure(
                 "zettel_identity_projection_stale"
             )
         finally:
+            if projection_watcher is not None:
+                try:
+                    projection_watcher.close()
+                except OSError:
+                    pass
             _close_archive_index_authority_fence(authority_fence)
             if mutation_guard is not None:
                 mutation_guard.close()
@@ -54812,10 +55240,12 @@ def lookup_zettel_objet_link_authority_projection(
     | None = None,
     *,
     _authority_fence: _ArchiveIndexAuthorityFence | None = None,
+    _projection_session: _ZettelObjetLinkProjectionSession | None = None,
+    _skip_projection_session: bool = False,
 ) -> dict[str, Any]:
     """Resolve one Zet and its matching manifest rows from the current index."""
 
-    if _authority_fence is None:
+    if _authority_fence is None and _projection_session is None:
         _emit_mint_progress(
             progress_callback,
             "zettel_objet_link_authority_lookup",
@@ -54823,10 +55253,102 @@ def lookup_zettel_objet_link_authority_projection(
             0,
             1,
         )
+        try:
+            archive_root = require_existing_archive_root(root)
+        except (ArchiveServiceError, OSError, ValueError):
+            return _zettel_objet_link_authority_failure(
+                "zettel_identity_projection_stale"
+            )
+        session = (
+            None
+            if _skip_projection_session
+            else _get_zettel_objet_link_projection_session(
+                archive_root,
+                authority_projection,
+            )
+        )
+        if session is not None:
+            mutation_guard: _ArchiveIndexReadMutationGuard | None = None
+            changed_reason: str | None = None
+            try:
+                with session.lock:
+                    with _activity_group_bound_directory_chain(
+                        archive_root,
+                        archive_root,
+                    ) as root_binding:
+                        mutation_guard = _ArchiveIndexReadMutationGuard(
+                            archive_root
+                        )
+                        session.watcher.assert_root_identity(root_binding)
+                        session.watcher.poll_clean()
+                        result = lookup_zettel_objet_link_authority_projection(
+                            archive_root,
+                            authority_projection,
+                            zettel_id=zettel_id,
+                            relative_path=relative_path,
+                            object_id=object_id,
+                            progress_callback=progress_callback,
+                            _projection_session=session,
+                            _skip_projection_session=True,
+                        )
+                        session.watcher.poll_clean()
+                        mutation_guard.verify_clean()
+            except _ZettelObjetLinkProjectionSessionChanged as exc:
+                changed_reason = exc.reason_code
+            except (ArchiveServiceError, OSError, TypeError, ValueError):
+                changed_reason = "zettel_identity_projection_stale"
+            except BaseException:
+                _invalidate_zettel_objet_link_projection_session(session)
+                raise
+            finally:
+                if mutation_guard is not None:
+                    try:
+                        mutation_guard.close()
+                    except OSError:
+                        changed_reason = (
+                            changed_reason
+                            or "zettel_identity_projection_stale"
+                        )
+            if changed_reason is not None:
+                _invalidate_zettel_objet_link_projection_session(session)
+                classified = lookup_zettel_objet_link_authority_projection(
+                    archive_root,
+                    authority_projection,
+                    zettel_id=zettel_id,
+                    relative_path=relative_path,
+                    object_id=object_id,
+                    progress_callback=progress_callback,
+                    _skip_projection_session=True,
+                )
+                return (
+                    classified
+                    if classified.get("ok") is not True
+                    else _zettel_objet_link_authority_failure(changed_reason)
+                )
+            stale_codes = {
+                "zettel_identity_projection_stale",
+                "zettel_identity_duplicate",
+                "zettel_tree_changed_during_plan",
+                "manifest_changed",
+            }
+            if any(
+                str(code) in stale_codes
+                for code in result.get("reason_codes", [])
+            ):
+                _invalidate_zettel_objet_link_projection_session(session)
+            if result.get("ok"):
+                _emit_mint_progress(
+                    progress_callback,
+                    "zettel_objet_link_authority_lookup",
+                    "done",
+                    1,
+                    1,
+                )
+            return result
+
         mutation_guard: _ArchiveIndexReadMutationGuard | None = None
         authority_fence: _ArchiveIndexAuthorityFence | None = None
         try:
-            archive_root = require_existing_archive_root(root)
             mutation_guard = _ArchiveIndexReadMutationGuard(archive_root)
             authority_fence = _ArchiveIndexAuthorityFence(archive_root)
         except (ArchiveServiceError, OSError, ValueError):
@@ -54881,15 +55403,42 @@ def lookup_zettel_objet_link_authority_projection(
         projected_manifest_count = int(
             authority_projection.get("manifest_record_count", -1)
         )
+        projected_live_snapshot_sha256 = str(
+            authority_projection.get("live_snapshot_sha256") or ""
+        )
+        raw_projected_manifest_generation = authority_projection.get(
+            "manifest_file_generation"
+        )
+        projected_manifest_generation = (
+            {
+                field: int(raw_projected_manifest_generation.get(field, -1))
+                for field in (
+                    "file_dev",
+                    "file_ino",
+                    "file_ctime_ns",
+                    "file_size",
+                    "file_mtime_ns",
+                )
+            }
+            if isinstance(raw_projected_manifest_generation, Mapping)
+            else None
+        )
         if (
             authority_projection.get("ok") is not True
             or authority_projection.get("schema")
             != ZETTEL_OBJET_LINK_AUTHORITY_PROJECTION_SCHEMA
             or not INDEX_GENERATION_RE.fullmatch(projected_generation)
             or not INDEX_SNAPSHOT_SHA256_RE.fullmatch(
+                projected_live_snapshot_sha256
+            )
+            or not INDEX_SNAPSHOT_SHA256_RE.fullmatch(
                 projected_manifest_sha256
             )
             or projected_manifest_count < 0
+            or projected_manifest_generation is None
+            or any(
+                value < 0 for value in projected_manifest_generation.values()
+            )
         ):
             return _zettel_objet_link_authority_failure(
                 "zettel_identity_projection_stale"
@@ -54918,12 +55467,57 @@ def lookup_zettel_objet_link_authority_projection(
                 return _zettel_objet_link_authority_failure(
                     "zettel_identity_projection_stale"
                 )
-            evidence = require_current_zettel_index(
-                archive_root,
-                connection=conn,
-                progress_callback=progress_callback,
-                _authority_fence=_authority_fence,
-            )
+            if _projection_session is not None:
+                indexed_zettel_count = int(
+                    conn.execute("SELECT COUNT(*) FROM zettels").fetchone()[0]
+                )
+                indexed_canonical_count = int(
+                    conn.execute(
+                        "SELECT COUNT(*) FROM zettels "
+                        "WHERE status = 'canonical' AND path LIKE 'zettels/%'"
+                    ).fetchone()[0]
+                )
+                indexed_manifest_record_count = int(
+                    conn.execute(
+                        "SELECT COUNT(*) FROM objet_manifest_projection"
+                    ).fetchone()[0]
+                )
+                identity_projection_sha256 = (
+                    archive_index_zettel_identity_projection_sha256(conn)
+                )
+                session_reasons = archive_index_metadata_stale_reasons(
+                    metadata,
+                    indexed_canonical_count=indexed_canonical_count,
+                    indexed_zettel_count=indexed_zettel_count,
+                    indexed_manifest_record_count=(
+                        indexed_manifest_record_count
+                    ),
+                    live_snapshot_sha256=projected_live_snapshot_sha256,
+                    indexed_zettel_identity_projection_sha256=(
+                        identity_projection_sha256
+                    ),
+                )
+                evidence = {
+                    "ok": not session_reasons,
+                    "state": (
+                        INDEX_STATE_CURRENT
+                        if not session_reasons
+                        else "rebuild_required"
+                    ),
+                    "generation": projected_generation,
+                    "live_snapshot_sha256": projected_live_snapshot_sha256,
+                    "reason_codes": session_reasons,
+                    "blockers": (
+                        [] if not session_reasons else [INDEX_REBUILD_REQUIRED]
+                    ),
+                }
+            else:
+                evidence = require_current_zettel_index(
+                    archive_root,
+                    connection=conn,
+                    progress_callback=progress_callback,
+                    _authority_fence=_authority_fence,
+                )
             if not evidence.get("ok"):
                 if any(
                     reason
@@ -54991,6 +55585,7 @@ def lookup_zettel_objet_link_authority_projection(
             )
             if (
                 manifest_generation is None
+                or manifest_generation != projected_manifest_generation
                 or manifest_snapshot["file_generation"] != manifest_generation
                 or manifest_snapshot["file_sha256"]
                 != projected_manifest_sha256
@@ -55086,6 +55681,8 @@ def lookup_zettel_objet_link_authority_projection(
                 boundary.get("state") == "blocked"
                 or str(boundary.get("frontmatter", {}).get("id") or "")
                 != str(row["zettel_id"] or "")
+                or str(boundary.get("frontmatter", {}).get("status") or "")
+                != str(row["status"] or "")
             ):
                 return _zettel_objet_link_authority_failure(
                     "zettel_tree_changed_during_plan"
@@ -55133,20 +55730,21 @@ def lookup_zettel_objet_link_authority_projection(
                         "zettel_identity_projection_stale"
                     )
                 manifest_records.append(record)
-            closing_snapshot = strict_live_zettel_stat_snapshot(
-                archive_root,
-                archive_index_zettel_stat_rows(conn),
-                progress_callback=progress_callback,
-                _authority_fence=_authority_fence,
-            )
-            if (
-                closing_snapshot.get("reason_codes")
-                or closing_snapshot.get("live_snapshot_sha256")
-                != authority_projection.get("live_snapshot_sha256")
-            ):
-                return _zettel_objet_link_authority_failure(
-                    "zettel_tree_changed_during_plan"
+            if _projection_session is None:
+                closing_snapshot = strict_live_zettel_stat_snapshot(
+                    archive_root,
+                    archive_index_zettel_stat_rows(conn),
+                    progress_callback=progress_callback,
+                    _authority_fence=_authority_fence,
                 )
+                if (
+                    closing_snapshot.get("reason_codes")
+                    or closing_snapshot.get("live_snapshot_sha256")
+                    != authority_projection.get("live_snapshot_sha256")
+                ):
+                    return _zettel_objet_link_authority_failure(
+                        "zettel_tree_changed_during_plan"
+                    )
             closing_manifest = archive_index_stable_file_snapshot(
                 archive_root,
                 manifest_path,
