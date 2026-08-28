@@ -48,10 +48,13 @@ conditional create-only publication for single PUT and multipart completion.
 New and already-present matching objects require HEAD plus a complete GET
 rehash. Proven conflicts become non-overwriting `review_required` evidence;
 unavailable evidence remains nonterminal and resumable. The exact private
-ledger is manifest-bound, counts real provider mutation calls, and can resume
-post-provider verification or receipt finalization without a second
-unconditional upload. A preservation receipt is not formal adoption and does
-not add a central-manifest remote location.
+ledger is manifest-bound and durably reserves and charges one budget unit
+immediately before each provider mutation. A crash-ambiguous reservation stays
+charged even when transport cannot be observed. Resume queries the exact remote
+target first; only verified matching bytes allow no-PUT finalization. Absence,
+provider unavailability, or uncertain multipart cleanup remains nonterminal
+and grants no automatic retry authority. A preservation receipt is not formal
+adoption and does not add a central-manifest remote location.
 
 Installing this runtime does not inspect a client archive, access credentials,
 call a provider, or upload bytes. Those effects require a separate update of

@@ -16,6 +16,15 @@ DECISION = (
 )
 LOCK = KIT / "project-runtime-supply-lock-v0.4.13.json"
 LOCK_SHA256 = "6ede0cfb75b4c2715cc2d53fb1d3129898d582731057d0f4f1c3e68fcdc160dd"
+BUDGET_CONTRACT_DOCUMENTS = (
+    ROOT / "CHANGELOG.md",
+    KIT / "README.md",
+    DECISION,
+    KIT / "docs" / "capability-matrix.md",
+    KIT / "docs" / "object-storage-adapter-execution-contract.md",
+    KIT / "docs" / "runtime-canonical-entrypoints.md",
+    RELEASE,
+)
 
 
 class V0413ReleaseDocsTests(unittest.TestCase):
@@ -82,7 +91,10 @@ class V0413ReleaseDocsTests(unittest.TestCase):
             "already_remote_verified",
             "review_required",
             "nonterminal and resumable",
-            "manifest-bound provider-call ceiling",
+            "durably reserves and charges one unit",
+            "charged reservation is not the same as an observed transport attempt",
+            "resume first queries the exact remote target",
+            "grant no automatic retry authority",
             "Preservation is not formal adoption",
             "person is not asked to count records or compare digests",
             "Publishing or installing v0.4.13 does not read a client archive",
@@ -96,6 +108,27 @@ class V0413ReleaseDocsTests(unittest.TestCase):
         self.assertIn("conditional create", decision)
         self.assertIn("without\n  issuing a second unconditional upload", decision)
         self.assertIn("whole-archive backup claim", decision)
+
+    def test_provider_budget_docs_distinguish_charge_from_observed_transport(self) -> None:
+        forbidden_overclaims = (
+            "counted every real provider mutation call",
+            "counts real provider mutation calls",
+            "actual provider calls are counted",
+            "counts actual create/part/complete/abort calls",
+            "includes actual multipart create",
+        )
+        for path in BUDGET_CONTRACT_DOCUMENTS:
+            with self.subTest(path=path.name):
+                normalized = " ".join(path.read_text(encoding="utf-8").split())
+                folded = normalized.casefold()
+                self.assertIn("charged", folded)
+                self.assertIn("observ", folded)
+                self.assertIn("exact remote target", folded)
+                self.assertIn("nonterminal", folded)
+                self.assertIn("automatic", folded)
+                self.assertIn("authority", folded)
+                for forbidden in forbidden_overclaims:
+                    self.assertNotIn(forbidden, folded)
 
     def test_public_v0413_documents_do_not_publish_client_evidence(self) -> None:
         documents = (

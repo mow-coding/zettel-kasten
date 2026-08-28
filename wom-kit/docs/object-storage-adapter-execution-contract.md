@@ -50,12 +50,19 @@ or deletion. Unknown size, incomplete or contradictory response, authorization
 failure, throttling, server failure, transport failure, and uncertain multipart
 cleanup stay nonterminal and resumable without a terminal receipt.
 
-The private resume ledger is bound to the exact manifest and records provider
-calls before the separate immutable terminal receipt is finalized. Resume can
-therefore continue verification or receipt publication after a crash without
-a second PUT. The remaining manifest-bound call ceiling is checked before each
-mutation and counts multipart create, part, complete, and abort calls that were
-actually attempted.
+The private resume ledger is bound to the exact manifest. Immediately before
+each provider mutation, it durably reserves and charges one unit from the
+manifest-bound call ceiling. `charged` is deliberately more conservative than
+`observed`: if a crash makes it impossible to prove whether transport was
+reached, the reservation remains charged. It is never released merely because
+no response was recorded.
+
+Resume first queries the exact remote target. Only independently verified
+matching bytes allow no-PUT verification or receipt finalization. Proven
+absence, provider unavailability, incomplete evidence, and uncertain multipart
+cleanup remain nonterminal. None of those states is automatic authority for a
+second mutation; any later mutation needs separately derived exact next-step
+authority within the unchanged manifest and remaining charged budget.
 
 `bytes_preserved` and `already_remote_verified` prove only the exact object at
 the recorded operation. They do not add a `wom_uploaded` manifest location,
