@@ -3,10 +3,12 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import os
 import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 from wom_kit import archive_services
@@ -988,6 +990,141 @@ class ObjectStorageSetupRegistrationTests(unittest.TestCase):
         rendered = json.dumps(status, sort_keys=True)
         for private in (BUCKET, STORE_REF, ENDPOINT_REF, PROFILE_ID, PROFILE_SLUG):
             self.assertNotIn(private, rendered)
+
+    def test_non_ascii_profile_exact_receipt_uses_validator_canonical_identity(
+        self,
+    ) -> None:
+        private_profile_id = "profile:개인:정확한-설정"
+        arguments = self.kwargs()
+        arguments["profile_id"] = private_profile_id
+        plan = plan_object_storage_setup_registration(self.root, **arguments)
+        applied = apply_object_storage_setup_registration(
+            plan, approval_authority=_authority()
+        )
+        self.assertTrue(applied["ok"], applied)
+        before = _snapshot(self.root)
+
+        status = archive_services.provider_setup_status(self.root)
+
+        self.assertEqual(_snapshot(self.root), before)
+        self.assertTrue(status["ok"], status)
+        self.assertEqual(status["receipt_count"], 1)
+        self.assertEqual(status["orphan_receipts"], [])
+        item = status["providers"][0]
+        self.assertEqual(item["setup_evidence_mode"], "exact_registration_v1")
+        self.assertEqual(item["status"], "metadata_and_receipt_present")
+        self.assertNotIn(private_profile_id, json.dumps(status, ensure_ascii=False))
+
+    @unittest.skipUnless(os.name == "nt", "Windows case-insensitive path contract")
+    def test_windows_case_only_exact_receipt_filename_is_not_orphaned(self) -> None:
+        plan = self.plan()
+        applied = apply_object_storage_setup_registration(
+            plan, approval_authority=_authority()
+        )
+        self.assertTrue(applied["ok"], applied)
+        exact_path = self.root / plan.receipt_relative
+        temporary_path = exact_path.with_name("case-transition.json")
+        uppercase_path = exact_path.with_name(
+            exact_path.stem.upper() + exact_path.suffix
+        )
+        exact_path.rename(temporary_path)
+        temporary_path.rename(uppercase_path)
+        before = _snapshot(self.root)
+
+        status = archive_services.provider_setup_status(self.root)
+
+        self.assertEqual(_snapshot(self.root), before)
+        self.assertTrue(status["ok"], status)
+        self.assertEqual(status["receipt_count"], 1)
+        self.assertEqual(status["orphan_receipts"], [])
+        self.assertEqual(status["providers"][0]["status"], "metadata_and_receipt_present")
+
+    def test_same_size_and_mtime_receipt_replacement_fails_closed(self) -> None:
+        receipt_root = self.root / "receipts" / "providers"
+        receipt_root.mkdir(parents=True, exist_ok=True)
+        private_sentinel = "private-replacement-bucket"
+        receipt_path = receipt_root / f"{private_sentinel}.json"
+        receipt_path.write_bytes(b"{}\n")
+        original_lstat = archive_services.os.lstat
+        target_calls = 0
+
+        def replaced_lstat(path: Path | str):
+            nonlocal target_calls
+            observed = original_lstat(path)
+            if Path(path).name != receipt_path.name:
+                return observed
+            target_calls += 1
+            if target_calls != 2:
+                return observed
+            return SimpleNamespace(
+                st_mode=observed.st_mode,
+                st_dev=observed.st_dev,
+                st_ino=int(observed.st_ino) + 1,
+                st_size=observed.st_size,
+                st_mtime_ns=observed.st_mtime_ns,
+                st_ctime_ns=observed.st_ctime_ns + 1,
+                st_ctime=observed.st_ctime,
+                st_file_attributes=getattr(observed, "st_file_attributes", 0),
+            )
+
+        with mock.patch.object(
+            archive_services.os,
+            "lstat",
+            side_effect=replaced_lstat,
+        ):
+            status = archive_services.provider_setup_status(self.root)
+
+        self.assertEqual(target_calls, 2)
+        self.assertFalse(status["ok"], status)
+        self.assertEqual(status["receipt_count"], 1)
+        self.assertEqual(len(status["orphan_receipts"]), 1)
+        orphan = status["orphan_receipts"][0]
+        self.assertEqual(orphan["reason_code"], "provider_setup_receipt_unreadable")
+        self.assertIsNone(orphan["receipt_sha256"])
+        self.assertRegex(orphan["receipt_path_sha256"], r"^sha256:[0-9a-f]{64}$")
+        rendered = json.dumps(status, sort_keys=True)
+        self.assertNotIn(private_sentinel, rendered)
+        self.assertNotIn(str(self.root), rendered)
+
+    def test_malformed_and_unreadable_github_receipts_remain_legacy_owned(
+        self,
+    ) -> None:
+        receipt_root = self.root / "receipts" / "providers"
+        receipt_root.mkdir(parents=True, exist_ok=True)
+        receipt_path = receipt_root / "legacy.github-repository-setup.json"
+        relative = receipt_path.relative_to(self.root).as_posix()
+        receipt_path.write_bytes(b"{")
+
+        malformed = archive_services.provider_setup_status(self.root)
+
+        self.assertFalse(malformed["ok"], malformed)
+        self.assertEqual(malformed["receipt_count"], 0)
+        self.assertEqual(malformed["orphan_receipts"], [])
+        self.assertEqual(len(malformed["blockers"]), 1)
+        self.assertIn(relative, malformed["blockers"][0])
+        self.assertNotIn("provider_setup_receipt_invalid", malformed["blockers"])
+
+        receipt_path.write_bytes(b"{}\n")
+        original = archive_services._read_provider_setup_status_receipt
+
+        def deny_github(path: Path) -> bytes:
+            if path.name == receipt_path.name:
+                raise OSError("legacy github denied")
+            return original(path)
+
+        with mock.patch.object(
+            archive_services,
+            "_read_provider_setup_status_receipt",
+            side_effect=deny_github,
+        ):
+            unreadable = archive_services.provider_setup_status(self.root)
+
+        self.assertFalse(unreadable["ok"], unreadable)
+        self.assertEqual(unreadable["receipt_count"], 0)
+        self.assertEqual(unreadable["orphan_receipts"], [])
+        self.assertEqual(len(unreadable["blockers"]), 1)
+        self.assertIn(relative, unreadable["blockers"][0])
+        self.assertNotIn("provider_setup_receipt_unreadable", unreadable["blockers"])
 
     def test_historical_bridge_rejects_incomplete_or_extended_receipts(self) -> None:
         self.install_historical_bridge(mismatch=False)

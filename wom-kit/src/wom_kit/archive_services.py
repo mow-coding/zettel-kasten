@@ -94294,6 +94294,10 @@ def provider_setup_status(archive_root: Path | str) -> dict[str, Any]:
         blockers.extend(status.get("blockers") or [])
         warnings.extend(status.get("warnings") or [])
 
+    from .object_storage_setup_registration import (
+        object_storage_setup_receipt_identity,
+    )
+
     claimed_private_paths: set[str] = set()
     for binding in bindings:
         provider = str(binding.get("provider") or "").strip().lower()
@@ -94302,13 +94306,19 @@ def provider_setup_status(archive_root: Path | str) -> dict[str, Any]:
             continue
         historical_path = provider_setup_expected_receipt_path(binding)
         if historical_path:
-            claimed_private_paths.add(historical_path)
-        binding_sha256 = sha256_json_value(binding)
-        claimed_private_paths.add(
-            "receipts/providers/object-storage-setup-registration/"
-            + binding_sha256.removeprefix("sha256:")
-            + ".json"
-        )
+            claimed_private_paths.add(
+                _provider_setup_receipt_reconcile_key(historical_path)
+            )
+        try:
+            _binding_sha256, exact_path = object_storage_setup_receipt_identity(
+                binding
+            )
+        except Exception:
+            exact_path = None
+        if exact_path:
+            claimed_private_paths.add(
+                _provider_setup_receipt_reconcile_key(exact_path)
+            )
 
     orphan_receipts: list[dict[str, Any]] = []
     for key, entries in receipts_by_key.items():
@@ -94329,7 +94339,10 @@ def provider_setup_status(archive_root: Path | str) -> dict[str, Any]:
             merge_provider_setup_external_actions(external_actions, entry["receipt"])
 
     for entry in private_receipt_entries:
-        if entry["path"] in claimed_private_paths:
+        if (
+            _provider_setup_receipt_reconcile_key(entry["path"])
+            in claimed_private_paths
+        ):
             continue
         reason_code = str(
             entry.get("reason_code")
@@ -95112,23 +95125,101 @@ def _private_provider_setup_receipt_entry(
     }
 
 
+def _provider_setup_receipt_reconcile_key(relative_path: str) -> str:
+    # Windows resolves the exact receipt filename case-insensitively.  POSIX
+    # keeps case-distinct files separate, so only fold on Windows.
+    return relative_path.casefold() if os.name == "nt" else relative_path
+
+
+def _provider_setup_status_stat_identity(
+    value: os.stat_result,
+) -> tuple[int, int, int, int, int, int]:
+    return (
+        int(value.st_mode),
+        int(getattr(value, "st_dev", 0)),
+        int(getattr(value, "st_ino", 0)),
+        int(value.st_size),
+        int(value.st_mtime_ns),
+        int(
+            getattr(
+                value,
+                "st_ctime_ns",
+                int(float(getattr(value, "st_ctime", 0.0)) * 1_000_000_000),
+            )
+        ),
+    )
+
+
+def _provider_setup_status_descriptor_identity(
+    value: os.stat_result,
+) -> tuple[int, int, int, int, int]:
+    identity = _provider_setup_status_stat_identity(value)
+    # Windows can expose different ctime representations through path stat and
+    # descriptor stat.  Full ctime is still compared path-before/path-after.
+    return identity[:5]
+
+
+def _provider_setup_status_is_reparse(value: os.stat_result) -> bool:
+    attributes = int(getattr(value, "st_file_attributes", 0))
+    marker = int(getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400))
+    return bool(attributes & marker)
+
+
 def _read_provider_setup_status_receipt(path: Path) -> bytes:
     before = os.lstat(path)
     if (
         not stat.S_ISREG(before.st_mode)
-        or path.is_symlink()
+        or stat.S_ISLNK(before.st_mode)
+        or _provider_setup_status_is_reparse(before)
         or before.st_size > PROVIDER_SETUP_STATUS_MAX_RECEIPT_BYTES
     ):
         raise OSError("unsafe provider setup receipt")
-    with path.open("rb") as handle:
-        raw = handle.read(PROVIDER_SETUP_STATUS_MAX_RECEIPT_BYTES + 1)
-    after = os.lstat(path)
+    descriptor: int | None = None
+    try:
+        flags = os.O_RDONLY | int(getattr(os, "O_BINARY", 0))
+        flags |= int(getattr(os, "O_NOFOLLOW", 0))
+        descriptor = os.open(path, flags)
+        opened_before = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(opened_before.st_mode)
+            or _provider_setup_status_is_reparse(opened_before)
+            or _provider_setup_status_descriptor_identity(opened_before)
+            != _provider_setup_status_descriptor_identity(before)
+        ):
+            raise OSError("provider setup receipt changed before read")
+        chunks: list[bytes] = []
+        total = 0
+        while True:
+            chunk = os.read(
+                descriptor,
+                min(
+                    65_536,
+                    PROVIDER_SETUP_STATUS_MAX_RECEIPT_BYTES + 1 - total,
+                ),
+            )
+            if not chunk:
+                break
+            chunks.append(chunk)
+            total += len(chunk)
+            if total > PROVIDER_SETUP_STATUS_MAX_RECEIPT_BYTES:
+                raise OSError("provider setup receipt too large")
+        opened_after = os.fstat(descriptor)
+        after = os.lstat(path)
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
     if (
-        len(raw) > PROVIDER_SETUP_STATUS_MAX_RECEIPT_BYTES
-        or (before.st_size, before.st_mtime_ns)
-        != (after.st_size, after.st_mtime_ns)
+        _provider_setup_status_descriptor_identity(opened_before)
+        != _provider_setup_status_descriptor_identity(opened_after)
+        or _provider_setup_status_stat_identity(before)
+        != _provider_setup_status_stat_identity(after)
+        or _provider_setup_status_is_reparse(after)
+        or not stat.S_ISREG(after.st_mode)
     ):
-        raise OSError("provider setup receipt changed")
+        raise OSError("provider setup receipt changed during read")
+    raw = b"".join(chunks)
+    if len(raw) != opened_after.st_size:
+        raise OSError("provider setup receipt changed during read")
     return raw
 
 
@@ -95150,7 +95241,11 @@ def load_provider_setup_receipts(
         try:
             raw = _read_provider_setup_status_receipt(path)
         except OSError as exc:
-            if private_entries is not None:
+            if github_filename:
+                blockers.append(
+                    f"Provider setup receipt could not be read as JSON: {relative} ({exc})."
+                )
+            elif private_entries is not None:
                 private_entries.append(
                     _private_provider_setup_receipt_entry(
                         root,
@@ -95164,35 +95259,15 @@ def load_provider_setup_receipts(
                         ),
                     )
                 )
-            if github_filename:
-                blockers.append(
-                    f"Provider setup receipt could not be read as JSON: {relative} ({exc})."
-                )
             continue
         try:
             data = json.loads(raw.decode("utf-8"))
         except (UnicodeError, json.JSONDecodeError) as exc:
-            if private_entries is not None:
-                private_entries.append(
-                    _private_provider_setup_receipt_entry(
-                        root,
-                        path,
-                        provider=("object_storage" if object_storage_filename else "unknown"),
-                        raw=raw,
-                        reason_code=(
-                            "object_storage_setup_receipt_invalid"
-                            if object_storage_filename
-                            else "provider_setup_receipt_invalid"
-                        ),
-                    )
-                )
             if github_filename:
                 blockers.append(
                     f"Provider setup receipt could not be read as JSON: {relative} ({exc})."
                 )
-            continue
-        if not isinstance(data, dict):
-            if private_entries is not None:
+            elif private_entries is not None:
                 private_entries.append(
                     _private_provider_setup_receipt_entry(
                         root,
@@ -95206,10 +95281,29 @@ def load_provider_setup_receipts(
                         ),
                     )
                 )
+            continue
+        if not isinstance(data, dict):
             if github_filename:
                 blockers.append(
                     f"Provider setup receipt must be a JSON object: {relative}."
                 )
+            elif private_entries is not None:
+                private_entries.append(
+                    _private_provider_setup_receipt_entry(
+                        root,
+                        path,
+                        provider=("object_storage" if object_storage_filename else "unknown"),
+                        raw=raw,
+                        reason_code=(
+                            "object_storage_setup_receipt_invalid"
+                            if object_storage_filename
+                            else "provider_setup_receipt_invalid"
+                        ),
+                    )
+                )
+            continue
+        if github_filename:
+            entries.append({"path": relative, "receipt": json_safe(data)})
             continue
         if object_storage_filename or data.get("provider") == "object_storage":
             if private_entries is not None:
