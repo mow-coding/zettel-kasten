@@ -5,6 +5,7 @@ import ctypes
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from contextlib import ExitStack, contextmanager
@@ -537,11 +538,45 @@ class Letter140BoundReadPrivacyTests(unittest.TestCase):
                         created = True
                     raise
 
-            with mock.patch.object(
-                archive_services,
-                "_activity_group_bound_directory_chain",
-                new=create_inbox_after_absent_probe,
-            ):
+            if sys.platform.startswith("linux"):
+                real_optional_probe = (
+                    archive_services._ArchiveIndexLinuxInotifyWatcher
+                    ._watch_optional_zettel_tree
+                )
+
+                def linux_create_inbox_after_absent_probe(
+                    watcher,
+                    folder_root: Path,
+                ) -> None:
+                    nonlocal created
+                    target_path = Path(folder_root).resolve()
+                    existed_before = target_path.exists()
+                    real_optional_probe(watcher, folder_root)
+                    if (
+                        not created
+                        and not existed_before
+                        and target_path == inbox
+                    ):
+                        inbox.mkdir()
+                        shutil.copyfile(
+                            zettels / f"{ZETTEL_ID}.md",
+                            inbox / "probe-gap-duplicate.md",
+                        )
+                        created = True
+
+                probe_patch = mock.patch.object(
+                    archive_services._ArchiveIndexLinuxInotifyWatcher,
+                    "_watch_optional_zettel_tree",
+                    new=linux_create_inbox_after_absent_probe,
+                )
+            else:
+                probe_patch = mock.patch.object(
+                    archive_services,
+                    "_activity_group_bound_directory_chain",
+                    new=create_inbox_after_absent_probe,
+                )
+
+            with probe_patch:
                 changed = completion_workflows.zettel_objet_link_plan(
                     root,
                     zettel_id=ZETTEL_ID,

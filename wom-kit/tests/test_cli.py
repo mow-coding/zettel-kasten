@@ -63513,10 +63513,18 @@ state:
             index_result = archive_services.index_archive(archive_root)
             self.assertTrue(index_result["index_complete"], index_result)
             private_error = PermissionError("C:/private/UNSTATABLE_TREE_SECRET_7306")
+            real_live_scan = archive_services._strict_live_zettel_stat_scan
+
+            def fail_inside_armed_live_scan(*args, **kwargs):
+                with patch(
+                    "wom_kit.archive_services.os.scandir",
+                    side_effect=private_error,
+                ):
+                    return real_live_scan(*args, **kwargs)
 
             with patch(
-                "wom_kit.archive_services.os.scandir",
-                side_effect=private_error,
+                "wom_kit.archive_services._strict_live_zettel_stat_scan",
+                side_effect=fail_inside_armed_live_scan,
             ):
                 rows, state = archive_services.promotion_duplicate_index_rows(archive_root)
                 result = archive_services.promote_zettel_dry_run(
