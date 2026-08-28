@@ -604,6 +604,61 @@ class ObjectStoragePreservationTests(unittest.TestCase):
         self.assertEqual(result["put_calls"], 3)
         self.assertEqual(result["result_status"], "failed_provider_call_ceiling")
 
+    def test_multipart_create_failures_are_durable_and_exhaust_manifest_ceiling(self):
+        class _CreateRateLimitedTransport(_MemoryTransport):
+            def __init__(self):
+                super().__init__()
+                self.create_calls = 0
+
+            def create_multipart(self, *, key):
+                self.create_calls += 1
+                raise archive_services._ObjectStorageProviderError("rate_limited")
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = self._root(Path(temporary))
+            self._write_rows(root, [self._local_row(root, b"multipart-create")])
+            plan = _plan_core(root, provider_kind="cloudflare-r2", store_ref="storage:account:test")
+            transport = _CreateRateLimitedTransport()
+            with (
+                mock.patch.object(
+                    archive_services, "OBJECT_STORAGE_MULTIPART_THRESHOLD_BYTES", 1
+                ),
+                mock.patch.object(
+                    archive_services, "OBJECT_STORAGE_MAX_ATTEMPTS_PER_OBJECT", 4
+                ),
+                mock.patch.object(
+                    preservation_module, "_provider_put_call_budget", return_value=(1, 4)
+                ),
+                mock.patch.object(
+                    archive_services, "_object_storage_backoff_ms", return_value=0
+                ),
+            ):
+                writer = preservation_module._Writer(plan, transport)
+                with self.assertRaises(ObjectStoragePreservationError):
+                    writer.write_field(
+                        target_kind="object_storage_preservation_terminal_receipt",
+                        target_ref=plan.specs[0].receipt_relative,
+                        field_ref="terminal_state_token",
+                        value=plan.specs[0].receipt_token,
+                        heartbeat=lambda: None,
+                    )
+                self.assertEqual(transport.create_calls, 4)
+                self.assertEqual(writer.ledger.total_put_calls(), 4)
+                self.assertIsNone(writer.ledger.terminal_for(plan.specs[0]))
+                self.assertFalse((root / plan.specs[0].receipt_relative).exists())
+
+                resumed = preservation_module._Writer(plan, transport)
+                with self.assertRaises(ObjectStoragePreservationError):
+                    resumed.write_field(
+                        target_kind="object_storage_preservation_terminal_receipt",
+                        target_ref=plan.specs[0].receipt_relative,
+                        field_ref="terminal_state_token",
+                        value=plan.specs[0].receipt_token,
+                        heartbeat=lambda: None,
+                    )
+                self.assertEqual(transport.create_calls, 4)
+                self.assertEqual(resumed.ledger.total_put_calls(), 4)
+
     def test_exact_writer_uploads_verifies_receipts_and_never_rewrites_manifest(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = self._root(Path(temporary))
@@ -1171,6 +1226,132 @@ class ObjectStoragePreservationTests(unittest.TestCase):
             self.assertTrue(loaded.loaded_from_control)
             self.assertEqual(loaded.manifest.document(), plan.manifest.document())
             self.assertEqual(len(loaded.specs), 600)
+
+    def test_b7_control_and_ledger_resume_without_rewriting_or_second_put(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = self._root(Path(temporary))
+            payload = b"b7-ledger-before-receipt"
+            self._write_rows(root, [self._local_row(root, payload)])
+            plan = _plan_core(root, provider_kind="cloudflare-r2", store_ref="storage:account:test")
+            spec = plan.specs[0]
+
+            legacy_basis = preservation_module._control_document(plan)
+            legacy_basis.pop("control_sha256")
+            legacy_basis.pop("existing_review_required_count")
+            legacy_basis["schema_version"] = preservation_module.LEGACY_CONTROL_SCHEMA
+            legacy_control = {
+                **legacy_basis,
+                "control_sha256": preservation_module._sha256_document(legacy_basis),
+            }
+            control_path = root / preservation_module._control_relative(
+                plan.manifest.manifest_sha256
+            )
+            control_path.parent.mkdir(parents=True, exist_ok=True)
+            control_bytes = preservation_module._canonical_control_bytes(legacy_control)
+            control_path.write_bytes(control_bytes)
+
+            ledger_path = root / preservation_module._ledger_relative(
+                plan.manifest.manifest_sha256
+            )
+            ledger_path.parent.mkdir(parents=True, exist_ok=True)
+            legacy_row = {
+                "schema_version": preservation_module.LEGACY_LEDGER_SCHEMA,
+                "operation": preservation_module.OPERATION,
+                "manifest_sha256": plan.manifest.manifest_sha256,
+                "target_identity_sha256": spec.target_identity_sha256,
+                "object_id": spec.object_id,
+                "remote_key_sha256": preservation_module._sha256_document(spec.remote_key),
+                "result_status": "uploaded",
+                "preservation_status": "bytes_preserved",
+                "remote_state": "verified_match",
+                "bytes": spec.size_bytes,
+                "part_count": 1,
+                "attempts": 1,
+                "put_calls": 1,
+                "backoff_ms_total": 0,
+                "completed_at": "2026-08-28T00:00:00Z",
+            }
+            ledger_path.write_text(
+                json.dumps(legacy_row, sort_keys=True, separators=(",", ":")) + "\n",
+                encoding="ascii",
+            )
+
+            loaded = load_object_storage_bytes_preservation_plan(
+                root, manifest_sha256=plan.manifest.manifest_sha256
+            )
+            _persist_control(loaded)
+            self.assertEqual(control_path.read_bytes(), control_bytes)
+            transport = _MemoryTransport()
+            transport.objects[spec.remote_key] = payload
+            writer = preservation_module._Writer(loaded, transport)
+            writer.write_field(
+                target_kind="object_storage_preservation_terminal_receipt",
+                target_ref=spec.receipt_relative,
+                field_ref="terminal_state_token",
+                value=spec.receipt_token,
+                heartbeat=lambda: None,
+            )
+            self.assertEqual(transport.put_calls, 0)
+            self.assertTrue((root / spec.receipt_relative).is_file())
+            self.assertEqual(writer.ledger.total_put_calls(), 1)
+
+    def test_legacy_schema_shapes_are_exact_and_fail_closed(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = self._root(Path(temporary))
+            self._write_rows(root, [self._local_row(root, b"strict-legacy")])
+            plan = _plan_core(root, provider_kind="cloudflare-r2", store_ref="storage:account:test")
+            legacy = preservation_module._control_document(plan)
+            legacy.pop("control_sha256")
+            legacy["schema_version"] = preservation_module.LEGACY_CONTROL_SCHEMA
+            # A v0.2 document that claims a v0.3-only field is ambiguous even
+            # when its self-hash is recomputed.
+            legacy["control_sha256"] = preservation_module._sha256_document(legacy)
+            path = root / preservation_module._control_relative(plan.manifest.manifest_sha256)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(preservation_module._canonical_control_bytes(legacy))
+            with self.assertRaises(ObjectStoragePreservationError):
+                load_object_storage_bytes_preservation_plan(
+                    root, manifest_sha256=plan.manifest.manifest_sha256
+                )
+
+            spec = plan.specs[0]
+            row = {
+                "schema_version": preservation_module.LEGACY_LEDGER_SCHEMA,
+                "operation": preservation_module.OPERATION,
+                "manifest_sha256": plan.manifest.manifest_sha256,
+                "target_identity_sha256": spec.target_identity_sha256,
+                "object_id": spec.object_id,
+                "remote_key_sha256": preservation_module._sha256_document(spec.remote_key),
+                "result_status": "failed_upload",
+                "preservation_status": None,
+                "remote_state": None,
+                "bytes": 0,
+                "part_count": 0,
+                "attempts": 1,
+                "put_calls": 1,
+                "backoff_ms_total": 0,
+                "completed_at": "2026-08-28T00:00:00Z",
+            }
+            ledger_path = root / preservation_module._ledger_relative(
+                plan.manifest.manifest_sha256
+            )
+            ledger_path.parent.mkdir(parents=True, exist_ok=True)
+            ambiguous_rows = (
+                {**row, "multipart_cleanup_state": "not_required"},
+                {
+                    **row,
+                    "schema_version": preservation_module.LEDGER_SCHEMA,
+                },
+            )
+            for ambiguous in ambiguous_rows:
+                with self.subTest(schema=ambiguous["schema_version"]):
+                    ledger_path.write_text(
+                        json.dumps(ambiguous, sort_keys=True, separators=(",", ":"))
+                        + "\n",
+                        encoding="ascii",
+                    )
+                    with self.assertRaises(ObjectStoragePreservationError):
+                        preservation_module._ManifestBoundPreservationLedger(plan)
 
     def test_resume_control_rejects_non_target_inventory_drift(self):
         with tempfile.TemporaryDirectory() as temporary:
