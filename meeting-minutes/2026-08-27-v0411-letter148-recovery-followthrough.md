@@ -178,3 +178,10 @@ assertion: the product correctly displayed the canonical WOM label
 the product label, and its complete module passed. Reverting the product to the
 legacy transliteration would have contradicted the user's established `zet`
 and `오브제` vocabulary.
+
+A later Ubuntu/Python 3.10 CI shard exposed a test-harness parsing error rather
+than a workflow timeout error. The matrix assertion kept scanning after the
+`tests` job and overwrote the final Windows row's real 45-minute timeout with
+the new Doctor scale job's 10-minute timeout. The parser now stops at the
+`tests` job's `steps:` boundary. The production workflow timeout values were
+already correct and were not changed.
