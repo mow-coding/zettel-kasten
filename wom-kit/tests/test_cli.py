@@ -69579,7 +69579,10 @@ state:
             result = json.loads(output)
             self.assertFalse(result["ok"])
             self.assertEqual(result["status"], "blocked")
-            self.assertIn("Missing provider setup receipt", "\n".join(result["blockers"]))
+            self.assertIn(
+                "object_storage_setup_evidence_missing",
+                result["blockers"],
+            )
             managed = [item for item in result["providers"] if item["setup_managed"]]
             self.assertEqual(len(managed), 1)
             self.assertEqual(managed[0]["status"], "metadata_without_receipt")

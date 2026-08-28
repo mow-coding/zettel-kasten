@@ -94277,6 +94277,7 @@ def provider_setup_status(archive_root: Path | str) -> dict[str, Any]:
 
     for binding in bindings:
         status = provider_setup_status_for_binding(
+            root,
             binding,
             archive_id=archive_id,
             receipts_by_key=receipts_by_key,
@@ -94326,7 +94327,13 @@ def provider_setup_status(archive_root: Path | str) -> dict[str, Any]:
         "bindings_present": provider_path.is_file(),
         "binding_count": len(bindings),
         "checked_binding_count": managed_count,
-        "receipt_count": len(receipt_entries),
+        "receipt_count": len(receipt_entries)
+        + sum(
+            1
+            for item in provider_statuses
+            if item.get("provider") == "object_storage"
+            and item.get("setup_receipt_present") is True
+        ),
         "receipt_dir": PROVIDER_SETUP_RECEIPTS_DIR,
         "providers": provider_statuses,
         "orphan_receipts": orphan_receipts,
@@ -94379,15 +94386,21 @@ def object_storage_adapter_readiness_plan(
 
     selected_items: list[dict[str, Any]] = []
     if normalized_provider_ref:
+        normalized_provider_ref_sha256 = "sha256:" + sha256_text(
+            normalized_provider_ref
+        )
         selected_items = [
             item
             for item in setup_managed_items
             if normalized_provider_ref
             in {
-                str(item.get("binding_id") or ""),
                 str(item.get("provider_kind") or ""),
                 str(item.get("provider") or ""),
             }
+            or normalized_provider_ref
+            == str(item.get("provider_binding_sha256") or "")
+            or normalized_provider_ref_sha256
+            == str(item.get("binding_ref_sha256") or "")
         ]
         if setup_managed_items and not selected_items:
             blockers.append("provider_ref_not_found_for_object_storage_binding")
@@ -94429,7 +94442,9 @@ def object_storage_adapter_readiness_plan(
             "selected_provider_kind": selected_provider_kind or None,
             "selected_setup_status": selected_status,
             "selected_provider_setup_ready": provider_setup_ready,
-            "selected_provider_setup_receipt_present": bool(selected and selected.get("receipt_path")),
+            "selected_provider_setup_receipt_present": bool(
+                selected and selected.get("setup_receipt_present") is True
+            ),
             "resource_details_echoed": False,
             "receipt_path_echoed": False,
         },
@@ -95033,6 +95048,12 @@ def load_provider_setup_receipts(root: Path, blockers: list[str]) -> list[dict[s
 
     entries: list[dict[str, Any]] = []
     for path in sorted(receipt_root.glob("*.json"), key=lambda item: item.name):
+        # Object-storage setup evidence has a strict exact-first validator.  Do
+        # not parse its historical bridge here: doing so would both duplicate
+        # that authority and make a bucket-derived filename public on failure.
+        # GitHub's historical receipt discovery remains unchanged.
+        if path.name.endswith(".object-storage-setup.json"):
+            continue
         relative = path.relative_to(root).as_posix()
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
@@ -95042,11 +95063,17 @@ def load_provider_setup_receipts(root: Path, blockers: list[str]) -> list[dict[s
         if not isinstance(data, dict):
             blockers.append(f"Provider setup receipt must be a JSON object: {relative}.")
             continue
+        if data.get("provider") == "object_storage":
+            # Even a nonstandard historical filename must not re-enter the
+            # generic orphan projection, which exposes receipt/resource data.
+            # The binding-authoritative validator is the only R2 status path.
+            continue
         entries.append({"path": relative, "receipt": json_safe(data)})
     return entries
 
 
 def provider_setup_status_for_binding(
+    root: Path,
     binding: dict[str, Any],
     *,
     archive_id: str,
@@ -95056,6 +95083,16 @@ def provider_setup_status_for_binding(
 ) -> dict[str, Any]:
     provider = str(binding.get("provider") or "unknown")
     provider_kind = str(binding.get("provider_kind") or "")
+    if (
+        provider.strip().lower() == "object_storage"
+        or provider_kind.strip().lower() in OBJECT_STORAGE_ALLOWED_PROVIDERS
+    ):
+        return object_storage_provider_setup_status_for_binding(
+            root,
+            binding,
+            archive_id=archive_id,
+        )
+
     binding_id = binding.get("binding_id")
     enabled = binding.get("enabled") is not False
     resource = binding.get("resource") if isinstance(binding.get("resource"), dict) else {}
@@ -95115,6 +95152,102 @@ def provider_setup_status_for_binding(
     )
     if result["blockers"]:
         result["status"] = "metadata_receipt_mismatch"
+    return result
+
+
+def object_storage_provider_setup_status_for_binding(
+    root: Path,
+    binding: dict[str, Any],
+    *,
+    archive_id: str,
+) -> dict[str, Any]:
+    """Return content-free object-storage setup truth from the exact validator."""
+
+    raw_provider_kind = str(binding.get("provider_kind") or "").strip().lower()
+    provider_kind = (
+        raw_provider_kind
+        if raw_provider_kind in OBJECT_STORAGE_ALLOWED_PROVIDERS
+        else ""
+    )
+    binding_id = str(binding.get("binding_id") or "")
+    auth = binding.get("auth") if isinstance(binding.get("auth"), dict) else {}
+    store_ref = str(auth.get("account_ref") or "")
+    enabled = binding.get("enabled") is not False
+    setup_managed = provider_setup_binding_is_managed(binding)
+    result = {
+        # Object-storage binding ids contain the private bucket slug.  Publish
+        # only stable digests and fixed states/codes; never the raw selector.
+        "binding_id": None,
+        "binding_ref_sha256": (
+            "sha256:" + sha256_text(binding_id) if binding_id else None
+        ),
+        "provider_binding_sha256": sha256_json_value(binding),
+        "receipt_sha256": None,
+        "provider": "object_storage",
+        "provider_kind": provider_kind or None,
+        "enabled": enabled,
+        "setup_managed": setup_managed,
+        "resource": {},
+        "expected_receipt_path": None,
+        "receipt_path": None,
+        "setup_receipt_present": False,
+        "setup_evidence_mode": None,
+        "status": "manual_status_untracked",
+        "reason_code": "object_storage_setup_status_untracked",
+        "external_actions": {},
+        "blockers": [],
+        "warnings": [],
+        "private_values_echoed": False,
+        "resource_details_echoed": False,
+        "receipt_path_echoed": False,
+    }
+    if not enabled:
+        result["status"] = "disabled_not_checked"
+        result["reason_code"] = "object_storage_setup_binding_disabled"
+        return result
+    if not setup_managed:
+        return result
+
+    # Local import avoids the module cycle: the exact registration module uses
+    # archive_services for binding parsing and historical-receipt validation.
+    from .object_storage_setup_registration import (
+        ObjectStorageSetupRegistrationError,
+        validate_object_storage_setup_evidence,
+    )
+
+    try:
+        evidence = validate_object_storage_setup_evidence(
+            root,
+            provider_kind=provider_kind,
+            store_ref=store_ref,
+        )
+    except ObjectStorageSetupRegistrationError as exc:
+        result["reason_code"] = exc.code
+        result["status"] = (
+            "metadata_without_receipt"
+            if exc.code == "object_storage_setup_evidence_missing"
+            else "metadata_receipt_mismatch"
+        )
+        result["blockers"] = [exc.code]
+        return result
+    except Exception:
+        # Public status must fail closed without retaining an unexpected
+        # exception, private scalar, or filesystem path in its projection.
+        result["reason_code"] = "object_storage_setup_evidence_mismatch"
+        result["status"] = "metadata_receipt_mismatch"
+        result["blockers"] = ["object_storage_setup_evidence_mismatch"]
+        return result
+
+    result.update(
+        {
+            "provider_binding_sha256": evidence.provider_binding_sha256,
+            "receipt_sha256": evidence.receipt_sha256,
+            "setup_receipt_present": True,
+            "setup_evidence_mode": evidence.mode,
+            "status": "metadata_and_receipt_present",
+            "reason_code": "object_storage_setup_evidence_valid",
+        }
+    )
     return result
 
 
