@@ -897,7 +897,19 @@ def _provider_put_call_budget(
     specs: Sequence[_PreservationSpec],
 ) -> tuple[int, int]:
     no_retry = sum(_single_attempt_provider_put_calls(spec.size_bytes) for spec in specs)
-    ceiling = no_retry * archive_services.OBJECT_STORAGE_MAX_ATTEMPTS_PER_OBJECT
+    ceiling = sum(
+        (
+            _single_attempt_provider_put_calls(spec.size_bytes)
+            + (
+                1
+                if spec.size_bytes
+                >= archive_services.OBJECT_STORAGE_MULTIPART_THRESHOLD_BYTES
+                else 0
+            )
+        )
+        * archive_services.OBJECT_STORAGE_MAX_ATTEMPTS_PER_OBJECT
+        for spec in specs
+    )
     return no_retry, ceiling
 
 
@@ -932,6 +944,7 @@ class ObjectStorageBytesPreservationPlan:
     manifest: ExactOperationManifest | None
     specs: tuple[_PreservationSpec, ...]
     already_recorded_count: int
+    existing_review_required_count: int
     review_count: int
     selected_only: str | None
     loaded_from_control: bool = False
@@ -952,6 +965,7 @@ class ObjectStorageBytesPreservationPlan:
         other_remote = int(self.inventory["nonconflicting_remote_recorded_other_count"])
         planned = len(self.specs)
         expected_put_calls, put_call_ceiling = _provider_put_call_budget(self.specs)
+        existing_review = self.existing_review_required_count
         accounted = (
             conflict_count
             + verified_official
@@ -963,21 +977,40 @@ class ObjectStorageBytesPreservationPlan:
             "schema_version": PLAN_SCHEMA,
             "ok": self.approveable,
             "state": (
-                "ready_for_exact_human_approval"
+                (
+                    "ready_for_exact_human_approval_with_existing_review"
+                    if existing_review
+                    else "ready_for_exact_human_approval"
+                )
                 if self.approveable
                 else (
                     "no_new_bytes_to_preserve"
-                    if planned == 0 and self.review_count == 0
-                    else "review_required"
+                    if planned == 0 and self.review_count == 0 and existing_review == 0
+                    else (
+                        "existing_review_required"
+                        if planned == 0 and self.review_count == 0
+                        else "review_required"
+                    )
                 )
             ),
             "reason_codes": (
-                ["object_storage_bytes_preservation_ready"]
+                (
+                    [
+                        "object_storage_bytes_preservation_ready",
+                        "object_storage_bytes_preservation_existing_review_required",
+                    ]
+                    if existing_review
+                    else ["object_storage_bytes_preservation_ready"]
+                )
                 if self.approveable
                 else (
                     ["object_storage_bytes_preservation_no_writes"]
-                    if self.review_count == 0
-                    else ["object_storage_bytes_preservation_review_required"]
+                    if self.review_count == 0 and existing_review == 0
+                    else (
+                        ["object_storage_bytes_preservation_existing_review_required"]
+                        if self.review_count == 0
+                        else ["object_storage_bytes_preservation_review_required"]
+                    )
                 )
             ),
             "plan_sha256": self.manifest.manifest_sha256 if self.manifest else None,
@@ -997,6 +1030,8 @@ class ObjectStorageBytesPreservationPlan:
             "expected_no_retry_provider_put_call_count": expected_put_calls,
             "manifest_bound_provider_put_call_ceiling": put_call_ceiling,
             "bytes_preserved_receipt_already_recorded_count": self.already_recorded_count,
+            "existing_review_required_count": existing_review,
+            "attention_count": self.review_count + existing_review,
             "review_count": self.review_count,
             "remote_evidence_metrics": {
                 "manifest_scope_remote_key_verified_object_count": int(
@@ -1042,7 +1077,7 @@ def _build_specs(
     only: str | None,
     max_objects: int | None,
     progress: Callable[[str, str, int | None, int | None], None] | None,
-) -> tuple[tuple[_PreservationSpec, ...], int, int]:
+) -> tuple[tuple[_PreservationSpec, ...], int, int, int]:
     inventory_sha = str(inventory["source_inventory_sha256"])
     selected_id = _normalize_object_id(only) if only else None
     candidates: list[tuple[str, dict[str, Any], str]] = []
@@ -1066,6 +1101,7 @@ def _build_specs(
             raise _fail("object_storage_preservation_plan_invalid")
     specs: list[_PreservationSpec] = []
     already_recorded = 0
+    existing_review_required = 0
     if progress is not None:
         progress("preservation-source-hash", "start", 0, len(candidates))
     for index, (object_id, row, local_relative) in enumerate(candidates, start=1):
@@ -1106,7 +1142,10 @@ def _build_specs(
                 store_ref=store_ref,
                 inventory_sha256=inventory_sha,
             ):
-                already_recorded += 1
+                if existing.get("preservation_status") == "review_required":
+                    existing_review_required += 1
+                else:
+                    already_recorded += 1
                 continue
             review_count += 1
             continue
@@ -1142,7 +1181,7 @@ def _build_specs(
             progress("preservation-source-hash", "hashed local objects", index, len(candidates))
     if progress is not None:
         progress("preservation-source-hash", "done", len(candidates), len(candidates))
-    return tuple(specs), already_recorded, review_count
+    return tuple(specs), already_recorded, existing_review_required, review_count
 
 
 def _manifest_for_specs(
@@ -1235,7 +1274,7 @@ def _plan_core(
     )
     rows, groups = _read_manifest_groups(root, progress=progress)
     inventory, unique_rows = _inventory(rows, groups)
-    specs, already_recorded, review_count = _build_specs(
+    specs, already_recorded, existing_review_required, review_count = _build_specs(
         root,
         archive_id,
         normalized_provider,
@@ -1257,6 +1296,7 @@ def _plan_core(
         manifest=manifest,
         specs=specs,
         already_recorded_count=already_recorded,
+        existing_review_required_count=existing_review_required,
         review_count=review_count,
         selected_only=_normalize_object_id(only) if only else None,
     )
@@ -1341,9 +1381,13 @@ class ObjectStorageRemoteQueryAdapter:
         if presence_state != "present" or result.get("present") is not True:
             return ObjectStorageRemoteQueryResult("verification_unavailable", False, False, False)
         remote_size = result.get("size")
-        size_match = type(remote_size) is int and remote_size == expected_size
-        if not size_match:
+        if type(remote_size) is not int or remote_size < 0:
+            return ObjectStorageRemoteQueryResult(
+                "verification_unavailable", True, False, False
+            )
+        if remote_size != expected_size:
             return ObjectStorageRemoteQueryResult("size_mismatch", True, False, False)
+        size_match = True
         checksum = result.get("checksum_sha256")
         if (
             result.get("verification_state") not in {None, "complete"}
@@ -1464,6 +1508,7 @@ class _ManifestBoundPreservationLedger(archive_services._ResumeLedger):
         "attempts",
         "put_calls",
         "backoff_ms_total",
+        "multipart_cleanup_state",
         "completed_at",
     )
     _RESULT_STATUSES = frozenset(
@@ -1476,6 +1521,20 @@ class _ManifestBoundPreservationLedger(archive_services._ResumeLedger):
             "failed_upload",
             "failed_auth",
             "failed_rate_limited",
+            "failed_cleanup_unverified",
+            "failed_provider_call_ceiling",
+        }
+    )
+    _CLEANUP_STATES = frozenset(
+        {
+            "not_applicable",
+            "not_started",
+            "in_flight",
+            "completed",
+            "confirmed_aborted",
+            "unconfirmed_budget_exhausted",
+            "unconfirmed_abort_error",
+            "unconfirmed_abort_response",
         }
     )
 
@@ -1559,6 +1618,11 @@ class _ManifestBoundPreservationLedger(archive_services._ResumeLedger):
             datetime.fromisoformat(completed_at.replace("Z", "+00:00"))
         except (TypeError, ValueError):
             raise _fail("object_storage_preservation_control_invalid") from None
+        cleanup_state = str(
+            values.get("multipart_cleanup_state") or "not_applicable"
+        )
+        if cleanup_state not in self._CLEANUP_STATES:
+            raise _fail("object_storage_preservation_control_invalid")
         row = {
             "schema_version": LEDGER_SCHEMA,
             "operation": OPERATION,
@@ -1574,6 +1638,7 @@ class _ManifestBoundPreservationLedger(archive_services._ResumeLedger):
             "attempts": nonnegative_int("attempts"),
             "put_calls": nonnegative_int("put_calls"),
             "backoff_ms_total": nonnegative_int("backoff_ms_total"),
+            "multipart_cleanup_state": cleanup_state,
             "completed_at": completed_at,
         }
         if result_status == "uploaded" and (
@@ -1735,6 +1800,7 @@ class _ManifestBoundPreservationLedger(archive_services._ResumeLedger):
         preservation_status: str,
         remote_state: str,
         put_calls: int = 0,
+        multipart_cleanup_state: str = "not_applicable",
     ) -> dict[str, Any]:
         result_status = (
             "review_required"
@@ -1750,6 +1816,7 @@ class _ManifestBoundPreservationLedger(archive_services._ResumeLedger):
                 "attempts": 1,
                 "put_calls": put_calls,
                 "backoff_ms_total": 0,
+                "multipart_cleanup_state": multipart_cleanup_state,
                 "completed_at": _now_iso(),
             },
             preservation_status=preservation_status,
@@ -2024,7 +2091,11 @@ class _Writer:
                 remote_state="verified_match",
             )
         elif before.state == "absent":
-            if self.ledger.total_put_calls() >= self.manifest_bound_put_call_ceiling:
+            used_provider_calls = self.ledger.total_put_calls()
+            remaining_provider_calls = (
+                self.manifest_bound_put_call_ceiling - used_provider_calls
+            )
+            if remaining_provider_calls <= 0:
                 raise _fail("object_storage_preservation_upload_failed")
             result = _call_with_heartbeat(
                 lambda: archive_services._object_storage_execute_one_upload(
@@ -2039,6 +2110,11 @@ class _Writer:
                     ledger=self.ledger,
                     force_upload=True,
                     create_only=True,
+                    max_attempts=min(
+                        archive_services.OBJECT_STORAGE_MAX_ATTEMPTS_PER_OBJECT,
+                        remaining_provider_calls,
+                    ),
+                    max_provider_mutation_calls=remaining_provider_calls,
                 ),
                 heartbeat=heartbeat,
             )
@@ -2058,6 +2134,9 @@ class _Writer:
                         preservation_status="already_remote_verified",
                         remote_state="verified_match",
                         put_calls=int(result.get("put_calls") or 0),
+                        multipart_cleanup_state=str(
+                            result.get("multipart_cleanup_state") or "not_applicable"
+                        ),
                     )
                 elif after_conflict.state in {"size_mismatch", "checksum_mismatch"}:
                     self.ledger.append_terminal(
@@ -2065,6 +2144,9 @@ class _Writer:
                         preservation_status="review_required",
                         remote_state=after_conflict.state,
                         put_calls=int(result.get("put_calls") or 0),
+                        multipart_cleanup_state=str(
+                            result.get("multipart_cleanup_state") or "not_applicable"
+                        ),
                     )
                 elif after_conflict.state == "verification_unavailable":
                     self.ledger.append_attempt(result)
@@ -2080,6 +2162,8 @@ class _Writer:
                     "failed_auth",
                     "failed_rate_limited",
                     "failed_upload",
+                    "failed_cleanup_unverified",
+                    "failed_provider_call_ceiling",
                 }:
                     raise _fail("object_storage_preservation_remote_unavailable")
                 raise _fail("object_storage_preservation_upload_failed")
@@ -2167,6 +2251,7 @@ def _control_document(plan: ObjectStorageBytesPreservationPlan) -> dict[str, Any
         "inventory": plan.inventory,
         "selected_only": plan.selected_only,
         "already_recorded_count": plan.already_recorded_count,
+        "existing_review_required_count": plan.existing_review_required_count,
         "review_count": plan.review_count,
         "manifest": plan.manifest.document(),
         "ledger_relative": _ledger_relative(plan.manifest.manifest_sha256),
@@ -2353,6 +2438,9 @@ def load_object_storage_bytes_preservation_plan(
         manifest=manifest,
         specs=tuple(specs),
         already_recorded_count=int(document.get("already_recorded_count") or 0),
+        existing_review_required_count=int(
+            document.get("existing_review_required_count") or 0
+        ),
         review_count=int(document.get("review_count") or 0),
         selected_only=document.get("selected_only"),
         loaded_from_control=True,
@@ -2492,7 +2580,16 @@ def _apply_with_store(
     durable = _durable_result_counts(plan, ledger)
     classifications = durable["classification_counts"]
     review_count = int(classifications["review_required"])
-    result_state = "completed_with_review" if review_count else "bytes_preserved"
+    existing_review_count = plan.existing_review_required_count
+    result_state = (
+        "completed_with_review"
+        if review_count
+        else (
+            "completed_with_existing_review"
+            if existing_review_count
+            else "bytes_preserved"
+        )
+    )
     return {
         "schema_version": RESULT_SCHEMA,
         "ok": core.get("status") == "completed",
@@ -2506,6 +2603,8 @@ def _apply_with_store(
             classifications["already_remote_verified"]
         ),
         "review_required_count": review_count,
+        "preexisting_review_required_count": existing_review_count,
+        "attention_count": review_count + existing_review_count,
         "classification_counts": classifications,
         "classification_sum_matches_item_count": sum(classifications.values())
         == len(plan.specs),

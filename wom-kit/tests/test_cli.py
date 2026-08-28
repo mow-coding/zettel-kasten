@@ -157,6 +157,7 @@ class _FakeObjectStorageTransport:
 
     def abort_multipart(self, *, key, upload_id):
         self.abort_calls += 1
+        return {"status_class": "ok"}
 
     def delete_object(self, *, key):
         self.delete_calls += 1
