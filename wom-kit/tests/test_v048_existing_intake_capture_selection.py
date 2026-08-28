@@ -76,6 +76,12 @@ class ExistingIntakeCaptureSelectionTests(unittest.TestCase):
         staged.parent.mkdir(parents=True)
         staged.write_bytes(b"private staged bytes\n")
         self.receipt_relative = self._write_existing_source_intake_receipt()
+        manifest = self.root / "objects" / "manifests" / "files.jsonl"
+        manifest.parent.mkdir(parents=True, exist_ok=True)
+        manifest.write_bytes(b"")
+        indexed = archive_services.index_archive(self.root)
+        self.assertTrue(indexed["ok"], indexed)
+        self.assertEqual(indexed["index_state"], "current", indexed)
 
     def tearDown(self) -> None:
         self.temporary.cleanup()

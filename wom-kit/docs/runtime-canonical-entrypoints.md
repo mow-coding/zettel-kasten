@@ -1,6 +1,8 @@
 # Runtime Canonical Entry Points
 
-Status: v0.4.11 live runtime binding, Deep Doctor evidence, and operator truth
+Status: v0.4.12 live runtime binding, Deep Doctor evidence, and operator truth
+
+Previous checkpoint: Status: v0.4.11 live runtime binding, Deep Doctor evidence, and operator truth
 
 Previous checkpoint: Status: v0.4.3 exact recovery, project update, and Git backup checkpoint
 
@@ -32,7 +34,22 @@ The underlying raw context packet remains available through:
 archive runtime-context <archive-root> --format json
 ```
 
-## v0.4.11 Current Runtime Delta
+## v0.4.12 Current Runtime Delta
+
+The current working tree makes the ordinary `zettel-objet-link` plan use one
+generation-bound archive projection instead of treating a repeated full-tree
+scan as authority. The plan binds the index generation and object-manifest
+SHA-256, and an unchanged existing link terminates as the stable
+`already_present` no-op before approval or support writes.
+
+The parser, nested help, and runtime fixed-close registry also agree that
+`derive-text capture` and
+`zet-revision-restore-proposal-from-snapshot` expose dry-run only. Their
+approval branches return `compound_exact_human_approval_binding_required`
+before private source, receipt, snapshot, archive, or target reads and create no
+write effect.
+
+## v0.4.11 Historical Runtime Delta
 
 Project alignment requires independent receipt, freshly observed installed-
 payload tree, installed module inventory, canonical launcher, current
@@ -122,11 +139,16 @@ archive capabilities --machine --format json
 
 Its `data.approval_status_inventory` distinguishes
 `approval_available`, `approval_fixed_closed`, and `approval_not_exposed` for
-every canonical executable command path and its aliases. The current parser
-reports 315 canonical executable paths: 49 operation-specific approval routes,
-65 fixed-closed routes, and 201 routes without an approval mode. The generated
-inventory,
-rather than a copied historical number, is authoritative.
+every canonical executable command path and its aliases. The current v0.4.12
+working-tree parser reports 315 canonical executable paths, 259 alias paths,
+and 574 total invocation paths: 47 operation-specific approval routes, 67
+fixed-closed routes, and 201 routes without an approval mode. Nine paths have
+conditional approval scope, 271 expose dry-run, and zero supplied fixed-close
+entries are unmatched. The generated inventory, rather than a copied
+historical number, is authoritative. The v0.4.10-v0.4.11 historical split
+remains 49 approval-available and 65 fixed-closed paths; v0.4.12 moves only
+`derive-text capture` and
+`zet-revision-restore-proposal-from-snapshot` to fixed closed.
 This is parser evidence only: it does not evaluate archive prerequisites, and
 `approval_not_exposed` does not mean that a command is read-only.
 
@@ -693,13 +715,18 @@ To audit historical `zet-revision-write` evidence, run the separate CLI-only
 transaction-lock check, not another archive startup scan and not permission to
 delete a leftover lock.
 
-For a v0.2 ordinary revision receipt, first use CLI-only `archive
+For a v0.2 ordinary revision receipt, use CLI-only `archive
 zet-revision-restore-proposal-from-snapshot <archive-root> --receipt
 <canonical-revision-receipt> --expected-receipt-sha256 <sha256> --dry-run
---format json`, then approve only its unchanged plan digest. This creates an
-independent private review copy and does not approve a restore. For a legacy
-v0.1 receipt, a human must still recover complete old zet bytes from a trusted
-private backup. Then use CLI-only `archive zet-revision-restore-plan <archive-root>
+--format json` only to verify the snapshot evidence and derive the private
+destination without writing. Its current approval branch is fixed closed before
+private receipt, snapshot, archive, or target reads and creates no proposal;
+the validation digest is not approval authority and must not be used to bypass
+that gate. Historical v0.3.249 executions may have left an independently
+preserved proposal. If no such complete private copy exists, stop and recover
+it from a trusted private backup rather than reconstructing or manually copying
+from hashes. For a legacy v0.1 receipt, the same separate private recovery is
+required. Then use CLI-only `archive zet-revision-restore-plan <archive-root>
 --receipt <canonical-revision-receipt> --expected-receipt-sha256 <sha256>
 --restore-proposal .wom-scratch/revisions/restores/<private>.md --dry-run
 --format json`. A green plan only prepares private human review and grants no

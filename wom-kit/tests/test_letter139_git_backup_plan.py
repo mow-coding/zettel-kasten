@@ -116,6 +116,10 @@ class Letter139GitBackupPlanTests(unittest.TestCase):
             self.assertFalse(first["ready_for_write"])
             self.assertFalse(first["writer_available"])
             self.assertEqual(first["would_change"], [])
+            next_actions = "\n".join(first["next_safe_actions"])
+            self.assertIn("git-backup-reconcile-plan", next_actions)
+            self.assertIn("approved", next_actions)
+            self.assertNotIn("v0.4.2 intentionally has no Git writer", next_actions)
             self.assertTrue(first["git_executable"]["stability_verified"])
             serialized = json.dumps(first, ensure_ascii=False)
             for private_value in (
@@ -567,6 +571,14 @@ class Letter139GitBackupPlanTests(unittest.TestCase):
             self.assertEqual(reconciled["status"], "reconciled")
             self.assertTrue(
                 all(value is True for value in reconciled["expected_bindings"].values())
+            )
+            next_actions = "\n".join(reconciled["next_safe_actions"])
+            self.assertIn("Have the AI prepare", next_actions)
+            self.assertIn("private exact selection manifest", next_actions)
+            self.assertIn("dry-run mode before approval", next_actions)
+            self.assertNotRegex(
+                next_actions,
+                r"(?i)(?:v0\.4\.2.*writer.*unavailable|writer.*unavailable.*v0\.4\.2)",
             )
             remote_patch, handoff_patch = self.plan_patches(root)
             with remote_patch, handoff_patch:

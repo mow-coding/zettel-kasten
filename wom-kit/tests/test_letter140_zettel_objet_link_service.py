@@ -5,6 +5,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from contextlib import contextmanager
@@ -37,7 +38,19 @@ class Letter140ZettelObjetLinkServiceTests(unittest.TestCase):
     def archive(self, parent: Path) -> Path:
         root = parent / "archive"
         shutil.copytree(FIXTURE, root)
+        self.reindex(root)
         return root
+
+    def reindex(self, root: Path) -> dict[str, object]:
+        indexed = archive_services.index_archive(root)
+        self.assertTrue(indexed["ok"], indexed)
+        self.assertEqual(indexed["index_state"], "current", indexed)
+        return indexed
+
+    def assert_index_dirty(self, root: Path) -> None:
+        evidence = archive_services.require_current_zettel_index(root)
+        self.assertFalse(evidence["ok"], evidence)
+        self.assertIn("archive_index_dirty", evidence["reason_codes"])
 
     def plan(self, root: Path, *, label: str | None = None) -> dict[str, object]:
         result = completion_workflows.zettel_objet_link_plan(
@@ -239,9 +252,11 @@ class Letter140ZettelObjetLinkServiceTests(unittest.TestCase):
 
                 self.assertFalse(plan["ok"], plan)
                 self.assertIn(
-                    "zettel_objet_link_zettel_unavailable",
+                    "zettel_identity_projection_stale",
                     plan["blockers"],
                 )
+                self.assertEqual(plan["summary"], {})
+                self.assertEqual(plan["data"], {})
                 self.assertEqual(zettel.read_bytes(), before)
                 self.assertFalse(
                     (
@@ -282,6 +297,7 @@ class Letter140ZettelObjetLinkServiceTests(unittest.TestCase):
                 bom = b"\xef\xbb\xbf" if with_bom else b""
                 zettel.write_bytes(bom + frontmatter_bytes + exact_body)
                 before = zettel.read_bytes()
+                self.reindex(root)
 
                 plan = self.plan(root)
                 binding, claim = self.claim(root, plan)
@@ -326,6 +342,7 @@ class Letter140ZettelObjetLinkServiceTests(unittest.TestCase):
                 manifest.read_text(encoding="utf-8") + duplicate + "\n",
                 encoding="utf-8",
             )
+            self.reindex(root)
             plan = completion_workflows.zettel_objet_link_plan(
                 root,
                 zettel_id=ZETTEL_ID,
@@ -350,6 +367,13 @@ class Letter140ZettelObjetLinkServiceTests(unittest.TestCase):
                     manifest.read_text(encoding="utf-8") + malformed + "\n",
                     encoding="utf-8",
                 )
+                with self.assertRaisesRegex(
+                    archive_services.ArchiveServiceError,
+                    "archive_index_manifest_invalid",
+                ):
+                    archive_services.archive_index_strict_manifest_snapshot(
+                        root
+                    )
                 plan = completion_workflows.zettel_objet_link_plan(
                     root,
                     zettel_id=ZETTEL_ID,
@@ -357,13 +381,10 @@ class Letter140ZettelObjetLinkServiceTests(unittest.TestCase):
                     role=ROLE,
                 )
                 self.assertFalse(plan["ok"], plan)
-                self.assertIn(
-                    "zettel_objet_link_manifest_set_incomplete",
-                    plan["blockers"],
-                )
-                self.assertFalse(
-                    plan["data"]["manifest_record_set_complete"]
-                )
+                self.assertEqual(plan["blockers"], ["manifest_changed"])
+                self.assertEqual(plan["reason_codes"], ["manifest_changed"])
+                self.assertEqual(plan["summary"], {})
+                self.assertEqual(plan["data"], {})
 
     def test_strict_manifest_rejects_incomplete_mismatched_and_nonfinite_rows(
         self,
@@ -405,6 +426,14 @@ class Letter140ZettelObjetLinkServiceTests(unittest.TestCase):
                     encoding="utf-8",
                 )
 
+                with self.assertRaisesRegex(
+                    archive_services.ArchiveServiceError,
+                    "archive_index_manifest_invalid",
+                ):
+                    archive_services.archive_index_strict_manifest_snapshot(
+                        root
+                    )
+
                 plan = completion_workflows.zettel_objet_link_plan(
                     root,
                     zettel_id=ZETTEL_ID,
@@ -413,15 +442,10 @@ class Letter140ZettelObjetLinkServiceTests(unittest.TestCase):
                 )
 
                 self.assertFalse(plan["ok"], plan)
-                self.assertIn(
-                    "zettel_objet_link_manifest_set_incomplete",
-                    plan["blockers"],
-                )
-                self.assertFalse(
-                    plan["data"]["manifest_record_set_complete"]
-                )
-                self.assertFalse(plan["summary"]["manifest_record_verified"])
-                self.assertEqual(plan["summary"]["manifest_record_count"], 0)
+                self.assertEqual(plan["blockers"], ["manifest_changed"])
+                self.assertEqual(plan["reason_codes"], ["manifest_changed"])
+                self.assertEqual(plan["summary"], {})
+                self.assertEqual(plan["data"], {})
 
     def test_strict_manifest_enforces_depth_node_and_record_bounds(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -438,43 +462,52 @@ class Letter140ZettelObjetLinkServiceTests(unittest.TestCase):
                 json.dumps(record) + "\n",
                 encoding="utf-8",
             )
+            with self.assertRaisesRegex(
+                archive_services.ArchiveServiceError,
+                "archive_index_manifest_invalid",
+            ):
+                archive_services.archive_index_strict_manifest_snapshot(root)
             plan = completion_workflows.zettel_objet_link_plan(
                 root,
                 zettel_id=ZETTEL_ID,
                 object_id=OBJECT_ID,
                 role=ROLE,
             )
-            self.assertFalse(plan["data"]["manifest_record_set_complete"])
+            self.assertFalse(plan["ok"], plan)
+            self.assertEqual(plan["blockers"], ["manifest_changed"])
+            self.assertEqual(plan["reason_codes"], ["manifest_changed"])
+            self.assertEqual(plan["summary"], {})
+            self.assertEqual(plan["data"], {})
 
         with tempfile.TemporaryDirectory() as tmp:
             root = self.archive(Path(tmp))
             with mock.patch.object(
-                completion_workflows,
-                "ZETTEL_OBJET_LINK_MAX_MANIFEST_JSON_NODES",
+                archive_services,
+                "ZETTEL_OBJET_LINK_MANIFEST_MAX_JSON_NODES",
                 1,
             ):
-                plan = completion_workflows.zettel_objet_link_plan(
-                    root,
-                    zettel_id=ZETTEL_ID,
-                    object_id=OBJECT_ID,
-                    role=ROLE,
-                )
-            self.assertFalse(plan["data"]["manifest_record_set_complete"])
+                with self.assertRaisesRegex(
+                    archive_services.ArchiveServiceError,
+                    "archive_index_manifest_invalid",
+                ):
+                    archive_services.archive_index_strict_manifest_snapshot(
+                        root
+                    )
 
         with tempfile.TemporaryDirectory() as tmp:
             root = self.archive(Path(tmp))
             with mock.patch.object(
-                completion_workflows,
-                "ZETTEL_OBJET_LINK_MAX_MANIFEST_RECORDS",
+                archive_services,
+                "ZETTEL_OBJET_LINK_MANIFEST_MAX_RECORDS",
                 1,
             ):
-                plan = completion_workflows.zettel_objet_link_plan(
-                    root,
-                    zettel_id=ZETTEL_ID,
-                    object_id=OBJECT_ID,
-                    role=ROLE,
-                )
-            self.assertFalse(plan["data"]["manifest_record_set_complete"])
+                with self.assertRaisesRegex(
+                    archive_services.ArchiveServiceError,
+                    "archive_index_manifest_too_many_records",
+                ):
+                    archive_services.archive_index_strict_manifest_snapshot(
+                        root
+                    )
 
     def test_snapshot_matrix_fails_closed_and_reuses_only_exact_regular(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -825,7 +858,11 @@ class Letter140ZettelObjetLinkServiceTests(unittest.TestCase):
                     result = self.apply(root, plan, binding, claim)
                 self.assertFalse(result["ok"], result)
                 self.assertIn(
-                    "zettel_objet_link_manifest_record_ambiguous",
+                    "manifest_changed",
+                    result["blockers"],
+                )
+                self.assertIn(
+                    "zettel_objet_link_plan_changed",
                     result["blockers"],
                 )
                 self.assertEqual(self.zettel_path(root).read_bytes(), before)
@@ -1113,6 +1150,7 @@ class Letter140ZettelObjetLinkServiceTests(unittest.TestCase):
             finally:
                 self.finish_claim(claim, succeeded=succeeded)
 
+    @unittest.skipUnless(os.name == "nt", "Windows dirty-projection watcher")
     def test_manifest_removed_after_prewrite_check_never_returns_success(
         self,
     ) -> None:
@@ -1122,35 +1160,34 @@ class Letter140ZettelObjetLinkServiceTests(unittest.TestCase):
             before = self.zettel_path(root).read_bytes()
             receipt = self.path_from_plan(root, plan, "receipt_path")
             binding, claim = self.claim(root, plan)
-            real_load = (
-                completion_workflows._strict_zettel_objet_manifest_records
+            real_reprove = (
+                completion_workflows
+                ._reprove_zettel_objet_link_dirty_projection
             )
-            load_count = 0
+            reproof_called = False
 
-            def remove_target_after_prewrite(root_path: Path):
-                nonlocal load_count
-                records = real_load(root_path)
-                load_count += 1
-                if load_count == 3:
-                    manifest = self.manifest_path(root)
-                    surviving_rows = [
-                        line
-                        for line in manifest.read_text(
-                            encoding="utf-8"
-                        ).splitlines()
-                        if OBJECT_ID not in line
-                    ]
-                    manifest.write_text(
-                        "\n".join(surviving_rows) + "\n",
-                        encoding="utf-8",
-                    )
-                return records
+            def remove_target_during_reproof(*args, **kwargs):
+                nonlocal reproof_called
+                reproof_called = True
+                manifest = self.manifest_path(root)
+                surviving_rows = [
+                    line
+                    for line in manifest.read_text(
+                        encoding="utf-8"
+                    ).splitlines()
+                    if OBJECT_ID not in line
+                ]
+                manifest.write_text(
+                    "\n".join(surviving_rows) + "\n",
+                    encoding="utf-8",
+                )
+                return real_reprove(*args, **kwargs)
 
             try:
                 with mock.patch.object(
                     completion_workflows,
-                    "_strict_zettel_objet_manifest_records",
-                    side_effect=remove_target_after_prewrite,
+                    "_reprove_zettel_objet_link_dirty_projection",
+                    side_effect=remove_target_during_reproof,
                 ):
                     with self.assertRaisesRegex(
                         archive_services.ArchiveServiceError,
@@ -1158,9 +1195,10 @@ class Letter140ZettelObjetLinkServiceTests(unittest.TestCase):
                     ):
                         self.apply(root, plan, binding, claim)
 
-                self.assertGreaterEqual(load_count, 4)
+                self.assertTrue(reproof_called)
                 self.assertEqual(self.zettel_path(root).read_bytes(), before)
                 self.assertTrue(receipt.is_file())
+                self.assert_index_dirty(root)
                 self.assertEqual(claim.status, "started")
                 found = completion_workflows.zettel_objet_link_receipts(
                     root,
@@ -1179,7 +1217,274 @@ class Letter140ZettelObjetLinkServiceTests(unittest.TestCase):
             finally:
                 self.finish_claim(claim, succeeded=False)
 
+    @unittest.skipUnless(os.name == "nt", "Windows dirty-projection watcher")
     def test_duplicate_id_created_after_fresh_plan_never_returns_success(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self.archive(Path(tmp))
+            plan = self.plan(root)
+            before = self.zettel_path(root).read_bytes()
+            receipt = self.path_from_plan(root, plan, "receipt_path")
+            duplicate = root / "inbox" / "late-duplicate.md"
+            binding, claim = self.claim(root, plan)
+            real_reprove = (
+                completion_workflows
+                ._reprove_zettel_objet_link_dirty_projection
+            )
+            reproof_called = False
+
+            def insert_duplicate_during_reproof(*args, **kwargs):
+                nonlocal reproof_called
+                reproof_called = True
+                shutil.copyfile(self.zettel_path(root), duplicate)
+                return real_reprove(*args, **kwargs)
+
+            try:
+                with mock.patch.object(
+                    completion_workflows,
+                    "_reprove_zettel_objet_link_dirty_projection",
+                    side_effect=insert_duplicate_during_reproof,
+                ):
+                    with self.assertRaisesRegex(
+                        archive_services.ArchiveServiceError,
+                        "zettel_objet_link_zettel_authority_changed_after_approval",
+                    ):
+                        self.apply(root, plan, binding, claim)
+
+                self.assertTrue(reproof_called)
+                self.assertTrue(duplicate.is_file())
+                self.assertEqual(self.zettel_path(root).read_bytes(), before)
+                self.assertTrue(receipt.is_file())
+                self.assert_index_dirty(root)
+                self.assertEqual(claim.status, "started")
+            finally:
+                self.finish_claim(claim, succeeded=False)
+
+    @unittest.skipUnless(os.name == "nt", "Windows dirty-projection watcher")
+    def test_manifest_and_duplicate_final_proofs_share_one_stable_point(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self.archive(Path(tmp)).resolve()
+            plan = self.plan(root)
+            before = self.zettel_path(root).read_bytes()
+            receipt = self.path_from_plan(root, plan, "receipt_path")
+            manifest = self.manifest_path(root)
+            duplicate = root / "inbox" / "cross-proof-duplicate.md"
+            binding, claim = self.claim(root, plan)
+            real_reprove = (
+                completion_workflows
+                ._reprove_zettel_objet_link_dirty_projection
+            )
+            reproof_called = False
+
+            def cross_drift_after_reproof(*args, **kwargs):
+                nonlocal reproof_called
+                reproof_called = True
+                # The indexed proof itself sees a clean tree and manifest.
+                # Both authorities then change before the writer can seal the
+                # delta.  The surrounding Windows watchers must reject even
+                # the transient duplicate that is gone by verification time.
+                proof = real_reprove(*args, **kwargs)
+                shutil.copyfile(self.zettel_path(root), duplicate)
+                duplicate.unlink()
+                manifest.unlink()
+                return proof
+
+            try:
+                with mock.patch.object(
+                    completion_workflows,
+                    "_reprove_zettel_objet_link_dirty_projection",
+                    side_effect=cross_drift_after_reproof,
+                ):
+                    with self.assertRaisesRegex(
+                        archive_services.ArchiveServiceError,
+                        "zettel_objet_link_zettel_authority_changed_after_approval",
+                    ):
+                        self.apply(root, plan, binding, claim)
+
+                self.assertTrue(reproof_called)
+                self.assertFalse(manifest.exists())
+                self.assertFalse(duplicate.exists())
+                self.assertEqual(self.zettel_path(root).read_bytes(), before)
+                self.assertTrue(receipt.is_file())
+                self.assert_index_dirty(root)
+                self.assertEqual(claim.status, "started")
+            finally:
+                self.finish_claim(claim, succeeded=False)
+
+    @unittest.skipUnless(os.name == "nt", "Windows dirty-projection watcher")
+    def test_cross_root_rename_during_dirty_projection_reproof_rolls_back(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self.archive(Path(tmp)).resolve()
+            plan = self.plan(root)
+            before = self.zettel_path(root).read_bytes()
+            receipt = self.path_from_plan(root, plan, "receipt_path")
+            source = root / "inbox" / "moving-duplicate.md"
+            destination = root / "zettels" / "moving-duplicate.md"
+            binding, claim = self.claim(root, plan)
+            real_reprove = (
+                completion_workflows
+                ._reprove_zettel_objet_link_dirty_projection
+            )
+            reproof_called = False
+            moved = False
+
+            def move_duplicate_during_reproof(*args, **kwargs):
+                nonlocal reproof_called, moved
+                reproof_called = True
+                shutil.copyfile(self.zettel_path(root), source)
+                os.replace(source, destination)
+                moved = True
+                return real_reprove(*args, **kwargs)
+
+            try:
+                with mock.patch.object(
+                    completion_workflows,
+                    "_reprove_zettel_objet_link_dirty_projection",
+                    side_effect=move_duplicate_during_reproof,
+                ):
+                    with self.assertRaisesRegex(
+                        archive_services.ArchiveServiceError,
+                        "zettel_objet_link_zettel_authority_changed_after_approval",
+                    ):
+                        self.apply(root, plan, binding, claim)
+
+                self.assertTrue(reproof_called)
+                self.assertTrue(moved)
+                self.assertFalse(source.exists())
+                self.assertTrue(destination.is_file())
+                self.assertEqual(self.zettel_path(root).read_bytes(), before)
+                self.assertTrue(receipt.is_file())
+                self.assert_index_dirty(root)
+                self.assertEqual(claim.status, "started")
+            finally:
+                self.finish_claim(claim, succeeded=False)
+
+    @unittest.skipUnless(os.name == "nt", "Windows dirty-projection watcher")
+    def test_in_place_duplicate_during_dirty_projection_reproof_rolls_back(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self.archive(Path(tmp)).resolve()
+            other = root / "inbox" / "other.md"
+            other.write_bytes(
+                self.zettel_path(root).read_bytes().replace(
+                    ZETTEL_ID.encode("utf-8"),
+                    b"zet_20260828_link_race_other",
+                    1,
+                )
+            )
+            self.reindex(root)
+            plan = self.plan(root)
+            before = self.zettel_path(root).read_bytes()
+            receipt = self.path_from_plan(root, plan, "receipt_path")
+            binding, claim = self.claim(root, plan)
+            real_reprove = (
+                completion_workflows
+                ._reprove_zettel_objet_link_dirty_projection
+            )
+            reproof_called = False
+            mutated = False
+            mutated_bytes: bytes | None = None
+
+            def mutate_indexed_zettel_during_reproof(*args, **kwargs):
+                nonlocal reproof_called, mutated, mutated_bytes
+                reproof_called = True
+                mutated_bytes = self.zettel_path(root).read_bytes()
+                other.write_bytes(mutated_bytes)
+                mutated = True
+                return real_reprove(*args, **kwargs)
+
+            try:
+                with mock.patch.object(
+                    completion_workflows,
+                    "_reprove_zettel_objet_link_dirty_projection",
+                    side_effect=mutate_indexed_zettel_during_reproof,
+                ):
+                    with self.assertRaisesRegex(
+                        archive_services.ArchiveServiceError,
+                        "zettel_objet_link_zettel_authority_changed_after_approval",
+                    ):
+                        self.apply(root, plan, binding, claim)
+
+                self.assertTrue(reproof_called)
+                self.assertTrue(mutated)
+                self.assertTrue(other.is_file())
+                self.assertEqual(other.read_bytes(), mutated_bytes)
+                self.assertEqual(self.zettel_path(root).read_bytes(), before)
+                self.assertTrue(receipt.is_file())
+                self.assert_index_dirty(root)
+                self.assertEqual(claim.status, "started")
+            finally:
+                self.finish_claim(claim, succeeded=False)
+
+    @unittest.skipUnless(
+        sys.platform.startswith("linux"),
+        "Linux portable final-proof fence",
+    )
+    def test_linux_manifest_removed_during_final_proof_rolls_back(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self.archive(Path(tmp))
+            plan = self.plan(root)
+            before = self.zettel_path(root).read_bytes()
+            receipt = self.path_from_plan(root, plan, "receipt_path")
+            binding, claim = self.claim(root, plan)
+            real_manifest_check = (
+                completion_workflows
+                ._require_exact_zettel_objet_manifest_target
+            )
+            check_count = 0
+
+            def remove_target_after_final_manifest_proof(*args, **kwargs):
+                nonlocal check_count
+                check_count += 1
+                result = real_manifest_check(*args, **kwargs)
+                if check_count == 2:
+                    manifest = self.manifest_path(root)
+                    surviving_rows = [
+                        line
+                        for line in manifest.read_text(
+                            encoding="utf-8"
+                        ).splitlines()
+                        if OBJECT_ID not in line
+                    ]
+                    manifest.write_text(
+                        "\n".join(surviving_rows) + "\n",
+                        encoding="utf-8",
+                    )
+                return result
+
+            try:
+                with mock.patch.object(
+                    completion_workflows,
+                    "_require_exact_zettel_objet_manifest_target",
+                    side_effect=remove_target_after_final_manifest_proof,
+                ):
+                    with self.assertRaisesRegex(
+                        archive_services.ArchiveServiceError,
+                        "zettel_objet_link_manifest_changed_after_approval",
+                    ):
+                        self.apply(root, plan, binding, claim)
+
+                self.assertEqual(check_count, 2)
+                self.assertEqual(self.zettel_path(root).read_bytes(), before)
+                self.assertTrue(receipt.is_file())
+                self.assert_index_dirty(root)
+                self.assertEqual(claim.status, "started")
+            finally:
+                self.finish_claim(claim, succeeded=False)
+
+    @unittest.skipUnless(
+        sys.platform.startswith("linux"),
+        "Linux portable final-proof fence",
+    )
+    def test_linux_duplicate_created_before_final_authority_check_rolls_back(
         self,
     ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1218,11 +1523,16 @@ class Letter140ZettelObjetLinkServiceTests(unittest.TestCase):
                 self.assertTrue(duplicate.is_file())
                 self.assertEqual(self.zettel_path(root).read_bytes(), before)
                 self.assertTrue(receipt.is_file())
+                self.assert_index_dirty(root)
                 self.assertEqual(claim.status, "started")
             finally:
                 self.finish_claim(claim, succeeded=False)
 
-    def test_manifest_and_duplicate_final_proofs_share_one_stable_point(
+    @unittest.skipUnless(
+        sys.platform.startswith("linux"),
+        "Linux portable final-proof fence",
+    )
+    def test_linux_manifest_and_duplicate_proofs_share_stable_point(
         self,
     ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1257,7 +1567,7 @@ class Letter140ZettelObjetLinkServiceTests(unittest.TestCase):
             def remove_duplicate_before_final_resolver(*args, **kwargs):
                 nonlocal resolve_count
                 resolve_count += 1
-                if resolve_count == 3:
+                if resolve_count == 1:
                     duplicate.unlink()
                 return real_resolve(*args, **kwargs)
 
@@ -1278,16 +1588,23 @@ class Letter140ZettelObjetLinkServiceTests(unittest.TestCase):
                         self.apply(root, plan, binding, claim)
 
                 self.assertEqual(check_count, 2)
-                self.assertEqual(resolve_count, 3)
+                self.assertEqual(resolve_count, 1)
                 self.assertFalse(manifest.exists())
                 self.assertFalse(duplicate.exists())
                 self.assertEqual(self.zettel_path(root).read_bytes(), before)
                 self.assertTrue(receipt.is_file())
+                self.assert_index_dirty(root)
                 self.assertEqual(claim.status, "started")
             finally:
                 self.finish_claim(claim, succeeded=False)
 
-    def test_cross_root_rename_during_final_resolver_rolls_back(self) -> None:
+    @unittest.skipUnless(
+        sys.platform.startswith("linux"),
+        "Linux portable final-proof fence",
+    )
+    def test_linux_cross_root_rename_during_final_resolver_rolls_back(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = self.archive(Path(tmp)).resolve()
             plan = self.plan(root)
@@ -1307,7 +1624,7 @@ class Letter140ZettelObjetLinkServiceTests(unittest.TestCase):
             def race_only_final_resolver(*args, **kwargs):
                 nonlocal resolve_count, moved
                 resolve_count += 1
-                if resolve_count != 3:
+                if resolve_count != 1:
                     return real_resolve(*args, **kwargs)
                 shutil.copyfile(self.zettel_path(root), source)
                 scan_exit_count = 0
@@ -1327,12 +1644,8 @@ class Letter140ZettelObjetLinkServiceTests(unittest.TestCase):
                             )
                         except (OSError, TypeError, ValueError):
                             target_is_zettels = False
-                    if (
-                        not moved
-                        and (
-                            target_is_zettels
-                            or (os.name != "nt" and scan_exit_count == 2)
-                        )
+                    if not moved and (
+                        target_is_zettels or scan_exit_count == 2
                     ):
                         os.replace(source, destination)
                         moved = True
@@ -1356,17 +1669,24 @@ class Letter140ZettelObjetLinkServiceTests(unittest.TestCase):
                     ):
                         self.apply(root, plan, binding, claim)
 
-                self.assertEqual(resolve_count, 3)
+                self.assertEqual(resolve_count, 1)
                 self.assertTrue(moved)
                 self.assertFalse(source.exists())
                 self.assertTrue(destination.is_file())
                 self.assertEqual(self.zettel_path(root).read_bytes(), before)
                 self.assertTrue(receipt.is_file())
+                self.assert_index_dirty(root)
                 self.assertEqual(claim.status, "started")
             finally:
                 self.finish_claim(claim, succeeded=False)
 
-    def test_in_place_duplicate_during_final_resolver_rolls_back(self) -> None:
+    @unittest.skipUnless(
+        sys.platform.startswith("linux"),
+        "Linux portable final-proof fence",
+    )
+    def test_linux_in_place_duplicate_during_final_resolver_rolls_back(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = self.archive(Path(tmp)).resolve()
             plan = self.plan(root)
@@ -1388,7 +1708,7 @@ class Letter140ZettelObjetLinkServiceTests(unittest.TestCase):
             def race_only_final_resolver(*args, **kwargs):
                 nonlocal resolve_count, mutated
                 resolve_count += 1
-                if resolve_count != 3:
+                if resolve_count != 1:
                     return real_resolve(*args, **kwargs)
                 shutil.copyfile(
                     root
@@ -1427,11 +1747,12 @@ class Letter140ZettelObjetLinkServiceTests(unittest.TestCase):
                     ):
                         self.apply(root, plan, binding, claim)
 
-                self.assertEqual(resolve_count, 3)
+                self.assertEqual(resolve_count, 1)
                 self.assertTrue(mutated)
                 self.assertTrue(other.is_file())
                 self.assertEqual(self.zettel_path(root).read_bytes(), before)
                 self.assertTrue(receipt.is_file())
+                self.assert_index_dirty(root)
                 self.assertEqual(claim.status, "started")
             finally:
                 self.finish_claim(claim, succeeded=False)

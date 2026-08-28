@@ -6,15 +6,19 @@
 철학 갱신: 2026-07-15
 하네스 호환 경계 갱신: 2026-07-16
 
-현재 v0.4.11 변경점: project 정렬은 새로 읽은 installed payload, module
-inventory, launcher, current process, pin, running version 근거를 모두 요구합니다.
-Deep Doctor는 byte 검증 기본값을 유지하고, 이후 SHA 변화는 정확한 시간순
-근거만 받으며, 완료 시점이 없는 local-recovery 상태 근거는 ERROR로 둡니다.
-native 결정은 정본 WOM 용어와 로컬 전용 대상 미리보기를 사용하고, 문서 읽기
-표면은 정본 byte를 바꾸지 않는 WOM-safe Markdown 표시본을 제공합니다. 고정
-차단 preview는 자신의 권한을 정직하게 말합니다. 전체 트리 반복 link와
-generation-bound index 구조는 v0.4.12 작업입니다. 공개나 설치만으로 클라이언트
-보관함은 바뀌지 않습니다.
+현재 v0.4.12 변경점: `zettel-objet-link`는 현재 generation-bound SQLite
+projection을 권한으로 사용하고 승인이나 쓰기 없이 결정적인 `already_present`를
+반환합니다. index를 쓰는 zet writer는 같은-generation dirty intent와 정확한
+delta-or-dirty lifecycle을 공유하며, projection이 없거나 stale이면 정본 쓰기 전에
+멈춥니다. parser 정본 inventory는 승인 가능 47개, 고정 차단 67개, 미노출
+201개입니다. 공개나 설치만으로 클라이언트 보관함은 바뀌지 않습니다. project
+업데이트 뒤 AI가 보관함 index를 명시적으로 다시 만들고 health와 기술 근거를
+검증하며, 사람은 파일 수를 세거나 해시를 비교하지 않습니다.
+
+과거 v0.4.11 변경점: project 정렬은 새로 읽은 installed payload, module
+inventory, launcher, current process, pin, running version 근거를 요구합니다.
+Deep Doctor는 byte 검증 기본값을 유지하고 native 결정은 비공개 미리보기를
+공개하지 않는 정본 WOM 용어를 사용합니다.
 
 과거 v0.4.10 변경점: 로컬 항목 1–1,000개의 intake와 capture가 중요한 결정 두
 번으로 이어집니다. intake는 모든 exact 영수증과 생성된 capture 요청 하나를
@@ -514,6 +518,7 @@ local archive
 - [v0.2.11 Delegate Capability Contract Work Log](../plans/work-log-2026-05-23-delegate-capability-contract.md)
 - [Changelog](../../CHANGELOG.md)
 - [Release Notes](releases/)
+- [v0.4.12 릴리스 노트](releases/v0.4.12.md)
 - [v0.4.11 릴리스 노트](releases/v0.4.11.md)
 - [v0.4.10 릴리스 노트](releases/v0.4.10.md)
 - [v0.4.9 릴리스 노트](releases/v0.4.9.md)

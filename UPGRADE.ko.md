@@ -2,6 +2,44 @@
 
 [English Upgrade Guide](UPGRADE.md)
 
+## v0.4.12 generation-bound link와 index 권한
+
+일치하는 공개 Release가 정확한 wheel을 자산으로 나열한 뒤에만 설치합니다.
+
+```powershell
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.12/wom_kit-0.4.12-py3-none-any.whl"
+archive --version
+```
+
+새 프로세스에서 정확히 `archive 0.4.12`인지 확인합니다. 설치만으로 클라이언트
+보관함은 바뀌지 않습니다. 프로젝트 runtime 업데이트 뒤 보관함 projection을
+명시적으로 건강한 상태로 만드는 일은 사람이 아니라 AI가 수행합니다.
+
+```powershell
+.\.zettel-kasten\bin\archive.cmd index <archive-root> --progress --format json
+.\.zettel-kasten\bin\archive.cmd index-health <archive-root> --dry-run --progress --format json
+```
+
+WOM이 결과의 개수·해시·generation·health 근거를 검증합니다. 사람은 쉬운 작업
+설명을 보고 실행할지만 결정하며 파일 수를 세거나 digest와 index 상태를 직접
+맞추지 않습니다.
+
+`zettel-objet-link` 계획과 적용은 현재 SQLite generation, 정확한 target row 하나,
+고유한 zet·Objet identity, manifest descriptor, 안정적인 파일 근거에 결속됩니다.
+정확한 link가 이미 있으면 승인이나 쓰기 없이 결정적으로 `already_present`를
+반환합니다. zet writer는 첫 정본 쓰기 전에 같은 generation의 durable dirty intent
+하나를 시작하고, 그 generation에서 정확한 전체 batch delta를 seal하거나
+`archive_index_rebuild_required`를 남긴 dirty 상태를 유지합니다. index가 없거나
+stale이면 승인·정본 변경·checkpoint·receipt 전에 멈추며, 인증된 같은-generation
+dirty resume만 계속 허용합니다.
+
+parser 정본 현재 inventory는 승인 가능 47개, 고정 차단 67개, 미노출 201개입니다.
+특히 `zet-revision-restore-proposal-from-snapshot --approve`와 독립 명령 경로
+`derive-text capture --approve`는 비공개 입력을 읽기 전에 계속 고정 차단됩니다.
+별도로 승인된 `objet-capture-batch` 내부의 paired derived-text 처리는 이 명령이
+아닙니다. dry-run 미리보기와 과거 근거는 유지합니다.
+[v0.4.12 릴리스 노트](wom-kit/docs/releases/v0.4.12.md)를 보세요.
+
 ## v0.4.11 런타임 정합과 깊은 검증
 
 정확히 일치하는 공개 Release가 wheel을 나열하고 실제 규모 Doctor 근거가
@@ -3013,11 +3051,12 @@ archive zet-revision-restore-proposal-from-snapshot <archive-root> `
   --dry-run --format json
 ```
 
-승인은 반환된 `plan_digest`를 그대로 다시 요구합니다. 승인이 만드는 것은
-`.wom-scratch/revisions/restores/` 아래의 독립된 정확한 복사본뿐이며 정본 zet는
-바꾸지 않습니다. 복사본을 검토한 다음 `zet-revision-restore-plan`과 별도의 사람
-검토형 복원 쓰기 절차를 계속 사용하세요. 수정 가능한 복원안을 불변 보존본에
-하드링크하거나, 복사본 생성을 복원 승인으로 해석하면 안 됩니다.
+과거 v0.3.249에서 승인은 반환된 `plan_digest`를 그대로 다시 요구하여
+`.wom-scratch/revisions/restores/` 아래의 독립된 정확한 복사본을 만들고 정본 zet는
+바꾸지 않았습니다. 현재 v0.4.12의 `--approve` 경로는 snapshot이나 target을 읽기
+전에 고정 차단되며 dry-run 미리보기만 남습니다. 과거 복원안은 계속 검토·감사할
+수 있습니다. 수정 가능한 복원안을 불변 보존본에 하드링크하거나 복사본 생성을
+복원 승인으로 해석하면 안 됩니다.
 
 기존 v0.1 영수증은 그대로 유효하지만, 신뢰할 수 있는 별도 비공개 백업에서
 완전한 과거 바이트를 복구해야 합니다.

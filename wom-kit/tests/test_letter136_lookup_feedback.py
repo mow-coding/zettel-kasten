@@ -40,6 +40,8 @@ class Letter136LookupFeedbackTests(unittest.TestCase):
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name).resolve() / "archive"
         shutil.copytree(KIT_ROOT / "examples" / "fake-life-archive", self.root)
+        indexed = archive_services.index_archive(self.root)
+        self.assertTrue(indexed["ok"], indexed)
 
     def run_cli(self, args: list[str]) -> tuple[int, str]:
         output = io.StringIO()
@@ -60,6 +62,8 @@ class Letter136LookupFeedbackTests(unittest.TestCase):
         selected_zettel_id = zettel_id or (
             None if relative_path is not None else self.ZETTEL_ID
         )
+        indexed = archive_services.index_archive(self.root)
+        self.assertTrue(indexed["ok"], indexed)
         plan = completion_workflows.zettel_objet_link_plan(
             self.root,
             zettel_id=selected_zettel_id,
@@ -163,6 +167,8 @@ class Letter136LookupFeedbackTests(unittest.TestCase):
             json.dumps(receipt, ensure_ascii=False, sort_keys=True) + "\n",
             encoding="utf-8",
         )
+        indexed = archive_services.index_archive(self.root)
+        self.assertTrue(indexed["ok"], indexed)
         return {
             "ok": True,
             "summary": {

@@ -837,6 +837,16 @@ class CompletionWorkflowTests(unittest.TestCase):
         write_args.pop("approve", None)
         write_args.pop("dry_run", None)
         reviewed_by = str(write_args.get("reviewed_by") or "")
+        index_evidence = (
+            completion_workflows.archive_services.require_current_zettel_index(
+                archive_root
+            )
+        )
+        if index_evidence.get("ok") is not True:
+            rebuilt = completion_workflows.archive_services.index_archive(
+                archive_root
+            )
+            self.assertTrue(rebuilt["ok"], rebuilt)
         preview = completion_workflows.archive_services.zettel_edge_write(
             archive_root,
             **write_args,
@@ -896,6 +906,10 @@ class CompletionWorkflowTests(unittest.TestCase):
     ) -> dict[str, object]:
         """Install one bounded v0.3 link history without its blocked writer."""
 
+        indexed = completion_workflows.archive_services.index_archive(
+            archive_root
+        )
+        self.assertTrue(indexed["ok"], indexed)
         plan = completion_workflows.zettel_objet_link_plan(
             archive_root,
             zettel_id=zettel_id,
@@ -994,6 +1008,10 @@ class CompletionWorkflowTests(unittest.TestCase):
             json.dumps(receipt, ensure_ascii=False, sort_keys=True) + "\n",
             encoding="utf-8",
         )
+        reindexed = completion_workflows.archive_services.index_archive(
+            archive_root
+        )
+        self.assertTrue(reindexed["ok"], reindexed)
         return {
             "ok": True,
             "summary": {
@@ -3139,6 +3157,10 @@ class CompletionWorkflowTests(unittest.TestCase):
     def test_zettel_objet_link_exact_approval_writes_while_revert_stays_closed(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.fake_archive(Path(tmp) / "archive")
+            indexed = completion_workflows.archive_services.index_archive(
+                archive_root
+            )
+            self.assertTrue(indexed["ok"], indexed)
             zettel_id = "zet_20240504_fake_lunch_thought"
             zettel_path = archive_root / "zettels" / f"{zettel_id}.md"
             before_bytes = zettel_path.read_bytes()
@@ -3303,6 +3325,10 @@ class CompletionWorkflowTests(unittest.TestCase):
             self.assertTrue(applied["ok"], applied)
             zettel_path = archive_root / "zettels" / f"{zettel_id}.md"
             zettel_path.write_bytes(zettel_path.read_bytes() + b"\nLater reviewed change.\n")
+            reindexed = completion_workflows.archive_services.index_archive(
+                archive_root
+            )
+            self.assertTrue(reindexed["ok"], reindexed)
 
             revert_plan = completion_workflows.zettel_objet_link_revert_plan(
                 archive_root,

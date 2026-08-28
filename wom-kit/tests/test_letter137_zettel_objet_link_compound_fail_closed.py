@@ -133,6 +133,9 @@ class Letter137ZettelObjetLinkCompoundFailClosedTests(unittest.TestCase):
             self.root,
             dirs_exist_ok=True,
         )
+        indexed = archive_services.index_archive(self.root)
+        self.assertTrue(indexed["ok"], indexed)
+        self.assertEqual(indexed["index_state"], "current", indexed)
         preview = completion_workflows.zettel_objet_link_plan(
             self.root,
             zettel_id=ZETTEL_ID,

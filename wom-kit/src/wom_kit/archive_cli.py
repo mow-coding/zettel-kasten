@@ -13150,6 +13150,7 @@ def _zettel_edge_blocked_preview_projection(
         else None
     )
     allowed_blockers = {
+        archive_services.INDEX_REBUILD_REQUIRED,
         "Use either --dry-run or --approve, not both.",
         "zettel-edge requires --dry-run or --approve.",
         "Provide exactly one of --from-zettel or --from-path.",
@@ -20836,27 +20837,16 @@ def command_zettel_objet_link(args: argparse.Namespace) -> int:
             ),
             exit_code=2,
         )
-    if args.approve and not str(args.reviewed_by or "").strip():
-        return _recognized_command_cli_error(
-            args,
-            command="zettel-objet-link",
-            lifecycle_action="zettel_objet_link_apply",
-            error_class="precondition",
-            reason_code="zettel_objet_link_reviewer_required",
-            text_message="zettel-objet-link --approve requires --reviewed-by.",
-        )
-    if args.approve and not str(args.expected_plan_sha256 or "").strip():
-        return _recognized_command_cli_error(
-            args,
-            command="zettel-objet-link",
-            lifecycle_action="zettel_objet_link_apply",
-            error_class="precondition",
-            reason_code="zettel_objet_link_expected_plan_required",
-            text_message=(
-                "zettel-objet-link --approve requires the exact plan digest "
-                "from a fresh --dry-run."
-            ),
-        )
+    reporter = CommandProgressReporter(
+        bool(getattr(args, "progress", False)),
+        label="zettel-objet-link",
+        stage_order=(
+            "zettel-objet-link-plan",
+            "zettel-objet-link-approval",
+            "zettel-objet-link-apply",
+        ),
+    )
+    reporter.progress("zettel-objet-link-plan", "start", 0, 1)
     approval_workflow_started = False
     try:
         archive_root = Path(args.archive_root)
@@ -20877,22 +20867,52 @@ def command_zettel_objet_link(args: argparse.Namespace) -> int:
                 role=args.role,
                 label=args.label,
             )
+            reporter.progress("zettel-objet-link-plan", "done", 1, 1)
+            if (
+                preview.get("ok") is True
+                and preview.get("state") == "already_present"
+                and preview.get("blockers") == []
+            ):
+                result = (
+                    preview
+                    if args.dry_run
+                    else {
+                        **preview,
+                        "dry_run": False,
+                        "approved": False,
+                        "lifecycle_action": "zettel_objet_link_apply",
+                        "files_written": [],
+                    }
+                )
+                _print_zettel_objet_link_result(result, args.format)
+                return 0
             if args.dry_run:
                 result = preview
                 _print_zettel_objet_link_result(result, args.format)
                 return 0 if result.get("ok") else 1
             else:
-                preview_archive_id = preview.get("archive_id")
-                if (
-                    type(preview_archive_id) is not str
-                    or type(held_archive_id) is not str
-                    or not secrets.compare_digest(
-                        preview_archive_id,
-                        held_archive_id,
+                if not str(args.reviewed_by or "").strip():
+                    return _recognized_command_cli_error(
+                        args,
+                        command="zettel-objet-link",
+                        lifecycle_action="zettel_objet_link_apply",
+                        error_class="precondition",
+                        reason_code="zettel_objet_link_reviewer_required",
+                        text_message=(
+                            "zettel-objet-link --approve requires --reviewed-by."
+                        ),
                     )
-                ):
-                    raise archive_services.ArchiveServiceError(
-                        "zettel_objet_link_archive_identity_changed"
+                if not str(args.expected_plan_sha256 or "").strip():
+                    return _recognized_command_cli_error(
+                        args,
+                        command="zettel-objet-link",
+                        lifecycle_action="zettel_objet_link_apply",
+                        error_class="precondition",
+                        reason_code="zettel_objet_link_expected_plan_required",
+                        text_message=(
+                            "zettel-objet-link --approve requires the exact "
+                            "plan digest from a fresh --dry-run."
+                        ),
                     )
                 if preview.get("ok") is not True or preview.get("blockers"):
                     return _recognized_command_cli_error(
@@ -20905,6 +20925,18 @@ def command_zettel_objet_link(args: argparse.Namespace) -> int:
                             "zettel-objet-link approval was blocked by a fresh "
                             "private preflight; no private values were echoed."
                         ),
+                    )
+                preview_archive_id = preview.get("archive_id")
+                if (
+                    type(preview_archive_id) is not str
+                    or type(held_archive_id) is not str
+                    or not secrets.compare_digest(
+                        preview_archive_id,
+                        held_archive_id,
+                    )
+                ):
+                    raise archive_services.ArchiveServiceError(
+                        "zettel_objet_link_archive_identity_changed"
                     )
             summary = (
                 preview.get("summary")
@@ -20944,25 +20976,30 @@ def command_zettel_objet_link(args: argparse.Namespace) -> int:
                 archive_id=preview_archive_id,
                 reviewer_claim=reviewer,
             )
+            reporter.progress("zettel-objet-link-approval", "start", 0, 1)
 
             def _write_zettel_objet_link(claim) -> dict[str, Any]:
-                return completion_workflows.zettel_objet_link_apply(
-                    archive_root,
-                    zettel_id=args.zettel_id,
-                    relative_path=args.path,
-                    object_id=args.object_id,
-                    role=args.role,
-                    label=args.label,
-                    expected_plan_sha256=expected_service_plan_sha256,
-                    reviewed_by=reviewer,
-                    expected_exact_approval_plan_sha256=(
-                        binding.plan_sha256
-                    ),
-                    expected_exact_approval_target_binding_sha256=(
-                        binding.target_binding_sha256
-                    ),
-                    exact_human_approval_claim=claim,
-                )
+                reporter.progress("zettel-objet-link-apply", "start", 0, 1)
+                try:
+                    return completion_workflows.zettel_objet_link_apply(
+                        archive_root,
+                        zettel_id=args.zettel_id,
+                        relative_path=args.path,
+                        object_id=args.object_id,
+                        role=args.role,
+                        label=args.label,
+                        expected_plan_sha256=expected_service_plan_sha256,
+                        reviewed_by=reviewer,
+                        expected_exact_approval_plan_sha256=(
+                            binding.plan_sha256
+                        ),
+                        expected_exact_approval_target_binding_sha256=(
+                            binding.target_binding_sha256
+                        ),
+                        exact_human_approval_claim=claim,
+                    )
+                finally:
+                    reporter.progress("zettel-objet-link-apply", "done", 1, 1)
 
             approval_workflow_started = True
             result = _execute_zettel_objet_link_exact_human_approved_write(
@@ -20970,6 +21007,7 @@ def command_zettel_objet_link(args: argparse.Namespace) -> int:
                 context,
                 _write_zettel_objet_link,
             )
+            reporter.progress("zettel-objet-link-approval", "done", 1, 1)
     except ExactHumanApprovalWorkflowError as error:
         no_archive_effect_codes = {
             "exact_human_approval_cancelled",
@@ -21038,6 +21076,8 @@ def command_zettel_objet_link(args: argparse.Namespace) -> int:
                 "unknown" if approval_workflow_started else "none"
             ),
         )
+    finally:
+        reporter.close()
     if args.format != "json" and _print_exact_human_reconciliation_notice(result):
         return 1
     _print_zettel_objet_link_result(result, args.format)
@@ -24788,6 +24828,19 @@ def command_retire_draft(args: argparse.Namespace) -> int:
     try:
         archive_root = Path(args.archive_root)
         if args.approve:
+            index_evidence = archive_services.require_current_zettel_index(
+                archive_root
+            )
+            if index_evidence.get("ok") is not True:
+                return _exact_write_cli_error(
+                    args,
+                    lifecycle_action="retire_minted_draft",
+                    reason_code=archive_services.INDEX_REBUILD_REQUIRED,
+                    message=(
+                        "Retire draft requires a current generated index; "
+                        "the approval dialog was not opened."
+                    ),
+                )
             preview = archive_services.retire_minted_draft(
                 archive_root,
                 zettel_id=args.zettel_id,
@@ -32043,11 +32096,30 @@ def _mark_compound_approval_help(
 ) -> None:
     """Make every fixed-closed public approval option honest in ``--help``."""
 
-    for command_name in sorted(COMPOUND_APPROVAL_BLOCKED_COMMANDS):
-        command_parser = subcommands.choices.get(command_name)
+    for command_path in sorted(COMPOUND_APPROVAL_BLOCKED_COMMANDS):
+        segments = tuple(command_path.split())
+        current_subcommands = subcommands
+        command_parser: argparse.ArgumentParser | None = None
+        for index, segment in enumerate(segments):
+            command_parser = current_subcommands.choices.get(segment)
+            if command_parser is None:
+                break
+            if index == len(segments) - 1:
+                continue
+            next_segment = segments[index + 1]
+            matching_nested_actions = [
+                action
+                for action in command_parser._actions
+                if isinstance(action, argparse._SubParsersAction)
+                and next_segment in action.choices
+            ]
+            if len(matching_nested_actions) != 1:
+                command_parser = None
+                break
+            current_subcommands = matching_nested_actions[0]
         if command_parser is None:
             raise RuntimeError(
-                "compound_approval_help_command_missing:" + command_name
+                "compound_approval_help_command_missing:" + command_path
             )
         approval_actions = [
             action
@@ -32056,7 +32128,7 @@ def _mark_compound_approval_help(
         ]
         if len(approval_actions) != 1:
             raise RuntimeError(
-                "compound_approval_help_action_invalid:" + command_name
+                "compound_approval_help_action_invalid:" + command_path
             )
         approval_actions[0].help = COMPOUND_APPROVAL_BLOCKED_HELP
 

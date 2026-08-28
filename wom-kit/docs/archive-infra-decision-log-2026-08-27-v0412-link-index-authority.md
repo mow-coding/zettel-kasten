@@ -36,6 +36,12 @@ Once authoritative target identity is proved, an existing exact link is checked
 before receipt and write planning so repeated calls return one stable
 `already_present` result without unnecessary downstream work.
 
+`current` records the clean watcher-close linearization point. It is evidence
+that the indexed source authority was exact at that instant, not a promise that
+external writers keep the archive frozen until the command returns. Every
+consumer must obtain a fresh current-index proof before using the projection;
+it must not reuse an earlier successful response as continuing authority.
+
 ## Security invariants
 
 - Do not trust a filename as proof of zet ID.
@@ -71,14 +77,16 @@ after review, and Windows watcher closure. New tests must additionally prove:
 Use a synthetic public-safe fixture comparable to 8,616 zettels, 22,441 objets,
 and a 37 MiB manifest.
 
-- First content-free status: no later than 2 seconds.
-- Maximum heartbeat gap while work continues: 10 seconds.
+- First non-empty serialized progress write and its first flush: no later than
+  2 seconds each.
+- Maximum gap between flushed progress events while work continues: 10 seconds.
 - Cold single-link plan p95: no more than 20 seconds on the declared Windows
   reference runner.
 - Warm single-link plan and unchanged `already_present` p95: no more than 5
   seconds on that runner.
-- Benchmark output contains counts, durations, generations, and fixed state
-  codes only; it contains no archive content or local locations.
+- The captured serialized progress stream and final benchmark JSON contain
+  counts, durations, generations, hashes, and fixed state codes only; neither
+  contains archive content or local locations.
 
 The reference runner specification and raw benchmark receipt must ship with the
 release evidence. A faster result obtained by disabling any security invariant
@@ -90,3 +98,20 @@ does not pass the gate.
   implementation.
 - No claim that incremental index maintenance covers every writer.
 - No automatic retry that hides archive mutation or approval drift.
+
+## v0.4.12 implementation evidence
+
+The bounded follow-up implementation is documented by the public v0.4.12
+release note and this decision record. The exact Windows reference path is
+`docs/evidence/v0.4.12-link-index-windows-reference.json`. The earlier v0.1
+file timed a callback and scanned only the final JSON, so it is not release
+authority. Publication requires a v0.2 replacement from the final candidate
+that captures the serialized progress writes and flushes, scans that stream,
+and binds source-tree, commit-object, benchmark-script, wheel-byte, and
+wheel-package-tree hashes. Pull-request CI builds the wheel outside the checkout
+and reruns the full profile on Windows.
+
+Release remains conditional on writer-wide lifecycle regression, the complete
+supported CI matrix, packaged-wheel verification, and public release-asset
+verification. This implementation evidence does not modify a client archive
+and does not by itself resolve any private feedback report.

@@ -651,6 +651,7 @@ class IndexLifecycleV03312Tests(unittest.TestCase):
 
     def test_all_three_mutations_commit_dirty_intent_before_first_indexed_file_change(self) -> None:
         original_open = Path.open
+        original_begin = archive_services.begin_archive_index_mutation
 
         def crash_first_canonical_open(path: Path, *args, **kwargs):
             mode = str(args[0] if args else kwargs.get("mode", "r"))
@@ -670,29 +671,48 @@ class IndexLifecycleV03312Tests(unittest.TestCase):
                 root = self.copy_archive(Path(tmp))
                 self.ready_draft(root, body=f"{operation} dirty intent fixture body. " * 20)
                 archive_services.index_archive(root)
-                with self.assertRaisesRegex(RuntimeError, "before canonical write"):
-                    if operation == "promote":
-                        with patch.object(
-                            Path, "open", new=crash_first_canonical_open
-                        ):
-                            self.promote_zettel(
-                                root,
-                                relative_path="inbox/zet_20260519_draft_ai_lunch_note.md",
-                                reviewed_by="person:test",
-                                allow_warnings=True,
-                            )
-                    else:
-                        with patch.object(
-                            archive_services,
-                            "_write_bytes_create_if_absent",
-                            new=crash_first_canonical_create,
-                        ):
-                            self.mint_zettel(
-                                root,
-                                relative_path="inbox/zet_20260519_draft_ai_lunch_note.md",
-                                reviewed_by="person:test",
-                                allow_warnings=True,
-                            )
+                lease_tokens = []
+
+                def begin_and_capture(*args, **kwargs):
+                    token = original_begin(*args, **kwargs)
+                    lease_tokens.append(token)
+                    return token
+
+                try:
+                    with patch.object(
+                        archive_services,
+                        "begin_archive_index_mutation",
+                        side_effect=begin_and_capture,
+                    ):
+                        with self.assertRaisesRegex(RuntimeError, "before canonical write"):
+                            if operation == "promote":
+                                with patch.object(
+                                    Path, "open", new=crash_first_canonical_open
+                                ):
+                                    self.promote_zettel(
+                                        root,
+                                        relative_path="inbox/zet_20260519_draft_ai_lunch_note.md",
+                                        reviewed_by="person:test",
+                                        allow_warnings=True,
+                                    )
+                            else:
+                                with patch.object(
+                                    archive_services,
+                                    "_write_bytes_create_if_absent",
+                                    new=crash_first_canonical_create,
+                                ):
+                                    self.mint_zettel(
+                                        root,
+                                        relative_path="inbox/zet_20260519_draft_ai_lunch_note.md",
+                                        reviewed_by="person:test",
+                                        allow_warnings=True,
+                                    )
+                finally:
+                    for lease_token in lease_tokens:
+                        archive_services._release_archive_index_mutation_lease(
+                            root,
+                            lease_token=lease_token,
+                        )
                 self.assertEqual(self.index_metadata(root)["state"], "dirty")
                 self.assertEqual(
                     archive_services.require_current_zettel_index(root)["blockers"],
@@ -713,20 +733,44 @@ class IndexLifecycleV03312Tests(unittest.TestCase):
                 allow_warnings=True,
             )
             self.assertTrue(minted["ok"], minted)
-            original_unlink = Path.unlink
+            original_move = archive_services._move_activity_group_entry_no_replace
+            lease_tokens = []
 
-            def crash_before_unlink(path: Path, *args, **kwargs):
-                if path.name == draft.name and path.parent.name == "inbox":
-                    raise RuntimeError("synthetic crash before draft unlink")
-                return original_unlink(path, *args, **kwargs)
+            def begin_and_capture(*args, **kwargs):
+                token = original_begin(*args, **kwargs)
+                lease_tokens.append(token)
+                return token
 
-            with patch.object(Path, "unlink", new=crash_before_unlink):
-                with self.assertRaisesRegex(RuntimeError, "before draft unlink"):
-                    self.retire_draft(
+            def crash_before_staged_delete(binding, source, destination):
+                if Path(source).name == draft.name:
+                    raise RuntimeError("synthetic crash before draft staged delete")
+                return original_move(binding, source, destination)
+
+            try:
+                with patch.object(
+                    archive_services,
+                    "begin_archive_index_mutation",
+                    side_effect=begin_and_capture,
+                ), patch.object(
+                    archive_services,
+                    "_move_activity_group_entry_no_replace",
+                    side_effect=crash_before_staged_delete,
+                ):
+                    with self.assertRaisesRegex(
+                        RuntimeError,
+                        "before draft staged delete",
+                    ):
+                        self.retire_draft(
+                            root,
+                            zettel_id="zet_20260519_draft_ai_lunch_note",
+                            reviewed_by="person:test",
+                            approve=True,
+                        )
+            finally:
+                for lease_token in lease_tokens:
+                    archive_services._release_archive_index_mutation_lease(
                         root,
-                        zettel_id="zet_20260519_draft_ai_lunch_note",
-                        reviewed_by="person:test",
-                        approve=True,
+                        lease_token=lease_token,
                     )
             self.assertTrue(draft.is_file())
             self.assertEqual(self.index_metadata(root)["state"], "dirty")
@@ -780,7 +824,7 @@ class IndexLifecycleV03312Tests(unittest.TestCase):
             rebuilt = archive_services.index_archive(root)
             generation = str(rebuilt["index_generation"])
 
-            archive_services.begin_archive_index_mutation(
+            lease_token = archive_services.begin_archive_index_mutation(
                 root,
                 expected_generation=generation,
             )
@@ -789,6 +833,7 @@ class IndexLifecycleV03312Tests(unittest.TestCase):
             resealed = archive_services.reseal_archive_index_mutation_without_delta(
                 root,
                 expected_generation=generation,
+                lease_token=lease_token,
             )
 
             self.assertTrue(resealed)

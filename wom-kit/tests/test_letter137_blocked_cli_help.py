@@ -29,6 +29,17 @@ class Letter137BlockedCliHelpTests(unittest.TestCase):
             raise AssertionError("expected exactly one --approve action")
         return matches[0]
 
+    def _command_parser(self, command_path: str) -> argparse.ArgumentParser:
+        parser = self.parser
+        for segment in command_path.split():
+            subcommands = next(
+                action
+                for action in parser._actions
+                if isinstance(action, argparse._SubParsersAction)
+            )
+            parser = subcommands.choices[segment]
+        return parser
+
     def test_every_fixed_closed_command_has_honest_approval_help(self) -> None:
         expected_additional_public_commands = {
             "credential-keepassxc-write",
@@ -48,7 +59,7 @@ class Letter137BlockedCliHelpTests(unittest.TestCase):
         }
         self.assertEqual(
             len(archive_cli.COMPOUND_APPROVAL_BLOCKED_COMMANDS),
-            65,
+            67,
         )
         for exact_batch_command in (
             "source-intake-batch",
@@ -103,7 +114,7 @@ class Letter137BlockedCliHelpTests(unittest.TestCase):
             archive_cli.COMPOUND_APPROVAL_BLOCKED_COMMANDS
         ):
             with self.subTest(command=command_name):
-                command_parser = self.subcommands.choices[command_name]
+                command_parser = self._command_parser(command_name)
                 action = self._approval_action(command_parser)
                 self.assertEqual(
                     action.help,

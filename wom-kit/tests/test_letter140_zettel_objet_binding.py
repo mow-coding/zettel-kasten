@@ -120,6 +120,8 @@ class Letter140ZettelObjetBindingTests(unittest.TestCase):
                 "current_asset_count": 2,
                 "manifest_record_count": 1,
                 "manifest_record_set_sha256": "sha256:" + "4" * 64,
+                "index_generation": "gen:" + "d" * 32,
+                "manifest_sha256": "sha256:" + "e" * 64,
                 "zettel_sha256": zettel_sha256,
                 "receipt_path": support_effect_set["receipt"]["path"],
                 "receipt_generation": 1,
@@ -307,6 +309,12 @@ class Letter140ZettelObjetBindingTests(unittest.TestCase):
             ),
             "manifest_record_set_sha256": lambda plan: plan["summary"].__setitem__(
                 "manifest_record_set_sha256", "sha256:" + "9" * 64
+            ),
+            "index_generation": lambda plan: plan["summary"].__setitem__(
+                "index_generation", "gen:" + "c" * 32
+            ),
+            "manifest_sha256": lambda plan: plan["summary"].__setitem__(
+                "manifest_sha256", "sha256:" + "f" * 64
             ),
             "role": lambda plan: plan["summary"].__setitem__(
                 "role", "supporting_source"

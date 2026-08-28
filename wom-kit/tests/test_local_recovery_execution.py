@@ -81,6 +81,9 @@ class LocalRecoveryExecutionTests(unittest.TestCase):
     def archive(self, parent: Path) -> Path:
         root = parent / "archive"
         shutil.copytree(FIXTURE, root)
+        archive_services.index_archive(root)
+        evidence = archive_services.require_current_zettel_index(root)
+        self.assertTrue(evidence["ok"], evidence)
         return root
 
     def title_plan(self, root: Path):
@@ -226,6 +229,10 @@ class LocalRecoveryExecutionTests(unittest.TestCase):
                 text + "\nLater unrelated body edit.\n",
                 encoding="utf-8",
                 newline="",
+            )
+            archive_services.index_archive(root)
+            self.assertTrue(
+                archive_services.require_current_zettel_index(root)["ok"]
             )
 
             persist_local_recovery_control(plan)
@@ -763,6 +770,10 @@ class LocalRecoveryExecutionTests(unittest.TestCase):
                 prefix + bad_legacy_body,
                 encoding="utf-8",
                 newline="",
+            )
+            archive_services.index_archive(root)
+            self.assertTrue(
+                archive_services.require_current_zettel_index(root)["ok"]
             )
             identity = local_recovery_zettel_identity_sha256(
                 archive_id,
