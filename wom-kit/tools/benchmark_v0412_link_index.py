@@ -52,7 +52,12 @@ WARM_P95_LIMIT_SECONDS = 5.0
 FIRST_STATUS_LIMIT_SECONDS = 2.0
 HEARTBEAT_GAP_LIMIT_SECONDS = 10.0
 EXPECTED_DISTRIBUTION = "wom-kit"
-EXPECTED_VERSION = "0.4.12"
+SOURCE_VERSION_ASSIGNMENT_PATTERN = re.compile(
+    r'(?m)^__version__ = "('
+    r"(?:0|[1-9][0-9]*)\."
+    r"(?:0|[1-9][0-9]*)\."
+    r'(?:0|[1-9][0-9]*))"\r?$'
+)
 
 
 @dataclass(frozen=True)
@@ -453,6 +458,23 @@ def _source_package_inventory() -> dict[str, tuple[int, str]]:
     return inventory
 
 
+def _source_expected_version() -> str:
+    raw = _stable_regular_file_bytes(
+        PACKAGE_ROOT / "__init__.py",
+        reason_code="benchmark_source_version_unstable",
+    )
+    try:
+        source = raw.decode("utf-8", "strict")
+    except UnicodeError as exc:
+        raise BenchmarkContractError(
+            "benchmark_source_version_invalid"
+        ) from exc
+    matches = SOURCE_VERSION_ASSIGNMENT_PATTERN.findall(source)
+    if len(matches) != 1 or source.count("__version__") != 1:
+        raise BenchmarkContractError("benchmark_source_version_invalid")
+    return matches[0]
+
+
 def _inventory_sha256(inventory: Mapping[str, tuple[int, str]]) -> str:
     canonical = [
         {
@@ -724,6 +746,7 @@ def _inventory_delta_count(
 
 def _provenance_document(wheel_path: Path) -> dict[str, Any]:
     source_inventory = _source_package_inventory()
+    source_version = _source_expected_version()
     (
         wheel_inventory,
         distribution,
@@ -804,7 +827,7 @@ def _provenance_document(wheel_path: Path) -> dict[str, Any]:
     )
     wheel_matches_source = wheel_inventory == source_inventory
     wheel_distribution_exact = distribution == EXPECTED_DISTRIBUTION
-    wheel_version_exact = version == EXPECTED_VERSION
+    wheel_version_exact = version == source_version
     source_matches_commit = source_inventory_delta_count == 0
     exact_commit_delta_count = source_inventory_delta_count + int(
         not benchmark_matches_commit
@@ -826,6 +849,8 @@ def _provenance_document(wheel_path: Path) -> dict[str, Any]:
         "wheel_package_entry_count": len(wheel_inventory),
         "wheel_distribution_exact": wheel_distribution_exact,
         "wheel_version_exact": wheel_version_exact,
+        "source_version": source_version,
+        "wheel_version": version,
         "wheel_matches_source_tree": wheel_matches_source,
         "source_tree_matches_git_commit": source_matches_commit,
         "benchmark_script_matches_git_commit": benchmark_matches_commit,
@@ -1090,7 +1115,8 @@ def _activated_captured_wheel_runtime(
         or len(wheel_inventory)
         != int(provenance.get("wheel_package_entry_count") or -1)
         or distribution != EXPECTED_DISTRIBUTION
-        or version != EXPECTED_VERSION
+        or provenance.get("source_version") != version
+        or provenance.get("wheel_version") != version
         or provenance.get("wheel_matches_source_tree") is not True
         or provenance.get("wheel_distribution_exact") is not True
         or provenance.get("wheel_version_exact") is not True
@@ -2038,8 +2064,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--wheel",
         required=True,
         help=(
-            "Exact v0.4.12 wheel whose bytes and package tree are bound to "
-            "this benchmark result."
+            "Exact current candidate wheel whose bytes, package tree, and "
+            "source-declared version are bound to this benchmark result."
         ),
     )
     parser.add_argument("--_worker", action="store_true", help=argparse.SUPPRESS)
