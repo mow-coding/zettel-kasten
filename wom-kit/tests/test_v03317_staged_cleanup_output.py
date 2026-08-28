@@ -30,6 +30,8 @@ class StagedCleanupOutputTests(unittest.TestCase):
         shutil.copytree(KIT_ROOT / "examples" / "fake-life-archive", archive_root)
         (archive_root / ".wom-sandbox").write_text("sandbox\n", encoding="utf-8")
         (archive_root / "staging" / "incoming").mkdir(parents=True, exist_ok=True)
+        indexed = archive_services.index_archive(archive_root)
+        self.assertTrue(indexed["ok"], indexed)
         return archive_root
 
     def _source_intake_plan(self, archive_root: Path) -> tuple[str, str]:

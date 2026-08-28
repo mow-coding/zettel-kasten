@@ -63,6 +63,7 @@ from .operation_approval_binding import (
     ExactOperationApprovalBinding,
     exact_operation_manifest_approval_binding,
 )
+from .zettel_index_batch_lifecycle import ZettelIndexBatchLifecycle
 
 
 SOURCE_PROPERTIES_SCHEMA_VERSION = "wom-kit/notion-source-properties/v0.1"
@@ -3181,6 +3182,17 @@ class _NotionPropertyVerifier(_NotionPropertyTargetBoundary):
 
 
 class _NotionPropertyWriter(_NotionPropertyTargetBoundary):
+    def __init__(
+        self,
+        root: Path,
+        archive_id: str,
+        identities: Mapping[str, str],
+        source_page_ids: Mapping[str, str],
+        index_lifecycle: ZettelIndexBatchLifecycle,
+    ) -> None:
+        super().__init__(root, archive_id, identities, source_page_ids)
+        self.index_lifecycle = index_lifecycle
+
     def write_field(
         self,
         *,
@@ -3214,6 +3226,7 @@ class _NotionPropertyWriter(_NotionPropertyTargetBoundary):
                 raise ValueError("field payload")
             candidate = _insert_managed_field(raw, decoded)
         heartbeat()
+        self.index_lifecycle.before_canonical_write()
         _atomic_replace(
             self.root,
             target,
@@ -3222,8 +3235,21 @@ class _NotionPropertyWriter(_NotionPropertyTargetBoundary):
         )
 
 
+def _index_mutation_owner_sha256(
+    plan: _NotionPropertyBackfillPlan,
+) -> str:
+    if plan.manifest is None:
+        raise _fail("notion_property_backfill_plan_invalid")
+    return archive_services.archive_manifest_mutation_owner_sha256(
+        operation="notion_property_backfill",
+        operation_binding_sha256=plan.manifest.manifest_sha256,
+    )
+
+
 def _execution_adapters(
     plan: _NotionPropertyBackfillPlan,
+    *,
+    index_lifecycle: ZettelIndexBatchLifecycle | None = None,
 ) -> tuple[
     _NotionPropertyPayloads,
     _NotionPropertyWriter,
@@ -3238,6 +3264,12 @@ def _execution_adapters(
         write.target_ref: write.normalized_source_page_id
         for write in plan.writes
     }
+    lifecycle = index_lifecycle or ZettelIndexBatchLifecycle.inspect(
+        plan.archive_root,
+        has_zettel_targets=True,
+        allow_dirty_resume=False,
+        operation_owner_sha256=_index_mutation_owner_sha256(plan),
+    )
     return (
         _NotionPropertyPayloads(plan),
         _NotionPropertyWriter(
@@ -3245,6 +3277,7 @@ def _execution_adapters(
             plan.archive_id,
             identities,
             source_page_ids,
+            lifecycle,
         ),
         _NotionPropertyVerifier(
             plan.archive_root,
@@ -3253,6 +3286,42 @@ def _execution_adapters(
             source_page_ids,
         ),
     )
+
+
+def _notion_property_index_entries(
+    plan: _NotionPropertyBackfillPlan,
+    writer: _NotionPropertyWriter,
+) -> tuple[dict[str, Any], ...]:
+    if plan.manifest is None:
+        raise _fail("notion_property_backfill_plan_invalid")
+    entries: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in plan.manifest.items:
+        target, raw, frontmatter = writer._snapshot(
+            item.target_kind,
+            item.target_ref,
+        )
+        relative = archive_services.archive_relative_path(
+            target,
+            plan.archive_root,
+        )
+        if relative in seen:
+            continue
+        seen.add(relative)
+        boundary = archive_services.parse_approval_zettel_content_boundary(
+            raw.decode("utf-8")
+        )
+        if boundary.get("state") == "blocked":
+            raise ValueError("target")
+        entries.append(
+            {
+                "path": target,
+                "frontmatter": frontmatter,
+                "body": str(boundary.get("body") or ""),
+                "expected_file_sha256": hashlib.sha256(raw).hexdigest(),
+            }
+        )
+    return tuple(entries)
 
 
 def _unresolved_result_projection(
@@ -3469,6 +3538,69 @@ def _assert_canonical_projection_unchanged(
         raise _fail("notion_property_backfill_plan_changed")
 
 
+def _merge_index_truth(
+    result: dict[str, Any],
+    index_truth: Mapping[str, Any],
+    *,
+    failure_state: str,
+) -> dict[str, Any]:
+    result.update(index_truth)
+    if index_truth.get("index_rebuild_required") is True:
+        result.update(
+            {
+                "ok": False,
+                "reason_code": archive_services.INDEX_REBUILD_REQUIRED,
+                "state": failure_state,
+                "blockers": [archive_services.INDEX_REBUILD_REQUIRED],
+            }
+        )
+    return result
+
+
+def _index_precondition_blocked_result(
+    plan: _NotionPropertyBackfillPlan,
+    manifest: ExactOperationManifest,
+    *,
+    mode: str,
+    lifecycle: ZettelIndexBatchLifecycle,
+) -> dict[str, Any]:
+    is_revert = mode == "revert"
+    return {
+        "schema_version": (
+            REVERT_RESULT_SCHEMA_VERSION if is_revert else RESULT_SCHEMA_VERSION
+        ),
+        "ok": False,
+        "reason_code": archive_services.INDEX_REBUILD_REQUIRED,
+        "state": (
+            "notion_property_backfill_revert_index_rebuild_required"
+            if is_revert
+            else "notion_property_backfill_index_rebuild_required"
+        ),
+        "manifest_sha256": manifest.manifest_sha256,
+        "blockers": [archive_services.INDEX_REBUILD_REQUIRED],
+        "next_safe_actions": list(
+            archive_services.INDEX_REBUILD_NEXT_SAFE_ACTIONS
+        ),
+        "executed_field_count": 0,
+        "written_field_count": 0,
+        "resumed_field_count": 0,
+        "writes_performed": False,
+        "applied_property_count": 0,
+        "applied_populated_property_count": 0,
+        "reverted_field_count": 0,
+        "field_scoped_revert_supported": True,
+        "field_scoped_revert": is_revert,
+        "common_exact_operation_manifest_used": True,
+        "parallel_receipt_created": False,
+        **_unresolved_result_projection(plan),
+        "private_values_echoed": False,
+        "paths_echoed": False,
+        "source_page_ids_echoed": False,
+        "property_values_echoed": False,
+        **lifecycle.precondition_truth(),
+    }
+
+
 def _apply_with_store(
     plan: _NotionPropertyBackfillPlan,
     authority: ExactOperationApprovalAuthority,
@@ -3476,22 +3608,52 @@ def _apply_with_store(
     *,
     resume: bool,
     progress_hook: Callable[[ExactOperationProgress], None] | None,
+    index_lifecycle: ZettelIndexBatchLifecycle | None = None,
 ) -> dict[str, Any]:
     if plan.manifest is None or plan.manifest.operation_evidence is None:
         raise _fail("notion_property_backfill_plan_invalid")
     operation_counts = plan.manifest.operation_evidence.document()["counts"]
-    payloads, writer, verifier = _execution_adapters(plan)
-    core_result = apply_exact_operation(
-        plan.manifest,
-        payloads=payloads,
-        writer=writer,
-        verifier=verifier,
-        checkpoint_store=checkpoints,
-        approval_authority=authority,
-        resume=resume,
-        progress_hook=progress_hook,
+    index_lifecycle = index_lifecycle or ZettelIndexBatchLifecycle.inspect(
+        plan.archive_root,
+        has_zettel_targets=bool(plan.manifest.items),
+        allow_dirty_resume=resume,
+        operation_owner_sha256=_index_mutation_owner_sha256(plan),
     )
-    return {
+    if index_lifecycle.precondition_blocked:
+        return _index_precondition_blocked_result(
+            plan,
+            plan.manifest,
+            mode="apply",
+            lifecycle=index_lifecycle,
+        )
+    payloads, writer, verifier = _execution_adapters(
+        plan,
+        index_lifecycle=index_lifecycle,
+    )
+    try:
+        core_result = apply_exact_operation(
+            plan.manifest,
+            payloads=payloads,
+            writer=writer,
+            verifier=verifier,
+            checkpoint_store=checkpoints,
+            approval_authority=authority,
+            resume=resume,
+            progress_hook=progress_hook,
+        )
+    except BaseException:
+        index_lifecycle.interrupted()
+        raise
+    try:
+        entries = (
+            _notion_property_index_entries(plan, writer)
+            if index_lifecycle.mutation_active
+            else ()
+        )
+        index_truth = index_lifecycle.finalize(entries)
+    except Exception:
+        index_truth = index_lifecycle.delta_failed()
+    result = {
         "schema_version": RESULT_SCHEMA_VERSION,
         "ok": core_result.get("status") == "completed",
         "reason_code": "notion_property_backfill_succeeded",
@@ -3514,6 +3676,11 @@ def _apply_with_store(
         "source_page_ids_echoed": False,
         "property_values_echoed": False,
     }
+    return _merge_index_truth(
+        result,
+        index_truth,
+        failure_state="notion_property_backfill_index_update_failed",
+    )
 
 
 def _apply_notion_property_backfill_core(
@@ -3547,6 +3714,19 @@ def _apply_notion_property_backfill_core(
         mode="apply",
     )
     with exact_operation_writer_lock(current.archive_root) as writer_lock:
+        index_lifecycle = ZettelIndexBatchLifecycle.inspect(
+            current.archive_root,
+            has_zettel_targets=bool(current.manifest.items),
+            allow_dirty_resume=resume,
+            operation_owner_sha256=_index_mutation_owner_sha256(current),
+        )
+        if index_lifecycle.precondition_blocked:
+            return _index_precondition_blocked_result(
+                current,
+                current.manifest,
+                mode="apply",
+                lifecycle=index_lifecycle,
+            )
         _publish_execution_locator(
             current,
             approval_claim,
@@ -3568,6 +3748,7 @@ def _apply_notion_property_backfill_core(
             checkpoints,
             resume=resume,
             progress_hook=progress_hook,
+            index_lifecycle=index_lifecycle,
         )
 
 
@@ -3645,24 +3826,54 @@ def _revert_with_store(
     *,
     resume: bool,
     progress_hook: Callable[[ExactOperationProgress], None] | None,
+    index_lifecycle: ZettelIndexBatchLifecycle | None = None,
 ) -> dict[str, Any]:
-    payloads, writer, verifier = _execution_adapters(plan)
     manifest = _notion_property_operation_manifest(plan, mode="revert")
+    index_lifecycle = index_lifecycle or ZettelIndexBatchLifecycle.inspect(
+        plan.archive_root,
+        has_zettel_targets=bool(manifest.items),
+        allow_dirty_resume=True,
+        operation_owner_sha256=_index_mutation_owner_sha256(plan),
+    )
+    if index_lifecycle.precondition_blocked:
+        return _index_precondition_blocked_result(
+            plan,
+            manifest,
+            mode="revert",
+            lifecycle=index_lifecycle,
+        )
+    payloads, writer, verifier = _execution_adapters(
+        plan,
+        index_lifecycle=index_lifecycle,
+    )
     selection = tuple(
         (item.item_id, "source_properties") for item in manifest.items
     )
-    core_result = revert_exact_operation_fields(
-        manifest,
-        selected_fields=selection,
-        payloads=payloads,
-        writer=writer,
-        verifier=verifier,
-        checkpoint_store=checkpoints,
-        approval_authority=authority,
-        resume=resume,
-        progress_hook=progress_hook,
-    )
-    return {
+    try:
+        core_result = revert_exact_operation_fields(
+            manifest,
+            selected_fields=selection,
+            payloads=payloads,
+            writer=writer,
+            verifier=verifier,
+            checkpoint_store=checkpoints,
+            approval_authority=authority,
+            resume=resume,
+            progress_hook=progress_hook,
+        )
+    except BaseException:
+        index_lifecycle.interrupted()
+        raise
+    try:
+        entries = (
+            _notion_property_index_entries(plan, writer)
+            if index_lifecycle.mutation_active
+            else ()
+        )
+        index_truth = index_lifecycle.finalize(entries)
+    except Exception:
+        index_truth = index_lifecycle.delta_failed()
+    result = {
         "schema_version": REVERT_RESULT_SCHEMA_VERSION,
         "ok": core_result.get("status") == "completed",
         "reason_code": "notion_property_backfill_reverted",
@@ -3682,6 +3893,11 @@ def _revert_with_store(
         "source_page_ids_echoed": False,
         "property_values_echoed": False,
     }
+    return _merge_index_truth(
+        result,
+        index_truth,
+        failure_state="notion_property_backfill_revert_index_update_failed",
+    )
 
 
 def _revert_notion_property_backfill_core(
@@ -3714,6 +3930,20 @@ def _revert_notion_property_backfill_core(
         mode="revert",
     )
     with exact_operation_writer_lock(current.archive_root) as writer_lock:
+        manifest = _notion_property_operation_manifest(current, mode="revert")
+        index_lifecycle = ZettelIndexBatchLifecycle.inspect(
+            current.archive_root,
+            has_zettel_targets=bool(manifest.items),
+            allow_dirty_resume=True,
+            operation_owner_sha256=_index_mutation_owner_sha256(current),
+        )
+        if index_lifecycle.precondition_blocked:
+            return _index_precondition_blocked_result(
+                current,
+                manifest,
+                mode="revert",
+                lifecycle=index_lifecycle,
+            )
         _publish_execution_locator(
             current,
             approval_claim,
@@ -3735,6 +3965,7 @@ def _revert_notion_property_backfill_core(
             checkpoints,
             resume=resume,
             progress_hook=progress_hook,
+            index_lifecycle=index_lifecycle,
         )
 
 
@@ -3752,6 +3983,21 @@ def execute_notion_property_backfill(
 
     if type(plan) is not _NotionPropertyBackfillPlan or not plan.approveable:
         raise _fail("notion_property_backfill_no_writes")
+    if plan.manifest is None:
+        raise _fail("notion_property_backfill_plan_invalid")
+    index_lifecycle = ZettelIndexBatchLifecycle.inspect(
+        plan.archive_root,
+        has_zettel_targets=bool(plan.manifest.items),
+        allow_dirty_resume=False,
+        operation_owner_sha256=_index_mutation_owner_sha256(plan),
+    )
+    if index_lifecycle.precondition_blocked:
+        return _index_precondition_blocked_result(
+            plan,
+            plan.manifest,
+            mode="apply",
+            lifecycle=index_lifecycle,
+        )
     context = _notion_property_backfill_context(
         plan,
         reviewer_claim=reviewer_claim,
@@ -3789,6 +4035,20 @@ def execute_notion_property_backfill_revert(
         # Do not start a one-use native approval claim unless every selected
         # managed field is currently in the exact post-state being reverted.
         raise _fail("notion_property_backfill_revert_no_writes")
+    manifest = _notion_property_operation_manifest(plan, mode="revert")
+    index_lifecycle = ZettelIndexBatchLifecycle.inspect(
+        plan.archive_root,
+        has_zettel_targets=bool(manifest.items),
+        allow_dirty_resume=True,
+        operation_owner_sha256=_index_mutation_owner_sha256(plan),
+    )
+    if index_lifecycle.precondition_blocked:
+        return _index_precondition_blocked_result(
+            plan,
+            manifest,
+            mode="revert",
+            lifecycle=index_lifecycle,
+        )
     context = _notion_property_backfill_context(
         plan,
         reviewer_claim=reviewer_claim,

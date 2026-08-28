@@ -2,6 +2,8 @@
 
 Status: latest-event-bound recovered-full-zet restore planning in v0.3.249
 
+Current execution boundary: v0.4.12 keeps the snapshot-proposal approval path fixed closed.
+
 `zet-revision-restore-plan` answers a narrow recovery question: does one
 complete old zet recovered from a private backup exactly match the `before`
 state of a valid current revision receipt?
@@ -14,12 +16,16 @@ already exist in private scratch:
 ```
 
 Since v0.3.248, new ordinary v0.2 revision receipts point to an exact local
-before-snapshot under `objects/sha256/`. Since v0.3.249, first run
-`zet-revision-restore-proposal-from-snapshot --dry-run|--approve` to create an
-independent content-addressed private proposal from those verified bytes. That
-copy step grants no restore authority; inspect the copy before passing it to
-this planner. Legacy v0.1 receipts still depend on a separate private backup
-and manual placement under private restore scratch.
+before-snapshot under `objects/sha256/`. The current
+`zet-revision-restore-proposal-from-snapshot --dry-run` verifies that evidence
+and derives a content-addressed private destination without writing. Its
+approval branch is fixed closed in the parser, nested help, and runtime before
+private receipt, snapshot, archive, or target reads, so it creates no proposal.
+Historical v0.3.249 executions may have left an independently preserved private
+proposal, but a dry-run digest is not authority to recreate or copy one by hand.
+If no complete private proposal already exists, stop and recover the old bytes
+from a trusted private backup. Legacy v0.1 receipts also depend on that separate
+private backup and manual placement under private restore scratch.
 
 Run:
 
@@ -79,10 +85,12 @@ must still compare the current canonical zet, recovered old zet, and selected
 receipt privately. Do not copy the recovered file over the canonical zet by
 hand.
 
-For a v0.2 ordinary revision receipt, the recommended predecessor is
+For a v0.2 ordinary revision receipt, the recommended read-only predecessor is
 [Restore Proposal From A Preserved Before-Snapshot](zet-revision-restore-proposal-from-snapshot.md).
-Its materialized proposal is independently editable and cannot mutate the
-immutable snapshot through a shared hard link.
+The current command materializes nothing. Only an independently preserved
+historical proposal or separately recovered complete private backup may be
+reviewed by this planner; neither the dry-run result nor its digest grants write
+or manual-copy authority.
 
 Since v0.3.239, pass the exact plan evidence to the separate CLI-only
 `zet-revision-restore-write --dry-run`. In v0.4.0 its approval path returns

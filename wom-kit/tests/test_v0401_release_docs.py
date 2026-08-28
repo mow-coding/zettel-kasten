@@ -103,7 +103,7 @@ class V0401ReleaseDocsTests(unittest.TestCase):
 
     def test_current_parser_combines_all_released_writers(self) -> None:
         blocked = archive_cli.COMPOUND_APPROVAL_BLOCKED_COMMANDS
-        self.assertEqual(len(blocked), 65)
+        self.assertEqual(len(blocked), 67)
         self.assertNotIn("migrate", blocked)
         self.assertNotIn("zettel-objet-link", blocked)
         self.assertIn("zettel-objet-link-revert", blocked)
@@ -116,6 +116,8 @@ class V0401ReleaseDocsTests(unittest.TestCase):
         self.assertNotIn("source-intake-batch", blocked)
         self.assertNotIn("objet-capture-batch", blocked)
         self.assertNotIn("revert-edge", blocked)
+        self.assertIn("derive-text capture", blocked)
+        self.assertIn("zet-revision-restore-proposal-from-snapshot", blocked)
 
         inventory = command_status.build_command_status_inventory(
             archive_cli.build_parser(),
@@ -125,8 +127,8 @@ class V0401ReleaseDocsTests(unittest.TestCase):
         self.assertEqual(counts["canonical_executable_command_count"], 315)
         self.assertEqual(counts["alias_invocation_path_count"], 259)
         self.assertEqual(counts["invocation_path_count"], 574)
-        self.assertEqual(counts["approval_available_command_count"], 49)
-        self.assertEqual(counts["approval_fixed_closed_command_count"], 65)
+        self.assertEqual(counts["approval_available_command_count"], 47)
+        self.assertEqual(counts["approval_fixed_closed_command_count"], 67)
         self.assertEqual(counts["approval_not_exposed_command_count"], 201)
         self.assertEqual(counts["conditional_approval_command_count"], 9)
         self.assertEqual(counts["dry_run_exposed_command_count"], 271)
@@ -144,6 +146,14 @@ class V0401ReleaseDocsTests(unittest.TestCase):
         )
         self.assertEqual(
             by_path["zettel-objet-link-revert"]["approval_status"],
+            "approval_fixed_closed",
+        )
+        self.assertEqual(
+            by_path["derive-text capture"]["approval_status"],
+            "approval_fixed_closed",
+        )
+        self.assertEqual(
+            by_path["zet-revision-restore-proposal-from-snapshot"]["approval_status"],
             "approval_fixed_closed",
         )
         self.assertEqual(

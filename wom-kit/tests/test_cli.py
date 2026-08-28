@@ -1020,6 +1020,8 @@ class ArchiveCliTests(unittest.TestCase):
                 archive_root,
                 f"PRIVATE_SOURCE_{draft_id}",
             )
+            indexed = archive_services.index_archive(archive_root)
+            self.assertTrue(indexed["ok"], indexed)
             create_arguments.update(
                 {
                     "source_fidelity_mode": "faithful_summary",
@@ -3800,10 +3802,10 @@ class ArchiveCliTests(unittest.TestCase):
             "token": {"state": "missing"},
         }
 
-    def snapshot_archive_files(self, archive_root: Path) -> dict[str, str]:
-        snapshot: dict[str, str] = {}
+    def snapshot_archive_files(self, archive_root: Path) -> dict[str, bytes]:
+        snapshot: dict[str, bytes] = {}
         for path in sorted(item for item in archive_root.rglob("*") if item.is_file()):
-            snapshot[path.relative_to(archive_root).as_posix()] = path.read_text(encoding="utf-8")
+            snapshot[path.relative_to(archive_root).as_posix()] = path.read_bytes()
         return snapshot
 
     def copy_fake_archive_as_company_target(self, root: Path) -> Path:
@@ -9959,7 +9961,11 @@ class ArchiveCliTests(unittest.TestCase):
                     env=environment,
                     capture_output=True,
                     text=True,
-                    timeout=60,
+                    # The v0.4.12 recovery contract performs several real,
+                    # bounded Git snapshot checks before the injected exit.
+                    # Keep the outer watchdog above that verified work rather
+                    # than racing its former roughly one-minute ceiling.
+                    timeout=120,
                     check=False,
                 )
                 self.assertEqual(
@@ -12282,7 +12288,7 @@ class ArchiveCliTests(unittest.TestCase):
             ["project_runtime_mismatch"],
         )
         self.assertEqual(result["project_pin"], "v0.4.2")
-        self.assertEqual(result["running_version"], "v0.4.11")
+        self.assertEqual(result["running_version"], "v0.4.12")
         self.assertEqual(
             result["project_runtime_argv"],
             [r".\.zettel-kasten\bin\archive.cmd"],
@@ -20827,6 +20833,8 @@ state:
                 "---\n" + archive_cli.dump_yaml(target_frontmatter) + "---\n\nImported Notion target body.\n",
                 encoding="utf-8",
             )
+            indexed = archive_services.index_archive(archive_root)
+            self.assertTrue(indexed["ok"], indexed)
 
             code, output = self.run_cli(
                 [
@@ -20856,6 +20864,8 @@ state:
     def test_zettel_edge_preview_and_approval_write_frontmatter_edge_receipt(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            indexed = archive_services.index_archive(archive_root)
+            self.assertTrue(indexed["ok"], indexed)
             before = self.snapshot_archive_files(archive_root)
             source_id = "zet_20240504_fake_lunch_thought"
             target_id = "zet_20240505_fake_company_onboarding_insight"
@@ -21023,6 +21033,8 @@ state:
     def test_exact_local_edge_revert_removes_only_receipt_bound_edge(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            indexed = archive_services.index_archive(archive_root)
+            self.assertTrue(indexed["ok"], indexed)
             source_id = "zet_20240504_fake_lunch_thought"
             target_id = "zet_20240505_fake_company_onboarding_insight"
             write_code, write_output = self.run_cli(
@@ -21237,6 +21249,8 @@ state:
             )
             continues_contract["to"] = ["OriginalObject"]
             types_path.write_text(archive_cli.dump_yaml(types_data), encoding="utf-8")
+            indexed = archive_services.index_archive(archive_root)
+            self.assertTrue(indexed["ok"], indexed)
             source_id = "zet_20240504_fake_lunch_thought"
             object_target = f"sha256:{_FAKE_SHA_A}"
 
@@ -21417,6 +21431,8 @@ state:
                 "---\n" + archive_cli.dump_yaml(source_frontmatter) + "---\n" + source_body,
                 encoding="utf-8",
             )
+            indexed = archive_services.index_archive(archive_root)
+            self.assertTrue(indexed["ok"], indexed)
             reciprocal_target_before = zettel_target_path.read_text(encoding="utf-8")
             manifest_path = archive_root / "objects" / "manifests" / "files.jsonl"
             manifest_before = manifest_path.read_text(encoding="utf-8")
@@ -21741,6 +21757,8 @@ state:
                 ],
             }
             plan_path.write_text(json.dumps(plan, indent=2), encoding="utf-8")
+            indexed = archive_services.index_archive(archive_root)
+            self.assertTrue(indexed["ok"], indexed)
             before = self.snapshot_archive_files(archive_root)
             code, output = self.run_cli(
                 [
@@ -21794,6 +21812,8 @@ state:
     def test_zettel_edge_batch_policy_dry_run_and_approval_write_receipts(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            indexed = archive_services.index_archive(archive_root)
+            self.assertTrue(indexed["ok"], indexed)
             before = self.snapshot_archive_files(archive_root)
             plan_path = Path(tmp) / "zettel-edge-batch.plan.json"
             plan = {
@@ -21896,6 +21916,8 @@ state:
                 ],
             }
             plan_path.write_text(json.dumps(plan, indent=2), encoding="utf-8")
+            indexed = archive_services.index_archive(archive_root)
+            self.assertTrue(indexed["ok"], indexed)
             manifest_load_count = 0
             original_load_manifest_records = archive_services.load_manifest_records
 
@@ -21955,6 +21977,8 @@ state:
                 ],
             }
             plan_path.write_text(json.dumps(plan, indent=2), encoding="utf-8")
+            indexed = archive_services.index_archive(archive_root)
+            self.assertTrue(indexed["ok"], indexed)
             iter_count = 0
             original_iter_zettel_paths = archive_services.iter_zettel_paths
 
@@ -22005,6 +22029,8 @@ state:
                 ],
             }
             plan_path.write_text(json.dumps(plan, indent=2), encoding="utf-8")
+            indexed = archive_services.index_archive(archive_root)
+            self.assertTrue(indexed["ok"], indexed)
             before = self.snapshot_archive_files(archive_root)
 
             code, output = self.run_cli(
@@ -32648,6 +32674,8 @@ state:
                 for row in rows
             )
             manifest.write_bytes(original)
+            indexed = archive_services.index_archive(archive_root)
+            self.assertTrue(indexed["ok"], indexed)
 
             wrong_code, wrong_output = self.run_cli(
                 [
@@ -35663,6 +35691,8 @@ state:
                 f'<embed url="{notion_url}">Convert private page title</embed>\n',
                 encoding="utf-8",
             )
+            indexed = archive_services.index_archive(archive_root)
+            self.assertTrue(indexed["ok"], indexed)
             before = self.snapshot_archive_files(archive_root)
             common = [
                 "notion-objet-link-convert",
@@ -45296,6 +45326,8 @@ state:
     def test_approved_edge_write_never_truncates_a_canonical_zet_in_place(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")
+            indexed = archive_services.index_archive(archive_root)
+            self.assertTrue(indexed["ok"], indexed)
             offenders: list[str] = []
 
             def is_canonical(path_like: object) -> bool:
@@ -56418,6 +56450,8 @@ state:
                 archive_root,
                 "Manifested conversation source reviewed for the approved draft.",
             )
+            indexed = archive_services.index_archive(archive_root)
+            self.assertTrue(indexed["ok"], indexed)
             create_args = [
                 "create-draft",
                 str(archive_root),
@@ -63479,10 +63513,18 @@ state:
             index_result = archive_services.index_archive(archive_root)
             self.assertTrue(index_result["index_complete"], index_result)
             private_error = PermissionError("C:/private/UNSTATABLE_TREE_SECRET_7306")
+            real_live_scan = archive_services._strict_live_zettel_stat_scan
+
+            def fail_inside_armed_live_scan(*args, **kwargs):
+                with patch(
+                    "wom_kit.archive_services.os.scandir",
+                    side_effect=private_error,
+                ):
+                    return real_live_scan(*args, **kwargs)
 
             with patch(
-                "wom_kit.archive_services.os.scandir",
-                side_effect=private_error,
+                "wom_kit.archive_services._strict_live_zettel_stat_scan",
+                side_effect=fail_inside_armed_live_scan,
             ):
                 rows, state = archive_services.promotion_duplicate_index_rows(archive_root)
                 result = archive_services.promote_zettel_dry_run(
@@ -71434,6 +71476,8 @@ class ObjetCaptureTests(unittest.TestCase):
                 "archive:personal:exact-capture",
                 [self._item(staged_path, digest, plan_path, plan_sha)],
             )
+            indexed = archive_services.index_archive(archive_root)
+            self.assertTrue(indexed["ok"], indexed)
             before = self._inventory(archive_root)
             ordinary_code, ordinary_output = self.run_cli(
                 [

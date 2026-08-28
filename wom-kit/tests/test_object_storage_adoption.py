@@ -138,6 +138,11 @@ class ObjectStorageFormalAdoptionPlanTests(unittest.TestCase):
             "mime": mime,
             "size_bytes": len(raw),
             "locations": locations,
+            "provenance": {
+                "created_in": "archive:test:object-storage-adoption",
+                "source": "test-fixture",
+                "captured_at": "2026-08-28T00:00:00Z",
+            },
         }
 
     @staticmethod
@@ -146,6 +151,7 @@ class ObjectStorageFormalAdoptionPlanTests(unittest.TestCase):
             "".join(json.dumps(row, separators=(",", ":")) + "\n" for row in rows),
             encoding="utf-8",
         )
+        archive_services.index_archive(root)
 
     @staticmethod
     def _write_map(parent: Path, rows: list[dict]) -> Path:

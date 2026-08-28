@@ -24,6 +24,47 @@ Before upgrading a real archive:
 
 The archive should never silently rewrite memory.
 
+## v0.4.12 Generation-Bound Link and Index Authority
+
+Install only after the matching public Release lists the exact wheel:
+
+```powershell
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.12/wom_kit-0.4.12-py3-none-any.whl"
+archive --version
+```
+
+Require exactly `archive 0.4.12` from a new process. Installation alone changes
+no client archive. After the project runtime update, the AI—not the person—must
+bring the archive projection to an explicit healthy state:
+
+```powershell
+.\.zettel-kasten\bin\archive.cmd index <archive-root> --progress --format json
+.\.zettel-kasten\bin\archive.cmd index-health <archive-root> --dry-run --progress --format json
+```
+
+WOM verifies the resulting counts, hashes, generation, and health evidence. The
+person decides only whether to run the plainly described operation; they do not
+count files, compare digests, or reconstruct index state.
+
+`zettel-objet-link` planning and apply now bind the current SQLite generation,
+one exact target row, unique zet and Objet identities, the manifest descriptor,
+and stable file evidence. An exact existing link returns deterministic
+`already_present` without approval or a write. zet writers begin one durable
+same-generation dirty intent before the first canonical write and either seal
+the exact batch delta in that generation or remain dirty with
+`archive_index_rebuild_required`. A missing or stale index fails before
+approval, canonical mutation, checkpoints, or receipts; an authenticated
+same-generation dirty resume remains available.
+
+The parser-derived current inventory is 47 approval-available, 67 fixed-closed,
+and 201 not-exposed paths. In particular,
+`zet-revision-restore-proposal-from-snapshot --approve` and the standalone
+command path `derive-text capture --approve` remain fixed closed before private
+inputs are read. The paired derived-text work inside the separately approved
+`objet-capture-batch` route is not that command. Dry-run previews and historical
+evidence remain available. See the
+[v0.4.12 release note](wom-kit/docs/releases/v0.4.12.md).
+
 ## v0.4.11 Runtime Truth and Deep Verification
 
 Install only after the matching public Release lists the exact wheel and its
@@ -3109,11 +3150,12 @@ archive zet-revision-restore-proposal-from-snapshot <archive-root> `
   --dry-run --format json
 ```
 
-Approval must reuse the returned `plan_digest`. It creates an independent exact
-copy under `.wom-scratch/revisions/restores/` and changes no canonical zet.
-Inspect that copy, then continue through `zet-revision-restore-plan` and the
-separate reviewed restore writer. Do not hard-link a mutable proposal to the
-immutable snapshot or treat materialization as restore approval.
+Historically, v0.3.249 approval reused the returned `plan_digest` to create an
+independent exact copy under `.wom-scratch/revisions/restores/` without changing
+a canonical zet. In current v0.4.12, that `--approve` path is fixed closed before
+snapshot or target reads; only the dry-run preview remains available. Historical
+proposals can still be inspected and audited. Do not hard-link a mutable
+proposal to the immutable snapshot or treat materialization as restore approval.
 
 Legacy v0.1 receipts are unchanged and still require complete old bytes from a
 separate trusted private backup.

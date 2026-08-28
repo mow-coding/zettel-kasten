@@ -412,14 +412,14 @@ class V03297ArchiveIndexIntegrationTests(unittest.TestCase):
         self,
     ) -> None:
         source = textwrap.dedent(
-            inspect.getsource(archive_services.index_archive)
+            inspect.getsource(archive_services._index_archive_locked)
         )
         module = ast.parse(source)
         function = next(
             node
             for node in module.body
             if isinstance(node, ast.FunctionDef)
-            and node.name == "index_archive"
+            and node.name == "_index_archive_locked"
         )
         calls = [
             node for node in ast.walk(function) if isinstance(node, ast.Call)

@@ -1419,6 +1419,8 @@ class PrivateMetadataWriterApprovalTests(unittest.TestCase):
         self,
     ) -> None:
         selection_path, captured_digest = self._make_objet_capture_fixture()
+        indexed = archive_services.index_archive(self.root)
+        self.assertTrue(indexed["ok"], indexed)
         capture_plan = archive_services.objet_capture_dry_run(
             self.root,
             selection_path,

@@ -35,6 +35,7 @@ _SHA256_RE = re.compile(r"^(?:sha256:)?[0-9a-f]{64}$")
 _WARNING_CODE_RE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
 _ZETTEL_OBJET_ROLE_RE = re.compile(r"^[a-z][a-z0-9_]{0,79}$")
 _ZETTEL_OBJET_LINK_ID_RE = re.compile(r"^asset:sha256:[0-9a-f]{64}$")
+_INDEX_GENERATION_RE = re.compile(r"^gen:[0-9a-f]{32}$")
 _ZETTEL_OBJET_CONTROL_SHA256 = "sha256:" + hashlib.sha256(
     b"wom-kit/zettel-objet-link-lock/v0.1\n"
 ).hexdigest()
@@ -957,11 +958,22 @@ def zettel_objet_link_approval_binding(
     ):
         raise _fail("operation_approval_plan_invalid")
 
+    index_generation = summary.get("index_generation")
+    manifest_sha256_value = summary.get("manifest_sha256")
+    if (
+        type(index_generation) is not str
+        or _INDEX_GENERATION_RE.fullmatch(index_generation) is None
+        or type(manifest_sha256_value) is not str
+        or re.fullmatch(r"sha256:[0-9a-f]{64}", manifest_sha256_value) is None
+    ):
+        raise _fail("operation_approval_plan_invalid")
+
     zettel_sha256 = _sha_ref(summary.get("zettel_sha256"))
     object_id = _sha_ref(summary.get("object_id"))
     manifest_record_set_sha256 = _sha_ref(
         summary.get("manifest_record_set_sha256")
     )
+    manifest_sha256 = _sha_ref(manifest_sha256_value)
     label_sha256 = _sha_ref(summary.get("label_sha256"))
     snapshot_sha256 = _sha_ref(summary.get("snapshot_sha256"))
     support_effect_set_sha256 = _sha_ref(
@@ -1056,6 +1068,8 @@ def zettel_objet_link_approval_binding(
         "manifest_record_set_complete": True,
         "manifest_record_set_unique": True,
         "manifest_record_set_sha256": manifest_record_set_sha256,
+        "index_generation": index_generation,
+        "manifest_sha256": manifest_sha256,
         "role": required_text["role"],
         "label_present": label_present,
         "label_sha256": label_sha256,
@@ -1098,6 +1112,7 @@ def zettel_objet_link_approval_binding(
         target_binding_sha256=_sha256(target),
         warning_codes=_warning_codes(warnings),
         review_binding_codes=(
+            "authority_projection",
             "control_artifact",
             "label_digest",
             "manifest_record_set",

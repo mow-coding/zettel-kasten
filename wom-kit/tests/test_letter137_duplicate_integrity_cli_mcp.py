@@ -11,6 +11,7 @@ from unittest import mock
 from wom_kit import (
     approval_integrity,
     archive_cli,
+    archive_services,
     duplicate_object_reconciliation,
     mcp_server,
 )
@@ -77,10 +78,20 @@ class Letter137DuplicateIntegrityCliMcpTests(unittest.TestCase):
             "logical_key": "PRIVATE/logical/name",
             "mime": "text/plain",
             "size_bytes": 41,
-            "locations": [{"kind": "local", "path": PRIVATE_PATH}],
+            "locations": [
+                {
+                    "provider": "local",
+                    "kind": "local",
+                    "path": PRIVATE_PATH,
+                }
+            ],
+            "provenance": {"source": "test"},
         }
         encoded = json.dumps(row, separators=(",", ":")) + "\n"
         manifest.write_text(encoded + encoded, encoding="utf-8")
+        indexed = archive_services.index_archive(root)
+        if not indexed["ok"] or indexed["index_state"] != "current":
+            raise AssertionError(indexed)
         return manifest
 
     @staticmethod

@@ -75,6 +75,8 @@ class Letter140ApprovalBoundaryPrivacyTests(unittest.TestCase):
     def archive(self, parent: Path) -> Path:
         root = parent / "archive"
         shutil.copytree(FIXTURE, root)
+        indexed = archive_services.index_archive(root)
+        self.assertTrue(indexed["ok"], indexed)
         return root
 
     @staticmethod

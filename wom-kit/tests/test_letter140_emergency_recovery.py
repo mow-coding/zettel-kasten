@@ -147,7 +147,7 @@ class Letter140StructuredRootFailureTests(unittest.TestCase):
         self.assertEqual(payload["error_class"], "precondition")
         self.assertEqual(
             payload["reason_codes"],
-            ["zettel_objet_link_reviewer_required"],
+            ["zettel_objet_link_workflow_precondition_failed"],
         )
         self.assertEqual(payload["exit_code"], code)
         self.assertEqual(payload["effects_state"], "none")

@@ -9,7 +9,7 @@ from wom_kit import __version__
 
 KIT_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = KIT_ROOT.parent
-EXPECTED_CURRENT_VERSION = "0.4.11"
+EXPECTED_CURRENT_VERSION = "0.4.12"
 EXPECTED_CURRENT_TAG = f"v{EXPECTED_CURRENT_VERSION}"
 CURRENT_VERSION = f"v{__version__}"
 CURRENT_RELEASE_NOTE = f"{EXPECTED_CURRENT_TAG}.md"
@@ -789,7 +789,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(document="canonical-revision-write"):
                 self.assertIn("zet-revision-write", text)
         for phrase in (
-            "Status: fixed closed in v0.4.11",
+            "Status: fixed closed in v0.4.12",
             "Step 2: Stop After Validation",
             "no supported next-step writer command",
             "before private target read or mutation",
@@ -2191,7 +2191,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, tiro_text)
         for phrase in (
-            "Status: v0.4.11 zet Markdown authoring and safe human-view checkpoint",
+            "Status: v0.4.12 zet Markdown authoring and safe human-view checkpoint",
             "archive zet-markdown-style-guide <archive-root> --topic range_tilde --dry-run --format json",
             "A ~ B",
             "A~~B",

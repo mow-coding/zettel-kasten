@@ -49,6 +49,7 @@ class ObjetCaptureBatchDerivedTextTests(unittest.TestCase):
             "sandbox\n",
             encoding="utf-8",
         )
+        archive_services.index_archive(target)
         return target
 
     def source_receipt(self, archive_root: Path) -> str:

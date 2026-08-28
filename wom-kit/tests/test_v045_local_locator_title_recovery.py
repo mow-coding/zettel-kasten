@@ -50,12 +50,18 @@ class V045LocalLocatorTitleRecoveryTests(unittest.TestCase):
     def archive(self, parent: Path) -> Path:
         root = parent / "archive"
         shutil.copytree(FIXTURE, root)
+        indexed = archive_services.index_archive(root)
+        self.assertTrue(indexed["ok"], indexed)
+        self.assertEqual(indexed["index_state"], "current", indexed)
         return root
 
     def zettel_path(self, root: Path) -> Path:
         return root / "zettels" / f"{ZETTEL_ID}.md"
 
     def execute(self, plan, *, mode: str):
+        indexed = archive_services.index_archive(plan.archive_root)
+        self.assertTrue(indexed["ok"], indexed)
+        self.assertEqual(indexed["index_state"], "current", indexed)
         with exact_operation_writer_lock(plan.archive_root) as lock:
             return _run_with_store(
                 plan,

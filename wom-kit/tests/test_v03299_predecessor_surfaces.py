@@ -148,7 +148,7 @@ CURRENT_DATABASE_CANONICAL_SHA256 = (
     "d9a42f08ee12a6d42e40214cfb12441e4077bf50c38c25b2692ec1344328294a"
 )
 RESOURCE_ADDITIONS = {
-    "release-notes/v0.4.11.md",
+    "release-notes/v0.4.12.md",
     "schemas/agent-instruction-policy-v0.1.schema.json",
     "schemas/approval-handoff-v0.1.schema.json",
     "schemas/approval-integrity-audit-result-v0.1.schema.json",
@@ -207,7 +207,7 @@ RESOURCE_ADDITIONS = {
 RESOURCE_REMOVALS = {"release-notes/v0.3.297.md"}
 CURRENT_RESOURCE_COUNT = 165
 CURRENT_RESOURCE_CANONICAL_SHA256 = (
-    "109dc00e1483460a73f002fd6eb217cbc388f52ccb59a5280d325bccbe8b1866"
+    "af8a7f3ce56ec92b63bcd4c2ef54fe82fad18f2aa960c92a2ed0c437118f578c"
 )
 
 
@@ -565,10 +565,10 @@ class V03299PredecessorSurfaceTests(unittest.TestCase):
             actual,
             expected,
             "Current package-resource paths must be the full v0.3.297 set plus "
-            "the exact cumulative v0.3.298 through v0.4.11 delta. "
+            "the exact cumulative v0.3.298 through v0.4.12 delta. "
             f"missing={compact(missing)}; extra={compact(extra)}",
         )
-        self.assertEqual(manifest["version"], "0.4.11")
+        self.assertEqual(manifest["version"], "0.4.12")
         self.assertEqual(len(actual), CURRENT_RESOURCE_COUNT)
         self.assertEqual(
             canonical_sha256(actual),
@@ -587,14 +587,14 @@ class V03299PredecessorSurfaceTests(unittest.TestCase):
         self.assertIn("does not undo", predecessor_flat)
         self.assertNotIn("C:\\Users\\", predecessor_text)
 
-    def test_v0411_release_note_is_current_and_v0402_remains_historical(self) -> None:
-        current_source_release = KIT_ROOT / "docs" / "releases" / "v0.4.11.md"
+    def test_v0412_release_note_is_current_and_older_notes_remain_historical(self) -> None:
+        current_source_release = KIT_ROOT / "docs" / "releases" / "v0.4.12.md"
         current_packaged_release = (
             SRC_ROOT
             / "wom_kit"
             / "_resources"
             / "release-notes"
-            / "v0.4.11.md"
+            / "v0.4.12.md"
         )
         self.assertEqual(
             current_source_release.read_bytes(),
@@ -603,10 +603,10 @@ class V03299PredecessorSurfaceTests(unittest.TestCase):
         current_text = current_source_release.read_text(encoding="utf-8")
         current_flat = " ".join(current_text.split())
         for token in (
-            "Runtime Truth, Deep Doctor Evidence, and Honest Operator Surfaces",
-            "exact chronology",
-            "Publishing or installing v0.4.11 does not modify a client archive",
-            "wom_kit-0.4.11-py3-none-any.whl",
+            "Generation-Bound Link Authority and Honest Index Lifecycles",
+            "deterministic",
+            "Publishing or installing v0.4.12 does not open, index, recover, or otherwise modify a client archive",
+            "wom_kit-0.4.12-py3-none-any.whl",
         ):
             with self.subTest(token=token):
                 self.assertIn(token, current_flat)
@@ -618,6 +618,11 @@ class V03299PredecessorSurfaceTests(unittest.TestCase):
         ):
             with self.subTest(forbidden=forbidden):
                 self.assertNotIn(forbidden, current_text)
+
+        v0411_source_release = KIT_ROOT / "docs" / "releases" / "v0.4.11.md"
+        v0411_packaged_release = current_packaged_release.with_name("v0.4.11.md")
+        self.assertTrue(v0411_source_release.is_file())
+        self.assertFalse(v0411_packaged_release.exists())
 
         v0402_source_release = KIT_ROOT / "docs" / "releases" / "v0.4.2.md"
         v0402_packaged_release = current_packaged_release.with_name("v0.4.2.md")
