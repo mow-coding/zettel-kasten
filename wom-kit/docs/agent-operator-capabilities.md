@@ -1,6 +1,6 @@
 # Agent Operator Capabilities Manifest
 
-Status: v0.4.10 parser-derived bounded batch operability inventory
+Status: v0.4.11 parser-derived approval truth and fixed-close inventory
 
 `archive capabilities --machine` lets an AI operator ask one practical question:
 
@@ -43,8 +43,8 @@ includes:
 - runnable status.
 
 v0.4.1 introduced `data.approval_status_inventory` with schema
-`wom-kit/command-approval-status-inventory/v0.1`. The v0.4.10 release returns
-the successor v0.2 shape, which adds machine-readable conditional
+`wom-kit/command-approval-status-inventory/v0.1`. v0.4.10 introduced and
+v0.4.11 continues the successor v0.2 shape, which adds machine-readable conditional
 approval scope. Unlike the legacy flattened
 command summary, this inventory walks canonical executable paths at every
 parser depth and keeps all accepted alias paths attached to their canonical
@@ -72,7 +72,7 @@ These are parser facts, not execution promises. `approval_available` does not
 mean that archive-specific prerequisites have passed. `approval_not_exposed`
 does not mean that the command is read-only.
 
-For the v0.4.10 parser, the inventory snapshot is:
+For the v0.4.11 parser, the inventory snapshot is:
 
 ```text
 canonical executable command paths: 315
@@ -127,6 +127,11 @@ evidence requirements; parser availability alone grants no write authority.
 Doctor may use this inventory to report requested dry-run mode and same-argument
 approval mode separately; that metadata executes nothing and does not prove
 archive prerequisites.
+
+v0.4.11 centralizes the fixed-close truth used by help, read-only plans, and
+machine status. A validation digest from canonical revision or never-minted
+draft discard preview is explicitly not approval authority. This clarification
+changes no parser path counts and opens no writer.
 
 The `summary` includes:
 

@@ -143,6 +143,56 @@ class SourceFidelityCliTests(unittest.TestCase):
             result["reason_codes"],
             ["create_draft_ai_approval_evidence_required"],
         )
+        self.assertEqual(
+            result["missing_required_options"],
+            [
+                "--draft-approved-by",
+                "--expected-body-sha256",
+                "--expected-source-fidelity-plan-sha256",
+            ],
+        )
+        self.assertFalse(result["private_values_echoed"])
+        self.assertNotIn(private_body, stdout + stderr)
+
+    def test_ai_approve_reports_all_five_missing_prerequisites_once(self) -> None:
+        private_body = "RAW PRIVATE BODY ALL PREREQUISITES"
+        with mock.patch.object(archive_services, "create_draft_zettel") as create_draft:
+            code, stdout, stderr = self.run_cli(
+                [
+                    "create-draft",
+                    "C:/private/archive",
+                    "--title",
+                    "Private title",
+                    "--body",
+                    private_body,
+                    "--creation-mode",
+                    "ai_assisted",
+                    "--approve",
+                    "--format",
+                    "json",
+                ]
+            )
+
+        self.assertEqual(code, 1, stderr)
+        create_draft.assert_not_called()
+        result = json.loads(stdout)
+        self.assertEqual(
+            result["reason_codes"],
+            [
+                "create_draft_ai_replay_identity_required",
+                "create_draft_ai_approval_evidence_required",
+            ],
+        )
+        self.assertEqual(
+            result["missing_required_options"],
+            [
+                "--draft-id",
+                "--created-at",
+                "--draft-approved-by",
+                "--expected-body-sha256",
+                "--expected-source-fidelity-plan-sha256",
+            ],
+        )
         self.assertFalse(result["private_values_echoed"])
         self.assertNotIn(private_body, stdout + stderr)
 
@@ -187,6 +237,7 @@ class SourceFidelityCliTests(unittest.TestCase):
         preview = {
             "ok": True,
             "dry_run": True,
+            "proposed_path": f"inbox/{DRAFT_ID}.md",
             "source_fidelity_plan_sha256": PLAN_SHA256,
             "body_sha256": BODY_SHA256,
             "warnings": [],
@@ -205,7 +256,7 @@ class SourceFidelityCliTests(unittest.TestCase):
                 archive_cli,
                 "_exact_human_approval_context",
                 return_value=mock.sentinel.approval_context,
-            ),
+            ) as approval_context,
             mock.patch.object(
                 archive_cli,
                 "_execute_exact_human_approved_write",
@@ -239,6 +290,10 @@ class SourceFidelityCliTests(unittest.TestCase):
             )
 
         self.assertEqual(code, 0, stderr)
+        target_preview = approval_context.call_args.kwargs["target_preview"]
+        self.assertEqual(target_preview.kind, "draft")
+        self.assertEqual(target_preview.primary, f"{DRAFT_ID}.md")
+        self.assertEqual(target_preview.secondary, "Reviewed title")
         self.assertEqual(create_draft.call_count, 2)
         kwargs = create_draft.call_args_list[-1].kwargs
         self.assertTrue(kwargs["approved"])

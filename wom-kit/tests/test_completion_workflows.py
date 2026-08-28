@@ -3340,7 +3340,27 @@ class CompletionWorkflowTests(unittest.TestCase):
             self.assertNotIn(reason, plan_output)
             plan = json.loads(plan_output)
             self.assertTrue(plan["ok"], plan)
+            self.assertEqual(plan["state"], "approval_fixed_closed")
+            self.assertEqual(plan["validation_status"], "ready")
+            self.assertEqual(
+                plan["approval_contract"]["approval_reason_code"],
+                "compound_exact_human_approval_binding_required",
+            )
+            self.assertFalse(
+                plan["approval_contract"]["approved_write_implemented"]
+            )
+            self.assertFalse(
+                plan["approval_contract"]["actionable_handoff_available"]
+            )
+            self.assertIsNone(plan["approval_handoff"])
+            self.assertTrue(plan["summary"]["plan_sha256_validation_only"])
+            self.assertFalse(
+                plan["summary"]["plan_sha256_is_approval_authority"]
+            )
             self.assertTrue(plan["summary"]["exact_byte_restore_supported"])
+            self.assertFalse(
+                plan["summary"]["exact_byte_restore_approval_available"]
+            )
 
             before_apply = {
                 path.relative_to(archive_root).as_posix(): path.read_bytes()

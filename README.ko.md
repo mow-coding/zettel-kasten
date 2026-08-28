@@ -32,10 +32,10 @@ wom-kit/docs/releases/에만 쌓고, baseline 사다리와 tag 목록을 여기�
 현재 공개 기준:
 
 ```text
-v0.4.10
+v0.4.11
 ```
 
-이전 공개 기준: v0.4.9.
+이전 공개 기준: v0.4.10.
 
 전체 릴리스 이력은 [CHANGELOG.md](CHANGELOG.md)와 [wom-kit/docs/releases/](wom-kit/docs/releases/)를 보세요.
 
@@ -54,7 +54,7 @@ Roadmap 요약: `v0.1.x`는 아이디어/프로토콜 언어 라인, `v0.2.x`는
 파일이 실제 공개되었다는 증거가 되지는 않습니다.
 
 ```powershell
-uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.10/wom_kit-0.4.10-py3-none-any.whl"
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.11/wom_kit-0.4.11-py3-none-any.whl"
 archive --version
 ```
 
@@ -89,7 +89,7 @@ archive runtime-skill-install --dry-run --format json
 - v0.4.4는 native 실행 확인을 사람 중심으로 바로잡습니다. 개수·해시·정본 상태·완전성·drift는 WOM이 자동 검증하고, 사람은 쉬운 설명을 보고 지금 실행할지만 결정합니다. 기술 결속값은 접힌 세부정보와 영수증에 유지되며 별도 확인 체크박스를 요구하지 않습니다. [Exact Human Approval Contract](wom-kit/docs/exact-human-approval-contract.md)와 [v0.4.4 릴리스 노트](wom-kit/docs/releases/v0.4.4.md)를 보세요.
 - v0.4.5는 Common Controls v6 활성화와 byte-packed Task Dialog ABI 교정으로 깨끗한 Windows wheel 설치본에서도 그 사람 중심 확인창이 실제로 열리게 합니다. 기계 검증을 약화하거나 사람에게 해시 확인표를 다시 요구하지 않습니다. [v0.4.5 릴리스 노트](wom-kit/docs/releases/v0.4.5.md)를 보세요.
 - v0.4.6은 기존 채택 명령 계열 안에 exact·resume 가능한 R2 복구를 추가합니다. local-only 바이트는 정식 채택으로 속이지 않고 content-addressed 사본과 독립 재해시로 보존하며, 검증된 비충돌 key-map 항목은 중앙 manifest를 마지막에 한 번만 투영하고 충돌은 명시적 검토 부채로 남깁니다. [v0.4.6 릴리스 노트](wom-kit/docs/releases/v0.4.6.md)를 보세요.
-- v0.4.10은 보관함 상대경로의 1–1,000개 source-intake와 local Objet capture를 두 번의 중요한 결정으로 처리합니다. 첫 배치 전용 native 결정이 intake 영수증과 정확한 capture 요청을 반드시 함께 만들고, 두 번째 결정은 인증된 승인·checkpoint·완료 영수증·같은 보관함에 결속된 그 요청만 받습니다. intake는 같은 manifest와 검토자로 내부 ID 없이 인증된 후보 하나만 재개할 수 있지만, 중단된 capture는 현재 상태의 새 exact dry-run과 새 승인이 필요합니다. 합성 508·1,000개 plan은 43초 안에 끝났으며 남은 Windows 항목별 재구성 비용은 v0.4.11로 명시적으로 미뤘습니다. 설치만으로 클라이언트 보관함은 바뀌지 않습니다. [v0.4.10 릴리스 노트](wom-kit/docs/releases/v0.4.10.md)를 보세요.
+- v0.4.11은 프로젝트 정렬을 실제 설치 payload·module inventory·launcher·실행 중인 process·pin에 결속하고, Deep Doctor를 byte 검증 기본값으로 유지하면서 정확한 시간순 SHA 변화 근거만 받습니다. native 결정과 읽기 전용 preview는 정본 WOM 용어로 실제 권한을 먼저 설명하며, 로컬 전용 대상 미리보기와 WOM-safe Markdown 표시는 정본 byte를 바꾸거나 비공개 값을 durable 출력에 남기지 않습니다. 고정 차단 writer는 계속 닫혀 있고 generation-bound `zettel-objet-link`·index 작업은 v0.4.12로 명시적으로 분리합니다. 설치만으로 클라이언트 보관함은 바뀌지 않습니다. [v0.4.11 릴리스 노트](wom-kit/docs/releases/v0.4.11.md)를 보세요.
 - Letter 117까지의 통합 실사용 피드백 기능. archive-root 경로, source-intake/Objet capture 배치, 구조화된 zet-objet 연결, 빠짐없는 1-based occurrence 검토 권한, 정확한 synced/transclusion placeholder를 위한 검토된 정적 zettel/objet 연결, 엄격한 빈 database 쌍을 위한 검토된 zettel 탐색 연결, 보호된 literal 강화, graph edge를 추론하지 않는 탐색 전용 zettel reference, 정확한 generated-TOC placeholder 제거, paired file과 검토된 page/audio 연결을 포함한 ready-only 손실 없는 마크업 정규화, callout·unknown column·unsupported 구조를 그대로 차단하는 안전 경계를 제공합니다. transcluded child를 재구성하거나 live provider 동작을 보존한다고 주장하지 않습니다. [Letter 117 완료 가이드](wom-kit/docs/letter117-completion.md)를 보세요.
 - 격리된 spawned child의 native Windows credential intake와 과거 v0.3.320 Notion recovery 근거는 유지합니다. 1회 capability, 비밀값 read 전 인증 claim, endpoint·scope·budget 검사, 내용 없는 세 근거는 계속 감사할 수 있습니다. v0.4.0의 Notion recovery 승인은 credential read·provider call·archive 변경 전에 `compound_exact_human_approval_binding_required`로 닫히며, read-only plan과 검증된 local replay만 남습니다. PAT를 명령 인자·일반 stdin·환경 변수·합성 검증 도구로 받지 않습니다. [Letter 118·119 가이드](wom-kit/docs/letter118-119-credential-continuity-and-notion-page-recovery.md)와 [Credential Capability Contract](wom-kit/docs/credential-capability-contract.md)를 보세요.
 - 보호된 search, 구조화된 `view-zets`, mint 계획이 하나의 fail-closed current-index 권한을 공유합니다. `mint-zet --progress`는 stdout을 최종 결과 하나에만 쓰면서 내용 없는 시작·heartbeat 근거를 stderr로 보내고, 별도의 operator-feedback 본문 companion은 외부 제출이나 실제 보관함 복구를 주장하지 않은 채 정확한 6개 섹션 비공개 요청, digest-bound 사람 승인, lifecycle 검사를 제공합니다. [Letter 120·123 가이드](wom-kit/docs/letter120-123-index-lifecycle-and-feedback-body.md)를 보세요.
@@ -419,7 +419,7 @@ WOM, `zettel-kasten`, `zet`, `ZET`는 버전이 있는 protocol family로 관리
 Release tag는 compatibility checkpoint입니다.
 
 ```text
-v0.4.10 (현재 checkpoint)
+v0.4.11 (현재 checkpoint)
 ```
 
 `v0.2.5` 이후의 공개 릴리스에는 compatibility checkpoint tag가 붙습니다. 전체

@@ -2,17 +2,24 @@
 
 상태: 공개 navigation baseline
 날짜: 2026-05-27
-갱신: 2026-08-27
+갱신: 2026-08-28
 철학 갱신: 2026-07-15
 하네스 호환 경계 갱신: 2026-07-16
 
-현재 v0.4.10 변경점: 로컬 항목 1–1,000개의 intake와 capture가 중요한 결정 두
-번으로 이어집니다. intake 작업은 모든 exact 영수증과 생성된 capture 요청 하나를
-checkpoint와 같은-claim resume로 기록합니다. capture는 인증된 이전 승인,
-checkpoint chain, 최종 영수증, 현재 영수증과 bytes, 같은 보관함 identity가 모두
-맞는 요청만 받습니다. 일부 capture 뒤에는 새 exact plan과 새 결정이 필요합니다.
-합성 508·1,000개 plan은 43초 안에 끝났고, 남은 Windows 항목별 재구성 비용은
-v0.4.11로 미뤘습니다. 공개나 설치만으로 클라이언트 보관함은 바뀌지 않습니다.
+현재 v0.4.11 변경점: project 정렬은 새로 읽은 installed payload, module
+inventory, launcher, current process, pin, running version 근거를 모두 요구합니다.
+Deep Doctor는 byte 검증 기본값을 유지하고, 이후 SHA 변화는 정확한 시간순
+근거만 받으며, 완료 시점이 없는 local-recovery 상태 근거는 ERROR로 둡니다.
+native 결정은 정본 WOM 용어와 로컬 전용 대상 미리보기를 사용하고, 문서 읽기
+표면은 정본 byte를 바꾸지 않는 WOM-safe Markdown 표시본을 제공합니다. 고정
+차단 preview는 자신의 권한을 정직하게 말합니다. 전체 트리 반복 link와
+generation-bound index 구조는 v0.4.12 작업입니다. 공개나 설치만으로 클라이언트
+보관함은 바뀌지 않습니다.
+
+과거 v0.4.10 변경점: 로컬 항목 1–1,000개의 intake와 capture가 중요한 결정 두
+번으로 이어집니다. intake는 모든 exact 영수증과 생성된 capture 요청 하나를
+checkpoint와 같은-claim resume로 기록합니다. capture는 인증된 이전 완료 chain만
+받고, 일부 capture 뒤에는 새 exact plan과 새 결정이 필요합니다.
 
 과거 v0.4.9 변경점: 일반적인 단일 파일 반입 경로가 세 번의 분리된 네이티브
 승인을 거쳐 정확한 source-intake 영수증, 기존 intake 기반 selection, 선택한
@@ -507,6 +514,7 @@ local archive
 - [v0.2.11 Delegate Capability Contract Work Log](../plans/work-log-2026-05-23-delegate-capability-contract.md)
 - [Changelog](../../CHANGELOG.md)
 - [Release Notes](releases/)
+- [v0.4.11 릴리스 노트](releases/v0.4.11.md)
 - [v0.4.10 릴리스 노트](releases/v0.4.10.md)
 - [v0.4.9 릴리스 노트](releases/v0.4.9.md)
 - [v0.4.8 릴리스 노트](releases/v0.4.8.md)

@@ -372,6 +372,8 @@ Commands:
 from __future__ import annotations
 
 import argparse
+import codecs
+from concurrent.futures import ThreadPoolExecutor
 import io
 import getpass
 import hashlib
@@ -407,6 +409,7 @@ from . import (
     git_backup_writer,
     human_artifact_registry,
     legacy_coordination_cleanup as legacy_cleanup,
+    local_recovery_sha_evolution,
     notion_property_backfill,
     objet_capture_batch_exact,
     objet_capture_selection_exact,
@@ -422,12 +425,14 @@ from . import (
     source_intake_batch_exact,
     source_intake_record_exact,
     source_fidelity_session_evidence,
+    target_sha_evolution,
 )
 from .paths import (
     ArchivePathError,
     archive_relative_path,
     contains_forbidden_location_reference,
     is_path_within_root,
+    normalize_archive_relative_path,
     resolve_archive_relative_path,
 )
 from .exact_human_approval import (
@@ -438,6 +443,7 @@ from .exact_human_approval import (
 from .exact_human_approval_windows import (
     ExactHumanApprovalContext,
     ExactHumanApprovalOperation,
+    ExactHumanApprovalTargetPreview,
     exact_human_approval_warning_codes,
     ExactHumanApprovalWindowsError,
 )
@@ -619,6 +625,7 @@ SECRET_SAFETY_QUARANTINED_ROOT_DIRS = {"collab", ".mow-harness"}
 SECRET_SAFETY_PROGRESS_EVERY_FILES = 250
 SECRET_SAFETY_PROGRESS_SECONDS = 30.0
 SECRET_SAFETY_READ_CHUNK_SIZE = 1024 * 1024
+DOCTOR_ZETTEL_TEXT_MAX_BYTES = 64 * 1024 * 1024
 DIAGNOSTIC_SEVERITIES = ("ERROR", "WARN", "INFO")
 DIAGNOSTIC_LEVEL_ALIASES = {
     "ERROR": "ERROR",
@@ -1764,7 +1771,21 @@ class Doctor:
             not in archive_doctor.DOCTOR_OBJECT_BYTE_VERIFICATION_MODES
         ):
             raise ValueError("doctor_object_byte_verification_mode_invalid")
+        # Preserve the caller's absolute spelling as well as the canonical
+        # root.  Windows may supply an 8.3 alias; both spellings describe the
+        # same frozen input boundary and must map to one relative-path space.
+        self._archive_root_input_absolute = Path(
+            os.path.abspath(os.fspath(archive_root))
+        )
+        # Capture the archive boundary once.  Every later descriptor read uses
+        # this immutable canonical path + directory identity instead of
+        # resolving a mutable root path after work has been queued.
         self.archive_root = archive_root.resolve()
+        self._archive_root_boundary = (
+            archive_doctor.capture_doctor_archive_root_boundary(
+                self.archive_root
+            )
+        )
         self.diagnostics: list[Diagnostic] = []
         self.archive_config: dict[str, Any] = {}
         self.manifest_objects: dict[str, dict[str, Any]] = {}
@@ -1772,6 +1793,12 @@ class Doctor:
         self.object_manifest_revalidation: archive_doctor.DoctorInputRevalidation | None = None
         self._object_manifest_raw: bytes | None = None
         self._object_manifest_records_loaded = False
+        self._archive_relative_path_cache: dict[str, str] = {}
+        self._archive_tree_file_identities: dict[str, tuple[int, ...]] = {}
+        self._archive_tree_directory_identities: dict[str, tuple[int, ...]] = {}
+        self._archive_tree_unsafe_entries: list[tuple[Path, bool]] = []
+        self._archive_tree_inventory_complete = False
+        self._archive_root_boundary_failure_reported = False
         self.allowed_link_types = self._load_allowed_link_types()
         self.edge_receipt_paths_by_source_segment: dict[str, list[tuple[Path, str]]] | None = None
         self.edge_receipts_by_source: dict[str, list[dict[str, Any]]] = {}
@@ -1780,10 +1807,33 @@ class Doctor:
         self.use_zettel_index_cache = use_zettel_index_cache
         self.object_byte_verification_mode = object_byte_verification_mode
         self._zettel_index_cache: dict[str, dict[str, Any] | None] = {}
-        self._file_sha256_cache: dict[str, str] = {}
-        self._zettel_text_cache: dict[str, str] = {}
-        self._zettel_frontmatter_cache: dict[str, dict[str, Any] | None] = {}
-        self._zettel_bom_cache: dict[str, bool] = {}
+        self._zettel_index_cache_db_identity: tuple[int, ...] | None = None
+        self._file_sha256_cache: dict[
+            str, tuple[tuple[int, ...], str]
+        ] = {}
+        self._zettel_text_cache: dict[
+            str, tuple[tuple[int, ...], str]
+        ] = {}
+        self._zettel_frontmatter_cache: dict[
+            str, tuple[tuple[int, ...], dict[str, Any] | None]
+        ] = {}
+        self._zettel_bom_cache: dict[
+            str, tuple[tuple[int, ...], bool]
+        ] = {}
+        self._json_file_cache: dict[
+            str, tuple[tuple[int, ...], Any]
+        ] = {}
+        self._secret_value_observation_cache: dict[
+            str, tuple[tuple[int, ...], bool]
+        ] = {}
+        self._run_cache_snapshot_active = False
+        self._run_file_generation_snapshots: dict[
+            str, tuple[str, Path, tuple[int, ...]]
+        ] = {}
+        self._stage_directory_generation_snapshots: dict[
+            str, tuple[Path, tuple[int, ...]]
+        ] = {}
+        self._stage_directory_cache_active = False
         self._file_sha256_cache_hits = 0
         self._file_sha256_cache_misses = 0
         self._zettel_frontmatter_cache_hits = 0
@@ -1799,7 +1849,29 @@ class Doctor:
         self._edge_source_candidates_loaded = 0
         self._edge_source_cache_hits = 0
         self._object_byte_reference_count = 0
+        self._object_byte_unresolved_reference_count = 0
         self._object_byte_states_by_path: dict[str, str] = {}
+        self._object_byte_observations_by_path: dict[
+            str, tuple[Path, int | None, str]
+        ] = {}
+        self._object_byte_completion_revalidation_state = "not_run"
+        self._object_byte_completion_revalidated_count = 0
+        self._target_sha_evolution_index: (
+            target_sha_evolution.ZettelObjetTargetShaEvolutionIndex | None
+        ) = None
+        self._target_sha_evolution_index_attempted = False
+        self._target_sha_evolution_index_lock = threading.Lock()
+        self._canonical_mint_target_mismatches: dict[
+            tuple[str, str, str], set[str]
+        ] = {}
+        self._retired_target_duplicate_fold_count = 0
+        self._local_recovery_assets_evolution_index: (
+            local_recovery_sha_evolution.LocalRecoveryAssetsEvolutionIndex
+            | None
+        ) = None
+        self._local_recovery_assets_evolution_index_attempted = False
+        self._local_recovery_assets_evolution_index_lock = threading.Lock()
+        self._local_recovery_assets_without_chronology_count = 0
         self._read_observations = {
             "zettel_bodies_read": False,
             "objet_bytes_read": False,
@@ -1817,8 +1889,29 @@ class Doctor:
             if not self.archive_root.is_dir():
                 self.error("archive_root_not_directory", "Archive root is not a directory.", self.archive_root)
                 return self.diagnostics
+            if (
+                self._archive_root_boundary is None
+                or not archive_doctor.doctor_archive_root_boundary_is_current(
+                    self._archive_root_boundary
+                )
+            ):
+                self.error(
+                    "archive_root_boundary_unverified",
+                    (
+                        "Archive root identity changed or could not be bound to "
+                        "one stable canonical directory; Doctor stopped before "
+                        "reading archive content."
+                    ),
+                    self.archive_root,
+                )
+                self._archive_root_boundary_failure_reported = True
+                return self.diagnostics
 
-            self.info("archive_root", f"Inspecting archive root: {self.archive_root}", self.archive_root)
+            self.info(
+                "archive_root",
+                "Inspecting one archive root without echoing its absolute location.",
+                self.archive_root,
+            )
             self.info(
                 "doctor_version_compatibility",
                 f"release v{__version__} / schema {archive_services.FRONTMATTER_V03_TARGET} / compatible? yes",
@@ -1838,15 +1931,152 @@ class Doctor:
             return self.diagnostics
         finally:
             self._finish_edge_receipt_source_load_progress()
+            self._record_archive_root_boundary_failure()
+            self._finalize_run_file_generation_snapshots()
+            self._record_archive_root_boundary_failure()
+            self._finalize_object_byte_observations()
             self._finalize_object_manifest_snapshot()
+            self._record_archive_root_boundary_failure()
             self._attach_suggested_command_statuses()
+            self._record_archive_root_boundary_failure()
+
+    def _finalize_object_byte_observations(self) -> None:
+        observations = sorted(
+            self._object_byte_observations_by_path.values(),
+            key=lambda item: self._file_cache_key(item[0]),
+        )
+        self._progress(
+            "object-byte-revalidation",
+            "start",
+            0,
+            len(observations),
+        )
+        unverified = False
+        revalidated = 0
+        total = len(observations)
+
+        def observe_one(
+            observation: tuple[Path, int, str],
+        ) -> tuple[Path, str, archive_doctor.DoctorStableFileHash]:
+            path, expected_size, expected_sha256 = observation
+            result = archive_doctor.observe_stable_regular_file_sha256(
+                path,
+                expected_size=expected_size,
+                required_root=self._archive_root_boundary,
+            )
+            return path, expected_sha256, result
+
+        # Each objet has an independent descriptor-bound stable read.  A bounded
+        # pool removes per-file filesystem latency without coalescing paths,
+        # reusing hashes, or weakening the one-current-read-per-path contract.
+        # Small runs stay sequential so unit tests and ordinary tiny archives do
+        # not pay thread-pool startup cost.  CommandProgressReporter supplies an
+        # independent content-free heartbeat while workers are inside os.read.
+        if total >= 32:
+            worker_count = min(16, total)
+            executor = ThreadPoolExecutor(
+                max_workers=worker_count,
+                thread_name_prefix="wom-doctor-objet-hash",
+            )
+            observed = executor.map(observe_one, observations)
+        else:
+            executor = None
+            observed = map(observe_one, observations)
+
+        try:
+            for index, (path, expected_sha256, result) in enumerate(
+                observed,
+                start=1,
+            ):
+                self._read_observations["objet_bytes_read"] = True
+                if result.state == "verified" and result.sha256 is not None:
+                    revalidated += 1
+                    self._record_object_byte_state(path, "rehashed_now")
+                    if result.sha256 != expected_sha256:
+                        self.error(
+                            "local_object_sha_mismatch",
+                            "Local objet SHA-256 mismatch.",
+                            path,
+                        )
+                else:
+                    unverified = True
+                    self._record_object_byte_state(path, "bytes_unverified")
+                    self.error(
+                        "doctor_objet_byte_input_unverified",
+                        (
+                            "WOM could not complete one stable, descriptor-bound read of "
+                            "a local objet; its byte integrity remains unverified."
+                        ),
+                        path,
+                        details=result.as_dict(),
+                    )
+                self._progress(
+                    "object-byte-revalidation",
+                    "revalidated",
+                    index,
+                    total,
+                )
+        finally:
+            if executor is not None:
+                executor.shutdown(wait=True, cancel_futures=False)
+        self._object_byte_completion_revalidated_count = revalidated
+        if self.object_byte_verification_mode != "deep":
+            self._object_byte_completion_revalidation_state = "not_run"
+        elif unverified:
+            self._object_byte_completion_revalidation_state = "unverified"
+        else:
+            self._object_byte_completion_revalidation_state = "current"
+        self._progress(
+            "object-byte-revalidation",
+            "done",
+            total,
+            total,
+        )
+        verification = self.object_byte_verification_summary()
+        if verification.bytes_unverified:
+            self.info(
+                "local_object_bytes_unverified",
+                (
+                    "Operational Doctor checked local objet paths, presence, and size, "
+                    "but did not read current objet bytes. This result is not a byte-integrity "
+                    "proof; rerun with --object-byte-verification deep for a current SHA-256 check."
+                ),
+                details=verification.as_dict(),
+            )
+        elif verification.rehashed_now:
+            self.info(
+                "local_object_bytes_rehashed_now",
+                "Deep Doctor hashed every unique current local objet exactly once with a stable descriptor-bound read.",
+                details=verification.as_dict(),
+            )
+        else:
+            self.info(
+                "local_object_bytes_not_applicable",
+                "Doctor found no present local objet file requiring byte verification.",
+                details=verification.as_dict(),
+            )
 
     def _finalize_object_manifest_snapshot(self) -> None:
         if self.object_manifest_snapshot is None or self.object_manifest_revalidation is not None:
             return
+        if not self._archive_root_boundary_current():
+            self.error(
+                "doctor_input_snapshot_unverified",
+                (
+                    "Object-manifest freshness was not revalidated because "
+                    "the captured archive root identity changed."
+                ),
+                details={
+                    "state": "unverified",
+                    "reason_codes": ["archive_root_boundary_changed"],
+                    "requires_nonzero_exit": True,
+                },
+            )
+            return
         revalidation = archive_doctor.revalidate_doctor_object_manifest_snapshot(
             self.archive_root,
             self.object_manifest_snapshot,
+            root_boundary=self._archive_root_boundary,
         )
         self.object_manifest_revalidation = revalidation
         details = revalidation.as_dict()
@@ -1973,8 +2203,87 @@ class Doctor:
 
     def _run_stage(self, stage_name: str, stage_func: Callable[[], None]) -> None:
         self._progress(stage_name, "start", None, None)
-        stage_func()
+        self._stage_directory_generation_snapshots.clear()
+        if not self._archive_root_boundary_current():
+            self._record_archive_root_boundary_failure()
+            self._progress(stage_name, "done", None, None)
+            return
+        self._stage_directory_cache_active = True
+        try:
+            stage_func()
+        finally:
+            self._stage_directory_cache_active = False
+            self._finalize_stage_directory_generations(stage_name)
+        if (
+            stage_name == "symlink-boundaries"
+            and self._archive_tree_inventory_complete
+            and self._archive_root_boundary_current()
+        ):
+            # Later cache consumers may reuse descriptor-proven generations.
+            # A single completion pass revalidates every reused file and its
+            # inventoried parent chain, replacing thousands of identical hot
+            # path checks with one result-snapshot proof.
+            self._run_cache_snapshot_active = True
+        self._record_archive_root_boundary_failure()
         self._progress(stage_name, "done", None, None)
+
+    def _finalize_stage_directory_generations(self, stage_name: str) -> None:
+        snapshots = tuple(self._stage_directory_generation_snapshots.values())
+        self._stage_directory_generation_snapshots.clear()
+        if not snapshots:
+            return
+        changed = 0
+        for path, expected in snapshots:
+            if not self._inventory_identity_matches(
+                path,
+                expected,
+                require_directory=True,
+            ):
+                changed += 1
+        if changed:
+            self.error(
+                "archive_stage_directory_boundary_changed",
+                (
+                    "An inventoried archive directory changed during a Doctor stage; "
+                    "that stage's findings are not current."
+                ),
+                details={
+                    "stage": stage_name,
+                    "revalidated_directory_count": len(snapshots),
+                    "changed_directory_count": changed,
+                    "private_values_echoed": False,
+                    "paths_echoed": False,
+                },
+            )
+
+    def _archive_root_boundary_current(self) -> bool:
+        return bool(
+            self._archive_root_boundary is not None
+            and archive_doctor.doctor_archive_root_boundary_is_current(
+                self._archive_root_boundary
+            )
+        )
+
+    def _record_archive_root_boundary_failure(self) -> bool:
+        if self._archive_root_boundary_current():
+            return False
+        if self._archive_root_boundary is None:
+            try:
+                if not self.archive_root.is_dir():
+                    return False
+            except OSError:
+                return False
+        if not self._archive_root_boundary_failure_reported:
+            self.error(
+                "archive_root_boundary_changed",
+                (
+                    "Archive root identity changed during Doctor; cached and "
+                    "new content results are not current."
+                ),
+                self.archive_root,
+            )
+            self._archive_root_boundary_failure_reported = True
+        return True
 
     def _progress(self, stage: str, message: str, current: int | None, total: int | None) -> None:
         if self.progress_callback is not None:
@@ -2050,13 +2359,559 @@ class Doctor:
         )
 
     def _file_cache_key(self, path: Path) -> str:
+        lexical_key = os.path.normcase(os.path.abspath(os.fspath(path)))
+        cached = self._archive_relative_path_cache.get(lexical_key)
+        if cached is not None:
+            return cached
+        relative = self._lexical_archive_relative(path)
+        if relative is not None:
+            key = relative
+            self._archive_relative_path_cache[lexical_key] = key
+            return key
         try:
-            return archive_relative_path(path, self.archive_root)
-        except (ArchivePathError, OSError, RuntimeError, ValueError):
+            key = str(path.resolve())
+        except (OSError, RuntimeError, ValueError):
+            key = str(path)
+        self._archive_relative_path_cache[lexical_key] = key
+        return key
+
+    @staticmethod
+    def _stat_identity(value: os.stat_result) -> tuple[int, ...]:
+        return (
+            int(value.st_dev),
+            int(getattr(value, "st_ino", 0) or 0),
+            int(value.st_mode),
+            int(value.st_size),
+            int(getattr(value, "st_mtime_ns", 0)),
+            int(getattr(value, "st_ctime_ns", 0)),
+            int(getattr(value, "st_file_attributes", 0)),
+        )
+
+    @staticmethod
+    def _inventory_stat_identity(value: os.stat_result) -> tuple[int, ...]:
+        # Inventory entries are captured and revalidated with ``os.lstat`` on
+        # both sides.  Device/inode (Win32 volume/file id) are indispensable:
+        # timestamps, size, and attributes can be copied onto a replacement.
+        return (
+            int(value.st_dev),
+            int(getattr(value, "st_ino", 0) or 0),
+            int(value.st_mode),
+            int(value.st_size),
+            int(getattr(value, "st_mtime_ns", 0)),
+            int(getattr(value, "st_ctime_ns", 0)),
+            int(getattr(value, "st_file_attributes", 0)),
+        )
+
+    @staticmethod
+    def _inventory_directory_identity(
+        value: os.stat_result,
+    ) -> tuple[int, ...]:
+        # Directory size is not stable across Windows stat APIs, but its
+        # volume/file id is.  Bind the unforgeable identity plus metadata used
+        # to notice ordinary concurrent directory changes.
+        return (
+            int(value.st_dev),
+            int(getattr(value, "st_ino", 0) or 0),
+            int(value.st_mode),
+            int(getattr(value, "st_mtime_ns", 0)),
+            int(getattr(value, "st_ctime_ns", 0)),
+            int(getattr(value, "st_file_attributes", 0)),
+        )
+
+    @staticmethod
+    def _archive_tree_key(relative: str) -> str:
+        return os.path.normcase(relative.replace("/", os.sep))
+
+    def _lexical_archive_relative(self, path: Path) -> str | None:
+        try:
+            absolute = Path(os.path.abspath(os.fspath(path)))
+        except (OSError, RuntimeError, ValueError):
+            return None
+        for root in (
+            self.archive_root,
+            self._archive_root_input_absolute,
+        ):
             try:
-                return str(path.resolve())
+                relative = absolute.relative_to(root)
             except (OSError, RuntimeError, ValueError):
-                return str(path)
+                continue
+            if not relative.parts:
+                return "."
+            return PurePosixPath(*relative.parts).as_posix()
+        return None
+
+    def _inventory_identity_matches(
+        self,
+        path: Path,
+        expected: tuple[int, ...],
+        *,
+        require_directory: bool,
+    ) -> bool:
+        try:
+            observed = os.lstat(path)
+        except OSError:
+            return False
+        if (
+            stat.S_ISLNK(observed.st_mode)
+            or archive_doctor._is_reparse_point(observed)
+            or (
+                not stat.S_ISDIR(observed.st_mode)
+                if require_directory
+                else not stat.S_ISREG(observed.st_mode)
+            )
+        ):
+            return False
+        current_identity = (
+            self._inventory_directory_identity(observed)
+            if require_directory
+            else self._inventory_stat_identity(observed)
+        )
+        return current_identity == expected
+
+    def _inventory_ancestor_chain_matches(
+        self,
+        path: Path,
+        *,
+        allow_stage_cache: bool = False,
+    ) -> bool:
+        """Revalidate root through the candidate's parent without caching.
+
+        A final-entry ``lstat`` follows an already replaced parent junction.
+        Rechecking every inventory-bound directory component rejects that
+        replacement before the candidate is returned.  Descriptor-bound reads
+        separately verify the final opened handle against ``archive_root``.
+        """
+
+        allow_stage_cache = bool(
+            allow_stage_cache and self._stage_directory_cache_active
+        )
+        boundary = self._archive_root_boundary
+        if boundary is None:
+            return False
+        relative = self._lexical_archive_relative(path)
+        if relative is None:
+            return False
+        root_expected = self._archive_tree_directory_identities.get(
+            self._archive_tree_key(".")
+        )
+        if root_expected is None:
+            return False
+        root_cached = self._stage_directory_generation_snapshots.get(".")
+        if not (
+            allow_stage_cache
+            and root_cached is not None
+            and root_cached[1] == root_expected
+        ):
+            try:
+                root_observed = os.lstat(self.archive_root)
+            except OSError:
+                return False
+            if (
+                not stat.S_ISDIR(root_observed.st_mode)
+                or stat.S_ISLNK(root_observed.st_mode)
+                or archive_doctor._is_reparse_point(root_observed)
+                or archive_doctor._identity_changed(
+                    boundary.observed_identity,
+                    root_observed,
+                )
+                or self._inventory_directory_identity(root_observed)
+                != root_expected
+            ):
+                return False
+            if allow_stage_cache:
+                self._stage_directory_generation_snapshots["."] = (
+                    self.archive_root,
+                    root_expected,
+                )
+        parts = () if relative == "." else PurePosixPath(relative).parts
+        current = self.archive_root
+        for index, part in enumerate(parts[:-1], start=1):
+            current = current / part
+            current_relative = PurePosixPath(*parts[:index]).as_posix()
+            expected = self._archive_tree_directory_identities.get(
+                self._archive_tree_key(current_relative)
+            )
+            cached = self._stage_directory_generation_snapshots.get(
+                current_relative
+            )
+            if (
+                allow_stage_cache
+                and cached is not None
+                and cached[1] == expected
+            ):
+                continue
+            if expected is None or not self._inventory_identity_matches(
+                current, expected, require_directory=True
+            ):
+                return False
+            if allow_stage_cache:
+                self._stage_directory_generation_snapshots[current_relative] = (
+                    current,
+                    expected,
+                )
+        return True
+
+    def _resolve_archive_relative_path(self, raw_path: str) -> Path:
+        """Resolve one untrusted relative path against this already-resolved root.
+
+        ``Doctor.__init__`` binds ``archive_root`` to its canonical path once.  A
+        candidate is still resolved afresh on every call, including the existing
+        bounded retry, so a changed child junction or symlink continues to fail
+        closed without paying for a second canonical-root lookup per receipt.
+        """
+
+        normalized = normalize_archive_relative_path(raw_path)
+        unresolved = self.archive_root.joinpath(
+            *PurePosixPath(normalized).parts
+        )
+        if self._archive_tree_inventory_complete:
+            key = self._archive_tree_key(normalized)
+            expected_file = self._archive_tree_file_identities.get(key)
+            if expected_file is not None:
+                if (
+                    self._inventory_ancestor_chain_matches(
+                        unresolved,
+                        allow_stage_cache=True,
+                    )
+                    and self._inventory_identity_matches(
+                        unresolved,
+                        expected_file,
+                        require_directory=False,
+                    )
+                ):
+                    return unresolved
+                raise ArchivePathError(
+                    "Archive-relative file changed after the boundary inventory."
+                )
+            expected_directory = self._archive_tree_directory_identities.get(
+                key
+            )
+            if expected_directory is not None:
+                if (
+                    self._inventory_ancestor_chain_matches(
+                        unresolved,
+                        allow_stage_cache=True,
+                    )
+                    and self._inventory_identity_matches(
+                        unresolved,
+                        expected_directory,
+                        require_directory=True,
+                    )
+                ):
+                    return unresolved
+                raise ArchivePathError(
+                    "Archive-relative directory changed after the boundary inventory."
+                )
+
+            parent = unresolved.parent
+            parent_relative = self._lexical_archive_relative(parent)
+            if parent_relative is not None:
+                expected_parent = self._archive_tree_directory_identities.get(
+                    self._archive_tree_key(parent_relative)
+                )
+                if (
+                    expected_parent is not None
+                    and self._inventory_ancestor_chain_matches(
+                        unresolved,
+                        allow_stage_cache=True,
+                    )
+                    and self._inventory_identity_matches(
+                        parent,
+                        expected_parent,
+                        require_directory=True,
+                    )
+                ):
+                    # A lexically safe missing final entry remains a missing entry;
+                    # callers retain their existing missing-file diagnostic.
+                    return unresolved
+            raise ArchivePathError(
+                "Archive-relative path was not present in the safe boundary inventory."
+            )
+        for attempt in range(5):
+            candidate = unresolved.resolve()
+            if candidate.is_relative_to(self.archive_root):
+                return candidate
+            if attempt < 4:
+                time.sleep(0.001)
+        raise ArchivePathError("Archive-relative path escapes archive root.")
+
+    def _path_is_currently_within_archive(self, path: Path) -> bool:
+        if self._archive_tree_inventory_complete:
+            relative = self._lexical_archive_relative(path)
+            if relative is None:
+                return False
+            key = self._archive_tree_key(relative)
+            expected_file = self._archive_tree_file_identities.get(key)
+            if expected_file is not None:
+                # A file is consumed only through a descriptor-bound reader, or
+                # reused from bytes previously obtained through one.  Compare
+                # its unforgeable inventory identity here and let that reader
+                # prove the opened handle's final path.  Rewalking the complete
+                # parent chain at every list/filter call was the dominant
+                # full-archive cost and duplicated the stronger handle proof.
+                if self._archive_root_boundary is None:
+                    return False
+                try:
+                    observed = os.lstat(path)
+                except OSError:
+                    return False
+                return bool(
+                    not stat.S_ISLNK(observed.st_mode)
+                    and not archive_doctor._is_reparse_point(observed)
+                    and stat.S_ISREG(observed.st_mode)
+                    and self._inventory_stat_identity(observed) == expected_file
+                    and archive_doctor.doctor_archive_root_boundary_is_current(
+                        self._archive_root_boundary
+                    )
+                )
+            expected_directory = self._archive_tree_directory_identities.get(
+                key
+            )
+            if expected_directory is not None:
+                return (
+                    self._inventory_ancestor_chain_matches(path)
+                    and self._inventory_identity_matches(
+                        path,
+                        expected_directory,
+                        require_directory=True,
+                    )
+                )
+            return False
+        try:
+            return path.resolve().is_relative_to(self.archive_root)
+        except (OSError, RuntimeError, ValueError):
+            return False
+
+    def _archive_cache_boundary_current(self, path: Path) -> bool:
+        """Reject every archive-content cache when its root/parents drifted."""
+
+        if self._archive_root_boundary is None:
+            return False
+        # Inventory identity belongs to the original lexical archive path.
+        # Check that chain before canonicalizing; otherwise an in-archive
+        # junction replacement can disappear into its safe-looking target.
+        relative = self._lexical_archive_relative(path)
+        if relative is None:
+            return False
+        canonical_lexical = self.archive_root
+        if relative != ".":
+            canonical_lexical = self.archive_root.joinpath(
+                *PurePosixPath(relative).parts
+            )
+        if self._archive_tree_inventory_complete:
+            expected = self._archive_tree_file_identities.get(
+                self._archive_tree_key(relative)
+            )
+            if (
+                expected is None
+                or not self._inventory_ancestor_chain_matches(
+                    canonical_lexical
+                )
+                or not self._inventory_identity_matches(
+                    canonical_lexical,
+                    expected,
+                    require_directory=False,
+                )
+            ):
+                return False
+            return True
+        else:
+            if not archive_doctor.doctor_archive_root_boundary_is_current(
+                self._archive_root_boundary
+            ):
+                return False
+            try:
+                canonical_path = path.resolve(strict=True)
+            except (OSError, RuntimeError, ValueError):
+                return False
+            if not archive_doctor._normalized_path_stays_within_root(
+                canonical_path,
+                self._archive_root_boundary.canonical_path,
+            ):
+                return False
+            return archive_doctor.doctor_archive_root_boundary_is_current(
+                self._archive_root_boundary
+            )
+
+    def _file_cache_identity(self, path: Path) -> tuple[int, ...]:
+        """Return one safe file generation for cache comparison.
+
+        Cache misses are followed by a descriptor-bound read, which proves the
+        opened handle's real location before and after consuming bytes.  Cache
+        hits reuse bytes already read from that proven descriptor.  Therefore
+        this hot path only needs the exact inventoried file identity plus the
+        immutable root generation; repeating the complete ancestor walk around
+        every cache lookup adds no stronger byte proof.  The strict ancestor
+        walk remains available through ``_archive_cache_boundary_current`` for
+        boundary decisions and the directory traversal itself.
+        """
+
+        relative = self._lexical_archive_relative(path)
+        if relative is None or self._archive_root_boundary is None:
+            raise OSError("doctor_archive_cache_boundary_changed")
+        canonical_lexical = self.archive_root
+        if relative != ".":
+            canonical_lexical = self.archive_root.joinpath(
+                *PurePosixPath(relative).parts
+            )
+        value = os.lstat(canonical_lexical)
+        if (
+            stat.S_ISLNK(value.st_mode)
+            or archive_doctor._is_reparse_point(value)
+            or not stat.S_ISREG(value.st_mode)
+        ):
+            raise OSError("doctor_file_cache_input_unsafe")
+        if self._archive_tree_inventory_complete:
+            expected = self._archive_tree_file_identities.get(
+                self._archive_tree_key(relative)
+            )
+            if (
+                expected is None
+                or self._inventory_stat_identity(value) != expected
+            ):
+                raise OSError("doctor_archive_cache_boundary_changed")
+        if not archive_doctor.doctor_archive_root_boundary_is_current(
+            self._archive_root_boundary
+        ):
+            raise OSError("doctor_archive_cache_boundary_changed")
+        return self._stat_identity(value)
+
+    def _remember_run_file_generation(
+        self,
+        path: Path,
+        identity: tuple[int, ...],
+    ) -> None:
+        if not self._run_cache_snapshot_active:
+            return
+        relative = self._lexical_archive_relative(path)
+        if relative is None:
+            return
+        expected = self._archive_tree_file_identities.get(
+            self._archive_tree_key(relative)
+        )
+        if expected is None or expected != identity:
+            return
+        canonical = self.archive_root
+        if relative != ".":
+            canonical = self.archive_root.joinpath(*PurePosixPath(relative).parts)
+        self._run_file_generation_snapshots[
+            self._archive_tree_key(relative)
+        ] = (relative, canonical, identity)
+
+    def _run_file_generation_is_trusted(
+        self,
+        path: Path,
+        identity: tuple[int, ...],
+    ) -> bool:
+        if not self._run_cache_snapshot_active:
+            return False
+        relative = self._lexical_archive_relative(path)
+        if relative is None:
+            return False
+        remembered = self._run_file_generation_snapshots.get(
+            self._archive_tree_key(relative)
+        )
+        return bool(remembered is not None and remembered[2] == identity)
+
+    def _finalize_run_file_generation_snapshots(self) -> None:
+        """Revalidate every descriptor-proven cache generation once at completion."""
+
+        snapshots = tuple(
+            sorted(
+                self._run_file_generation_snapshots.values(),
+                key=lambda item: item[0],
+            )
+        )
+        self._run_cache_snapshot_active = False
+        if not snapshots:
+            return
+        boundary = self._archive_root_boundary
+        if (
+            boundary is None
+            or not archive_doctor.doctor_archive_root_boundary_is_current(boundary)
+        ):
+            self.error(
+                "doctor_cache_snapshot_unverified",
+                "Cached archive inputs could not be revalidated because the archive root changed.",
+                details={
+                    "state": "unverified",
+                    "file_count": len(snapshots),
+                    "private_values_echoed": False,
+                    "paths_echoed": False,
+                },
+            )
+            return
+
+        changed_files = 0
+        parent_relatives: set[str] = {"."}
+        for relative, path, expected in snapshots:
+            parts = PurePosixPath(relative).parts
+            for depth in range(1, len(parts)):
+                parent_relatives.add(PurePosixPath(*parts[:depth]).as_posix())
+            try:
+                observed = os.lstat(path)
+            except OSError:
+                changed_files += 1
+                continue
+            if (
+                stat.S_ISLNK(observed.st_mode)
+                or archive_doctor._is_reparse_point(observed)
+                or not stat.S_ISREG(observed.st_mode)
+                or self._stat_identity(observed) != expected
+            ):
+                changed_files += 1
+
+        changed_directories = 0
+        for relative in sorted(
+            parent_relatives,
+            key=lambda value: (len(PurePosixPath(value).parts), value),
+            reverse=True,
+        ):
+            expected = self._archive_tree_directory_identities.get(
+                self._archive_tree_key(relative)
+            )
+            path = self.archive_root
+            if relative != ".":
+                path = self.archive_root.joinpath(*PurePosixPath(relative).parts)
+            if expected is None or not self._inventory_identity_matches(
+                path,
+                expected,
+                require_directory=True,
+            ):
+                changed_directories += 1
+
+        root_current = archive_doctor.doctor_archive_root_boundary_is_current(
+            boundary
+        )
+        if changed_files or changed_directories or not root_current:
+            self.error(
+                "doctor_cache_snapshot_stale",
+                (
+                    "One or more cached archive inputs or parent directories changed "
+                    "during Doctor; cached findings are not current."
+                ),
+                details={
+                    "state": "stale",
+                    "revalidated_file_count": len(snapshots),
+                    "changed_file_count": changed_files,
+                    "changed_directory_count": changed_directories,
+                    "archive_root_current": root_current,
+                    "private_values_echoed": False,
+                    "paths_echoed": False,
+                },
+            )
+        else:
+            self.info(
+                "doctor_cache_snapshot_current",
+                "Descriptor-proven cached inputs and their parent boundaries are current at completion.",
+                details={
+                    "state": "current",
+                    "revalidated_file_count": len(snapshots),
+                    "revalidated_directory_count": len(parent_relatives),
+                    "private_values_echoed": False,
+                    "paths_echoed": False,
+                },
+            )
 
     def _sha256_file_cached(
         self,
@@ -2066,39 +2921,228 @@ class Doctor:
         progress_label: str = "file",
     ) -> str:
         key = self._file_cache_key(path)
-        if key in self._file_sha256_cache:
+        cached = self._file_sha256_cache.get(key)
+        if (
+            cached is not None
+            and self._run_file_generation_is_trusted(path, cached[0])
+        ):
             self._file_sha256_cache_hits += 1
             if progress_callback is not None:
                 progress_callback(f"{progress_label} file sha256 cache hit")
-        else:
-            self._file_sha256_cache_misses += 1
-            if progress_callback is not None:
-                progress_callback(f"reading {progress_label} file stat")
-            try:
-                file_size = path.stat().st_size
-            except OSError:
-                file_size = None
-            if progress_callback is not None:
-                progress_callback(f"hashing {progress_label} file bytes")
-
-            def hash_progress(_bytes_read: int) -> None:
-                if progress_callback is not None:
-                    progress_callback(f"still hashing {progress_label} file bytes")
-
-            self._file_sha256_cache[key] = sha256_file(
+            return cached[1]
+        try:
+            identity_before = self._file_cache_identity(path)
+        except OSError:
+            self._file_sha256_cache.pop(key, None)
+            self.error(
+                "doctor_file_input_unverified",
+                (
+                    "A cached file result was not reused because its archive "
+                    "root or ancestor boundary changed."
+                ),
                 path,
-                progress_callback=hash_progress if progress_callback is not None else None,
+            )
+            return ""
+        if cached is not None and cached[0] == identity_before:
+            self._file_sha256_cache_hits += 1
+            if progress_callback is not None:
+                progress_callback(f"{progress_label} file sha256 cache hit")
+            return cached[1]
+        self._file_sha256_cache_misses += 1
+        if progress_callback is not None:
+            progress_callback(f"reading {progress_label} file stat")
+            progress_callback(f"hashing {progress_label} file bytes")
+
+        def hash_progress(_bytes_read: int) -> None:
+            if progress_callback is not None:
+                progress_callback(f"still hashing {progress_label} file bytes")
+
+        try:
+            digest = sha256_file(
+                path,
+                progress_callback=(
+                    hash_progress if progress_callback is not None else None
+                ),
                 progress_step_bytes=64 * 1024 * 1024,
+                required_root=self._archive_root_boundary,
+            )
+            identity_after = self._file_cache_identity(path)
+        except OSError:
+            self.error(
+                "doctor_file_input_unverified",
+                (
+                    "A file could not be read as one stable regular file; "
+                    "Doctor will not reuse or trust a digest from this read."
+                ),
+                path,
             )
             if progress_callback is not None:
-                progress_callback(f"hashed {progress_label} file bytes")
-        return self._file_sha256_cache[key]
+                progress_callback(f"{progress_label} file bytes unverified")
+            return ""
+        if identity_before != identity_after:
+            self.error(
+                "doctor_file_changed_while_hashing",
+                (
+                    "A file changed while Doctor was hashing it; this run cannot "
+                    "treat that digest as a current result."
+                ),
+                path,
+            )
+            self._file_sha256_cache.pop(key, None)
+            if progress_callback is not None:
+                progress_callback(f"{progress_label} file bytes changed")
+            return ""
+        self._file_sha256_cache[key] = (identity_after, digest)
+        self._remember_run_file_generation(path, identity_after)
+        if progress_callback is not None:
+            progress_callback(f"hashed {progress_label} file bytes")
+        return digest
+
+    def _observe_stable_text_for_prefetch(
+        self,
+        path: Path,
+        *,
+        encoding: str,
+    ) -> tuple[tuple[int, ...], bytes, str, bool] | None:
+        """Read one stable text generation without mutating Doctor state.
+
+        Worker threads may use this helper because it only observes one path
+        and returns an immutable result.  Cache updates and diagnostics remain
+        on the main thread so their count and order do not depend on worker
+        scheduling.
+        """
+
+        try:
+            identity_before = self._file_cache_identity(path)
+            raw, _reason = archive_doctor._stable_regular_file_bytes(
+                path,
+                maximum_bytes=DOCTOR_ZETTEL_TEXT_MAX_BYTES,
+                required_root=self._archive_root_boundary,
+            )
+            identity_after = self._file_cache_identity(path)
+        except OSError:
+            return None
+        if raw is None or identity_before != identity_after:
+            return None
+        try:
+            text = raw.decode(encoding)
+        except UnicodeError:
+            return None
+        return (
+            identity_after,
+            raw,
+            text,
+            contains_secret_value(text),
+        )
+
+    def _cache_prefetched_zettel_text(
+        self,
+        path: Path,
+        observation: tuple[tuple[int, ...], bytes, str, bool] | None,
+    ) -> None:
+        if observation is None:
+            return
+        identity, raw, text, contains_secret = observation
+        key = self._file_cache_key(path)
+        self._zettel_text_cache[key] = (identity, text)
+        self._file_sha256_cache[key] = (
+            identity,
+            hashlib.sha256(raw).hexdigest(),
+        )
+        self._secret_value_observation_cache[key] = (
+            identity,
+            contains_secret,
+        )
+        self._remember_run_file_generation(path, identity)
+
+    def _cache_prefetched_json_text(
+        self,
+        path: Path,
+        observation: tuple[tuple[int, ...], bytes, str, bool] | None,
+    ) -> None:
+        if observation is None:
+            return
+        identity, raw, text, contains_secret = observation
+        try:
+            data = json.loads(text)
+        except (json.JSONDecodeError, UnicodeError):
+            # The ordinary sequential loader records exactly one deterministic
+            # diagnostic for an invalid input.
+            return
+        key = self._file_cache_key(path)
+        self._json_file_cache[key] = (identity, data)
+        self._file_sha256_cache[key] = (
+            identity,
+            hashlib.sha256(raw).hexdigest(),
+        )
+        self._secret_value_observation_cache[key] = (
+            identity,
+            contains_secret,
+        )
+        self._remember_run_file_generation(path, identity)
 
     def _load_zettel_text_cached(self, path: Path) -> str:
         key = self._file_cache_key(path)
-        if key not in self._zettel_text_cache:
-            self._zettel_text_cache[key] = path.read_text(encoding="utf-8")
-        return self._zettel_text_cache[key]
+        cached = self._zettel_text_cache.get(key)
+        if (
+            cached is not None
+            and self._run_file_generation_is_trusted(path, cached[0])
+        ):
+            return cached[1]
+        try:
+            identity = self._file_cache_identity(path)
+        except OSError:
+            self.error(
+                "doctor_zet_input_unsafe",
+                "A zet path is not a stable regular file; its text was not read.",
+                path,
+            )
+            self._zettel_text_cache.pop(key, None)
+            return ""
+        if cached is not None and cached[0] == identity:
+            return cached[1]
+        raw, reason = archive_doctor._stable_regular_file_bytes(
+            path,
+            maximum_bytes=DOCTOR_ZETTEL_TEXT_MAX_BYTES,
+            required_root=self._archive_root_boundary,
+        )
+        try:
+            identity_after = self._file_cache_identity(path)
+        except OSError:
+            identity_after = None
+        if raw is None or identity_after is None or identity != identity_after:
+            self.error(
+                "doctor_zet_changed_while_reading",
+                (
+                    "A zet could not be bound to one stable regular-file generation; "
+                    "Doctor discarded the read instead of caching stale text."
+                ),
+                path,
+                details={"state": reason or "identity_changed"},
+            )
+            self._zettel_text_cache.pop(key, None)
+            return ""
+        try:
+            text = raw.decode("utf-8")
+        except UnicodeError:
+            self.error(
+                "doctor_zet_utf8_invalid",
+                "A zet is not valid UTF-8; its text was not cached.",
+                path,
+            )
+            self._zettel_text_cache.pop(key, None)
+            return ""
+        self._zettel_text_cache[key] = (identity_after, text)
+        self._file_sha256_cache[key] = (
+            identity_after,
+            hashlib.sha256(raw).hexdigest(),
+        )
+        self._secret_value_observation_cache[key] = (
+            identity_after,
+            contains_secret_value(text),
+        )
+        self._remember_run_file_generation(path, identity_after)
+        return text
 
     def _remember_zettel_frontmatter(
         self,
@@ -2106,11 +3150,38 @@ class Doctor:
         data: dict[str, Any] | None,
         *,
         bom: bool | None = None,
-    ) -> None:
+        expected_identity: tuple[int, ...] | None = None,
+    ) -> bool:
         key = self._file_cache_key(path)
-        self._zettel_frontmatter_cache[key] = data
+        if expected_identity is None:
+            self._zettel_frontmatter_cache.pop(key, None)
+            self._zettel_bom_cache.pop(key, None)
+            return False
+        if self._run_file_generation_is_trusted(path, expected_identity):
+            identity = expected_identity
+        else:
+            try:
+                identity = self._file_cache_identity(path)
+            except OSError:
+                self._zettel_frontmatter_cache.pop(key, None)
+                self._zettel_bom_cache.pop(key, None)
+                return False
+        if identity != expected_identity:
+            self._zettel_frontmatter_cache.pop(key, None)
+            self._zettel_bom_cache.pop(key, None)
+            self.error(
+                "doctor_zet_changed_while_parsing",
+                (
+                    "A zet changed after its stable text read; Doctor discarded "
+                    "the parsed frontmatter instead of binding it to a newer file."
+                ),
+                path,
+            )
+            return False
+        self._zettel_frontmatter_cache[key] = (identity, data)
         if bom is not None:
-            self._zettel_bom_cache[key] = bom
+            self._zettel_bom_cache[key] = (identity, bom)
+        return True
 
     def _load_zettel_frontmatter_cached(
         self,
@@ -2119,15 +3190,50 @@ class Doctor:
         progress_callback: Callable[[str], None] | None = None,
     ) -> dict[str, Any] | None:
         key = self._file_cache_key(path)
-        if key in self._zettel_frontmatter_cache:
+        cached = self._zettel_frontmatter_cache.get(key)
+        if (
+            cached is not None
+            and self._run_file_generation_is_trusted(path, cached[0])
+        ):
             self._zettel_frontmatter_cache_hits += 1
             if progress_callback is not None:
                 progress_callback("target frontmatter cache hit")
-            return self._zettel_frontmatter_cache[key]
+            return cached[1]
+        try:
+            identity = self._file_cache_identity(path)
+        except OSError:
+            self.error(
+                "doctor_zet_input_unsafe",
+                "A zet path is not a stable regular file; frontmatter was not read.",
+                path,
+            )
+            return None
+        if cached is not None and cached[0] == identity:
+            self._zettel_frontmatter_cache_hits += 1
+            if progress_callback is not None:
+                progress_callback("target frontmatter cache hit")
+            return cached[1]
         self._zettel_frontmatter_cache_misses += 1
         if progress_callback is not None:
             progress_callback("target frontmatter reading text")
         text = self._load_zettel_text_cached(path)
+        text_generation = self._zettel_text_cache.get(key)
+        if (
+            text_generation is None
+            or text_generation[0] != identity
+            or text_generation[1] != text
+        ):
+            self.error(
+                "doctor_zet_changed_before_frontmatter_parse",
+                (
+                    "A zet generation changed before frontmatter parsing; "
+                    "Doctor discarded the candidate text."
+                ),
+                path,
+            )
+            self._zettel_frontmatter_cache.pop(key, None)
+            self._zettel_bom_cache.pop(key, None)
+            return None
         if progress_callback is not None:
             progress_callback("target frontmatter checking bom")
         self._zettel_has_bom_cached(path)
@@ -2135,31 +3241,60 @@ class Doctor:
             progress_callback("target frontmatter parsing fence")
         frontmatter = parse_frontmatter(text)
         if frontmatter is None:
-            self._zettel_frontmatter_cache[key] = None
+            self._remember_zettel_frontmatter(
+                path,
+                None,
+                expected_identity=identity,
+            )
             return None
         if progress_callback is not None:
             progress_callback("target frontmatter loading yaml")
         data = self._load_yaml_text(frontmatter, path)
         if isinstance(data, dict):
-            self._remember_zettel_frontmatter(path, data)
+            if not self._remember_zettel_frontmatter(
+                path,
+                data,
+                expected_identity=identity,
+            ):
+                return None
             if progress_callback is not None:
                 progress_callback("target frontmatter loaded")
             return data
-        self._zettel_frontmatter_cache[key] = None
+        self._remember_zettel_frontmatter(
+            path,
+            None,
+            expected_identity=identity,
+        )
         return None
 
     def _zettel_has_bom_cached(self, path: Path) -> bool:
         key = self._file_cache_key(path)
-        if key in self._zettel_bom_cache:
+        cached = self._zettel_bom_cache.get(key)
+        if (
+            cached is not None
+            and self._run_file_generation_is_trusted(path, cached[0])
+        ):
             self._zettel_bom_cache_hits += 1
-        else:
-            self._zettel_bom_cache_misses += 1
-            try:
-                with path.open("rb") as handle:
-                    self._zettel_bom_cache[key] = handle.read(3) == b"\xef\xbb\xbf"
-            except OSError:
-                self._zettel_bom_cache[key] = False
-        return self._zettel_bom_cache[key]
+            return cached[1]
+        try:
+            identity = self._file_cache_identity(path)
+        except OSError:
+            self._zettel_bom_cache.pop(key, None)
+            return False
+        if cached is not None and cached[0] == identity:
+            self._zettel_bom_cache_hits += 1
+            return cached[1]
+        self._zettel_bom_cache_misses += 1
+        text = self._load_zettel_text_cached(path)
+        try:
+            identity_after = self._file_cache_identity(path)
+        except OSError:
+            return False
+        if identity_after != identity:
+            return False
+        bom = text.startswith("\ufeff")
+        self._zettel_bom_cache[key] = (identity, bom)
+        return bom
 
     def error(
         self,
@@ -2223,11 +3358,8 @@ class Doctor:
     def _display_path(self, path: Path | str | None) -> str | None:
         if path is None:
             return None
-        path_obj = Path(path)
-        try:
-            return archive_relative_path(path_obj, self.archive_root)
-        except (ArchivePathError, OSError, ValueError):
-            return str(path)
+        relative = self._lexical_archive_relative(Path(path))
+        return relative if relative is not None else str(path)
 
     def _parse_receipt_time(self, value: Any) -> datetime | None:
         if not isinstance(value, str) or not value.strip():
@@ -2308,7 +3440,7 @@ class Doctor:
                 progress_callback("target edge evolution path unresolved")
             return False
         if progress_callback is not None:
-            progress_callback(f"target edge evolution target {target_relative}")
+            progress_callback("target edge evolution target resolved")
             progress_callback("loading target edge receipt candidates")
         target_frontmatter = self._load_zettel_frontmatter_cached(
             target_path,
@@ -2341,9 +3473,278 @@ class Doctor:
             target_path,
             expected_sha,
             edge_receipts=edge_receipts,
-            target_text=self._load_zettel_text_cached(target_path),
             progress_callback=progress_callback,
         )
+
+    def _target_evolution_cutoff(
+        self,
+        receipt_data: dict[str, Any],
+    ) -> str | None:
+        """Return the timestamp that bound this receipt's target digest."""
+
+        for key in ("timestamp", "created_at", "reviewed_at"):
+            value = receipt_data.get(key)
+            if isinstance(value, str) and self._parse_receipt_time(value) is not None:
+                return value
+        return None
+
+    def _target_sha_evolved_by_direct_objet_receipts(
+        self,
+        receipt_data: dict[str, Any],
+        receipt_path: Path,
+        target_path: Path,
+        expected_sha: str,
+        actual_sha: str,
+        *,
+        progress_callback: Callable[[str], None] | None = None,
+    ) -> dict[str, Any] | None:
+        """Prove one exact, chronological zet--objet byte transition chain.
+
+        The index is built at most once for a Doctor run.  Any unavailable,
+        ambiguous, changed, or malformed evidence fails closed and leaves the
+        ordinary SHA mismatch in place.
+        """
+
+        if not SHA256_RE.fullmatch(actual_sha):
+            return None
+        with self._target_sha_evolution_index_lock:
+            if not self._target_sha_evolution_index_attempted:
+                self._target_sha_evolution_index_attempted = True
+                if progress_callback is not None:
+                    progress_callback("building one direct zet-objet transition index")
+                try:
+                    self._target_sha_evolution_index = (
+                        target_sha_evolution
+                        .build_zettel_objet_target_sha_evolution_index(
+                            self.archive_root
+                        )
+                    )
+                except (OSError, ValueError, archive_services.ArchiveServiceError):
+                    self._target_sha_evolution_index = None
+                if progress_callback is not None:
+                    progress_callback("direct zet-objet transition index ready")
+            index = self._target_sha_evolution_index
+        if index is None:
+            return None
+        if receipt_data.get("action") not in {
+            "mint_zettel",
+            "retire_minted_draft",
+        }:
+            return None
+        zettel = receipt_data.get("zettel")
+        target = receipt_data.get("target")
+        if not isinstance(zettel, dict) or not isinstance(target, dict):
+            return None
+        try:
+            target_relative = archive_relative_path(target_path, self.archive_root)
+        except (ArchivePathError, OSError, ValueError):
+            return None
+        if (
+            target.get("path") != target_relative
+            or target.get("sha256") != expected_sha
+        ):
+            return None
+        archive_id = receipt_data.get("archive_id")
+        zettel_id = zettel.get("id")
+        cutoff = self._target_evolution_cutoff(receipt_data)
+        if not all(
+            isinstance(value, str) and value
+            for value in (archive_id, zettel_id, cutoff)
+        ):
+            return None
+        assessment = index.assess(
+            archive_id=archive_id,
+            zettel_id=zettel_id,
+            zettel_path=target_relative,
+            expected_sha256=expected_sha,
+            current_sha256=actual_sha,
+            cutoff_created_at=cutoff,
+        )
+        evidence = assessment.get("evidence")
+        if (
+            not assessment.get("proven")
+            or assessment.get("state")
+            != target_sha_evolution.EXACT_BYTE_TRANSITION_INTERNAL_EVIDENCE
+            or not isinstance(evidence, dict)
+        ):
+            return None
+        return {
+            "proof_tier": evidence.get("evidence_kind"),
+            "transition_count": evidence.get("transition_count"),
+            "transition_kinds": evidence.get("transition_kinds"),
+            "cryptographic_authentication": evidence.get(
+                "cryptographic_authentication"
+            ),
+            "private_values_echoed": False,
+            "paths_echoed": False,
+        }
+
+    def _mint_target_mismatch_key(
+        self,
+        target_path: Path,
+        expected_sha: str,
+        actual_sha: str,
+    ) -> tuple[str, str, str] | None:
+        if (
+            SHA256_RE.fullmatch(expected_sha) is None
+            or SHA256_RE.fullmatch(actual_sha) is None
+        ):
+            return None
+        try:
+            relative = archive_relative_path(target_path, self.archive_root)
+        except (ArchivePathError, OSError, ValueError):
+            return None
+        return (relative, expected_sha, actual_sha)
+
+    def _field_scoped_assets_evidence_without_chronology(
+        self,
+        receipt_data: dict[str, Any],
+        target_path: Path,
+        expected_sha: str,
+        actual_sha: str,
+        *,
+        progress_callback: Callable[[str], None] | None = None,
+    ) -> dict[str, Any] | None:
+        """Classify exact assets evidence without relaxing a SHA error."""
+
+        try:
+            target_relative = archive_relative_path(target_path, self.archive_root)
+        except (ArchivePathError, OSError, ValueError):
+            return None
+        with self._local_recovery_assets_evolution_index_lock:
+            if not self._local_recovery_assets_evolution_index_attempted:
+                self._local_recovery_assets_evolution_index_attempted = True
+                if progress_callback is not None:
+                    progress_callback("building one field-scoped local recovery index")
+                self._progress(
+                    "local-recovery-assets-evolution-index",
+                    "start",
+                    None,
+                    None,
+                )
+                last_heartbeat = time.monotonic()
+
+                def heartbeat() -> None:
+                    nonlocal last_heartbeat
+                    now = time.monotonic()
+                    if now - last_heartbeat >= 5.0:
+                        self._progress(
+                            "local-recovery-assets-evolution-index",
+                            "still indexing content-private evidence",
+                            None,
+                            None,
+                        )
+                        last_heartbeat = now
+
+                try:
+                    self._local_recovery_assets_evolution_index = (
+                        local_recovery_sha_evolution
+                        .build_local_recovery_assets_evolution_index(
+                            self.archive_root,
+                            heartbeat=heartbeat,
+                        )
+                    )
+                except (OSError, UnicodeError, ValueError):
+                    self._local_recovery_assets_evolution_index = None
+                self._progress(
+                    "local-recovery-assets-evolution-index",
+                    "done",
+                    None,
+                    None,
+                )
+                if progress_callback is not None:
+                    progress_callback("field-scoped local recovery index ready")
+            index = self._local_recovery_assets_evolution_index
+        if (
+            index is None
+            or target_relative not in index.transitions_by_target
+        ):
+            return None
+        cutoff = self._target_evolution_cutoff(receipt_data)
+        if cutoff is None:
+            return None
+        raw, _reason = archive_doctor._stable_regular_file_bytes(
+            target_path,
+            maximum_bytes=DOCTOR_ZETTEL_TEXT_MAX_BYTES,
+            required_root=self._archive_root_boundary,
+        )
+        if (
+            raw is None
+            or hashlib.sha256(raw).hexdigest() != actual_sha
+        ):
+            return None
+        result = (
+            local_recovery_sha_evolution
+            .classify_current_bytes_against_mint_sha(
+                index,
+                target_relative=target_relative,
+                mint_anchor_sha256="sha256:" + expected_sha,
+                mint_cutoff=cutoff,
+                current_bytes=raw,
+            )
+        )
+        if (
+            result.get("proof_tier")
+            != "field_scoped_assets_state_evidence_without_chronology"
+            or result.get("field_state_transition_proven") is not True
+            or result.get("mint_sha_mismatch_softening_allowed") is not False
+        ):
+            return None
+        self._local_recovery_assets_without_chronology_count += 1
+        return {
+            "classification": result.get("proof_tier"),
+            "reason_codes": list(result.get("reason_codes") or []),
+            "matched_evidence_count": result.get("matched_evidence_count"),
+            "field_scope_only": True,
+            "full_file_sha_chain_proven": False,
+            "chronological_post_mint_evolution_proven": False,
+            "mint_sha_mismatch_softened": False,
+            "private_values_echoed": False,
+            "paths_echoed": False,
+        }
+
+    def _record_canonical_mint_target_mismatch(
+        self,
+        receipt_path: Path,
+        target_path: Path,
+        expected_sha: str,
+        actual_sha: str,
+    ) -> None:
+        key = self._mint_target_mismatch_key(
+            target_path,
+            expected_sha,
+            actual_sha,
+        )
+        receipt_relative = self._display_path(receipt_path)
+        if key is not None and isinstance(receipt_relative, str):
+            self._canonical_mint_target_mismatches.setdefault(key, set()).add(
+                receipt_relative
+            )
+
+    def _folded_retired_target_duplicate(
+        self,
+        receipt_data: dict[str, Any],
+        target_path: Path,
+        expected_sha: str,
+        actual_sha: str,
+    ) -> bool:
+        key = self._mint_target_mismatch_key(
+            target_path,
+            expected_sha,
+            actual_sha,
+        )
+        mint_ref = receipt_data.get("mint_receipt")
+        mint_relative = mint_ref.get("path") if isinstance(mint_ref, dict) else None
+        if (
+            key is None
+            or not isinstance(mint_relative, str)
+            or mint_relative not in self._canonical_mint_target_mismatches.get(
+                key, set()
+            )
+        ):
+            return False
+        self._retired_target_duplicate_fold_count += 1
+        return True
 
     def _scope_includes_relative(self, relative: str, selected: set[str]) -> bool:
         return not self.validate_scope.active() or relative in selected
@@ -2351,18 +3752,35 @@ class Doctor:
     def _indexed_zettel_cache_for_path(self, path: Path) -> dict[str, Any] | None:
         if not self.use_zettel_index_cache:
             return None
-        try:
-            relative = archive_relative_path(path, self.archive_root)
-        except (ArchivePathError, OSError, ValueError):
+        relative = self._display_path(path)
+        if relative is None or relative == str(path):
             return None
-        if relative in self._zettel_index_cache:
-            return self._zettel_index_cache[relative]
-        self._zettel_index_cache[relative] = None
         db_path = self.archive_root / archive_services.INDEX_RELATIVE_PATH
         if not db_path.is_file():
             return None
+        # SQLite opens the path itself and can inspect journal sidecars, unlike
+        # the ordinary content caches whose misses use WOM's descriptor-bound
+        # reader.  Keep the complete ancestor proof around this external open.
+        if not self._archive_cache_boundary_current(db_path):
+            self._zettel_index_cache.clear()
+            self._zettel_index_cache_db_identity = None
+            return None
         try:
-            stat = path.stat()
+            identity_before = self._file_cache_identity(path)
+            db_identity_before = self._file_cache_identity(db_path)
+        except OSError:
+            self._zettel_index_cache.pop(relative, None)
+            return None
+        if (
+            self._zettel_index_cache_db_identity is not None
+            and self._zettel_index_cache_db_identity != db_identity_before
+        ):
+            self._zettel_index_cache.clear()
+        self._zettel_index_cache_db_identity = db_identity_before
+        if relative in self._zettel_index_cache:
+            return self._zettel_index_cache[relative]
+        self._zettel_index_cache[relative] = None
+        try:
             conn = archive_services.connect_archive_index(db_path, row_factory=True)
             try:
                 row = conn.execute(
@@ -2376,7 +3794,17 @@ class Doctor:
                 ).fetchone()
             finally:
                 conn.close()
+            identity_after = self._file_cache_identity(path)
+            db_identity_after = self._file_cache_identity(db_path)
         except (OSError, sqlite3.Error):
+            return None
+        if (
+            identity_after != identity_before
+            or db_identity_after != db_identity_before
+            or not self._archive_cache_boundary_current(db_path)
+        ):
+            self._zettel_index_cache.clear()
+            self._zettel_index_cache_db_identity = None
             return None
         if row is None:
             return None
@@ -2385,7 +3813,10 @@ class Doctor:
             file_mtime_ns = int(row["file_mtime_ns"])
         except (TypeError, ValueError):
             return None
-        if file_size != stat.st_size or file_mtime_ns != stat.st_mtime_ns:
+        if (
+            file_size != identity_before[3]
+            or file_mtime_ns != identity_before[4]
+        ):
             return None
         try:
             frontmatter = json.loads(str(row["frontmatter_json"] or ""))
@@ -2398,6 +3829,7 @@ class Doctor:
             "body_sha256": row["body_sha256"],
             "approved_body_sha256": row["approved_body_sha256"],
             "forbidden_location_reference_found": bool(row["forbidden_location_reference_found"]),
+            "file_identity": identity_before,
         }
         self._zettel_index_cache[relative] = cached
         return cached
@@ -2462,7 +3894,7 @@ class Doctor:
             ]:
                 relative = root_policy.get(key, default_relative)
                 try:
-                    policy_path = resolve_archive_relative_path(self.archive_root, str(relative))
+                    policy_path = self._resolve_archive_relative_path(str(relative))
                 except ArchivePathError as exc:
                     self.error("root_policy_path_unsafe", f"root_policy.{key} has an unsafe path: {relative} ({exc})", path)
                     continue
@@ -2471,7 +3903,7 @@ class Doctor:
             if "derived_text_manifest" in root_policy:
                 relative = root_policy.get("derived_text_manifest")
                 try:
-                    policy_path = resolve_archive_relative_path(self.archive_root, str(relative))
+                    policy_path = self._resolve_archive_relative_path(str(relative))
                 except ArchivePathError as exc:
                     self.error(
                         "root_policy_path_unsafe",
@@ -2609,7 +4041,7 @@ class Doctor:
     def _check_source_ref_is_portable(self, value: str, path: Path, field_path: str) -> None:
         if value.startswith("archive:"):
             try:
-                resolve_archive_relative_path(self.archive_root, value.removeprefix("archive:"))
+                self._resolve_archive_relative_path(value.removeprefix("archive:"))
             except ArchivePathError as exc:
                 self.error("source_binding_archive_ref_unsafe", f"{field_path} has an unsafe archive ref: {value} ({exc})", path)
             return
@@ -2672,7 +4104,9 @@ class Doctor:
         if not path.is_file():
             return
         try:
-            sql = path.read_text(encoding="utf-8")
+            sql = self._read_archive_text_stable(path)
+            if sql is None:
+                return
             conn = sqlite3.connect(":memory:")
             try:
                 conn.executescript(sql)
@@ -2687,6 +4121,7 @@ class Doctor:
         path = self.archive_root / "objects" / "manifests" / "files.jsonl"
         raw, snapshot = archive_doctor.capture_doctor_object_manifest_snapshot(
             self.archive_root,
+            root_boundary=self._archive_root_boundary,
         )
         self.object_manifest_snapshot = snapshot
         self._object_manifest_raw = raw
@@ -2762,29 +4197,6 @@ class Doctor:
 
     def _check_object_manifest(self) -> None:
         self._load_object_manifest_records(audit=True)
-        verification = self.object_byte_verification_summary()
-        if verification.bytes_unverified:
-            self.info(
-                "local_object_bytes_unverified",
-                (
-                    "Operational Doctor checked local object paths, presence, and size, "
-                    "but did not read current object bytes. This result is not a byte-integrity "
-                    "proof; rerun with --object-byte-verification deep for a current SHA-256 check."
-                ),
-                details=verification.as_dict(),
-            )
-        elif verification.rehashed_now:
-            self.info(
-                "local_object_bytes_rehashed_now",
-                "Deep Doctor rehashed every unique current local object file in this run.",
-                details=verification.as_dict(),
-            )
-        else:
-            self.info(
-                "local_object_bytes_not_applicable",
-                "Doctor found no present local object file requiring byte verification.",
-                details=verification.as_dict(),
-            )
 
     def object_byte_verification_summary(
         self,
@@ -2797,6 +4209,15 @@ class Doctor:
             rehashed_now=states.count("rehashed_now"),
             attested_unchanged=states.count("attested_unchanged"),
             bytes_unverified=states.count("bytes_unverified"),
+            unresolved_local_reference_count=(
+                self._object_byte_unresolved_reference_count
+            ),
+            completion_revalidation_state=(
+                self._object_byte_completion_revalidation_state
+            ),
+            completion_revalidated_unique_local_file_count=(
+                self._object_byte_completion_revalidated_count
+            ),
         )
 
     def _record_object_byte_state(self, path: Path, state: str) -> None:
@@ -2814,7 +4235,10 @@ class Doctor:
             return
 
         seen: set[str] = set()
-        for line_number, raw_line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+        text = self._read_archive_text_stable(path)
+        if text is None:
+            return
+        for line_number, raw_line in enumerate(text.splitlines(), start=1):
             line = raw_line.strip()
             if not line:
                 continue
@@ -2867,7 +4291,7 @@ class Doctor:
                 self.error("derived_text_logical_key_missing", f"Derived text missing text_logical_key: {derived_text_id}", path)
             else:
                 try:
-                    text_path = resolve_archive_relative_path(self.archive_root, text_logical_key)
+                    text_path = self._resolve_archive_relative_path(text_logical_key)
                 except ArchivePathError as exc:
                     self.error("derived_text_path_unsafe", f"Derived text path is unsafe: {text_logical_key} ({exc})", path)
                 else:
@@ -2895,25 +4319,45 @@ class Doctor:
             self._object_byte_reference_count += 1
             relative_path = location.get("path")
             if not isinstance(relative_path, str):
-                self.warn("local_object_path_missing", f"Local object location missing path: {object_id}", manifest_path)
+                self._object_byte_unresolved_reference_count += 1
+                self.warn("local_object_path_missing", f"Local objet location missing path: {object_id}", manifest_path)
                 continue
             try:
-                local_path = resolve_archive_relative_path(self.archive_root, relative_path)
+                local_path = self._resolve_archive_relative_path(relative_path)
             except ArchivePathError as exc:
-                self.error("local_object_path_unsafe", f"Local object location has an unsafe path: {relative_path} ({exc})", manifest_path)
+                self._object_byte_unresolved_reference_count += 1
+                self.error("local_object_path_unsafe", f"Local objet location has an unsafe path: {relative_path} ({exc})", manifest_path)
                 continue
-            if not local_path.is_file():
-                self.warn("local_object_missing", f"Local object file is missing: {relative_path}", local_path)
+            try:
+                local_stat = local_path.stat()
+            except OSError:
+                local_stat = None
+            if local_stat is None or not stat.S_ISREG(local_stat.st_mode):
+                self._object_byte_unresolved_reference_count += 1
+                self.warn("local_object_missing", f"Local objet file is missing: {relative_path}", local_path)
                 continue
-            if isinstance(expected_size, int) and local_path.stat().st_size != expected_size:
-                self.error("local_object_size_mismatch", f"Local object size mismatch: {relative_path}", local_path)
+            if isinstance(expected_size, int) and local_stat.st_size != expected_size:
+                self.error("local_object_size_mismatch", f"Local objet size mismatch: {relative_path}", local_path)
             if isinstance(expected_sha, str):
                 if self.object_byte_verification_mode == "deep":
-                    self._read_observations["objet_bytes_read"] = True
-                    actual_sha = self._sha256_file_cached(local_path)
-                    self._record_object_byte_state(local_path, "rehashed_now")
-                    if actual_sha != expected_sha:
-                        self.error("local_object_sha_mismatch", f"Local object SHA-256 mismatch: {relative_path}", local_path)
+                    key = self._file_cache_key(local_path)
+                    expectation = (
+                        local_path,
+                        expected_size if isinstance(expected_size, int) else None,
+                        expected_sha,
+                    )
+                    prior = self._object_byte_observations_by_path.get(key)
+                    if prior is not None and prior[1:] != expectation[1:]:
+                        self.error(
+                            "doctor_objet_path_manifest_expectation_conflict",
+                            (
+                                "One local objet path has conflicting manifest byte "
+                                "expectations; WOM will not choose one silently."
+                            ),
+                            local_path,
+                        )
+                    else:
+                        self._object_byte_observations_by_path[key] = expectation
                 else:
                     self._record_object_byte_state(local_path, "bytes_unverified")
             else:
@@ -2928,7 +4372,10 @@ class Doctor:
         for path in sorted(root.glob("*.jsonl")):
             if not self._path_stays_inside_archive(path):
                 continue
-            for line_number, raw_line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+            text = self._read_archive_text_stable(path)
+            if text is None:
+                continue
+            for line_number, raw_line in enumerate(text.splitlines(), start=1):
                 line = raw_line.strip()
                 if not line:
                     continue
@@ -2982,13 +4429,45 @@ class Doctor:
             for path in sorted(root.rglob("*.md")):
                 if not self._path_stays_inside_archive(path):
                     continue
-                try:
-                    relative = archive_relative_path(path, self.archive_root)
-                except (ArchivePathError, OSError, ValueError):
+                relative = self._display_path(path)
+                if relative is None or relative == str(path):
                     continue
                 if not self._scope_includes_relative(relative, self.validate_scope.zettel_paths):
                     continue
                 paths.append(path)
+            if len(paths) >= 16:
+                self._progress(
+                    "zettels",
+                    "prefetching stable zet generations",
+                    0,
+                    len(paths),
+                )
+                with ThreadPoolExecutor(
+                    max_workers=min(8, len(paths)),
+                    thread_name_prefix="wom-doctor-zet-read",
+                ) as executor:
+                    observations = executor.map(
+                        lambda item: self._observe_stable_text_for_prefetch(
+                            item,
+                            encoding="utf-8",
+                        ),
+                        paths,
+                    )
+                    for prefetch_index, (path, observation) in enumerate(
+                        zip(paths, observations, strict=True),
+                        start=1,
+                    ):
+                        self._cache_prefetched_zettel_text(path, observation)
+                        if (
+                            prefetch_index == len(paths)
+                            or prefetch_index % 250 == 0
+                        ):
+                            self._progress(
+                                "zettels",
+                                "prefetched stable zet generations",
+                                prefetch_index,
+                                len(paths),
+                            )
             total = len(paths)
             for index, path in enumerate(paths, start=1):
                 if index == 1 or index == total or index % 250 == 0:
@@ -3084,18 +4563,37 @@ class Doctor:
         cached = self._indexed_zettel_cache_for_path(path)
         if cached is not None:
             data = cached["frontmatter"]
-            self._remember_zettel_frontmatter(path, data)
+            if not self._remember_zettel_frontmatter(
+                path,
+                data,
+                expected_identity=cached.get("file_identity"),
+            ):
+                return
             if cached.get("forbidden_location_reference_found"):
                 self.error("provider_url_in_zettel", "Zettel appears to contain a provider URL or local absolute path.", path)
         else:
             self._read_observations["zettel_bodies_read"] = True
             text = self._load_zettel_text_cached(path)
-            self._zettel_bom_cache[self._file_cache_key(path)] = text.startswith("\ufeff")
+            text_generation = self._zettel_text_cache.get(
+                self._file_cache_key(path)
+            )
+            expected_identity = (
+                text_generation[0]
+                if text_generation is not None
+                and text_generation[1] == text
+                else None
+            )
             if contains_forbidden_location_reference(text):
                 self.error("provider_url_in_zettel", "Zettel appears to contain a provider URL or local absolute path.", path)
 
             frontmatter = parse_frontmatter(text)
             if frontmatter is None:
+                self._remember_zettel_frontmatter(
+                    path,
+                    None,
+                    bom=text.startswith("\ufeff"),
+                    expected_identity=expected_identity,
+                )
                 self.error("zettel_frontmatter_missing", "Zettel is missing YAML frontmatter.", path)
                 return
 
@@ -3103,7 +4601,13 @@ class Doctor:
             if not isinstance(data, dict):
                 self.error("zettel_frontmatter_invalid", "Zettel frontmatter must be a YAML object.", path)
                 return
-            self._remember_zettel_frontmatter(path, data)
+            if not self._remember_zettel_frontmatter(
+                path,
+                data,
+                bom=text.startswith("\ufeff"),
+                expected_identity=expected_identity,
+            ):
+                return
             self._warn_unquoted_yaml_timestamps(data, path)
         self._check_schema(data, "zettel-frontmatter.schema.json", path)
 
@@ -3417,7 +4921,8 @@ class Doctor:
             def receipt_liveness(message: str) -> None:
                 self._progress("mint-receipts", message, index, total)
 
-            self._progress("mint-receipts", self._display_path(path) or "mint receipt", index, total)
+            if emit_detail_progress:
+                self._progress("mint-receipts", "mint receipt", index, total)
             receipt_liveness("started receipt checks")
             receipt_progress("loading receipt json")
             data = self._load_json_file(path)
@@ -3511,7 +5016,7 @@ class Doctor:
                     receipt_progress("recording target mint receipt link error")
                     self.error(
                         "mint_receipt_canonical_link_missing",
-                        "Mint receipt target zettel does not link back through mint.receipt_path.",
+                        "Mint receipt target zet does not link back through mint.receipt_path.",
                         path,
                     )
                 else:
@@ -3533,6 +5038,26 @@ class Doctor:
             None,
             None,
         )
+        if self._local_recovery_assets_without_chronology_count:
+            self.info(
+                "mint_receipt_assets_evidence_without_chronology_summary",
+                (
+                    "Some mint target mismatches have exact field-scoped assets "
+                    "state evidence, but their recovery receipts do not bind a "
+                    "completion time; the mismatches remain errors."
+                ),
+                details={
+                    "classified_count": (
+                        self._local_recovery_assets_without_chronology_count
+                    ),
+                    "classification": (
+                        "field_scoped_assets_state_evidence_without_chronology"
+                    ),
+                    "mint_sha_mismatch_softened": False,
+                    "private_values_echoed": False,
+                    "paths_echoed": False,
+                },
+            )
 
     def _mint_receipt_source_is_retired(self, data: dict[str, Any], path: Path) -> bool:
         zettel = data.get("zettel") if isinstance(data.get("zettel"), dict) else {}
@@ -3561,39 +5086,94 @@ class Doctor:
                 continue
             paths.append(path)
         total = len(paths)
+        if total >= 16:
+            self._progress(
+                "retired-draft-receipts",
+                "prefetching stable receipt generations",
+                0,
+                total,
+            )
+            with ThreadPoolExecutor(
+                max_workers=min(8, total),
+                thread_name_prefix="wom-doctor-retired-receipt",
+            ) as executor:
+                observations = executor.map(
+                    lambda item: self._observe_stable_text_for_prefetch(
+                        item,
+                        encoding="utf-8-sig",
+                    ),
+                    paths,
+                )
+                for index, (path, observation) in enumerate(
+                    zip(paths, observations, strict=True),
+                    start=1,
+                ):
+                    self._cache_prefetched_json_text(path, observation)
+                    if index == total or index % 250 == 0:
+                        self._progress(
+                            "retired-draft-receipts",
+                            "prefetched stable receipt generations",
+                            index,
+                            total,
+                        )
         for index, path in enumerate(paths, start=1):
             if index == 1 or index == total or index % 250 == 0:
-                self._progress("retired-draft-receipts", self._display_path(path) or "retired draft receipt", index, total)
-            data = self._load_json_file(path)
-            if not isinstance(data, dict):
-                continue
-            self._check_schema(data, "mint-retired-draft-receipt.schema.json", path)
-            if data.get("action") != "retire_minted_draft":
-                self.error("mint_retired_draft_action_invalid", "Retired draft receipt action must be retire_minted_draft.", path)
-            if data.get("authority_mode") != archive_services.MINT_AUTHORITY_MODE:
-                self.error("mint_retired_draft_authority_mode_invalid", "Retired draft receipt authority_mode must be basic.", path)
-            if data.get("dry_run") is False and not data.get("reviewed_by"):
-                self.error("mint_retired_draft_reviewer_missing", "Applied retired draft receipt must include reviewed_by.", path)
-            if data.get("receipt_path") != self._display_path(path):
-                self.error("mint_retired_draft_path_mismatch", "Retired draft receipt receipt_path must match its archive-relative path.", path)
-            for field in ["source", "target", "mint_receipt", "snapshot", "zettel", "result"]:
-                if not isinstance(data.get(field), dict):
-                    self.error("mint_retired_draft_field_missing", f"Retired draft receipt must contain object field: {field}.", path)
+                self._progress(
+                    "retired-draft-receipts",
+                    "retired draft receipt",
+                    index,
+                    total,
+                )
+            self._check_one_retired_draft_receipt(path)
+        if self._retired_target_duplicate_fold_count:
+            self.info(
+                "mint_retired_draft_target_duplicate_mismatches_folded",
+                (
+                    "Retired-draft target SHA findings that exactly duplicated "
+                    "their referenced canonical mint finding were folded into the "
+                    "single canonical error."
+                ),
+                details={
+                    "folded_duplicate_count": (
+                        self._retired_target_duplicate_fold_count
+                    ),
+                    "unique_canonical_error_retained": True,
+                    "private_values_echoed": False,
+                    "paths_echoed": False,
+                },
+            )
 
-            source = data.get("source") if isinstance(data.get("source"), dict) else {}
-            source_path_value = source.get("path")
-            if isinstance(source_path_value, str) and source_path_value:
-                try:
-                    source_path = resolve_archive_relative_path(self.archive_root, source_path_value)
-                except ArchivePathError:
-                    self.error("mint_retired_draft_source_path_invalid", "Retired draft receipt source.path is unsafe.", path)
-                else:
-                    if source_path.exists():
-                        self.error("mint_retired_draft_source_still_exists", "Retired inbox draft still exists after retirement receipt.", path)
+    def _check_one_retired_draft_receipt(self, path: Path) -> None:
+        data = self._load_json_file(path)
+        if not isinstance(data, dict):
+            return
+        self._check_schema(data, "mint-retired-draft-receipt.schema.json", path)
+        if data.get("action") != "retire_minted_draft":
+            self.error("mint_retired_draft_action_invalid", "Retired draft receipt action must be retire_minted_draft.", path)
+        if data.get("authority_mode") != archive_services.MINT_AUTHORITY_MODE:
+            self.error("mint_retired_draft_authority_mode_invalid", "Retired draft receipt authority_mode must be basic.", path)
+        if data.get("dry_run") is False and not data.get("reviewed_by"):
+            self.error("mint_retired_draft_reviewer_missing", "Applied retired draft receipt must include reviewed_by.", path)
+        if data.get("receipt_path") != self._display_path(path):
+            self.error("mint_retired_draft_path_mismatch", "Retired draft receipt receipt_path must match its archive-relative path.", path)
+        for field in ["source", "target", "mint_receipt", "snapshot", "zettel", "result"]:
+            if not isinstance(data.get(field), dict):
+                self.error("mint_retired_draft_field_missing", f"Retired draft receipt must contain object field: {field}.", path)
 
-            self._check_retired_draft_existing_ref(data, path, "target")
-            self._check_retired_draft_existing_ref(data, path, "mint_receipt")
-            self._check_retired_draft_existing_ref(data, path, "snapshot")
+        source = data.get("source") if isinstance(data.get("source"), dict) else {}
+        source_path_value = source.get("path")
+        if isinstance(source_path_value, str) and source_path_value:
+            try:
+                source_path = self._resolve_archive_relative_path(source_path_value)
+            except ArchivePathError:
+                self.error("mint_retired_draft_source_path_invalid", "Retired draft receipt source.path is unsafe.", path)
+            else:
+                if source_path.exists():
+                    self.error("mint_retired_draft_source_still_exists", "Retired inbox draft still exists after retirement receipt.", path)
+
+        self._check_retired_draft_existing_ref(data, path, "target")
+        self._check_retired_draft_existing_ref(data, path, "mint_receipt")
+        self._check_retired_draft_existing_ref(data, path, "snapshot")
 
     def _check_reconcile_receipts(self) -> None:
         root = self.archive_root / archive_services.MINT_RECONCILE_RECEIPTS_DIR
@@ -3881,7 +5461,7 @@ class Doctor:
         paths = []
         for relative in sorted(self.validate_scope.edge_receipt_paths):
             try:
-                path = resolve_archive_relative_path(self.archive_root, relative)
+                path = self._resolve_archive_relative_path(relative)
             except ArchivePathError:
                 self.error("zettel_edge_receipt_path_unsafe", "Scoped zettel-edge receipt path is unsafe.", relative)
                 continue
@@ -3951,13 +5531,46 @@ class Doctor:
             return
         actual_sha = self._sha256_file_cached(resolved)
         if actual_sha != expected_sha:
-            if section == "target" and self._target_sha_evolved_by_edge_receipts(data, resolved, expected_sha):
-                self.info(
-                    "mint_retired_draft_target_sha_evolved_by_edge_receipts",
-                    "Retired draft receipt target.sha256 is historical; current target differs only by approved zettel-edge receipts.",
-                    path,
+            if section == "target":
+                direct_evidence = (
+                    self._target_sha_evolved_by_direct_objet_receipts(
+                        data,
+                        path,
+                        resolved,
+                        expected_sha,
+                        actual_sha,
+                    )
                 )
-                return
+                if direct_evidence is not None:
+                    self.info(
+                        "mint_retired_draft_target_sha_evolved_by_direct_objet_receipts",
+                        (
+                            "Retired draft target.sha256 is historical; one exact "
+                            "post-mint zet-objet byte-transition chain reaches the "
+                            "current target."
+                        ),
+                        path,
+                        details=direct_evidence,
+                    )
+                    return
+                if self._target_sha_evolved_by_edge_receipts(
+                    data,
+                    resolved,
+                    expected_sha,
+                ):
+                    self.info(
+                        "mint_retired_draft_target_sha_evolved_by_edge_receipts",
+                        "Retired draft receipt target.sha256 is historical; current target differs only by approved zettel-edge receipts.",
+                        path,
+                    )
+                    return
+                if self._folded_retired_target_duplicate(
+                    data,
+                    resolved,
+                    expected_sha,
+                    actual_sha,
+                ):
+                    return
             # v0.3.167 Item 2: discoverability route to the retire-draft-reconcile
             # sibling. Mirror the mint route: a byte-drift-suspected FORMAT variant
             # fires ONLY when a prior retire reconcile recorded a normalized_content_digest
@@ -3975,12 +5588,18 @@ class Doctor:
                         recorded_digest = report.get("normalized_content_digest")
                         break
             if section in ("target", "snapshot", "source") and isinstance(recorded_digest, str) and SHA256_RE.match(recorded_digest):
-                try:
-                    current_digest = hashlib.sha256(
-                        archive_services.bytes_normalized_for_content_compare(resolved.read_bytes())
+                raw, _reason = archive_doctor._stable_regular_file_bytes(
+                    resolved,
+                    maximum_bytes=DOCTOR_ZETTEL_TEXT_MAX_BYTES,
+                    required_root=self._archive_root_boundary,
+                )
+                current_digest = (
+                    hashlib.sha256(
+                        archive_services.bytes_normalized_for_content_compare(raw)
                     ).hexdigest()
-                except OSError:
-                    current_digest = None
+                    if raw is not None
+                    else None
+                )
                 if current_digest == recorded_digest:
                     self.error(
                         "mint_retired_draft_byte_drift_suspected_format",
@@ -4055,7 +5674,31 @@ class Doctor:
             progress_label=section,
         )
         if actual_sha != expected_sha:
+            mismatch_details: dict[str, Any] | None = None
             if section == "target":
+                if progress_callback is not None:
+                    progress_callback("checking direct zet-objet receipt evolution")
+                direct_evidence = (
+                    self._target_sha_evolved_by_direct_objet_receipts(
+                        data,
+                        path,
+                        resolved,
+                        expected_sha,
+                        actual_sha,
+                        progress_callback=progress_callback,
+                    )
+                )
+                if direct_evidence is not None:
+                    self.info(
+                        "mint_receipt_target_sha_evolved_by_direct_objet_receipts",
+                        (
+                            "Mint target.sha256 is historical; one exact post-mint "
+                            "zet-objet byte-transition chain reaches the current target."
+                        ),
+                        path,
+                        details=direct_evidence,
+                    )
+                    return resolved
                 if progress_callback is not None:
                     progress_callback("checking target edge-receipt evolution")
                 if self._target_sha_evolved_by_edge_receipts(
@@ -4070,6 +5713,25 @@ class Doctor:
                         path,
                     )
                     return resolved
+                if progress_callback is not None:
+                    progress_callback(
+                        "checking field-scoped local recovery evidence"
+                    )
+                mismatch_details = (
+                    self._field_scoped_assets_evidence_without_chronology(
+                        data,
+                        resolved,
+                        expected_sha,
+                        actual_sha,
+                        progress_callback=progress_callback,
+                    )
+                )
+                self._record_canonical_mint_target_mismatch(
+                    path,
+                    resolved,
+                    expected_sha,
+                    actual_sha,
+                )
             if progress_callback is not None:
                 progress_callback(f"{section} file sha256 mismatch")
             # Format-drift route (v0.3.162): a PREVIOUSLY-reconciled receipt that
@@ -4083,12 +5745,18 @@ class Doctor:
                 reconcile = data.get("reconcile") if isinstance(data.get("reconcile"), dict) else {}
                 recorded_digest = reconcile.get("normalized_content_digest")
                 if isinstance(recorded_digest, str) and SHA256_RE.match(recorded_digest):
-                    try:
-                        current_digest = hashlib.sha256(
-                            archive_services.bytes_normalized_for_content_compare(resolved.read_bytes())
+                    raw, _reason = archive_doctor._stable_regular_file_bytes(
+                        resolved,
+                        maximum_bytes=DOCTOR_ZETTEL_TEXT_MAX_BYTES,
+                        required_root=self._archive_root_boundary,
+                    )
+                    current_digest = (
+                        hashlib.sha256(
+                            archive_services.bytes_normalized_for_content_compare(raw)
                         ).hexdigest()
-                    except OSError:
-                        current_digest = None
+                        if raw is not None
+                        else None
+                    )
                     if current_digest == recorded_digest:
                         zettel = data.get("zettel") if isinstance(data.get("zettel"), dict) else {}
                         zettel_id = zettel.get("id") if isinstance(zettel.get("id"), str) else "<id>"
@@ -4098,6 +5766,7 @@ class Doctor:
                             "(suspected format drift, UNVERIFIED). Run remint-reconcile to classify and clear.",
                             path,
                             suggested_command=f"archive remint-reconcile <archive-root> --zettel-id {zettel_id} --dry-run",
+                            details=mismatch_details,
                         )
                         return resolved
                 zettel = data.get("zettel") if isinstance(data.get("zettel"), dict) else {}
@@ -4107,6 +5776,7 @@ class Doctor:
                     f"Mint receipt {section}.sha256 does not match the referenced file.",
                     path,
                     suggested_command=f"archive remint-reconcile <archive-root> --zettel-id {zettel_id} --dry-run",
+                    details=mismatch_details,
                 )
                 return resolved
             self.error("mint_receipt_sha_mismatch", f"Mint receipt {section}.sha256 does not match the referenced file.", path)
@@ -4169,7 +5839,10 @@ class Doctor:
             )
             if resolved is None:
                 continue
-            actual_sha = sha256_file(resolved)
+            actual_sha = sha256_file(
+                resolved,
+                required_root=self._archive_root_boundary,
+            )
             if actual_sha != expected_sha:
                 self.error("delegate_receipt_zettel_sha_mismatch", f"Delegate receipt delegated_zets[{index}].sha256 does not match the referenced zettel.", path)
 
@@ -4191,7 +5864,7 @@ class Doctor:
         try:
             if progress_callback is not None:
                 progress_callback(f"resolving {progress_label} file path")
-            resolved = resolve_archive_relative_path(self.archive_root, value)
+            resolved = self._resolve_archive_relative_path(value)
         except ArchivePathError as exc:
             self.error(f"{code_prefix}_path_unsafe", f"{label} is unsafe: {value} ({exc})", path)
             return None
@@ -4333,29 +6006,67 @@ class Doctor:
         self._progress(stage, "checking gitignore secret patterns", None, None)
         self._check_gitignore_secret_patterns()
         self._progress(stage, "walking archive files", None, None)
+        if (
+            self._archive_tree_inventory_complete
+            and self._run_cache_snapshot_active
+        ):
+            self._check_local_profile_and_secret_safety_from_inventory(stage)
+            return
         checked_files = 0
         skipped_dirs = 0
         secret_content_files = 0
         local_profile_files = 0
         last_progress = time.monotonic()
-        at_archive_root = True
-        for dirpath, dirnames, filenames in os.walk(self.archive_root):
-            dir_path = Path(dirpath)
-            if not is_path_within_root(dir_path, self.archive_root):
-                dirnames[:] = []
+        ignored_directory_names = {
+            name.casefold() for name in SECRET_SAFETY_IGNORED_DIRS
+        }
+        quarantined_root_names = {
+            name.casefold() for name in SECRET_SAFETY_QUARANTINED_ROOT_DIRS
+        }
+        pending: list[tuple[Path, bool]] = [(self.archive_root, True)]
+        while pending:
+            dir_path, is_archive_root = pending.pop()
+            if not self._path_is_currently_within_archive(dir_path):
                 continue
-            before_dirs = len(dirnames)
-            ignored_dirs = SECRET_SAFETY_IGNORED_DIRS
-            if at_archive_root:
-                ignored_dirs = ignored_dirs | SECRET_SAFETY_QUARANTINED_ROOT_DIRS
-                at_archive_root = False
-            ignored_dir_names = {name.casefold() for name in ignored_dirs}
-            dirnames[:] = [
-                name for name in dirnames if name.casefold() not in ignored_dir_names
-            ]
-            skipped_dirs += before_dirs - len(dirnames)
-            for filename in filenames:
-                path = dir_path / filename
+            try:
+                with os.scandir(dir_path) as iterator:
+                    entries = sorted(
+                        iterator,
+                        key=lambda item: item.name.casefold(),
+                    )
+            except OSError:
+                continue
+            child_directories: list[Path] = []
+            for entry in entries:
+                path = Path(entry.path)
+                try:
+                    observed = entry.stat(follow_symlinks=False)
+                except OSError:
+                    continue
+                if stat.S_ISDIR(observed.st_mode):
+                    ignored = entry.name.casefold() in ignored_directory_names
+                    if (
+                        is_archive_root
+                        and entry.name.casefold() in quarantined_root_names
+                    ):
+                        ignored = True
+                    if ignored:
+                        skipped_dirs += 1
+                        continue
+                    if (
+                        stat.S_ISLNK(observed.st_mode)
+                        or archive_doctor._is_reparse_point(observed)
+                    ):
+                        skipped_dirs += 1
+                        self.error(
+                            "doctor_secret_scan_directory_unsafe",
+                            "Secret scanning skipped a non-regular or reparse directory boundary.",
+                            path,
+                        )
+                        continue
+                    child_directories.append(path)
+                    continue
+
                 checked_files += 1
                 now = time.monotonic()
                 if checked_files == 1 or checked_files % SECRET_SAFETY_PROGRESS_EVERY_FILES == 0:
@@ -4378,37 +6089,189 @@ class Doctor:
                         None,
                     )
                     last_progress = now
-                if path.is_symlink():
-                    if (
-                        not path.is_file()
-                        or not self._path_stays_inside_archive(path)
-                        or self._is_ignored_scan_path(path)
-                    ):
-                        continue
-                    relative = self._display_path(path) or str(path)
-                else:
-                    if not path.is_file():
-                        continue
-                    try:
-                        relative = PurePosixPath(*path.relative_to(self.archive_root).parts).as_posix()
-                    except ValueError:
-                        self.error(
-                            "archive_path_escapes_root",
-                            "Archive file is outside the archive root during local profile safety inspection.",
-                            path,
-                        )
-                        continue
+                if (
+                    stat.S_ISLNK(observed.st_mode)
+                    or archive_doctor._is_reparse_point(observed)
+                    or not stat.S_ISREG(observed.st_mode)
+                ):
+                    self.error(
+                        "doctor_secret_scan_file_unsafe",
+                        "Secret scanning skipped a non-regular, symlink, or reparse file.",
+                        path,
+                    )
+                    continue
+                relative = self._lexical_archive_relative(path)
+                if relative is None:
+                    self.error(
+                        "archive_path_escapes_root",
+                        "Archive file is outside the archive root during local profile safety inspection.",
+                        path,
+                    )
+                    continue
                 if self._is_secret_filename(path, relative=relative):
                     self.error("secret_file_detected", f"Secret-like local file should not live in the archive: {relative}", path)
                     continue
                 if self._should_scan_secret_content(path):
                     secret_content_files += 1
                     self._read_observations["archive_text_scanned_for_secret_patterns"] = True
-                    if self._file_contains_secret_value(path, stage=stage, progress_label=relative):
+                    cached = self._secret_value_observation_cache.get(
+                        self._file_cache_key(path)
+                    )
+                    if (
+                        cached is not None
+                        and cached[0] == self._stat_identity(observed)
+                        and self._archive_root_boundary_current()
+                    ):
+                        secret_found = cached[1]
+                    else:
+                        secret_found = self._file_contains_secret_value(
+                            path,
+                            stage=stage,
+                            progress_label=relative,
+                        )
+                    if secret_found:
                         self.error("secret_value_detected", f"Secret-like value found in archive file: {relative}", path)
                 if self._is_local_profile_path(path, relative=relative):
                     local_profile_files += 1
                     self._check_local_profile_file(path)
+            pending.extend(
+                (child_path, False)
+                for child_path in reversed(child_directories)
+            )
+        self._progress(
+            stage,
+            "local profile secret safety summary "
+            f"checked_files={checked_files} content_scanned={secret_content_files} "
+            f"local_profiles={local_profile_files} skipped_dirs={skipped_dirs}",
+            None,
+            None,
+        )
+
+    def _check_local_profile_and_secret_safety_from_inventory(
+        self,
+        stage: str,
+    ) -> None:
+        """Reuse the safe tree inventory instead of walking the disk twice."""
+
+        ignored_names = {name.casefold() for name in SECRET_SAFETY_IGNORED_DIRS}
+        quarantined_names = {
+            name.casefold() for name in SECRET_SAFETY_QUARANTINED_ROOT_DIRS
+        }
+
+        def ignored(relative: str) -> bool:
+            parts = PurePosixPath(relative).parts
+            return bool(
+                any(part.casefold() in ignored_names for part in parts[:-1])
+                or (
+                    parts
+                    and parts[0].casefold() in quarantined_names
+                )
+            )
+
+        skipped_directory_keys = {
+            key
+            for key in self._archive_tree_directory_identities
+            if key != "."
+            and any(
+                part.casefold() in ignored_names
+                for part in PurePosixPath(key.replace(os.sep, "/")).parts
+            )
+        }
+        checked_files = 0
+        secret_content_files = 0
+        local_profile_files = 0
+        skipped_dirs = len(skipped_directory_keys)
+        last_progress = time.monotonic()
+
+        for unsafe_path, is_directory in self._archive_tree_unsafe_entries:
+            relative = self._lexical_archive_relative(unsafe_path)
+            if relative is None or ignored(relative):
+                continue
+            if is_directory:
+                skipped_dirs += 1
+                self.error(
+                    "doctor_secret_scan_directory_unsafe",
+                    "Secret scanning skipped a non-regular or reparse directory boundary.",
+                    unsafe_path,
+                )
+            else:
+                checked_files += 1
+                self.error(
+                    "doctor_secret_scan_file_unsafe",
+                    "Secret scanning skipped a non-regular, symlink, or reparse file.",
+                    unsafe_path,
+                )
+
+        for key, expected_identity in sorted(
+            self._archive_tree_file_identities.items()
+        ):
+            relative = key.replace(os.sep, "/")
+            if ignored(relative):
+                continue
+            path = self.archive_root.joinpath(*PurePosixPath(relative).parts)
+            checked_files += 1
+            now = time.monotonic()
+            if (
+                checked_files == 1
+                or checked_files % SECRET_SAFETY_PROGRESS_EVERY_FILES == 0
+            ):
+                self._progress(
+                    stage,
+                    "checked archive files "
+                    f"files={checked_files} content={secret_content_files} "
+                    f"profiles={local_profile_files} skipped_dirs={skipped_dirs}",
+                    checked_files,
+                    None,
+                )
+                last_progress = now
+            elif now - last_progress >= SECRET_SAFETY_PROGRESS_SECONDS:
+                self._progress(
+                    stage,
+                    "still checking local profile secret safety "
+                    f"files={checked_files} content={secret_content_files} "
+                    f"profiles={local_profile_files} skipped_dirs={skipped_dirs}",
+                    checked_files,
+                    None,
+                )
+                last_progress = now
+
+            if self._is_secret_filename(path, relative=relative):
+                self.error(
+                    "secret_file_detected",
+                    f"Secret-like local file should not live in the archive: {relative}",
+                    path,
+                )
+                continue
+            if self._should_scan_secret_content(path):
+                secret_content_files += 1
+                self._read_observations[
+                    "archive_text_scanned_for_secret_patterns"
+                ] = True
+                cached = self._secret_value_observation_cache.get(
+                    self._file_cache_key(path)
+                )
+                if (
+                    cached is not None
+                    and cached[0] == expected_identity
+                    and self._run_file_generation_is_trusted(path, cached[0])
+                ):
+                    secret_found = cached[1]
+                else:
+                    secret_found = self._file_contains_secret_value(
+                        path,
+                        stage=stage,
+                        progress_label=relative,
+                    )
+                if secret_found:
+                    self.error(
+                        "secret_value_detected",
+                        f"Secret-like value found in archive file: {relative}",
+                        path,
+                    )
+            if self._is_local_profile_path(path, relative=relative):
+                local_profile_files += 1
+                self._check_local_profile_file(path)
+
         self._progress(
             stage,
             "local profile secret safety summary "
@@ -4423,9 +6286,12 @@ class Doctor:
         if not path.is_file():
             self.warn("local_profile_gitignore_missing", "Archive has no .gitignore protecting local profiles and secrets.", path)
             return
+        text = self._read_archive_text_stable(path)
+        if text is None:
+            return
         lines = {
             line.strip()
-            for line in path.read_text(encoding="utf-8").splitlines()
+            for line in text.splitlines()
             if line.strip() and not line.strip().startswith("#")
         }
         missing = [pattern for pattern in RECOMMENDED_GITIGNORE_PATTERNS if pattern not in lines]
@@ -4465,34 +6331,131 @@ class Doctor:
         return relative.endswith(".local.yml") or relative.endswith(".local.yaml") or relative.startswith(LOCAL_PROFILE_ROOTS)
 
     def _file_contains_secret_value(self, path: Path, *, stage: str, progress_label: str) -> bool:
-        cached_text = self._zettel_text_cache.get(self._file_cache_key(path))
-        if cached_text is not None:
-            return contains_secret_value(cached_text)
         bytes_read = 0
         tail = ""
         last_progress = time.monotonic()
-        try:
-            with path.open("r", encoding="utf-8") as handle:
-                while True:
-                    chunk = handle.read(SECRET_SAFETY_READ_CHUNK_SIZE)
-                    if not chunk:
-                        return False
-                    bytes_read += len(chunk.encode("utf-8", errors="ignore"))
-                    text = tail + chunk
-                    if contains_secret_value(text):
-                        return True
-                    tail = text[-512:]
-                    now = time.monotonic()
-                    if now - last_progress >= SECRET_SAFETY_PROGRESS_SECONDS:
-                        self._progress(
-                            stage,
-                            f"still scanning secret content {progress_label} bytes={bytes_read}",
-                            None,
-                            None,
-                        )
-                        last_progress = now
-        except UnicodeDecodeError:
+        found = False
+        if not self._archive_cache_boundary_current(path):
+            self.error(
+                "doctor_secret_scan_input_changed",
+                (
+                    "Secret scanning did not reuse content after the archive "
+                    "root or ancestor boundary changed."
+                ),
+                path,
+            )
             return False
+        try:
+            path_before = os.lstat(path)
+        except OSError:
+            return False
+        if (
+            stat.S_ISLNK(path_before.st_mode)
+            or archive_doctor._is_reparse_point(path_before)
+            or not stat.S_ISREG(path_before.st_mode)
+        ):
+            self.error(
+                "doctor_secret_scan_file_unsafe",
+                "Secret scanning refused a non-regular, symlink, or reparse file.",
+                path,
+            )
+            return False
+        key = self._file_cache_key(path)
+        cached = self._secret_value_observation_cache.get(key)
+        if (
+            cached is not None
+            and cached[0] == self._stat_identity(path_before)
+        ):
+            return cached[1]
+        flags = (
+            os.O_RDONLY
+            | int(getattr(os, "O_BINARY", 0) or 0)
+            | int(getattr(os, "O_NOFOLLOW", 0) or 0)
+        )
+        try:
+            descriptor = os.open(str(path), flags)
+        except OSError:
+            return False
+        try:
+            opened_before = os.fstat(descriptor)
+            if (
+                not stat.S_ISREG(opened_before.st_mode)
+                or archive_doctor._is_reparse_point(opened_before)
+                or archive_doctor._identity_changed(path_before, opened_before)
+                or not archive_doctor.descriptor_path_stays_within_root(
+                    descriptor,
+                    required_root=self._archive_root_boundary,
+                )
+            ):
+                self.error(
+                    "doctor_secret_scan_input_changed",
+                    "Secret scanning refused a file whose opened identity changed.",
+                    path,
+                )
+                return False
+            decoder = codecs.getincrementaldecoder("utf-8")("strict")
+            while True:
+                raw_chunk = os.read(descriptor, SECRET_SAFETY_READ_CHUNK_SIZE)
+                if not raw_chunk:
+                    chunk = decoder.decode(b"", final=True)
+                    if chunk and contains_secret_value(tail + chunk):
+                        found = True
+                    break
+                bytes_read += len(raw_chunk)
+                chunk = decoder.decode(raw_chunk, final=False)
+                text = tail + chunk
+                if contains_secret_value(text):
+                    found = True
+                tail = text[-512:]
+                now = time.monotonic()
+                if now - last_progress >= SECRET_SAFETY_PROGRESS_SECONDS:
+                    self._progress(
+                        stage,
+                        f"still scanning secret content bytes={bytes_read}",
+                        None,
+                        None,
+                    )
+                    last_progress = now
+            opened_after = os.fstat(descriptor)
+            descriptor_inside_after = (
+                archive_doctor.doctor_archive_root_boundary_is_current(
+                    self._archive_root_boundary
+                )
+            )
+        except (OSError, UnicodeDecodeError):
+            return False
+        finally:
+            os.close(descriptor)
+        try:
+            path_after = os.lstat(path)
+        except OSError:
+            path_after = None
+        if (
+            path_after is None
+            or not stat.S_ISREG(path_after.st_mode)
+            or stat.S_ISLNK(path_after.st_mode)
+            or archive_doctor._is_reparse_point(path_after)
+            or archive_doctor._identity_changed(opened_before, opened_after)
+            or archive_doctor._identity_changed(opened_after, path_after)
+            or not descriptor_inside_after
+            or not self._archive_cache_boundary_current(path)
+            or bytes_read != int(opened_after.st_size)
+        ):
+            self.error(
+                "doctor_secret_scan_input_changed",
+                "Secret scanning discarded a result because the file changed during the descriptor-bound read.",
+                path,
+            )
+            return False
+        self._secret_value_observation_cache[key] = (
+            self._stat_identity(path_after),
+            found,
+        )
+        self._remember_run_file_generation(
+            path,
+            self._stat_identity(path_after),
+        )
+        return found
 
     def _check_local_profile_file(self, path: Path) -> None:
         data = self._load_yaml_file(path, missing_ok=True) if path.suffix.lower() in {".yml", ".yaml"} else None
@@ -4511,41 +6474,136 @@ class Doctor:
             self.error("local_profile_secret_value", "Local profile appears to contain a secret value.", path)
 
     def _check_symlink_boundaries(self) -> None:
+        self._archive_tree_file_identities.clear()
+        self._archive_tree_directory_identities.clear()
+        self._archive_tree_unsafe_entries.clear()
+        self._archive_tree_inventory_complete = False
         quarantine_names = {
             name.casefold() for name in SECRET_SAFETY_QUARANTINED_ROOT_DIRS
         }
-        at_archive_root = True
-        for dirpath, dirnames, filenames in os.walk(
-            self.archive_root,
-            topdown=True,
-            followlinks=False,
-        ):
-            dir_path = Path(dirpath)
-            if not is_path_within_root(dir_path, self.archive_root):
-                dirnames[:] = []
-                continue
-            if at_archive_root:
-                dirnames[:] = [
-                    name
-                    for name in dirnames
-                    if name.casefold() not in quarantine_names
-                ]
-                at_archive_root = False
-            dirnames.sort(key=str.casefold)
-            for name in sorted([*dirnames, *filenames], key=str.casefold):
-                path = dir_path / name
-                if path.is_symlink() and not is_path_within_root(
-                    path,
+        try:
+            if (
+                self._archive_root_boundary is None
+                or not archive_doctor.doctor_archive_root_boundary_is_current(
+                    self._archive_root_boundary
+                )
+            ):
+                self.error(
+                    "archive_root_boundary_changed",
+                    (
+                        "Archive root identity changed before the safe boundary "
+                        "inventory; Doctor did not traverse the replacement."
+                    ),
                     self.archive_root,
-                ):
-                    self.error(
-                        "archive_symlink_escapes_root",
-                        "Archive symlink resolves outside the archive root.",
-                        path,
+                )
+                return
+            root_observed = os.lstat(self.archive_root)
+            if (
+                stat.S_ISLNK(root_observed.st_mode)
+                or archive_doctor._is_reparse_point(root_observed)
+                or not stat.S_ISDIR(root_observed.st_mode)
+            ):
+                return
+            self._archive_tree_directory_identities[
+                self._archive_tree_key(".")
+            ] = self._inventory_directory_identity(root_observed)
+            pending: list[tuple[Path, bool]] = [(self.archive_root, True)]
+            while pending:
+                dir_path, is_archive_root = pending.pop()
+                try:
+                    with os.scandir(dir_path) as iterator:
+                        entries = sorted(
+                            iterator,
+                            key=lambda item: item.name.casefold(),
+                        )
+                except OSError:
+                    continue
+                child_directories: list[Path] = []
+                for entry in entries:
+                    if (
+                        is_archive_root
+                        and entry.name.casefold() in quarantine_names
+                    ):
+                        continue
+                    path = Path(entry.path)
+                    try:
+                        observed = entry.stat(follow_symlinks=False)
+                    except OSError:
+                        continue
+                    if (
+                        not stat.S_ISLNK(observed.st_mode)
+                        and not archive_doctor._is_reparse_point(observed)
+                        and stat.S_ISDIR(observed.st_mode)
+                    ):
+                        relative = self._lexical_archive_relative(path)
+                        try:
+                            directory_observed = os.lstat(path)
+                        except OSError:
+                            directory_observed = None
+                        if (
+                            relative is not None
+                            and directory_observed is not None
+                            and not stat.S_ISLNK(directory_observed.st_mode)
+                            and not archive_doctor._is_reparse_point(
+                                directory_observed
+                            )
+                            and stat.S_ISDIR(directory_observed.st_mode)
+                        ):
+                            self._archive_tree_directory_identities[
+                                self._archive_tree_key(relative)
+                            ] = self._inventory_directory_identity(
+                                directory_observed
+                            )
+                            child_directories.append(path)
+                        continue
+                    if (
+                        not stat.S_ISLNK(observed.st_mode)
+                        and not archive_doctor._is_reparse_point(observed)
+                        and stat.S_ISREG(observed.st_mode)
+                    ):
+                        relative = self._lexical_archive_relative(path)
+                        try:
+                            file_observed = os.lstat(path)
+                        except OSError:
+                            file_observed = None
+                        if (
+                            relative is not None
+                            and file_observed is not None
+                            and not stat.S_ISLNK(file_observed.st_mode)
+                            and not archive_doctor._is_reparse_point(
+                                file_observed
+                            )
+                            and stat.S_ISREG(file_observed.st_mode)
+                        ):
+                            self._archive_tree_file_identities[
+                                self._archive_tree_key(relative)
+                            ] = self._inventory_stat_identity(file_observed)
+                        continue
+                    if stat.S_ISLNK(observed.st_mode):
+                        try:
+                            escapes = not path.resolve().is_relative_to(
+                                self.archive_root
+                            )
+                        except (OSError, RuntimeError, ValueError):
+                            escapes = True
+                        if escapes:
+                            self.error(
+                                "archive_symlink_escapes_root",
+                                "Archive symlink resolves outside the archive root.",
+                                path,
+                            )
+                    self._archive_tree_unsafe_entries.append(
+                        (path, stat.S_ISDIR(observed.st_mode))
                     )
+                pending.extend(
+                    (child_path, False)
+                    for child_path in reversed(child_directories)
+                )
+        finally:
+            self._archive_tree_inventory_complete = True
 
     def _path_stays_inside_archive(self, path: Path) -> bool:
-        if is_path_within_root(path, self.archive_root):
+        if self._path_is_currently_within_archive(path):
             return True
         self.error(
             "archive_path_escapes_root",
@@ -4568,15 +6626,57 @@ class Doctor:
                 return {item.get("id") for item in link_types if isinstance(item, dict) and item.get("id")}
         return set()
 
+    def _read_archive_text_stable(
+        self,
+        path: Path,
+        *,
+        encoding: str = "utf-8",
+    ) -> str | None:
+        archive_contained = self._path_lexically_inside_archive(path)
+        if archive_contained and self._archive_root_boundary is None:
+            self.error(
+                "archive_root_boundary_unverified",
+                "Archive text was not read because its root boundary is unavailable.",
+                path,
+            )
+            return None
+        if archive_contained and not self._path_stays_inside_archive(path):
+            return None
+        raw, reason = archive_doctor._stable_regular_file_bytes(
+            path,
+            maximum_bytes=DOCTOR_ZETTEL_TEXT_MAX_BYTES,
+            required_root=(
+                self._archive_root_boundary if archive_contained else None
+            ),
+        )
+        if raw is None:
+            self.error(
+                "doctor_file_input_unverified",
+                "An archive text file could not be read from one stable archive-contained handle.",
+                path,
+                details={"state": reason or "unverified"},
+            )
+            return None
+        try:
+            return raw.decode(encoding)
+        except UnicodeError:
+            self.error(
+                "doctor_file_utf8_invalid",
+                "An archive text file is not valid UTF-8.",
+                path,
+            )
+            return None
+
     def _load_yaml_file(self, path: Path, missing_ok: bool = False) -> Any:
         if not path.is_file():
             if not missing_ok:
                 self.error("yaml_file_missing", "YAML file is missing.", path)
             return None
-        if self._path_lexically_inside_archive(path) and not self._path_stays_inside_archive(path):
+        text = self._read_archive_text_stable(path)
+        if text is None:
             return None
         try:
-            return load_yaml(path.read_text(encoding="utf-8"))
+            return load_yaml(text)
         except Exception as exc:
             self.error("yaml_parse_error", f"YAML failed to parse: {exc}", path)
             return None
@@ -4589,22 +6689,66 @@ class Doctor:
             return None
 
     def _load_json_file(self, path: Path) -> Any:
-        if self._path_lexically_inside_archive(path) and not self._path_stays_inside_archive(path):
+        key = self._file_cache_key(path)
+        cached = self._json_file_cache.get(key)
+        if (
+            cached is not None
+            and self._run_file_generation_is_trusted(path, cached[0])
+        ):
+            return cached[1]
+        try:
+            identity_before = self._file_cache_identity(path)
+        except OSError as exc:
+            self.error("json_read_error", f"JSON file could not be read: {exc}", path)
+            self._json_file_cache.pop(key, None)
+            return None
+        if cached is not None and cached[0] == identity_before:
+            return cached[1]
+        raw, reason = archive_doctor._stable_regular_file_bytes(
+            path,
+            maximum_bytes=DOCTOR_ZETTEL_TEXT_MAX_BYTES,
+            required_root=self._archive_root_boundary,
+        )
+        try:
+            identity_after = self._file_cache_identity(path)
+        except OSError:
+            identity_after = None
+        if (
+            raw is None
+            or identity_after is None
+            or identity_before != identity_after
+        ):
+            self.error(
+                "json_read_error",
+                "JSON file could not be bound to one stable regular-file generation: "
+                + str(reason or "identity_changed"),
+                path,
+            )
+            self._json_file_cache.pop(key, None)
             return None
         try:
-            return json.loads(path.read_text(encoding="utf-8-sig"))
+            text = raw.decode("utf-8-sig")
+            data = json.loads(text)
         except json.JSONDecodeError as exc:
             self.error("json_parse_error", f"JSON failed to parse: {exc}", path)
             return None
-        except OSError as exc:
-            self.error("json_read_error", f"JSON file could not be read: {exc}", path)
+        except UnicodeDecodeError as exc:
+            self.error("json_read_error", f"JSON file is not valid UTF-8: {exc}", path)
             return None
+        self._json_file_cache[key] = (identity_after, data)
+        self._file_sha256_cache[key] = (
+            identity_after,
+            hashlib.sha256(raw).hexdigest(),
+        )
+        self._secret_value_observation_cache[key] = (
+            identity_after,
+            contains_secret_value(text),
+        )
+        self._remember_run_file_generation(path, identity_after)
+        return data
 
     def _path_lexically_inside_archive(self, path: Path) -> bool:
-        try:
-            return path.absolute().is_relative_to(self.archive_root)
-        except (OSError, RuntimeError, ValueError):
-            return False
+        return self._lexical_archive_relative(path) is not None
 
 
 def require_yaml() -> None:
@@ -4637,19 +6781,27 @@ def sha256_file(
     *,
     progress_callback: Callable[[int], None] | None = None,
     progress_step_bytes: int = 64 * 1024 * 1024,
+    required_root: archive_doctor.DoctorArchiveRootBoundary | None = None,
 ) -> str:
-    digest = hashlib.sha256()
-    bytes_read = 0
     next_report = max(1, progress_step_bytes)
-    with path.open("rb") as file:
-        for chunk in iter(lambda: file.read(1024 * 1024), b""):
-            bytes_read += len(chunk)
-            digest.update(chunk)
-            if progress_callback is not None and bytes_read >= next_report:
-                progress_callback(bytes_read)
-                while next_report <= bytes_read:
-                    next_report += max(1, progress_step_bytes)
-    return digest.hexdigest()
+
+    def report(bytes_read: int) -> None:
+        nonlocal next_report
+        if progress_callback is not None and bytes_read >= next_report:
+            progress_callback(bytes_read)
+            while next_report <= bytes_read:
+                next_report += max(1, progress_step_bytes)
+
+    result = archive_doctor.observe_stable_regular_file_sha256(
+        path,
+        progress_callback=report if progress_callback is not None else None,
+        required_root=required_root,
+    )
+    if result.state != "verified" or result.sha256 is None:
+        raise OSError(f"stable_regular_file_hash_failed:{result.state}")
+    if progress_callback is not None and result.size_bytes is not None:
+        progress_callback(result.size_bytes)
+    return result.sha256
 
 
 def command_doctor(args: argparse.Namespace) -> int:
@@ -4660,6 +6812,15 @@ def command_doctor(args: argparse.Namespace) -> int:
     except ValueError as exc:
         print(str(exc), file=sys.stderr)
         return 2
+    object_byte_verification_mode = str(
+        getattr(args, "object_byte_verification", "deep")
+    )
+    if bool(getattr(args, "strict", False)) and object_byte_verification_mode != "deep":
+        print(
+            "--strict requires --object-byte-verification deep so byte integrity is verified.",
+            file=sys.stderr,
+        )
+        return 2
     archive_root = Path(args.archive_root)
     if getattr(args, "output", None):
         try:
@@ -4669,9 +6830,7 @@ def command_doctor(args: argparse.Namespace) -> int:
             return 1
     doctor = Doctor(
         archive_root,
-        object_byte_verification_mode=str(
-            getattr(args, "object_byte_verification", "operational")
-        ),
+        object_byte_verification_mode=object_byte_verification_mode,
     )
     progress_log_path = getattr(args, "progress_log", None)
     try:
@@ -4684,6 +6843,7 @@ def command_doctor(args: argparse.Namespace) -> int:
             stage_order=(
                 "doctor-run",
                 *(stage_name for stage_name, _stage_func in doctor._full_stages()),
+                "object-byte-revalidation",
                 "snapshot-revalidation",
             ),
             detail=str(getattr(args, "progress_detail", "compact")),
@@ -4751,6 +6911,12 @@ def command_doctor(args: argparse.Namespace) -> int:
             exit_code,
             doctor.object_manifest_revalidation,
         )
+    object_byte_summary = doctor.object_byte_verification_summary()
+    if (
+        object_byte_summary.mode == "deep"
+        and not object_byte_summary.byte_integrity_verified
+    ):
+        exit_code = max(exit_code, 1)
     return exit_code
 
 
@@ -4771,6 +6937,7 @@ def command_version(args: argparse.Namespace) -> int:
             Path(args.inspection_root) if args.inspection_root else None,
             redact_local_paths=args.redact_local_paths,
             progress_callback=reporter.progress,
+            running_module_path=Path(__file__),
         )
     finally:
         reporter.close()
@@ -8088,7 +10255,7 @@ def render_ai_start_here_markdown(result: dict[str, Any]) -> str:
         f"- Archive text scanned for secret patterns: {'yes' if safety.get('archive_text_scanned_for_secret_patterns') else 'no'}"
     )
     lines.append(f"- Zettel bodies read: {'yes' if safety.get('zettel_bodies_read') else 'no'}")
-    lines.append(f"- Objet bytes read: {'yes' if safety.get('objet_bytes_read') else 'no'}")
+    lines.append(f"- objet bytes read: {'yes' if safety.get('objet_bytes_read') else 'no'}")
     lines.append(f"- Local paths redacted: {'yes' if safety.get('local_paths_redacted') else 'no'}")
     if missing:
         lines.extend(["", "## Missing Required Entrypoints", ""])
@@ -16574,7 +18741,12 @@ def command_zet_revision_plan(args: argparse.Namespace) -> int:
                 else "no"
             )
         )
-        print("Approved write available in this release: yes, through zet-revision-write")
+        approval = result.get("approval_contract", {})
+        print(
+            "Approved write available in this release: "
+            + ("yes" if approval.get("approved_write_implemented") else "no")
+        )
+        print("Plan digest grants approval authority: no")
         if result.get("blockers"):
             print("Blockers:")
             for blocker in result["blockers"]:
@@ -16595,7 +18767,7 @@ def command_zet_revision_write(args: argparse.Namespace) -> int:
         return _exact_human_approval_cli_error(
             args,
             lifecycle_action="zet_revision_write",
-            reason_code="compound_exact_human_approval_binding_required",
+            reason_code=command_status.COMPOUND_APPROVAL_REASON_CODE,
         )
     if bool(args.dry_run) == bool(args.approve):
         print(
@@ -18961,7 +21133,7 @@ def command_discard_draft(args: argparse.Namespace) -> int:
         return _exact_human_approval_cli_error(
             args,
             lifecycle_action="discard_draft_apply",
-            reason_code="compound_exact_human_approval_binding_required",
+            reason_code=command_status.COMPOUND_APPROVAL_REASON_CODE,
         )
     if args.dry_run == args.approve:
         print(
@@ -19662,7 +21834,9 @@ def command_notion_objet_manifest_locator_label(args: argparse.Namespace) -> int
 def _create_draft_cli_error(
     args: argparse.Namespace,
     *,
-    reason_code: str,
+    reason_code: str | None = None,
+    reason_codes: list[str] | None = None,
+    missing_required_options: list[str] | None = None,
     message: str,
 ) -> int:
     """Return a fixed, content-free create-draft failure.
@@ -19671,17 +21845,23 @@ def _create_draft_cli_error(
     exception strings are therefore never reflected at this boundary.
     """
 
+    safe_reason_codes = list(
+        reason_codes or ([] if reason_code is None else [reason_code])
+    )
+    if not safe_reason_codes:
+        raise ValueError("create_draft_reason_code_required")
+    result = {
+        "ok": False,
+        "state": "blocked",
+        "lifecycle_action": "create_draft",
+        "reason_codes": safe_reason_codes,
+        "files_written": [],
+        "private_values_echoed": False,
+    }
+    if missing_required_options is not None:
+        result["missing_required_options"] = list(missing_required_options)
     if getattr(args, "format", None) == "json":
-        print_json(
-            {
-                "ok": False,
-                "state": "blocked",
-                "lifecycle_action": "create_draft",
-                "reason_codes": [reason_code],
-                "files_written": [],
-                "private_values_echoed": False,
-            }
-        )
+        print_json(result)
     else:
         print(message, file=sys.stderr)
     return 1
@@ -19734,6 +21914,7 @@ def _exact_human_approval_context(
     reviewer_claim: Any,
     review_binding_codes: tuple[str, ...],
     warnings: list[str] | tuple[str, ...],
+    target_preview: ExactHumanApprovalTargetPreview | None = None,
 ) -> ExactHumanApprovalContext:
     """Build the content-free live boundary from service-owned digests only."""
 
@@ -19750,6 +21931,7 @@ def _exact_human_approval_context(
         reviewer_claim=str(reviewer_claim or "").strip(),
         review_binding_codes=review_binding_codes,
         warning_codes=exact_human_approval_warning_codes(warnings),
+        target_preview=target_preview,
     )
 
 
@@ -20154,26 +22336,11 @@ def command_create_draft(args: argparse.Namespace) -> int:
             ),
         )
     if ai_creation_mode and args.approve:
-        missing_replay_identity = [
+        missing_approval_prerequisites = [
             option
             for option, value in (
                 ("--draft-id", args.draft_id),
                 ("--created-at", args.created_at),
-            )
-            if not isinstance(value, str) or not value.strip()
-        ]
-        if missing_replay_identity:
-            return _create_draft_cli_error(
-                args,
-                reason_code="create_draft_ai_replay_identity_required",
-                message=(
-                    "AI draft approval must reuse both --draft-id and "
-                    "--created-at from approval_replay."
-                ),
-            )
-        missing_approval_fields = [
-            option
-            for option, value in (
                 ("--draft-approved-by", args.draft_approved_by),
                 ("--expected-body-sha256", args.expected_body_sha256),
                 (
@@ -20183,14 +22350,36 @@ def command_create_draft(args: argparse.Namespace) -> int:
             )
             if not isinstance(value, str) or not value.strip()
         ]
-        if missing_approval_fields:
+        if missing_approval_prerequisites:
+            replay_options = {"--draft-id", "--created-at"}
+            evidence_options = {
+                "--draft-approved-by",
+                "--expected-body-sha256",
+                "--expected-source-fidelity-plan-sha256",
+            }
+            prerequisite_reason_codes = []
+            if any(
+                option in replay_options
+                for option in missing_approval_prerequisites
+            ):
+                prerequisite_reason_codes.append(
+                    "create_draft_ai_replay_identity_required"
+                )
+            if any(
+                option in evidence_options
+                for option in missing_approval_prerequisites
+            ):
+                prerequisite_reason_codes.append(
+                    "create_draft_ai_approval_evidence_required"
+                )
             return _create_draft_cli_error(
                 args,
-                reason_code="create_draft_ai_approval_evidence_required",
+                reason_codes=prerequisite_reason_codes,
+                missing_required_options=missing_approval_prerequisites,
                 message=(
-                    "AI draft approval requires --draft-approved-by, "
-                    "--expected-body-sha256, and "
-                    "--expected-source-fidelity-plan-sha256."
+                    "AI draft approval is missing these required options: "
+                    + ", ".join(missing_approval_prerequisites)
+                    + "."
                 ),
             )
 
@@ -20289,6 +22478,13 @@ def command_create_draft(args: argparse.Namespace) -> int:
                     preview.get("warnings")
                     if isinstance(preview.get("warnings"), list)
                     else []
+                ),
+                target_preview=ExactHumanApprovalTargetPreview(
+                    kind="draft",
+                    primary=PurePosixPath(
+                        str(preview.get("proposed_path") or args.draft_id)
+                    ).name,
+                    secondary=str(args.title),
                 ),
             )
 
@@ -22370,9 +24566,6 @@ def command_mint_zettel(args: argparse.Namespace) -> int:
 
 
 def command_zet_self_contained_check(args: argparse.Namespace) -> int:
-    if not args.dry_run:
-        print("zet-self-contained-check is read-only and requires --dry-run.", file=sys.stderr)
-        return 1
     try:
         result = archive_services.zet_self_contained_check(
             Path(args.archive_root),
@@ -28328,6 +30521,19 @@ def doctor_summary_payload(
         result["input_revalidation"] = input_revalidation
     if object_byte_verification is not None:
         result["object_byte_verification"] = object_byte_verification
+        verification_scope = object_byte_verification.get("mode")
+        byte_integrity_verified = bool(
+            object_byte_verification.get("byte_integrity_verified") is True
+        )
+        result["verification_scope"] = verification_scope
+        result["byte_integrity_verified"] = byte_integrity_verified
+        result["full_integrity_ok"] = (
+            bool(ok and byte_integrity_verified)
+            if verification_scope == "deep"
+            else None
+        )
+        if verification_scope == "deep" and not byte_integrity_verified:
+            result["ok"] = False
     return result
 
 
@@ -29600,7 +31806,22 @@ def print_doctor_summary_text(summary: dict[str, Any]) -> None:
         f"{data['error_count']} error(s), {data['warning_count']} warning(s), "
         f"{data['info_count']} info(s), {data['diagnostic_count']} diagnostic(s)."
     )
-    print(f"OK: {str(summary['ok']).lower()}")
+    print(f"OK in selected scope: {str(summary['ok']).lower()}")
+    if "verification_scope" in summary:
+        print(f"Verification scope: {summary.get('verification_scope')}")
+        print(
+            "objet byte integrity verified: "
+            f"{str(bool(summary.get('byte_integrity_verified'))).lower()}"
+        )
+        full_integrity_ok = summary.get("full_integrity_ok")
+        print(
+            "Full integrity OK: "
+            + (
+                "not verified"
+                if full_integrity_ok is None
+                else str(bool(full_integrity_ok)).lower()
+            )
+        )
     revalidation = (
         summary.get("input_revalidation")
         if isinstance(summary.get("input_revalidation"), dict)
@@ -29628,7 +31849,7 @@ def print_doctor_summary_text(summary: dict[str, Any]) -> None:
             else {}
         )
         print(
-            "Local object bytes: "
+            "Local objet bytes: "
             f"{byte_verification.get('result_state')} "
             f"(mode={byte_verification.get('mode')}, "
             f"rehashed_now={states.get('rehashed_now', 0)}, "
@@ -29812,74 +32033,8 @@ COMPOUND_APPROVAL_BLOCKED_HELP = (
     "status."
 )
 
-COMPOUND_APPROVAL_BLOCKED_COMMANDS = frozenset(
-    {
-        "activity-group-membership-recover",
-        "activity-group-membership-removal-recover",
-        "activity-group-membership-removal-write",
-        "activity-group-membership-write",
-        "add-source",
-        "ai-scratch-gc",
-        "credential-keepassxc-write",
-        "credential-lifecycle",
-        "delegate-zet",
-        "discard-draft",
-        "discard-draft-restore",
-        "external-locator-deactivate",
-        "external-locator-revert",
-        "github-repo",
-        "identity-reconcile",
-        "imap-mailbox-adapter-manifest-write",
-        "imap-mailbox-header-metadata-scan",
-        "import-external",
-        "legacy-coordination-cleanup",
-        "markup-normalization",
-        "markup-normalization-recovery",
-        "markup-normalization-revert",
-        "mint-zet-batch",
-        "notion-ancestor-fetch-adapter-run",
-        "notion-objet-manifest-locator-label",
-        "notion-objet-link-convert",
-        "notion-page-recovery",
-        "notion-recover",
-        "object-storage-upload",
-        "object-storage-upload-evidence",
-        "object-storage-wom-location-reconcile",
-        "objet-capture-enable",
-        "objet-source-metadata-write",
-        "onboard",
-        "prehashed-objet-ledger",
-        "principal-register",
-        "principal-unregister",
-        "project-bytecode-repair",
-        "project-version-update-collision",
-        "repair-gitignore",
-        "quarantine-foreign-block",
-        "record-quarantine-decision",
-        "remint-reconcile",
-        "retire-draft-batch",
-        "retire-draft-reconcile",
-        "runtime-skill-install",
-        "runtime-skill-uninstall",
-        "revert-batch",
-        "restore-drill",
-        "saved-view-revert",
-        "saved-view-write",
-        "scan-source",
-        "tiro-lossless-recovery-capture",
-        "tiro-lossless-recovery-fetch-run",
-        "transfer-ownership",
-        "zet-abstract-backfill-recover",
-        "zet-abstract-backfill-revert",
-        "zet-abstract-backfill-write",
-        "zet-revision-restore-write",
-        "zet-revision-write",
-        "zet-title-remap-recover",
-        "zet-title-remap-revert-recover",
-        "zet-catalog-pass-cleanup",
-        "zettel-edge-batch",
-        "zettel-objet-link-revert",
-    }
+COMPOUND_APPROVAL_BLOCKED_COMMANDS = (
+    command_status.COMPOUND_APPROVAL_FIXED_CLOSED_COMMANDS
 )
 
 
@@ -30837,10 +32992,10 @@ def build_parser() -> argparse.ArgumentParser:
     doctor.add_argument(
         "--object-byte-verification",
         choices=["operational", "deep"],
-        default="operational",
+        default="deep",
         help=(
-            "Choose operational path/presence/size checks (default; current bytes are "
-            "reported unverified) or deep current-byte SHA-256 verification."
+            "Choose deep current-byte SHA-256 verification (default), or explicit "
+            "operational path/presence/size checks that report current objet bytes unverified."
         ),
     )
     doctor.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
@@ -34353,7 +36508,20 @@ def build_parser() -> argparse.ArgumentParser:
     zet_revision_plan = subcommands.add_parser(
         "zet-revision-plan",
         aliases=["revise-zet-plan", "canonical-revision-plan"],
-        help="Validate one private full-zet revision proposal against the current canonical zet without writing either file.",
+        help=(
+            "Validate one private full-zet revision proposal without writing; "
+            "revision approval remains fixed closed in this release."
+        ),
+        description=(
+            "Validate one private full-zet revision proposal against the current "
+            "canonical zet without writing either file. This is validation evidence, "
+            "not approval authority."
+        ),
+        epilog=(
+            "Approval status: approval_fixed_closed "
+            f"({command_status.COMPOUND_APPROVAL_REASON_CODE}). No actionable "
+            "approval handoff is issued by this command."
+        ),
     )
     zet_revision_plan.add_argument("archive_root", help="Archive root containing the canonical zet.")
     zet_revision_plan.add_argument(
@@ -34387,7 +36555,14 @@ def build_parser() -> argparse.ArgumentParser:
     zet_revision_write = subcommands.add_parser(
         "zet-revision-write",
         aliases=["revise-zet-write", "canonical-revision-write"],
-        help="Preview or approve one SHA-bound canonical zet replacement and immutable revision receipt.",
+        help=(
+            "Build a SHA-bound revision validation preview; approval remains "
+            "fixed closed in this release."
+        ),
+        description=(
+            "Build a SHA-bound canonical revision validation preview without "
+            "writing. The approval mode remains fixed closed in this release."
+        ),
     )
     zet_revision_write.add_argument(
         "archive_root", help="Archive root containing the canonical zet."
@@ -35528,7 +37703,14 @@ def build_parser() -> argparse.ArgumentParser:
 
     discard_draft = subcommands.add_parser(
         "discard-draft",
-        help="Preview or approve reversible discard of one unminted inbox draft.",
+        help=(
+            "Preview reversible discard of one unminted inbox draft; approval "
+            "remains fixed closed in this release."
+        ),
+        description=(
+            "Build a reversible discard validation preview without writing. "
+            "The approval mode remains fixed closed in this release."
+        ),
     )
     discard_draft.add_argument("archive_root")
     discard_draft_target = discard_draft.add_mutually_exclusive_group(required=True)
@@ -37068,7 +39250,11 @@ def build_parser() -> argparse.ArgumentParser:
     self_contained_target = self_contained.add_mutually_exclusive_group(required=True)
     self_contained_target.add_argument("--zettel-id", help="Zet id to inspect.")
     self_contained_target.add_argument("--path", help="Archive-relative zet path to inspect.")
-    self_contained.add_argument("--dry-run", action="store_true", help="Required; read-only check.")
+    self_contained.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Optional compatibility flag; this command is always read-only.",
+    )
     self_contained.add_argument("--format", choices=["text", "json"], default="json", help="Output format.")
     self_contained.set_defaults(func=command_zet_self_contained_check)
 
@@ -40943,6 +43129,7 @@ def _project_write_runtime_guard(
         result = project_runtime.project_write_guard(
             candidate,
             running_version=__version__,
+            running_module_path=Path(__file__),
         )
         if result.get("reason_code") == "project_runtime_pin_not_found":
             continue
@@ -40963,6 +43150,7 @@ def _project_write_runtime_guard(
                 "lifecycle_action": "project_runtime_guard",
                 "command": command,
                 "reason_codes": [result["reason_code"]],
+                "detail_reason_code": result.get("detail_reason_code"),
                 "project_pin": result.get("project_pin"),
                 "running_version": result.get("running_version"),
                 "project_runtime_argv": result["project_runtime_argv"],

@@ -19,6 +19,47 @@ REVALIDATED_AT = "2026-08-26T13:44:00Z"
 
 
 class DoctorObjectManifestSnapshotTests(unittest.TestCase):
+    def test_prebound_revalidation_rejects_identical_replacement_root(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            root = base / "archive"
+            raw = b"same-manifest-bytes\n"
+            self.make_archive(root, raw)
+            boundary = archive_doctor.capture_doctor_archive_root_boundary(
+                root
+            )
+            self.assertIsNotNone(boundary)
+            _captured, observed = (
+                archive_doctor.capture_doctor_object_manifest_snapshot(
+                    root.resolve(),
+                    observed_at=OBSERVED_AT,
+                    root_boundary=boundary,
+                )
+            )
+
+            saved = base / "archive-original"
+            root.rename(saved)
+            self.make_archive(root, raw)
+            try:
+                result = archive_doctor.revalidate_doctor_object_manifest_snapshot(
+                    root.resolve(),
+                    observed,
+                    revalidated_at=REVALIDATED_AT,
+                    root_boundary=boundary,
+                )
+            finally:
+                replacement_manifest = (
+                    root / "objects" / "manifests" / "files.jsonl"
+                )
+                replacement_manifest.unlink()
+                replacement_manifest.parent.rmdir()
+                replacement_manifest.parent.parent.rmdir()
+                root.rmdir()
+                saved.rename(root)
+
+            self.assertEqual(result.state, "unverified")
+            self.assertTrue(result.requires_nonzero_exit)
+
     def make_archive(self, root: Path, raw: bytes | None = b'{"object_id":"sha256:00"}\n') -> Path:
         manifest = root / "objects" / "manifests" / "files.jsonl"
         if raw is not None:
@@ -619,9 +660,15 @@ class DoctorCliIntegrationTests(unittest.TestCase):
             def mutate_then_revalidate(
                 archive_root: Path,
                 observed: archive_doctor.DoctorInputSnapshot,
+                *,
+                root_boundary: archive_doctor.DoctorArchiveRootBoundary | None = None,
             ) -> archive_doctor.DoctorInputRevalidation:
                 manifest.write_bytes(b"{\"changed\":true}\n")
-                return original_revalidate(archive_root, observed)
+                return original_revalidate(
+                    archive_root,
+                    observed,
+                    root_boundary=root_boundary,
+                )
 
             with (
                 mock.patch.object(
@@ -684,9 +731,15 @@ class DoctorCliIntegrationTests(unittest.TestCase):
             def mutate_then_revalidate(
                 archive_root: Path,
                 observed: archive_doctor.DoctorInputSnapshot,
+                *,
+                root_boundary: archive_doctor.DoctorArchiveRootBoundary | None = None,
             ) -> archive_doctor.DoctorInputRevalidation:
                 manifest.write_bytes(b"{\"changed\":true}\n")
-                return original_revalidate(archive_root, observed)
+                return original_revalidate(
+                    archive_root,
+                    observed,
+                    root_boundary=root_boundary,
+                )
 
             with (
                 mock.patch.object(

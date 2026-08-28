@@ -51,6 +51,7 @@ from wom_kit import (
     archive_services,
     exact_human_approval as exact_human_approval_module,
     operator_feedback_body,
+    project_runtime,
 )
 from wom_kit.exact_human_approval import (
     _claim_exact_human_approval_core as claim_exact_human_approval,
@@ -4545,7 +4546,13 @@ class ArchiveCliTests(unittest.TestCase):
                 )
 
         self.assertIn("checking target edge-receipt evolution", events)
-        self.assertTrue(any(message.startswith("target edge evolution target zettels/") for message in events))
+        self.assertIn("target edge evolution target resolved", events)
+        self.assertFalse(
+            any(
+                message.startswith("target edge evolution target zettels/")
+                for message in events
+            )
+        )
         self.assertIn("loading target edge receipt candidates", events)
         self.assertIn("loading edge receipt index", events)
         self.assertIn("loaded edge receipt index", events)
@@ -4633,7 +4640,13 @@ class ArchiveCliTests(unittest.TestCase):
             ):
                 doctor._check_local_profile_and_secret_safety()
 
-        self.assertEqual(path_boundary.call_count, 0)
+        # The 100 data files reuse the scandir observation.  The one explicit
+        # boundary proof belongs to the separately opened .gitignore file.
+        self.assertEqual(path_boundary.call_count, 1)
+        self.assertEqual(
+            path_boundary.call_args.args[0].name,
+            ".gitignore",
+        )
         self.assertEqual(ignored_path.call_count, 0)
         self.assertFalse(any(item.severity == "ERROR" for item in doctor.diagnostics))
 
@@ -4985,6 +4998,69 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertEqual(ok_result["project_source_mirror"]["status"], "missing")
             self.assertEqual(ok_result["project_runtime"]["status"], "runtime_mismatch")
             self.assertEqual(ok_result["consistency_state"], "project_runtime_mismatch")
+
+    def test_version_reports_aligned_only_for_receipted_bound_project_process(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project_root = Path(tmp) / "project"
+            pin_dir = project_root / ".zettel-kasten"
+            pin_dir.mkdir(parents=True)
+            (pin_dir / "installed-version.txt").write_text(
+                f"v{archive_cli.__version__}\n",
+                encoding="utf-8",
+            )
+            installed = {
+                "status": "receipt_candidate",
+                "verified": False,
+                "receipt_candidate_valid": True,
+                "verification_scope": "static_receipt_only",
+            }
+            current_process = {
+                "bound": True,
+                "reason_code": "current_project_runtime_bound",
+                "verification_scope": "current_process_operational_binding",
+                "absolute_paths_echoed": False,
+            }
+            with (
+                patch.object(
+                    project_runtime,
+                    "inspect_runtime",
+                    return_value=installed,
+                ),
+                patch.object(
+                    project_runtime,
+                    "launcher_snapshot",
+                    return_value={"unsafe": False, "already_target": True},
+                ),
+                patch.object(
+                    project_runtime,
+                    "current_project_runtime_binding",
+                    return_value=current_process,
+                ) as current_binding,
+            ):
+                code, output = self.run_cli(
+                    ["version", str(project_root), "--format", "json"]
+                )
+            result = json.loads(output)
+
+        self.assertEqual(
+            current_binding.call_args.kwargs["running_module_path"],
+            Path(archive_cli.__file__),
+        )
+
+        self.assertEqual(result["project_runtime"]["status"], "aligned")
+        self.assertEqual(
+            result["project_runtime"]["detail_reason_code"],
+            "current_project_runtime_bound",
+        )
+        self.assertFalse(result["project_runtime"]["installed"]["verified"])
+        self.assertTrue(
+            result["project_runtime"]["installed"]["receipt_candidate_valid"]
+        )
+        self.assertTrue(result["project_runtime"]["current_process"]["bound"])
+        self.assertNotEqual(result["consistency_state"], "project_runtime_mismatch")
+        self.assertIn(code, {0, 1}, output)
 
     def test_object_storage_upload_help_matches_shipped_live_transport(self) -> None:
         parser = archive_cli.build_parser()
@@ -12203,7 +12279,7 @@ class ArchiveCliTests(unittest.TestCase):
             ["project_runtime_mismatch"],
         )
         self.assertEqual(result["project_pin"], "v0.4.2")
-        self.assertEqual(result["running_version"], "v0.4.10")
+        self.assertEqual(result["running_version"], "v0.4.11")
         self.assertEqual(
             result["project_runtime_argv"],
             [r".\.zettel-kasten\bin\archive.cmd"],
@@ -49300,14 +49376,34 @@ state:
             result = json.loads(output)
             self.assertTrue(result["ok"])
             self.assertEqual(result["schema"], "wom-kit/zet-revision-plan/v0.1")
-            self.assertEqual(result["status"], "ready_for_human_review")
+            self.assertEqual(result["status"], "approval_fixed_closed")
+            self.assertEqual(
+                result["proposal_validation_status"],
+                "ready_for_human_review",
+            )
             self.assertTrue(result["change_summary"]["body_changed"])
             self.assertTrue(result["change_summary"]["abstract_changed"])
             self.assertTrue(result["change_summary"]["semantic_change_present"])
             self.assertRegex(result["canonical"]["sha256"], r"^sha256:[0-9a-f]{64}$")
             self.assertRegex(result["proposal"]["sha256"], r"^sha256:[0-9a-f]{64}$")
             self.assertRegex(result["plan_digest"], r"^sha256:[0-9a-f]{64}$")
-            self.assertTrue(result["approval_contract"]["approved_write_implemented"])
+            self.assertTrue(result["plan_digest_contract"]["validation_only"])
+            self.assertFalse(result["plan_digest_contract"]["approval_authority"])
+            self.assertFalse(result["approval_contract"]["approved_write_implemented"])
+            self.assertEqual(
+                result["approval_contract"]["approval_reason_code"],
+                "compound_exact_human_approval_binding_required",
+            )
+            self.assertFalse(
+                result["approval_contract"]["actionable_handoff_available"]
+            )
+            self.assertIsNone(result["approval_handoff"])
+            self.assertFalse(
+                any(
+                    "zet-revision-write" in action
+                    for action in result["next_safe_actions"]
+                )
+            )
             self.assertFalse(result["write_boundary"]["files_written"])
             self.assertFalse(result["privacy_guards"]["zettel_id_echoed"])
             self.assertFalse(result["privacy_guards"]["abstract_text_echoed"])
@@ -59454,6 +59550,40 @@ state:
             self.assertEqual(check_result["scratch_cleanup_plan"]["candidate_count"], 1)
             self.assertNotIn(str(archive_root), check_output)
 
+            before_default = {
+                path.relative_to(archive_root).as_posix(): path.read_bytes()
+                for path in archive_root.rglob("*")
+                if path.is_file()
+            }
+            default_code, default_output = self.run_cli(
+                [
+                    "zet-self-contained-check",
+                    str(archive_root),
+                    "--path",
+                    "inbox/zet_20260622_scratch_gc_fixture.md",
+                    "--format",
+                    "json",
+                ]
+            )
+            self.assertEqual(default_code, check_code, default_output)
+            default_result = json.loads(default_output)
+            self.assertEqual(
+                default_result["self_contained"],
+                check_result["self_contained"],
+            )
+            self.assertEqual(
+                default_result["scratch_cleanup_plan"]["candidate_count"],
+                check_result["scratch_cleanup_plan"]["candidate_count"],
+            )
+            self.assertEqual(
+                {
+                    path.relative_to(archive_root).as_posix(): path.read_bytes()
+                    for path in archive_root.rglob("*")
+                    if path.is_file()
+                },
+                before_default,
+            )
+
             plan_code, plan_output = self.run_cli(
                 [
                     "mint-zet",
@@ -63235,6 +63365,14 @@ state:
             self.assertEqual(
                 [item["reason"] for item in mint_result["near_duplicates"]],
                 ["archive_index_rebuild_required"],
+            )
+            self.assertIn(
+                archive_services.INDEX_REBUILD_MINT_BLOCKER,
+                mint_result["blockers"],
+            )
+            self.assertNotIn(
+                "Possible duplicate canonical zettel",
+                json.dumps(mint_result, ensure_ascii=False),
             )
 
             validate_code, validate_output = self.run_cli(

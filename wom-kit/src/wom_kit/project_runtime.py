@@ -17,6 +17,7 @@ import platform
 import re
 import secrets
 import shutil
+import stat as stat_module
 import subprocess
 import sys
 import tempfile
@@ -385,40 +386,207 @@ def _sha256_bytes(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-def _read_limited(path: Path, *, limit: int) -> bytes | None:
-    try:
-        if not path.is_file() or path.is_symlink() or path.stat().st_size > limit:
-            return None
-        data = path.read_bytes()
-    except OSError:
-        return None
-    return data if len(data) <= limit else None
+def _is_reparse_stat(stat_result: os.stat_result) -> bool:
+    return bool(getattr(stat_result, "st_file_attributes", 0) & 0x400)
 
 
-def _existing_components_are_real(root: Path, target: Path) -> bool:
+def _stat_identity(stat_result: os.stat_result) -> tuple[int, int, int, int, int, int]:
+    """Return the fields that must stay stable across a bound read.
+
+    Windows does not expose one uniform generation counter through Python.  A
+    device/inode identity plus type, size, mtime and reparse attributes is the
+    strongest portable observation available here.  The open descriptor is
+    still the authority for the bytes; the path observations only prove that
+    the name and its ancestors did not visibly move around that read.
+    """
+
+    return (
+        int(stat_result.st_dev),
+        int(stat_result.st_ino),
+        int(stat_module.S_IFMT(stat_result.st_mode)),
+        int(stat_result.st_size),
+        int(stat_result.st_mtime_ns),
+        int(getattr(stat_result, "st_file_attributes", 0)),
+    )
+
+
+def _real_component_snapshot(
+    root: Path,
+    target: Path,
+    *,
+    target_must_exist: bool,
+) -> tuple[tuple[str, tuple[int, int, int, int, int, int]], ...] | None:
+    """Observe one non-reparse path chain without resolving through links."""
+
     try:
         root_absolute = Path(os.path.abspath(str(root)))
         target_absolute = Path(os.path.abspath(str(target)))
         relative = target_absolute.relative_to(root_absolute)
-        root_stat = root_absolute.lstat()
     except (OSError, RuntimeError, ValueError):
-        return False
-    if root_absolute.is_symlink() or bool(
-        getattr(root_stat, "st_file_attributes", 0) & 0x400
-    ):
-        return False
+        return None
+    paths = [root_absolute]
     current = root_absolute
     for part in relative.parts:
         current = current / part
-        if not current.exists():
-            continue
+        paths.append(current)
+    observations: list[tuple[str, tuple[int, int, int, int, int, int]]] = []
+    for index, component in enumerate(paths):
         try:
-            stat_result = current.lstat()
+            component_stat = component.lstat()
+        except FileNotFoundError:
+            if not target_must_exist and index > 0:
+                # Creation paths are allowed to have a missing suffix, but no
+                # later component can exist once one prefix is absent.
+                break
+            return None
         except OSError:
-            return False
-        if current.is_symlink() or bool(getattr(stat_result, "st_file_attributes", 0) & 0x400):
-            return False
-    return True
+            return None
+        if _is_reparse_stat(component_stat) or stat_module.S_ISLNK(
+            component_stat.st_mode
+        ):
+            return None
+        is_target = index == len(paths) - 1
+        if not is_target and not stat_module.S_ISDIR(component_stat.st_mode):
+            return None
+        if is_target and target_must_exist and not (
+            stat_module.S_ISREG(component_stat.st_mode)
+            or stat_module.S_ISDIR(component_stat.st_mode)
+        ):
+            return None
+        observations.append((str(component), _stat_identity(component_stat)))
+    if target_must_exist and len(observations) != len(paths):
+        return None
+    return tuple(observations)
+
+
+def _stable_regular_file_observation(
+    path: Path,
+    *,
+    limit: int,
+    ancestor_root: Path | None = None,
+    collect_bytes: bool,
+    tree_shape_bound: bool = False,
+) -> tuple[bytes | None, str, int] | None:
+    """Read/hash a bounded regular file through one no-follow descriptor.
+
+    The descriptor prevents a post-open pathname swap from changing the byte
+    stream.  Matching before/after descriptor, pathname, and ancestor
+    snapshots rejects observable file or directory generation changes.
+    """
+
+    root = Path(ancestor_root) if ancestor_root is not None else path.parent
+    try:
+        path_before = path.lstat()
+    except OSError:
+        return None
+    if (
+        not stat_module.S_ISREG(path_before.st_mode)
+        or stat_module.S_ISLNK(path_before.st_mode)
+        or _is_reparse_stat(path_before)
+    ):
+        return None
+    before_components = None
+    if not tree_shape_bound:
+        before_components = _real_component_snapshot(
+            root,
+            path,
+            target_must_exist=True,
+        )
+        if before_components is None:
+            return None
+    flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    descriptor: int | None = None
+    try:
+        descriptor = os.open(path, flags)
+        opened_before = os.fstat(descriptor)
+        if (
+            not stat_module.S_ISREG(opened_before.st_mode)
+            or _is_reparse_stat(opened_before)
+            or opened_before.st_size < 0
+            or opened_before.st_size > limit
+        ):
+            return None
+        digest = hashlib.sha256()
+        chunks: list[bytes] | None = [] if collect_bytes else None
+        total = 0
+        with os.fdopen(descriptor, "rb", closefd=True) as handle:
+            descriptor = None
+            while True:
+                chunk = handle.read(min(1024 * 1024, limit + 1 - total))
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > limit:
+                    return None
+                digest.update(chunk)
+                if chunks is not None:
+                    chunks.append(chunk)
+            opened_after = os.fstat(handle.fileno())
+        try:
+            path_after = path.lstat()
+        except OSError:
+            return None
+        after_components = None
+        if not tree_shape_bound:
+            after_components = _real_component_snapshot(
+                root,
+                path,
+                target_must_exist=True,
+            )
+        if (
+            not stat_module.S_ISREG(opened_after.st_mode)
+            or not stat_module.S_ISREG(path_after.st_mode)
+            or _is_reparse_stat(opened_after)
+            or _is_reparse_stat(path_after)
+            or _stat_identity(path_before) != _stat_identity(opened_before)
+            or _stat_identity(opened_before) != _stat_identity(opened_after)
+            or _stat_identity(opened_after) != _stat_identity(path_after)
+            or (
+                not tree_shape_bound
+                and before_components != after_components
+            )
+            or total != opened_after.st_size
+        ):
+            return None
+        return (
+            b"".join(chunks) if chunks is not None else None,
+            digest.hexdigest(),
+            total,
+        )
+    except OSError:
+        return None
+    finally:
+        if descriptor is not None:
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+
+
+def _read_limited(
+    path: Path,
+    *,
+    limit: int,
+    ancestor_root: Path | None = None,
+) -> bytes | None:
+    try:
+        observed = _stable_regular_file_observation(
+            path,
+            limit=limit,
+            ancestor_root=ancestor_root,
+            collect_bytes=True,
+        )
+    except (OSError, RuntimeError, ValueError):
+        return None
+    return observed[0] if observed is not None else None
+
+
+def _existing_components_are_real(root: Path, target: Path) -> bool:
+    return _real_component_snapshot(
+        root,
+        target,
+        target_must_exist=False,
+    ) is not None
 
 
 def project_runtime_policy_document(raw: bytes | None) -> dict[str, Any] | None:
@@ -434,8 +602,8 @@ def project_runtime_policy_document(raw: bytes | None) -> dict[str, Any] | None:
         "runtime_root": ".zettel-kasten/runtimes/vX.Y.Z",
         "active_version_pin": ".zettel-kasten/installed-version.txt",
         "launcher": ".zettel-kasten/bin/archive.cmd",
-        "supply_lock": "wom-kit/project-runtime-supply-lock-v0.4.10.json",
-        "supply_lock_sha256": "sha256:b2eff88120968d385fc211a8b6015a11398dad74852e9206265b93ab5fc65381",
+        "supply_lock": "wom-kit/project-runtime-supply-lock-v0.4.11.json",
+        "supply_lock_sha256": "sha256:a053ff5866f0799a9b25beae71fd3654fc6eb0b01926d424fb41a210202ab9b9",
         "global_path_mutation": False,
     }
     if value != expected:
@@ -778,10 +946,265 @@ def project_runtime_argv() -> list[str]:
     return [r".\.zettel-kasten\bin\archive.cmd"]
 
 
+def _same_absolute_path(left: Path, right: Path) -> bool:
+    return os.path.normcase(os.path.abspath(str(left))) == os.path.normcase(
+        os.path.abspath(str(right))
+    )
+
+
+def _path_is_within(path: Path, parent: Path) -> bool:
+    try:
+        Path(os.path.abspath(str(path))).relative_to(
+            Path(os.path.abspath(str(parent)))
+        )
+    except (OSError, RuntimeError, ValueError):
+        return False
+    return True
+
+
+def current_project_runtime_binding(
+    project_root: Path,
+    target: str,
+    *,
+    running_executable: str | Path | None = None,
+    running_module_path: str | Path | None = None,
+    running_archive_cli_module_path: str | Path | None = None,
+    running_project_runtime_module_path: str | Path | None = None,
+    running_package_origin_path: str | Path | None = None,
+    running_prefix: str | Path | None = None,
+    isolated_mode: bool | None = None,
+    dont_write_bytecode: bool | None = None,
+    runtime_inspection: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Verify that this process matches the canonical project-launcher contract.
+
+    A static runtime receipt proves what a prior installer recorded.  It does
+    not prove which Python or WOM package the current process selected, and
+    process state cannot prove which batch file causally started it.  This
+    content-free result therefore verifies equivalent interpreter/module/flag
+    binding while keeping those evidence boundaries separate.
+    """
+
+    version = _version(target)
+    if version is None:
+        return {
+            "bound": False,
+            "reason_code": "project_runtime_target_version_invalid",
+            "absolute_paths_echoed": False,
+        }
+    root = Path(os.path.abspath(str(project_root)))
+    final = runtime_path(root, version)
+    expected_python = final / "Scripts" / "python.exe"
+    inspection = (
+        dict(runtime_inspection)
+        if isinstance(runtime_inspection, Mapping)
+        else inspect_runtime(root, version)
+    )
+    launcher = launcher_snapshot(root, version)
+    executable = Path(
+        os.path.abspath(str(running_executable or sys.executable))
+    )
+    module_path = Path(
+        os.path.abspath(str(running_module_path or __file__))
+    )
+    archive_cli_loaded = sys.modules.get("wom_kit.archive_cli")
+    package_loaded = sys.modules.get("wom_kit")
+    archive_cli_module_path = Path(
+        os.path.abspath(
+            str(
+                running_archive_cli_module_path
+                or getattr(archive_cli_loaded, "__file__", "")
+            )
+        )
+    )
+    project_runtime_module_path = Path(
+        os.path.abspath(str(running_project_runtime_module_path or __file__))
+    )
+    package_origin_path = Path(
+        os.path.abspath(
+            str(
+                running_package_origin_path
+                or getattr(package_loaded, "__file__", "")
+            )
+        )
+    )
+    prefix = Path(os.path.abspath(str(running_prefix or sys.prefix)))
+    isolated = bool(sys.flags.isolated) if isolated_mode is None else bool(isolated_mode)
+    no_bytecode = (
+        bool(sys.dont_write_bytecode)
+        if dont_write_bytecode is None
+        else bool(dont_write_bytecode)
+    )
+    launcher_aligned = bool(
+        not launcher.get("unsafe") and launcher.get("already_target")
+    )
+    static_receipt_aligned = bool(
+        inspection.get("static_receipt_valid")
+        and inspection.get("target_version") == version
+        and inspection.get("path") == runtime_logical_path(version)
+    )
+    live_payload_aligned = bool(
+        static_receipt_aligned and inspection.get("live_payload_aligned") is True
+    )
+    receipt_path = final / PROJECT_RUNTIME_RECEIPT_NAME
+    live_receipt_bytes = _read_limited(
+        receipt_path,
+        limit=2 * 1024 * 1024,
+        ancestor_root=root,
+    )
+    receipt_generation_aligned = bool(
+        live_receipt_bytes is not None
+        and inspection.get("receipt_sha256")
+        == f"sha256:{_sha256_bytes(live_receipt_bytes)}"
+    )
+    if not receipt_generation_aligned:
+        static_receipt_aligned = False
+        live_payload_aligned = False
+    try:
+        module_relative = module_path.relative_to(final)
+        module_parts = tuple(part.casefold() for part in module_relative.parts)
+    except (OSError, RuntimeError, ValueError):
+        module_relative = None
+        module_parts = ()
+    wom_module_layout = bool(
+        len(module_parts) >= 4
+        and module_parts[:3] == ("lib", "site-packages", "wom_kit")
+        and module_parts[-1].endswith((".py", ".pyc", ".pyd"))
+    )
+    executable_aligned = bool(
+        _same_absolute_path(executable, expected_python)
+        and _real_component_snapshot(root, executable, target_must_exist=True)
+        is not None
+    )
+    module_aligned = bool(
+        _path_is_within(module_path, final)
+        and wom_module_layout
+        and _real_component_snapshot(root, module_path, target_must_exist=True)
+        is not None
+    )
+    prefix_aligned = bool(
+        _same_absolute_path(prefix, final)
+        and _real_component_snapshot(root, prefix, target_must_exist=True) is not None
+    )
+    executable_receipt_bound = False
+    module_receipt_bound = False
+    core_modules_receipt_bound = False
+    if live_payload_aligned and executable_aligned and module_aligned:
+        expected_payload = str(
+            inspection.get("installed_payload_sha256") or ""
+        ).removeprefix("sha256:")
+        try:
+            observed_payload, inventory = _runtime_payload_observation(final)
+            inventory_by_path = {
+                logical: (size, digest) for logical, size, digest in inventory
+            }
+            live_payload_aligned = observed_payload == expected_payload
+
+            def receipt_bound_file(candidate: Path) -> bool:
+                try:
+                    logical = Path(os.path.abspath(str(candidate))).relative_to(
+                        Path(os.path.abspath(str(final)))
+                    ).as_posix()
+                    expected = inventory_by_path.get(logical)
+                    actual_digest, actual_size = _sha256_file(
+                        candidate,
+                        ancestor_root=root,
+                    )
+                except (OSError, RuntimeError, ValueError, ProjectRuntimeError):
+                    return False
+                return bool(
+                    live_payload_aligned
+                    and expected is not None
+                    and expected == (actual_size, actual_digest)
+                )
+
+            executable_receipt_bound = receipt_bound_file(executable)
+            module_receipt_bound = receipt_bound_file(module_path)
+            expected_core_paths = (
+                (
+                    archive_cli_module_path,
+                    final
+                    / "Lib"
+                    / "site-packages"
+                    / "wom_kit"
+                    / "archive_cli.py",
+                ),
+                (
+                    project_runtime_module_path,
+                    final
+                    / "Lib"
+                    / "site-packages"
+                    / "wom_kit"
+                    / "project_runtime.py",
+                ),
+                (
+                    package_origin_path,
+                    final / "Lib" / "site-packages" / "wom_kit" / "__init__.py",
+                ),
+            )
+            core_modules_receipt_bound = all(
+                _same_absolute_path(observed, expected)
+                and receipt_bound_file(observed)
+                for observed, expected in expected_core_paths
+            )
+        except ProjectRuntimeError:
+            live_payload_aligned = False
+    bound = bool(
+        launcher_aligned
+        and static_receipt_aligned
+        and live_payload_aligned
+        and executable_aligned
+        and module_aligned
+        and prefix_aligned
+        and executable_receipt_bound
+        and module_receipt_bound
+        and core_modules_receipt_bound
+        and isolated
+        and no_bytecode
+    )
+    if not launcher_aligned:
+        reason_code = "project_runtime_launcher_mismatch"
+    elif not static_receipt_aligned:
+        reason_code = "project_runtime_static_receipt_invalid"
+    elif not live_payload_aligned:
+        reason_code = "project_runtime_live_payload_mismatch"
+    elif not executable_aligned or not module_aligned or not prefix_aligned:
+        reason_code = "project_runtime_process_binding_mismatch"
+    elif not executable_receipt_bound or not module_receipt_bound:
+        reason_code = "project_runtime_process_bytes_not_receipt_bound"
+    elif not core_modules_receipt_bound:
+        reason_code = "project_runtime_core_modules_not_receipt_bound"
+    elif not isolated or not no_bytecode:
+        reason_code = "project_runtime_canonical_launcher_flags_missing"
+    else:
+        reason_code = "current_project_runtime_bound"
+    return {
+        "bound": bound,
+        "reason_code": reason_code,
+        "launcher_aligned": launcher_aligned,
+        "static_receipt_aligned": static_receipt_aligned,
+        "receipt_generation_aligned": receipt_generation_aligned,
+        "live_payload_aligned": live_payload_aligned,
+        "running_executable_aligned": executable_aligned,
+        "running_module_aligned": module_aligned,
+        "running_prefix_aligned": prefix_aligned,
+        "running_executable_receipt_bound": executable_receipt_bound,
+        "running_module_receipt_bound": module_receipt_bound,
+        "core_modules_receipt_bound": core_modules_receipt_bound,
+        "isolated_mode": isolated,
+        "dont_write_bytecode": no_bytecode,
+        "verification_scope": "current_process_operational_binding",
+        "project_runtime_argv": project_runtime_argv(),
+        "private_values_echoed": False,
+        "absolute_paths_echoed": False,
+    }
+
+
 def project_write_guard(
     inspection_root: Path,
     *,
     running_version: str,
+    running_module_path: str | Path | None = None,
 ) -> dict[str, Any]:
     """Return a content-free blocker when a project pin and runtime differ."""
 
@@ -809,7 +1232,11 @@ def project_write_guard(
                 "absolute_paths_echoed": False,
             }
         pin_path = project_root / ".zettel-kasten" / "installed-version.txt"
-        if not pin_path.exists():
+        try:
+            pin_present = os.path.lexists(pin_path)
+        except OSError:
+            pin_present = True
+        if not pin_present:
             continue
         if not _existing_components_are_real(project_root, pin_path):
             return {
@@ -819,7 +1246,11 @@ def project_write_guard(
                 "private_values_echoed": False,
                 "absolute_paths_echoed": False,
             }
-        pin_bytes = _read_limited(pin_path, limit=1024)
+        pin_bytes = _read_limited(
+            pin_path,
+            limit=1024,
+            ancestor_root=project_root,
+        )
         try:
             pinned_version = _version((pin_bytes or b"").decode("utf-8-sig").strip())
         except UnicodeError:
@@ -833,13 +1264,47 @@ def project_write_guard(
                 "private_values_echoed": False,
                 "absolute_paths_echoed": False,
             }
+        if pinned_version != running:
+            blocked = True
+            detail_reason_code = "project_runtime_version_mismatch"
+        else:
+            minimum = _version("0.4.3")
+            runtime_required = bool(
+                minimum is not None
+                and tuple(int(part) for part in pinned_version.split("."))
+                >= tuple(int(part) for part in minimum.split("."))
+            )
+            if runtime_required:
+                installed = inspect_runtime(project_root, pinned_version)
+                binding = current_project_runtime_binding(
+                    project_root,
+                    pinned_version,
+                    running_module_path=running_module_path,
+                    runtime_inspection=installed,
+                )
+                blocked = bool(
+                    not installed.get("receipt_candidate_valid")
+                    or installed.get("live_payload_aligned") is not True
+                    or not binding.get("bound")
+                )
+                detail_reason_code = (
+                    "project_runtime_static_receipt_invalid"
+                    if not installed.get("static_receipt_valid")
+                    else "project_runtime_live_payload_mismatch"
+                    if installed.get("live_payload_aligned") is not True
+                    else str(binding.get("reason_code"))
+                )
+            else:
+                blocked = False
+                detail_reason_code = "project_runtime_version_aligned"
         return {
-            "blocked": pinned_version != running,
+            "blocked": blocked,
             "reason_code": (
                 "project_runtime_mismatch"
-                if pinned_version != running
+                if blocked
                 else "project_runtime_version_aligned"
             ),
+            "detail_reason_code": detail_reason_code,
             "project_pin": f"v{pinned_version}",
             "running_version": f"v{running}" if running else None,
             "project_runtime_argv": project_runtime_argv(),
@@ -857,15 +1322,23 @@ def project_write_guard(
 
 def launcher_snapshot(project_root: Path, target: str) -> dict[str, Any]:
     path = project_root / PROJECT_RUNTIME_LAUNCHER_RELATIVE
-    previous = _read_limited(path, limit=64 * 1024)
-    unsafe = path.exists() and previous is None
+    previous = _read_limited(
+        path,
+        limit=64 * 1024,
+        ancestor_root=project_root,
+    )
+    try:
+        present = os.path.lexists(path)
+    except OSError:
+        present = True
+    unsafe = present and previous is None
     if not _existing_components_are_real(project_root, path):
         unsafe = True
     target_bytes = launcher_bytes(target)
     return {
         "path": path,
         "logical": PROJECT_RUNTIME_LAUNCHER_RELATIVE.as_posix(),
-        "existed": path.is_file() and previous is not None,
+        "existed": present and previous is not None,
         "previous_bytes": previous,
         "target_bytes": target_bytes,
         "already_target": previous == target_bytes,
@@ -897,27 +1370,59 @@ def inspect_runtime(
 ) -> dict[str, Any]:
     version = _version(target)
     if version is None:
-        return {"status": "invalid_target", "verified": False}
-    final = runtime_path(project_root, version)
+        return {
+            "status": "invalid_target",
+            "verified": False,
+            "receipt_candidate_valid": False,
+            "static_receipt_valid": False,
+            "live_payload_aligned": False,
+            "absolute_paths_echoed": False,
+        }
+    root = Path(os.path.abspath(str(project_root)))
+    final = runtime_path(root, version)
     logical = runtime_logical_path(version)
     receipt_path = final / PROJECT_RUNTIME_RECEIPT_NAME
-    if not final.exists():
+    try:
+        final_present = os.path.lexists(final)
+    except OSError:
+        final_present = True
+    if not final_present:
         return {
             "status": "missing",
             "verified": False,
+            "receipt_candidate_valid": False,
+            "static_receipt_valid": False,
+            "live_payload_aligned": False,
             "path": logical,
             "receipt_sha256": None,
             "absolute_paths_echoed": False,
         }
-    if not final.is_dir() or not _existing_components_are_real(project_root, receipt_path):
+    try:
+        final_stat = final.lstat()
+    except OSError:
+        final_stat = None
+    if (
+        final_stat is None
+        or not stat_module.S_ISDIR(final_stat.st_mode)
+        or _is_reparse_stat(final_stat)
+        or _real_component_snapshot(root, final, target_must_exist=True) is None
+        or _real_component_snapshot(root, receipt_path, target_must_exist=True) is None
+    ):
         return {
             "status": "unsafe",
             "verified": False,
+            "receipt_candidate_valid": False,
+            "static_receipt_valid": False,
+            "live_payload_aligned": False,
             "path": logical,
             "receipt_sha256": None,
             "absolute_paths_echoed": False,
         }
-    receipt_bytes = _read_limited(receipt_path, limit=2 * 1024 * 1024)
+    receipt_bytes = _read_limited(
+        receipt_path,
+        limit=2 * 1024 * 1024,
+        ancestor_root=root,
+    )
     try:
         receipt = _json_without_duplicate_keys(receipt_bytes or b"")
     except (UnicodeError, json.JSONDecodeError, ValueError):
@@ -935,7 +1440,7 @@ def inspect_runtime(
         )
     )
     python_executable = final / "Scripts" / "python.exe"
-    valid = bool(
+    static_receipt_valid = bool(
         receipt_schema_valid
         and receipt.get("schema") == PROJECT_RUNTIME_RECEIPT_SCHEMA
         and receipt.get("target_tag") == f"v{version}"
@@ -961,13 +1466,41 @@ def inspect_runtime(
         and verification.get("artifact_inventory") is True
         and verification.get("installed_payload") is True
         and verification.get("live_process") is True
-        and python_executable.is_file()
-        and not python_executable.is_symlink()
     )
+    required_python_safe = False
+    live_payload_sha256: str | None = None
+    live_payload_aligned = False
+    if static_receipt_valid:
+        try:
+            _python_digest, _python_size = _sha256_file(
+                python_executable,
+                ancestor_root=root,
+            )
+            required_python_safe = True
+            live_payload_digest, live_inventory = _runtime_payload_observation(final)
+            live_payload_sha256 = f"sha256:{live_payload_digest}"
+            python_logical = python_executable.relative_to(final).as_posix()
+            python_in_inventory = any(
+                logical_path == python_logical
+                for logical_path, _size, _digest in live_inventory
+            )
+            live_payload_aligned = bool(
+                required_python_safe
+                and python_in_inventory
+                and receipt.get("installed_payload_sha256")
+                == live_payload_sha256
+            )
+        except (OSError, RuntimeError, ValueError, ProjectRuntimeError):
+            required_python_safe = False
+            live_payload_aligned = False
+    valid = bool(static_receipt_valid and required_python_safe and live_payload_aligned)
     return {
         "status": "receipt_candidate" if valid else "invalid",
         "verified": False,
         "receipt_candidate_valid": valid,
+        "static_receipt_valid": static_receipt_valid,
+        "live_payload_aligned": live_payload_aligned,
+        "required_python_safe": required_python_safe,
         "path": logical,
         "target_tag": f"v{version}",
         "target_version": version,
@@ -981,10 +1514,12 @@ def inspect_runtime(
             if isinstance(receipt, dict)
             else None
         ),
+        "live_payload_sha256": live_payload_sha256,
         "python_version": receipt.get("python_version") if isinstance(receipt, dict) else None,
         "verification": verification if isinstance(verification, dict) else {},
         "receipt_sha256": f"sha256:{_sha256_bytes(receipt_bytes)}" if receipt_bytes else None,
-        "verification_basis": "receipt_binding_and_required_path_presence",
+        "verification_basis": "receipt_binding_and_descriptor_bound_live_payload_hash",
+        "verification_scope": "static_receipt_plus_live_payload_bytes",
         "live_reverification_required_before_reuse": True,
         "absolute_paths_echoed": False,
     }
@@ -1365,33 +1900,23 @@ def _resource_check_script() -> str:
     )
 
 
-def _sha256_file(path: Path, *, limit: int = 512 * 1024 * 1024) -> tuple[str, int]:
-    try:
-        stat_result = path.lstat()
-        if (
-            not path.is_file()
-            or path.is_symlink()
-            or bool(getattr(stat_result, "st_file_attributes", 0) & 0x400)
-            or stat_result.st_size < 0
-            or stat_result.st_size > limit
-        ):
-            raise ProjectRuntimeError("project_runtime_file_unsafe")
-        digest = hashlib.sha256()
-        total = 0
-        with path.open("rb") as handle:
-            while True:
-                chunk = handle.read(1024 * 1024)
-                if not chunk:
-                    break
-                total += len(chunk)
-                if total > limit:
-                    raise ProjectRuntimeError("project_runtime_file_too_large")
-                digest.update(chunk)
-    except OSError as error:
-        raise ProjectRuntimeError("project_runtime_file_unreadable") from error
-    if total != stat_result.st_size:
-        raise ProjectRuntimeError("project_runtime_file_size_changed")
-    return digest.hexdigest(), total
+def _sha256_file(
+    path: Path,
+    *,
+    limit: int = 512 * 1024 * 1024,
+    ancestor_root: Path | None = None,
+    tree_shape_bound: bool = False,
+) -> tuple[str, int]:
+    observed = _stable_regular_file_observation(
+        path,
+        limit=limit,
+        ancestor_root=ancestor_root,
+        collect_bytes=False,
+        tree_shape_bound=tree_shape_bound,
+    )
+    if observed is None:
+        raise ProjectRuntimeError("project_runtime_file_unreadable_or_changed")
+    return observed[1], observed[2]
 
 
 def _walk_regular_files(
@@ -1400,62 +1925,127 @@ def _walk_regular_files(
     excluded_top_level: set[str] | None = None,
     max_files: int = 100_000,
     max_total_bytes: int = 4 * 1024 * 1024 * 1024,
+    require_stable_tree_generation: bool = False,
 ) -> list[tuple[str, Path, int, str]]:
-    if not root.is_dir() or root.is_symlink():
-        raise ProjectRuntimeError("project_runtime_tree_unsafe")
-    pending: list[tuple[Path, PurePosixPath]] = [(root, PurePosixPath("."))]
-    files: list[tuple[str, Path, int, str]] = []
-    total_bytes = 0
-    excluded = {item.casefold() for item in (excluded_top_level or set())}
-    while pending:
-        directory, logical_parent = pending.pop()
+    def shape_snapshot() -> tuple[
+        tuple[str, str, int, int, int, int, int, int], ...
+    ]:
         try:
-            directory_stat = directory.lstat()
-            if directory.is_symlink() or bool(
-                getattr(directory_stat, "st_file_attributes", 0) & 0x400
-            ):
-                raise ProjectRuntimeError("project_runtime_tree_unsafe")
-            with os.scandir(directory) as iterator:
-                entries = sorted(iterator, key=lambda item: (item.name.casefold(), item.name))
+            root_stat = root.lstat()
         except OSError as error:
             raise ProjectRuntimeError("project_runtime_tree_unreadable") from error
-        seen: set[str] = set()
-        for entry in entries:
-            name_key = entry.name.casefold()
-            if name_key in seen:
-                raise ProjectRuntimeError("project_runtime_tree_case_collision")
-            seen.add(name_key)
-            relative = (
-                PurePosixPath(entry.name)
-                if logical_parent == PurePosixPath(".")
-                else logical_parent / entry.name
+        if (
+            not stat_module.S_ISDIR(root_stat.st_mode)
+            or stat_module.S_ISLNK(root_stat.st_mode)
+            or _is_reparse_stat(root_stat)
+        ):
+            raise ProjectRuntimeError("project_runtime_tree_unsafe")
+        pending: list[tuple[Path, PurePosixPath]] = [(root, PurePosixPath("."))]
+        observed: list[tuple[str, str, int, int, int, int, int, int]] = [
+            (
+                ".",
+                "directory",
+                int(root_stat.st_dev),
+                int(root_stat.st_ino),
+                int(stat_module.S_IFMT(root_stat.st_mode)),
+                int(root_stat.st_size),
+                int(root_stat.st_mtime_ns),
+                int(getattr(root_stat, "st_file_attributes", 0)),
             )
-            if logical_parent == PurePosixPath(".") and name_key in excluded:
-                continue
+        ]
+        file_count = 0
+        byte_count = 0
+        while pending:
+            directory, logical_parent = pending.pop()
             try:
-                # Use the same lstat API for both observations.  On Windows,
-                # DirEntry.stat may expose a different synthetic inode shape.
-                stat_result = Path(entry.path).lstat()
-                attributes = getattr(stat_result, "st_file_attributes", 0)
-                if entry.is_symlink() or bool(attributes & 0x400):
+                directory_before = directory.lstat()
+                if (
+                    not stat_module.S_ISDIR(directory_before.st_mode)
+                    or stat_module.S_ISLNK(directory_before.st_mode)
+                    or _is_reparse_stat(directory_before)
+                ):
                     raise ProjectRuntimeError("project_runtime_tree_unsafe")
-                if entry.is_dir(follow_symlinks=False):
-                    pending.append((Path(entry.path), relative))
-                    continue
-                if not entry.is_file(follow_symlinks=False):
-                    raise ProjectRuntimeError("project_runtime_tree_unsafe")
+                with os.scandir(directory) as iterator:
+                    entries = sorted(
+                        iterator,
+                        key=lambda item: (item.name.casefold(), item.name),
+                    )
+                directory_after = directory.lstat()
             except OSError as error:
                 raise ProjectRuntimeError("project_runtime_tree_unreadable") from error
-            digest, size = _sha256_file(Path(entry.path))
-            total_bytes += size
-            if len(files) >= max_files or total_bytes > max_total_bytes:
-                raise ProjectRuntimeError("project_runtime_tree_too_large")
-            files.append((relative.as_posix(), Path(entry.path), size, digest))
+            if _stat_identity(directory_before) != _stat_identity(directory_after):
+                raise ProjectRuntimeError("project_runtime_tree_changed")
+            seen: set[str] = set()
+            for entry in entries:
+                name_key = entry.name.casefold()
+                if name_key in seen:
+                    raise ProjectRuntimeError("project_runtime_tree_case_collision")
+                seen.add(name_key)
+                relative = (
+                    PurePosixPath(entry.name)
+                    if logical_parent == PurePosixPath(".")
+                    else logical_parent / entry.name
+                )
+                if logical_parent == PurePosixPath(".") and name_key in excluded:
+                    continue
+                try:
+                    entry_path = Path(entry.path)
+                    entry_stat = entry_path.lstat()
+                except OSError as error:
+                    raise ProjectRuntimeError("project_runtime_tree_unreadable") from error
+                if stat_module.S_ISLNK(entry_stat.st_mode) or _is_reparse_stat(
+                    entry_stat
+                ):
+                    raise ProjectRuntimeError("project_runtime_tree_unsafe")
+                if stat_module.S_ISDIR(entry_stat.st_mode):
+                    kind = "directory"
+                    pending.append((entry_path, relative))
+                elif stat_module.S_ISREG(entry_stat.st_mode):
+                    kind = "file"
+                    file_count += 1
+                    byte_count += int(entry_stat.st_size)
+                    if file_count > max_files or byte_count > max_total_bytes:
+                        raise ProjectRuntimeError("project_runtime_tree_too_large")
+                else:
+                    raise ProjectRuntimeError("project_runtime_tree_unsafe")
+                observed.append(
+                    (
+                        relative.as_posix(),
+                        kind,
+                        int(entry_stat.st_dev),
+                        int(entry_stat.st_ino),
+                        int(stat_module.S_IFMT(entry_stat.st_mode)),
+                        int(entry_stat.st_size),
+                        int(entry_stat.st_mtime_ns),
+                        int(getattr(entry_stat, "st_file_attributes", 0)),
+                    )
+                )
+        observed.sort(key=lambda item: (item[0].casefold(), item[0], item[1]))
+        return tuple(observed)
+
+    files: list[tuple[str, Path, int, str]] = []
+    excluded = {item.casefold() for item in (excluded_top_level or set())}
+    before_shape = shape_snapshot()
+    for logical, kind, _dev, _ino, _mode, expected_size, _mtime, _attrs in before_shape:
+        if kind != "file":
+            continue
+        path = root.joinpath(*PurePosixPath(logical).parts)
+        # The pre/post whole-tree shape binds every ancestor generation.  The
+        # per-file descriptor observation therefore needs to repeat only its
+        # immediate directory and pathname checks here.
+        digest, size = _sha256_file(path, tree_shape_bound=True)
+        if size != expected_size:
+            raise ProjectRuntimeError("project_runtime_tree_changed")
+        files.append((logical, path, size, digest))
+    if require_stable_tree_generation and shape_snapshot() != before_shape:
+        raise ProjectRuntimeError("project_runtime_tree_changed")
     files.sort(key=lambda item: (item[0].casefold(), item[0]))
     return files
 
 
-def _runtime_payload_sha256(final: Path) -> str:
+def _runtime_payload_observation(
+    final: Path,
+) -> tuple[str, tuple[tuple[str, int, str], ...]]:
     files = _walk_regular_files(
         final,
         excluded_top_level={
@@ -1463,6 +2053,7 @@ def _runtime_payload_sha256(final: Path) -> str:
             PROJECT_RUNTIME_RECEIPT_NAME,
             PROJECT_RUNTIME_INSTALLING_NAME,
         },
+        require_stable_tree_generation=True,
     )
     digest = hashlib.sha256()
     for logical, _path, size, file_sha256 in files:
@@ -1472,7 +2063,12 @@ def _runtime_payload_sha256(final: Path) -> str:
         digest.update(b"\0")
         digest.update(file_sha256.encode("ascii"))
         digest.update(b"\n")
-    return digest.hexdigest()
+    inventory = tuple((logical, size, file_sha256) for logical, _path, size, file_sha256 in files)
+    return digest.hexdigest(), inventory
+
+
+def _runtime_payload_sha256(final: Path) -> str:
+    return _runtime_payload_observation(final)[0]
 
 
 def _wheel_payload_manifest(
