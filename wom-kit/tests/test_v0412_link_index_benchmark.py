@@ -29,9 +29,12 @@ REFERENCE_PATH = (
     / "evidence"
     / "v0.4.12-link-index-windows-reference.json"
 )
+REFERENCE_GIT_PATH = (
+    "wom-kit/docs/evidence/v0.4.12-link-index-windows-reference.json"
+)
 SHA256_PATTERN = r"^sha256:[0-9a-f]{64}$"
 REFERENCE_SHA256 = (
-    "c3c768a573fc2a7206a1a8bd11d673c9c05f5daac9026e562978c44a6fae8492"
+    "b115168676d71a1b3c71dcde47af0fb6db2820ddf94b43b3983be407c75bb20c"
 )
 V0412_RELEASE_NOTES_SHA256 = (
     "1e0a0ffd9a29d505f6a91541797d4227770cf687e633d1a822f64e153c9849fa"
@@ -132,7 +135,37 @@ class V0412LinkIndexBenchmarkTests(unittest.TestCase):
         )
 
     def test_committed_windows_reference_and_required_ci_are_exact(self) -> None:
-        reference_raw = REFERENCE_PATH.read_bytes()
+        def git_bytes(*arguments: str) -> bytes:
+            completed = subprocess.run(
+                ["git", "-C", str(ROOT), *arguments],
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+            )
+            return bytes(completed.stdout)
+
+        tag_ref = "refs/tags/v0.4.12"
+        self.assertEqual(
+            git_bytes("cat-file", "-t", tag_ref)
+            .decode("ascii", "strict")
+            .strip(),
+            "tag",
+        )
+        tag_commit_oid = git_bytes(
+            "rev-parse",
+            f"{tag_ref}^{{commit}}",
+        ).decode("ascii", "strict").strip()
+        reference_raw = git_bytes(
+            "cat-file",
+            "blob",
+            f"{tag_commit_oid}:{REFERENCE_GIT_PATH}",
+        )
+        current_reference_raw = git_bytes(
+            "cat-file",
+            "blob",
+            f"HEAD:{REFERENCE_GIT_PATH}",
+        )
+        self.assertEqual(current_reference_raw, reference_raw)
         self.assertEqual(
             hashlib.sha256(reference_raw).hexdigest(),
             REFERENCE_SHA256,
@@ -203,29 +236,9 @@ class V0412LinkIndexBenchmarkTests(unittest.TestCase):
         self.assertEqual(provenance["git_status_change_count"], 0)
         self.assertFalse(provenance["private_paths_included"])
 
-        def git_bytes(*arguments: str) -> bytes:
-            completed = subprocess.run(
-                ["git", "-C", str(ROOT), *arguments],
-                check=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL,
-            )
-            return bytes(completed.stdout)
-
         recorded_commit_oid = str(provenance["git_commit_oid"]).split(
             ":", 1
         )[1]
-        tag_ref = "refs/tags/v0.4.12"
-        self.assertEqual(
-            git_bytes("cat-file", "-t", tag_ref)
-            .decode("ascii", "strict")
-            .strip(),
-            "tag",
-        )
-        tag_commit_oid = git_bytes(
-            "rev-parse",
-            f"{tag_ref}^{{commit}}",
-        ).decode("ascii", "strict").strip()
         ancestry = subprocess.run(
             [
                 "git",
