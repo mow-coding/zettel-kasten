@@ -752,6 +752,14 @@ class ObjectStorageSetupRegistrationTests(unittest.TestCase):
         self.assertFalse(item["resource_details_echoed"])
         self.assertFalse(item["receipt_path_echoed"])
 
+        public_digest_readiness = (
+            archive_services.object_storage_adapter_readiness_plan(
+                self.root,
+                provider_ref=item["binding_ref_sha256"],
+                dry_run=True,
+            )
+        )
+
         self.assertTrue(readiness["ok"], readiness)
         self.assertEqual(readiness["readiness_state"], "ready_for_future_adapter")
         summary = readiness["provider_summary"]
@@ -762,12 +770,16 @@ class ObjectStorageSetupRegistrationTests(unittest.TestCase):
         self.assertEqual(readiness["would_change"], [])
         self.assertTrue(private_selector_readiness["ok"], private_selector_readiness)
         self.assertTrue(private_selector_readiness["provider_ref_supplied"])
+        self.assertTrue(public_digest_readiness["ok"], public_digest_readiness)
+        self.assertTrue(public_digest_readiness["provider_ref_supplied"])
+        self.assertEqual(_snapshot(self.root), before)
 
         rendered = json.dumps(
             {
                 "status": status,
                 "readiness": readiness,
                 "private_selector_readiness": private_selector_readiness,
+                "public_digest_readiness": public_digest_readiness,
             },
             sort_keys=True,
         )
@@ -863,6 +875,119 @@ class ObjectStorageSetupRegistrationTests(unittest.TestCase):
         ):
             self.assertNotIn(private, rendered)
         self.assertNotIn("strict_historical_bridge", rendered)
+
+    def test_orphan_legacy_r2_receipt_is_counted_and_blocks_content_free(self) -> None:
+        self.install_historical_bridge(mismatch=False)
+        receipt_path = next(
+            (self.root / "receipts" / "providers").glob(
+                "*.object-storage-setup.json"
+            )
+        )
+        (self.root / "provider-bindings.yml").unlink()
+        before = _snapshot(self.root)
+
+        status = archive_services.provider_setup_status(self.root)
+
+        self.assertEqual(_snapshot(self.root), before)
+        self.assertFalse(status["ok"], status)
+        self.assertEqual(status["status"], "blocked")
+        self.assertEqual(status["binding_count"], 0)
+        self.assertEqual(status["receipt_count"], 1)
+        self.assertEqual(len(status["orphan_receipts"]), 1)
+        orphan = status["orphan_receipts"][0]
+        self.assertEqual(orphan["provider"], "object_storage")
+        self.assertEqual(orphan["status"], "receipt_without_binding")
+        self.assertEqual(
+            orphan["reason_code"],
+            "object_storage_setup_receipt_without_binding",
+        )
+        self.assertRegex(orphan["receipt_path_sha256"], r"^sha256:[0-9a-f]{64}$")
+        self.assertRegex(orphan["receipt_sha256"], r"^sha256:[0-9a-f]{64}$")
+        self.assertIsNone(orphan["receipt_path"])
+        self.assertEqual(orphan["resource"], {})
+        rendered = json.dumps(status, sort_keys=True)
+        for private in (
+            BUCKET,
+            STORE_REF,
+            ENDPOINT_REF,
+            PROFILE_ID,
+            PROFILE_SLUG,
+            receipt_path.relative_to(self.root).as_posix(),
+            str(self.root),
+        ):
+            self.assertNotIn(private, rendered)
+
+    def test_unknown_malformed_and_unreadable_receipts_use_only_codes_and_digests(
+        self,
+    ) -> None:
+        receipt_root = self.root / "receipts" / "providers"
+        receipt_root.mkdir(parents=True, exist_ok=True)
+        bucket_sentinel = "private-bucket-sentinel"
+        malformed = receipt_root / f"{bucket_sentinel}-malformed.json"
+        unreadable = receipt_root / f"{bucket_sentinel}-unreadable.json"
+        malformed.write_bytes(b"{")
+        unreadable.write_bytes(b"{}\n")
+        before = _snapshot(self.root)
+        original = archive_services._read_provider_setup_status_receipt
+
+        def deny_one(path: Path) -> bytes:
+            if path.name == unreadable.name:
+                raise OSError(f"private exception {bucket_sentinel}")
+            return original(path)
+
+        with mock.patch.object(
+            archive_services,
+            "_read_provider_setup_status_receipt",
+            side_effect=deny_one,
+        ):
+            status = archive_services.provider_setup_status(self.root)
+
+        self.assertEqual(_snapshot(self.root), before)
+        self.assertFalse(status["ok"], status)
+        self.assertEqual(status["status"], "blocked")
+        self.assertEqual(status["receipt_count"], 2)
+        self.assertEqual(len(status["orphan_receipts"]), 2, status)
+        self.assertEqual(
+            {row["reason_code"] for row in status["orphan_receipts"]},
+            {"provider_setup_receipt_invalid", "provider_setup_receipt_unreadable"},
+        )
+        for row in status["orphan_receipts"]:
+            self.assertIsNone(row["receipt_path"])
+            self.assertRegex(row["receipt_path_sha256"], r"^sha256:[0-9a-f]{64}$")
+            if row["reason_code"] == "provider_setup_receipt_invalid":
+                self.assertRegex(row["receipt_sha256"], r"^sha256:[0-9a-f]{64}$")
+            else:
+                self.assertIsNone(row["receipt_sha256"])
+        rendered = json.dumps(status, sort_keys=True)
+        self.assertNotIn(bucket_sentinel, rendered)
+        self.assertNotIn(str(self.root), rendered)
+        self.assertNotIn("private exception", rendered)
+
+    def test_disabled_r2_receipt_is_still_counted_without_echoing_it(self) -> None:
+        self.install_historical_bridge(mismatch=False)
+        provider_path = self.root / "provider-bindings.yml"
+        document = archive_services.load_yaml(provider_path.read_text(encoding="utf-8"))
+        document["bindings"][0]["enabled"] = False
+        provider_path.write_text(
+            archive_services.dump_yaml(document), encoding="utf-8"
+        )
+        before = _snapshot(self.root)
+
+        status = archive_services.provider_setup_status(self.root)
+
+        self.assertEqual(_snapshot(self.root), before)
+        self.assertTrue(status["ok"], status)
+        self.assertEqual(status["receipt_count"], 1)
+        self.assertEqual(status["orphan_receipts"], [])
+        item = next(
+            row
+            for row in status["providers"]
+            if row.get("provider") == "object_storage"
+        )
+        self.assertEqual(item["status"], "disabled_not_checked")
+        rendered = json.dumps(status, sort_keys=True)
+        for private in (BUCKET, STORE_REF, ENDPOINT_REF, PROFILE_ID, PROFILE_SLUG):
+            self.assertNotIn(private, rendered)
 
     def test_historical_bridge_rejects_incomplete_or_extended_receipts(self) -> None:
         self.install_historical_bridge(mismatch=False)

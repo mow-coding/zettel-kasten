@@ -1891,6 +1891,7 @@ PROVIDER_REFERENCE_URLS = {
 }
 GITHUB_REPOSITORY_SETUP_RECEIPTS_DIR = "receipts/providers"
 PROVIDER_SETUP_RECEIPTS_DIR = "receipts/providers"
+PROVIDER_SETUP_STATUS_MAX_RECEIPT_BYTES = 128 * 1024
 PROVIDER_SETUP_STATUS_EXTERNAL_ACTION_KEYS = {
     "github_api_called",
     "github_repository_created",
@@ -94262,7 +94263,12 @@ def provider_setup_status(archive_root: Path | str) -> dict[str, Any]:
         blockers.append("provider-bindings.yml archive_id must match archive.yml archive_id.")
 
     bindings = provider_bindings_list(bindings_doc)
-    receipt_entries = load_provider_setup_receipts(root, blockers)
+    private_receipt_entries: list[dict[str, Any]] = []
+    receipt_entries = load_provider_setup_receipts(
+        root,
+        blockers,
+        private_entries=private_receipt_entries,
+    )
     receipts_by_key: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
     for entry in receipt_entries:
         key = provider_setup_receipt_key(entry["receipt"])
@@ -94288,6 +94294,22 @@ def provider_setup_status(archive_root: Path | str) -> dict[str, Any]:
         blockers.extend(status.get("blockers") or [])
         warnings.extend(status.get("warnings") or [])
 
+    claimed_private_paths: set[str] = set()
+    for binding in bindings:
+        provider = str(binding.get("provider") or "").strip().lower()
+        provider_kind = str(binding.get("provider_kind") or "").strip().lower()
+        if provider != "object_storage" and provider_kind not in OBJECT_STORAGE_ALLOWED_PROVIDERS:
+            continue
+        historical_path = provider_setup_expected_receipt_path(binding)
+        if historical_path:
+            claimed_private_paths.add(historical_path)
+        binding_sha256 = sha256_json_value(binding)
+        claimed_private_paths.add(
+            "receipts/providers/object-storage-setup-registration/"
+            + binding_sha256.removeprefix("sha256:")
+            + ".json"
+        )
+
     orphan_receipts: list[dict[str, Any]] = []
     for key, entries in receipts_by_key.items():
         if key in checked_keys:
@@ -94305,6 +94327,35 @@ def provider_setup_status(archive_root: Path | str) -> dict[str, Any]:
             orphan_receipts.append(orphan)
             blockers.extend(orphan["blockers"])
             merge_provider_setup_external_actions(external_actions, entry["receipt"])
+
+    for entry in private_receipt_entries:
+        if entry["path"] in claimed_private_paths:
+            continue
+        reason_code = str(
+            entry.get("reason_code")
+            or "object_storage_setup_receipt_without_binding"
+        )
+        orphan = {
+            "status": (
+                "receipt_without_binding"
+                if entry.get("reason_code") is None
+                else "receipt_invalid"
+            ),
+            "provider": entry.get("provider") or "unknown",
+            "provider_kind": None,
+            "receipt_path": None,
+            "receipt_path_sha256": entry["path_sha256"],
+            "receipt_sha256": entry.get("receipt_sha256"),
+            "resource": {},
+            "reason_code": reason_code,
+            "blockers": [reason_code],
+            "warnings": [],
+            "private_values_echoed": False,
+            "resource_details_echoed": False,
+            "receipt_path_echoed": False,
+        }
+        orphan_receipts.append(orphan)
+        blockers.append(reason_code)
 
     managed_count = sum(1 for item in provider_statuses if item.get("setup_managed") is True)
     action_performed = any(external_actions.values())
@@ -94327,13 +94378,7 @@ def provider_setup_status(archive_root: Path | str) -> dict[str, Any]:
         "bindings_present": provider_path.is_file(),
         "binding_count": len(bindings),
         "checked_binding_count": managed_count,
-        "receipt_count": len(receipt_entries)
-        + sum(
-            1
-            for item in provider_statuses
-            if item.get("provider") == "object_storage"
-            and item.get("setup_receipt_present") is True
-        ),
+        "receipt_count": len(receipt_entries) + len(private_receipt_entries),
         "receipt_dir": PROVIDER_SETUP_RECEIPTS_DIR,
         "providers": provider_statuses,
         "orphan_receipts": orphan_receipts,
@@ -94399,6 +94444,8 @@ def object_storage_adapter_readiness_plan(
             }
             or normalized_provider_ref
             == str(item.get("provider_binding_sha256") or "")
+            or normalized_provider_ref
+            == str(item.get("binding_ref_sha256") or "")
             or normalized_provider_ref_sha256
             == str(item.get("binding_ref_sha256") or "")
         ]
@@ -95041,34 +95088,187 @@ def object_storage_adapter_execution_contract(
     }
 
 
-def load_provider_setup_receipts(root: Path, blockers: list[str]) -> list[dict[str, Any]]:
+def _private_provider_setup_receipt_entry(
+    root: Path,
+    path: Path,
+    *,
+    provider: str,
+    raw: bytes | None,
+    reason_code: str | None,
+) -> dict[str, Any]:
+    relative = path.relative_to(root).as_posix()
+    return {
+        # path is retained only for internal binding reconciliation.  Public
+        # projections use its digest and never return this scalar.
+        "path": relative,
+        "path_sha256": "sha256:" + sha256_text(relative),
+        "receipt_sha256": (
+            "sha256:" + hashlib.sha256(raw).hexdigest()
+            if raw is not None
+            else None
+        ),
+        "provider": provider,
+        "reason_code": reason_code,
+    }
+
+
+def _read_provider_setup_status_receipt(path: Path) -> bytes:
+    before = os.lstat(path)
+    if (
+        not stat.S_ISREG(before.st_mode)
+        or path.is_symlink()
+        or before.st_size > PROVIDER_SETUP_STATUS_MAX_RECEIPT_BYTES
+    ):
+        raise OSError("unsafe provider setup receipt")
+    with path.open("rb") as handle:
+        raw = handle.read(PROVIDER_SETUP_STATUS_MAX_RECEIPT_BYTES + 1)
+    after = os.lstat(path)
+    if (
+        len(raw) > PROVIDER_SETUP_STATUS_MAX_RECEIPT_BYTES
+        or (before.st_size, before.st_mtime_ns)
+        != (after.st_size, after.st_mtime_ns)
+    ):
+        raise OSError("provider setup receipt changed")
+    return raw
+
+
+def load_provider_setup_receipts(
+    root: Path,
+    blockers: list[str],
+    *,
+    private_entries: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
     receipt_root = archive_internal_path(root, PROVIDER_SETUP_RECEIPTS_DIR)
     if not receipt_root.is_dir():
         return []
 
     entries: list[dict[str, Any]] = []
     for path in sorted(receipt_root.glob("*.json"), key=lambda item: item.name):
-        # Object-storage setup evidence has a strict exact-first validator.  Do
-        # not parse its historical bridge here: doing so would both duplicate
-        # that authority and make a bucket-derived filename public on failure.
-        # GitHub's historical receipt discovery remains unchanged.
-        if path.name.endswith(".object-storage-setup.json"):
-            continue
         relative = path.relative_to(root).as_posix()
+        object_storage_filename = path.name.endswith(".object-storage-setup.json")
+        github_filename = path.name.endswith(".github-repository-setup.json")
         try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as exc:
-            blockers.append(f"Provider setup receipt could not be read as JSON: {relative} ({exc}).")
+            raw = _read_provider_setup_status_receipt(path)
+        except OSError as exc:
+            if private_entries is not None:
+                private_entries.append(
+                    _private_provider_setup_receipt_entry(
+                        root,
+                        path,
+                        provider=("object_storage" if object_storage_filename else "unknown"),
+                        raw=None,
+                        reason_code=(
+                            "object_storage_setup_receipt_unreadable"
+                            if object_storage_filename
+                            else "provider_setup_receipt_unreadable"
+                        ),
+                    )
+                )
+            if github_filename:
+                blockers.append(
+                    f"Provider setup receipt could not be read as JSON: {relative} ({exc})."
+                )
+            continue
+        try:
+            data = json.loads(raw.decode("utf-8"))
+        except (UnicodeError, json.JSONDecodeError) as exc:
+            if private_entries is not None:
+                private_entries.append(
+                    _private_provider_setup_receipt_entry(
+                        root,
+                        path,
+                        provider=("object_storage" if object_storage_filename else "unknown"),
+                        raw=raw,
+                        reason_code=(
+                            "object_storage_setup_receipt_invalid"
+                            if object_storage_filename
+                            else "provider_setup_receipt_invalid"
+                        ),
+                    )
+                )
+            if github_filename:
+                blockers.append(
+                    f"Provider setup receipt could not be read as JSON: {relative} ({exc})."
+                )
             continue
         if not isinstance(data, dict):
-            blockers.append(f"Provider setup receipt must be a JSON object: {relative}.")
+            if private_entries is not None:
+                private_entries.append(
+                    _private_provider_setup_receipt_entry(
+                        root,
+                        path,
+                        provider=("object_storage" if object_storage_filename else "unknown"),
+                        raw=raw,
+                        reason_code=(
+                            "object_storage_setup_receipt_invalid"
+                            if object_storage_filename
+                            else "provider_setup_receipt_invalid"
+                        ),
+                    )
+                )
+            if github_filename:
+                blockers.append(
+                    f"Provider setup receipt must be a JSON object: {relative}."
+                )
             continue
-        if data.get("provider") == "object_storage":
-            # Even a nonstandard historical filename must not re-enter the
-            # generic orphan projection, which exposes receipt/resource data.
-            # The binding-authoritative validator is the only R2 status path.
+        if object_storage_filename or data.get("provider") == "object_storage":
+            if private_entries is not None:
+                private_entries.append(
+                    _private_provider_setup_receipt_entry(
+                        root,
+                        path,
+                        provider="object_storage",
+                        raw=raw,
+                        reason_code=None,
+                    )
+                )
+            continue
+        if not github_filename and provider_setup_receipt_key(data) is None:
+            if private_entries is not None:
+                private_entries.append(
+                    _private_provider_setup_receipt_entry(
+                        root,
+                        path,
+                        provider="unknown",
+                        raw=raw,
+                        reason_code="provider_setup_receipt_invalid",
+                    )
+                )
             continue
         entries.append({"path": relative, "receipt": json_safe(data)})
+
+    if private_entries is not None:
+        exact_root = archive_internal_path(
+            root,
+            "receipts/providers/object-storage-setup-registration",
+        )
+        if exact_root.is_dir():
+            for path in sorted(exact_root.glob("*.json"), key=lambda item: item.name):
+                try:
+                    raw = _read_provider_setup_status_receipt(path)
+                except OSError:
+                    raw = None
+                    reason_code = "object_storage_setup_receipt_unreadable"
+                else:
+                    try:
+                        data = json.loads(raw.decode("utf-8"))
+                    except (UnicodeError, json.JSONDecodeError):
+                        reason_code = "object_storage_setup_receipt_invalid"
+                    else:
+                        reason_code = (
+                            None
+                            if isinstance(data, dict)
+                            else "object_storage_setup_receipt_invalid"
+                        )
+                private_entries.append(
+                    _private_provider_setup_receipt_entry(
+                        root,
+                        path,
+                        provider="object_storage",
+                        raw=raw,
+                        reason_code=reason_code,
+                    )
+                )
     return entries
 
 
