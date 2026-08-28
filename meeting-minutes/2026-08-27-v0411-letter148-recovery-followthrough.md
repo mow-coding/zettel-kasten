@@ -170,3 +170,11 @@ the parsed text, unlike the historical universal-newline contract. The stable
 byte read remains intact, but decoding now applies the existing strict UTF-8
 universal-newline helper. The four failed cases, the explicit CRLF regression,
 and the final exact-scale benchmark all passed after the correction.
+
+The release-candidate Windows CI later exposed one stale terminology
+assertion: the product correctly displayed the canonical WOM label
+`zet-오브제 연결 생성`, while the old Letter 140 test still required
+`제텔-오브제 연결 생성`. The test expectation was updated without changing
+the product label, and its complete module passed. Reverting the product to the
+legacy transliteration would have contradicted the user's established `zet`
+and `오브제` vocabulary.
