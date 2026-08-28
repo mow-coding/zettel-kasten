@@ -148,7 +148,7 @@ CURRENT_DATABASE_CANONICAL_SHA256 = (
     "d9a42f08ee12a6d42e40214cfb12441e4077bf50c38c25b2692ec1344328294a"
 )
 RESOURCE_ADDITIONS = {
-    "release-notes/v0.4.12.md",
+    "release-notes/v0.4.13.md",
     "schemas/agent-instruction-policy-v0.1.schema.json",
     "schemas/approval-handoff-v0.1.schema.json",
     "schemas/approval-integrity-audit-result-v0.1.schema.json",
@@ -177,6 +177,8 @@ RESOURCE_ADDITIONS = {
     "schemas/notion-property-backfill-acceptance-v0.1.schema.json",
     "schemas/notion-source-properties-v0.1.schema.json",
     "schemas/object-storage-bytes-preserved-receipt-v0.1.schema.json",
+    "schemas/object-storage-preservation-terminal-receipt-v0.2.schema.json",
+    "schemas/object-storage-preservation-terminal-receipt-v0.3.schema.json",
     "schemas/object-storage-formal-adoption-receipt-v0.1.schema.json",
     "schemas/objet-capture-batch-receipt.schema.json",
     "schemas/objet-capture-batch-request.schema.json",
@@ -205,9 +207,9 @@ RESOURCE_ADDITIONS = {
     "schemas/zettel-objet-link-revert-receipt.schema.json",
 }
 RESOURCE_REMOVALS = {"release-notes/v0.3.297.md"}
-CURRENT_RESOURCE_COUNT = 165
+CURRENT_RESOURCE_COUNT = 167
 CURRENT_RESOURCE_CANONICAL_SHA256 = (
-    "af8a7f3ce56ec92b63bcd4c2ef54fe82fad18f2aa960c92a2ed0c437118f578c"
+    "bda23d398907c75b2bcd4ebcb5ecc8f8b465e92d8fd34e0834110e0c85483dc1"
 )
 
 
@@ -535,7 +537,7 @@ class V03299PredecessorSurfaceTests(unittest.TestCase):
             "^sha256:[0-9a-f]{64}$",
         )
 
-    def test_resource_paths_are_v03297_plus_exact_through_v0409_delta(self) -> None:
+    def test_resource_paths_are_v03297_plus_exact_through_v0413_delta(self) -> None:
         predecessor_paths = set(self.fixture["package_resources"]["packaged_paths"])
         self.assertTrue(
             RESOURCE_REMOVALS <= predecessor_paths,
@@ -565,10 +567,10 @@ class V03299PredecessorSurfaceTests(unittest.TestCase):
             actual,
             expected,
             "Current package-resource paths must be the full v0.3.297 set plus "
-            "the exact cumulative v0.3.298 through v0.4.12 delta. "
+            "the exact cumulative v0.3.298 through v0.4.13 delta. "
             f"missing={compact(missing)}; extra={compact(extra)}",
         )
-        self.assertEqual(manifest["version"], "0.4.12")
+        self.assertEqual(manifest["version"], "0.4.13")
         self.assertEqual(len(actual), CURRENT_RESOURCE_COUNT)
         self.assertEqual(
             canonical_sha256(actual),
@@ -587,14 +589,14 @@ class V03299PredecessorSurfaceTests(unittest.TestCase):
         self.assertIn("does not undo", predecessor_flat)
         self.assertNotIn("C:\\Users\\", predecessor_text)
 
-    def test_v0412_release_note_is_current_and_older_notes_remain_historical(self) -> None:
-        current_source_release = KIT_ROOT / "docs" / "releases" / "v0.4.12.md"
+    def test_v0413_release_note_is_current_and_older_notes_remain_historical(self) -> None:
+        current_source_release = KIT_ROOT / "docs" / "releases" / "v0.4.13.md"
         current_packaged_release = (
             SRC_ROOT
             / "wom_kit"
             / "_resources"
             / "release-notes"
-            / "v0.4.12.md"
+            / "v0.4.13.md"
         )
         self.assertEqual(
             current_source_release.read_bytes(),
@@ -603,10 +605,10 @@ class V03299PredecessorSurfaceTests(unittest.TestCase):
         current_text = current_source_release.read_text(encoding="utf-8")
         current_flat = " ".join(current_text.split())
         for token in (
-            "Generation-Bound Link Authority and Honest Index Lifecycles",
-            "deterministic",
-            "Publishing or installing v0.4.12 does not open, index, recover, or otherwise modify a client archive",
-            "wom_kit-0.4.12-py3-none-any.whl",
+            "Exact Setup Evidence and Create-Only Byte Preservation",
+            "Preservation is create-only",
+            "Publishing or installing v0.4.13 does not read a client archive",
+            "wom_kit-0.4.13-py3-none-any.whl",
         ):
             with self.subTest(token=token):
                 self.assertIn(token, current_flat)
@@ -619,10 +621,10 @@ class V03299PredecessorSurfaceTests(unittest.TestCase):
             with self.subTest(forbidden=forbidden):
                 self.assertNotIn(forbidden, current_text)
 
-        v0411_source_release = KIT_ROOT / "docs" / "releases" / "v0.4.11.md"
-        v0411_packaged_release = current_packaged_release.with_name("v0.4.11.md")
-        self.assertTrue(v0411_source_release.is_file())
-        self.assertFalse(v0411_packaged_release.exists())
+        v0412_source_release = KIT_ROOT / "docs" / "releases" / "v0.4.12.md"
+        v0412_packaged_release = current_packaged_release.with_name("v0.4.12.md")
+        self.assertTrue(v0412_source_release.is_file())
+        self.assertFalse(v0412_packaged_release.exists())
 
         v0402_source_release = KIT_ROOT / "docs" / "releases" / "v0.4.2.md"
         v0402_packaged_release = current_packaged_release.with_name("v0.4.2.md")
