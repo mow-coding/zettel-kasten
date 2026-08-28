@@ -77,6 +77,12 @@ if original_match is None:
 exact_body = b"    print('WOM_WHEEL_SAFE_SYNTHETIC')\r\n\r\nparagraph\r\n"
 before = original_text[: original_match.end()].encode("utf-8") + exact_body
 zettel_path.write_bytes(before)
+indexed = archive_services.index_archive(root)
+if (
+    not indexed.get("ok")
+    or indexed.get("index_state") != archive_services.INDEX_STATE_CURRENT
+):
+    raise RuntimeError("installed_letter140_index_failed")
 
 plan = completion_workflows.zettel_objet_link_plan(
     root,
@@ -1150,7 +1156,7 @@ from wom_kit import completion_workflows
 
 
 ROOT = Path(sys.argv[1])
-EXPECTED_VERSION = "0.4.12"
+EXPECTED_VERSION = sys.argv[2]
 PRIVATE_MARKER = "SYNTHETIC_PRIVATE_V0411_VALUE_MUST_NOT_ESCAPE"
 ZET_ID = "zet_20260827_installed_v0411_truth"
 EXPECTED_MISSING_OPTIONS = [
@@ -3220,6 +3226,7 @@ def _check_installed_v0411_truth_contracts(
     fixture_root: Path,
     *,
     cwd: Path,
+    expected_package_version: str,
 ) -> dict[str, Any]:
     """Prove v0.4.11 operator truth using only the isolated installed wheel."""
 
@@ -3231,6 +3238,7 @@ def _check_installed_v0411_truth_contracts(
             "-c",
             INSTALLED_V0411_TRUTH_SMOKE_SCRIPT,
             str(fixture_root),
+            expected_package_version,
         ],
         cwd=cwd,
         label="installed v0.4.11 operator truth contracts",
@@ -3242,7 +3250,7 @@ def _check_installed_v0411_truth_contracts(
     expected = {
         "ok": True,
         "schema": INSTALLED_V0411_TRUTH_SMOKE_SCHEMA,
-        "package_version": "0.4.12",
+        "package_version": expected_package_version,
         "isolated_installed_package": True,
         "isolated_python_flags": True,
         "revision_and_discard": {
@@ -3582,6 +3590,7 @@ def check_wheel(output_dir: Path | None = None) -> dict[str, Any]:
             python,
             temp_root / "v0411-truth-archive",
             cwd=temp_root,
+            expected_package_version=package_version,
         )
 
         wheel_sha256 = hashlib.sha256(wheel.read_bytes()).hexdigest()

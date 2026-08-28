@@ -983,6 +983,7 @@ class InstalledEntrypointTests(unittest.TestCase):
         self.assertEqual(command[:3], [str(python), "-I", "-c"])
         self.assertEqual(command[-1], str(archive_root))
         self.assertIn("import hashlib", command[3])
+        self.assertIn("index_archive", command[3])
         self.assertIn("zettel_objet_link_apply", command[3])
         self.assertIn("receipt/v0.2", command[3])
         self.assertIn("WOM_WHEEL_SAFE_SYNTHETIC", command[3])
@@ -1225,13 +1226,14 @@ class InstalledEntrypointTests(unittest.TestCase):
                     python,
                     fixture_root,
                     cwd=self.temp_root,
+                    expected_package_version=self.PACKAGE_VERSION,
                 )
             )
 
         self.assertEqual(evidence, expected)
         command = run_mock.call_args.args[0]
         self.assertEqual(command[:4], [str(python), "-I", "-B", "-c"])
-        self.assertEqual(command[-1], str(fixture_root))
+        self.assertEqual(command[-2:], [str(fixture_root), self.PACKAGE_VERSION])
         self.assertIn("wom_kit.__version__", command[4])
         self.assertIn("zet-self-contained-check", command[4])
         self.assertIn("EXPECTED_MISSING_OPTIONS", command[4])
@@ -1249,6 +1251,7 @@ class InstalledEntrypointTests(unittest.TestCase):
                     python,
                     fixture_root,
                     cwd=self.temp_root,
+                    expected_package_version=self.PACKAGE_VERSION,
                 )
 
     def test_installed_strict_doctor_explicitly_disables_default_progress(self) -> None:
