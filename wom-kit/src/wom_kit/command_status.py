@@ -39,6 +39,115 @@ COMPOUND_APPROVAL_REASON_CODE = (
     "compound_exact_human_approval_binding_required"
 )
 
+# One content-free source of truth for public approval surfaces that remain
+# deliberately closed.  CLI help, capability inventory, and read-only planners
+# must consume this registry instead of maintaining independent claims.
+COMPOUND_APPROVAL_FIXED_CLOSED_COMMANDS = frozenset(
+    {
+        "activity-group-membership-recover",
+        "activity-group-membership-removal-recover",
+        "activity-group-membership-removal-write",
+        "activity-group-membership-write",
+        "add-source",
+        "ai-scratch-gc",
+        "credential-keepassxc-write",
+        "credential-lifecycle",
+        "delegate-zet",
+        "discard-draft",
+        "discard-draft-restore",
+        "external-locator-deactivate",
+        "external-locator-revert",
+        "github-repo",
+        "identity-reconcile",
+        "imap-mailbox-adapter-manifest-write",
+        "imap-mailbox-header-metadata-scan",
+        "import-external",
+        "legacy-coordination-cleanup",
+        "markup-normalization",
+        "markup-normalization-recovery",
+        "markup-normalization-revert",
+        "mint-zet-batch",
+        "notion-ancestor-fetch-adapter-run",
+        "notion-objet-manifest-locator-label",
+        "notion-objet-link-convert",
+        "notion-page-recovery",
+        "notion-recover",
+        "object-storage-upload",
+        "object-storage-upload-evidence",
+        "object-storage-wom-location-reconcile",
+        "objet-capture-enable",
+        "objet-source-metadata-write",
+        "onboard",
+        "prehashed-objet-ledger",
+        "principal-register",
+        "principal-unregister",
+        "project-bytecode-repair",
+        "project-version-update-collision",
+        "repair-gitignore",
+        "quarantine-foreign-block",
+        "record-quarantine-decision",
+        "remint-reconcile",
+        "retire-draft-batch",
+        "retire-draft-reconcile",
+        "runtime-skill-install",
+        "runtime-skill-uninstall",
+        "revert-batch",
+        "restore-drill",
+        "saved-view-revert",
+        "saved-view-write",
+        "scan-source",
+        "tiro-lossless-recovery-capture",
+        "tiro-lossless-recovery-fetch-run",
+        "transfer-ownership",
+        "zet-abstract-backfill-recover",
+        "zet-abstract-backfill-revert",
+        "zet-abstract-backfill-write",
+        "zet-catalog-pass-cleanup",
+        "zet-revision-restore-write",
+        "zet-revision-write",
+        "zet-title-remap-recover",
+        "zet-title-remap-revert-recover",
+        "zettel-edge-batch",
+        "zettel-objet-link-revert",
+    }
+)
+
+COMPOUND_APPROVAL_FIXED_CLOSED_PLAN_WRITERS = {
+    "discard-draft": "discard-draft",
+    "zet-revision-plan": "zet-revision-write",
+}
+
+
+def compound_approval_fixed_closed_contract(command: str) -> dict[str, Any]:
+    """Return the shared content-free approval truth for one closed writer."""
+
+    normalized = " ".join(str(command or "").split())
+    if normalized not in COMPOUND_APPROVAL_FIXED_CLOSED_COMMANDS:
+        raise ValueError("compound_approval_command_not_fixed_closed")
+    return {
+        "approval_status": APPROVAL_FIXED_CLOSED,
+        "approval_reason_code": COMPOUND_APPROVAL_REASON_CODE,
+        "approved_write_implemented": False,
+        "actionable_handoff_available": False,
+    }
+
+
+def compound_approval_fixed_closed_plan_contract(
+    plan_command: str,
+) -> dict[str, Any]:
+    """Separate a safe validation preview from unavailable approval authority."""
+
+    normalized = " ".join(str(plan_command or "").split())
+    writer = COMPOUND_APPROVAL_FIXED_CLOSED_PLAN_WRITERS.get(normalized)
+    if writer is None:
+        raise ValueError("compound_approval_plan_command_not_registered")
+    return {
+        **compound_approval_fixed_closed_contract(writer),
+        "validation_preview_available": True,
+        "validation_digest_is_approval_authority": False,
+        "writer_command": writer,
+    }
+
 
 def _subparser_actions(
     parser: argparse.ArgumentParser,

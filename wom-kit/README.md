@@ -10,12 +10,12 @@ It is not a website, SaaS app, dashboard, or visual note-taking product. The int
 
 ## Install The Command-Line Tool
 
-The exact v0.4.10 GitHub Release, when present, uses the self-contained wheel
+The exact v0.4.11 GitHub Release, when present, uses the self-contained wheel
 below. Confirm that the release exists and lists the wheel before installing
 it. The versioned URL alone is not proof that the asset is available.
 
 ```powershell
-uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.10/wom_kit-0.4.10-py3-none-any.whl"
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.11/wom_kit-0.4.11-py3-none-any.whl"
 archive --version
 ```
 
@@ -52,7 +52,19 @@ them adopted. Formal adoption verifies exact key-map entries, writes immutable
 evidence, performs one final manifest projection, and leaves every conflicting
 definition in review. The legacy compound approval path remains closed.
 
-v0.4.10 opens bounded 1–1,000 item `source-intake-batch` and
+v0.4.11 binds project alignment to fresh installed payload, module inventory,
+launcher, current-process, pin, and running-version evidence instead of a
+matching version string. Deep Doctor remains the default and hashes each unique
+objet once through a stable read. Exact chronological direct-receipt chains may
+explain later byte evolution; local-recovery state evidence without completion
+chronology remains ERROR. Native decisions use canonical WOM language and show
+their validated target only in the local dialog, while the read-only document
+view produces a WOM-safe Markdown projection without changing canonical bytes.
+Fixed-closed previews state that they grant no write authority. The repeated
+full-tree `zettel-objet-link` and generation-bound index architecture remain
+v0.4.12 work. Installing the wheel alone changes no client archive.
+
+v0.4.10 opened bounded 1–1,000 item `source-intake-batch` and
 `objet-capture-batch` execution as two separate exact-human decisions. Intake
 accepts archive-relative sources and records every item plus one generated
 capture request in one checkpointed manifest; a batch that cannot produce the
@@ -121,6 +133,7 @@ and repaired high-risk failures can use `wom-kit/cli-error/v0.1`: exit `2` is a
 usage failure, exit `1` is policy/precondition failure, and
 `effects_state: unknown` means an exact-human workflow had started and its
 durable claim requires reconciliation rather than automatic retry. See the
+[`v0.4.11 release note`](docs/releases/v0.4.11.md),
 [`v0.4.10 release note`](docs/releases/v0.4.10.md),
 [`v0.4.9 release note`](docs/releases/v0.4.9.md),
 [`v0.4.8 release note`](docs/releases/v0.4.8.md),

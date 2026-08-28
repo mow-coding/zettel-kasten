@@ -1130,6 +1130,384 @@ print(
     )
 )
 '''
+INSTALLED_V0411_TRUTH_SMOKE_SCHEMA = (
+    "wom-kit/installed-v0411-truth-wheel-smoke/v0.1"
+)
+INSTALLED_V0411_TRUTH_SMOKE_SCRIPT = r'''
+import argparse
+import hashlib
+import io
+import json
+import os
+import sys
+from contextlib import redirect_stderr, redirect_stdout
+from pathlib import Path
+from unittest import mock
+
+import wom_kit
+from wom_kit import archive_cli, archive_services, command_status
+from wom_kit import completion_workflows
+
+
+ROOT = Path(sys.argv[1])
+EXPECTED_VERSION = "0.4.11"
+PRIVATE_MARKER = "SYNTHETIC_PRIVATE_V0411_VALUE_MUST_NOT_ESCAPE"
+ZET_ID = "zet_20260827_installed_v0411_truth"
+EXPECTED_MISSING_OPTIONS = [
+    "--draft-id",
+    "--created-at",
+    "--draft-approved-by",
+    "--expected-body-sha256",
+    "--expected-source-fidelity-plan-sha256",
+]
+
+
+def _fail(code):
+    raise RuntimeError(code)
+
+
+def _tree_sha256(root):
+    return {
+        path.relative_to(root).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
+        for path in sorted(root.rglob("*"))
+        if path.is_file()
+    }
+
+
+def _run_json(arguments, expected_code):
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+    with redirect_stdout(stdout), redirect_stderr(stderr):
+        code = archive_cli.main(arguments)
+    if int(code) != expected_code:
+        _fail("installed_v0411_cli_exit_failed")
+    raw_stdout = stdout.getvalue()
+    raw_stderr = stderr.getvalue()
+    try:
+        result = json.loads(raw_stdout)
+    except json.JSONDecodeError:
+        _fail("installed_v0411_cli_json_failed")
+    if not isinstance(result, dict):
+        _fail("installed_v0411_cli_shape_failed")
+    if PRIVATE_MARKER in raw_stdout or PRIVATE_MARKER in raw_stderr:
+        _fail("installed_v0411_private_value_echoed")
+    if str(ROOT) in raw_stdout or str(ROOT) in raw_stderr:
+        _fail("installed_v0411_absolute_path_echoed")
+    return result, raw_stderr
+
+
+def _command_help(command):
+    parser = archive_cli.build_parser()
+    subcommands = next(
+        action
+        for action in parser._actions
+        if isinstance(action, argparse._SubParsersAction)
+    )
+    return subcommands.choices[command].format_help()
+
+
+if wom_kit.__version__ != EXPECTED_VERSION:
+    _fail("installed_v0411_package_version_failed")
+module_path = Path(wom_kit.__file__).resolve()
+installed_prefix = Path(sys.prefix).resolve()
+if module_path != installed_prefix and installed_prefix not in module_path.parents:
+    _fail("installed_v0411_module_not_isolated_install")
+if sys.flags.isolated != 1 or sys.flags.dont_write_bytecode != 1:
+    _fail("installed_v0411_python_isolation_flags_failed")
+
+revision_contract = command_status.compound_approval_fixed_closed_plan_contract(
+    "zet-revision-plan"
+)
+discard_contract = command_status.compound_approval_fixed_closed_plan_contract(
+    "discard-draft"
+)
+for contract, writer in (
+    (revision_contract, "zet-revision-write"),
+    (discard_contract, "discard-draft"),
+):
+    if (
+        contract.get("approval_status") != "approval_fixed_closed"
+        or contract.get("approval_reason_code")
+        != "compound_exact_human_approval_binding_required"
+        or contract.get("approved_write_implemented") is not False
+        or contract.get("actionable_handoff_available") is not False
+        or contract.get("validation_preview_available") is not True
+        or contract.get("validation_digest_is_approval_authority") is not False
+        or contract.get("writer_command") != writer
+    ):
+        _fail("installed_v0411_fixed_closed_contract_failed")
+
+revision_plan_help = _command_help("zet-revision-plan")
+revision_write_help = _command_help("zet-revision-write")
+discard_help = _command_help("discard-draft")
+self_contained_help = _command_help("zet-self-contained-check")
+revision_plan_help_words = " ".join(revision_plan_help.split())
+revision_write_help_words = " ".join(revision_write_help.split())
+discard_help_words = " ".join(discard_help.split())
+self_contained_help_words = " ".join(self_contained_help.split())
+if (
+    "approval_fixed_closed" not in revision_plan_help_words
+    or "No actionable approval handoff" not in revision_plan_help_words
+    or "fixed closed" not in revision_write_help_words
+    or "fixed closed" not in discard_help_words
+):
+    _fail("installed_v0411_fixed_closed_help_failed")
+if (
+    "Optional compatibility flag" not in self_contained_help_words
+    or "always read-only" not in self_contained_help_words
+):
+    _fail("installed_v0411_self_contained_help_failed")
+
+ROOT.mkdir(parents=True, exist_ok=False)
+(ROOT / "archive.yml").write_text(
+    "archive_id: archive:test:installed-v0411-truth\n"
+    "name: Installed v0.4.11 truth fixture\n"
+    "type: personal\n",
+    encoding="utf-8",
+)
+zettels = ROOT / "zettels"
+zettels.mkdir()
+(ROOT / "objects" / "manifests").mkdir(parents=True)
+zet_path = zettels / (ZET_ID + ".md")
+zet_path.write_text(
+    "---\n"
+    "id: " + ZET_ID + "\n"
+    "title: Installed v0.4.11 truth fixture\n"
+    "abstract: Synthetic content-free installed-wheel verification.\n"
+    "created_at: '2026-08-27T00:00:00+09:00'\n"
+    "updated_at: '2026-08-27T00:00:00+09:00'\n"
+    "archive_id: archive:test:installed-v0411-truth\n"
+    "status: canonical\n"
+    "kind: permanent_note\n"
+    "facets: {}\n"
+    "assets: []\n"
+    "edges: []\n"
+    "source_refs: []\n"
+    "provenance:\n"
+    "  created_by: person:installed-wheel-smoke\n"
+    "  created_in: archive:test:installed-v0411-truth\n"
+    "  source: synthetic_installed_wheel_smoke\n"
+    "  derived_from: []\n"
+    "visibility:\n"
+    "  scope: private\n"
+    "  allowed_archives: []\n"
+    "  source_visibility: private\n"
+    "---\n\n"
+    "# Installed v0.4.11 truth fixture\n\n"
+    "This synthetic zet is self-contained.\n",
+    encoding="utf-8",
+)
+index_result = archive_services.index_archive(ROOT)
+if index_result.get("index_complete") is not True:
+    _fail("installed_v0411_fixture_index_failed")
+
+before_read_only = _tree_sha256(ROOT)
+self_contained, self_contained_stderr = _run_json(
+    [
+        "zet-self-contained-check",
+        str(ROOT),
+        "--zettel-id",
+        ZET_ID,
+        "--format",
+        "json",
+    ],
+    0,
+)
+self_contained_compat, self_contained_compat_stderr = _run_json(
+    [
+        "zet-self-contained-check",
+        str(ROOT),
+        "--zettel-id",
+        ZET_ID,
+        "--dry-run",
+        "--format",
+        "json",
+    ],
+    0,
+)
+after_read_only = _tree_sha256(ROOT)
+if (
+    self_contained_stderr
+    or self_contained_compat_stderr
+    or self_contained.get("ok") is not True
+    or self_contained.get("dry_run") is not True
+    or self_contained.get("lifecycle_action") != "zet_self_contained_check"
+    or self_contained.get("would_change") != []
+    or self_contained.get("privacy_guards", {}).get("writes") is not False
+    or self_contained_compat.get("ok") is not True
+    or self_contained_compat.get("dry_run") is not True
+    or before_read_only != after_read_only
+):
+    _fail("installed_v0411_self_contained_read_only_failed")
+
+closed_before = _tree_sha256(ROOT)
+digest = "sha256:" + ("0" * 64)
+with (
+    mock.patch.object(
+        archive_services,
+        "zet_revision_write",
+        side_effect=RuntimeError("installed_v0411_revision_writer_called"),
+    ) as revision_writer,
+    mock.patch.object(
+        completion_workflows,
+        "draft_discard_apply",
+        side_effect=RuntimeError("installed_v0411_discard_writer_called"),
+    ) as discard_writer,
+):
+    revision_blocked, revision_stderr = _run_json(
+        [
+            "zet-revision-write",
+            str(ROOT),
+            "--zettel-id",
+            ZET_ID,
+            "--proposal",
+            ".wom-scratch/revisions/synthetic.md",
+            "--expected-canonical-sha256",
+            digest,
+            "--expected-proposal-sha256",
+            digest,
+            "--expected-proposal-semantic-sha256",
+            digest,
+            "--expected-plan-digest",
+            digest,
+            "--approve",
+            "--format",
+            "json",
+        ],
+        1,
+    )
+    discard_blocked, discard_stderr = _run_json(
+        [
+            "discard-draft",
+            str(ROOT),
+            "--path",
+            "inbox/synthetic.md",
+            "--reason",
+            PRIVATE_MARKER,
+            "--approve",
+            "--format",
+            "json",
+        ],
+        1,
+    )
+if revision_writer.call_count or discard_writer.call_count:
+    _fail("installed_v0411_closed_writer_called")
+for blocked in (revision_blocked, discard_blocked):
+    if (
+        blocked.get("ok") is not False
+        or blocked.get("state") != "blocked"
+        or blocked.get("reason_codes")
+        != ["compound_exact_human_approval_binding_required"]
+        or blocked.get("effects_state") != "none"
+        or blocked.get("files_written") != []
+        or blocked.get("private_values_echoed") is not False
+    ):
+        _fail("installed_v0411_closed_cli_result_failed")
+if revision_stderr or discard_stderr or closed_before != _tree_sha256(ROOT):
+    _fail("installed_v0411_closed_cli_effect_failed")
+
+create_before = _tree_sha256(ROOT)
+with mock.patch.object(
+    archive_services,
+    "create_draft_zettel",
+    side_effect=RuntimeError("installed_v0411_create_draft_service_called"),
+) as create_draft_service:
+    missing, missing_stderr = _run_json(
+        [
+            "create-draft",
+            str(ROOT),
+            "--title",
+            "Synthetic installed-wheel draft",
+            "--body",
+            PRIVATE_MARKER,
+            "--creation-mode",
+            "ai_assisted",
+            "--approve",
+            "--format",
+            "json",
+        ],
+        1,
+    )
+if (
+    create_draft_service.call_count
+    or missing_stderr
+    or missing.get("reason_codes")
+    != [
+        "create_draft_ai_replay_identity_required",
+        "create_draft_ai_approval_evidence_required",
+    ]
+    or missing.get("missing_required_options") != EXPECTED_MISSING_OPTIONS
+    or len(set(missing.get("missing_required_options") or [])) != 5
+    or missing.get("private_values_echoed") is not False
+    or create_before != _tree_sha256(ROOT)
+):
+    _fail("installed_v0411_create_draft_prerequisites_failed")
+
+previous_mtime_ns = zet_path.stat().st_mtime_ns
+zet_path.write_bytes(zet_path.read_bytes() + b"\n")
+current_stat = zet_path.stat()
+os.utime(
+    zet_path,
+    ns=(
+        current_stat.st_atime_ns,
+        max(current_stat.st_mtime_ns, previous_mtime_ns + 1_000_000_000),
+    ),
+)
+rows, stale_state = archive_services.promotion_duplicate_index_rows(ROOT)
+rebuild_message = archive_services.INDEX_REBUILD_MINT_BLOCKER
+if (
+    rows != []
+    or stale_state.get("used_generated_index") is not False
+    or stale_state.get("fallback_reason") != "archive_index_rebuild_required"
+    or not stale_state.get("stale_reasons")
+    or stale_state.get("next_safe_actions")
+    != list(archive_services.INDEX_REBUILD_NEXT_SAFE_ACTIONS)
+    or "rebuild" not in rebuild_message.lower()
+    or "Possible duplicate canonical zettel" in rebuild_message
+):
+    _fail("installed_v0411_stale_index_truth_failed")
+
+print(
+    json.dumps(
+        {
+            "ok": True,
+            "schema": "wom-kit/installed-v0411-truth-wheel-smoke/v0.1",
+            "package_version": EXPECTED_VERSION,
+            "isolated_installed_package": True,
+            "isolated_python_flags": True,
+            "revision_and_discard": {
+                "approval_status": "approval_fixed_closed",
+                "approved_write_implemented": False,
+                "actionable_handoff_available": False,
+                "validation_digest_is_approval_authority": False,
+                "approval_attempts_fixed_closed_without_effects": True,
+            },
+            "self_contained_check": {
+                "works_without_dry_run_flag": True,
+                "dry_run_flag_is_optional_compatibility": True,
+                "read_only_bytes_unchanged": True,
+            },
+            "create_draft": {
+                "missing_required_option_count": 5,
+                "all_missing_options_reported_once": True,
+                "service_not_called": True,
+                "files_written": False,
+            },
+            "stale_index": {
+                "rebuild_required": True,
+                "generated_index_used": False,
+                "duplicate_conclusion_made": False,
+            },
+            "provider_api_called": False,
+            "credential_value_read": False,
+            "private_values_echoed": False,
+            "absolute_paths_echoed": False,
+            "production_archive_touched": False,
+        },
+        sort_keys=True,
+    )
+)
+'''
 WHEEL_PRIVACY_TEXT_EXTENSIONS = frozenset(
     {
         ".cfg",
@@ -2639,6 +3017,7 @@ def _wheel_install_success_result(
     letter140_link_evidence: dict[str, Any],
     v049_workflow_evidence: dict[str, Any],
     v0410_batch_workflow_evidence: dict[str, Any],
+    v0411_truth_evidence: dict[str, Any],
     wheel_filename: str,
     wheel_sha256: str,
     artifact_preserved: bool,
@@ -2655,6 +3034,7 @@ def _wheel_install_success_result(
         "installed_letter140_link_workflow": letter140_link_evidence,
         "installed_v049_recovery_workflows": v049_workflow_evidence,
         "installed_v0410_batch_workflow": v0410_batch_workflow_evidence,
+        "installed_v0411_truth_contracts": v0411_truth_evidence,
         "runtime_skill_lifecycle": "passed",
         "onboarding_preview": "passed",
         "onboarding_write": "fixed_closed",
@@ -2716,7 +3096,7 @@ def _check_installed_v049_workflows(
     *,
     cwd: Path,
 ) -> dict[str, Any]:
-    """Run current v0.4.10 recovery paths from the isolated installed package only."""
+    """Recheck the historical v0.4.10 recovery paths from the installed package."""
 
     stdout = _run_installed_entrypoint(
         [
@@ -2831,6 +3211,74 @@ def _check_installed_v0410_batch_workflow(
             "Installed v0.4.10 batch workflow did not prove the exact expected "
             "three-file, derived-request, fresh-two-approval, byte-preservation, "
             "no-progress, and privacy contract."
+        )
+    return evidence
+
+
+def _check_installed_v0411_truth_contracts(
+    python: Path,
+    fixture_root: Path,
+    *,
+    cwd: Path,
+) -> dict[str, Any]:
+    """Prove v0.4.11 operator truth using only the isolated installed wheel."""
+
+    stdout = _run_installed_entrypoint(
+        [
+            str(python),
+            "-I",
+            "-B",
+            "-c",
+            INSTALLED_V0411_TRUTH_SMOKE_SCRIPT,
+            str(fixture_root),
+        ],
+        cwd=cwd,
+        label="installed v0.4.11 operator truth contracts",
+    )
+    evidence = _parse_entrypoint_json_object(
+        stdout,
+        label="Installed v0.4.11 operator truth contract output",
+    )
+    expected = {
+        "ok": True,
+        "schema": INSTALLED_V0411_TRUTH_SMOKE_SCHEMA,
+        "package_version": "0.4.11",
+        "isolated_installed_package": True,
+        "isolated_python_flags": True,
+        "revision_and_discard": {
+            "approval_status": "approval_fixed_closed",
+            "approved_write_implemented": False,
+            "actionable_handoff_available": False,
+            "validation_digest_is_approval_authority": False,
+            "approval_attempts_fixed_closed_without_effects": True,
+        },
+        "self_contained_check": {
+            "works_without_dry_run_flag": True,
+            "dry_run_flag_is_optional_compatibility": True,
+            "read_only_bytes_unchanged": True,
+        },
+        "create_draft": {
+            "missing_required_option_count": 5,
+            "all_missing_options_reported_once": True,
+            "service_not_called": True,
+            "files_written": False,
+        },
+        "stale_index": {
+            "rebuild_required": True,
+            "generated_index_used": False,
+            "duplicate_conclusion_made": False,
+        },
+        "provider_api_called": False,
+        "credential_value_read": False,
+        "private_values_echoed": False,
+        "absolute_paths_echoed": False,
+        "production_archive_touched": False,
+    }
+    if evidence != expected:
+        raise WheelCheckError(
+            "Installed v0.4.11 wheel did not prove the exact expected "
+            "fixed-close, read-only, prerequisite, stale-index, isolation, "
+            "and privacy truth contracts."
         )
     return evidence
 
@@ -3130,6 +3578,11 @@ def check_wheel(output_dir: Path | None = None) -> dict[str, Any]:
                 cwd=temp_root,
             )
         )
+        v0411_truth_evidence = _check_installed_v0411_truth_contracts(
+            python,
+            temp_root / "v0411-truth-archive",
+            cwd=temp_root,
+        )
 
         wheel_sha256 = hashlib.sha256(wheel.read_bytes()).hexdigest()
         artifact_preserved = False
@@ -3153,6 +3606,7 @@ def check_wheel(output_dir: Path | None = None) -> dict[str, Any]:
             letter140_link_evidence=letter140_link_evidence,
             v049_workflow_evidence=v049_workflow_evidence,
             v0410_batch_workflow_evidence=v0410_batch_workflow_evidence,
+            v0411_truth_evidence=v0411_truth_evidence,
             wheel_filename=wheel.name,
             wheel_sha256=wheel_sha256,
             artifact_preserved=artifact_preserved,

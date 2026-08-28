@@ -48,7 +48,11 @@ class OperationApprovalBindingTests(unittest.TestCase):
         first = mint_zet_approval_binding(plan)
         self.assertIs(first.operation, ExactHumanApprovalOperation.mint_zet)
         self.assertEqual(first.warning_codes, ("sensitive_content_reviewed",))
+        self.assertEqual(first.target_preview.kind, "zet")
+        self.assertEqual(first.target_preview.primary, "private.md")
+        self.assertIsNone(first.target_preview.secondary)
         self.assertNotIn("PRIVATE_ZET_ID", json.dumps(first.public_document()))
+        self.assertNotIn("private.md", json.dumps(first.public_document()))
         changed = copy.deepcopy(plan)
         changed["checklist"][0]["status"] = "failed"
         second = mint_zet_approval_binding(changed)
@@ -59,6 +63,20 @@ class OperationApprovalBindingTests(unittest.TestCase):
                 expected_plan_sha256=first.plan_sha256,
                 expected_target_binding_sha256=first.target_binding_sha256,
             )
+
+        changed_display_only = copy.deepcopy(plan)
+        changed_display_only["title"] = "unbound spoofed title"
+        same = mint_zet_approval_binding(changed_display_only)
+        self.assertEqual(same.plan_sha256, first.plan_sha256)
+        self.assertEqual(same.target_preview, first.target_preview)
+
+    def test_mint_preview_requires_one_bound_identity(self) -> None:
+        plan = self.mint_plan()
+        plan["proposed_canonical_path"] = None
+        plan["zettel_id"] = None
+        with self.assertRaises(OperationApprovalBindingError) as captured:
+            mint_zet_approval_binding(plan)
+        self.assertEqual(captured.exception.code, "operation_approval_plan_invalid")
 
     def test_mint_binding_ignores_only_volatile_scratch_receipt_locator(self) -> None:
         plan = self.mint_plan()
@@ -131,6 +149,10 @@ class OperationApprovalBindingTests(unittest.TestCase):
             "would_change": [],
         }
         binding = zettel_edge_approval_binding(plan)
+        self.assertEqual(binding.target_preview.kind, "zet_edge")
+        self.assertEqual(binding.target_preview.primary, "private")
+        self.assertEqual(binding.target_preview.secondary, "private-target")
+        self.assertEqual(binding.target_preview.relation, "supports")
         changed = copy.deepcopy(plan)
         changed["source"]["current_sha256"] = "sha256:" + "3" * 64
         self.assertNotEqual(
@@ -220,11 +242,27 @@ class OperationApprovalBindingTests(unittest.TestCase):
             "would_change": [],
         }
         first = retire_draft_approval_binding(plan)
+        self.assertEqual(first.target_preview.primary, "private-source")
+        self.assertIsNone(first.target_preview.secondary)
         changed = copy.deepcopy(plan)
         changed["receipt_preview"]["snapshot"]["sha256"] = "8" * 64
         second = retire_draft_approval_binding(changed)
         self.assertNotEqual(first.plan_sha256, second.plan_sha256)
         self.assertNotEqual(first.target_binding_sha256, second.target_binding_sha256)
+
+        changed_display_only = copy.deepcopy(plan)
+        changed_display_only["draft_path"] = "inbox/spoofed.md"
+        changed_display_only["title"] = "spoofed title"
+        same = retire_draft_approval_binding(changed_display_only)
+        self.assertEqual(same.plan_sha256, first.plan_sha256)
+        self.assertEqual(same.target_preview, first.target_preview)
+
+        missing_identity = copy.deepcopy(plan)
+        missing_identity["zettel_id"] = None
+        missing_identity["receipt_preview"]["source"]["path"] = None
+        with self.assertRaises(OperationApprovalBindingError) as captured:
+            retire_draft_approval_binding(missing_identity)
+        self.assertEqual(captured.exception.code, "operation_approval_plan_invalid")
 
     def test_blocked_or_missing_required_digest_fails_content_free(self) -> None:
         plan = self.mint_plan()

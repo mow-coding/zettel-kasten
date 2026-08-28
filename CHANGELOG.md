@@ -6,6 +6,29 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.4.11 - 2026-08-28
+
+- Bound project-runtime alignment to fresh installed payload, module inventory,
+  launcher, current-process, pin, and running-version evidence; a same-version
+  computer-wide executable no longer passes as the intended project runtime.
+- Kept Deep Doctor as the default, hashed every unique objet once through a
+  stable descriptor-bound read, and made Operational mode explicitly report
+  that it has not proved full byte integrity.
+- Accepted post-mint byte evolution only through one exact chronological
+  receipt chain, folded paired lifecycle duplicates into one logical finding,
+  and kept local-recovery state evidence without chronology as ERROR.
+- Added canonical WOM terminology and local-only target previews to open native
+  decisions without copying private target values into durable or public
+  output, and added a read-only WOM-safe Markdown display projection.
+- Made fixed-closed revision/discard previews, self-contained help, aggregate
+  draft prerequisites, and stale-index guidance tell their authority and next
+  step truth before a person invests more work.
+- Deferred the repeated full-tree `zettel-objet-link` and generation-bound
+  index architecture to v0.4.12 without weakening current identity and race
+  protections. Installing this release does not modify a client archive.
+- Kept the release blocked until its declared exact-scale Doctor benchmark is
+  recorded with timing, progress, privacy, and one-hash-per-objet evidence.
+
 ## v0.4.10 - 2026-08-27
 
 - Opened bounded 1–1,000 item `source-intake-batch` execution through one

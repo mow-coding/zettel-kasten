@@ -24,7 +24,7 @@ from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
 
-from . import archive_services, operation_approval_binding
+from . import archive_services, command_status, operation_approval_binding
 from .exact_human_approval import (
     _ClaimedExactHumanApproval,
     exact_human_approval_archive_identity_sha256,
@@ -4999,7 +4999,7 @@ def _compound_exact_human_approval_binding_blocked(
 ) -> dict[str, Any]:
     """Block legacy compound writers before any archive read or mutation."""
 
-    reason = "compound_exact_human_approval_binding_required"
+    reason = command_status.COMPOUND_APPROVAL_REASON_CODE
     return {
         "ok": False,
         "state": "blocked",
@@ -6891,6 +6891,12 @@ def _draft_discard_plan_core(
     }
     plan_sha256 = _sha256_bytes(_canonical_json_bytes(plan_binding))
     aggregate = archive_services.unique_preserve_order(blockers)
+    validation_ready = not aggregate
+    approval_contract = (
+        command_status.compound_approval_fixed_closed_plan_contract(
+            "discard-draft"
+        )
+    )
     next_safe_actions = (
         [
             f"archive retire-draft <archive-root> --zettel-id {safe_zettel_id} --dry-run --format json"
@@ -6900,8 +6906,14 @@ def _draft_discard_plan_core(
         else []
     )
     result = {
-        "ok": not aggregate,
-        "state": "ready" if not aggregate else "blocked",
+        "ok": validation_ready,
+        "state": (
+            command_status.APPROVAL_FIXED_CLOSED
+            if validation_ready
+            else "blocked"
+        ),
+        "validation_status": "ready" if validation_ready else "blocked",
+        "approval_status": approval_contract["approval_status"],
         "dry_run": True,
         "lifecycle_action": "discard_draft_plan",
         "archive_id": archive_id,
@@ -6912,13 +6924,18 @@ def _draft_discard_plan_core(
             "reason_sha256": reason_sha256,
             "snapshot_path": snapshot_relative,
             "receipt_path": receipt_relative,
-            "plan_sha256": plan_sha256 if not aggregate else None,
+            "plan_sha256": plan_sha256 if validation_ready else None,
+            "plan_sha256_validation_only": validation_ready,
+            "plan_sha256_is_approval_authority": False,
             "mint_receipt_present": (
                 "discard_draft_mint_receipt_present_use_retire_draft" in aggregate
             ),
             "canonical_twin_present": canonical_twin_present,
             "exact_byte_restore_supported": True,
+            "exact_byte_restore_approval_available": False,
         },
+        "approval_contract": approval_contract,
+        "approval_handoff": None,
         "blockers": aggregate,
         "warnings": [],
         "next_safe_actions": next_safe_actions,
@@ -6928,7 +6945,7 @@ def _draft_discard_plan_core(
                 f"write {snapshot_relative}",
                 f"write {receipt_relative}",
             ]
-            if not aggregate
+            if validation_ready
             else []
         ),
         "privacy_guards": {

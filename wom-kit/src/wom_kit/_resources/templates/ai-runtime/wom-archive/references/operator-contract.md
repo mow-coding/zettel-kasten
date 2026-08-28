@@ -366,12 +366,13 @@ newer for audit because they truthfully record
 `--max-locks` independently caps locks and journals. Never auto-delete a lock or
 journal, and never edit an immutable receipt to silence this audit.
 
-For an ordinary correction to one canonical zet, prepare a complete private
-proposal under `.wom-scratch/revisions/`, use `zet-revision-plan`, and preview
-the separate CLI-only `zet-revision-write`. In v0.4.0 stop there: approval is
-fixed fail-closed before private target read or mutation with
-`compound_exact_human_approval_binding_required`. Never hand-edit the canonical
-file to bypass those hashes. To audit historical revisions before handoff, run:
+For an ordinary correction to one canonical zet, a complete private proposal
+under `.wom-scratch/revisions/` may be validated with `zet-revision-plan`.
+In v0.4.11 the returned hashes are review evidence only: approval is fixed
+closed, `approved_write_implemented` and `actionable_handoff_available` are
+both false, and there is no supported handoff to `zet-revision-write`. Never
+hand-edit the canonical file or replay validation bindings to bypass this
+boundary. To audit historical revisions, run:
 
 ```bash
 archive zet-revision-receipt-audit <archive-root> --dry-run --max-receipts 5000 --max-locks 5000 --max-problems 100 --progress --format json

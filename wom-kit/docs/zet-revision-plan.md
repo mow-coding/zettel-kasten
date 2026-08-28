@@ -1,10 +1,11 @@
 # Canonical zet Revision Plan
 
-Status: v0.4.0 read-only single-zet planning; v0.3.235 writer evidence is historical
+Status: v0.4.11 read-only single-zet validation; writer evidence is historical
 
-`zet-revision-plan` is the first half of WOM's ordinary canonical correction
-workflow. It compares one complete private revision proposal with the current
-canonical zet before any canonical byte or receipt is written.
+`zet-revision-plan` is WOM's read-only validation surface for reviewing an
+ordinary canonical correction proposal. It compares one complete private
+revision proposal with the current canonical zet without creating a writer
+handoff and before any canonical byte or receipt is written.
 
 This is different from `remint-reconcile`. Reconcile explains and receipts a
 canonical file that already drifted on disk. Revision planning keeps the
@@ -87,10 +88,9 @@ title, abstract, body, custom frontmatter value, reviewer id, provider URL,
 absolute path, or secret value. It calls no model, provider, credential store,
 object store, or database.
 
-## Writer Preview And Current Stop
+## Validation Result And Current Stop
 
-A green plan can be handed to CLI `zet-revision-write --dry-run`. Keep these
-exact values:
+A green plan returns these exact binding values as review evidence:
 
 ```text
 canonical.sha256
@@ -99,11 +99,17 @@ proposal.semantic_sha256
 plan_digest
 ```
 
-The writer creates a second no-write preview that binds `revision_at` and the
-exact writer-produced candidate. In v0.4.0 approval returns
-`compound_exact_human_approval_binding_required` before private target reads or
-mutation and writes no canonical byte, lock, snapshot, or receipt. See
-[Canonical zet Revision Write](zet-revision-write.md).
+They prove what the validation read, but they do not grant approval authority.
+The successful result therefore reports `status: approval_fixed_closed`,
+`proposal_validation_status: ready_for_human_review`,
+`approval_contract.approved_write_implemented: false`, and
+`approval_contract.actionable_handoff_available: false`.
+
+v0.4.11 provides no supported preview, handoff, or apply path from this result
+to `zet-revision-write`. The command remains fixed closed, and a person should
+not be instructed to copy the proposed change into the canonical zet by hand.
+See [Canonical zet Revision Write](zet-revision-write.md) for that command's
+closed-boundary contract.
 
 MCP remains read-only and exposes no revision writer.
 
@@ -112,6 +118,5 @@ MCP remains read-only and exposes no revision writer.
 A green plan means only that the private proposal is structurally safe and
 bound to the current canonical bytes for human review. It does not mean the
 correction is true, approved, applied, understood by a model, or safe to copy
-into the canonical file by hand. Machine output reports
-the historical field `approval_contract.approved_write_implemented: true`, but
-v0.4.0 fixed-close policy overrides it; only writer dry-run is current.
+into the canonical file by hand. Its validation digests are evidence only and
+must not be interpreted as permission to write.

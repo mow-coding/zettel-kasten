@@ -9,7 +9,7 @@ from wom_kit import __version__
 
 KIT_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = KIT_ROOT.parent
-EXPECTED_CURRENT_VERSION = "0.4.10"
+EXPECTED_CURRENT_VERSION = "0.4.11"
 EXPECTED_CURRENT_TAG = f"v{EXPECTED_CURRENT_VERSION}"
 CURRENT_VERSION = f"v{__version__}"
 CURRENT_RELEASE_NOTE = f"{EXPECTED_CURRENT_TAG}.md"
@@ -20,8 +20,8 @@ CURRENT_WHEEL_URL = (
     f"wom_kit-{EXPECTED_CURRENT_VERSION}-py3-none-any.whl"
 )
 CURRENT_RUNTIME_STATUS = (
-    f"Status: {CURRENT_VERSION} bounded batch operability, "
-    "authenticated handoff, and fresh capture recovery"
+    f"Status: {CURRENT_VERSION} live runtime binding, Deep Doctor evidence, "
+    "and operator truth"
 )
 CURRENT_MATRIX_VERSION = f"Version: {CURRENT_VERSION} implementation and release scope"
 MATRIX_PATH = KIT_ROOT / "docs" / "capability-matrix.md"
@@ -682,6 +682,9 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         readme_text = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
         readme_ko_text = (REPO_ROOT / "README.ko.md").read_text(encoding="utf-8")
         kit_readme_text = (KIT_ROOT / "README.md").read_text(encoding="utf-8")
+        operator_text = (
+            RUNTIME_SKILL_ROOT / "references" / "operator-contract.md"
+        ).read_text(encoding="utf-8")
 
         for phrase in (
             "Status: v0.3.234 canonical zet revision plan checkpoint",
@@ -689,7 +692,10 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "Canonical zet revision plan",
             ".wom-scratch/revisions/",
             "plan_digest",
-            "separate CLI writer dry-run",
+            "no actionable writer handoff",
+            "approval_fixed_closed",
+            "approved_write_implemented: false",
+            "actionable_handoff_available: false",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
@@ -715,7 +721,22 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase.lower(), combined.lower())
-        self.assertIn("approved_write_implemented", guide_text)
+        for phrase in (
+            "approval_fixed_closed",
+            "approved_write_implemented: false",
+            "actionable_handoff_available: false",
+            "no supported preview, handoff, or apply path",
+        ):
+            with self.subTest(current_plan_contract=phrase):
+                self.assertIn(phrase, guide_text)
+        for phrase in (
+            "review evidence only",
+            "there is no supported handoff to `zet-revision-write`",
+            "actionable_handoff_available` are\nboth false",
+        ):
+            with self.subTest(installed_operator_contract=phrase):
+                self.assertIn(phrase, operator_text)
+        self.assertNotIn("preview\nthe separate CLI-only `zet-revision-write`", operator_text)
         self.assertIn("zet-revision-plan.md", public_map_text)
         self.assertIn("zet-revision-plan.md", public_map_ko_text)
 
@@ -747,12 +768,10 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             KIT_ROOT / "schemas" / "zet-revision-receipt.schema.json"
         ).read_text(encoding="utf-8")
         guide_compact = " ".join(guide_text.split())
-
         for phrase in (
             "Status: v0.3.235 canonical zet revision write checkpoint",
             CURRENT_MATRIX_VERSION,
             "Canonical zet revision write",
-            "dry-run-only in v0.4.0",
             "compound_exact_human_approval_binding_required",
         ):
             with self.subTest(phrase=phrase):
@@ -770,11 +789,13 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(document="canonical-revision-write"):
                 self.assertIn("zet-revision-write", text)
         for phrase in (
-            "write_plan.actual_digest",
-            "receipts/revisions/canonical/",
-            "Approval Is Closed In v0.4.0",
+            "Status: fixed closed in v0.4.11",
+            "Step 2: Stop After Validation",
+            "no supported next-step writer command",
             "before private target read or mutation",
             "compound_exact_human_approval_binding_required",
+            "Historical v0.3 Receipt Boundary",
+            "receipts/revisions/canonical/",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase.lower(), guide_compact.lower())
@@ -2170,7 +2191,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, tiro_text)
         for phrase in (
-            "Status: v0.3.184 zet Markdown authoring and frontmatter viewer checkpoint",
+            "Status: v0.4.11 zet Markdown authoring and safe human-view checkpoint",
             "archive zet-markdown-style-guide <archive-root> --topic range_tilde --dry-run --format json",
             "A ~ B",
             "A~~B",
@@ -4311,7 +4332,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "apply exact-human available in v0.4.1; revert fixed closed",
             "v0.4.1 adds an operation-specific exact-human binding only for apply",
             "Objet capture selection manifest",
-            f"authenticated exact-human local writer in {CURRENT_VERSION}",
+            "authenticated exact-human local writer in v0.4.10",
             "Bounded multi-item Objet capture",
             "Notion objet locator bridge",
             "read-only in v0.4.0",

@@ -50,7 +50,9 @@ from .paths import (
     resolve_archive_relative_path,
 )
 from .resource_paths import runtime_resource_root
+from .markdown_display import project_wom_safe_markdown
 from . import (
+    command_status,
     project_runtime,
     project_update_git_runner,
     project_update_transaction,
@@ -130,8 +132,12 @@ INDEX_REBUILD_NEXT_SAFE_ACTIONS = (
     "archive index <archive-root> --progress --format json",
     "archive index-health <archive-root> --dry-run --progress --format json",
 )
+INDEX_REBUILD_MINT_BLOCKER = (
+    "Archive index is stale or incomplete; rebuild it before duplicate checking "
+    "(archive_index_rebuild_required)."
+)
 COMPOUND_EXACT_HUMAN_APPROVAL_REQUIRED = (
-    "compound_exact_human_approval_binding_required"
+    command_status.COMPOUND_APPROVAL_REASON_CODE
 )
 
 
@@ -7348,6 +7354,28 @@ def read_zettel(
             "next_cursor": None if complete else page_end,
             "body_sha256": body_sha256,
         }
+    display_projection: dict[str, Any] | None = None
+    if section == "document" and include_body and not page_requested:
+        projected = project_wom_safe_markdown(returned_body)
+        returned_body = str(projected["text"])
+        projection_metadata = projected["metadata"]
+        display_projection = {
+            "profile": projection_metadata["profile"],
+            "schema": projection_metadata["schema"],
+            "display_only": True,
+            "canonical_source_unchanged": True,
+            "projection_applied": True,
+            "projection_changed_text": bool(projection_metadata["changed"]),
+            "source_body_sha256": (
+                "sha256:" + str(projection_metadata["source_sha256"])
+            ),
+            "projected_body_sha256": (
+                "sha256:" + str(projection_metadata["projected_sha256"])
+            ),
+            "marker_counts": dict(projection_metadata["counts"]),
+            "source_body_available_via": "section=body",
+        }
+
     result = {
         "path": archive_relative_path(path, root),
         "frontmatter": frontmatter if include_full_frontmatter else zettel_overview_frontmatter(frontmatter),
@@ -7367,11 +7395,19 @@ def read_zettel(
             "exact_file_bytes_hashed": True,
             "body_hash_basis": "decoded_canonical_body_before_section_omission",
             "body_text_returned": include_body,
+            "returned_body_sha256": (
+                "sha256:" + hashlib.sha256(returned_body.encode("utf-8")).hexdigest()
+                if include_body
+                else None
+            ),
+            "returned_body_is_display_projection": display_projection is not None,
         },
         "warnings": unique_preserve_order(overview_warnings),
     }
     if body_page is not None:
         result["body_page"] = body_page
+    if display_projection is not None:
+        result["display"] = display_projection
     return result
 
 
@@ -18981,12 +19017,19 @@ def blocked_zet_revision_plan_payload(
     warnings: list[str],
 ) -> dict[str, Any]:
     """Return the public plan schema without evidence from rejected bytes."""
+    approval_contract = (
+        command_status.compound_approval_fixed_closed_plan_contract(
+            "zet-revision-plan"
+        )
+    )
     return {
         "ok": False,
         "dry_run": bool(dry_run),
         "schema": ZET_REVISION_PLAN_SCHEMA,
         "lifecycle_action": "zet_revision_plan",
         "status": "blocked",
+        "proposal_validation_status": "blocked",
+        "approval_status": approval_contract["approval_status"],
         "archive_id": archive_id,
         "canonical": {
             "sha256": None,
@@ -19026,10 +19069,13 @@ def blocked_zet_revision_plan_payload(
             "warning_count": 0,
             "warning_values_echoed": False,
         },
+        "plan_digest_contract": {
+            "present": False,
+            "validation_only": True,
+            "approval_authority": False,
+        },
         "approval_contract": {
-            "approved_write_implemented": True,
-            "approved_write_command": "zet-revision-write",
-            "approved_write_requires_separate_dry_run": True,
+            **approval_contract,
             "human_review_required": True,
             "future_write_must_bind_canonical_sha256": True,
             "future_write_must_bind_proposal_sha256": True,
@@ -19039,13 +19085,7 @@ def blocked_zet_revision_plan_payload(
             "future_write_must_record_reviewed_abstract_body_pair": True,
             "manual_canonical_edit_recommended": False,
         },
-        "approval_handoff": _zet_revision_plan_approval_handoff(
-            ready=False,
-            canonical_sha256=None,
-            proposal_sha256=None,
-            semantic_sha256=None,
-            plan_digest=None,
-        ),
+        "approval_handoff": None,
         "write_boundary": {
             "files_written": False,
             "canonical_zets_changed": False,
@@ -19403,12 +19443,23 @@ def zet_revision_plan(
     blockers = unique_preserve_order(blockers)
     warnings = unique_preserve_order(warnings)
     ok = not blockers
+    approval_contract = (
+        command_status.compound_approval_fixed_closed_plan_contract(
+            "zet-revision-plan"
+        )
+    )
     return {
         "ok": ok,
         "dry_run": bool(dry_run),
         "schema": ZET_REVISION_PLAN_SCHEMA,
         "lifecycle_action": "zet_revision_plan",
-        "status": "ready_for_human_review" if ok else "blocked",
+        "status": (
+            command_status.APPROVAL_FIXED_CLOSED if ok else "blocked"
+        ),
+        "proposal_validation_status": (
+            "ready_for_human_review" if ok else "blocked"
+        ),
+        "approval_status": approval_contract["approval_status"],
         "archive_id": archive_id,
         "canonical": {
             "sha256": canonical_sha256,
@@ -19433,6 +19484,11 @@ def zet_revision_plan(
             "must_preserve_system_managed_fields": True,
         },
         "plan_digest": plan_digest,
+        "plan_digest_contract": {
+            "present": True,
+            "validation_only": True,
+            "approval_authority": False,
+        },
         "change_summary": change_summary,
         "first_read_check": first_read_check,
         "abstract_review_basis": abstract_review_basis,
@@ -19449,9 +19505,7 @@ def zet_revision_plan(
             "warning_values_echoed": False,
         },
         "approval_contract": {
-            "approved_write_implemented": True,
-            "approved_write_command": "zet-revision-write",
-            "approved_write_requires_separate_dry_run": True,
+            **approval_contract,
             "human_review_required": True,
             "future_write_must_bind_canonical_sha256": True,
             "future_write_must_bind_proposal_sha256": True,
@@ -19461,13 +19515,7 @@ def zet_revision_plan(
             "future_write_must_record_reviewed_abstract_body_pair": True,
             "manual_canonical_edit_recommended": False,
         },
-        "approval_handoff": _zet_revision_plan_approval_handoff(
-            ready=ok,
-            canonical_sha256=canonical_sha256,
-            proposal_sha256=proposal_sha256,
-            semantic_sha256=proposal_semantic_sha256,
-            plan_digest=plan_digest,
-        ),
+        "approval_handoff": None,
         "write_boundary": {
             "files_written": False,
             "canonical_zets_changed": False,
@@ -19494,8 +19542,8 @@ def zet_revision_plan(
         "next_safe_actions": (
             [
                 "Review the current canonical zet and private proposal together, including the explicit abstract.",
-                "Retain canonical.sha256, proposal.sha256, proposal.semantic_sha256, and plan_digest for zet-revision-write.",
-                "Run zet-revision-write in dry-run mode to bind revision_at and the exact writer-produced candidate before approval.",
+                "Treat plan_digest only as read-only validation evidence; it is not approval authority.",
+                "Approval execution remains fixed closed in this release.",
                 "Do not edit the canonical zet manually.",
             ]
             if ok
@@ -35225,96 +35273,6 @@ def _create_draft_approval_handoff(
     )
 
 
-def _zet_revision_plan_approval_handoff(
-    *,
-    ready: bool,
-    canonical_sha256: str | None,
-    proposal_sha256: str | None,
-    semantic_sha256: str | None,
-    plan_digest: str | None,
-) -> dict[str, Any]:
-    return build_approval_replay_handoff(
-        stage="write_preview_required" if ready else "blocked",
-        next_command="archive zet-revision-write",
-        ready=ready,
-        exact_replay_required=True,
-        replay_scope="one_complete_canonical_zet_revision_proposal",
-        arguments=[
-            approval_handoff_argument(
-                "--zettel-id",
-                required=True,
-                value_source="reuse_input",
-                sensitive=True,
-                echoed=False,
-            ),
-            approval_handoff_argument(
-                "--proposal",
-                required=True,
-                value_source="reuse_input",
-                sensitive=True,
-                echoed=False,
-            ),
-            approval_handoff_argument(
-                "--expected-canonical-sha256",
-                required=True,
-                value_source="json_pointer",
-                json_pointer="/canonical/sha256",
-                value=canonical_sha256,
-            ),
-            approval_handoff_argument(
-                "--expected-proposal-sha256",
-                required=True,
-                value_source="json_pointer",
-                json_pointer="/proposal/sha256",
-                value=proposal_sha256,
-            ),
-            approval_handoff_argument(
-                "--expected-proposal-semantic-sha256",
-                required=True,
-                value_source="json_pointer",
-                json_pointer="/proposal/semantic_sha256",
-                value=semantic_sha256,
-            ),
-            approval_handoff_argument(
-                "--expected-plan-digest",
-                required=True,
-                value_source="json_pointer",
-                json_pointer="/plan_digest",
-                value=plan_digest,
-            ),
-            approval_handoff_argument(
-                "--revision-at",
-                required=False,
-                value_source="operator_input",
-                sensitive=False,
-            ),
-        ],
-        required_review_bindings=[
-            approval_handoff_review_binding(
-                "complete_proposal_document_sha256",
-                required=True,
-                value_json_pointer="/proposal/sha256",
-            ),
-            approval_handoff_review_binding(
-                "proposal_semantic_sha256",
-                required=True,
-                value_json_pointer="/proposal/semantic_sha256",
-            ),
-            approval_handoff_review_binding(
-                "canonical_before_sha256",
-                required=True,
-                value_json_pointer="/canonical/sha256",
-            ),
-            approval_handoff_review_binding(
-                "revision_plan_digest",
-                required=True,
-                value_json_pointer="/plan_digest",
-            ),
-        ],
-        receipt_ref=None,
-    )
-
-
 def _zet_revision_write_approval_handoff(
     *,
     status: str,
@@ -47669,10 +47627,13 @@ def promote_zettel_dry_run(
         progress_callback=progress_callback,
     )
     for duplicate in near_duplicates:
-        message = (
-            f"Possible duplicate canonical zettel: {duplicate['path']} "
-            f"({duplicate['reason']})."
-        )
+        if duplicate.get("reason") == INDEX_REBUILD_REQUIRED:
+            message = INDEX_REBUILD_MINT_BLOCKER
+        else:
+            message = (
+                f"Possible duplicate canonical zettel: {duplicate['path']} "
+                f"({duplicate['reason']})."
+            )
         if duplicate["severity"] == "blocker":
             blockers.append(message)
         else:
@@ -49020,7 +48981,7 @@ def target_sha_evolved_by_edge_receipts(
             progress_callback("target edge evolution path unresolved")
         return False
     if progress_callback is not None:
-        progress_callback(f"target edge evolution target {target_relative}")
+        progress_callback("target edge evolution target resolved")
     cutoff = receipt_cutoff_time(receipt_data)
     if cutoff is None:
         if progress_callback is not None:
@@ -49029,8 +48990,16 @@ def target_sha_evolved_by_edge_receipts(
 
     try:
         if progress_callback is not None:
-            progress_callback("reading target zettel for edge evolution")
-        target_text = target_path.read_text(encoding="utf-8")
+            progress_callback("reading current target zet for edge evolution")
+        target_raw, target_read_reason = _bounded_stable_regular_file_read(
+            target_path,
+            max_bytes=ABSTRACT_FRESHNESS_MAX_ZET_BYTES,
+        )
+        if target_raw is None or target_read_reason is not None:
+            raise ArchiveServiceError("target_edge_evolution_input_unstable")
+        # Match Path.read_text()'s historical universal-newline semantics while
+        # keeping the underlying byte read descriptor-bound and stable.
+        target_text = decode_utf8_with_universal_newlines(target_raw)
         frontmatter, body = require_readable_zettel_text(target_text)
     except (OSError, UnicodeError, ArchiveServiceError):
         if progress_callback is not None:
@@ -101025,6 +100994,7 @@ def wom_kit_version_info(
     *,
     redact_local_paths: bool = True,
     progress_callback: Callable[[str, str, int | None, int | None], None] | None = None,
+    running_module_path: Path | str | None = None,
 ) -> dict[str, Any]:
     def progress(stage: str, event: str) -> None:
         if progress_callback is None:
@@ -101160,6 +101130,10 @@ def wom_kit_version_info(
         "status": "not_checked",
         "required_for_pinned_release": False,
         "installed": {"status": "not_checked", "verified": False},
+        "current_process": {
+            "bound": False,
+            "reason_code": "not_checked",
+        },
         "launcher_path": project_runtime.PROJECT_RUNTIME_LAUNCHER_RELATIVE.as_posix(),
         "launcher_aligned": None,
         "project_runtime_argv": project_runtime.project_runtime_argv(),
@@ -101198,15 +101172,43 @@ def wom_kit_version_info(
                 not launcher_state.get("unsafe")
                 and launcher_state.get("already_target")
             )
+            current_process = project_runtime.current_project_runtime_binding(
+                project_scope_root,
+                pinned_version,
+                running_module_path=running_module_path or service_path,
+                runtime_inspection=installed_runtime,
+            )
             project_runtime_summary["installed"] = installed_runtime
+            project_runtime_summary["current_process"] = current_process
             project_runtime_summary["launcher_aligned"] = launcher_aligned
             project_runtime_summary["status"] = (
                 "aligned"
-                if installed_runtime.get("verified")
+                if installed_runtime.get("receipt_candidate_valid")
                 and launcher_aligned
+                and current_process.get("bound")
                 and pinned_version == normalized_package
                 else "runtime_mismatch"
             )
+            if project_runtime_summary["status"] == "aligned":
+                project_runtime_summary["detail_reason_code"] = (
+                    "current_project_runtime_bound"
+                )
+            elif not installed_runtime.get("receipt_candidate_valid"):
+                project_runtime_summary["detail_reason_code"] = (
+                    "project_runtime_static_receipt_invalid"
+                )
+            elif not launcher_aligned:
+                project_runtime_summary["detail_reason_code"] = (
+                    "project_runtime_launcher_mismatch"
+                )
+            elif not current_process.get("bound"):
+                project_runtime_summary["detail_reason_code"] = (
+                    current_process.get("reason_code")
+                )
+            else:
+                project_runtime_summary["detail_reason_code"] = (
+                    "project_runtime_version_mismatch"
+                )
             if project_runtime_summary["status"] != "aligned":
                 warnings.append(
                     "The project-local WOM runtime is missing, invalid, or differs from the active project pin; use the exact project launcher after a verified project-version-update."

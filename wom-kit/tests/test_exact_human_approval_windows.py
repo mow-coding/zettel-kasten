@@ -10,6 +10,7 @@ from wom_kit.exact_human_approval_windows import (
     ExactHumanApprovalContext,
     ExactHumanApprovalIntent,
     ExactHumanApprovalOperation,
+    ExactHumanApprovalTargetPreview,
     ExactHumanApprovalWindowsError,
     _ACTCTXW,
     _COMMON_CONTROLS_V6_MANIFEST,
@@ -173,7 +174,7 @@ class ExactHumanApprovalWindowsTests(unittest.TestCase):
                     "manifest와 영수증",
                     "외부 서비스(provider) 호출",
                     "원격 업로드",
-                    "제텔 연결",
+                    "zet 연결",
                     "초안 생성",
                     "정본 발행",
                     "배치 전체 보존",
@@ -242,6 +243,91 @@ class ExactHumanApprovalWindowsTests(unittest.TestCase):
         self.assertIn("검토가 필요한 항목은 변경하지 않습니다", str(call["content"]))
         self.assertNotIn("review_pages_present", str(call["content"]))
         self.assertIn("review_pages_present", str(call["expanded_information"]))
+
+    def test_dialog_uses_canonical_wom_product_language(self) -> None:
+        expected_questions = {
+            ExactHumanApprovalOperation.mint_zet: "이 zet를 정본으로 발행할까요?",
+            ExactHumanApprovalOperation.zettel_edge: (
+                "이 두 zet 사이에 엣지를 만들까요?"
+            ),
+            ExactHumanApprovalOperation.zettel_objet_link: (
+                "이 zet와 오브제를 연결할까요?"
+            ),
+            ExactHumanApprovalOperation.retire_draft: (
+                "발행을 마친 이 초안을 퇴역시킬까요?"
+            ),
+        }
+        for operation, question in expected_questions.items():
+            with self.subTest(operation=operation.value):
+                context = ExactHumanApprovalContext(
+                    operation=operation,
+                    archive_identity_sha256=SHA_A,
+                    plan_sha256=SHA_B,
+                    target_binding_sha256=SHA_C,
+                    reviewer_claim="person:local-operator",
+                    review_binding_codes=("machine_verified",),
+                )
+                native = _FakeNative((2, False))
+                request_exact_human_approval(
+                    context,
+                    intent=ExactHumanApprovalIntent.live_write,
+                    native=native,
+                )
+                rendered = "\n".join(str(value) for value in native.calls[0].values())
+                self.assertEqual(native.calls[0]["main_instruction"], question)
+                for forbidden in ("제텔", "오브젝트", "중복 객체"):
+                    self.assertNotIn(forbidden, rendered)
+        self.assertIn("퇴역", expected_questions[ExactHumanApprovalOperation.retire_draft])
+        self.assertNotIn("폐기", expected_questions[ExactHumanApprovalOperation.retire_draft])
+
+    def test_dialog_shows_local_target_identity_without_putting_it_in_machine_details(self) -> None:
+        preview = ExactHumanApprovalTargetPreview(
+            kind="zet_edge",
+            primary="출발-zet.md",
+            secondary="도착-zet.md",
+            relation="supports",
+        )
+        context = ExactHumanApprovalContext(
+            operation=ExactHumanApprovalOperation.zettel_edge,
+            archive_identity_sha256=SHA_A,
+            plan_sha256=SHA_B,
+            target_binding_sha256=SHA_C,
+            reviewer_claim="person:local-operator",
+            review_binding_codes=("edge_contract",),
+            target_preview=preview,
+        )
+        native = _FakeNative((2, False))
+
+        request_exact_human_approval(
+            context,
+            intent=ExactHumanApprovalIntent.live_write,
+            native=native,
+        )
+
+        call = native.calls[0]
+        content = str(call["content"])
+        self.assertIn("확인할 대상", content)
+        self.assertIn("출발 zet: 출발-zet.md", content)
+        self.assertIn("도착 zet: 도착-zet.md", content)
+        self.assertIn("엣지: supports", content)
+        advanced = str(call["expanded_information"])
+        self.assertNotIn("출발-zet.md", advanced)
+        self.assertNotIn("도착-zet.md", advanced)
+        self.assertNotIn("supports", advanced)
+        self.assertNotIn("출발-zet.md", repr(context))
+        self.assertNotIn("출발-zet.md", repr(preview))
+
+    def test_target_preview_rejects_multiline_or_directional_spoofing(self) -> None:
+        for unsafe in (
+            "first\nsecond",
+            "safe\u2028fake label",
+            "safe\u2029fake paragraph",
+            "safe\u202eevil",
+        ):
+            with self.subTest(unsafe=unsafe), self.assertRaises(
+                ExactHumanApprovalWindowsError
+            ):
+                ExactHumanApprovalTargetPreview(kind="zet", primary=unsafe)
 
     def test_invalid_context_or_plain_string_intent_fails_before_native(self) -> None:
         native = _FakeNative()

@@ -33,6 +33,85 @@ def _tree_snapshot(root: Path) -> dict[str, bytes]:
     }
 
 
+def _write_receipt_bound_runtime(
+    project: Path,
+    *,
+    version: str = "0.4.3",
+) -> tuple[Path, Path, Path]:
+    """Create one tiny cross-platform runtime image with an exact receipt."""
+
+    runtime = project_runtime.runtime_path(project, version)
+    executable = runtime / "Scripts" / "python.exe"
+    module = runtime / "Lib" / "site-packages" / "wom_kit" / "project_runtime.py"
+    archive_cli_module = module.with_name("archive_cli.py")
+    package_origin = module.with_name("__init__.py")
+    executable.parent.mkdir(parents=True, exist_ok=True)
+    module.parent.mkdir(parents=True, exist_ok=True)
+    executable.write_bytes(b"synthetic-python\n")
+    module.write_bytes(b"# receipt-bound WOM module\n")
+    archive_cli_module.write_bytes(b"# receipt-bound WOM CLI module\n")
+    package_origin.write_bytes(f'__version__ = "{version}"\n'.encode("utf-8"))
+    payload_sha256 = project_runtime._runtime_payload_sha256(runtime)
+    verification = {
+        "wheel_sha256": True,
+        "pip_check": True,
+        "version": True,
+        "package_resources": True,
+        "new_process": True,
+        "supply_lock": True,
+        "artifact_hashes": True,
+        "artifact_sizes": True,
+        "artifact_inventory": True,
+        "installed_payload": True,
+        "live_process": True,
+    }
+    receipt = {
+        "schema": project_runtime.PROJECT_RUNTIME_RECEIPT_SCHEMA,
+        "status": "verified",
+        "created_at": "2026-08-27T00:00:00Z",
+        "target_tag": f"v{version}",
+        "target_version": version,
+        "target_commit": "b" * 40,
+        "wheel_file_name": f"wom_kit-{version}-py3-none-any.whl",
+        "wheel_sha256": "sha256:" + "a" * 64,
+        "supply_lock_sha256": "sha256:" + "c" * 64,
+        "artifact_inventory": [
+            {
+                "role": "runtime",
+                "distribution": "wom-kit",
+                "version": version,
+                "file_name": f"wom_kit-{version}-py3-none-any.whl",
+                "size_bytes": 1,
+                "sha256": "sha256:" + "a" * 64,
+            },
+            {
+                "role": "dependency",
+                "distribution": "synthetic-dependency",
+                "version": "1.2.3",
+                "file_name": "synthetic_dependency-1.2.3-cp312-cp312-win_amd64.whl",
+                "size_bytes": 1,
+                "sha256": "sha256:" + "d" * 64,
+            },
+        ],
+        "installed_payload_sha256": "sha256:" + payload_sha256,
+        "python_version": "3.12.0",
+        "installer_running_version": version,
+        "installed_distributions": [
+            {"name": "wom-kit", "version": version},
+            {"name": "synthetic-dependency", "version": "1.2.3"},
+        ],
+        "verification": verification,
+        "global_path_mutation": False,
+        "previous_runtime_deleted": False,
+        "absolute_paths_echoed": False,
+    }
+    receipt_path = runtime / project_runtime.PROJECT_RUNTIME_RECEIPT_NAME
+    receipt_path.write_bytes(
+        (json.dumps(receipt, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+    )
+    return runtime, executable, module
+
+
 def _write_minimal_wheel(destination: Path, version: str) -> Path:
     wheel_name = f"wom_kit-{version}-py3-none-any.whl"
     wheel_path = destination / wheel_name
@@ -200,7 +279,7 @@ class ProjectRuntimeTests(unittest.TestCase):
             "wom-kit/project-runtime-supply-lock-v*.json text eol=lf",
             attributes.splitlines(),
         )
-        raw = (KIT_ROOT / "project-runtime-supply-lock-v0.4.10.json").read_bytes()
+        raw = (KIT_ROOT / "project-runtime-supply-lock-v0.4.11.json").read_bytes()
         policy = project_runtime.project_runtime_policy_document(
             (KIT_ROOT / "project-runtime-policy.json").read_bytes()
         )
@@ -208,21 +287,21 @@ class ProjectRuntimeTests(unittest.TestCase):
         assert policy is not None
         self.assertEqual(
             policy["supply_lock"],
-            "wom-kit/project-runtime-supply-lock-v0.4.10.json",
+            "wom-kit/project-runtime-supply-lock-v0.4.11.json",
         )
         self.assertEqual(
             policy["supply_lock_sha256"],
-            "sha256:b2eff88120968d385fc211a8b6015a11398dad74852e9206265b93ab5fc65381",
+            "sha256:a053ff5866f0799a9b25beae71fd3654fc6eb0b01926d424fb41a210202ab9b9",
         )
         supply = project_runtime.project_runtime_supply_lock(
             raw,
-            expected_target="v0.4.10",
+            expected_target="v0.4.11",
         )
         self.assertIsNotNone(supply)
         assert supply is not None
         self.assertEqual(
             supply.sha256,
-            "b2eff88120968d385fc211a8b6015a11398dad74852e9206265b93ab5fc65381",
+            "a053ff5866f0799a9b25beae71fd3654fc6eb0b01926d424fb41a210202ab9b9",
         )
         self.assertEqual(
             [(item.distribution, item.version, item.size_bytes, item.sha256) for item in supply.artifacts],
@@ -613,7 +692,7 @@ class ProjectRuntimeTests(unittest.TestCase):
         self.assertFalse(summary["download_url_echoed"])
         self.assertNotIn("url", summary)
 
-    def test_write_guard_blocks_a_different_running_version(self) -> None:
+    def test_write_guard_requires_version_and_current_project_runtime(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             project = Path(tmp) / "project"
             metadata = project / ".zettel-kasten"
@@ -626,10 +705,35 @@ class ProjectRuntimeTests(unittest.TestCase):
                 archive,
                 running_version="0.4.2",
             )
-            aligned = project_runtime.project_write_guard(
+            same_version_unbound = project_runtime.project_write_guard(
                 archive,
                 running_version="0.4.3",
             )
+            with (
+                patch.object(
+                    project_runtime,
+                    "inspect_runtime",
+                    return_value={
+                        "receipt_candidate_valid": True,
+                        "static_receipt_valid": True,
+                        "live_payload_aligned": True,
+                    },
+                ),
+                patch.object(
+                    project_runtime,
+                    "current_project_runtime_binding",
+                    return_value={
+                        "bound": True,
+                        "reason_code": "current_project_runtime_bound",
+                    },
+                ) as current_binding,
+            ):
+                running_module = Path("synthetic-project-archive-cli.py")
+                aligned = project_runtime.project_write_guard(
+                    archive,
+                    running_version="0.4.3",
+                    running_module_path=running_module,
+                )
             update_lock = metadata / "version-update.lock"
             update_lock.write_text(
                 '{"private":"must-not-be-echoed"}\n',
@@ -645,7 +749,16 @@ class ProjectRuntimeTests(unittest.TestCase):
             blocked["project_runtime_argv"],
             [r".\.zettel-kasten\bin\archive.cmd"],
         )
+        self.assertTrue(same_version_unbound["blocked"])
+        self.assertEqual(
+            same_version_unbound["detail_reason_code"],
+            "project_runtime_static_receipt_invalid",
+        )
         self.assertFalse(aligned["blocked"])
+        self.assertEqual(
+            current_binding.call_args.kwargs["running_module_path"],
+            running_module,
+        )
         self.assertTrue(recovery_required["blocked"])
         self.assertEqual(
             recovery_required["reason_code"],
@@ -653,6 +766,383 @@ class ProjectRuntimeTests(unittest.TestCase):
         )
         self.assertFalse(recovery_required["private_values_echoed"])
         self.assertNotIn("must-not-be-echoed", json.dumps(recovery_required))
+
+    def test_write_guard_fails_closed_on_live_payload_mismatch(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp) / "project"
+            archive = project / "archive"
+            metadata = project / ".zettel-kasten"
+            archive.mkdir(parents=True)
+            (archive / "archive.yml").write_text(
+                "archive_id: archive:test\n",
+                encoding="utf-8",
+            )
+            metadata.mkdir(exist_ok=True)
+            (metadata / "installed-version.txt").write_text(
+                "v0.4.3\n",
+                encoding="utf-8",
+            )
+            _runtime, _executable, module = _write_receipt_bound_runtime(project)
+            launcher = project / project_runtime.PROJECT_RUNTIME_LAUNCHER_RELATIVE
+            launcher.parent.mkdir(parents=True)
+            launcher.write_bytes(project_runtime.launcher_bytes("0.4.3"))
+            module.write_bytes(module.read_bytes() + b"# tampered\n")
+
+            guarded = project_runtime.project_write_guard(
+                archive,
+                running_version="0.4.3",
+                running_module_path=module,
+            )
+
+        self.assertTrue(guarded["blocked"])
+        self.assertEqual(guarded["reason_code"], "project_runtime_mismatch")
+        self.assertEqual(
+            guarded["detail_reason_code"],
+            "project_runtime_live_payload_mismatch",
+        )
+        self.assertFalse(guarded["absolute_paths_echoed"])
+
+    def test_current_project_runtime_binding_requires_canonical_launcher_process(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp) / "project"
+            runtime = project_runtime.runtime_path(project, "0.4.3")
+            executable = runtime / "Scripts" / "python.exe"
+            module = runtime / "Lib" / "site-packages" / "wom_kit" / "project_runtime.py"
+            launcher = project / project_runtime.PROJECT_RUNTIME_LAUNCHER_RELATIVE
+            executable.parent.mkdir(parents=True)
+            module.parent.mkdir(parents=True)
+            launcher.parent.mkdir(parents=True)
+            executable.write_bytes(b"synthetic-python")
+            module.write_text("# synthetic module\n", encoding="utf-8")
+            launcher.write_bytes(project_runtime.launcher_bytes("0.4.3"))
+
+            path_only = project_runtime.current_project_runtime_binding(
+                project,
+                "0.4.3",
+                running_executable=executable,
+                running_module_path=module,
+                running_archive_cli_module_path=module.with_name("archive_cli.py"),
+                running_project_runtime_module_path=module,
+                running_package_origin_path=module.with_name("__init__.py"),
+                running_prefix=runtime,
+                isolated_mode=True,
+                dont_write_bytecode=True,
+            )
+            _write_receipt_bound_runtime(project)
+            aligned = project_runtime.current_project_runtime_binding(
+                project,
+                "0.4.3",
+                running_executable=executable,
+                running_module_path=module,
+                running_archive_cli_module_path=module.with_name("archive_cli.py"),
+                running_project_runtime_module_path=module,
+                running_package_origin_path=module.with_name("__init__.py"),
+                running_prefix=runtime,
+                isolated_mode=True,
+                dont_write_bytecode=True,
+            )
+            direct_console_script = project_runtime.current_project_runtime_binding(
+                project,
+                "0.4.3",
+                running_executable=executable,
+                running_module_path=module,
+                running_archive_cli_module_path=module.with_name("archive_cli.py"),
+                running_project_runtime_module_path=module,
+                running_package_origin_path=module.with_name("__init__.py"),
+                running_prefix=runtime,
+                isolated_mode=False,
+                dont_write_bytecode=True,
+            )
+            global_process = project_runtime.current_project_runtime_binding(
+                project,
+                "0.4.3",
+                running_executable=sys.executable,
+                running_module_path=Path(__file__),
+                running_archive_cli_module_path=Path(__file__),
+                running_project_runtime_module_path=Path(__file__),
+                running_package_origin_path=Path(__file__),
+                running_prefix=sys.prefix,
+                isolated_mode=True,
+                dont_write_bytecode=True,
+            )
+
+        self.assertFalse(path_only["bound"])
+        self.assertEqual(
+            path_only["reason_code"],
+            "project_runtime_static_receipt_invalid",
+        )
+        self.assertTrue(aligned["bound"])
+        self.assertEqual(aligned["reason_code"], "current_project_runtime_bound")
+        self.assertTrue(aligned["live_payload_aligned"])
+        self.assertTrue(aligned["running_module_receipt_bound"])
+        self.assertFalse(direct_console_script["bound"])
+        self.assertEqual(
+            direct_console_script["reason_code"],
+            "project_runtime_canonical_launcher_flags_missing",
+        )
+        self.assertFalse(global_process["bound"])
+        self.assertEqual(
+            global_process["reason_code"],
+            "project_runtime_process_binding_mismatch",
+        )
+        self.assertFalse(global_process["absolute_paths_echoed"])
+
+    def test_runtime_inspection_rejects_receipt_bound_payload_tamper(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp) / "project"
+            runtime, _executable, module = _write_receipt_bound_runtime(project)
+
+            before = project_runtime.inspect_runtime(project, "0.4.3")
+            module.write_bytes(module.read_bytes() + b"# post-receipt tamper\n")
+            after = project_runtime.inspect_runtime(project, "0.4.3")
+
+        self.assertTrue(before["static_receipt_valid"])
+        self.assertTrue(before["live_payload_aligned"])
+        self.assertTrue(before["receipt_candidate_valid"])
+        self.assertEqual(
+            before["live_payload_sha256"],
+            before["installed_payload_sha256"],
+        )
+        self.assertEqual(before["path"], runtime.relative_to(project).as_posix())
+        self.assertTrue(after["static_receipt_valid"])
+        self.assertFalse(after["live_payload_aligned"])
+        self.assertFalse(after["receipt_candidate_valid"])
+        self.assertFalse(after["absolute_paths_echoed"])
+
+    def test_binding_rechecks_payload_after_reused_inspection(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp) / "project"
+            runtime, executable, module = _write_receipt_bound_runtime(project)
+            launcher = project / project_runtime.PROJECT_RUNTIME_LAUNCHER_RELATIVE
+            launcher.parent.mkdir(parents=True)
+            launcher.write_bytes(project_runtime.launcher_bytes("0.4.3"))
+            inspection = project_runtime.inspect_runtime(project, "0.4.3")
+            module.write_bytes(module.read_bytes() + b"# swapped generation\n")
+
+            binding = project_runtime.current_project_runtime_binding(
+                project,
+                "0.4.3",
+                running_executable=executable,
+                running_module_path=module,
+                running_archive_cli_module_path=module.with_name("archive_cli.py"),
+                running_project_runtime_module_path=module,
+                running_package_origin_path=module.with_name("__init__.py"),
+                running_prefix=runtime,
+                isolated_mode=True,
+                dont_write_bytecode=True,
+                runtime_inspection=inspection,
+            )
+
+        self.assertFalse(binding["bound"])
+        self.assertFalse(binding["live_payload_aligned"])
+        self.assertEqual(
+            binding["reason_code"],
+            "project_runtime_live_payload_mismatch",
+        )
+
+    def test_binding_rejects_receipt_generation_change_after_inspection(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp) / "project"
+            runtime, executable, module = _write_receipt_bound_runtime(project)
+            launcher = project / project_runtime.PROJECT_RUNTIME_LAUNCHER_RELATIVE
+            launcher.parent.mkdir(parents=True)
+            launcher.write_bytes(project_runtime.launcher_bytes("0.4.3"))
+            inspection = project_runtime.inspect_runtime(project, "0.4.3")
+            receipt_path = runtime / project_runtime.PROJECT_RUNTIME_RECEIPT_NAME
+            receipt_path.write_bytes(receipt_path.read_bytes() + b"\n")
+
+            binding = project_runtime.current_project_runtime_binding(
+                project,
+                "0.4.3",
+                running_executable=executable,
+                running_module_path=module,
+                running_archive_cli_module_path=module.with_name("archive_cli.py"),
+                running_project_runtime_module_path=module,
+                running_package_origin_path=module.with_name("__init__.py"),
+                running_prefix=runtime,
+                isolated_mode=True,
+                dont_write_bytecode=True,
+                runtime_inspection=inspection,
+            )
+
+        self.assertFalse(binding["bound"])
+        self.assertFalse(binding["receipt_generation_aligned"])
+        self.assertEqual(
+            binding["reason_code"],
+            "project_runtime_static_receipt_invalid",
+        )
+
+    def test_runtime_inspection_rejects_symlink_swapped_payload_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = root / "project"
+            _runtime, _executable, module = _write_receipt_bound_runtime(project)
+            outside = root / "outside.py"
+            outside.write_bytes(module.read_bytes())
+            module.unlink()
+            try:
+                module.symlink_to(outside)
+            except OSError as error:
+                self.skipTest(f"symlink creation unavailable: {error}")
+
+            inspected = project_runtime.inspect_runtime(project, "0.4.3")
+
+        self.assertTrue(inspected["static_receipt_valid"])
+        self.assertFalse(inspected["live_payload_aligned"])
+        self.assertFalse(inspected["receipt_candidate_valid"])
+
+    def test_descriptor_bound_read_rejects_observed_path_generation_swap(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target = root / "target.bin"
+            replacement = root / "replacement.bin"
+            target.write_bytes(b"receipt-bound")
+            replacement.write_bytes(b"other-generation")
+            target_before = target.lstat()
+            replacement_stat = replacement.lstat()
+            original_lstat = Path.lstat
+            target_observations = 0
+
+            def swapped_lstat(path: Path) -> os.stat_result:
+                nonlocal target_observations
+                if path == target:
+                    target_observations += 1
+                    return (
+                        target_before
+                        if target_observations == 1
+                        else replacement_stat
+                    )
+                return original_lstat(path)
+
+            with patch.object(Path, "lstat", swapped_lstat):
+                observed = project_runtime._stable_regular_file_observation(
+                    target,
+                    limit=1024,
+                    collect_bytes=True,
+                    tree_shape_bound=True,
+                )
+
+        self.assertIsNone(observed)
+
+    def test_payload_hash_rejects_directory_generation_change_during_scan(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime = Path(tmp) / "runtime"
+            first = runtime / "wom_kit" / "first.py"
+            first.parent.mkdir(parents=True)
+            first.write_bytes(b"first\n")
+            original_sha256_file = project_runtime._sha256_file
+            changed = False
+
+            def mutate_tree(path: Path, **kwargs: object) -> tuple[str, int]:
+                nonlocal changed
+                result = original_sha256_file(path, **kwargs)
+                if not changed:
+                    changed = True
+                    (runtime / "wom_kit" / "late.py").write_bytes(b"late\n")
+                return result
+
+            with patch.object(
+                project_runtime,
+                "_sha256_file",
+                side_effect=mutate_tree,
+            ):
+                with self.assertRaisesRegex(
+                    project_runtime.ProjectRuntimeError,
+                    "project_runtime_tree_changed",
+                ):
+                    project_runtime._runtime_payload_sha256(runtime)
+
+    def test_binding_requires_all_loaded_core_wom_modules(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp) / "project"
+            runtime, executable, module = _write_receipt_bound_runtime(project)
+            launcher = project / project_runtime.PROJECT_RUNTIME_LAUNCHER_RELATIVE
+            launcher.parent.mkdir(parents=True)
+            launcher.write_bytes(project_runtime.launcher_bytes("0.4.3"))
+            archive_cli_module = module.with_name("archive_cli.py")
+            package_origin = module.with_name("__init__.py")
+
+            binding = project_runtime.current_project_runtime_binding(
+                project,
+                "0.4.3",
+                running_executable=executable,
+                running_module_path=archive_cli_module,
+                running_archive_cli_module_path=archive_cli_module,
+                # A receipt-bound file with the wrong core-module identity must
+                # not stand in for the loaded project_runtime module.
+                running_project_runtime_module_path=archive_cli_module,
+                running_package_origin_path=package_origin,
+                running_prefix=runtime,
+                isolated_mode=True,
+                dont_write_bytecode=True,
+            )
+
+        self.assertFalse(binding["bound"])
+        self.assertFalse(binding["core_modules_receipt_bound"])
+        self.assertEqual(
+            binding["reason_code"],
+            "project_runtime_core_modules_not_receipt_bound",
+        )
+
+    def test_binding_rejects_receipt_bound_non_wom_module_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp) / "project"
+            runtime = project_runtime.runtime_path(project, "0.4.3")
+            executable = runtime / "Scripts" / "python.exe"
+            module = runtime / "Lib" / "site-packages" / "unrelated.py"
+            executable.parent.mkdir(parents=True)
+            module.parent.mkdir(parents=True)
+            executable.write_bytes(b"synthetic-python\n")
+            module.write_bytes(b"# unrelated but payload-bound\n")
+            # Add a real WOM module so the receipt itself describes a plausible
+            # runtime; the running module argument deliberately points elsewhere.
+            wom_module = (
+                runtime
+                / "Lib"
+                / "site-packages"
+                / "wom_kit"
+                / "project_runtime.py"
+            )
+            wom_module.parent.mkdir(parents=True)
+            wom_module.write_bytes(b"# WOM module\n")
+            _runtime, _executable, _module = _write_receipt_bound_runtime(project)
+            # The helper rewrites the payload, so add the unrelated file and
+            # bind the resulting exact tree in the receipt once more.
+            module.write_bytes(b"# unrelated but payload-bound\n")
+            receipt_path = runtime / project_runtime.PROJECT_RUNTIME_RECEIPT_NAME
+            receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+            receipt["installed_payload_sha256"] = (
+                "sha256:" + project_runtime._runtime_payload_sha256(runtime)
+            )
+            receipt_path.write_text(
+                json.dumps(receipt, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            launcher = project / project_runtime.PROJECT_RUNTIME_LAUNCHER_RELATIVE
+            launcher.parent.mkdir(parents=True)
+            launcher.write_bytes(project_runtime.launcher_bytes("0.4.3"))
+
+            binding = project_runtime.current_project_runtime_binding(
+                project,
+                "0.4.3",
+                running_executable=executable,
+                running_module_path=module,
+                running_archive_cli_module_path=wom_module.with_name("archive_cli.py"),
+                running_project_runtime_module_path=wom_module,
+                running_package_origin_path=wom_module.with_name("__init__.py"),
+                running_prefix=runtime,
+                isolated_mode=True,
+                dont_write_bytecode=True,
+            )
+
+        self.assertFalse(binding["bound"])
+        self.assertFalse(binding["running_module_aligned"])
+        self.assertEqual(
+            binding["reason_code"],
+            "project_runtime_process_binding_mismatch",
+        )
 
     @unittest.skipUnless(
         os.name == "nt"
