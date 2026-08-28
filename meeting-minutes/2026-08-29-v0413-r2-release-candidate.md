@@ -32,6 +32,14 @@
 - The Windows link-index full-scale benchmark passed at 8,616 Zet, 22,441 Objet, and a 37 MiB manifest.
 - The Doctor full-scale functional, privacy, first-status, heartbeat, and scan-count checks passed, but both measured Doctor modes exceeded the 180-second limit on the local Windows machine while another full-scale benchmark was running. The threshold is not weakened. The authoritative Ubuntu pull-request gate must pass before merge.
 
+## Pull-request CI correction
+
+- PR #89's first Ubuntu Python 3.10 shard found one historical-evidence test failure. The test hashed checkout bytes, so Windows CRLF bytes and the committed LF Git blob had different hashes.
+- The correction does not replace the evidence or weaken its expected value. The test now reads the exact blob from the annotated v0.4.12 tag, asserts the current HEAD blob remains byte-identical, and hashes those platform-neutral Git bytes.
+- The v0.4.12 evidence blob is 5,458 bytes with SHA-256 `b115168676d71a1b3c71dcde47af0fb6db2820ddf94b43b3983be407c75bb20c`.
+- The focused historical test and the complete link-index benchmark module passed after the correction: 15 tests and 10 subtests.
+- An independent review found no P0, P1, or P2 issue. All required CI jobs must run again against the corrected head.
+
 ## Pending release steps
 
 1. Push the candidate branch and open a pull request.
