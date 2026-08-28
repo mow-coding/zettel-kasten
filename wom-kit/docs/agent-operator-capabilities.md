@@ -1,6 +1,6 @@
 # Agent Operator Capabilities Manifest
 
-Status: v0.4.12 working-tree parser, help, and runtime approval truth
+Status: v0.4.13 working-tree parser, help, and exact object-storage truth
 
 `archive capabilities --machine` lets an AI operator ask one practical question:
 
@@ -44,7 +44,7 @@ includes:
 
 v0.4.1 introduced `data.approval_status_inventory` with schema
 `wom-kit/command-approval-status-inventory/v0.1`. v0.4.10 introduced and
-v0.4.11-v0.4.12 continue the successor v0.2 shape, which adds machine-readable conditional
+v0.4.11-v0.4.13 continue the successor v0.2 shape, which adds machine-readable conditional
 approval scope. Unlike the legacy flattened
 command summary, this inventory walks canonical executable paths at every
 parser depth and keeps all accepted alias paths attached to their canonical
@@ -72,7 +72,7 @@ These are parser facts, not execution promises. `approval_available` does not
 mean that archive-specific prerequisites have passed. `approval_not_exposed`
 does not mean that the command is read-only.
 
-For the current v0.4.12 working-tree parser, the inventory snapshot is:
+For the current v0.4.13 working-tree parser, the inventory snapshot is:
 
 ```text
 canonical executable command paths: 315
@@ -90,6 +90,17 @@ The historical v0.4.0 release count remains 79 fixed-close command paths.
 Later releases reopen only exact, operation-specific routes while each handler
 independently enforces the same boundary. Parser availability is not permission
 to skip archive prerequisites, approval, or post-write verification.
+
+v0.4.13 changes no top-level command count. It tightens the existing local
+`object-storage` setup evidence reader and the operation-specific
+`object-storage-adopt-existing --preserve-local-only` route. Setup status is
+exact-first and content-free. Preservation uses conditional create-only remote
+publication, independent HEAD plus full-GET rehash, manifest-bound durable
+resume, and the terminal states `bytes_preserved`,
+`already_remote_verified`, and `review_required`. Provider-unavailable or
+uncertain cleanup states remain nonterminal. This narrow authority does not
+open `object-storage-upload`, unscoped legacy adoption, remote deletion,
+automatic conflict merge, or formal adoption by implication.
 
 v0.4.3 made `migrate` conditional on the sole exact-supported target. The v0.2
 inventory records the allowed argument value and the fixed-close status/reason

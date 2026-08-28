@@ -1,18 +1,21 @@
 # Object Storage Adapter Execution Contract
 
-Status: v0.3.78 read-only upload execution-contract checkpoint
-Date: 2026-06-16
+Status: v0.4.13 read-only generic contract plus narrow exact preservation
+Date: 2026-08-29
 
-Current v0.4.0 boundary: `object-storage`, `object-storage-upload`,
-`object-storage-adopt-existing`, and related evidence/reconcile writers are
-dry-run/contract-only. Approval returns
-`compound_exact_human_approval_binding_required` before private object,
-credential, provider, or target reads; it performs no network call and writes
-no manifest row, ledger, or receipt. Live upload/adopt details below preserve
-historical v0.3 implementation evidence and are not current run instructions.
+Current v0.4.13 boundary: this `object-storage-adapter-execution-contract`
+command remains read-only. Local `object-storage` setup registration is a
+separate exact metadata-only writer. The operation-specific
+`object-storage-adopt-existing --preserve-local-only` mode is a narrow live
+exception that may conditionally preserve and independently verify bytes after
+its own native approval. `--formal-adoption` is a separate zero-PUT exact mode.
+`object-storage-upload`, unscoped legacy adoption, evidence reconciliation, and
+other provider writers remain fixed closed. Historical v0.3 upload details
+below are implementation history, not authority to use a closed mode.
 
-`object-storage-adapter-execution-contract` defines the safety contract a future
-live object-storage upload adapter must satisfy.
+`object-storage-adapter-execution-contract` defines the safety contract a
+generic live object-storage upload adapter must satisfy. The current narrow
+preservation route satisfies only the explicitly documented subset below.
 
 It is not the upload adapter. It does not read object bytes, compute local file
 hashes, call a storage provider, retrieve a secret, write a resume ledger, write
@@ -21,9 +24,43 @@ an execution receipt, or update `objects/manifests/files.jsonl`.
 It answers one narrow question:
 
 ```text
-If WOM-kit later uploads a sha256-addressed objet, what must the adapter prove
+If WOM-kit uploads a sha256-addressed objet, what must the adapter prove
 before and after it touches the provider?
 ```
+
+## v0.4.13 Current Preservation Execution
+
+`object-storage-adopt-existing --preserve-local-only` is bound to one
+`ExactOperationManifest v1` and exact local setup evidence. Before any provider
+mutation it revalidates the complete local source set. The remote key is
+content-addressed and contains no original filename.
+
+Publication is create-only:
+
+- single PUT carries `If-None-Match: *`;
+- multipart applies `If-None-Match: *` to `CompleteMultipartUpload`, the final
+  publish point;
+- a conditional conflict is followed by a fresh remote query and is never
+  retried as an unconditional overwrite.
+
+New or already-present matching bytes are terminal only after HEAD and a
+complete GET rehash match the exact local content identity. A proven size or
+checksum conflict becomes a durable `review_required` state without overwrite
+or deletion. Unknown size, incomplete or contradictory response, authorization
+failure, throttling, server failure, transport failure, and uncertain multipart
+cleanup stay nonterminal and resumable without a terminal receipt.
+
+The private resume ledger is bound to the exact manifest and records provider
+calls before the separate immutable terminal receipt is finalized. Resume can
+therefore continue verification or receipt publication after a crash without
+a second PUT. The remaining manifest-bound call ceiling is checked before each
+mutation and counts multipart create, part, complete, and abort calls that were
+actually attempted.
+
+`bytes_preserved` and `already_remote_verified` prove only the exact object at
+the recorded operation. They do not add a `wom_uploaded` manifest location,
+constitute formal adoption, merge conflicts, enable remote deletion, or prove a
+whole-archive backup.
 
 ## Command
 

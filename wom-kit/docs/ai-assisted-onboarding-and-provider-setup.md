@@ -1,7 +1,7 @@
 # AI-Assisted Onboarding And Provider Setup
 
-Status: planning baseline
-Date: 2026-05-22
+Status: v0.4.13 onboarding baseline with exact local setup and narrow preservation
+Date: 2026-08-29
 
 This document describes the desired beginner experience:
 
@@ -142,7 +142,7 @@ Before planning object storage for WOM objets, the AI should run:
 archive object-storage <archive-root> --dry-run --provider <provider> --profile-id <profile-id> --profile-slug <ascii-slug> --storage-account-ref <safe-ref> --format json
 ```
 
-`--profile-id` is required and must first be resolved from a reviewed registry, normally `profiles/wom-profiles.yml`, with `profile-resolve`. The command does not invent an id or create that registry. Dry-run writes nothing. The exact approval path records only the reviewed local provider binding and setup receipt; it does not create buckets, start OAuth, call provider APIs, read credentials, upload, sync, copy, hash, or import source files. The retired `--write-local-profile` interface is not a profile-registry writer and is intentionally unsupported.
+`--profile-id` is required and must first be resolved from a reviewed registry, normally `profiles/wom-profiles.yml`, with `profile-resolve`. The command does not invent an id or create that registry. Dry-run writes nothing. The exact approval path records only the reviewed local provider binding and setup receipt; it does not create buckets, start OAuth, call provider APIs, read credentials, upload, sync, copy, hash, or import source files. Current setup readers validate the canonical exact binding and receipt before a strict legacy bridge and keep resource/profile/credential values out of public status. The retired `--write-local-profile` interface is not a profile-registry writer and is intentionally unsupported.
 
 But the AI should not silently:
 
@@ -299,13 +299,26 @@ If object storage is selected:
 
 - run `archive object-storage --dry-run`,
 - explain that local objet store means raw source/original files and the remote bucket is deferred unless the user explicitly proceeds,
-- review the proposed bucket/container, prefix, provider binding, and receipt,
-- stop because v0.4.0 object-storage approval is fixed fail-closed and writes no binding or receipt,
-- use provider login/API key flow outside WOM-kit,
-- store credentials in keyring/env/local profile,
-- write only references in `provider-bindings.yml`,
-- run upload/list dry-run,
-- do not upload until approved.
+- let WOM validate the exact profile, binding, receipt identity, path safety, and
+  privacy boundary; the person chooses only whether to register the plainly
+  described local setup or cancel,
+- remember that setup approval writes local metadata and a local receipt only;
+  it creates no provider account, bucket, credential, or remote byte,
+- create the provider resource outside WOM-kit only through an attended
+  provider flow, then register credential material through the dedicated local
+  credential capability rather than argv, environment, committed files, or a
+  broad workspace search,
+- use the exact project runtime and rerun provider/setup readiness before any
+  provider-capable operation,
+- if emergency preservation is intentionally selected, first run
+  `object-storage-adopt-existing --preserve-local-only --dry-run` and let WOM
+  verify every technical count, hash, target, and call budget,
+- ask the person only for the final plain run-or-cancel decision; do not ask
+  them to count objects, compare digests, or inspect internal identifiers,
+- treat `bytes_preserved`, `already_remote_verified`, and `review_required` as
+  per-object evidence, not whole-archive backup or formal adoption,
+- do not upload merely because WOM was installed, a setup receipt exists, or a
+  dry-run is ready.
 
 ### Stage 5: Source Worlds
 
