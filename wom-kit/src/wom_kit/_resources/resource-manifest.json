@@ -1003,8 +1003,8 @@
     {
       "source": "docs/releases/v0.4.13.md",
       "packaged": "release-notes/v0.4.13.md",
-      "bytes": 4031,
-      "sha256": "ab87cbdc75c12516329fb77d1087e81bcb37723463c991e6b86edb7b2171d2e9"
+      "bytes": 4787,
+      "sha256": "ada89ba9fa750ef595200d75930d0ecadbebffa8c79a62d964a87b69188da37c"
     }
   ]
 }
