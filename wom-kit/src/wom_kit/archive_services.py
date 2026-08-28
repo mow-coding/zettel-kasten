@@ -125279,15 +125279,17 @@ def _object_storage_execute_one_upload(
         retries = 0
         while True:
             if is_multipart:
-                if max_provider_mutation_calls is not None:
+                if max_provider_mutation_calls is not None and not create_only:
                     expected_parts = max(
                         1,
                         (size + multipart_part_size_bytes - 1)
                         // multipart_part_size_bytes,
                     )
-                    # Reserve one call for AbortMultipartUpload before starting
-                    # an attempt. A failed complete must not consume the ceiling
-                    # and leave cleanup authority silently unresolved.
+                    # Legacy overwrite-capable callers retain the conservative
+                    # full-attempt reservation. Create-only callers may safely
+                    # spend a final call on CreateMultipartUpload: a failed
+                    # create allocates no upload id, while a success that cannot
+                    # be cleaned up is surfaced as cleanup_unverified.
                     safe_attempt_calls = expected_parts + 3
                     if max_provider_mutation_calls - put_calls < safe_attempt_calls:
                         return _object_storage_failed_result(

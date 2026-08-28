@@ -67,9 +67,11 @@ RESULT_SCHEMA = "wom-kit/object-storage-bytes-preservation-result/v0.2"
 VERIFY_SCHEMA = "wom-kit/object-storage-bytes-preservation-verification/v0.2"
 LEGACY_RECEIPT_SCHEMA = "wom-kit/object-storage-bytes-preserved-receipt/v0.1"
 RECEIPT_SCHEMA = "wom-kit/object-storage-preservation-terminal-receipt/v0.2"
-CONTROL_SCHEMA = "wom-kit/object-storage-bytes-preservation-control/v0.2"
+CONTROL_SCHEMA = "wom-kit/object-storage-bytes-preservation-control/v0.3"
+LEGACY_CONTROL_SCHEMA = "wom-kit/object-storage-bytes-preservation-control/v0.2"
 REMOTE_QUERY_SCHEMA = "wom-kit/object-storage-remote-query-result/v0.1"
-LEDGER_SCHEMA = "wom-kit/object-storage-bytes-preservation-ledger/v0.1"
+LEDGER_SCHEMA = "wom-kit/object-storage-bytes-preservation-ledger/v0.2"
+LEGACY_LEDGER_SCHEMA = "wom-kit/object-storage-bytes-preservation-ledger/v0.1"
 OPERATION = ExactHumanApprovalOperation.object_storage_bytes_preservation.value
 
 RECEIPT_ROOT = "receipts/providers/object-storage-bytes-preserved"
@@ -1511,6 +1513,9 @@ class _ManifestBoundPreservationLedger(archive_services._ResumeLedger):
         "multipart_cleanup_state",
         "completed_at",
     )
+    _LEGACY_ROW_FIELDS = tuple(
+        field for field in _ROW_FIELDS if field != "multipart_cleanup_state"
+    )
     _RESULT_STATUSES = frozenset(
         {
             "uploaded",
@@ -1528,6 +1533,7 @@ class _ManifestBoundPreservationLedger(archive_services._ResumeLedger):
     _CLEANUP_STATES = frozenset(
         {
             "not_applicable",
+            "not_required",
             "not_started",
             "in_flight",
             "completed",
@@ -1758,14 +1764,27 @@ class _ManifestBoundPreservationLedger(archive_services._ResumeLedger):
                     # torn append; do not grant it durable authority.
                     self._torn_trailing_prefix_bytes = consumed
                     break
-                if set(parsed) != set(self._ROW_FIELDS):
-                    raise ValueError("ledger fields")
+                schema_version = parsed.get("schema_version")
+                if schema_version == LEDGER_SCHEMA:
+                    if set(parsed) != set(self._ROW_FIELDS):
+                        raise ValueError("ledger fields")
+                    normalized = dict(parsed)
+                elif schema_version == LEGACY_LEDGER_SCHEMA:
+                    if set(parsed) != set(self._LEGACY_ROW_FIELDS):
+                        raise ValueError("legacy ledger fields")
+                    normalized = {
+                        **parsed,
+                        "schema_version": LEDGER_SCHEMA,
+                        "multipart_cleanup_state": "not_applicable",
+                    }
+                else:
+                    raise ValueError("ledger schema")
                 rebuilt = self._bound_row(
-                    parsed,
-                    preservation_status=parsed.get("preservation_status"),
-                    remote_state=parsed.get("remote_state"),
+                    normalized,
+                    preservation_status=normalized.get("preservation_status"),
+                    remote_state=normalized.get("remote_state"),
                 )
-                if rebuilt != parsed:
+                if rebuilt != normalized:
                     raise ValueError("ledger binding")
                 rows.append(rebuilt)
                 consumed += len(raw_line)
@@ -2273,10 +2292,40 @@ def _control_document(plan: ObjectStorageBytesPreservationPlan) -> dict[str, Any
     return {**basis, "control_sha256": _sha256_document(basis)}
 
 
+_CONTROL_FIELDS = frozenset(
+    {
+        "schema_version",
+        "archive_id",
+        "provider_kind",
+        "store_ref",
+        "source_inventory_sha256",
+        "inventory",
+        "selected_only",
+        "already_recorded_count",
+        "existing_review_required_count",
+        "review_count",
+        "manifest",
+        "ledger_relative",
+        "specs",
+        "private_control_document",
+    }
+)
+_LEGACY_CONTROL_FIELDS = _CONTROL_FIELDS - {"existing_review_required_count"}
+
+
 def _persist_control(plan: ObjectStorageBytesPreservationPlan) -> str:
     if plan.manifest is None:
         raise _fail("object_storage_preservation_no_writes")
     relative = _control_relative(plan.manifest.manifest_sha256)
+    path = archive_services.archive_internal_path(plan.archive_root, relative)
+    if path.exists():
+        existing = load_object_storage_bytes_preservation_plan(
+            plan.archive_root,
+            manifest_sha256=plan.manifest.manifest_sha256,
+        )
+        if not _same_control_plan(existing, plan):
+            raise _fail("object_storage_preservation_control_invalid")
+        return relative
     raw = _canonical_control_bytes(_control_document(plan))
     _create_or_match_receipt(
         plan.archive_root,
@@ -2286,6 +2335,29 @@ def _persist_control(plan: ObjectStorageBytesPreservationPlan) -> str:
         failure_code="object_storage_preservation_control_invalid",
     )
     return relative
+
+
+def _same_control_plan(
+    left: ObjectStorageBytesPreservationPlan,
+    right: ObjectStorageBytesPreservationPlan,
+) -> bool:
+    if left.manifest is None or right.manifest is None:
+        return False
+    return (
+        left.archive_root == right.archive_root
+        and left.archive_id == right.archive_id
+        and left.provider_kind == right.provider_kind
+        and left.store_ref == right.store_ref
+        and left.source_inventory_sha256 == right.source_inventory_sha256
+        and left.inventory == right.inventory
+        and left.manifest.document() == right.manifest.document()
+        and left.specs == right.specs
+        and left.already_recorded_count == right.already_recorded_count
+        and left.existing_review_required_count
+        == right.existing_review_required_count
+        and left.review_count == right.review_count
+        and left.selected_only == right.selected_only
+    )
 
 
 def load_object_storage_bytes_preservation_plan(
@@ -2311,8 +2383,15 @@ def load_object_storage_bytes_preservation_plan(
     except Exception:
         raise _fail("object_storage_preservation_control_invalid") from None
     supplied_control_sha = document.pop("control_sha256", None)
+    schema_version = document.get("schema_version")
+    valid_shape = (
+        schema_version == CONTROL_SCHEMA and set(document) == _CONTROL_FIELDS
+    ) or (
+        schema_version == LEGACY_CONTROL_SCHEMA
+        and set(document) == _LEGACY_CONTROL_FIELDS
+    )
     if (
-        document.get("schema_version") != CONTROL_SCHEMA
+        not valid_shape
         or document.get("private_control_document") is not True
         or type(supplied_control_sha) is not str
         or not hmac.compare_digest(supplied_control_sha, _sha256_document(document))
