@@ -5,6 +5,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from contextlib import contextmanager
@@ -1149,6 +1150,7 @@ class Letter140ZettelObjetLinkServiceTests(unittest.TestCase):
             finally:
                 self.finish_claim(claim, succeeded=succeeded)
 
+    @unittest.skipUnless(os.name == "nt", "Windows dirty-projection watcher")
     def test_manifest_removed_after_prewrite_check_never_returns_success(
         self,
     ) -> None:
@@ -1215,6 +1217,7 @@ class Letter140ZettelObjetLinkServiceTests(unittest.TestCase):
             finally:
                 self.finish_claim(claim, succeeded=False)
 
+    @unittest.skipUnless(os.name == "nt", "Windows dirty-projection watcher")
     def test_duplicate_id_created_after_fresh_plan_never_returns_success(
         self,
     ) -> None:
@@ -1258,6 +1261,7 @@ class Letter140ZettelObjetLinkServiceTests(unittest.TestCase):
             finally:
                 self.finish_claim(claim, succeeded=False)
 
+    @unittest.skipUnless(os.name == "nt", "Windows dirty-projection watcher")
     def test_manifest_and_duplicate_final_proofs_share_one_stable_point(
         self,
     ) -> None:
@@ -1310,6 +1314,7 @@ class Letter140ZettelObjetLinkServiceTests(unittest.TestCase):
             finally:
                 self.finish_claim(claim, succeeded=False)
 
+    @unittest.skipUnless(os.name == "nt", "Windows dirty-projection watcher")
     def test_cross_root_rename_during_dirty_projection_reproof_rolls_back(
         self,
     ) -> None:
@@ -1359,6 +1364,7 @@ class Letter140ZettelObjetLinkServiceTests(unittest.TestCase):
             finally:
                 self.finish_claim(claim, succeeded=False)
 
+    @unittest.skipUnless(os.name == "nt", "Windows dirty-projection watcher")
     def test_in_place_duplicate_during_dirty_projection_reproof_rolls_back(
         self,
     ) -> None:
@@ -1409,6 +1415,341 @@ class Letter140ZettelObjetLinkServiceTests(unittest.TestCase):
                 self.assertTrue(mutated)
                 self.assertTrue(other.is_file())
                 self.assertEqual(other.read_bytes(), mutated_bytes)
+                self.assertEqual(self.zettel_path(root).read_bytes(), before)
+                self.assertTrue(receipt.is_file())
+                self.assert_index_dirty(root)
+                self.assertEqual(claim.status, "started")
+            finally:
+                self.finish_claim(claim, succeeded=False)
+
+    @unittest.skipUnless(
+        sys.platform.startswith("linux"),
+        "Linux portable final-proof fence",
+    )
+    def test_linux_manifest_removed_during_final_proof_rolls_back(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self.archive(Path(tmp))
+            plan = self.plan(root)
+            before = self.zettel_path(root).read_bytes()
+            receipt = self.path_from_plan(root, plan, "receipt_path")
+            binding, claim = self.claim(root, plan)
+            real_manifest_check = (
+                completion_workflows
+                ._require_exact_zettel_objet_manifest_target
+            )
+            check_count = 0
+
+            def remove_target_after_final_manifest_proof(*args, **kwargs):
+                nonlocal check_count
+                check_count += 1
+                result = real_manifest_check(*args, **kwargs)
+                if check_count == 2:
+                    manifest = self.manifest_path(root)
+                    surviving_rows = [
+                        line
+                        for line in manifest.read_text(
+                            encoding="utf-8"
+                        ).splitlines()
+                        if OBJECT_ID not in line
+                    ]
+                    manifest.write_text(
+                        "\n".join(surviving_rows) + "\n",
+                        encoding="utf-8",
+                    )
+                return result
+
+            try:
+                with mock.patch.object(
+                    completion_workflows,
+                    "_require_exact_zettel_objet_manifest_target",
+                    side_effect=remove_target_after_final_manifest_proof,
+                ):
+                    with self.assertRaisesRegex(
+                        archive_services.ArchiveServiceError,
+                        "zettel_objet_link_manifest_changed_after_approval",
+                    ):
+                        self.apply(root, plan, binding, claim)
+
+                self.assertEqual(check_count, 2)
+                self.assertEqual(self.zettel_path(root).read_bytes(), before)
+                self.assertTrue(receipt.is_file())
+                self.assert_index_dirty(root)
+                self.assertEqual(claim.status, "started")
+            finally:
+                self.finish_claim(claim, succeeded=False)
+
+    @unittest.skipUnless(
+        sys.platform.startswith("linux"),
+        "Linux portable final-proof fence",
+    )
+    def test_linux_duplicate_created_before_final_authority_check_rolls_back(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self.archive(Path(tmp))
+            plan = self.plan(root)
+            before = self.zettel_path(root).read_bytes()
+            receipt = self.path_from_plan(root, plan, "receipt_path")
+            duplicate = root / "inbox" / "late-duplicate.md"
+            binding, claim = self.claim(root, plan)
+            real_manifest_check = (
+                completion_workflows
+                ._require_exact_zettel_objet_manifest_target
+            )
+            check_count = 0
+
+            def insert_duplicate_before_final_authority_check(*args, **kwargs):
+                nonlocal check_count
+                check_count += 1
+                if check_count == 2:
+                    shutil.copyfile(self.zettel_path(root), duplicate)
+                return real_manifest_check(*args, **kwargs)
+
+            try:
+                with mock.patch.object(
+                    completion_workflows,
+                    "_require_exact_zettel_objet_manifest_target",
+                    side_effect=insert_duplicate_before_final_authority_check,
+                ):
+                    with self.assertRaisesRegex(
+                        archive_services.ArchiveServiceError,
+                        "zettel_objet_link_zettel_authority_changed_after_approval",
+                    ):
+                        self.apply(root, plan, binding, claim)
+
+                self.assertEqual(check_count, 2)
+                self.assertTrue(duplicate.is_file())
+                self.assertEqual(self.zettel_path(root).read_bytes(), before)
+                self.assertTrue(receipt.is_file())
+                self.assert_index_dirty(root)
+                self.assertEqual(claim.status, "started")
+            finally:
+                self.finish_claim(claim, succeeded=False)
+
+    @unittest.skipUnless(
+        sys.platform.startswith("linux"),
+        "Linux portable final-proof fence",
+    )
+    def test_linux_manifest_and_duplicate_proofs_share_stable_point(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self.archive(Path(tmp)).resolve()
+            plan = self.plan(root)
+            before = self.zettel_path(root).read_bytes()
+            receipt = self.path_from_plan(root, plan, "receipt_path")
+            manifest = self.manifest_path(root)
+            duplicate = root / "inbox" / "cross-proof-duplicate.md"
+            binding, claim = self.claim(root, plan)
+            real_manifest_check = (
+                completion_workflows
+                ._require_exact_zettel_objet_manifest_target
+            )
+            real_resolve = (
+                completion_workflows
+                ._resolve_zettel_objet_link_target_bound
+            )
+            check_count = 0
+            resolve_count = 0
+
+            def replace_manifest_proof_with_duplicate(*args, **kwargs):
+                nonlocal check_count
+                check_count += 1
+                if check_count == 2:
+                    shutil.copyfile(self.zettel_path(root), duplicate)
+                result = real_manifest_check(*args, **kwargs)
+                if check_count == 2:
+                    manifest.unlink()
+                return result
+
+            def remove_duplicate_before_final_resolver(*args, **kwargs):
+                nonlocal resolve_count
+                resolve_count += 1
+                if resolve_count == 1:
+                    duplicate.unlink()
+                return real_resolve(*args, **kwargs)
+
+            try:
+                with mock.patch.object(
+                    completion_workflows,
+                    "_require_exact_zettel_objet_manifest_target",
+                    side_effect=replace_manifest_proof_with_duplicate,
+                ), mock.patch.object(
+                    completion_workflows,
+                    "_resolve_zettel_objet_link_target_bound",
+                    side_effect=remove_duplicate_before_final_resolver,
+                ):
+                    with self.assertRaisesRegex(
+                        archive_services.ArchiveServiceError,
+                        "zettel_objet_link_manifest_changed_after_approval",
+                    ):
+                        self.apply(root, plan, binding, claim)
+
+                self.assertEqual(check_count, 2)
+                self.assertEqual(resolve_count, 1)
+                self.assertFalse(manifest.exists())
+                self.assertFalse(duplicate.exists())
+                self.assertEqual(self.zettel_path(root).read_bytes(), before)
+                self.assertTrue(receipt.is_file())
+                self.assert_index_dirty(root)
+                self.assertEqual(claim.status, "started")
+            finally:
+                self.finish_claim(claim, succeeded=False)
+
+    @unittest.skipUnless(
+        sys.platform.startswith("linux"),
+        "Linux portable final-proof fence",
+    )
+    def test_linux_cross_root_rename_during_final_resolver_rolls_back(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self.archive(Path(tmp)).resolve()
+            plan = self.plan(root)
+            before = self.zettel_path(root).read_bytes()
+            receipt = self.path_from_plan(root, plan, "receipt_path")
+            source = root / "inbox" / "moving-duplicate.md"
+            destination = root / "zettels" / "moving-duplicate.md"
+            binding, claim = self.claim(root, plan)
+            real_resolve = (
+                completion_workflows
+                ._resolve_zettel_objet_link_target_bound
+            )
+            real_scandir = os.scandir
+            resolve_count = 0
+            moved = False
+
+            def race_only_final_resolver(*args, **kwargs):
+                nonlocal resolve_count, moved
+                resolve_count += 1
+                if resolve_count != 1:
+                    return real_resolve(*args, **kwargs)
+                shutil.copyfile(self.zettel_path(root), source)
+                scan_exit_count = 0
+
+                @contextmanager
+                def move_after_zettels_snapshot(target):
+                    nonlocal scan_exit_count, moved
+                    with real_scandir(target) as entries:
+                        yield entries
+                    scan_exit_count += 1
+                    target_is_zettels = False
+                    if not isinstance(target, int):
+                        try:
+                            target_is_zettels = (
+                                Path(target).resolve()
+                                == (root / "zettels")
+                            )
+                        except (OSError, TypeError, ValueError):
+                            target_is_zettels = False
+                    if not moved and (
+                        target_is_zettels or scan_exit_count == 2
+                    ):
+                        os.replace(source, destination)
+                        moved = True
+
+                with mock.patch.object(
+                    completion_workflows.os,
+                    "scandir",
+                    new=move_after_zettels_snapshot,
+                ):
+                    return real_resolve(*args, **kwargs)
+
+            try:
+                with mock.patch.object(
+                    completion_workflows,
+                    "_resolve_zettel_objet_link_target_bound",
+                    side_effect=race_only_final_resolver,
+                ):
+                    with self.assertRaisesRegex(
+                        archive_services.ArchiveServiceError,
+                        "zettel_objet_link_zettel_authority_changed_after_approval",
+                    ):
+                        self.apply(root, plan, binding, claim)
+
+                self.assertEqual(resolve_count, 1)
+                self.assertTrue(moved)
+                self.assertFalse(source.exists())
+                self.assertTrue(destination.is_file())
+                self.assertEqual(self.zettel_path(root).read_bytes(), before)
+                self.assertTrue(receipt.is_file())
+                self.assert_index_dirty(root)
+                self.assertEqual(claim.status, "started")
+            finally:
+                self.finish_claim(claim, succeeded=False)
+
+    @unittest.skipUnless(
+        sys.platform.startswith("linux"),
+        "Linux portable final-proof fence",
+    )
+    def test_linux_in_place_duplicate_during_final_resolver_rolls_back(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self.archive(Path(tmp)).resolve()
+            plan = self.plan(root)
+            before = self.zettel_path(root).read_bytes()
+            receipt = self.path_from_plan(root, plan, "receipt_path")
+            other = root / "inbox" / "other.md"
+            binding, claim = self.claim(root, plan)
+            real_resolve = (
+                completion_workflows
+                ._resolve_zettel_objet_link_target_bound
+            )
+            real_read = (
+                completion_workflows
+                ._read_zettel_objet_candidate_bound_observation
+            )
+            resolve_count = 0
+            mutated = False
+
+            def race_only_final_resolver(*args, **kwargs):
+                nonlocal resolve_count, mutated
+                resolve_count += 1
+                if resolve_count != 1:
+                    return real_resolve(*args, **kwargs)
+                shutil.copyfile(
+                    root
+                    / "zettels"
+                    / "zet_20110228_fake_school_record.md",
+                    other,
+                )
+
+                def mutate_after_other_read(*read_args, **read_kwargs):
+                    nonlocal mutated
+                    observed = real_read(*read_args, **read_kwargs)
+                    if (
+                        Path(read_args[2]).resolve() == other
+                        and not mutated
+                    ):
+                        other.write_bytes(self.zettel_path(root).read_bytes())
+                        mutated = True
+                    return observed
+
+                with mock.patch.object(
+                    completion_workflows,
+                    "_read_zettel_objet_candidate_bound_observation",
+                    side_effect=mutate_after_other_read,
+                ):
+                    return real_resolve(*args, **kwargs)
+
+            try:
+                with mock.patch.object(
+                    completion_workflows,
+                    "_resolve_zettel_objet_link_target_bound",
+                    side_effect=race_only_final_resolver,
+                ):
+                    with self.assertRaisesRegex(
+                        archive_services.ArchiveServiceError,
+                        "zettel_objet_link_zettel_authority_changed_after_approval",
+                    ):
+                        self.apply(root, plan, binding, claim)
+
+                self.assertEqual(resolve_count, 1)
+                self.assertTrue(mutated)
+                self.assertTrue(other.is_file())
                 self.assertEqual(self.zettel_path(root).read_bytes(), before)
                 self.assertTrue(receipt.is_file())
                 self.assert_index_dirty(root)

@@ -3805,6 +3805,41 @@ def _apply_duplicate_object_reconciliation_core(
         )
     except archive_services.ArchiveServiceError:
         raise _fail("archive_index_rebuild_required") from None
+
+    # Keep every rejectable approval/local-evidence check ahead of the
+    # process-shared manifest lock.  On POSIX, acquiring that lock necessarily
+    # creates the durable coordination inode when it does not already exist;
+    # an invalid claim or drifted local object must still satisfy the writer's
+    # zero-output contract.  The locked core repeats these checks, because the
+    # archive can change between this read-only preflight and lock acquisition.
+    if (
+        type(approval_claim) is not _ClaimedExactHumanApproval
+        or type(context) is not ExactHumanApprovalContext
+        or context.operation
+        is not ExactHumanApprovalOperation.duplicate_object_reconcile
+        or context.plan_sha256 != plan.plan_sha256
+        or context.target_binding_sha256 != plan.manifest_sha256
+    ):
+        raise _fail("duplicate_object_approval_required")
+    try:
+        _ClaimedExactHumanApproval.assert_ready_for_context(
+            approval_claim,
+            context,
+        )
+    except ExactHumanApprovalError:
+        raise _fail("duplicate_object_approval_required") from None
+    if _read_manifest(root) != plan._manifest_bytes:
+        raise _fail("duplicate_object_manifest_changed")
+    fresh_plan = _plan_duplicate_object_reconciliation_core(
+        root,
+        terminal_auditor=_claim_terminal_auditor(approval_claim),
+    )
+    if (
+        fresh_plan.manifest_sha256 != plan.manifest_sha256
+        or fresh_plan.plan_sha256 != plan.plan_sha256
+        or fresh_plan._replacement_bytes != plan._replacement_bytes
+    ):
+        raise _fail("duplicate_object_local_evidence_changed")
     with archive_services._ObjetCaptureManifestLock(root):
         return _apply_duplicate_object_reconciliation_locked_core(
             plan,
