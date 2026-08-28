@@ -279,6 +279,15 @@ def _receipt_relative(binding_sha256: str) -> str:
     )
 
 
+def object_storage_setup_receipt_identity(
+    binding: Mapping[str, Any],
+) -> tuple[str, str]:
+    """Return the canonical binding digest and exact receipt path."""
+
+    binding_sha256 = _sha(dict(binding))
+    return binding_sha256, _receipt_relative(binding_sha256)
+
+
 def _receipt_document(
     *,
     archive_id: str,
@@ -534,8 +543,7 @@ def plan_object_storage_setup_registration(
     if original_raw is not None and original_binding == proposed:
         # An unchanged target binding must not cause a formatting-only rewrite.
         post_raw = original_raw
-    binding_sha = _sha(proposed)
-    receipt_relative = _receipt_relative(binding_sha)
+    binding_sha, receipt_relative = object_storage_setup_receipt_identity(proposed)
     receipt = _receipt_bytes(
         _receipt_document(
             archive_id=archive_id,
@@ -1175,8 +1183,7 @@ def validate_object_storage_setup_evidence(
         or not _strict_object_storage_binding(binding, archive_id=archive_id)
     ):
         raise _fail("object_storage_setup_evidence_mismatch")
-    binding_sha = _sha(binding)
-    relative = _receipt_relative(binding_sha)
+    binding_sha, relative = object_storage_setup_receipt_identity(binding)
     path = archive_services.archive_internal_path(root, relative)
     raw = _read_bounded(path, maximum=_MAX_RECEIPT_BYTES, missing_ok=True)
     if raw is not None:
@@ -1210,6 +1217,7 @@ __all__ = [
     "ObjectStorageSetupRegistrationPlan",
     "apply_object_storage_setup_registration",
     "execute_object_storage_setup_registration",
+    "object_storage_setup_receipt_identity",
     "plan_object_storage_setup_registration",
     "revert_object_storage_setup_registration",
     "validate_object_storage_setup_evidence",
