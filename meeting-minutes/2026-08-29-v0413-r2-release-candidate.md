@@ -40,10 +40,30 @@
 - The focused historical test and the complete link-index benchmark module passed after the correction: 15 tests and 10 subtests.
 - An independent review found no P0, P1, or P2 issue. All required CI jobs must run again against the corrected head.
 
+## Windows candidate-preparation hardening
+
+- The corrected PR run passed nine required jobs but one Windows shard stopped after the runtime candidate's offline install and before its static `pip check` stage.
+- The same complete runtime-candidate test had passed on the immediately preceding CI run with the same Windows runner image and CPython 3.12.10, and it also passed locally. The intervening commit did not change runtime code. This bounded the first failure to a nondeterministic post-install Windows filesystem condition rather than a deterministic package-layout change.
+- WOM now retries only a newly generated, owned runtime-script removal for bounded Windows access/sharing/lock errors. The final removal reuses WOM's retained-handle exact-delete primitive and binds identity, bytes, size, timestamp, single-link state, and stream inventory; a path replacement between validation and deletion cannot redirect the mutation. Persistent locks, non-transient errors, alternate streams, hard links, byte drift, and identity replacement remain fail-closed.
+- Previously silent post-install normalization and static-verification boundaries now emit content-free stage progress so a future failure can be located without exposing a path or package content.
+- A separate failure-path defect was confirmed: an intact structured durable update lock was compared with the historical fixed legacy lock bytes and could be misreported as removed or replaced. The ownership check now accepts the exact expected lock bytes, and an incomplete private candidate explicitly keeps its structured lock and reports cleanup as unverified.
+- Regression tests cover Windows error 5/32/33 followed by exact-handle success, a persistent lock, disposition/close uncertainty with no retry, identity replacement during retry, exact structured-lock identity, partial-candidate preservation, absence of an abort receipt, and unchanged source and version pins.
+- The earlier wheel hash above is retained as historical candidate evidence only. Runtime source changed during this correction, so that wheel is superseded and cannot be released. A new wheel must be built and independently verified from the final merged commit.
+
 ## Pending release steps
 
-1. Push the candidate branch and open a pull request.
-2. Require every Ubuntu and Windows test shard plus both scale gates to pass.
+1. Finish the focused Windows runtime tests and push the hardened candidate to PR #89.
+2. Require every Ubuntu and Windows test shard plus both scale gates to pass against that exact head.
 3. Merge the exact reviewed head.
-4. Tag the exact merge commit, publish one wheel, download it anonymously, and re-verify its hash and clean installation.
+4. Tag the exact merge commit, build and publish one new wheel, download it anonymously, and re-verify its hash and clean installation.
 5. Do not install it into or run it against a beta-client archive from the development session.
+
+## Final Windows hardening evidence before push
+
+- The complete runtime-candidate module passed on the final production source: 4 tests and 5 subtests in 356.24 seconds.
+- A new end-to-end regression injected exactly one Windows sharing violation into retained-handle script cleanup and then proved candidate sealing, static inventory, and `pip check` completion.
+- The original durable candidate end-to-end test passed again in 278.359 seconds.
+- Focused exact-delete, retry-boundary, structured-lock, and partial-candidate tests passed. Windows error 5, 32, and 33 are the only retryable open failures; disposition and close uncertainty are not retried.
+- Release readiness passed all four hygiene checks. Resource synchronization covers 167 packaged files, and the v0.4.13 release/resource tests passed 13 tests and 203 subtests.
+- Two independent final reviews found no remaining P0, P1, or P2 issue in the retained-handle implementation, durable-lock correction, privacy surface, or packaged resources.
+- These local results authorize commit and pull-request CI, not release. The exact committed head still requires every required GitHub Ubuntu/Windows shard and both scale gates to pass.

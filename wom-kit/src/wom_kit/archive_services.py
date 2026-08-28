@@ -110953,15 +110953,18 @@ def wom_kit_project_update_owned_lock_present(
     project_root: Path,
     lock_path: Path,
     identity: tuple[int, int] | None,
+    *,
+    expected_lock_bytes: bytes = WOM_KIT_PROJECT_UPDATE_LOCK_BYTES,
 ) -> bool:
     if (
         identity is None
+        or not expected_lock_bytes
         or _wom_kit_read_bounded_real_bytes(
             project_root,
             lock_path,
-            max_bytes=len(WOM_KIT_PROJECT_UPDATE_LOCK_BYTES),
+            max_bytes=len(expected_lock_bytes),
         )
-        != WOM_KIT_PROJECT_UPDATE_LOCK_BYTES
+        != expected_lock_bytes
     ):
         return False
     try:
@@ -118834,6 +118837,12 @@ def _wom_kit_project_version_update_legacy_core_generator(
                 rollback["prepared_runtime_bundle_removed"] = False
                 preserve_lock = True
                 raise
+            except project_runtime.PreparedRuntimeCandidateIncompleteError as failure:
+                prepared_runtime_bundle_cleanup_state = "uncertain"
+                rollback["prepared_runtime_bundle_removed"] = False
+                preserve_lock = True
+                blockers.append(str(failure))
+                raise
             except project_runtime.ProjectRuntimeError as failure:
                 blockers.append(str(failure))
                 release_current_lock_or_raise("blocked")
@@ -119374,6 +119383,11 @@ def _wom_kit_project_version_update_legacy_core_generator(
                     project_root,
                     lock_path,
                     lock_identity,
+                    expected_lock_bytes=(
+                        durable_lock_bytes
+                        if durable_lock_bytes is not None
+                        else WOM_KIT_PROJECT_UPDATE_LOCK_BYTES
+                    ),
                 )
                 and _wom_kit_project_update_git_snapshot(
                     mirror_path,
@@ -119896,7 +119910,10 @@ def _wom_kit_project_version_update_legacy_core_generator(
             )
         elif isinstance(
             failure,
-            project_runtime.PreparedRuntimeBundleCleanupError,
+            (
+                project_runtime.PreparedRuntimeBundleCleanupError,
+                project_runtime.PreparedRuntimeCandidateIncompleteError,
+            ),
         ):
             prepared_bundle_removed = False
             prepared_runtime_bundle_cleanup_state = "uncertain"
@@ -119906,7 +119923,12 @@ def _wom_kit_project_version_update_legacy_core_generator(
         if not prepared_bundle_removed:
             preserve_lock = True
             blockers.append(
-                "project_runtime_prepared_bundle_cleanup_unverified"
+                "project_runtime_candidate_cleanup_unverified"
+                if isinstance(
+                    failure,
+                    project_runtime.PreparedRuntimeCandidateIncompleteError,
+                )
+                else "project_runtime_prepared_bundle_cleanup_unverified"
             )
         potential_mutation_attempted = bool(
             source_checkout_changed
@@ -119967,6 +119989,11 @@ def _wom_kit_project_version_update_legacy_core_generator(
             project_root,
             lock_path,
             lock_identity,
+            expected_lock_bytes=(
+                durable_lock_bytes
+                if durable_lock_bytes is not None
+                else WOM_KIT_PROJECT_UPDATE_LOCK_BYTES
+            ),
         ):
             lock_missing = lock_kind_after_failure == "missing"
             lock_acquired = not lock_missing

@@ -367,6 +367,7 @@ def _windows_open(path: Path, *, directory: bool) -> int:
         flags |= api.FILE_FLAG_BACKUP_SEMANTICS
     else:
         desired_access |= api.GENERIC_READ
+    ctypes.set_last_error(0)
     handle = api.create_file(
         _windows_extended_path(path),
         desired_access,
@@ -378,7 +379,13 @@ def _windows_open(path: Path, *, directory: bool) -> int:
     )
     value = handle if isinstance(handle, int) else getattr(handle, "value", None)
     if value in {None, api.invalid_handle}:
-        raise _fail("legacy_cleanup_bound_win32_open_uncertain")
+        # Preserve only the numeric Windows failure in the exception chain so
+        # an owning caller can distinguish a short scanner/share lock from a
+        # semantic failure.  The public error remains content-free.
+        winerror = ctypes.get_last_error()
+        raise _fail("legacy_cleanup_bound_win32_open_uncertain") from ctypes.WinError(
+            winerror
+        )
     return int(value)
 
 
