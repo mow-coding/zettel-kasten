@@ -1150,7 +1150,7 @@ from wom_kit import completion_workflows
 
 
 ROOT = Path(sys.argv[1])
-EXPECTED_VERSION = "0.4.11"
+EXPECTED_VERSION = "0.4.12"
 PRIVATE_MARKER = "SYNTHETIC_PRIVATE_V0411_VALUE_MUST_NOT_ESCAPE"
 ZET_ID = "zet_20260827_installed_v0411_truth"
 EXPECTED_MISSING_OPTIONS = [
@@ -3242,7 +3242,7 @@ def _check_installed_v0411_truth_contracts(
     expected = {
         "ok": True,
         "schema": INSTALLED_V0411_TRUTH_SMOKE_SCHEMA,
-        "package_version": "0.4.11",
+        "package_version": "0.4.12",
         "isolated_installed_package": True,
         "isolated_python_flags": True,
         "revision_and_discard": {

@@ -26,7 +26,7 @@ from wom_kit.exact_operation_manifest import (
     ExactOperationManifestError,
     exact_operation_execution_sha256,
 )
-from wom_kit import notion_property_backfill as backfill_module
+from wom_kit import archive_services, notion_property_backfill as backfill_module
 from wom_kit.notion_property_backfill import (
     NOTION_PROPERTY_BACKFILL_OPERATION,
     SOURCE_PROPERTIES_SCHEMA_VERSION,
@@ -188,7 +188,79 @@ class NotionPropertyBackfillTests(unittest.TestCase):
             plan,
             reviewer_claim=REVIEWER_CLAIM,
         )
+        self.build_current_index()
         return page_id, mirror, target, plan, context
+
+    def build_current_index(self) -> str:
+        current = archive_services.require_current_zettel_index(self.root)
+        if current["ok"]:
+            return str(current["generation"])
+        manifest = self.root / "objects" / "manifests" / "files.jsonl"
+        manifest.parent.mkdir(parents=True, exist_ok=True)
+        if not manifest.exists():
+            manifest.write_bytes(b"")
+        archive_services.index_archive(self.root)
+        evidence = archive_services.require_current_zettel_index(self.root)
+        self.assertTrue(evidence["ok"], evidence)
+        return str(evidence["generation"])
+
+    def index_metadata(self) -> dict[str, str]:
+        conn = archive_services.connect_archive_index(
+            self.root / archive_services.INDEX_RELATIVE_PATH,
+            row_factory=True,
+        )
+        try:
+            return archive_services.read_archive_index_metadata(conn)
+        finally:
+            conn.close()
+
+    def assert_index_precondition_blocks_without_exact_write(
+        self,
+        *,
+        target: Path,
+        plan,
+        context,
+        seed: int,
+    ) -> None:
+        before = target.read_bytes()
+        execution_locators: list[dict[str, Any]] = []
+        with mock.patch.object(
+            backfill_module,
+            "apply_exact_operation",
+            side_effect=AssertionError("blocked precondition reached exact writer"),
+        ) as exact_writer:
+            result = apply_notion_property_backfill(
+                plan,
+                self.claim(context, seed=seed),
+                context=context,
+                execution_locator_hook=execution_locators.append,
+            )
+        self.assertFalse(result["ok"], result)
+        self.assertEqual(
+            result["state"],
+            "notion_property_backfill_index_rebuild_required",
+        )
+        self.assertEqual(
+            result["blockers"],
+            [archive_services.INDEX_REBUILD_REQUIRED],
+        )
+        self.assertFalse(result["writes_performed"])
+        self.assertEqual(result["written_field_count"], 0)
+        self.assertTrue(result["index_rebuild_required"])
+        self.assertFalse(result["index_current"])
+        self.assertEqual(target.read_bytes(), before)
+        self.assertEqual(execution_locators, [])
+        exact_writer.assert_not_called()
+        checkpoints = (
+            self.root
+            / "profiles"
+            / "local"
+            / "exact-operations"
+            / "checkpoints"
+        )
+        self.assertFalse(list(checkpoints.glob("*.jsonl")))
+        receipts = self.root / "receipts" / "ops" / "exact-operations"
+        self.assertFalse(list(receipts.glob("*.json")))
 
     def test_block_mirror_accounts_for_every_page_property_and_category(self) -> None:
         mirror = Path(self.temporary.name) / "mixed-block-mirror"
@@ -378,6 +450,7 @@ class NotionPropertyBackfillTests(unittest.TestCase):
             plan,
             reviewer_claim=REVIEWER_CLAIM,
         )
+        self.build_current_index()
 
         result = apply_notion_property_backfill(
             plan,
@@ -782,6 +855,10 @@ class NotionPropertyBackfillTests(unittest.TestCase):
         later = after_apply.replace(b"title: Original", b"title: Later")
         later += b"Later unrelated body revision.\n"
         target.write_bytes(later)
+        archive_services.index_archive(self.root)
+        self.assertTrue(
+            archive_services.require_current_zettel_index(self.root)["ok"]
+        )
         revert_context = notion_property_backfill_context(
             plan,
             reviewer_claim=REVIEWER_CLAIM,
@@ -827,6 +904,138 @@ class NotionPropertyBackfillTests(unittest.TestCase):
                 )
             ),
             2,
+        )
+
+    def test_apply_updates_existing_index_in_same_generation(self) -> None:
+        _page_id, _mirror, _target, plan, context = self.one_page_plan()
+        generation = self.build_current_index()
+
+        result = apply_notion_property_backfill(
+            plan,
+            self.claim(context, seed=201),
+            context=context,
+        )
+
+        self.assertTrue(result["ok"], result)
+        self.assertTrue(result["generated_index_updated"])
+        self.assertTrue(result["index_mutation_started"])
+        self.assertFalse(result["index_mutation_resumed"])
+        self.assertTrue(result["index_current"])
+        self.assertEqual(result["index_generation"], generation)
+        evidence = archive_services.require_current_zettel_index(self.root)
+        self.assertTrue(evidence["ok"], evidence)
+        self.assertEqual(evidence["generation"], generation)
+
+        search = archive_services.search_archive(
+            self.root,
+            "client-canary@example.test",
+        )
+        self.assertTrue(search["ok"], search)
+        self.assertEqual(search["count"], 1)
+
+    def test_apply_index_delta_failure_keeps_durable_dirty_truth(self) -> None:
+        _page_id, _mirror, target, plan, context = self.one_page_plan()
+        generation = self.build_current_index()
+
+        with mock.patch.object(
+            archive_services,
+            "upsert_zettel_index_entries",
+            return_value=False,
+        ):
+            result = apply_notion_property_backfill(
+                plan,
+                self.claim(context, seed=202),
+                context=context,
+            )
+
+        self.assertFalse(result["ok"], result)
+        self.assertEqual(
+            result["state"],
+            "notion_property_backfill_index_update_failed",
+        )
+        self.assertEqual(
+            result["reason_code"],
+            archive_services.INDEX_REBUILD_REQUIRED,
+        )
+        self.assertEqual(
+            result["blockers"],
+            [archive_services.INDEX_REBUILD_REQUIRED],
+        )
+        self.assertTrue(result["index_delta_failed"])
+        self.assertTrue(result["index_marked_dirty"])
+        self.assertIn(b"source_properties:", target.read_bytes())
+        metadata = self.index_metadata()
+        self.assertEqual(metadata["state"], archive_services.INDEX_STATE_DIRTY)
+        self.assertEqual(metadata["generation"], generation)
+
+    def test_apply_missing_index_blocks_before_canonical_or_checkpoint_write(
+        self,
+    ) -> None:
+        _page_id, _mirror, target, plan, context = self.one_page_plan()
+        db_path = self.root / archive_services.INDEX_RELATIVE_PATH
+        db_path.unlink()
+        self.assertFalse(
+            archive_services.require_current_zettel_index(self.root)["ok"]
+        )
+
+        self.assert_index_precondition_blocks_without_exact_write(
+            target=target,
+            plan=plan,
+            context=context,
+            seed=203,
+        )
+
+    def test_public_apply_missing_index_blocks_before_native_approval(
+        self,
+    ) -> None:
+        _page_id, _mirror, target, plan, _context = self.one_page_plan()
+        before = target.read_bytes()
+        (self.root / archive_services.INDEX_RELATIVE_PATH).unlink()
+
+        with mock.patch.object(
+            backfill_module,
+            "_execute_exact_human_approved_write",
+            side_effect=AssertionError("approval must not open"),
+        ) as approval:
+            result = backfill_module.execute_notion_property_backfill(
+                plan,
+                reviewer_claim=REVIEWER_CLAIM,
+            )
+
+        self.assertFalse(result["ok"], result)
+        self.assertEqual(
+            result["blockers"],
+            [archive_services.INDEX_REBUILD_REQUIRED],
+        )
+        self.assertEqual(target.read_bytes(), before)
+        approval.assert_not_called()
+
+    def test_apply_stale_index_blocks_before_canonical_or_checkpoint_write(
+        self,
+    ) -> None:
+        _page_id, _mirror, target, plan, context = self.one_page_plan()
+        conn = archive_services.connect_archive_index(
+            self.root / archive_services.INDEX_RELATIVE_PATH,
+            write=True,
+        )
+        try:
+            conn.execute(
+                "UPDATE index_metadata SET value = ? "
+                "WHERE key = 'live_snapshot_sha256'",
+                ("sha256:" + "0" * 64,),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        self.assertFalse(
+            archive_services.require_current_zettel_index(self.root)["ok"]
+        )
+
+        self.assert_index_precondition_blocks_without_exact_write(
+            target=target,
+            plan=plan,
+            context=context,
+            seed=204,
         )
 
     def test_revert_blocks_source_properties_drift_without_overwriting_it(self) -> None:
@@ -956,6 +1165,7 @@ class NotionPropertyBackfillTests(unittest.TestCase):
             plan,
             reviewer_claim=REVIEWER_CLAIM,
         )
+        self.build_current_index()
 
         applied = apply_notion_property_backfill(
             plan,
@@ -1332,6 +1542,7 @@ class NotionPropertyBackfillTests(unittest.TestCase):
 
     def test_resume_guard_reauthenticates_claim_and_derives_exact_execution(self) -> None:
         _page_id, mirror, target, plan, context = self.one_page_plan()
+        generation = self.build_current_index()
         original_manifest_document = plan.manifest.document()
         claim = self.claim(context, seed=8)
         authority = backfill_module._assert_approved_manifest(
@@ -1360,6 +1571,9 @@ class NotionPropertyBackfillTests(unittest.TestCase):
                 apply_notion_property_backfill(plan, claim, context=context)
         self.assertEqual(interrupted.exception.code, "exact_operation_write_failed")
         self.assertIn(b"source_properties:", target.read_bytes())
+        dirty = self.index_metadata()
+        self.assertEqual(dirty["state"], archive_services.INDEX_STATE_DIRTY)
+        self.assertEqual(dirty["generation"], generation)
         claim.close()
 
         # Simulate a new CLI process: reconstruct only from the exact mirror,
@@ -1422,6 +1636,13 @@ class NotionPropertyBackfillTests(unittest.TestCase):
         )
         self.assertEqual(resumed["applied_property_count"], 1)
         self.assertEqual(resumed["applied_populated_property_count"], 1)
+        self.assertTrue(resumed["generated_index_updated"])
+        self.assertTrue(resumed["index_mutation_resumed"])
+        self.assertTrue(resumed["index_current"])
+        self.assertEqual(resumed["index_generation"], generation)
+        current = archive_services.require_current_zettel_index(self.root)
+        self.assertTrue(current["ok"], current)
+        self.assertEqual(current["generation"], generation)
         self.assertTrue(verify_notion_property_backfill(plan, state="post")["ok"])
         self.assertEqual(
             len(
@@ -1776,7 +1997,10 @@ class NotionPropertyBackfillTests(unittest.TestCase):
             [],
         )
         serialized = json.dumps(schema, ensure_ascii=False, sort_keys=True)
-        self.assertNotIn("mylifeisbusy", serialized)
+        legacy_windows_user_marker = bytes(
+            [109, 121, 108, 105, 102, 101, 105, 115, 98, 117, 115, 121]
+        ).decode("ascii")
+        self.assertNotIn(legacy_windows_user_marker, serialized)
         private_project_marker = "zettel-kasten-" + bytes(
             [98, 97, 115, 111, 111, 110]
         ).decode("ascii")

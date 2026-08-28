@@ -1,6 +1,6 @@
 # Exact Human Approval Contract
 
-Status: v0.4.11 canonical local target previews and truthful fixed-close authority; v0.4.0 one-use authority baseline preserved
+Status: v0.4.12 generation-bound link authority and parser-derived fixed-close truth; v0.4.0 one-use authority baseline preserved
 
 ## Purpose
 
@@ -52,6 +52,26 @@ archive identity. A partial capture requires a fresh exact dry-run and new
 decision; automatic retry and same-claim resume remain unavailable. Provider
 mutation and every unscoped legacy approval remain closed. Their parser
 allowlists and exact evidence contracts are the authority.
+
+v0.4.12 upgrades the already-open operation-specific single
+`zettel-objet-link` apply with generation-bound authority. The current SQLite
+projection, exact target row,
+unique zet and Objet identities, manifest descriptor, stable file evidence, and
+one generation remain bound through planning, approval, and apply. An exact
+existing link returns deterministic `already_present` before approval and
+without a durable write. A missing or stale projection fails before approval or
+canonical mutation. Once a supported indexed writer begins, it must either seal
+the exact same-generation delta or leave that generation dirty and report
+`archive_index_rebuild_required`; ambiguous partial effects are never reported
+as success.
+
+The current parser-derived inventory is 47 approval-available, 67 fixed-closed,
+and 201 not-exposed paths. `zet-revision-restore-proposal-from-snapshot
+--approve` and the canonical standalone command path `derive-text capture
+--approve` remain fixed closed before private snapshot, target, text, source, or
+manifest reads. The paired derived-text handling inside the separately approved
+`objet-capture-batch` route is not that command path. Dry-run surfaces and
+historical evidence do not grant authority.
 
 ## Machine verification binding
 

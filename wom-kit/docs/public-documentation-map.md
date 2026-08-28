@@ -6,16 +6,20 @@ Updated: 2026-08-28
 Philosophy clarified: 2026-07-15
 Harness compatibility clarified: 2026-07-16
 
-Current v0.4.11 delta: project alignment now requires fresh installed-payload,
+Current v0.4.12 delta: `zettel-objet-link` uses the current generation-bound
+SQLite projection as authority and returns deterministic `already_present`
+without approval or a write. Indexed zet writers share a same-generation
+dirty-intent and exact delta-or-dirty lifecycle; missing or stale projections
+fail before canonical writes. The parser-derived inventory is 47 approval-
+available, 67 fixed-closed, and 201 not-exposed paths. Publishing or installing
+the release changes no client archive. After a project update the AI explicitly
+rebuilds the archive index, runs index health, and verifies the technical
+evidence; the person does not count files or compare hashes.
+
+Historical v0.4.11 delta: project alignment requires fresh installed-payload,
 module-inventory, launcher, current-process, pin, and running-version evidence.
-Deep Doctor remains the byte-verifying default, accepts later SHA evolution only
-through exact chronological evidence, and keeps local-recovery state evidence
-without chronology as ERROR. Native decisions use canonical WOM language and a
-local-only target preview; the document read surface adds a WOM-safe Markdown
-projection without changing canonical bytes. Fixed-closed previews state their
-authority honestly. The repeated full-tree link and generation-bound index
-architecture remain v0.4.12 work. Publishing or installing the release changes
-no client archive.
+Deep Doctor remains the byte-verifying default and native decisions use
+canonical WOM language without publishing private previews.
 
 Historical v0.4.10 delta: bounded 1–1,000 item local intake and capture form a
 two-decision pipeline. Intake writes every exact receipt plus one generated
@@ -530,6 +534,7 @@ These documents record public-safe work already performed.
 - [v0.2.11 Delegate Capability Contract Work Log](../plans/work-log-2026-05-23-delegate-capability-contract.md)
 - [Changelog](../../CHANGELOG.md)
 - [Release Notes](releases/)
+- [v0.4.12 Release Note](releases/v0.4.12.md)
 - [v0.4.11 Release Note](releases/v0.4.11.md)
 - [v0.4.10 Release Note](releases/v0.4.10.md)
 - [v0.4.9 Release Note](releases/v0.4.9.md)

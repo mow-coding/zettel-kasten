@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Callable
 from unittest import mock
 
+from wom_kit import archive_services
 from wom_kit import duplicate_object_reconciliation as duplicate_module
 from wom_kit.duplicate_object_reconciliation import (
     DuplicateObjectReconciliationError,
@@ -162,12 +163,29 @@ class DuplicateObjectReconciliationTests(unittest.TestCase):
             for row in rows
         )
         self.manifest.write_bytes(raw)
+        archive_services.index_archive(self.root)
         return raw
 
     def _rewrite_json(self, path: Path, mutate) -> None:
         document = json.loads(path.read_text(encoding="utf-8"))
         mutate(document)
         path.write_bytes(duplicate_module._canonical_bytes(document))
+
+    def _replace_manifest_then_fail(self, message: str):
+        real_replace = duplicate_module._replace_manifest_compare_and_swap
+
+        def replace_then_fail(root: Path, **kwargs) -> None:
+            real_replace(root, **kwargs)
+            raise OSError(message)
+
+        return replace_then_fail
+
+    @staticmethod
+    def _fail_before_manifest_replace(message: str):
+        def fail_before_replace(_root: Path, **_kwargs) -> None:
+            raise OSError(message)
+
+        return fail_before_replace
 
     def strict_pair(
         self,
@@ -418,6 +436,7 @@ class DuplicateObjectReconciliationTests(unittest.TestCase):
             )
         )
         self.manifest.write_bytes(original)
+        archive_services.index_archive(self.root)
 
         plan = plan_duplicate_object_reconciliation(self.root)
         public = plan.public_document()
@@ -615,7 +634,7 @@ class DuplicateObjectReconciliationTests(unittest.TestCase):
 
         self.assertEqual(
             captured.exception.code,
-            "duplicate_object_manifest_changed",
+            "archive_index_rebuild_required",
         )
         self.assertEqual(archive_snapshot(self.root), before)
         self.assertEqual(claim.status, "started")
@@ -638,6 +657,7 @@ class DuplicateObjectReconciliationTests(unittest.TestCase):
         self.assertEqual(archive_snapshot(self.root), after_success)
 
         self.manifest.write_bytes(original)
+        archive_services.index_archive(self.root)
         claim.finalize_succeeded()
         before_terminal_replay = archive_snapshot(self.root)
         with self.assertRaises(DuplicateObjectReconciliationError) as replay:
@@ -653,15 +673,10 @@ class DuplicateObjectReconciliationTests(unittest.TestCase):
         _original, plan, context = self.ready_plan("5")
         claims = [self.claim(context, seed=7), self.claim(context, seed=8)]
         barrier = threading.Barrier(2)
-        original_assert = ClaimedExactHumanApproval.assert_ready_for_context
-
-        def gated_assert(claim, exact_context):
-            reference = original_assert(claim, exact_context)
-            barrier.wait(timeout=5)
-            return reference
 
         def worker(index: int):
             try:
+                barrier.wait(timeout=5)
                 return apply_duplicate_object_reconciliation(
                     plan,
                     claims[index],
@@ -670,22 +685,20 @@ class DuplicateObjectReconciliationTests(unittest.TestCase):
             except BaseException as exc:
                 return exc
 
-        with mock.patch.object(
-            ClaimedExactHumanApproval,
-            "assert_ready_for_context",
-            new=gated_assert,
-        ):
-            with ThreadPoolExecutor(max_workers=2) as executor:
-                outcomes = list(executor.map(worker, (0, 1)))
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            outcomes = list(executor.map(worker, (0, 1)))
 
         successes = [item for item in outcomes if isinstance(item, dict)]
         failures = [item for item in outcomes if isinstance(item, BaseException)]
         self.assertEqual(len(successes), 1, outcomes)
         self.assertEqual(len(failures), 1, outcomes)
         self.assertIsInstance(failures[0], DuplicateObjectReconciliationError)
-        self.assertEqual(
+        self.assertIn(
             failures[0].code,
-            "duplicate_object_reconciliation_conflict",
+            {
+                "archive_index_rebuild_required",
+                "duplicate_object_manifest_changed",
+            },
         )
         self.assertEqual([claim.status for claim in claims], ["started", "started"])
         lock_paths = list(
@@ -1091,18 +1104,14 @@ class DuplicateObjectReconciliationTests(unittest.TestCase):
     ) -> None:
         original, plan, context = self.ready_plan("a")
         old_claim = self.claim(context, seed=20)
-        real_atomic_replace = duplicate_module._atomic_replace
-
-        def replace_manifest_then_fail(root: Path, path: Path, raw: bytes) -> None:
-            real_atomic_replace(root, path, raw)
-            if path.resolve() == self.manifest.resolve():
-                raise OSError("simulated power loss after manifest replace")
 
         with (
             mock.patch.object(
                 duplicate_module,
-                "_atomic_replace",
-                side_effect=replace_manifest_then_fail,
+                "_replace_manifest_compare_and_swap",
+                side_effect=self._replace_manifest_then_fail(
+                    "simulated power loss after manifest replace"
+                ),
             ),
             self.assertRaises(DuplicateObjectReconciliationError) as interrupted,
         ):
@@ -1220,18 +1229,14 @@ class DuplicateObjectReconciliationTests(unittest.TestCase):
     ) -> None:
         _original, plan, context = self.ready_plan("c")
         old_claim = self.claim(context, seed=24)
-        real_atomic_replace = duplicate_module._atomic_replace
-
-        def replace_manifest_then_fail(root: Path, path: Path, raw: bytes) -> None:
-            real_atomic_replace(root, path, raw)
-            if path.resolve() == self.manifest.resolve():
-                raise OSError("simulated interruption")
 
         with (
             mock.patch.object(
                 duplicate_module,
-                "_atomic_replace",
-                side_effect=replace_manifest_then_fail,
+                "_replace_manifest_compare_and_swap",
+                side_effect=self._replace_manifest_then_fail(
+                    "simulated interruption"
+                ),
             ),
             self.assertRaises(DuplicateObjectReconciliationError),
         ):
@@ -1633,19 +1638,14 @@ class DuplicateObjectReconciliationTests(unittest.TestCase):
             apply_duplicate_object_reconciliation(
                 plan, self.claim(context, seed=64), context=context
             )
-        real_atomic_replace = duplicate_module._atomic_replace
-
-        def fail_before_forward_replace(
-            root: Path, path: Path, raw: bytes
-        ) -> None:
-            if path.resolve() == self.manifest.resolve():
-                raise OSError("simulated second retry interruption")
-            real_atomic_replace(root, path, raw)
+        fail_before_forward_replace = self._fail_before_manifest_replace(
+            "simulated second retry interruption"
+        )
 
         with (
             mock.patch.object(
                 duplicate_module,
-                "_atomic_replace",
+                "_replace_manifest_compare_and_swap",
                 side_effect=fail_before_forward_replace,
             ),
             self.assertRaises(DuplicateObjectReconciliationError),
@@ -1656,7 +1656,7 @@ class DuplicateObjectReconciliationTests(unittest.TestCase):
         with (
             mock.patch.object(
                 duplicate_module,
-                "_atomic_replace",
+                "_replace_manifest_compare_and_swap",
                 side_effect=fail_before_forward_replace,
             ),
             self.assertRaises(DuplicateObjectReconciliationError),
@@ -1734,20 +1734,15 @@ class DuplicateObjectReconciliationTests(unittest.TestCase):
             apply_duplicate_object_reconciliation(
                 plan, self.claim(context, seed=67), context=context
             )
-        real_atomic_replace = duplicate_module._atomic_replace
-
-        def fail_before_forward_replace(
-            root: Path, path: Path, raw: bytes
-        ) -> None:
-            if path.resolve() == self.manifest.resolve():
-                raise OSError("simulated retry interruption")
-            real_atomic_replace(root, path, raw)
+        fail_before_forward_replace = self._fail_before_manifest_replace(
+            "simulated retry interruption"
+        )
 
         for seed in range(68, 68 + duplicate_module._MAX_APPROVAL_SUPERSESSION_DEPTH):
             with (
                 mock.patch.object(
                     duplicate_module,
-                    "_atomic_replace",
+                    "_replace_manifest_compare_and_swap",
                     side_effect=fail_before_forward_replace,
                 ),
                 self.assertRaises(DuplicateObjectReconciliationError),
@@ -1794,20 +1789,14 @@ class DuplicateObjectReconciliationTests(unittest.TestCase):
         Callable[..., bool],
     ]:
         original, forward_plan, forward_context = self.ready_plan(digest)
-        real_atomic_replace = duplicate_module._atomic_replace
-
-        def replace_forward_manifest_then_fail(
-            root: Path, path: Path, raw: bytes
-        ) -> None:
-            real_atomic_replace(root, path, raw)
-            if path.resolve() == self.manifest.resolve():
-                raise OSError("simulated forward replace after-effect")
 
         with (
             mock.patch.object(
                 duplicate_module,
-                "_atomic_replace",
-                side_effect=replace_forward_manifest_then_fail,
+                "_replace_manifest_compare_and_swap",
+                side_effect=self._replace_manifest_then_fail(
+                    "simulated forward replace after-effect"
+                ),
             ),
             self.assertRaises(ExactHumanApprovalWorkflowError) as interrupted,
         ):
@@ -1964,20 +1953,18 @@ class DuplicateObjectReconciliationTests(unittest.TestCase):
             self.root, terminal_auditor
         )
 
-    def test_revert_manifest_restore_after_effect_converges(self) -> None:
+    def test_revert_manifest_restore_after_effect_converges_without_claiming_write(
+        self,
+    ) -> None:
         original, plan, context = self._ready_successful_revert("3", seed=40)
-        real_atomic_replace = duplicate_module._atomic_replace
-
-        def restore_then_fail(root: Path, path: Path, raw: bytes) -> None:
-            real_atomic_replace(root, path, raw)
-            if path.resolve() == self.manifest.resolve():
-                raise OSError("simulated restore after-effect")
 
         revert_claim = self.claim(context, seed=41)
         with mock.patch.object(
             duplicate_module,
-            "_atomic_replace",
-            side_effect=restore_then_fail,
+            "_replace_manifest_compare_and_swap",
+            side_effect=self._replace_manifest_then_fail(
+                "simulated restore after-effect"
+            ),
         ):
             result = apply_duplicate_object_reconciliation_revert(
                 plan,
@@ -1989,8 +1976,53 @@ class DuplicateObjectReconciliationTests(unittest.TestCase):
             plan, revert_claim, context=context
         )
         self.assertTrue(result["ok"], result)
-        self.assertTrue(result["manifest_write_performed_this_run"])
+        self.assertFalse(result["manifest_write_performed_this_run"])
+        self.assertTrue(result["finalize_only"])
+        self.assertTrue(result["generated_index_updated"])
         self.assertEqual(self.manifest.read_bytes(), original)
+
+    def test_revert_pre_cas_foreign_same_byte_replacement_is_not_our_write(
+        self,
+    ) -> None:
+        original, plan, context = self._ready_successful_revert("f", seed=116)
+        calls = 0
+
+        def foreign_replace_before_cas(root: Path, **kwargs) -> None:
+            nonlocal calls
+            calls += 1
+            replacement = self.manifest.with_name(
+                self.manifest.name + ".foreign-same-byte"
+            )
+            replacement.write_bytes(kwargs["replacement_bytes"])
+            replacement.replace(self.manifest)
+            raise OSError("simulated foreign same-byte replacement before CAS")
+
+        revert_claim = self.claim(context, seed=117)
+        with mock.patch.object(
+            duplicate_module,
+            "_replace_manifest_compare_and_swap",
+            side_effect=foreign_replace_before_cas,
+        ):
+            result = apply_duplicate_object_reconciliation_revert(
+                plan,
+                revert_claim,
+                context=context,
+            )
+        revert_claim.finalize_succeeded()
+        finalize_duplicate_object_reconciliation_revert(
+            plan,
+            revert_claim,
+            context=context,
+        )
+
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(calls, 1)
+        self.assertFalse(result["manifest_write_performed_this_run"])
+        self.assertTrue(result["finalize_only"])
+        self.assertTrue(result["generated_index_updated"])
+        self.assertEqual(self.manifest.read_bytes(), original)
+        evidence = archive_services.require_current_zettel_index(self.root)
+        self.assertTrue(evidence["ok"], evidence)
 
     def test_revert_receipt_publish_after_effect_converges(self) -> None:
         original, plan, context = self._ready_successful_revert("4", seed=42)
@@ -2143,20 +2175,14 @@ class DuplicateObjectReconciliationTests(unittest.TestCase):
     ) -> None:
         original, forward_plan, forward_context = self.ready_plan("9")
         forward_claim = self.claim(forward_context, seed=54)
-        real_atomic_replace = duplicate_module._atomic_replace
-
-        def replace_forward_manifest_then_fail(
-            root: Path, path: Path, raw: bytes
-        ) -> None:
-            real_atomic_replace(root, path, raw)
-            if path.resolve() == self.manifest.resolve():
-                raise OSError("simulated forward replace after-effect")
 
         with (
             mock.patch.object(
                 duplicate_module,
-                "_atomic_replace",
-                side_effect=replace_forward_manifest_then_fail,
+                "_replace_manifest_compare_and_swap",
+                side_effect=self._replace_manifest_then_fail(
+                    "simulated forward replace after-effect"
+                ),
             ),
             self.assertRaises(DuplicateObjectReconciliationError) as forward,
         ):
@@ -2233,18 +2259,16 @@ class DuplicateObjectReconciliationTests(unittest.TestCase):
             reviewer_claim=REVIEWER_CLAIM,
         )
         manifest_writes = 0
+        real_manifest_replace = duplicate_module._replace_manifest_compare_and_swap
 
-        def count_manifest_writes(
-            root: Path, path: Path, raw: bytes
-        ) -> None:
+        def count_manifest_writes(root: Path, **kwargs) -> None:
             nonlocal manifest_writes
-            if path.resolve() == self.manifest.resolve():
-                manifest_writes += 1
-            real_atomic_replace(root, path, raw)
+            manifest_writes += 1
+            real_manifest_replace(root, **kwargs)
 
         with mock.patch.object(
             duplicate_module,
-            "_atomic_replace",
+            "_replace_manifest_compare_and_swap",
             side_effect=count_manifest_writes,
         ):
             result = apply_duplicate_object_reconciliation_revert(
@@ -2297,20 +2321,14 @@ class DuplicateObjectReconciliationTests(unittest.TestCase):
         self,
     ) -> None:
         original, forward_plan, forward_context = self.ready_plan("e")
-        real_atomic_replace = duplicate_module._atomic_replace
-
-        def replace_forward_manifest_then_fail(
-            root: Path, path: Path, raw: bytes
-        ) -> None:
-            real_atomic_replace(root, path, raw)
-            if path.resolve() == self.manifest.resolve():
-                raise OSError("simulated forward replace after-effect")
 
         with (
             mock.patch.object(
                 duplicate_module,
-                "_atomic_replace",
-                side_effect=replace_forward_manifest_then_fail,
+                "_replace_manifest_compare_and_swap",
+                side_effect=self._replace_manifest_then_fail(
+                    "simulated forward replace after-effect"
+                ),
             ),
             self.assertRaises(DuplicateObjectReconciliationError),
         ):
@@ -2403,19 +2421,14 @@ class DuplicateObjectReconciliationTests(unittest.TestCase):
             apply_duplicate_object_reconciliation_revert(
                 plan, self.claim(context, seed=79), context=context
             )
-        real_atomic_replace = duplicate_module._atomic_replace
-
-        def fail_before_revert_restore(
-            root: Path, path: Path, raw: bytes
-        ) -> None:
-            if path.resolve() == self.manifest.resolve():
-                raise OSError("simulated revert retry interruption")
-            real_atomic_replace(root, path, raw)
+        fail_before_revert_restore = self._fail_before_manifest_replace(
+            "simulated revert retry interruption"
+        )
 
         with (
             mock.patch.object(
                 duplicate_module,
-                "_atomic_replace",
+                "_replace_manifest_compare_and_swap",
                 side_effect=fail_before_revert_restore,
             ),
             self.assertRaises(DuplicateObjectReconciliationError),
@@ -2839,17 +2852,16 @@ class DuplicateObjectReconciliationTests(unittest.TestCase):
         self.assertEqual(approval_id, pending_claim.approval_id)
         pending_claim.close()
         manifest_writes = 0
-        real_atomic_replace = duplicate_module._atomic_replace
+        real_manifest_replace = duplicate_module._replace_manifest_compare_and_swap
 
-        def count_manifest_writes(root: Path, path: Path, raw: bytes) -> None:
+        def count_manifest_writes(root: Path, **kwargs) -> None:
             nonlocal manifest_writes
-            if path.resolve() == self.manifest.resolve():
-                manifest_writes += 1
-            real_atomic_replace(root, path, raw)
+            manifest_writes += 1
+            real_manifest_replace(root, **kwargs)
 
         with mock.patch.object(
             duplicate_module,
-            "_atomic_replace",
+            "_replace_manifest_compare_and_swap",
             side_effect=count_manifest_writes,
         ):
             result = resume_exact_human_approved_transaction(
@@ -2903,20 +2915,19 @@ class DuplicateObjectReconciliationTests(unittest.TestCase):
         self.assertEqual(approval_id, pending_claim.approval_id)
         pending_claim.close()
         manifest_writes = 0
-        real_atomic_replace = duplicate_module._atomic_replace
+        real_manifest_replace = duplicate_module._replace_manifest_compare_and_swap
 
-        def count_manifest_writes(root: Path, path: Path, raw: bytes) -> None:
+        def count_manifest_writes(root: Path, **kwargs) -> None:
             nonlocal manifest_writes
-            if path.resolve() == self.manifest.resolve():
-                manifest_writes += 1
-            real_atomic_replace(root, path, raw)
+            manifest_writes += 1
+            real_manifest_replace(root, **kwargs)
 
         def writer_must_not_run(_claim) -> dict[str, Any]:
             raise AssertionError("succeeded resume must not re-enter writer")
 
         with mock.patch.object(
             duplicate_module,
-            "_atomic_replace",
+            "_replace_manifest_compare_and_swap",
             side_effect=count_manifest_writes,
         ):
             result = resume_exact_human_approved_transaction(

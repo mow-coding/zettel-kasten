@@ -143,6 +143,9 @@ class SourceFidelityV03313Tests(unittest.TestCase):
             archive_services.read_archive_id(fixture_root),
             "archive:personal:fidelity-test",
         )
+        indexed = archive_services.index_archive(self.root)
+        self.assertTrue(indexed["ok"], indexed)
+        self.assertEqual(indexed["index_state"], "current", indexed)
 
     def manifested_source(self, raw: bytes) -> str:
         digest = hashlib.sha256(raw).hexdigest()
@@ -170,6 +173,9 @@ class SourceFidelityV03313Tests(unittest.TestCase):
         }
         with manifest_path.open("a", encoding="utf-8", newline="\n") as handle:
             handle.write(json.dumps(record, ensure_ascii=False) + "\n")
+        indexed = archive_services.index_archive(self.root)
+        self.assertTrue(indexed["ok"], indexed)
+        self.assertEqual(indexed["index_state"], "current", indexed)
         return object_id
 
     def archive_file_snapshot(self) -> dict[str, str]:
@@ -239,6 +245,9 @@ class SourceFidelityV03313Tests(unittest.TestCase):
             newline="\n",
         )
         self.assertEqual(path.read_bytes().count(b"\r"), 0)
+        indexed = archive_services.index_archive(self.root)
+        self.assertTrue(indexed["ok"], indexed)
+        self.assertEqual(indexed["index_state"], "current", indexed)
         return {"path": relative_path}
 
     def ai_kwargs(
@@ -1179,6 +1188,9 @@ class SourceFidelityV03313Tests(unittest.TestCase):
         ]
         for index, (kind, private_value) in enumerate(mutations):
             with self.subTest(kind=kind):
+                indexed = archive_services.index_archive(self.root)
+                self.assertTrue(indexed["ok"], indexed)
+                self.assertEqual(indexed["index_state"], "current")
                 result = self.create_approved(
                     self.ai_kwargs(
                         object_id,

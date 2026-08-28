@@ -465,6 +465,9 @@ def _write_lifecycle_fixture(root: Path, profile: ScaleProfile) -> None:
             _json_bytes(receipt),
         )
 
+    indexed = archive_services.index_archive(root)
+    if indexed.get("ok") is not True:
+        raise BenchmarkFailure("retirement_builder_index_blocked")
     retirement_plan = archive_services.minted_draft_retirement_plan(
         root,
         relative_path=seed_source_relative,

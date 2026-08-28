@@ -197,6 +197,101 @@ def test_ordinary_rebuild_converts_legacy_clean_wal_to_delete(
     assert not Path(str(db_path) + "-journal").exists()
 
 
+def test_rebuild_preflight_closes_authority_fence_before_non_rebuild_error(
+    tmp_path: Path,
+) -> None:
+    root = _copy_archive(tmp_path)
+    assert archive_services.index_archive(root)["ok"] is True
+    real_fence_factory = archive_services._ArchiveIndexAuthorityFence
+    created_fences: list[object] = []
+
+    class TrackingFence:
+        def __init__(self, archive_root: Path) -> None:
+            self.inner = real_fence_factory(archive_root)
+            self.closed = False
+            created_fences.append(self)
+
+        def close(self) -> None:
+            self.inner.close()
+            self.closed = True
+
+        def __getattr__(self, name: str) -> object:
+            return getattr(self.inner, name)
+
+    injected = archive_services.ArchiveIndexReadBoundaryError(
+        "archive_index_read_preflight_failed"
+    )
+    with mock.patch.object(
+        archive_services,
+        "_ArchiveIndexAuthorityFence",
+        side_effect=TrackingFence,
+    ), mock.patch.object(
+        archive_services,
+        "connect_archive_index",
+        side_effect=injected,
+    ):
+        try:
+            archive_services.index_archive(root)
+        except archive_services.ArchiveIndexReadBoundaryError as exc:
+            assert exc is injected
+        else:
+            raise AssertionError("non-rebuild boundary error was swallowed")
+
+    assert len(created_fences) == 1
+    assert created_fences[0].closed is True
+    shutil.rmtree(root)
+    assert not root.exists()
+
+
+def test_rebuild_preflight_closes_fence_and_preserves_base_exceptions(
+    tmp_path: Path,
+) -> None:
+    real_fence_factory = archive_services._ArchiveIndexAuthorityFence
+
+    for case_name, injected in (
+        ("keyboard-interrupt", KeyboardInterrupt("stop")),
+        ("system-exit", SystemExit(7)),
+    ):
+        root = tmp_path / case_name / "archive"
+        shutil.copytree(KIT_ROOT / "examples" / "fake-life-archive", root)
+        assert archive_services.index_archive(root)["ok"] is True
+        created_fences: list[object] = []
+
+        class TrackingFence:
+            def __init__(self, archive_root: Path) -> None:
+                self.inner = real_fence_factory(archive_root)
+                self.closed = False
+                created_fences.append(self)
+
+            def close(self) -> None:
+                self.inner.close()
+                self.closed = True
+
+            def __getattr__(self, name: str) -> object:
+                return getattr(self.inner, name)
+
+        with mock.patch.object(
+            archive_services,
+            "_ArchiveIndexAuthorityFence",
+            side_effect=TrackingFence,
+        ), mock.patch.object(
+            archive_services,
+            "connect_archive_index",
+            side_effect=injected,
+        ):
+            try:
+                archive_services.index_archive(root)
+            except BaseException as exc:
+                assert exc is injected
+            else:
+                raise AssertionError("base exception was swallowed")
+
+        assert len(created_fences) == 1
+        assert created_fences[0].closed is True
+        shutil.rmtree(root)
+        assert not root.exists()
+
+
 def test_blocked_private_cases_project_top_level_blockers_and_commands() -> None:
     for case_id, expected_blocker in (
         ("C1", "private_objet_metadata_snapshot_changed"),

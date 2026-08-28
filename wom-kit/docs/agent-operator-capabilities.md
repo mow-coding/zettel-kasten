@@ -1,6 +1,6 @@
 # Agent Operator Capabilities Manifest
 
-Status: v0.4.11 parser-derived approval truth and fixed-close inventory
+Status: v0.4.12 working-tree parser, help, and runtime approval truth
 
 `archive capabilities --machine` lets an AI operator ask one practical question:
 
@@ -44,7 +44,7 @@ includes:
 
 v0.4.1 introduced `data.approval_status_inventory` with schema
 `wom-kit/command-approval-status-inventory/v0.1`. v0.4.10 introduced and
-v0.4.11 continues the successor v0.2 shape, which adds machine-readable conditional
+v0.4.11-v0.4.12 continue the successor v0.2 shape, which adds machine-readable conditional
 approval scope. Unlike the legacy flattened
 command summary, this inventory walks canonical executable paths at every
 parser depth and keeps all accepted alias paths attached to their canonical
@@ -72,14 +72,14 @@ These are parser facts, not execution promises. `approval_available` does not
 mean that archive-specific prerequisites have passed. `approval_not_exposed`
 does not mean that the command is read-only.
 
-For the v0.4.11 parser, the inventory snapshot is:
+For the current v0.4.12 working-tree parser, the inventory snapshot is:
 
 ```text
 canonical executable command paths: 315
 alias invocation paths:              259
 all invocation paths:                574
-approval_available:                   49
-approval_fixed_closed:                65
+approval_available:                   47
+approval_fixed_closed:                67
 approval_not_exposed:                201
 conditional approval paths:             9
 dry_run_exposed:                     271
@@ -132,6 +132,15 @@ v0.4.11 centralizes the fixed-close truth used by help, read-only plans, and
 machine status. A validation digest from canonical revision or never-minted
 draft discard preview is explicitly not approval authority. This clarification
 changes no parser path counts and opens no writer.
+
+v0.4.12 reconciles two residual parser/help/runtime mismatches without adding a
+command. `derive-text capture` and
+`zet-revision-restore-proposal-from-snapshot` are now fixed closed on all three
+surfaces and return `compound_exact_human_approval_binding_required` before
+private source, receipt, snapshot, archive, or target reads. Their dry-run
+previews remain available, but neither path exposes current write authority.
+This moves the current working-tree snapshot from the historical v0.4.11
+49/65 split to 47 approval-available paths and 67 fixed-closed paths.
 
 The `summary` includes:
 

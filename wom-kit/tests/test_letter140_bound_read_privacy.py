@@ -39,7 +39,14 @@ class Letter140BoundReadPrivacyTests(unittest.TestCase):
     def archive(self, parent: Path) -> Path:
         root = parent / "archive"
         shutil.copytree(FIXTURE, root)
+        self.reindex(root)
         return root
+
+    def reindex(self, root: Path) -> dict[str, object]:
+        indexed = archive_services.index_archive(root)
+        self.assertTrue(indexed["ok"], indexed)
+        self.assertEqual(indexed["index_state"], "current", indexed)
+        return indexed
 
     def plan(self, root: Path) -> dict[str, object]:
         result = completion_workflows.zettel_objet_link_plan(
@@ -241,6 +248,7 @@ class Letter140BoundReadPrivacyTests(unittest.TestCase):
             nested = root / "zettels" / "nested" / "renamed.md"
             nested.parent.mkdir()
             direct.rename(nested)
+            self.reindex(root)
 
             renamed = self.plan(root)
             self.assertEqual(
@@ -250,6 +258,7 @@ class Letter140BoundReadPrivacyTests(unittest.TestCase):
 
             duplicate = root / "inbox" / "duplicate-target.md"
             shutil.copyfile(nested, duplicate)
+            self.reindex(root)
             ambiguous = completion_workflows.zettel_objet_link_plan(
                 root,
                 zettel_id=ZETTEL_ID,
@@ -258,7 +267,7 @@ class Letter140BoundReadPrivacyTests(unittest.TestCase):
             )
             self.assertFalse(ambiguous["ok"], ambiguous)
             self.assertIn(
-                "zettel_objet_link_zettel_unavailable",
+                "zettel_identity_duplicate",
                 ambiguous["blockers"],
             )
 
@@ -278,6 +287,7 @@ class Letter140BoundReadPrivacyTests(unittest.TestCase):
 
             duplicate = root / "inbox" / "duplicate-target.md"
             shutil.copyfile(direct, duplicate)
+            self.reindex(root)
             ambiguous = completion_workflows.zettel_objet_link_plan(
                 root,
                 relative_path=relative,
@@ -287,7 +297,7 @@ class Letter140BoundReadPrivacyTests(unittest.TestCase):
 
             self.assertFalse(ambiguous["ok"], ambiguous)
             self.assertIn(
-                "zettel_objet_link_zettel_unavailable",
+                "zettel_identity_duplicate",
                 ambiguous["blockers"],
             )
 
@@ -297,26 +307,23 @@ class Letter140BoundReadPrivacyTests(unittest.TestCase):
             direct = (root / "zettels" / f"{ZETTEL_ID}.md").resolve()
             hidden = direct.with_suffix(".hidden")
             relative = f"zettels/{ZETTEL_ID}.md"
-            real_read = (
-                completion_workflows
-                ._read_zettel_objet_candidate_bound_observation
+            real_lookup = (
+                archive_services.lookup_zettel_objet_link_authority_projection
             )
             swapped = False
 
-            def read_then_swap(*args, **kwargs):
+            def swap_then_lookup(*args, **kwargs):
                 nonlocal swapped
-                observed = real_read(*args, **kwargs)
-                candidate = Path(args[2])
-                if candidate == direct and not swapped:
+                if not swapped:
                     direct.rename(hidden)
                     shutil.copyfile(hidden, direct)
                     swapped = True
-                return observed
+                return real_lookup(*args, **kwargs)
 
             with mock.patch.object(
-                completion_workflows,
-                "_read_zettel_objet_candidate_bound_observation",
-                side_effect=read_then_swap,
+                archive_services,
+                "lookup_zettel_objet_link_authority_projection",
+                side_effect=swap_then_lookup,
             ):
                 changed = completion_workflows.zettel_objet_link_plan(
                     root,
@@ -328,7 +335,7 @@ class Letter140BoundReadPrivacyTests(unittest.TestCase):
             self.assertTrue(swapped)
             self.assertFalse(changed["ok"], changed)
             self.assertIn(
-                "zettel_objet_link_zettel_unavailable",
+                "zettel_tree_changed_during_plan",
                 changed["blockers"],
             )
 
@@ -352,6 +359,7 @@ class Letter140BoundReadPrivacyTests(unittest.TestCase):
                     zettels / f"{ZETTEL_ID}.md",
                     source,
                 )
+                self.reindex(root)
                 real_scandir = os.scandir
                 scan_exit_count = 0
                 moved = False
@@ -397,7 +405,7 @@ class Letter140BoundReadPrivacyTests(unittest.TestCase):
                 self.assertFalse(source.exists())
                 self.assertFalse(changed["ok"], changed)
                 self.assertIn(
-                    "zettel_objet_link_zettel_unavailable",
+                    "zettel_identity_projection_stale",
                     changed["blockers"],
                 )
 
@@ -409,30 +417,26 @@ class Letter140BoundReadPrivacyTests(unittest.TestCase):
                 root / "zettels" / "zet_20110228_fake_school_record.md",
                 other,
             )
+            self.reindex(root)
             duplicate_bytes = (
                 root / "zettels" / f"{ZETTEL_ID}.md"
             ).read_bytes()
-            real_read = (
-                completion_workflows
-                ._read_zettel_objet_candidate_bound_observation
+            real_lookup = (
+                archive_services.lookup_zettel_objet_link_authority_projection
             )
             mutated = False
 
-            def mutate_after_other_read(*args, **kwargs):
+            def mutate_then_lookup(*args, **kwargs):
                 nonlocal mutated
-                observed = real_read(*args, **kwargs)
-                if (
-                    Path(args[2]).resolve() == other
-                    and not mutated
-                ):
+                if not mutated:
                     other.write_bytes(duplicate_bytes)
                     mutated = True
-                return observed
+                return real_lookup(*args, **kwargs)
 
             with mock.patch.object(
-                completion_workflows,
-                "_read_zettel_objet_candidate_bound_observation",
-                side_effect=mutate_after_other_read,
+                archive_services,
+                "lookup_zettel_objet_link_authority_projection",
+                side_effect=mutate_then_lookup,
             ):
                 changed = completion_workflows.zettel_objet_link_plan(
                     root,
@@ -444,7 +448,7 @@ class Letter140BoundReadPrivacyTests(unittest.TestCase):
             self.assertTrue(mutated)
             self.assertFalse(changed["ok"], changed)
             self.assertIn(
-                "zettel_objet_link_zettel_unavailable",
+                "zettel_tree_changed_during_plan",
                 changed["blockers"],
             )
 
@@ -453,6 +457,7 @@ class Letter140BoundReadPrivacyTests(unittest.TestCase):
             root = self.archive(Path(temporary)).resolve()
             inbox = root / "inbox"
             inbox.rename(root / "inbox-before-test")
+            self.reindex(root)
             zettels = root / "zettels"
             real_scandir = os.scandir
             created = False
@@ -494,7 +499,7 @@ class Letter140BoundReadPrivacyTests(unittest.TestCase):
             self.assertTrue(created)
             self.assertFalse(changed["ok"], changed)
             self.assertIn(
-                "zettel_objet_link_zettel_unavailable",
+                "zettel_identity_projection_stale",
                 changed["blockers"],
             )
 
@@ -505,6 +510,7 @@ class Letter140BoundReadPrivacyTests(unittest.TestCase):
             root = self.archive(Path(temporary)).resolve()
             inbox = root / "inbox"
             inbox.rename(root / "inbox-before-test")
+            self.reindex(root)
             zettels = root / "zettels"
             real_chain = (
                 archive_services._activity_group_bound_directory_chain
@@ -546,7 +552,7 @@ class Letter140BoundReadPrivacyTests(unittest.TestCase):
             self.assertTrue(created)
             self.assertFalse(changed["ok"], changed)
             self.assertIn(
-                "zettel_objet_link_zettel_unavailable",
+                "zettel_identity_projection_stale",
                 changed["blockers"],
             )
 
@@ -562,6 +568,7 @@ class Letter140BoundReadPrivacyTests(unittest.TestCase):
                 inbox = root / "inbox"
                 if mode == "absent_inbox":
                     inbox.rename(root / "inbox-before-test")
+                    self.reindex(root)
                 duplicate = (
                     inbox / "closing-gap.md"
                     if mode == "absent_inbox"
@@ -612,7 +619,7 @@ class Letter140BoundReadPrivacyTests(unittest.TestCase):
                 self.assertTrue(duplicate.is_file())
                 self.assertFalse(changed["ok"], changed)
                 self.assertIn(
-                    "zettel_objet_link_zettel_unavailable",
+                    "zettel_identity_projection_stale",
                     changed["blockers"],
                 )
 
@@ -984,17 +991,18 @@ class Letter140BoundReadPrivacyTests(unittest.TestCase):
                         side_effect=inject_after_root_resolution,
                     ),
                 ):
-                    with self.assertRaisesRegex(
-                        archive_services.ArchiveServiceError,
-                        "zettel_objet_link_archive_identity_unavailable",
-                    ):
-                        completion_workflows.zettel_objet_link_plan(
-                            root,
-                            zettel_id=ZETTEL_ID,
-                            object_id=OBJECT_ID,
-                            role=ROLE,
-                        )
+                    attacked = completion_workflows.zettel_objet_link_plan(
+                        root,
+                        zettel_id=ZETTEL_ID,
+                        object_id=OBJECT_ID,
+                        role=ROLE,
+                    )
                 self.assertTrue(injected)
+                self.assertFalse(attacked["ok"], attacked)
+                self.assertIn(
+                    "zettel_identity_projection_stale",
+                    attacked["blockers"],
+                )
                 self.assertEqual(counts["file_open_or_read"], 0, counts)
                 self.assertEqual(counts["directory_scan"], 0, counts)
             finally:

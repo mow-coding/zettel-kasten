@@ -111,6 +111,8 @@ class Letter137WriterToctouTests(unittest.TestCase):
     def test_edge_change_after_claim_is_not_overwritten(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = self.copy_archive(Path(tmp))
+            indexed = archive_services.index_archive(root)
+            self.assertTrue(indexed["ok"], indexed)
             source_id = "zet_20240504_fake_lunch_thought"
             target_id = "zet_20240505_fake_company_onboarding_insight"
             source_path = root / "zettels" / f"{source_id}.md"

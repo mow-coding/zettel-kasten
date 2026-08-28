@@ -18,3 +18,4 @@ wom-kit/tests/fixtures/v0.3.294-surface-baseline.json text eol=lf
 # Windows and POSIX checkouts.
 wom-kit/cli/archive.py text eol=lf
 wom-kit/src/wom_kit/**/*.py text eol=lf
+wom-kit/tools/benchmark_v0412_link_index.py text eol=lf

@@ -1,6 +1,6 @@
 # Git Backup Plan And Reconciliation Plan
 
-Status: v0.4.3 exact commit/push writer implementation candidate
+Status: exact commit/non-force-push writer available since v0.4.3
 
 This guide explains the existing Git backup command family. `git-backup-plan`
 remains read-only. `git-backup-reconcile-plan` can remain read-only, validate a
@@ -44,8 +44,8 @@ terminal commit.
 
 ## First Observation
 
-Use a fresh v0.4.2 process and start with the default `origin` remote and the
-branch named by symbolic HEAD:
+Use the intended project's current isolated runtime and start with the default
+`origin` remote and the branch named by symbolic HEAD:
 
 ```powershell
 archive git-backup-plan <archive-root> `

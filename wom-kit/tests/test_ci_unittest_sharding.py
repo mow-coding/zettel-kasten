@@ -180,7 +180,12 @@ class CiUnittestShardingTests(unittest.TestCase):
         self.assertEqual(len(matrix_rows), 8)
         for row in matrix_rows:
             expected_timeout = (
-                "75"
+                "90"
+                if (
+                    row["os"] == "windows-latest"
+                    and row["shard_index_zero"] == "0"
+                )
+                else "75"
                 if row["shard_index_zero"] == "0"
                 or (
                     row["os"] == "windows-latest"

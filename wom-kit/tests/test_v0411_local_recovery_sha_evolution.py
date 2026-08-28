@@ -76,6 +76,9 @@ class V0411LocalRecoveryShaEvolutionTests(unittest.TestCase):
             encoding="utf-8",
             newline="",
         )
+        indexed = archive_services.index_archive(root)
+        self.assertTrue(indexed["ok"], indexed)
+        self.assertEqual(indexed["index_state"], "current", indexed)
         return root
 
     def make_plan(
@@ -175,6 +178,9 @@ class V0411LocalRecoveryShaEvolutionTests(unittest.TestCase):
         source_digit: str,
         authority_digit: str,
     ) -> tuple[object, str]:
+        indexed = archive_services.index_archive(root)
+        self.assertTrue(indexed["ok"], indexed)
+        self.assertEqual(indexed["index_state"], "current", indexed)
         plan = self.make_plan(root, source_digit=source_digit)
         persist_local_recovery_control(plan)
         authority = self.authority(authority_digit)

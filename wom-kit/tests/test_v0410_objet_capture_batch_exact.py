@@ -85,6 +85,7 @@ class ObjetCaptureBatchExactTests(unittest.TestCase):
         # legacy batch preview is closed, while native exact approval may plan.
         self.root = self.workspace / "archive"
         shutil.copytree(KIT_ROOT / "examples" / "fake-life-archive", self.root)
+        archive_services.index_archive(self.root)
 
     def tearDown(self) -> None:
         self.temporary.cleanup()

@@ -31,7 +31,7 @@ import unicodedata
 import urllib.error
 import urllib.parse
 import urllib.request
-from contextlib import contextmanager, nullcontext
+from contextlib import ExitStack, contextmanager, nullcontext
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
@@ -124,9 +124,22 @@ ZETTEL_CONTENT_STATUSES = frozenset({"draft", "canonical", "archived", "redacted
 ZETTEL_QUERYABLE_STATUSES = ("draft", "canonical", "archived")
 ZETTEL_QUARANTINED_STATUS = "unreadable"
 INDEX_RELATIVE_PATH = "db/archive-index.sqlite"
-INDEX_METADATA_SCHEMA = "wom-kit/archive-index-metadata/v0.3"
+INDEX_METADATA_SCHEMA = "wom-kit/archive-index-metadata/v0.4"
+ZETTEL_OBJET_LINK_AUTHORITY_PROJECTION_SCHEMA = (
+    "wom-kit/zettel-objet-link-authority-projection/v0.1"
+)
+ZETTEL_OBJET_LINK_MANIFEST_RELATIVE_PATH = "objects/manifests/files.jsonl"
+ZETTEL_OBJET_LINK_MANIFEST_MAX_BYTES = 64 * 1024 * 1024
+ZETTEL_OBJET_LINK_MANIFEST_MAX_RECORDS = 500_000
+ZETTEL_OBJET_LINK_MANIFEST_MAX_JSON_DEPTH = 32
+ZETTEL_OBJET_LINK_MANIFEST_MAX_JSON_NODES = 5_000_000
+ZETTEL_OBJET_LINK_ZETTEL_MAX_BYTES = 64 * 1024 * 1024
+ZETTEL_OBJET_LINK_DRIFT_DUPLICATE_SCAN_MAX_PATHS = 128
 INDEX_STATE_CURRENT = "current"
 INDEX_STATE_DIRTY = "dirty"
+INDEX_MUTATION_OWNER_KEY = "mutation_owner"
+INDEX_SEAL_PENDING_KEY = "seal_pending"
+INDEX_SEAL_PENDING_RE = re.compile(r"seal:[0-9a-f]{32}")
 INDEX_REBUILD_REQUIRED = "archive_index_rebuild_required"
 INDEX_REBUILD_NEXT_SAFE_ACTIONS = (
     "archive index <archive-root> --progress --format json",
@@ -1286,6 +1299,8 @@ PROJECT_INTAKE_MAX_STRING_LENGTH = 4000
 MINT_RECEIPTS_DIR = "receipts/mint"
 MINT_DRAFT_SNAPSHOTS_DIR = "receipts/mint/drafts"
 MINT_RETIRED_DRAFT_RECEIPTS_DIR = "receipts/mint/retired-drafts"
+MINT_RETIRED_DRAFT_DELETE_SUFFIX = ".retire-draft-delete"
+MINT_RETIRED_DRAFT_MAX_BYTES = 64 * 1024 * 1024
 MINT_BATCH_RECEIPTS_DIR = "receipts/mint/batches"
 MINT_RETIRED_DRAFT_BATCH_RECEIPTS_DIR = "receipts/mint/retired-drafts/batches"
 MINT_RECONCILE_RECEIPTS_DIR = "receipts/mint/reconciles"
@@ -1303,6 +1318,9 @@ ZETTEL_EDGE_RECEIPTS_DIR = "receipts/edges"
 ZETTEL_EDGE_BATCH_RECEIPTS_DIR = "receipts/edges/batches"
 ZETTEL_EDGE_REVERT_RECEIPTS_DIR = "receipts/edges/reverts"
 ZETTEL_EDGE_BATCH_REVERT_RECEIPTS_DIR = "receipts/edges/batches/reverts"
+ZETTEL_EDGE_MAX_ZETTEL_BYTES = 16 * 1024 * 1024
+ZETTEL_EDGE_CANONICAL_SWAP_SUFFIX = ".zettel-edge.swap"
+ZETTEL_EDGE_REVERT_CANONICAL_SWAP_SUFFIX = ".zettel-edge-revert.swap"
 MIGRATION_RECEIPTS_DIR = "receipts/migrations"
 MIGRATION_REVERT_RECEIPTS_DIR = "receipts/migrations/reverts"
 NOTION_OBJET_MANIFEST_LOCATOR_LABEL_RECEIPTS_DIR = "receipts/objects/notion-locator-labels"
@@ -36705,6 +36723,19 @@ def create_draft_zettel(
                 if item != fidelity_receipt_relative
             ]
 
+    # The AI approval command replays the dry-run with ``approved=True``.
+    # Prove the generated Zet index is current during that replay, before the
+    # native human broker can be opened.  A plain exploratory dry-run remains
+    # read-only and can still explain the draft itself; an idempotent replay
+    # that will not create a Zet also has no index delta to protect.
+    if is_ai_draft and approved and proposed_path in planned_writes:
+        try:
+            index_evidence = require_current_zettel_index(root)
+        except (ArchiveServiceError, OSError, ValueError):
+            index_evidence = {"ok": False}
+        if index_evidence.get("ok") is not True:
+            blockers.append(INDEX_REBUILD_REQUIRED)
+
     approval_replay = {
         "draft_id": (
             None
@@ -36808,31 +36839,69 @@ def create_draft_zettel(
 
     inbox.mkdir(parents=True, exist_ok=True)
     created_paths: list[str] = []
-    if is_ai_draft:
-        if _source_fidelity_publish_create_only(
+    draft_index_write_planned = proposed_path in planned_writes
+    expected_index_generation: str | None = None
+    index_lease_token: ArchiveIndexMutationLeaseToken | None = None
+    draft_created_by_run = False
+    if draft_index_write_planned:
+        expected_index_generation = (
+            _current_archive_index_generation_for_mutation(root)
+        )
+        index_lease_token = begin_archive_index_mutation(
             root,
-            path,
-            draft_bytes,
-            conflict_code="source_fidelity_draft_create_only_conflict",
-        ):
+            expected_generation=expected_index_generation,
+        )
+    try:
+        if is_ai_draft:
+            draft_created_by_run = _source_fidelity_publish_create_only(
+                root,
+                path,
+                draft_bytes,
+                conflict_code="source_fidelity_draft_create_only_conflict",
+            )
+            if draft_created_by_run:
+                created_paths.append(proposed_path)
+            if fidelity_receipt_path is None or fidelity_receipt_bytes is None:
+                raise ArchiveServiceError("source_fidelity_receipt_plan_missing")
+            if _source_fidelity_publish_create_only(
+                root,
+                fidelity_receipt_path,
+                fidelity_receipt_bytes,
+                conflict_code="source_fidelity_receipt_create_only_conflict",
+            ):
+                created_paths.append(str(fidelity_receipt_relative))
+        else:
+            try:
+                _write_bytes_create_if_absent(path, draft_bytes)
+            except FileExistsError as exc:
+                raise ArchiveServiceError(
+                    "draft_create_only_conflict"
+                ) from exc
+            draft_created_by_run = True
             created_paths.append(proposed_path)
-        if fidelity_receipt_path is None or fidelity_receipt_bytes is None:
-            raise ArchiveServiceError("source_fidelity_receipt_plan_missing")
-        if _source_fidelity_publish_create_only(
-            root,
-            fidelity_receipt_path,
-            fidelity_receipt_bytes,
-            conflict_code="source_fidelity_receipt_create_only_conflict",
-        ):
-            created_paths.append(str(fidelity_receipt_relative))
-    else:
-        try:
-            _write_bytes_create_if_absent(path, draft_bytes)
-        except FileExistsError as exc:
-            raise ArchiveServiceError(
-                "draft_create_only_conflict"
-            ) from exc
-        created_paths.append(proposed_path)
+    except (ArchiveServiceError, OSError):
+        if expected_index_generation is not None:
+            draft_removed = (
+                not draft_created_by_run
+                or _created_file_cleanup_if_exact(
+                    path,
+                    hashlib.sha256(draft_bytes).hexdigest(),
+                )
+            )
+            if not (
+                draft_removed
+                and reseal_archive_index_mutation_without_delta(
+                    root,
+                    expected_generation=expected_index_generation,
+                    lease_token=index_lease_token,
+                )
+            ):
+                mark_archive_index_dirty(
+                    root,
+                    expected_generation=expected_index_generation,
+                    lease_token=index_lease_token,
+                )
+        raise
     exact_approval_link: dict[str, Any] | None = None
     if exact_approval_reference is not None:
         if (
@@ -36905,6 +36974,56 @@ def create_draft_zettel(
         result["exact_human_approval_reference"] = exact_approval_reference
     if exact_approval_link is not None:
         result["exact_human_approval_link"] = exact_approval_link
+    if expected_index_generation is not None:
+        generated_index_updated = False
+        try:
+            generated_index_updated = upsert_zettel_index_entry(
+                root,
+                path,
+                frontmatter,
+                normalized_body,
+                expected_generation=expected_index_generation,
+                expected_file_sha256=hashlib.sha256(draft_bytes).hexdigest(),
+                lease_token=index_lease_token,
+            )
+            if not generated_index_updated:
+                raise sqlite3.IntegrityError(INDEX_REBUILD_REQUIRED)
+        except (ArchiveServiceError, OSError, sqlite3.Error):
+            index_marked_dirty = mark_archive_index_dirty(
+                root,
+                expected_generation=expected_index_generation,
+                lease_token=index_lease_token,
+            )
+            result.update(
+                {
+                    "ok": False,
+                    "state": "draft_written_index_update_failed",
+                    "blockers": [INDEX_REBUILD_REQUIRED],
+                    "generated_index_updated": False,
+                    "index_marked_dirty": index_marked_dirty,
+                    "index_generation": expected_index_generation,
+                    "partial_result": {
+                        "draft_and_receipts_written": True,
+                        "index_current": False,
+                    },
+                }
+            )
+            return result
+        result.update(
+            {
+                "generated_index_updated": True,
+                "index_marked_dirty": False,
+                "index_generation": expected_index_generation,
+            }
+        )
+    else:
+        result.update(
+            {
+                "generated_index_updated": False,
+                "index_marked_dirty": False,
+                "index_generation": None,
+            }
+        )
     return result
 
 
@@ -42747,6 +42866,277 @@ def _replace_activity_group_canonical_bytes_compare_and_swap(
     )
 
 
+def _stage_regular_file_bytes_compare_and_swap_delete(
+    root: Path,
+    path: Path,
+    *,
+    expected_bytes: bytes,
+    expected_file_generation: Mapping[str, int],
+    transaction_sha256: str,
+    evidence_suffix: str,
+    max_bytes: int,
+    error_prefix: str,
+) -> tuple[Path, tuple[int, int, int]]:
+    """Move one exact occupant to hidden evidence without deleting a racer.
+
+    The no-replace namespace move is the deletion linearization point.  The
+    moved occupant is verified *after* the move; if another process won the
+    source name just before that point, its bytes are moved back without
+    overwrite.  Exact expected bytes remain staged until the caller has durably
+    written the operation receipt.
+    """
+
+    if (
+        not isinstance(max_bytes, int)
+        or isinstance(max_bytes, bool)
+        or max_bytes < 1
+        or len(expected_bytes) > max_bytes
+    ):
+        raise OSError(f"{error_prefix}_delete_bytes_too_large")
+    if not re.fullmatch(r"[a-z][a-z0-9_]{0,63}", error_prefix):
+        raise OSError("compare_and_swap_delete_error_prefix_invalid")
+    try:
+        evidence_path, previous_path = regular_file_canonical_swap_paths(
+            path,
+            transaction_sha256,
+            swap_suffix=evidence_suffix,
+        )
+    except ValueError:
+        raise OSError(f"{error_prefix}_delete_binding_invalid") from None
+
+    generation_fields = (
+        "file_dev",
+        "file_ino",
+        "file_ctime_ns",
+        "file_size",
+        "file_mtime_ns",
+    )
+    try:
+        expected_generation = {
+            field: int(expected_file_generation[field])
+            for field in generation_fields
+        }
+    except (KeyError, TypeError, ValueError):
+        raise OSError(f"{error_prefix}_delete_generation_invalid") from None
+    if (
+        expected_generation["file_size"] != len(expected_bytes)
+        or any(value < 0 for value in expected_generation.values())
+    ):
+        raise OSError(f"{error_prefix}_delete_generation_invalid")
+    expected_identity = (
+        expected_generation["file_dev"],
+        expected_generation["file_ino"],
+        expected_generation["file_size"],
+    )
+
+    with _activity_group_bound_directory_chain(root, path.parent) as binding:
+        for residue in (evidence_path, previous_path):
+            try:
+                _read_activity_group_regular_bytes_bound(
+                    root,
+                    binding,
+                    residue,
+                    max_bytes=max_bytes,
+                )
+            except FileNotFoundError:
+                continue
+            except OSError:
+                raise OSError(
+                    f"{error_prefix}_delete_evidence_ambiguous"
+                ) from None
+            raise OSError(f"{error_prefix}_delete_evidence_ambiguous")
+
+        try:
+            current_snapshot = archive_index_stable_file_snapshot(
+                root,
+                path,
+                max_bytes=max_bytes,
+            )
+        except FileNotFoundError:
+            raise OSError(f"{error_prefix}_source_changed_before_delete") from None
+        except OSError:
+            raise OSError(f"{error_prefix}_source_changed_before_delete") from None
+        if (
+            current_snapshot.get("raw") != expected_bytes
+            or current_snapshot.get("file_generation") != expected_generation
+        ):
+            raise OSError(f"{error_prefix}_source_changed_before_delete")
+
+        _move_activity_group_entry_no_replace(
+            binding,
+            path,
+            evidence_path,
+        )
+        captured_exact = False
+        try:
+            captured_snapshot = archive_index_stable_file_snapshot(
+                root,
+                evidence_path,
+                max_bytes=max_bytes,
+            )
+            captured_generation = captured_snapshot.get("file_generation")
+            captured_identity = (
+                int(captured_generation["file_dev"]),
+                int(captured_generation["file_ino"]),
+                int(captured_generation["file_size"]),
+            )
+            captured_exact = (
+                captured_snapshot.get("raw") == expected_bytes
+                and captured_identity == expected_identity
+            )
+        except OSError:
+            captured_exact = False
+        except (KeyError, TypeError, ValueError):
+            captured_exact = False
+        if not captured_exact:
+            # Restore the captured (possibly foreign) occupant only if the
+            # public name is still absent.  A newer replacement always wins and
+            # the captured evidence is retained for reconciliation.
+            try:
+                _move_activity_group_entry_no_replace(
+                    binding,
+                    evidence_path,
+                    path,
+                )
+            except OSError:
+                pass
+            raise OSError(f"{error_prefix}_source_changed_during_delete")
+
+        try:
+            _read_activity_group_regular_bytes_bound(
+                root,
+                binding,
+                path,
+                max_bytes=max_bytes,
+            )
+        except FileNotFoundError:
+            return evidence_path, expected_identity
+        except OSError:
+            raise OSError(
+                f"{error_prefix}_source_recreated_during_delete"
+            ) from None
+        raise OSError(f"{error_prefix}_source_recreated_during_delete")
+
+
+def _restore_staged_regular_file_delete(
+    root: Path,
+    path: Path,
+    evidence_path: Path,
+    *,
+    expected_bytes: bytes,
+    expected_identity: tuple[int, int, int],
+    max_bytes: int,
+) -> bool:
+    """Restore exact staged bytes without overwriting a replacement."""
+
+    try:
+        with _activity_group_bound_directory_chain(
+            root,
+            path.parent,
+        ) as binding:
+            evidence_snapshot = archive_index_stable_file_snapshot(
+                root,
+                evidence_path,
+                max_bytes=max_bytes,
+            )
+            evidence_generation = evidence_snapshot.get("file_generation")
+            evidence_identity = (
+                int(evidence_generation["file_dev"]),
+                int(evidence_generation["file_ino"]),
+                int(evidence_generation["file_size"]),
+            )
+            if (
+                evidence_snapshot.get("raw") != expected_bytes
+                or evidence_identity != expected_identity
+            ):
+                return False
+            try:
+                current_bytes = _read_activity_group_regular_bytes_bound(
+                    root,
+                    binding,
+                    path,
+                    max_bytes=max_bytes,
+                )
+            except FileNotFoundError:
+                _move_activity_group_entry_no_replace(
+                    binding,
+                    evidence_path,
+                    path,
+                )
+                restored_snapshot = archive_index_stable_file_snapshot(
+                    root,
+                    path,
+                    max_bytes=max_bytes,
+                )
+                restored_generation = restored_snapshot.get("file_generation")
+                restored_identity = (
+                    int(restored_generation["file_dev"]),
+                    int(restored_generation["file_ino"]),
+                    int(restored_generation["file_size"]),
+                )
+                return (
+                    restored_snapshot.get("raw") == expected_bytes
+                    and restored_identity == expected_identity
+                )
+            if current_bytes != expected_bytes:
+                return False
+            _delete_activity_group_evidence_exact(
+                root,
+                evidence_path,
+                expected_sha256=(
+                    "sha256:" + hashlib.sha256(expected_bytes).hexdigest()
+                ),
+                max_bytes=max_bytes,
+                parent_binding=binding,
+                expected_identity=expected_identity,
+            )
+            return True
+    except (KeyError, OSError, TypeError, ValueError):
+        return False
+
+
+def _finalize_staged_regular_file_delete(
+    root: Path,
+    evidence_path: Path,
+    *,
+    expected_bytes: bytes,
+    expected_identity: tuple[int, int, int],
+    max_bytes: int,
+) -> None:
+    """Delete only the exact staged source after its receipt is durable."""
+
+    with _activity_group_bound_directory_chain(
+        root,
+        evidence_path.parent,
+    ) as binding:
+        captured_snapshot = archive_index_stable_file_snapshot(
+            root,
+            evidence_path,
+            max_bytes=max_bytes,
+        )
+        captured_generation = captured_snapshot.get("file_generation")
+        captured_identity = (
+            int(captured_generation["file_dev"]),
+            int(captured_generation["file_ino"]),
+            int(captured_generation["file_size"]),
+        )
+        if (
+            captured_snapshot.get("raw") != expected_bytes
+            or captured_identity != expected_identity
+        ):
+            raise OSError("staged_delete_evidence_changed")
+        _delete_activity_group_evidence_exact(
+            root,
+            evidence_path,
+            expected_sha256=(
+                "sha256:" + hashlib.sha256(expected_bytes).hexdigest()
+            ),
+            max_bytes=max_bytes,
+            parent_binding=binding,
+            expected_identity=expected_identity,
+        )
+
+
 def _activity_group_private_request(
     root: Path,
     request_path: str,
@@ -47837,7 +48227,7 @@ def promote_zettel(
     receipt_path.parent.mkdir(parents=True, exist_ok=True)
     duplicate_evidence = dry_run.get("duplicate_check", {}).get("index_evidence", {})
     expected_index_generation = str(duplicate_evidence.get("generation") or "")
-    begin_archive_index_mutation(
+    index_lease_token = begin_archive_index_mutation(
         root,
         expected_generation=expected_index_generation,
         progress_callback=progress_callback,
@@ -47873,6 +48263,13 @@ def promote_zettel(
             reseal_archive_index_mutation_without_delta(
                 root,
                 expected_generation=expected_index_generation,
+                lease_token=index_lease_token,
+            )
+        else:
+            mark_archive_index_dirty(
+                root,
+                expected_generation=expected_index_generation,
+                lease_token=index_lease_token,
             )
         raise
 
@@ -47886,11 +48283,16 @@ def promote_zettel(
             body,
             expected_generation=expected_index_generation,
             expected_file_sha256=expected_canonical_sha256,
+            lease_token=index_lease_token,
         )
         if not generated_index_updated:
             raise sqlite3.IntegrityError(INDEX_REBUILD_REQUIRED)
     except (OSError, sqlite3.Error, ArchiveServiceError):
-        index_marked_dirty = mark_archive_index_dirty(root)
+        index_marked_dirty = mark_archive_index_dirty(
+            root,
+            expected_generation=expected_index_generation,
+            lease_token=index_lease_token,
+        )
         return {
             "ok": False,
             "state": "canonical_written_index_update_failed",
@@ -48441,7 +48843,7 @@ def mint_zettel(
     duplicate_check = dry_run.get("duplicate_check") if isinstance(dry_run.get("duplicate_check"), dict) else {}
     duplicate_evidence = duplicate_check.get("index_evidence") if isinstance(duplicate_check.get("index_evidence"), dict) else {}
     expected_index_generation = str(duplicate_evidence.get("generation") or "")
-    begin_archive_index_mutation(
+    index_lease_token = begin_archive_index_mutation(
         root,
         expected_generation=expected_index_generation,
         progress_callback=progress_callback,
@@ -48554,6 +48956,13 @@ def mint_zettel(
             reseal_archive_index_mutation_without_delta(
                 root,
                 expected_generation=expected_index_generation,
+                lease_token=index_lease_token,
+            )
+        else:
+            mark_archive_index_dirty(
+                root,
+                expected_generation=expected_index_generation,
+                lease_token=index_lease_token,
             )
         raise
 
@@ -48568,11 +48977,16 @@ def mint_zettel(
             body,
             expected_generation=expected_index_generation,
             expected_file_sha256=expected_canonical_sha256,
+            lease_token=index_lease_token,
         )
         if not generated_index_updated:
             raise sqlite3.IntegrityError(INDEX_REBUILD_REQUIRED)
     except (OSError, sqlite3.Error, ArchiveServiceError):
-        index_marked_dirty = mark_archive_index_dirty(root)
+        index_marked_dirty = mark_archive_index_dirty(
+            root,
+            expected_generation=expected_index_generation,
+            lease_token=index_lease_token,
+        )
         return {
             "ok": False,
             "state": "canonical_written_index_update_failed",
@@ -49131,6 +49545,12 @@ def minted_draft_retirement_plan(
 
     blockers: list[str] = []
     warnings: list[str] = []
+    try:
+        index_evidence = require_current_zettel_index(root)
+    except (ArchiveServiceError, OSError, ValueError):
+        index_evidence = {"ok": False}
+    if index_evidence.get("ok") is not True:
+        blockers.append(INDEX_REBUILD_REQUIRED)
     if not zettel_id_value:
         blockers.append("Draft frontmatter id is missing.")
     if source_frontmatter.get("status") != "draft":
@@ -49403,7 +49823,18 @@ def write_retired_draft_from_plan(
         raise ArchiveServiceError("Retiring minted draft blocked: " + "; ".join(str(item) for item in plan.get("blockers", [])))
 
     draft_path = resolve_inbox_draft_path(root, zettel_id, relative_path or plan.get("draft_path"))
-    source_bytes = draft_path.read_bytes()
+    try:
+        source_snapshot = archive_index_stable_file_snapshot(
+            root,
+            draft_path,
+            max_bytes=MINT_RETIRED_DRAFT_MAX_BYTES,
+        )
+        source_bytes = source_snapshot["raw"]
+        source_file_generation = source_snapshot["file_generation"]
+    except (KeyError, OSError, TypeError, ValueError):
+        raise ArchiveServiceError(
+            "retired_draft_source_changed_after_approval"
+        ) from None
     verify_retired_draft_plan_still_current(root, plan)
 
     try:
@@ -49431,6 +49862,29 @@ def write_retired_draft_from_plan(
         "removed_paths": [plan["draft_path"]],
         "created_paths": [plan["retire_receipt_path"]],
     }
+    receipt_bytes = (
+        json.dumps(
+            json_safe(receipt),
+            indent=2,
+            ensure_ascii=False,
+            default=str,
+        )
+        + "\n"
+    ).encode("utf-8")
+    delete_transaction_sha256 = "sha256:" + sha256_json_hex(
+        {
+            "action": "retire_minted_draft_compare_and_swap_delete",
+            "draft_path": plan["draft_path"],
+            "source_sha256": (
+                "sha256:" + hashlib.sha256(source_bytes).hexdigest()
+            ),
+            "retire_receipt_path": plan["retire_receipt_path"],
+            "retire_receipt_sha256": (
+                "sha256:" + hashlib.sha256(receipt_bytes).hexdigest()
+            ),
+        }
+    )
+    delete_max_bytes = max(1, len(source_bytes))
 
     retire_receipt_path = resolve_archive_relative_path(root, plan["retire_receipt_path"])
     retire_receipt_path.parent.mkdir(parents=True, exist_ok=True)
@@ -49439,41 +49893,97 @@ def write_retired_draft_from_plan(
         if not index_evidence.get("ok"):
             raise ArchiveServiceError(INDEX_REBUILD_REQUIRED)
         expected_index_generation = str(index_evidence.get("generation") or "")
-    begin_archive_index_mutation(
+    index_lease_token = begin_archive_index_mutation(
         root,
         expected_generation=expected_index_generation,
     )
+    staged_delete_path: Path | None = None
+    staged_delete_identity: tuple[int, int, int] | None = None
     try:
         try:
-            final_source_bytes = draft_path.read_bytes()
-        except OSError:
+            final_source_snapshot = archive_index_stable_file_snapshot(
+                root,
+                draft_path,
+                max_bytes=delete_max_bytes,
+            )
+            final_source_bytes = final_source_snapshot["raw"]
+            final_source_generation = final_source_snapshot["file_generation"]
+        except (KeyError, OSError, TypeError, ValueError):
             raise ArchiveServiceError(
                 "retired_draft_source_changed_after_approval"
             ) from None
         if (
             not hmac.compare_digest(final_source_bytes, source_bytes)
+            or final_source_generation != source_file_generation
             or retire_receipt_path.exists()
         ):
             raise ArchiveServiceError(
                 "retired_draft_source_changed_after_approval"
             )
-        draft_path.unlink()
+        staged_delete_path, staged_delete_identity = (
+            _stage_regular_file_bytes_compare_and_swap_delete(
+                root,
+                draft_path,
+                expected_bytes=source_bytes,
+                expected_file_generation=source_file_generation,
+                transaction_sha256=delete_transaction_sha256,
+                evidence_suffix=MINT_RETIRED_DRAFT_DELETE_SUFFIX,
+                max_bytes=delete_max_bytes,
+                error_prefix="retired_draft",
+            )
+        )
         try:
-            with retire_receipt_path.open("x", encoding="utf-8") as handle:
-                handle.write(json.dumps(json_safe(receipt), indent=2, ensure_ascii=False, default=str) + "\n")
+            write_json_new_file(retire_receipt_path, receipt)
         except OSError as receipt_error:
-            if not _restore_file_create_only_with_exact_bytes(draft_path, source_bytes):
-                # Never overwrite or remove a draft that appeared after unlink.
-                # The committed dirty intent is the recovery authority.
+            receipt_absent = not retire_receipt_path.exists()
+            if not receipt_absent:
+                receipt_absent = _created_file_cleanup_if_exact(
+                    retire_receipt_path,
+                    hashlib.sha256(receipt_bytes).hexdigest(),
+                )
+            if (
+                not receipt_absent
+                or staged_delete_path is None
+                or staged_delete_identity is None
+                or not _restore_staged_regular_file_delete(
+                    root,
+                    draft_path,
+                    staged_delete_path,
+                    expected_bytes=source_bytes,
+                    expected_identity=staged_delete_identity,
+                    max_bytes=delete_max_bytes,
+                )
+            ):
+                # Never overwrite a draft that appeared after the namespace
+                # move.  Exact staged bytes remain hidden recovery evidence.
                 raise ArchiveServiceError(
                     "retired_draft_restore_conflict"
                 ) from receipt_error
             raise
+        assert staged_delete_identity is not None
+        _finalize_staged_regular_file_delete(
+            root,
+            staged_delete_path,
+            expected_bytes=source_bytes,
+            expected_identity=staged_delete_identity,
+            max_bytes=delete_max_bytes,
+        )
     except (OSError, ArchiveServiceError):
         if draft_path.is_file():
-            reseal_archive_index_mutation_without_delta(
+            _restore_indexed_zettel_bytes_and_reseal(
+                root,
+                draft_path,
+                original_bytes=source_bytes,
+                written_bytes=None,
+                expected_generation=expected_index_generation,
+                lease_token=index_lease_token,
+                error_prefix="retired_draft",
+            )
+        else:
+            mark_archive_index_dirty(
                 root,
                 expected_generation=expected_index_generation,
+                lease_token=index_lease_token,
             )
         raise
 
@@ -49482,11 +49992,16 @@ def write_retired_draft_from_plan(
             root,
             plan["draft_path"],
             expected_generation=expected_index_generation,
+            lease_token=index_lease_token,
         )
         if not index_row_removed:
             raise sqlite3.IntegrityError(INDEX_REBUILD_REQUIRED)
     except (OSError, sqlite3.Error, ArchiveServiceError):
-        index_marked_dirty = mark_archive_index_dirty(root)
+        index_marked_dirty = mark_archive_index_dirty(
+            root,
+            expected_generation=expected_index_generation,
+            lease_token=index_lease_token,
+        )
         result = dict(plan)
         result.update(
             {
@@ -52701,29 +53216,715 @@ def promotion_duplicate_index_canonical_rows(conn: sqlite3.Connection) -> list[d
     ]
 
 
+def archive_index_file_generation(file_stat: os.stat_result) -> dict[str, int]:
+    """Return the strong, content-free generation token stored by index v0.4."""
+
+    return {
+        "file_dev": int(file_stat.st_dev),
+        "file_ino": int(file_stat.st_ino),
+        "file_ctime_ns": int(file_stat.st_ctime_ns),
+        "file_size": int(file_stat.st_size),
+        "file_mtime_ns": int(file_stat.st_mtime_ns),
+    }
+
+
+def archive_index_stable_file_snapshot(
+    root: Path,
+    path: Path,
+    *,
+    max_bytes: int,
+) -> dict[str, Any]:
+    """Read exact bytes while binding the path to one strong file generation."""
+
+    lexical_root = Path(os.path.abspath(Path(root)))
+    canonical_root = lexical_root.resolve()
+    candidate_path = Path(path)
+    if not candidate_path.is_absolute():
+        candidate_path = lexical_root / candidate_path
+    lexical_path = Path(os.path.abspath(candidate_path))
+    try:
+        relative_parts = lexical_path.relative_to(lexical_root).parts
+    except ValueError as exc:
+        raise OSError("archive_index_projection_file_outside_archive") from exc
+    if not relative_parts:
+        raise OSError("archive_index_projection_file_unsafe")
+    reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+    current = lexical_root
+    for index, part in enumerate(relative_parts):
+        current = current / part
+        component_stat = os.lstat(current)
+        is_final = index == len(relative_parts) - 1
+        if (
+            stat.S_ISLNK(component_stat.st_mode)
+            or (
+                reparse_flag
+                and getattr(component_stat, "st_file_attributes", 0)
+                & reparse_flag
+            )
+            or (not is_final and not stat.S_ISDIR(component_stat.st_mode))
+        ):
+            raise OSError("archive_index_projection_file_unsafe")
+    try:
+        canonical_path = current.resolve(strict=True)
+        canonical_path.relative_to(canonical_root)
+    except (OSError, ValueError) as exc:
+        raise OSError("archive_index_projection_file_outside_archive") from exc
+    root = canonical_root
+    path = canonical_path
+    before = os.lstat(path)
+    if (
+        not stat.S_ISREG(before.st_mode)
+        or stat.S_ISLNK(before.st_mode)
+        or (
+            reparse_flag
+            and getattr(before, "st_file_attributes", 0) & reparse_flag
+        )
+    ):
+        raise OSError("archive_index_projection_file_unsafe")
+    before_generation = archive_index_file_generation(before)
+    with _hold_activity_group_evidence_file(
+        root,
+        path,
+        max_bytes=max_bytes,
+    ) as held:
+        raw = held["raw"]
+        descriptor = held.get("descriptor")
+        held_stat = os.fstat(descriptor) if isinstance(descriptor, int) else os.stat(
+            path,
+            follow_symlinks=False,
+        )
+        held_generation = archive_index_file_generation(held_stat)
+        after = os.lstat(path)
+        after_generation = archive_index_file_generation(after)
+        if (
+            before_generation != held_generation
+            or held_generation != after_generation
+            or tuple(held.get("identity") or ())
+            != (held_generation["file_dev"], held_generation["file_ino"])
+            or len(raw) != held_generation["file_size"]
+        ):
+            raise OSError("archive_index_projection_file_changed")
+    return {
+        "raw": raw,
+        "file_sha256": "sha256:" + hashlib.sha256(raw).hexdigest(),
+        "file_generation": held_generation,
+    }
+
+
+class _ArchiveIndexManifestDuplicateKey(ValueError):
+    pass
+
+
+def _archive_index_manifest_reject_duplicate_pairs(
+    pairs: list[tuple[str, Any]],
+) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise _ArchiveIndexManifestDuplicateKey(key)
+        result[key] = value
+    return result
+
+
+def _archive_index_json_tree_node_count(
+    value: Any,
+    *,
+    max_nodes: int,
+) -> int | None:
+    pending: list[tuple[Any, int]] = [(value, 0)]
+    nodes = 0
+    while pending:
+        item, depth = pending.pop()
+        nodes += 1
+        if (
+            nodes > max_nodes
+            or depth > ZETTEL_OBJET_LINK_MANIFEST_MAX_JSON_DEPTH
+        ):
+            return None
+        if item is None or type(item) in {str, bool, int}:
+            continue
+        if type(item) is float:
+            if not math.isfinite(item):
+                return None
+            continue
+        if type(item) is dict:
+            if any(type(key) is not str for key in item):
+                return None
+            pending.extend((child, depth + 1) for child in item.values())
+        elif type(item) is list:
+            pending.extend((child, depth + 1) for child in item)
+        else:
+            return None
+    return nodes
+
+
+def archive_index_manifest_record_is_strict(record: Any) -> bool:
+    """Validate the byte-identity fields required by link authority."""
+
+    if type(record) is not dict:
+        return False
+    object_id = record.get("object_id")
+    digest = record.get("sha256")
+    logical_key = record.get("logical_key")
+    mime = record.get("mime")
+    size_bytes = record.get("size_bytes")
+    locations = record.get("locations")
+    provenance = record.get("provenance")
+    if (
+        type(object_id) is not str
+        or not OBJECT_ID_RE.fullmatch(object_id)
+        or type(digest) is not str
+        or not SHA256_RE.fullmatch(digest)
+        or object_id != f"sha256:{digest}"
+        or type(logical_key) is not str
+        or not logical_key.strip()
+        or type(locations) is not list
+        or type(provenance) is not dict
+        or (
+            "size_bytes" in record
+            and (type(size_bytes) is not int or size_bytes < 0)
+        )
+        or (
+            "mime" in record
+            and (type(mime) is not str or not mime.strip())
+        )
+    ):
+        return False
+    return all(
+        type(location) is dict
+        and type(location.get("provider")) is str
+        and bool(location["provider"].strip())
+        for location in locations
+    )
+
+
+def archive_index_strict_manifest_snapshot(root: Path) -> dict[str, Any]:
+    """Read and strictly parse one exact manifest generation."""
+
+    manifest_path = root / "objects" / "manifests" / "files.jsonl"
+    snapshot = archive_index_stable_file_snapshot(
+        root,
+        manifest_path,
+        max_bytes=ZETTEL_OBJET_LINK_MANIFEST_MAX_BYTES,
+    )
+    try:
+        text = snapshot["raw"].decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ArchiveServiceError("archive_index_manifest_invalid") from exc
+    records: list[dict[str, Any]] = []
+    remaining_json_nodes = ZETTEL_OBJET_LINK_MANIFEST_MAX_JSON_NODES
+    for line_number, raw_line in enumerate(text.splitlines(), start=1):
+        line = raw_line.strip()
+        if not line:
+            continue
+        if len(records) >= ZETTEL_OBJET_LINK_MANIFEST_MAX_RECORDS:
+            raise ArchiveServiceError("archive_index_manifest_too_many_records")
+        try:
+            record = json.loads(
+                line,
+                object_pairs_hook=_archive_index_manifest_reject_duplicate_pairs,
+                parse_constant=lambda value: (_ for _ in ()).throw(ValueError(value)),
+            )
+        except (
+            _ArchiveIndexManifestDuplicateKey,
+            json.JSONDecodeError,
+            ValueError,
+            RecursionError,
+        ) as exc:
+            raise ArchiveServiceError("archive_index_manifest_invalid") from exc
+        node_count = _archive_index_json_tree_node_count(
+            record,
+            max_nodes=remaining_json_nodes,
+        )
+        if node_count is None:
+            raise ArchiveServiceError("archive_index_manifest_invalid")
+        remaining_json_nodes -= node_count
+        try:
+            schema_issues = validate_schema(
+                record,
+                "object-manifest-entry.schema.json",
+            )
+        except (OSError, RecursionError, TypeError, ValueError) as exc:
+            raise ArchiveServiceError("archive_index_manifest_invalid") from exc
+        if schema_issues or not archive_index_manifest_record_is_strict(record):
+            raise ArchiveServiceError("archive_index_manifest_invalid")
+        record_json = json.dumps(
+            json_safe(record),
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        records.append(
+            {
+                "record_ordinal": len(records) + 1,
+                "source_line_number": line_number,
+                "record_sha256": "sha256:"
+                + hashlib.sha256((record_json + "\n").encode("utf-8")).hexdigest(),
+                "record_json": record_json,
+                "record": record,
+            }
+        )
+    return {**snapshot, "records": records, "record_count": len(records)}
+
+
 def archive_index_zettel_stat_rows(conn: sqlite3.Connection) -> list[dict[str, Any]]:
     return [
         {
             "path": str(row["path"] if isinstance(row, sqlite3.Row) else row[0]),
-            "file_size": row["file_size"] if isinstance(row, sqlite3.Row) else row[1],
-            "file_mtime_ns": row["file_mtime_ns"] if isinstance(row, sqlite3.Row) else row[2],
+            "file_dev": row["file_dev"] if isinstance(row, sqlite3.Row) else row[1],
+            "file_ino": row["file_ino"] if isinstance(row, sqlite3.Row) else row[2],
+            "file_ctime_ns": row["file_ctime_ns"] if isinstance(row, sqlite3.Row) else row[3],
+            "file_size": row["file_size"] if isinstance(row, sqlite3.Row) else row[4],
+            "file_mtime_ns": row["file_mtime_ns"] if isinstance(row, sqlite3.Row) else row[5],
         }
         for row in conn.execute(
-            "SELECT path, file_size, file_mtime_ns FROM zettels ORDER BY path"
+            "SELECT path, file_dev, file_ino, file_ctime_ns, file_size, file_mtime_ns "
+            "FROM zettels ORDER BY path"
         ).fetchall()
     ]
 
 
-def strict_live_zettel_stat_snapshot(
-    archive_root: Path,
-    indexed_rows: list[dict[str, Any]],
-    *,
-    progress_callback: Callable[[str, str, int | None, int | None], None] | None = None,
-) -> dict[str, Any]:
-    """Take exactly one strict, content-free live stat snapshot and compare it."""
+class _ArchiveIndexLinuxInotifyWatcher:
+    """One fail-closed Linux event queue for every index authority path.
 
-    _emit_mint_progress(progress_callback, "index_snapshot", "start", 0, None)
-    live_by_path: dict[str, tuple[int, int]] = {}
+    Linux inotify is not recursive.  Existing Zet directories are therefore
+    armed top-down before the live scan starts.  Once a parent is armed, a new
+    child directory is itself an authority-changing event, so it does not have
+    to be added after the snapshot has begun.  All watches share one kernel
+    queue; one final non-blocking drain is the successful snapshot's
+    linearization point.
+    """
+
+    _IN_MODIFY = 0x00000002
+    _IN_ATTRIB = 0x00000004
+    _IN_CLOSE_WRITE = 0x00000008
+    _IN_MOVED_FROM = 0x00000040
+    _IN_MOVED_TO = 0x00000080
+    _IN_CREATE = 0x00000100
+    _IN_DELETE = 0x00000200
+    _IN_DELETE_SELF = 0x00000400
+    _IN_MOVE_SELF = 0x00000800
+    _IN_UNMOUNT = 0x00002000
+    _IN_Q_OVERFLOW = 0x00004000
+    _IN_IGNORED = 0x00008000
+    _IN_ONLYDIR = 0x01000000
+    _IN_DONT_FOLLOW = 0x02000000
+    _IN_ISDIR = 0x40000000
+    _EVENT_MASK = (
+        _IN_MODIFY
+        | _IN_ATTRIB
+        | _IN_CLOSE_WRITE
+        | _IN_MOVED_FROM
+        | _IN_MOVED_TO
+        | _IN_CREATE
+        | _IN_DELETE
+        | _IN_DELETE_SELF
+        | _IN_MOVE_SELF
+        | _IN_UNMOUNT
+        | _IN_Q_OVERFLOW
+        | _IN_IGNORED
+        | _IN_ONLYDIR
+        | _IN_DONT_FOLLOW
+    )
+    _SELF_OR_AMBIGUOUS_MASK = (
+        _IN_DELETE_SELF
+        | _IN_MOVE_SELF
+        | _IN_UNMOUNT
+        | _IN_Q_OVERFLOW
+        | _IN_IGNORED
+    )
+
+    def __init__(self, root: Path) -> None:
+        if not sys.platform.startswith("linux"):
+            raise OSError("archive_index_watcher_wrong_platform")
+        self._fd: int | None = None
+        self._roles_by_watch_descriptor: dict[int, str] = {}
+        libc = ctypes.CDLL(None, use_errno=True)
+        init = getattr(libc, "inotify_init1", None)
+        add_watch = getattr(libc, "inotify_add_watch", None)
+        if init is None or add_watch is None:
+            raise OSError("archive_index_watcher_unavailable")
+        init.argtypes = [ctypes.c_int]
+        init.restype = ctypes.c_int
+        add_watch.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_uint32]
+        add_watch.restype = ctypes.c_int
+        self._add_watch = add_watch
+        flags = int(getattr(os, "O_NONBLOCK", 0)) | int(
+            getattr(os, "O_CLOEXEC", 0)
+        )
+        fd = int(init(flags))
+        if fd < 0:
+            raise OSError(
+                ctypes.get_errno(),
+                "archive_index_watcher_unavailable",
+            )
+        self._fd = fd
+        try:
+            self._watch_directory(root, role="archive-root")
+            self._watch_optional_directory(root / "objects", role="objects")
+            self._watch_optional_directory(
+                root / "objects" / "manifests",
+                role="manifest-parent",
+            )
+            for folder in ("zettels", "inbox"):
+                self._watch_optional_zettel_tree(root / folder)
+        except BaseException:
+            self.close()
+            raise
+
+    @staticmethod
+    def _safe_directory_stat(path: Path) -> os.stat_result:
+        observed = os.lstat(path)
+        reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+        if (
+            stat.S_ISLNK(observed.st_mode)
+            or not stat.S_ISDIR(observed.st_mode)
+            or (
+                reparse_flag
+                and getattr(observed, "st_file_attributes", 0) & reparse_flag
+            )
+        ):
+            raise OSError("archive_index_watcher_directory_unsafe")
+        return observed
+
+    def _watch_directory(self, path: Path, *, role: str) -> None:
+        if self._fd is None:
+            raise OSError("archive_index_watcher_state_invalid")
+        before = self._safe_directory_stat(path)
+        watch_descriptor = int(
+            self._add_watch(
+                self._fd,
+                os.fsencode(str(path)),
+                self._EVENT_MASK,
+            )
+        )
+        if watch_descriptor < 0:
+            raise OSError(
+                ctypes.get_errno(),
+                "archive_index_watcher_unavailable",
+            )
+        after = self._safe_directory_stat(path)
+        if (before.st_dev, before.st_ino) != (after.st_dev, after.st_ino):
+            raise OSError("archive_index_watcher_directory_changed")
+        existing_role = self._roles_by_watch_descriptor.get(watch_descriptor)
+        if existing_role is not None and existing_role != role:
+            raise OSError("archive_index_watcher_directory_aliased")
+        self._roles_by_watch_descriptor[watch_descriptor] = role
+
+    def _watch_optional_directory(self, path: Path, *, role: str) -> None:
+        try:
+            self._watch_directory(path, role=role)
+        except FileNotFoundError:
+            return
+
+    def _watch_optional_zettel_tree(self, folder_root: Path) -> None:
+        try:
+            self._safe_directory_stat(folder_root)
+        except FileNotFoundError:
+            return
+        pending = [folder_root]
+        while pending:
+            current = pending.pop()
+            self._watch_directory(current, role="zettel-tree")
+            try:
+                with os.scandir(current) as entries:
+                    current_entries = list(entries)
+            except OSError:
+                raise OSError("archive_index_watcher_scan_unavailable") from None
+            for entry in current_entries:
+                path = Path(entry.path)
+                try:
+                    observed = os.lstat(path)
+                except OSError:
+                    raise OSError(
+                        "archive_index_watcher_scan_unavailable"
+                    ) from None
+                reparse_flag = getattr(
+                    stat,
+                    "FILE_ATTRIBUTE_REPARSE_POINT",
+                    0,
+                )
+                if (
+                    stat.S_ISLNK(observed.st_mode)
+                    or (
+                        reparse_flag
+                        and getattr(observed, "st_file_attributes", 0)
+                        & reparse_flag
+                    )
+                ):
+                    raise OSError("archive_index_watcher_directory_unsafe")
+                if stat.S_ISDIR(observed.st_mode):
+                    pending.append(path)
+
+    @staticmethod
+    def _event_name(raw: bytes) -> str:
+        return os.fsdecode(raw.rstrip(b"\0"))
+
+    def _event_is_relevant(self, role: str, mask: int, name: str) -> bool:
+        if mask & self._SELF_OR_AMBIGUOUS_MASK:
+            return True
+        if role == "zettel-tree":
+            return True
+        if role == "archive-root":
+            return name in {"zettels", "inbox", "objects"}
+        if role == "objects":
+            return name == "manifests"
+        if role == "manifest-parent":
+            return name == "files.jsonl"
+        return True
+
+    def verify_clean(self) -> None:
+        if self._fd is None:
+            raise OSError("archive_index_watcher_state_invalid")
+        while True:
+            try:
+                raw = os.read(self._fd, 64 * 1024)
+            except BlockingIOError:
+                return
+            except OSError:
+                raise OSError("archive_index_watcher_ambiguous") from None
+            if not raw:
+                raise OSError("archive_index_watcher_ambiguous")
+            offset = 0
+            while offset < len(raw):
+                if len(raw) - offset < 16:
+                    raise OSError("archive_index_watcher_ambiguous")
+                watch_descriptor = int.from_bytes(
+                    raw[offset : offset + 4],
+                    byteorder=sys.byteorder,
+                    signed=True,
+                )
+                mask = int.from_bytes(
+                    raw[offset + 4 : offset + 8],
+                    byteorder=sys.byteorder,
+                    signed=False,
+                )
+                name_length = int.from_bytes(
+                    raw[offset + 12 : offset + 16],
+                    byteorder=sys.byteorder,
+                    signed=False,
+                )
+                event_end = offset + 16 + name_length
+                if event_end > len(raw):
+                    raise OSError("archive_index_watcher_ambiguous")
+                role = self._roles_by_watch_descriptor.get(watch_descriptor)
+                if role is None:
+                    raise OSError("archive_index_watcher_ambiguous")
+                name = self._event_name(raw[offset + 16 : event_end])
+                if self._event_is_relevant(role, mask, name):
+                    raise OSError("archive_index_authority_changed")
+                offset = event_end
+
+    def close(self) -> None:
+        if self._fd is not None:
+            try:
+                os.close(self._fd)
+            finally:
+                self._fd = None
+
+
+class _ArchiveIndexAuthorityFence:
+    """Hold one authority-change fence from live proof through final close.
+
+    Windows uses exact held directory chains plus change notifications for the
+    two Zet trees and the canonical manifest ancestry.  A root-subtree closing
+    guard is armed after a writer commits, before the scoped guards are
+    cancelled, so their sequential cancellation cannot create a success gap.
+    Linux uses one inotify queue for all equivalent paths.  Platforms without
+    an exact notification primitive deliberately fail closed.
+    """
+
+    def __init__(self, root: Path) -> None:
+        root = Path(root).resolve()
+        self._root = root
+        self._stack = ExitStack()
+        self._watchers: list[Any] = []
+        self._closing_guard: Any | None = None
+        self._manifest_binding: dict[str, Any] | None = None
+        self._manifest_watcher: Any | None = None
+        self._manifest_watcher_reset = False
+        self._verified = False
+        self._closed = False
+        try:
+            if os.name == "nt":
+                # Import lazily to avoid changing the already-shared Windows
+                # primitive while completion workflows are under independent
+                # review.  Runtime calls happen only after both modules have
+                # completed import.
+                from .completion_workflows import (
+                    _ZettelObjetLinkWindowsDirectoryWatcher,
+                )
+
+                self._windows_watcher_type = (
+                    _ZettelObjetLinkWindowsDirectoryWatcher
+                )
+                self._archive_binding = self._stack.enter_context(
+                    _activity_group_bound_directory_chain(root, root)
+                )
+                self._add_windows_watcher(
+                    self._archive_binding,
+                    watch_subtree=False,
+                    names_only=True,
+                )
+                for folder in ("zettels", "inbox"):
+                    try:
+                        binding = self._stack.enter_context(
+                            _activity_group_bound_directory_chain(
+                                root,
+                                root / folder,
+                            )
+                        )
+                    except FileNotFoundError:
+                        continue
+                    self._add_windows_watcher(
+                        binding,
+                        watch_subtree=True,
+                    )
+                try:
+                    objects_binding = self._stack.enter_context(
+                        _activity_group_bound_directory_chain(
+                            root,
+                            root / "objects",
+                        )
+                    )
+                except FileNotFoundError:
+                    objects_binding = None
+                if objects_binding is not None:
+                    self._add_windows_watcher(
+                        objects_binding,
+                        watch_subtree=False,
+                        names_only=True,
+                    )
+                    try:
+                        manifest_binding = self._stack.enter_context(
+                            _activity_group_bound_directory_chain(
+                                root,
+                                root / "objects" / "manifests",
+                            )
+                        )
+                    except FileNotFoundError:
+                        manifest_binding = None
+                    if manifest_binding is not None:
+                        self._manifest_binding = manifest_binding
+                        self._manifest_watcher = self._add_windows_watcher(
+                            manifest_binding,
+                            watch_subtree=False,
+                        )
+            elif sys.platform.startswith("linux"):
+                watcher = _ArchiveIndexLinuxInotifyWatcher(root)
+                self._watchers.append(watcher)
+                self._stack.callback(watcher.close)
+                self._windows_watcher_type = None
+                self._archive_binding = None
+            else:
+                raise OSError("archive_index_watcher_unavailable")
+        except BaseException:
+            self.close()
+            raise
+
+    def _add_windows_watcher(
+        self,
+        binding: dict[str, Any],
+        *,
+        watch_subtree: bool,
+        names_only: bool = False,
+    ) -> Any:
+        watcher = self._windows_watcher_type(
+            binding,
+            watch_subtree=watch_subtree,
+            names_only=names_only,
+        )
+        self._watchers.append(watcher)
+        self._stack.callback(watcher.close)
+        return watcher
+
+    def reset_manifest_watcher_after_internal_setup(self) -> None:
+        """Discard only known pre-scan private-lock initialization events.
+
+        The private index session protects and revalidates its own capture.
+        On Windows it also creates lock evidence inside ``manifests`` before
+        the public rebuild's first source scan.  Start a fresh manifest watch
+        immediately after that setup and before the public manifest is read;
+        zettel and ancestry watches remain continuously armed.
+        """
+
+        if os.name != "nt":
+            return
+        if (
+            self._closed
+            or self._verified
+            or self._closing_guard is not None
+            or self._manifest_watcher_reset
+        ):
+            raise OSError("archive_index_watcher_state_invalid")
+        self._manifest_watcher_reset = True
+        if self._manifest_binding is None or self._manifest_watcher is None:
+            return
+        old_watcher = self._manifest_watcher
+        old_watcher.close()
+        try:
+            self._watchers.remove(old_watcher)
+        except ValueError:
+            raise OSError("archive_index_watcher_state_invalid") from None
+        self._manifest_watcher = self._add_windows_watcher(
+            self._manifest_binding,
+            watch_subtree=False,
+        )
+
+    def arm_closing_guard(self) -> None:
+        if self._closed or self._verified or self._closing_guard is not None:
+            raise OSError("archive_index_watcher_state_invalid")
+        if os.name == "nt":
+            self._closing_guard = self._windows_watcher_type(
+                self._archive_binding,
+                watch_subtree=True,
+            )
+            self._stack.callback(self._closing_guard.close)
+
+    def verify_clean(self) -> None:
+        if self._closed or self._verified:
+            raise OSError("archive_index_watcher_state_invalid")
+        if os.name == "nt" and self._closing_guard is None:
+            raise OSError("archive_index_watcher_closing_guard_missing")
+        for watcher in self._watchers:
+            watcher.verify_clean()
+        if self._closing_guard is not None:
+            self._closing_guard.verify_clean()
+        self._verified = True
+
+    def close(self) -> None:
+        if not self._closed:
+            self._closed = True
+            self._stack.close()
+
+    def __enter__(self) -> "_ArchiveIndexAuthorityFence":
+        return self
+
+    def __exit__(self, exc_type: Any, exc: Any, traceback: Any) -> bool:
+        self.close()
+        return False
+
+
+def _close_archive_index_authority_fence(
+    authority_fence: _ArchiveIndexAuthorityFence | None,
+) -> None:
+    if authority_fence is not None:
+        try:
+            authority_fence.close()
+        except OSError:
+            pass
+
+
+def _strict_live_zettel_stat_scan(
+    archive_root: Path,
+    *,
+    progress_callback: Callable[[str, str, int | None, int | None], None] | None,
+    progress_state: str,
+) -> tuple[dict[str, dict[str, int]], dict[str, dict[str, int]], bool]:
+    """Collect one strict stat-only Zet-tree generation."""
+
+    live_by_path: dict[str, dict[str, int]] = {}
+    directories_by_path: dict[str, dict[str, int]] = {}
     stat_failed = False
     inspected = 0
     reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
@@ -52746,6 +53947,7 @@ def strict_live_zettel_stat_snapshot(
         ):
             stat_failed = True
             continue
+        directories_by_path[folder] = archive_index_file_generation(folder_stat)
 
         pending = [folder_root]
         while pending:
@@ -52759,7 +53961,10 @@ def strict_live_zettel_stat_snapshot(
             for entry in current_entries:
                 path = Path(entry.path)
                 try:
-                    entry_stat = entry.stat(follow_symlinks=False)
+                    # CPython's Windows DirEntry cache can expose zeroed
+                    # st_dev/st_ino values.  A path lstat supplies the exact
+                    # strong generation fields persisted by index v0.4.
+                    entry_stat = os.lstat(path)
                 except OSError:
                     stat_failed = True
                     continue
@@ -52773,6 +53978,15 @@ def strict_live_zettel_stat_snapshot(
                     stat_failed = True
                     continue
                 if stat.S_ISDIR(entry_stat.st_mode):
+                    relative_directory = PurePosixPath(
+                        *path.relative_to(archive_root).parts
+                    ).as_posix()
+                    if relative_directory in directories_by_path:
+                        stat_failed = True
+                        continue
+                    directories_by_path[relative_directory] = (
+                        archive_index_file_generation(entry_stat)
+                    )
                     pending.append(path)
                     continue
                 if not entry.name.casefold().endswith(".md"):
@@ -52781,23 +53995,93 @@ def strict_live_zettel_stat_snapshot(
                     stat_failed = True
                     continue
                 relative = PurePosixPath(*path.relative_to(archive_root).parts).as_posix()
-                live_by_path[relative] = (entry_stat.st_size, entry_stat.st_mtime_ns)
+                if relative in live_by_path:
+                    stat_failed = True
+                    continue
+                live_by_path[relative] = archive_index_file_generation(entry_stat)
                 inspected += 1
                 if inspected == 1 or inspected % 250 == 0:
                     _emit_mint_progress(
                         progress_callback,
                         "index_snapshot",
-                        "scanned",
+                        progress_state,
                         inspected,
                         None,
                     )
+
+    return live_by_path, directories_by_path, stat_failed
+
+
+def strict_live_zettel_stat_snapshot(
+    archive_root: Path,
+    indexed_rows: list[dict[str, Any]],
+    *,
+    progress_callback: Callable[[str, str, int | None, int | None], None] | None = None,
+    _authority_fence: _ArchiveIndexAuthorityFence | None = None,
+) -> dict[str, Any]:
+    """Take a closed, content-free live stat snapshot and compare it."""
+
+    _emit_mint_progress(progress_callback, "index_snapshot", "start", 0, None)
+    owns_fence = _authority_fence is None
+    authority_fence = _authority_fence
+    watcher_unavailable = False
+    watcher_changed = False
+    if authority_fence is None:
+        try:
+            authority_fence = _ArchiveIndexAuthorityFence(archive_root)
+        except OSError:
+            watcher_unavailable = True
+    try:
+        first_live_by_path, first_directories, first_stat_failed = (
+            _strict_live_zettel_stat_scan(
+                archive_root,
+                progress_callback=progress_callback,
+                progress_state="scanned",
+            )
+        )
+        live_by_path, closing_directories, closing_stat_failed = (
+            _strict_live_zettel_stat_scan(
+                archive_root,
+                progress_callback=progress_callback,
+                progress_state="revalidated",
+            )
+        )
+        if owns_fence and authority_fence is not None:
+            authority_fence.arm_closing_guard()
+            authority_fence.verify_clean()
+    except OSError:
+        watcher_changed = True
+        first_live_by_path = locals().get("first_live_by_path", {})
+        first_directories = locals().get("first_directories", {})
+        first_stat_failed = bool(locals().get("first_stat_failed", True))
+        live_by_path = locals().get("live_by_path", first_live_by_path)
+        closing_directories = locals().get(
+            "closing_directories",
+            first_directories,
+        )
+        closing_stat_failed = bool(locals().get("closing_stat_failed", True))
+    finally:
+        if owns_fence and authority_fence is not None:
+            try:
+                authority_fence.close()
+            except OSError:
+                watcher_changed = True
 
     indexed_by_path = {str(row.get("path") or ""): row for row in indexed_rows}
     live_paths = set(live_by_path)
     indexed_paths = set(indexed_by_path)
     reasons: list[str] = []
-    if stat_failed:
+    if watcher_unavailable:
+        reasons.append("live_archive_authority_watcher_unavailable")
+    if watcher_changed:
+        reasons.append("live_archive_authority_changed_during_snapshot")
+    if first_stat_failed or closing_stat_failed:
         reasons.append("live_zettel_stat_unavailable")
+    if (
+        first_live_by_path != live_by_path
+        or first_directories != closing_directories
+    ):
+        reasons.append("live_zettel_tree_changed_during_snapshot")
     if live_paths - indexed_paths:
         reasons.append("live_zettels_missing_from_index")
     if indexed_paths - live_paths:
@@ -52808,7 +54092,13 @@ def strict_live_zettel_stat_snapshot(
     for relative in sorted(live_paths & indexed_paths):
         row = indexed_by_path[relative]
         try:
-            recorded = (int(row.get("file_size")), int(row.get("file_mtime_ns")))
+            recorded = {
+                "file_dev": int(row.get("file_dev")),
+                "file_ino": int(row.get("file_ino")),
+                "file_ctime_ns": int(row.get("file_ctime_ns")),
+                "file_size": int(row.get("file_size")),
+                "file_mtime_ns": int(row.get("file_mtime_ns")),
+            }
         except (TypeError, ValueError):
             indexed_stat_invalid = True
             continue
@@ -52821,8 +54111,7 @@ def strict_live_zettel_stat_snapshot(
     snapshot_rows = [
         {
             "path": relative,
-            "file_size": values[0],
-            "file_mtime_ns": values[1],
+            **values,
         }
         for relative, values in live_by_path.items()
     ]
@@ -52868,12 +54157,39 @@ def read_archive_index_metadata(conn: sqlite3.Connection) -> dict[str, str]:
     return metadata
 
 
+def archive_index_zettel_identity_projection_sha256(
+    conn: sqlite3.Connection,
+) -> str:
+    rows = [
+        [
+            str(row[0] or ""),
+            str(row[1] or ""),
+            str(row[2] or ""),
+        ]
+        for row in conn.execute(
+            "SELECT path, zettel_id, file_sha256 FROM zettels ORDER BY path"
+        ).fetchall()
+    ]
+    encoded = json.dumps(
+        rows,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return "sha256:" + hashlib.sha256(
+        b"wom-kit/zettel-identity-projection/v0.1\0" + encoded
+    ).hexdigest()
+
+
 def archive_index_metadata_stale_reasons(
     metadata: dict[str, str],
     *,
     indexed_canonical_count: int,
     indexed_zettel_count: int | None = None,
+    indexed_manifest_record_count: int | None = None,
     live_snapshot_sha256: str | None = None,
+    indexed_zettel_identity_projection_sha256: str | None = None,
+    allow_seal_pending: str | None = None,
+    allow_mutation_owner: str | None = None,
 ) -> list[str]:
     reasons: list[str] = []
     if not metadata:
@@ -52885,6 +54201,27 @@ def archive_index_metadata_stale_reasons(
         reasons.append("archive_index_metadata_state_invalid")
     elif state == INDEX_STATE_DIRTY:
         reasons.append("archive_index_dirty")
+    if INDEX_SEAL_PENDING_KEY in metadata:
+        seal_pending = str(metadata.get(INDEX_SEAL_PENDING_KEY) or "")
+        if not (
+            allow_seal_pending is not None
+            and INDEX_SEAL_PENDING_RE.fullmatch(seal_pending) is not None
+            and INDEX_SEAL_PENDING_RE.fullmatch(allow_seal_pending)
+            is not None
+            and hmac.compare_digest(seal_pending, allow_seal_pending)
+        ):
+            reasons.append("archive_index_mutation_in_progress")
+    if INDEX_MUTATION_OWNER_KEY in metadata:
+        mutation_owner = str(metadata.get(INDEX_MUTATION_OWNER_KEY) or "")
+        if not (
+            allow_mutation_owner is not None
+            and INDEX_SNAPSHOT_SHA256_RE.fullmatch(mutation_owner)
+            is not None
+            and INDEX_SNAPSHOT_SHA256_RE.fullmatch(allow_mutation_owner)
+            is not None
+            and hmac.compare_digest(mutation_owner, allow_mutation_owner)
+        ):
+            reasons.append("archive_index_mutation_in_progress")
     if not INDEX_GENERATION_RE.fullmatch(str(metadata.get("generation") or "")):
         reasons.append("archive_index_generation_invalid")
     try:
@@ -52930,6 +54267,50 @@ def archive_index_metadata_stale_reasons(
         reasons.append("archive_index_metadata_snapshot_invalid")
     elif live_snapshot_sha256 is not None and recorded_snapshot != live_snapshot_sha256:
         reasons.append("archive_index_metadata_snapshot_mismatch")
+    recorded_manifest_sha256 = metadata.get("manifest_sha256")
+    if (
+        not isinstance(recorded_manifest_sha256, str)
+        or not INDEX_SNAPSHOT_SHA256_RE.fullmatch(recorded_manifest_sha256)
+    ):
+        reasons.append("archive_index_metadata_manifest_sha256_invalid")
+    try:
+        recorded_manifest_count = int(metadata.get("manifest_record_count", ""))
+        if recorded_manifest_count < 0:
+            raise ValueError
+    except ValueError:
+        reasons.append("archive_index_metadata_manifest_count_invalid")
+    else:
+        if (
+            indexed_manifest_record_count is not None
+            and recorded_manifest_count != indexed_manifest_record_count
+        ):
+            reasons.append("archive_index_metadata_manifest_count_mismatch")
+    if _archive_index_metadata_file_generation(
+        metadata,
+        prefix="manifest_",
+    ) is None:
+        reasons.append("archive_index_metadata_manifest_generation_invalid")
+    recorded_identity_projection = metadata.get(
+        "zettel_identity_projection_sha256"
+    )
+    if (
+        not isinstance(recorded_identity_projection, str)
+        or INDEX_SNAPSHOT_SHA256_RE.fullmatch(recorded_identity_projection)
+        is None
+    ):
+        reasons.append(
+            "archive_index_metadata_zettel_identity_projection_invalid"
+        )
+    elif (
+        indexed_zettel_identity_projection_sha256 is not None
+        and not hmac.compare_digest(
+            recorded_identity_projection,
+            indexed_zettel_identity_projection_sha256,
+        )
+    ):
+        reasons.append(
+            "archive_index_zettel_identity_projection_mismatch"
+        )
     return reasons
 
 
@@ -52953,6 +54334,10 @@ def require_current_zettel_index(
     *,
     connection: sqlite3.Connection | None = None,
     progress_callback: Callable[[str, str, int | None, int | None], None] | None = None,
+    _authority_fence: _ArchiveIndexAuthorityFence | None = None,
+    _allow_seal_pending: str | None = None,
+    _allow_mutation_owner: str | None = None,
+    _allow_active_mutation: bool = False,
 ) -> dict[str, Any]:
     """Return content-free current-index evidence or one fixed rebuild blocker."""
 
@@ -52965,6 +54350,83 @@ def require_current_zettel_index(
         _emit_mint_progress(progress_callback, "index_snapshot", "done", 0, 0)
         base["reason_codes"] = ["archive_index_missing"]
         return base
+
+    if _authority_fence is None:
+        mutation_guard: _ArchiveIndexReadMutationGuard | None = None
+        if not _allow_active_mutation:
+            try:
+                mutation_guard = _ArchiveIndexReadMutationGuard(root)
+            except OSError:
+                _emit_mint_progress(
+                    progress_callback,
+                    "index_snapshot",
+                    "start",
+                    0,
+                    0,
+                )
+                _emit_mint_progress(
+                    progress_callback,
+                    "index_snapshot",
+                    "done",
+                    0,
+                    0,
+                )
+                base["reason_codes"] = [
+                    "archive_index_mutation_in_progress"
+                ]
+                return base
+        try:
+            authority_fence = _ArchiveIndexAuthorityFence(root)
+        except OSError:
+            if mutation_guard is not None:
+                mutation_guard.close()
+            base["reason_codes"] = [
+                "archive_index_live_authority_watcher_unavailable"
+            ]
+            return base
+        fenced_evidence: dict[str, Any] | None = None
+        fence_failed = False
+        try:
+            fenced_evidence = require_current_zettel_index(
+                root,
+                connection=connection,
+                progress_callback=progress_callback,
+                _authority_fence=authority_fence,
+                _allow_seal_pending=_allow_seal_pending,
+                _allow_mutation_owner=_allow_mutation_owner,
+                _allow_active_mutation=_allow_active_mutation,
+            )
+            authority_fence.arm_closing_guard()
+            authority_fence.verify_clean()
+            if mutation_guard is not None:
+                mutation_guard.verify_clean()
+        except OSError:
+            fence_failed = True
+        finally:
+            try:
+                authority_fence.close()
+            except OSError:
+                fence_failed = True
+            if mutation_guard is not None:
+                try:
+                    mutation_guard.close()
+                except OSError:
+                    fence_failed = True
+        if fence_failed:
+            failed = dict(fenced_evidence or base)
+            failed.update(
+                {
+                    "ok": False,
+                    "state": "rebuild_required",
+                    "blockers": [INDEX_REBUILD_REQUIRED],
+                    "reason_codes": unique_preserve_order(
+                        list(failed.get("reason_codes") or [])
+                        + ["archive_index_live_authority_changed_during_check"]
+                    ),
+                }
+            )
+            return failed
+        return fenced_evidence or base
 
     owns_connection = connection is None
     conn = connection or connect_archive_index(db_path, row_factory=True)
@@ -52981,6 +54443,14 @@ def require_current_zettel_index(
                     "SELECT COUNT(*) FROM zettels WHERE status = 'canonical' AND path LIKE 'zettels/%'"
                 ).fetchone()[0]
             )
+            indexed_manifest_record_count = int(
+                conn.execute(
+                    "SELECT COUNT(*) FROM objet_manifest_projection"
+                ).fetchone()[0]
+            )
+            indexed_zettel_identity_projection_sha256 = (
+                archive_index_zettel_identity_projection_sha256(conn)
+            )
         except sqlite3.Error:
             base["reason_codes"] = ["archive_index_schema_unreadable"]
             return base
@@ -52989,6 +54459,7 @@ def require_current_zettel_index(
             root,
             indexed_rows,
             progress_callback=progress_callback,
+            _authority_fence=_authority_fence,
         )
         reason_codes = list(snapshot["reason_codes"])
         reason_codes.extend(
@@ -52996,9 +54467,43 @@ def require_current_zettel_index(
                 metadata,
                 indexed_canonical_count=indexed_canonical_count,
                 indexed_zettel_count=len(indexed_rows),
+                indexed_manifest_record_count=indexed_manifest_record_count,
                 live_snapshot_sha256=str(snapshot["live_snapshot_sha256"]),
+                indexed_zettel_identity_projection_sha256=(
+                    indexed_zettel_identity_projection_sha256
+                ),
+                allow_seal_pending=_allow_seal_pending,
+                allow_mutation_owner=_allow_mutation_owner,
             )
         )
+        manifest_snapshot: dict[str, Any] | None = None
+        try:
+            manifest_snapshot = archive_index_stable_file_snapshot(
+                root,
+                root / ZETTEL_OBJET_LINK_MANIFEST_RELATIVE_PATH,
+                max_bytes=ZETTEL_OBJET_LINK_MANIFEST_MAX_BYTES,
+            )
+        except (ArchiveServiceError, OSError, UnicodeError, ValueError):
+            reason_codes.append("archive_index_manifest_unreadable")
+        else:
+            recorded_manifest_sha256 = str(metadata.get("manifest_sha256") or "")
+            recorded_manifest_generation = _archive_index_metadata_file_generation(
+                metadata,
+                prefix="manifest_",
+            )
+            if (
+                INDEX_SNAPSHOT_SHA256_RE.fullmatch(recorded_manifest_sha256)
+                and recorded_manifest_generation is not None
+                and (
+                    not hmac.compare_digest(
+                        manifest_snapshot["file_sha256"],
+                        recorded_manifest_sha256,
+                    )
+                    or manifest_snapshot["file_generation"]
+                    != recorded_manifest_generation
+                )
+            ):
+                reason_codes.append("archive_index_manifest_changed")
         reason_codes = unique_preserve_order(reason_codes)
         generation = str(metadata.get("generation") or "")
         evidence = {
@@ -53008,6 +54513,16 @@ def require_current_zettel_index(
             "indexed_zettel_count": len(indexed_rows),
             "live_zettel_count": int(snapshot["live_zettel_count"]),
             "live_snapshot_sha256": snapshot["live_snapshot_sha256"],
+            "manifest_sha256": (
+                manifest_snapshot["file_sha256"]
+                if manifest_snapshot is not None
+                else None
+            ),
+            "manifest_file_generation": (
+                manifest_snapshot["file_generation"]
+                if manifest_snapshot is not None
+                else None
+            ),
             "reason_codes": reason_codes,
         }
         if not reason_codes:
@@ -53028,12 +54543,977 @@ def require_current_zettel_index(
                 conn.close()
 
 
+def _zettel_objet_link_authority_failure(reason_code: str) -> dict[str, Any]:
+    """Return one fixed-code, content-free projection failure."""
+
+    return {
+        "ok": False,
+        "state": "blocked",
+        "reason_codes": [reason_code],
+        "blockers": [reason_code],
+    }
+
+
+def _archive_index_metadata_file_generation(
+    metadata: Mapping[str, str],
+    *,
+    prefix: str,
+) -> dict[str, int] | None:
+    try:
+        generation = {
+            field: int(metadata[prefix + field])
+            for field in (
+                "file_dev",
+                "file_ino",
+                "file_ctime_ns",
+                "file_size",
+                "file_mtime_ns",
+            )
+        }
+    except (KeyError, TypeError, ValueError):
+        return None
+    return generation if all(value >= 0 for value in generation.values()) else None
+
+
+def build_zettel_objet_link_authority_projection(
+    archive_root: Path | str,
+    progress_callback: Callable[[str, str, int | None, int | None], None]
+    | None = None,
+    *,
+    _authority_fence: _ArchiveIndexAuthorityFence | None = None,
+) -> dict[str, Any]:
+    """Build one content-free, generation-bound link lookup projection."""
+
+    if _authority_fence is None:
+        _emit_mint_progress(
+            progress_callback,
+            "zettel_objet_link_authority_projection",
+            "start",
+            0,
+            None,
+        )
+    try:
+        root = require_existing_archive_root(archive_root)
+    except (ArchiveServiceError, OSError, ValueError):
+        return _zettel_objet_link_authority_failure(
+            "zettel_identity_projection_stale"
+        )
+    if _authority_fence is None:
+        mutation_guard: _ArchiveIndexReadMutationGuard | None = None
+        authority_fence: _ArchiveIndexAuthorityFence | None = None
+        try:
+            mutation_guard = _ArchiveIndexReadMutationGuard(root)
+            authority_fence = _ArchiveIndexAuthorityFence(root)
+            result = build_zettel_objet_link_authority_projection(
+                root,
+                progress_callback=progress_callback,
+                _authority_fence=authority_fence,
+            )
+            authority_fence.arm_closing_guard()
+            authority_fence.verify_clean()
+            mutation_guard.verify_clean()
+        except OSError:
+            return _zettel_objet_link_authority_failure(
+                "zettel_identity_projection_stale"
+            )
+        finally:
+            _close_archive_index_authority_fence(authority_fence)
+            if mutation_guard is not None:
+                mutation_guard.close()
+        if result.get("ok"):
+            _emit_mint_progress(
+                progress_callback,
+                "zettel_objet_link_authority_projection",
+                "done",
+                int(result.get("manifest_record_count") or 0),
+                int(result.get("manifest_record_count") or 0),
+            )
+        return result
+    try:
+        evidence = require_current_zettel_index(
+            root,
+            progress_callback=progress_callback,
+            _authority_fence=_authority_fence,
+        )
+        if not evidence.get("ok"):
+            public_reason = (
+                "manifest_changed"
+                if any(
+                    reason
+                    in {
+                        "archive_index_manifest_changed",
+                        "archive_index_manifest_unreadable",
+                    }
+                    for reason in evidence.get("reason_codes", [])
+                )
+                else "zettel_identity_projection_stale"
+            )
+            return _zettel_objet_link_authority_failure(
+                public_reason
+            )
+        db_path = root / INDEX_RELATIVE_PATH
+        conn = connect_archive_index(db_path, row_factory=True)
+        try:
+            conn.execute("BEGIN")
+            metadata = read_archive_index_metadata(conn)
+            generation = str(metadata.get("generation") or "")
+            manifest_sha256 = str(metadata.get("manifest_sha256") or "")
+            try:
+                manifest_record_count = int(
+                    metadata.get("manifest_record_count", "")
+                )
+            except ValueError:
+                manifest_record_count = -1
+            manifest_generation = _archive_index_metadata_file_generation(
+                metadata,
+                prefix="manifest_",
+            )
+            if (
+                metadata.get("schema") != INDEX_METADATA_SCHEMA
+                or metadata.get("state") != INDEX_STATE_CURRENT
+                or not INDEX_GENERATION_RE.fullmatch(generation)
+                or evidence.get("generation") != generation
+                or not INDEX_SNAPSHOT_SHA256_RE.fullmatch(manifest_sha256)
+                or manifest_record_count < 0
+                or manifest_generation is None
+            ):
+                return _zettel_objet_link_authority_failure(
+                    "zettel_identity_projection_stale"
+                )
+            manifest_snapshot = archive_index_stable_file_snapshot(
+                root,
+                root / "objects" / "manifests" / "files.jsonl",
+                max_bytes=ZETTEL_OBJET_LINK_MANIFEST_MAX_BYTES,
+            )
+            if (
+                manifest_snapshot["file_sha256"] != manifest_sha256
+                or manifest_snapshot["file_generation"] != manifest_generation
+            ):
+                return _zettel_objet_link_authority_failure(
+                    "manifest_changed"
+                )
+            projected_row_count = int(
+                conn.execute(
+                    "SELECT COUNT(*) FROM objet_manifest_projection"
+                ).fetchone()[0]
+            )
+            if projected_row_count != manifest_record_count:
+                return _zettel_objet_link_authority_failure(
+                    "zettel_identity_projection_stale"
+                )
+        finally:
+            if conn.in_transaction:
+                conn.rollback()
+            conn.close()
+    except (ArchiveServiceError, OSError, sqlite3.Error, UnicodeError, ValueError):
+        return _zettel_objet_link_authority_failure(
+            "zettel_identity_projection_stale"
+        )
+    result = {
+        "ok": True,
+        "state": INDEX_STATE_CURRENT,
+        "schema": ZETTEL_OBJET_LINK_AUTHORITY_PROJECTION_SCHEMA,
+        "generation": generation,
+        "live_snapshot_sha256": evidence["live_snapshot_sha256"],
+        "manifest_sha256": manifest_sha256,
+        "manifest_record_count": manifest_record_count,
+        "manifest_file_generation": manifest_generation,
+        "reason_codes": [],
+        "blockers": [],
+    }
+    return result
+
+
+def _archive_index_manifest_records_at_ordinals(
+    raw: bytes,
+    ordinals: set[int],
+) -> tuple[int, dict[int, dict[str, Any]]]:
+    """Bind requested projection rows to exact non-empty manifest lines.
+
+    The complete byte snapshot is already hash/generation-bound.  This scan
+    counts every non-empty line but parses only requested ordinals, so a
+    generated SQLite row can never invent membership in the canonical JSONL.
+    """
+
+    if any(type(value) is not int or value < 1 for value in ordinals):
+        raise ArchiveServiceError("archive_index_manifest_projection_invalid")
+    found: dict[int, dict[str, Any]] = {}
+    record_ordinal = 0
+    for raw_line in raw.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        record_ordinal += 1
+        if record_ordinal not in ordinals:
+            continue
+        try:
+            record = json.loads(
+                line.decode("utf-8"),
+                object_pairs_hook=_archive_index_manifest_reject_duplicate_pairs,
+                parse_constant=lambda value: (_ for _ in ()).throw(
+                    ValueError(value)
+                ),
+            )
+        except (
+            _ArchiveIndexManifestDuplicateKey,
+            UnicodeDecodeError,
+            json.JSONDecodeError,
+            ValueError,
+            RecursionError,
+        ) as exc:
+            raise ArchiveServiceError(
+                "archive_index_manifest_projection_invalid"
+            ) from exc
+        node_count = _archive_index_json_tree_node_count(
+            record,
+            max_nodes=ZETTEL_OBJET_LINK_MANIFEST_MAX_JSON_NODES,
+        )
+        if node_count is None:
+            raise ArchiveServiceError(
+                "archive_index_manifest_projection_invalid"
+            )
+        try:
+            schema_issues = validate_schema(
+                record,
+                "object-manifest-entry.schema.json",
+            )
+        except (OSError, RecursionError, TypeError, ValueError) as exc:
+            raise ArchiveServiceError(
+                "archive_index_manifest_projection_invalid"
+            ) from exc
+        if schema_issues or not archive_index_manifest_record_is_strict(record):
+            raise ArchiveServiceError(
+                "archive_index_manifest_projection_invalid"
+            )
+        record_json = json.dumps(
+            json_safe(record),
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        found[record_ordinal] = {
+            "record": record,
+            "record_json": record_json,
+            "record_sha256": "sha256:"
+            + hashlib.sha256((record_json + "\n").encode("utf-8")).hexdigest(),
+        }
+    if set(found) != ordinals:
+        raise ArchiveServiceError("archive_index_manifest_projection_invalid")
+    return record_ordinal, found
+
+
+def lookup_zettel_objet_link_authority_projection(
+    root: Path | str,
+    authority_projection: Mapping[str, Any],
+    zettel_id: str | None = None,
+    relative_path: str | None = None,
+    object_id: str | None = None,
+    progress_callback: Callable[[str, str, int | None, int | None], None]
+    | None = None,
+    *,
+    _authority_fence: _ArchiveIndexAuthorityFence | None = None,
+) -> dict[str, Any]:
+    """Resolve one Zet and its matching manifest rows from the current index."""
+
+    if _authority_fence is None:
+        _emit_mint_progress(
+            progress_callback,
+            "zettel_objet_link_authority_lookup",
+            "start",
+            0,
+            1,
+        )
+        mutation_guard: _ArchiveIndexReadMutationGuard | None = None
+        authority_fence: _ArchiveIndexAuthorityFence | None = None
+        try:
+            archive_root = require_existing_archive_root(root)
+            mutation_guard = _ArchiveIndexReadMutationGuard(archive_root)
+            authority_fence = _ArchiveIndexAuthorityFence(archive_root)
+        except (ArchiveServiceError, OSError, ValueError):
+            _close_archive_index_authority_fence(authority_fence)
+            if mutation_guard is not None:
+                mutation_guard.close()
+            return _zettel_objet_link_authority_failure(
+                "zettel_identity_projection_stale"
+            )
+        try:
+            result = lookup_zettel_objet_link_authority_projection(
+                archive_root,
+                authority_projection,
+                zettel_id=zettel_id,
+                relative_path=relative_path,
+                object_id=object_id,
+                progress_callback=progress_callback,
+                _authority_fence=authority_fence,
+            )
+            authority_fence.arm_closing_guard()
+            authority_fence.verify_clean()
+            mutation_guard.verify_clean()
+        except OSError:
+            if result.get("ok"):
+                return _zettel_objet_link_authority_failure(
+                    "zettel_tree_changed_during_plan"
+                )
+            return result
+        finally:
+            _close_archive_index_authority_fence(authority_fence)
+            if mutation_guard is not None:
+                mutation_guard.close()
+        if result.get("ok"):
+            _emit_mint_progress(
+                progress_callback,
+                "zettel_objet_link_authority_lookup",
+                "done",
+                1,
+                1,
+            )
+        return result
+    try:
+        archive_root = require_existing_archive_root(root)
+        if not isinstance(authority_projection, Mapping):
+            return _zettel_objet_link_authority_failure(
+                "zettel_identity_projection_stale"
+            )
+        projected_generation = str(authority_projection.get("generation") or "")
+        projected_manifest_sha256 = str(
+            authority_projection.get("manifest_sha256") or ""
+        )
+        projected_manifest_count = int(
+            authority_projection.get("manifest_record_count", -1)
+        )
+        if (
+            authority_projection.get("ok") is not True
+            or authority_projection.get("schema")
+            != ZETTEL_OBJET_LINK_AUTHORITY_PROJECTION_SCHEMA
+            or not INDEX_GENERATION_RE.fullmatch(projected_generation)
+            or not INDEX_SNAPSHOT_SHA256_RE.fullmatch(
+                projected_manifest_sha256
+            )
+            or projected_manifest_count < 0
+        ):
+            return _zettel_objet_link_authority_failure(
+                "zettel_identity_projection_stale"
+            )
+        selector_count = int(bool(str(zettel_id or "").strip())) + int(
+            bool(str(relative_path or "").strip())
+        )
+        if selector_count != 1:
+            return _zettel_objet_link_authority_failure(
+                "zettel_objet_link_zettel_unavailable"
+            )
+        db_path = archive_root / INDEX_RELATIVE_PATH
+        conn = connect_archive_index(db_path, row_factory=True)
+        try:
+            conn.execute("BEGIN")
+            metadata = read_archive_index_metadata(conn)
+            if (
+                metadata.get("schema") != INDEX_METADATA_SCHEMA
+                or metadata.get("state") != INDEX_STATE_CURRENT
+                or metadata.get("generation") != projected_generation
+                or metadata.get("manifest_sha256")
+                != projected_manifest_sha256
+                or int(metadata.get("manifest_record_count", "-1"))
+                != projected_manifest_count
+            ):
+                return _zettel_objet_link_authority_failure(
+                    "zettel_identity_projection_stale"
+                )
+            evidence = require_current_zettel_index(
+                archive_root,
+                connection=conn,
+                progress_callback=progress_callback,
+                _authority_fence=_authority_fence,
+            )
+            if not evidence.get("ok"):
+                if any(
+                    reason
+                    in {
+                        "archive_index_manifest_changed",
+                        "archive_index_manifest_unreadable",
+                    }
+                    for reason in evidence.get("reason_codes", [])
+                ):
+                    return _zettel_objet_link_authority_failure(
+                        "manifest_changed"
+                    )
+                duplicate = False
+                requested_id = str(zettel_id or "").strip()
+                if requested_id:
+                    indexed_paths = {
+                        str(row[0])
+                        for row in conn.execute("SELECT path FROM zettels")
+                    }
+                    extra_paths = [
+                        path
+                        for path in iter_zettel_paths(archive_root)
+                        if archive_relative_path(path, archive_root)
+                        not in indexed_paths
+                    ]
+                    if (
+                        len(extra_paths)
+                        <= ZETTEL_OBJET_LINK_DRIFT_DUPLICATE_SCAN_MAX_PATHS
+                    ):
+                        for path in extra_paths:
+                            try:
+                                candidate = archive_index_stable_file_snapshot(
+                                    archive_root,
+                                    path,
+                                    max_bytes=ZETTEL_OBJET_LINK_ZETTEL_MAX_BYTES,
+                                )
+                                boundary = parse_approval_zettel_content_boundary(
+                                    candidate["raw"].decode("utf-8")
+                                )
+                            except (OSError, UnicodeError):
+                                continue
+                            if (
+                                boundary.get("state") != "blocked"
+                                and boundary.get("frontmatter", {}).get("id")
+                                == requested_id
+                            ):
+                                duplicate = True
+                                break
+                return _zettel_objet_link_authority_failure(
+                    "zettel_identity_duplicate"
+                    if duplicate
+                    else "zettel_tree_changed_during_plan"
+                )
+            manifest_generation = _archive_index_metadata_file_generation(
+                metadata,
+                prefix="manifest_",
+            )
+            manifest_path = (
+                archive_root / "objects" / "manifests" / "files.jsonl"
+            )
+            manifest_snapshot = archive_index_stable_file_snapshot(
+                archive_root,
+                manifest_path,
+                max_bytes=ZETTEL_OBJET_LINK_MANIFEST_MAX_BYTES,
+            )
+            if (
+                manifest_generation is None
+                or manifest_snapshot["file_generation"] != manifest_generation
+                or manifest_snapshot["file_sha256"]
+                != projected_manifest_sha256
+            ):
+                return _zettel_objet_link_authority_failure(
+                    "manifest_changed"
+                )
+            projection_row_count = int(
+                conn.execute(
+                    "SELECT COUNT(*) FROM objet_manifest_projection"
+                ).fetchone()[0]
+            )
+            if projection_row_count != projected_manifest_count:
+                return _zettel_objet_link_authority_failure(
+                    "zettel_identity_projection_stale"
+                )
+            if str(zettel_id or "").strip():
+                zettel_rows = conn.execute(
+                    "SELECT path, zettel_id, status, file_sha256, file_dev, "
+                    "file_ino, file_ctime_ns, file_size, file_mtime_ns "
+                    "FROM zettels WHERE zettel_id = ? ORDER BY path LIMIT 3",
+                    (str(zettel_id).strip(),),
+                ).fetchall()
+            else:
+                normalized_relative = normalize_archive_relative_path(
+                    str(relative_path or "").strip()
+                )
+                if not normalized_relative.startswith(VALID_ZETTEL_FOLDERS):
+                    return _zettel_objet_link_authority_failure(
+                        "zettel_objet_link_zettel_unavailable"
+                    )
+                zettel_rows = conn.execute(
+                    "SELECT path, zettel_id, status, file_sha256, file_dev, "
+                    "file_ino, file_ctime_ns, file_size, file_mtime_ns "
+                    "FROM zettels WHERE path = ? LIMIT 2",
+                    (normalized_relative,),
+                ).fetchall()
+            if len(zettel_rows) > 1:
+                return _zettel_objet_link_authority_failure(
+                    "zettel_identity_duplicate"
+                )
+            if not zettel_rows:
+                return _zettel_objet_link_authority_failure(
+                    "zettel_objet_link_zettel_unavailable"
+                )
+            row = zettel_rows[0]
+            selected_zettel_id = str(row["zettel_id"] or "")
+            if (
+                not selected_zettel_id
+                or int(
+                    conn.execute(
+                        "SELECT COUNT(*) FROM zettels WHERE zettel_id = ?",
+                        (selected_zettel_id,),
+                    ).fetchone()[0]
+                )
+                != 1
+            ):
+                return _zettel_objet_link_authority_failure(
+                    "zettel_identity_duplicate"
+                )
+            selected_relative = str(row["path"] or "")
+            selected_path = resolve_archive_relative_path(
+                archive_root,
+                selected_relative,
+            )
+            zettel_snapshot = archive_index_stable_file_snapshot(
+                archive_root,
+                selected_path,
+                max_bytes=ZETTEL_OBJET_LINK_ZETTEL_MAX_BYTES,
+            )
+            indexed_generation = {
+                field: int(row[field])
+                for field in (
+                    "file_dev",
+                    "file_ino",
+                    "file_ctime_ns",
+                    "file_size",
+                    "file_mtime_ns",
+                )
+            }
+            if (
+                str(row["file_sha256"] or "")
+                != zettel_snapshot["file_sha256"]
+                or indexed_generation != zettel_snapshot["file_generation"]
+            ):
+                return _zettel_objet_link_authority_failure(
+                    "zettel_tree_changed_during_plan"
+                )
+            boundary = parse_approval_zettel_content_boundary(
+                zettel_snapshot["raw"].decode("utf-8")
+            )
+            if (
+                boundary.get("state") == "blocked"
+                or str(boundary.get("frontmatter", {}).get("id") or "")
+                != str(row["zettel_id"] or "")
+            ):
+                return _zettel_objet_link_authority_failure(
+                    "zettel_tree_changed_during_plan"
+                )
+            normalized_object_id = str(object_id or "").strip().lower()
+            manifest_rows = conn.execute(
+                "SELECT record_ordinal, object_id, record_sha256, record_json "
+                "FROM objet_manifest_projection WHERE object_id = ? "
+                "ORDER BY record_ordinal",
+                (normalized_object_id,),
+            ).fetchall()
+            manifest_ordinals = {
+                int(manifest_row["record_ordinal"])
+                for manifest_row in manifest_rows
+            }
+            live_manifest_count, live_manifest_records = (
+                _archive_index_manifest_records_at_ordinals(
+                    manifest_snapshot["raw"],
+                    manifest_ordinals,
+                )
+            )
+            if live_manifest_count != projected_manifest_count:
+                return _zettel_objet_link_authority_failure(
+                    "zettel_identity_projection_stale"
+                )
+            manifest_records: list[dict[str, Any]] = []
+            for manifest_row in manifest_rows:
+                record_ordinal = int(manifest_row["record_ordinal"])
+                record_json = str(manifest_row["record_json"] or "")
+                record = json.loads(record_json)
+                expected_record_sha256 = "sha256:" + hashlib.sha256(
+                    (record_json + "\n").encode("utf-8")
+                ).hexdigest()
+                if (
+                    not archive_index_manifest_record_is_strict(record)
+                    or record.get("object_id") != normalized_object_id
+                    or str(manifest_row["record_sha256"] or "")
+                    != expected_record_sha256
+                    or live_manifest_records[record_ordinal]["record_json"]
+                    != record_json
+                    or live_manifest_records[record_ordinal]["record_sha256"]
+                    != expected_record_sha256
+                ):
+                    return _zettel_objet_link_authority_failure(
+                        "zettel_identity_projection_stale"
+                    )
+                manifest_records.append(record)
+            closing_snapshot = strict_live_zettel_stat_snapshot(
+                archive_root,
+                archive_index_zettel_stat_rows(conn),
+                progress_callback=progress_callback,
+                _authority_fence=_authority_fence,
+            )
+            if (
+                closing_snapshot.get("reason_codes")
+                or closing_snapshot.get("live_snapshot_sha256")
+                != authority_projection.get("live_snapshot_sha256")
+            ):
+                return _zettel_objet_link_authority_failure(
+                    "zettel_tree_changed_during_plan"
+                )
+            closing_manifest = archive_index_stable_file_snapshot(
+                archive_root,
+                manifest_path,
+                max_bytes=ZETTEL_OBJET_LINK_MANIFEST_MAX_BYTES,
+            )
+            if (
+                closing_manifest["file_sha256"]
+                != projected_manifest_sha256
+                or closing_manifest["file_generation"]
+                != manifest_generation
+            ):
+                return _zettel_objet_link_authority_failure(
+                    "manifest_changed"
+                )
+        finally:
+            if conn.in_transaction:
+                conn.rollback()
+            conn.close()
+    except (
+        ArchivePathError,
+        ArchiveServiceError,
+        OSError,
+        sqlite3.Error,
+        UnicodeError,
+        ValueError,
+        TypeError,
+    ):
+        return _zettel_objet_link_authority_failure(
+            "zettel_identity_projection_stale"
+        )
+    result = {
+        "ok": True,
+        "state": INDEX_STATE_CURRENT,
+        "schema": ZETTEL_OBJET_LINK_AUTHORITY_PROJECTION_SCHEMA,
+        "generation": projected_generation,
+        "live_snapshot_sha256": evidence["live_snapshot_sha256"],
+        "manifest_sha256": projected_manifest_sha256,
+        "manifest_record_count": projected_manifest_count,
+        "zettel": {
+            "path": selected_relative,
+            "zettel_id": str(row["zettel_id"] or ""),
+            "status": str(row["status"] or ""),
+            "file_sha256": zettel_snapshot["file_sha256"],
+            "file_generation": zettel_snapshot["file_generation"],
+            "frontmatter_json": boundary["frontmatter"],
+            "body": boundary["body"],
+            "raw_bytes": zettel_snapshot["raw"],
+        },
+        "manifest_records": manifest_records,
+        "reason_codes": [],
+        "blockers": [],
+    }
+    return result
+
+
+class _ArchiveIndexMutationLock:
+    """One cross-process lease shared by rebuilds and indexed writers."""
+
+    def __init__(self, root: Path, *, blocking: bool = True) -> None:
+        self._root = Path(root).resolve()
+        lock_dir = archive_internal_path(self._root, "db")
+        lock_dir.mkdir(parents=True, exist_ok=True)
+        self._path = lock_dir / ".archive-index-mutation.lock"
+        self._blocking = blocking
+        self._handle: Any = None
+
+    def __enter__(self) -> "_ArchiveIndexMutationLock":
+        self._handle = self._path.open("a+b")
+        self._handle.seek(0, os.SEEK_END)
+        if self._handle.tell() == 0:
+            self._handle.write(b"\0")
+            self._handle.flush()
+            os.fsync(self._handle.fileno())
+        self._handle.seek(0)
+        try:
+            if os.name == "nt":
+                import msvcrt
+
+                mode = msvcrt.LK_LOCK if self._blocking else msvcrt.LK_NBLCK
+                while True:
+                    try:
+                        msvcrt.locking(self._handle.fileno(), mode, 1)
+                        break
+                    except OSError:
+                        if not self._blocking:
+                            raise
+                        continue
+            else:
+                import fcntl
+
+                flags = fcntl.LOCK_EX
+                if not self._blocking:
+                    flags |= fcntl.LOCK_NB
+                fcntl.flock(self._handle.fileno(), flags)
+        except BaseException:
+            self._handle.close()
+            self._handle = None
+            raise
+        return self
+
+    def __exit__(self, *exc_info: Any) -> bool:
+        try:
+            if self._handle is not None:
+                self._handle.seek(0)
+                if os.name == "nt":
+                    import msvcrt
+
+                    msvcrt.locking(self._handle.fileno(), msvcrt.LK_UNLCK, 1)
+                else:
+                    import fcntl
+
+                    fcntl.flock(self._handle.fileno(), fcntl.LOCK_UN)
+        finally:
+            if self._handle is not None:
+                self._handle.close()
+                self._handle = None
+        return False
+
+
+_ARCHIVE_INDEX_MUTATION_LEASE_GUARD = threading.Lock()
+
+
+class ArchiveIndexMutationLeaseToken:
+    """Opaque process-local authority for one acquired mutation lease."""
+
+    __slots__ = ("generation", "root_key")
+
+    def __init__(self, *, root_key: str, generation: str) -> None:
+        self.root_key = root_key
+        self.generation = generation
+
+
+_ARCHIVE_INDEX_MUTATION_LEASES: dict[
+    str,
+    tuple[ArchiveIndexMutationLeaseToken, _ArchiveIndexMutationLock],
+] = {}
+
+
+def _archive_index_mutation_lease_key(root: Path) -> str:
+    resolved = str(Path(root).resolve())
+    return resolved.casefold() if os.name == "nt" else resolved
+
+
+def _acquire_archive_index_mutation_lease(
+    root: Path,
+    *,
+    expected_generation: str,
+) -> ArchiveIndexMutationLeaseToken:
+    if INDEX_GENERATION_RE.fullmatch(str(expected_generation or "")) is None:
+        raise ArchiveServiceError(INDEX_REBUILD_REQUIRED)
+    key = _archive_index_mutation_lease_key(root)
+    with _ARCHIVE_INDEX_MUTATION_LEASE_GUARD:
+        if key in _ARCHIVE_INDEX_MUTATION_LEASES:
+            raise ArchiveServiceError(INDEX_REBUILD_REQUIRED)
+    lease = _ArchiveIndexMutationLock(root)
+    lease.__enter__()
+    token = ArchiveIndexMutationLeaseToken(
+        root_key=key,
+        generation=expected_generation,
+    )
+    with _ARCHIVE_INDEX_MUTATION_LEASE_GUARD:
+        if key in _ARCHIVE_INDEX_MUTATION_LEASES:
+            lease.__exit__(None, None, None)
+            raise ArchiveServiceError(INDEX_REBUILD_REQUIRED)
+        _ARCHIVE_INDEX_MUTATION_LEASES[key] = (
+            token,
+            lease,
+        )
+    return token
+
+
+def _release_archive_index_mutation_lease(
+    root: Path,
+    *,
+    lease_token: ArchiveIndexMutationLeaseToken | None,
+) -> None:
+    key = _archive_index_mutation_lease_key(root)
+    lease: _ArchiveIndexMutationLock | None = None
+    with _ARCHIVE_INDEX_MUTATION_LEASE_GUARD:
+        current = _ARCHIVE_INDEX_MUTATION_LEASES.get(key)
+        if (
+            lease_token is not None
+            and current is not None
+            and current[0] is lease_token
+            and lease_token.root_key == key
+        ):
+            lease = current[1]
+            del _ARCHIVE_INDEX_MUTATION_LEASES[key]
+    if lease is not None:
+        lease.__exit__(None, None, None)
+
+
+class _ArchiveIndexReadMutationGuard:
+    """Hold an existing writer lock without creating health-check artifacts."""
+
+    def __init__(self, root: Path) -> None:
+        self._root = Path(root).resolve()
+        self._key = _archive_index_mutation_lease_key(self._root)
+        self._path = archive_internal_path(
+            self._root,
+            "db",
+        ) / ".archive-index-mutation.lock"
+        self._handle: Any = None
+        self._identity: tuple[int, int] | None = None
+        self._missing = False
+        with _ARCHIVE_INDEX_MUTATION_LEASE_GUARD:
+            if self._key in _ARCHIVE_INDEX_MUTATION_LEASES:
+                raise OSError("archive_index_mutation_in_progress")
+        try:
+            before = os.lstat(self._path)
+        except FileNotFoundError:
+            self._missing = True
+            return
+        if not stat.S_ISREG(before.st_mode) or stat.S_ISLNK(before.st_mode):
+            raise OSError("archive_index_mutation_lock_unsafe")
+        try:
+            handle = self._path.open("r+b")
+        except OSError:
+            raise OSError("archive_index_mutation_lock_unavailable") from None
+        self._handle = handle
+        try:
+            opened = os.fstat(handle.fileno())
+            if (
+                not stat.S_ISREG(opened.st_mode)
+                or (before.st_dev, before.st_ino)
+                != (opened.st_dev, opened.st_ino)
+            ):
+                raise OSError("archive_index_mutation_lock_changed")
+            self._identity = (int(opened.st_dev), int(opened.st_ino))
+            handle.seek(0)
+            if os.name == "nt":
+                import msvcrt
+
+                msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(
+                    handle.fileno(),
+                    fcntl.LOCK_EX | fcntl.LOCK_NB,
+                )
+        except BaseException:
+            handle.close()
+            self._handle = None
+            raise OSError("archive_index_mutation_in_progress") from None
+        with _ARCHIVE_INDEX_MUTATION_LEASE_GUARD:
+            if self._key in _ARCHIVE_INDEX_MUTATION_LEASES:
+                self.close()
+                raise OSError("archive_index_mutation_in_progress")
+
+    def verify_clean(self) -> None:
+        with _ARCHIVE_INDEX_MUTATION_LEASE_GUARD:
+            if self._key in _ARCHIVE_INDEX_MUTATION_LEASES:
+                raise OSError("archive_index_mutation_in_progress")
+        if self._missing:
+            try:
+                os.lstat(self._path)
+            except FileNotFoundError:
+                return
+            raise OSError("archive_index_mutation_lock_created")
+        if self._handle is None or self._identity is None:
+            raise OSError("archive_index_mutation_lock_unavailable")
+        opened = os.fstat(self._handle.fileno())
+        current = os.lstat(self._path)
+        if (
+            (opened.st_dev, opened.st_ino) != self._identity
+            or (current.st_dev, current.st_ino) != self._identity
+        ):
+            raise OSError("archive_index_mutation_lock_changed")
+
+    def close(self) -> None:
+        if self._handle is None:
+            return
+        try:
+            self._handle.seek(0)
+            if os.name == "nt":
+                import msvcrt
+
+                msvcrt.locking(self._handle.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(self._handle.fileno(), fcntl.LOCK_UN)
+        finally:
+            self._handle.close()
+            self._handle = None
+
+
+def _require_archive_index_mutation_lease(
+    root: Path,
+    *,
+    expected_generation: str,
+    lease_token: ArchiveIndexMutationLeaseToken | None,
+) -> None:
+    key = _archive_index_mutation_lease_key(root)
+    with _ARCHIVE_INDEX_MUTATION_LEASE_GUARD:
+        current = _ARCHIVE_INDEX_MUTATION_LEASES.get(key)
+        if (
+            lease_token is None
+            or current is None
+            or current[0] is not lease_token
+            or lease_token.root_key != key
+            or lease_token.generation != expected_generation
+        ):
+            raise ArchiveServiceError(INDEX_REBUILD_REQUIRED)
+
+
+def resume_archive_index_mutation(
+    archive_root: Path | str,
+    *,
+    expected_generation: str,
+    expected_mutation_owner_sha256: str,
+) -> ArchiveIndexMutationLeaseToken:
+    """Acquire the lifecycle lease only for the exact owned dirty intent."""
+
+    root = require_existing_archive_root(archive_root)
+    if (
+        INDEX_GENERATION_RE.fullmatch(str(expected_generation or "")) is None
+        or INDEX_SNAPSHOT_SHA256_RE.fullmatch(
+            str(expected_mutation_owner_sha256 or "")
+        )
+        is None
+    ):
+        raise ArchiveServiceError(INDEX_REBUILD_REQUIRED)
+    lease_token = _acquire_archive_index_mutation_lease(
+        root,
+        expected_generation=expected_generation,
+    )
+    try:
+        conn = connect_archive_index(
+            root / INDEX_RELATIVE_PATH,
+            row_factory=True,
+        )
+        try:
+            conn.execute("BEGIN")
+            metadata = read_archive_index_metadata(conn)
+            if (
+                metadata.get("schema") != INDEX_METADATA_SCHEMA
+                or metadata.get("state") != INDEX_STATE_DIRTY
+                or metadata.get("generation") != expected_generation
+                or INDEX_SEAL_PENDING_KEY in metadata
+                or not hmac.compare_digest(
+                    str(metadata.get(INDEX_MUTATION_OWNER_KEY) or ""),
+                    expected_mutation_owner_sha256,
+                )
+            ):
+                raise ArchiveServiceError(INDEX_REBUILD_REQUIRED)
+        finally:
+            if conn.in_transaction:
+                conn.rollback()
+            conn.close()
+    except BaseException:
+        _release_archive_index_mutation_lease(
+            root,
+            lease_token=lease_token,
+        )
+        raise
+    return lease_token
+
+
 def begin_archive_index_mutation(
     archive_root: Path | str,
     *,
     expected_generation: str,
+    mutation_owner_sha256: str | None = None,
     progress_callback: Callable[[str, str, int | None, int | None], None] | None = None,
-) -> str:
+) -> ArchiveIndexMutationLeaseToken:
     """Commit a generation-bound dirty intent before any indexed file mutation.
 
     This transaction is atomic only inside SQLite.  The later filesystem write
@@ -53043,16 +55523,37 @@ def begin_archive_index_mutation(
     root = require_existing_archive_root(archive_root)
     if not INDEX_GENERATION_RE.fullmatch(str(expected_generation or "")):
         raise ArchiveServiceError(INDEX_REBUILD_REQUIRED)
+    if (
+        mutation_owner_sha256 is not None
+        and not INDEX_SNAPSHOT_SHA256_RE.fullmatch(mutation_owner_sha256)
+    ):
+        raise ArchiveServiceError(INDEX_REBUILD_REQUIRED)
+    lease_token = _acquire_archive_index_mutation_lease(
+        root,
+        expected_generation=expected_generation,
+    )
     db_path = root / INDEX_RELATIVE_PATH
     if not db_path.is_file():
+        _release_archive_index_mutation_lease(
+            root,
+            lease_token=lease_token,
+        )
         raise ArchiveServiceError(INDEX_REBUILD_REQUIRED)
-    conn = connect_archive_index(db_path, write=True, row_factory=True)
+    try:
+        conn = connect_archive_index(db_path, write=True, row_factory=True)
+    except BaseException:
+        _release_archive_index_mutation_lease(
+            root,
+            lease_token=lease_token,
+        )
+        raise
     try:
         conn.execute("BEGIN IMMEDIATE")
         evidence = require_current_zettel_index(
             root,
             connection=conn,
             progress_callback=progress_callback,
+            _allow_active_mutation=True,
         )
         if (
             not evidence.get("ok")
@@ -53071,14 +55572,45 @@ def begin_archive_index_mutation(
             "INSERT OR REPLACE INTO index_metadata(key, value) VALUES ('updated_by', ?)",
             (f"wom-kit/{WOM_KIT_VERSION}",),
         )
+        if mutation_owner_sha256 is None:
+            conn.execute(
+                "DELETE FROM index_metadata WHERE key = ?",
+                (INDEX_MUTATION_OWNER_KEY,),
+            )
+        else:
+            conn.execute(
+                "INSERT OR REPLACE INTO index_metadata(key, value) VALUES (?, ?)",
+                (
+                    INDEX_MUTATION_OWNER_KEY,
+                    mutation_owner_sha256,
+                ),
+            )
         conn.commit()
-        return expected_generation
+        return lease_token
     except BaseException:
         if conn.in_transaction:
             conn.rollback()
+        _release_archive_index_mutation_lease(
+            root,
+            lease_token=lease_token,
+        )
         raise
     finally:
         conn.close()
+
+
+def _current_archive_index_generation_for_mutation(root: Path) -> str:
+    """Return the one current generation a writer must dirty before mutation."""
+
+    evidence = require_current_zettel_index(root)
+    generation = str(evidence.get("generation") or "")
+    if (
+        not evidence.get("ok")
+        or evidence.get("state") != INDEX_STATE_CURRENT
+        or not INDEX_GENERATION_RE.fullmatch(generation)
+    ):
+        raise ArchiveServiceError(INDEX_REBUILD_REQUIRED)
+    return generation
 
 
 def seal_archive_index_mutation(
@@ -53086,15 +55618,34 @@ def seal_archive_index_mutation(
     conn: sqlite3.Connection,
     *,
     expected_generation: str,
+    _authority_fence: _ArchiveIndexAuthorityFence | None = None,
 ) -> dict[str, Any]:
     """Reseal one exact delta only when its dirty generation still owns it."""
 
+    if _authority_fence is None:
+        # A seal that owns only its live scan cannot cover the caller's later
+        # SQLite commit.  Every writer must supply the longer-lived fence and
+        # finish it through ``_commit_archive_index_seal_with_fence``.
+        raise sqlite3.IntegrityError(INDEX_REBUILD_REQUIRED)
     metadata = read_archive_index_metadata(conn)
     if (
         metadata.get("schema") != INDEX_METADATA_SCHEMA
         or metadata.get("state") != INDEX_STATE_DIRTY
         or metadata.get("generation") != expected_generation
         or not INDEX_GENERATION_RE.fullmatch(str(expected_generation or ""))
+    ):
+        raise sqlite3.IntegrityError(INDEX_REBUILD_REQUIRED)
+    expected_manifest_sha256 = str(metadata.get("manifest_sha256") or "")
+    expected_manifest_generation = _archive_index_metadata_file_generation(
+        metadata,
+        prefix="manifest_",
+    )
+    expected_mutation_owner_sha256 = str(
+        metadata.get(INDEX_MUTATION_OWNER_KEY) or ""
+    ) or None
+    if (
+        not INDEX_SNAPSHOT_SHA256_RE.fullmatch(expected_manifest_sha256)
+        or expected_manifest_generation is None
     ):
         raise sqlite3.IntegrityError(INDEX_REBUILD_REQUIRED)
     quarantined_zettel_count = int(
@@ -53110,6 +55661,7 @@ def seal_archive_index_mutation(
         "WHERE status = 'canonical' AND path LIKE 'zettels/%'"
     ).fetchone()
     stat_rows = archive_index_zettel_stat_rows(conn)
+    seal_pending_nonce = "seal:" + secrets.token_hex(16)
     replace_archive_index_metadata(
         conn,
         canonical_zettel_count=int(canonical_row[0]),
@@ -53120,66 +55672,536 @@ def seal_archive_index_mutation(
         live_snapshot_sha256=archive_index_snapshot_sha256(stat_rows),
         state=INDEX_STATE_CURRENT,
         generation=expected_generation,
+        seal_pending_nonce=seal_pending_nonce,
     )
     # This is a fresh live-tree comparison after the delta, not a claim based
     # only on the SQLite rows.  Any unrelated concurrent zet change therefore
     # rolls this transaction back to the previously committed dirty intent.
-    evidence = require_current_zettel_index(root, connection=conn)
+    evidence = require_current_zettel_index(
+        root,
+        connection=conn,
+        _authority_fence=_authority_fence,
+        _allow_seal_pending=seal_pending_nonce,
+        _allow_mutation_owner=expected_mutation_owner_sha256,
+        _allow_active_mutation=True,
+    )
     if (
         not evidence.get("ok")
         or evidence.get("generation") != expected_generation
     ):
         raise sqlite3.IntegrityError(INDEX_REBUILD_REQUIRED)
+    try:
+        live_manifest = archive_index_stable_file_snapshot(
+            root,
+            root / ZETTEL_OBJET_LINK_MANIFEST_RELATIVE_PATH,
+            max_bytes=ZETTEL_OBJET_LINK_MANIFEST_MAX_BYTES,
+        )
+    except OSError:
+        raise sqlite3.IntegrityError(INDEX_REBUILD_REQUIRED) from None
+    if (
+        live_manifest.get("file_sha256") != expected_manifest_sha256
+        or live_manifest.get("file_generation")
+        != expected_manifest_generation
+    ):
+        raise sqlite3.IntegrityError(INDEX_REBUILD_REQUIRED)
     return evidence
+
+
+def _restore_archive_index_dirty_after_failed_seal(
+    root: Path,
+    conn: sqlite3.Connection,
+    *,
+    expected_generation: str,
+    mutation_owner_sha256: str | None,
+) -> bool:
+    """Durably undo a just-committed current claim after fence failure."""
+
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        metadata = read_archive_index_metadata(conn)
+        if (
+            metadata.get("schema") != INDEX_METADATA_SCHEMA
+            or metadata.get("generation") != expected_generation
+            or metadata.get("state")
+            not in {INDEX_STATE_CURRENT, INDEX_STATE_DIRTY}
+        ):
+            conn.rollback()
+            return False
+        conn.execute(
+            "INSERT OR REPLACE INTO index_metadata(key, value) "
+            "VALUES ('state', ?)",
+            (INDEX_STATE_DIRTY,),
+        )
+        conn.execute(
+            "INSERT OR REPLACE INTO index_metadata(key, value) "
+            "VALUES ('updated_at', ?)",
+            (datetime.now().astimezone().replace(microsecond=0).isoformat(),),
+        )
+        conn.execute(
+            "INSERT OR REPLACE INTO index_metadata(key, value) "
+            "VALUES ('updated_by', ?)",
+            (f"wom-kit/{WOM_KIT_VERSION}",),
+        )
+        if mutation_owner_sha256 is None:
+            conn.execute(
+                "DELETE FROM index_metadata WHERE key = ?",
+                (INDEX_MUTATION_OWNER_KEY,),
+            )
+        else:
+            conn.execute(
+                "INSERT OR REPLACE INTO index_metadata(key, value) "
+                "VALUES (?, ?)",
+                (INDEX_MUTATION_OWNER_KEY, mutation_owner_sha256),
+            )
+        conn.execute(
+            "DELETE FROM index_metadata WHERE key = ?",
+            (INDEX_SEAL_PENDING_KEY,),
+        )
+        conn.commit()
+        return _archive_index_dirty_is_durably_proven(
+            root,
+            expected_generation=expected_generation,
+            expected_mutation_owner_sha256=mutation_owner_sha256,
+        )
+    except BaseException as exc:
+        if conn.in_transaction:
+            try:
+                conn.rollback()
+            except BaseException:
+                pass
+        dirty_proven = _archive_index_dirty_is_durably_proven(
+            root,
+            expected_generation=expected_generation,
+            expected_mutation_owner_sha256=mutation_owner_sha256,
+        )
+        if dirty_proven and not isinstance(exc, Exception):
+            raise
+        return dirty_proven
+
+
+def _archive_index_dirty_is_durably_proven(
+    root: Path,
+    *,
+    expected_generation: str,
+    expected_mutation_owner_sha256: str | None,
+) -> bool:
+    """Freshly read back one exact dirty generation from durable metadata."""
+
+    db_path = root / INDEX_RELATIVE_PATH
+    if (
+        not db_path.is_file()
+        or INDEX_GENERATION_RE.fullmatch(expected_generation) is None
+        or (
+            expected_mutation_owner_sha256 is not None
+            and INDEX_SNAPSHOT_SHA256_RE.fullmatch(
+                expected_mutation_owner_sha256
+            )
+            is None
+        )
+    ):
+        return False
+    try:
+        proof_conn = connect_archive_index(db_path, row_factory=True)
+    except (OSError, sqlite3.Error, ValueError):
+        return False
+    try:
+        proof_conn.execute("BEGIN")
+        metadata = read_archive_index_metadata(proof_conn)
+        return bool(
+            metadata.get("schema") == INDEX_METADATA_SCHEMA
+            and metadata.get("state") == INDEX_STATE_DIRTY
+            and metadata.get("generation") == expected_generation
+            and (
+                expected_mutation_owner_sha256 is None
+                or hmac.compare_digest(
+                    str(metadata.get(INDEX_MUTATION_OWNER_KEY) or ""),
+                    expected_mutation_owner_sha256,
+                )
+            )
+        )
+    except (OSError, sqlite3.Error, ValueError):
+        return False
+    finally:
+        if proof_conn.in_transaction:
+            proof_conn.rollback()
+        proof_conn.close()
+
+
+def _ensure_archive_index_dirty_with_retained_lease(
+    root: Path,
+    *,
+    expected_generation: str,
+    lease_token: ArchiveIndexMutationLeaseToken | None,
+) -> bool:
+    """Make dirty durable without consuming a still-valid recovery token."""
+
+    try:
+        _require_archive_index_mutation_lease(
+            root,
+            expected_generation=expected_generation,
+            lease_token=lease_token,
+        )
+        conn = connect_archive_index(
+            root / INDEX_RELATIVE_PATH,
+            write=True,
+            row_factory=True,
+        )
+    except (ArchiveServiceError, OSError, sqlite3.Error, ValueError):
+        return False
+    try:
+        metadata = read_archive_index_metadata(conn)
+        mutation_owner_sha256 = str(
+            metadata.get(INDEX_MUTATION_OWNER_KEY) or ""
+        ) or None
+        return _restore_archive_index_dirty_after_failed_seal(
+            root,
+            conn,
+            expected_generation=expected_generation,
+            mutation_owner_sha256=mutation_owner_sha256,
+        )
+    finally:
+        conn.close()
+
+
+class _ArchiveIndexDirtyRestoreUncertainError(ArchiveServiceError):
+    """The writer cannot prove that a failed current claim became dirty."""
+
+
+class _ArchiveIndexFinalAuthorityChangedError(ArchiveServiceError):
+    """A caller's final source proof failed while its writer lease is held."""
+
+
+def _publish_archive_index_completed_seal(
+    conn: sqlite3.Connection,
+    *,
+    expected_generation: str,
+    expected_seal_pending: str,
+    expected_mutation_owner_sha256: str | None,
+) -> bool:
+    """Clear the durable fail-closed marker only after the fence is clean."""
+
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        metadata = read_archive_index_metadata(conn)
+        if (
+            metadata.get("schema") != INDEX_METADATA_SCHEMA
+            or metadata.get("state") != INDEX_STATE_CURRENT
+            or metadata.get("generation") != expected_generation
+            or not hmac.compare_digest(
+                str(metadata.get(INDEX_SEAL_PENDING_KEY) or ""),
+                expected_seal_pending,
+            )
+            or (
+                expected_mutation_owner_sha256 is None
+                and INDEX_MUTATION_OWNER_KEY in metadata
+            )
+            or (
+                expected_mutation_owner_sha256 is not None
+                and (
+                    INDEX_SNAPSHOT_SHA256_RE.fullmatch(
+                        expected_mutation_owner_sha256
+                    )
+                    is None
+                    or INDEX_SNAPSHOT_SHA256_RE.fullmatch(
+                        str(metadata.get(INDEX_MUTATION_OWNER_KEY) or "")
+                    )
+                    is None
+                    or not hmac.compare_digest(
+                        str(
+                            metadata.get(INDEX_MUTATION_OWNER_KEY) or ""
+                        ),
+                        expected_mutation_owner_sha256,
+                    )
+                )
+            )
+        ):
+            conn.rollback()
+            return False
+        conn.execute(
+            "DELETE FROM index_metadata WHERE key IN (?, ?)",
+            (INDEX_SEAL_PENDING_KEY, INDEX_MUTATION_OWNER_KEY),
+        )
+        conn.commit()
+        conn.execute("BEGIN")
+        published = read_archive_index_metadata(conn)
+        conn.rollback()
+        return bool(
+            published.get("schema") == INDEX_METADATA_SCHEMA
+            and published.get("state") == INDEX_STATE_CURRENT
+            and published.get("generation") == expected_generation
+            and INDEX_SEAL_PENDING_KEY not in published
+            and INDEX_MUTATION_OWNER_KEY not in published
+        )
+    except (OSError, sqlite3.Error, ValueError):
+        if conn.in_transaction:
+            conn.rollback()
+        return False
+
+
+def _commit_archive_index_seal_with_fence(
+    root: Path,
+    conn: sqlite3.Connection,
+    *,
+    expected_generation: str,
+    mutation_owner_sha256: str | None,
+    authority_fence: _ArchiveIndexAuthorityFence,
+    final_target_check: Callable[[], bool] | None = None,
+) -> bool:
+    """Commit current, close the authority fence, or restore durable dirty.
+
+    Scoped watchers remain armed across the SQLite commit and exact target
+    readback.  On Windows a root-subtree closing guard is then armed before any
+    scoped watcher is cancelled, giving all source watches one clean-close
+    linearization point.  A detected/ambiguous change or failed target check
+    immediately restores the same generation to its already-owned dirty state.
+    """
+
+    commit_attempted = False
+    fence_clean = False
+    final_authority_phase_started = False
+    final_authority_phase_completed = False
+    failure: BaseException | None = None
+    pending_metadata = read_archive_index_metadata(conn)
+    expected_seal_pending = str(
+        pending_metadata.get(INDEX_SEAL_PENDING_KEY) or ""
+    )
+    if INDEX_SEAL_PENDING_RE.fullmatch(expected_seal_pending) is None:
+        raise _ArchiveIndexDirtyRestoreUncertainError(
+            "archive_index_seal_pending_missing"
+        )
+    try:
+        commit_attempted = True
+        conn.commit()
+        final_authority_phase_started = True
+        if final_target_check is not None:
+            try:
+                final_target_exact = final_target_check()
+            except BaseException:
+                raise
+            if not final_target_exact:
+                raise OSError("archive_index_final_target_changed")
+        # From this point until both scoped watchers and the broad closing
+        # guard are verified there are no database writes.  This avoids
+        # mistaking our own SQLite publication for an archive source change.
+        # The clean close is the source-authority linearization point; the
+        # durable pending nonce keeps every reader blocked until publication.
+        authority_fence.arm_closing_guard()
+        authority_fence.verify_clean()
+        authority_fence.close()
+        final_authority_phase_completed = True
+        if not _publish_archive_index_completed_seal(
+            conn,
+            expected_generation=expected_generation,
+            expected_seal_pending=expected_seal_pending,
+            expected_mutation_owner_sha256=mutation_owner_sha256,
+        ):
+            raise _ArchiveIndexDirtyRestoreUncertainError(
+                "archive_index_seal_publication_uncertain"
+            )
+        fence_clean = True
+    except BaseException as exc:
+        failure = exc
+        if conn.in_transaction:
+            try:
+                conn.rollback()
+            except BaseException as rollback_exc:
+                if failure is None:
+                    failure = rollback_exc
+    finally:
+        if not fence_clean:
+            try:
+                authority_fence.close()
+            except BaseException as close_exc:
+                if failure is None:
+                    failure = close_exc
+    if fence_clean:
+        return True
+    if commit_attempted:
+        try:
+            dirty_restored = _restore_archive_index_dirty_after_failed_seal(
+                root,
+                conn,
+                expected_generation=expected_generation,
+                mutation_owner_sha256=mutation_owner_sha256,
+            )
+        except BaseException as restore_exc:
+            raise _ArchiveIndexDirtyRestoreUncertainError(
+                "archive_index_dirty_restore_uncertain"
+            ) from restore_exc
+        if not dirty_restored:
+            raise _ArchiveIndexDirtyRestoreUncertainError(
+                "archive_index_dirty_restore_uncertain"
+            ) from failure
+    if (
+        final_authority_phase_started
+        and not final_authority_phase_completed
+        and isinstance(failure, Exception)
+    ):
+        # The same writer lease must remain held until the calling exact
+        # operation has rolled its canonical bytes back.  Returning False here
+        # would let its public wrapper release the lease before that rollback.
+        # This phase includes the caller target check and every scoped/broad
+        # source watcher; pending-marker publication starts only after it.
+        raise _ArchiveIndexFinalAuthorityChangedError(
+            "archive_index_final_authority_changed"
+        ) from failure
+    if failure is not None and not isinstance(failure, Exception):
+        raise failure
+    return False
 
 
 def reseal_archive_index_mutation_without_delta(
     archive_root: Path | str,
     *,
     expected_generation: str,
+    lease_token: ArchiveIndexMutationLeaseToken | None = None,
 ) -> bool:
     """Return a cleaned-up failed write to current only after a fresh proof."""
 
     root = require_existing_archive_root(archive_root)
+    try:
+        _require_archive_index_mutation_lease(
+            root,
+            expected_generation=expected_generation,
+            lease_token=lease_token,
+        )
+    except ArchiveServiceError:
+        return False
     db_path = root / INDEX_RELATIVE_PATH
     if not db_path.is_file():
+        _release_archive_index_mutation_lease(
+            root,
+            lease_token=lease_token,
+        )
         return False
     try:
         conn = connect_archive_index(db_path, write=True, row_factory=True)
     except sqlite3.Error:
+        _release_archive_index_mutation_lease(
+            root,
+            lease_token=lease_token,
+        )
         return False
+    authority_fence: _ArchiveIndexAuthorityFence | None = None
+    retain_lease = False
     try:
+        authority_fence = _ArchiveIndexAuthorityFence(root)
         conn.execute("BEGIN IMMEDIATE")
+        metadata = read_archive_index_metadata(conn)
+        mutation_owner_sha256 = str(
+            metadata.get(INDEX_MUTATION_OWNER_KEY) or ""
+        ) or None
         seal_archive_index_mutation(
             root,
             conn,
             expected_generation=expected_generation,
+            _authority_fence=authority_fence,
         )
-        conn.commit()
-        return True
+        return _commit_archive_index_seal_with_fence(
+            root,
+            conn,
+            expected_generation=expected_generation,
+            mutation_owner_sha256=mutation_owner_sha256,
+            authority_fence=authority_fence,
+        )
+    except _ArchiveIndexDirtyRestoreUncertainError:
+        retain_lease = True
+        raise
     except (OSError, sqlite3.Error, ArchiveServiceError, ValueError):
         if conn.in_transaction:
             conn.rollback()
         return False
     finally:
+        if authority_fence is not None:
+            try:
+                authority_fence.close()
+            except OSError:
+                pass
         conn.close()
+        if not retain_lease:
+            _release_archive_index_mutation_lease(
+                root,
+                lease_token=lease_token,
+            )
 
 
 def mark_archive_index_dirty(
     archive_root: Path | str,
     *,
     expected_generation: str | None = None,
+    expected_mutation_owner_sha256: str | None = None,
+    lease_token: ArchiveIndexMutationLeaseToken | None = None,
 ) -> bool:
-    """Atomically mark only SQLite metadata dirty; no filesystem atomicity is claimed."""
+    """Durably mark one exact generation dirty or fail without overclaiming."""
 
     root = require_existing_archive_root(archive_root)
+    mutation_generation = str(expected_generation or "")
+    if lease_token is not None and not mutation_generation:
+        mutation_generation = lease_token.generation
+    if not mutation_generation:
+        try:
+            evidence = require_current_zettel_index(root)
+        except (ArchiveServiceError, OSError, ValueError):
+            return False
+        mutation_generation = str(evidence.get("generation") or "")
+    if INDEX_GENERATION_RE.fullmatch(mutation_generation) is None:
+        return False
+    if (
+        expected_mutation_owner_sha256 is not None
+        and INDEX_SNAPSHOT_SHA256_RE.fullmatch(
+            expected_mutation_owner_sha256
+        )
+        is None
+    ):
+        return False
+    active_token = lease_token
+    if active_token is None:
+        try:
+            active_token = _acquire_archive_index_mutation_lease(
+                root,
+                expected_generation=mutation_generation,
+            )
+        except (ArchiveServiceError, OSError):
+            return _archive_index_dirty_is_durably_proven(
+                root,
+                expected_generation=mutation_generation,
+                expected_mutation_owner_sha256=(
+                    expected_mutation_owner_sha256
+                ),
+            )
+    else:
+        try:
+            _require_archive_index_mutation_lease(
+                root,
+                expected_generation=mutation_generation,
+                lease_token=active_token,
+            )
+        except ArchiveServiceError:
+            return _archive_index_dirty_is_durably_proven(
+                root,
+                expected_generation=mutation_generation,
+                expected_mutation_owner_sha256=(
+                    expected_mutation_owner_sha256
+                ),
+            )
     db_path = root / INDEX_RELATIVE_PATH
     if not db_path.is_file():
+        _release_archive_index_mutation_lease(
+            root,
+            lease_token=active_token,
+        )
         return False
     try:
         conn = connect_archive_index(db_path, write=True)
-    except sqlite3.Error:
-        return False
+    except (OSError, sqlite3.Error, ValueError) as exc:
+        # The database exists, so a transient open failure cannot prove that
+        # a previously published CURRENT claim is safe.  Keep the mutation
+        # lease held and force an explicit recovery instead of reopening a
+        # stale index to readers.
+        raise _ArchiveIndexDirtyRestoreUncertainError(
+            "archive_index_dirty_restore_uncertain"
+        ) from exc
+    retain_lease = False
     try:
         conn.execute("BEGIN IMMEDIATE")
         metadata = read_archive_index_metadata(conn)
@@ -53188,9 +56210,15 @@ def mark_archive_index_dirty(
             metadata.get("schema") != INDEX_METADATA_SCHEMA
             or metadata.get("state") not in {INDEX_STATE_CURRENT, INDEX_STATE_DIRTY}
             or not INDEX_GENERATION_RE.fullmatch(generation)
+            or generation != mutation_generation
             or (
-                expected_generation is not None
-                and generation != expected_generation
+                expected_mutation_owner_sha256 is not None
+                and (
+                    not hmac.compare_digest(
+                        str(metadata.get(INDEX_MUTATION_OWNER_KEY) or ""),
+                        expected_mutation_owner_sha256,
+                    )
+                )
             )
         ):
             conn.rollback()
@@ -53207,14 +56235,609 @@ def mark_archive_index_dirty(
             "INSERT OR REPLACE INTO index_metadata(key, value) VALUES ('updated_by', ?)",
             (f"wom-kit/{WOM_KIT_VERSION}",),
         )
+        conn.execute(
+            "DELETE FROM index_metadata WHERE key = ?",
+            (INDEX_SEAL_PENDING_KEY,),
+        )
         conn.commit()
+        if _archive_index_dirty_is_durably_proven(
+            root,
+            expected_generation=mutation_generation,
+            expected_mutation_owner_sha256=(
+                expected_mutation_owner_sha256
+            ),
+        ):
+            return True
+        if _ensure_archive_index_dirty_with_retained_lease(
+            root,
+            expected_generation=mutation_generation,
+            lease_token=active_token,
+        ):
+            return True
+        retain_lease = True
+        raise _ArchiveIndexDirtyRestoreUncertainError(
+            "archive_index_dirty_restore_uncertain"
+        )
+    except _ArchiveIndexDirtyRestoreUncertainError:
+        retain_lease = True
+        raise
+    except BaseException as exc:
+        if conn.in_transaction:
+            try:
+                conn.rollback()
+            except BaseException:
+                pass
+        try:
+            dirty_restored = _ensure_archive_index_dirty_with_retained_lease(
+                root,
+                expected_generation=mutation_generation,
+                lease_token=active_token,
+            )
+        except BaseException as restore_exc:
+            retain_lease = True
+            raise _ArchiveIndexDirtyRestoreUncertainError(
+                "archive_index_dirty_restore_uncertain"
+            ) from restore_exc
+        if not dirty_restored:
+            retain_lease = True
+            raise _ArchiveIndexDirtyRestoreUncertainError(
+                "archive_index_dirty_restore_uncertain"
+            ) from exc
+        if not isinstance(exc, Exception):
+            raise
         return True
+    finally:
+        conn.close()
+        if not retain_lease:
+            _release_archive_index_mutation_lease(
+                root,
+                lease_token=active_token,
+            )
+
+
+def archive_manifest_mutation_owner_sha256(
+    *,
+    operation: str,
+    operation_binding_sha256: str,
+) -> str:
+    """Return a private-data-free owner for one exact manifest operation."""
+
+    normalized_operation = str(operation or "")
+    normalized_binding = str(operation_binding_sha256 or "")
+    if (
+        re.fullmatch(r"[a-z][a-z0-9_]{0,63}", normalized_operation) is None
+        or INDEX_SNAPSHOT_SHA256_RE.fullmatch(normalized_binding) is None
+    ):
+        raise ArchiveServiceError(INDEX_REBUILD_REQUIRED)
+    return "sha256:" + hashlib.sha256(
+        b"wom-kit/archive-manifest-mutation-owner/v0.1\0"
+        + normalized_operation.encode("ascii")
+        + b"\0"
+        + normalized_binding.encode("ascii")
+    ).hexdigest()
+
+
+def require_archive_manifest_index_mutation_authority(
+    archive_root: Path | str,
+    *,
+    operation_owner_sha256: str,
+    expected_pre_manifest_sha256: str,
+    expected_post_manifest_sha256: str | None = None,
+    _authority_fence: _ArchiveIndexAuthorityFence | None = None,
+) -> dict[str, Any]:
+    """Read-only proof that a manifest writer may later begin or resume.
+
+    This preflight belongs before *any* object, receipt, checkpoint, snapshot,
+    or manifest output.  It never changes SQLite.  A second call through
+    :func:`prepare_archive_manifest_index_mutation` still revalidates and commits
+    dirty immediately before the actual manifest mutation.
+    """
+
+    root = require_existing_archive_root(archive_root)
+    if INDEX_SNAPSHOT_SHA256_RE.fullmatch(
+        str(operation_owner_sha256 or "")
+    ) is None:
+        raise ArchiveServiceError(INDEX_REBUILD_REQUIRED)
+    allowed_sha256s = {str(expected_pre_manifest_sha256 or "")}
+    if expected_post_manifest_sha256 is not None:
+        allowed_sha256s.add(str(expected_post_manifest_sha256))
+    if (
+        not allowed_sha256s
+        or any(not INDEX_SNAPSHOT_SHA256_RE.fullmatch(value) for value in allowed_sha256s)
+    ):
+        raise ArchiveServiceError(INDEX_REBUILD_REQUIRED)
+
+    if _authority_fence is None:
+        mutation_guard: _ArchiveIndexReadMutationGuard | None = None
+        authority_fence: _ArchiveIndexAuthorityFence | None = None
+        try:
+            mutation_guard = _ArchiveIndexReadMutationGuard(root)
+            authority_fence = _ArchiveIndexAuthorityFence(root)
+            result = require_archive_manifest_index_mutation_authority(
+                root,
+                operation_owner_sha256=operation_owner_sha256,
+                expected_pre_manifest_sha256=expected_pre_manifest_sha256,
+                expected_post_manifest_sha256=expected_post_manifest_sha256,
+                _authority_fence=authority_fence,
+            )
+            authority_fence.arm_closing_guard()
+            authority_fence.verify_clean()
+            mutation_guard.verify_clean()
+            return result
+        except OSError:
+            raise ArchiveServiceError(INDEX_REBUILD_REQUIRED) from None
+        finally:
+            _close_archive_index_authority_fence(authority_fence)
+            if mutation_guard is not None:
+                mutation_guard.close()
+
+    try:
+        live_manifest = archive_index_stable_file_snapshot(
+            root,
+            root / ZETTEL_OBJET_LINK_MANIFEST_RELATIVE_PATH,
+            max_bytes=ZETTEL_OBJET_LINK_MANIFEST_MAX_BYTES,
+        )
+    except OSError:
+        raise ArchiveServiceError(INDEX_REBUILD_REQUIRED) from None
+    if live_manifest["file_sha256"] not in allowed_sha256s:
+        raise ArchiveServiceError(INDEX_REBUILD_REQUIRED)
+
+    evidence = require_current_zettel_index(
+        root,
+        _authority_fence=_authority_fence,
+    )
+    if evidence.get("ok") and evidence.get("state") == INDEX_STATE_CURRENT:
+        generation = str(evidence.get("generation") or "")
+        if (
+            not INDEX_GENERATION_RE.fullmatch(generation)
+            or not hmac.compare_digest(
+                str(evidence.get("manifest_sha256") or ""),
+                str(live_manifest["file_sha256"]),
+            )
+            or evidence.get("manifest_file_generation")
+            != live_manifest["file_generation"]
+        ):
+            raise ArchiveServiceError(INDEX_REBUILD_REQUIRED)
+        return {
+            "state": INDEX_STATE_CURRENT,
+            "generation": generation,
+            "manifest_snapshot": live_manifest,
+        }
+
+    db_path = root / INDEX_RELATIVE_PATH
+    if not db_path.is_file():
+        raise ArchiveServiceError(INDEX_REBUILD_REQUIRED)
+    conn = connect_archive_index(db_path, row_factory=True)
+    try:
+        conn.execute("BEGIN")
+        metadata = read_archive_index_metadata(conn)
+        generation = str(metadata.get("generation") or "")
+        indexed_rows = archive_index_zettel_stat_rows(conn)
+        if (
+            metadata.get("schema") != INDEX_METADATA_SCHEMA
+            or metadata.get("state") != INDEX_STATE_DIRTY
+            or not INDEX_GENERATION_RE.fullmatch(generation)
+            or INDEX_SEAL_PENDING_KEY in metadata
+            or not hmac.compare_digest(
+                str(metadata.get(INDEX_MUTATION_OWNER_KEY) or ""),
+                operation_owner_sha256,
+            )
+        ):
+            raise ArchiveServiceError(INDEX_REBUILD_REQUIRED)
+        live_zettels = strict_live_zettel_stat_snapshot(
+            root,
+            indexed_rows,
+            _authority_fence=_authority_fence,
+        )
+        if live_zettels.get("reason_codes"):
+            raise ArchiveServiceError(INDEX_REBUILD_REQUIRED)
+
+        # When the manifest still has the indexed pre-state, require the exact
+        # descriptor generation too.  An exact-byte replacement by an unknown
+        # process is not evidence that this operation owns the dirty intent.
+        recorded_manifest_sha256 = str(metadata.get("manifest_sha256") or "")
+        if live_manifest["file_sha256"] == recorded_manifest_sha256:
+            recorded_generation = _archive_index_metadata_file_generation(
+                metadata,
+                prefix="manifest_",
+            )
+            if recorded_generation != live_manifest["file_generation"]:
+                raise ArchiveServiceError(INDEX_REBUILD_REQUIRED)
+        return {
+            "state": INDEX_STATE_DIRTY,
+            "generation": generation,
+            "manifest_snapshot": live_manifest,
+        }
+    finally:
+        if conn.in_transaction:
+            conn.rollback()
+        conn.close()
+
+
+def prepare_archive_manifest_index_mutation(
+    archive_root: Path | str,
+    *,
+    operation_owner_sha256: str,
+    expected_pre_manifest_sha256: str,
+    expected_post_manifest_sha256: str | None = None,
+) -> tuple[str, bool, ArchiveIndexMutationLeaseToken]:
+    """Commit fresh dirty intent or reuse one strictly proved dirty resume."""
+
+    root = require_existing_archive_root(archive_root)
+    authority = require_archive_manifest_index_mutation_authority(
+        root,
+        operation_owner_sha256=operation_owner_sha256,
+        expected_pre_manifest_sha256=expected_pre_manifest_sha256,
+        expected_post_manifest_sha256=expected_post_manifest_sha256,
+    )
+    generation = str(authority["generation"])
+    if authority["state"] == INDEX_STATE_CURRENT:
+        lease_token = begin_archive_index_mutation(
+            root,
+            expected_generation=generation,
+            mutation_owner_sha256=operation_owner_sha256,
+        )
+        return generation, True, lease_token
+    lease_token = resume_archive_index_mutation(
+        root,
+        expected_generation=generation,
+        expected_mutation_owner_sha256=operation_owner_sha256,
+    )
+    return generation, False, lease_token
+
+
+def replace_archive_index_manifest_projection(
+    archive_root: Path | str,
+    *,
+    expected_generation: str,
+    expected_manifest_sha256: str,
+    expected_mutation_owner_sha256: str,
+    lease_token: ArchiveIndexMutationLeaseToken | None = None,
+) -> bool:
+    """Replace both manifest projections and reseal one dirty generation.
+
+    The durable manifest is strictly parsed exactly once.  ``objects``, the
+    ordinal projection, and descriptor-bound manifest metadata are then
+    replaced in one SQLite transaction.  The shared seal performs a fresh live
+    Zet and manifest comparison before the transaction may become current.
+    """
+
+    root = require_existing_archive_root(archive_root)
+    try:
+        _require_archive_index_mutation_lease(
+            root,
+            expected_generation=expected_generation,
+            lease_token=lease_token,
+        )
+    except ArchiveServiceError:
+        return False
+    if (
+        not INDEX_GENERATION_RE.fullmatch(str(expected_generation or ""))
+        or not INDEX_SNAPSHOT_SHA256_RE.fullmatch(
+            str(expected_manifest_sha256 or "")
+        )
+        or not INDEX_SNAPSHOT_SHA256_RE.fullmatch(
+            str(expected_mutation_owner_sha256 or "")
+        )
+    ):
+        if INDEX_GENERATION_RE.fullmatch(str(expected_generation or "")):
+            _release_archive_index_mutation_lease(
+                root,
+                lease_token=lease_token,
+            )
+        return False
+    try:
+        authority_fence = _ArchiveIndexAuthorityFence(root)
+    except OSError:
+        _release_archive_index_mutation_lease(
+            root,
+            lease_token=lease_token,
+        )
+        return False
+    try:
+        manifest_snapshot = archive_index_strict_manifest_snapshot(root)
+    except (ArchiveServiceError, OSError, UnicodeError, ValueError):
+        _close_archive_index_authority_fence(authority_fence)
+        _release_archive_index_mutation_lease(
+            root,
+            lease_token=lease_token,
+        )
+        return False
+    if manifest_snapshot["file_sha256"] != expected_manifest_sha256:
+        _close_archive_index_authority_fence(authority_fence)
+        _release_archive_index_mutation_lease(
+            root,
+            lease_token=lease_token,
+        )
+        return False
+
+    db_path = root / INDEX_RELATIVE_PATH
+    if not db_path.is_file():
+        _close_archive_index_authority_fence(authority_fence)
+        _release_archive_index_mutation_lease(
+            root,
+            lease_token=lease_token,
+        )
+        return False
+    try:
+        conn = connect_archive_index(db_path, write=True, row_factory=True)
     except sqlite3.Error:
+        _close_archive_index_authority_fence(authority_fence)
+        _release_archive_index_mutation_lease(
+            root,
+            lease_token=lease_token,
+        )
+        return False
+    retain_lease = False
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        metadata = read_archive_index_metadata(conn)
+        if (
+            metadata.get("schema") != INDEX_METADATA_SCHEMA
+            or metadata.get("state") != INDEX_STATE_DIRTY
+            or metadata.get("generation") != expected_generation
+            or not hmac.compare_digest(
+                str(metadata.get(INDEX_MUTATION_OWNER_KEY) or ""),
+                expected_mutation_owner_sha256,
+            )
+        ):
+            raise sqlite3.IntegrityError(INDEX_REBUILD_REQUIRED)
+        conn.execute("DELETE FROM objects")
+        conn.execute("DELETE FROM objet_manifest_projection")
+        for projected_record in manifest_snapshot["records"]:
+            record = projected_record["record"]
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO objects(
+                  object_id, logical_key, mime, manifest_json
+                )
+                VALUES (?, ?, ?, ?)
+                """,
+                (
+                    record.get("object_id"),
+                    record.get("logical_key"),
+                    record.get("mime"),
+                    json.dumps(record, ensure_ascii=False, default=str),
+                ),
+            )
+            conn.execute(
+                """
+                INSERT INTO objet_manifest_projection(
+                  record_ordinal, object_id, record_sha256, record_json
+                )
+                VALUES (?, ?, ?, ?)
+                """,
+                (
+                    projected_record["record_ordinal"],
+                    record["object_id"],
+                    projected_record["record_sha256"],
+                    projected_record["record_json"],
+                ),
+            )
+        manifest_generation = manifest_snapshot["file_generation"]
+        manifest_metadata = {
+            "manifest_sha256": manifest_snapshot["file_sha256"],
+            "manifest_record_count": str(manifest_snapshot["record_count"]),
+            **{
+                "manifest_" + field: str(manifest_generation[field])
+                for field in (
+                    "file_dev",
+                    "file_ino",
+                    "file_ctime_ns",
+                    "file_size",
+                    "file_mtime_ns",
+                )
+            },
+        }
+        for key, value in manifest_metadata.items():
+            conn.execute(
+                "INSERT OR REPLACE INTO index_metadata(key, value) VALUES (?, ?)",
+                (key, value),
+            )
+        seal_archive_index_mutation(
+            root,
+            conn,
+            expected_generation=expected_generation,
+            _authority_fence=authority_fence,
+        )
+
+        def final_manifest_target_is_exact() -> bool:
+            try:
+                final_manifest = archive_index_stable_file_snapshot(
+                    root,
+                    root / ZETTEL_OBJET_LINK_MANIFEST_RELATIVE_PATH,
+                    max_bytes=ZETTEL_OBJET_LINK_MANIFEST_MAX_BYTES,
+                )
+            except (ArchiveServiceError, OSError, ValueError):
+                return False
+            return bool(
+                final_manifest.get("file_sha256")
+                == manifest_snapshot["file_sha256"]
+                and final_manifest.get("file_generation")
+                == manifest_snapshot["file_generation"]
+            )
+
+        return _commit_archive_index_seal_with_fence(
+            root,
+            conn,
+            expected_generation=expected_generation,
+            mutation_owner_sha256=expected_mutation_owner_sha256,
+            authority_fence=authority_fence,
+            final_target_check=final_manifest_target_is_exact,
+        )
+    except _ArchiveIndexDirtyRestoreUncertainError:
+        retain_lease = True
+        raise
+    except (
+        ArchiveServiceError,
+        OSError,
+        sqlite3.Error,
+        UnicodeError,
+        ValueError,
+    ):
         if conn.in_transaction:
             conn.rollback()
         return False
     finally:
+        _close_archive_index_authority_fence(authority_fence)
         conn.close()
+        if not retain_lease:
+            _release_archive_index_mutation_lease(
+                root,
+                lease_token=lease_token,
+            )
+
+
+def restore_archive_manifest_bytes_and_reseal(
+    archive_root: Path | str,
+    *,
+    original_bytes: bytes,
+    written_bytes: bytes | None,
+    expected_generation: str,
+    expected_mutation_owner_sha256: str,
+    lease_token: ArchiveIndexMutationLeaseToken | None = None,
+    error_prefix: str,
+) -> bool:
+    """CAS-restore exact manifest bytes, rebuild projections, then reseal."""
+
+    root = require_existing_archive_root(archive_root)
+    manifest_path = root / ZETTEL_OBJET_LINK_MANIFEST_RELATIVE_PATH
+    restored = False
+    try:
+        current_bytes = manifest_path.read_bytes()
+        if hmac.compare_digest(current_bytes, original_bytes):
+            restored = True
+        elif (
+            isinstance(written_bytes, bytes)
+            and hmac.compare_digest(current_bytes, written_bytes)
+        ):
+            transaction_sha256 = "sha256:" + hashlib.sha256(
+                b"wom-kit/indexed-manifest-rollback/v0.1\0"
+                + error_prefix.encode("ascii")
+                + b"\0"
+                + hashlib.sha256(original_bytes).digest()
+                + hashlib.sha256(written_bytes).digest()
+            ).hexdigest()
+            _replace_regular_file_bytes_compare_and_swap(
+                root,
+                manifest_path,
+                expected_bytes=written_bytes,
+                replacement_bytes=original_bytes,
+                transaction_sha256=transaction_sha256,
+                swap_suffix=".index-manifest-rollback.swap",
+                max_bytes=ZETTEL_OBJET_LINK_MANIFEST_MAX_BYTES,
+                error_prefix=error_prefix,
+            )
+            restored = hmac.compare_digest(
+                manifest_path.read_bytes(),
+                original_bytes,
+            )
+    except (ArchiveServiceError, OSError, UnicodeError, ValueError):
+        restored = False
+    if restored:
+        try:
+            projection_restored = replace_archive_index_manifest_projection(
+                root,
+                expected_generation=expected_generation,
+                expected_manifest_sha256=(
+                    "sha256:" + hashlib.sha256(original_bytes).hexdigest()
+                ),
+                expected_mutation_owner_sha256=(
+                    expected_mutation_owner_sha256
+                ),
+                lease_token=lease_token,
+            )
+        except _ArchiveIndexDirtyRestoreUncertainError:
+            raise
+        if projection_restored:
+            return True
+    index_marked_dirty = mark_archive_index_dirty(
+        root,
+        expected_generation=expected_generation,
+        expected_mutation_owner_sha256=expected_mutation_owner_sha256,
+        lease_token=lease_token,
+    )
+    if not index_marked_dirty:
+        raise _ArchiveIndexDirtyRestoreUncertainError(
+            "archive_index_dirty_restore_uncertain"
+        )
+    return False
+
+
+def _restore_indexed_zettel_bytes_and_reseal(
+    root: Path,
+    path: Path,
+    *,
+    original_bytes: bytes,
+    written_bytes: bytes | None,
+    expected_generation: str,
+    lease_token: ArchiveIndexMutationLeaseToken | None = None,
+    error_prefix: str,
+) -> bool:
+    """Restore one failed compound write without overwriting an unknown edit.
+
+    Returning ``True`` means both the exact original bytes and the unchanged
+    index generation were independently proven current.  Every ambiguous path
+    deliberately keeps the already-committed dirty intent.
+    """
+
+    restored = False
+    try:
+        current_bytes = path.read_bytes()
+        if hmac.compare_digest(current_bytes, original_bytes):
+            restored = True
+        elif (
+            isinstance(written_bytes, bytes)
+            and hmac.compare_digest(current_bytes, written_bytes)
+        ):
+            transaction_sha256 = "sha256:" + hashlib.sha256(
+                b"wom-kit/indexed-zettel-rollback/v0.1\0"
+                + error_prefix.encode("ascii")
+                + b"\0"
+                + hashlib.sha256(original_bytes).digest()
+                + hashlib.sha256(written_bytes).digest()
+            ).hexdigest()
+            _replace_regular_file_bytes_compare_and_swap(
+                root,
+                path,
+                expected_bytes=written_bytes,
+                replacement_bytes=original_bytes,
+                transaction_sha256=transaction_sha256,
+                swap_suffix=".index-rollback.swap",
+                max_bytes=ZETTEL_OBJET_LINK_ZETTEL_MAX_BYTES,
+                error_prefix=error_prefix,
+            )
+            restored = hmac.compare_digest(path.read_bytes(), original_bytes)
+    except (ArchiveServiceError, OSError, ValueError):
+        restored = False
+
+    if restored:
+        try:
+            restored_row_updated = upsert_zettel_index_entry(
+                root,
+                path,
+                {},
+                "",
+                expected_generation=expected_generation,
+                expected_file_sha256=hashlib.sha256(original_bytes).hexdigest(),
+                lease_token=lease_token,
+            )
+        except _ArchiveIndexDirtyRestoreUncertainError:
+            raise
+        except (ArchiveServiceError, OSError, sqlite3.Error):
+            restored_row_updated = False
+        if restored_row_updated:
+            return True
+    index_marked_dirty = mark_archive_index_dirty(
+        root,
+        expected_generation=expected_generation,
+        lease_token=lease_token,
+    )
+    if not index_marked_dirty:
+        raise _ArchiveIndexDirtyRestoreUncertainError(
+            "archive_index_dirty_restore_uncertain"
+        )
+    return False
 
 
 def title_is_generic_for_checklist(title: str) -> bool:
@@ -70834,6 +74457,17 @@ def zettel_edge_write(
     blockers: list[str] = []
     warnings: list[str] = []
 
+    # A single edge changes canonical Zet bytes and must update the generated
+    # index in the same generation.  Put that mechanical fact in the dry-run
+    # itself so the CLI never asks a person to approve an effect that cannot
+    # start safely.
+    try:
+        index_evidence = require_current_zettel_index(root)
+    except (ArchiveServiceError, OSError, ValueError):
+        index_evidence = {"ok": False}
+    if index_evidence.get("ok") is not True:
+        blockers.append(INDEX_REBUILD_REQUIRED)
+
     if dry_run and approve:
         blockers.append("Use either --dry-run or --approve, not both.")
     if not dry_run and not approve:
@@ -71012,13 +74646,24 @@ def zettel_edge_write(
         str(source_summary.get("current_sha256") or ""),
     ):
         raise ArchiveServiceError("zettel_edge_source_changed_after_dry_run")
-    original_text = decode_utf8_with_universal_newlines(original_bytes)
     updated_frontmatter = copy.deepcopy(source_frontmatter)
     updated_edges = list(existing_edges)
     updated_edges.append(proposed_edge)
     updated_frontmatter["edges"] = updated_edges
     updated_frontmatter["updated_at"] = now
     updated_text = "---\n" + dump_yaml(updated_frontmatter) + "---\n" + source_body
+    intended_written_bytes = updated_text.encode("utf-8")
+    canonical_swap_transaction_sha256 = "sha256:" + sha256_json_hex(
+        {
+            "action": "zettel_edge_canonical_compare_and_swap",
+            "edge_id": edge_id,
+            "source_sha256": current_source_sha256,
+            "replacement_sha256": (
+                "sha256:"
+                + hashlib.sha256(intended_written_bytes).hexdigest()
+            ),
+        }
+    )
     receipt = {
         "schema_version": "wom-kit/zettel-edge-receipt/v0.1",
         "lifecycle_action": "zettel_edge_write",
@@ -71079,25 +74724,145 @@ def zettel_edge_write(
         raise ArchiveServiceError(
             "zettel_edge_source_changed_after_approval"
         )
-    zettel_written = False
+    expected_index_generation = (
+        _current_archive_index_generation_for_mutation(root)
+    )
+    index_lease_token = begin_archive_index_mutation(
+        root,
+        expected_generation=expected_index_generation,
+    )
     try:
-        # Atomic: a kill mid-write leaves the canonical zet byte-identical rather
-        # than truncated. The rollback below only runs on OSError, so it is not a
-        # substitute for the write itself being all-or-nothing.
-        write_text_atomic(source_path, updated_text)
+        final_source_bytes = source_path.read_bytes()
+    except OSError:
+        _restore_indexed_zettel_bytes_and_reseal(
+            root,
+            source_path,
+            original_bytes=original_bytes,
+            written_bytes=None,
+            expected_generation=expected_index_generation,
+            lease_token=index_lease_token,
+            error_prefix="zettel_edge_write",
+        )
+        raise ArchiveServiceError(
+            "zettel_edge_source_changed_after_approval"
+        ) from None
+    if (
+        not hmac.compare_digest(final_source_bytes, original_bytes)
+        or receipt_path.exists()
+    ):
+        _restore_indexed_zettel_bytes_and_reseal(
+            root,
+            source_path,
+            original_bytes=original_bytes,
+            written_bytes=None,
+            expected_generation=expected_index_generation,
+            lease_token=index_lease_token,
+            error_prefix="zettel_edge_write",
+        )
+        raise ArchiveServiceError(
+            "zettel_edge_source_changed_after_approval"
+        )
+    zettel_written = False
+    written_bytes: bytes | None = None
+    receipt_bytes = (
+        json.dumps(
+            json_safe(receipt),
+            indent=2,
+            ensure_ascii=False,
+            default=str,
+        )
+        + "\n"
+    ).encode("utf-8")
+    try:
+        _replace_regular_file_bytes_compare_and_swap(
+            root,
+            source_path,
+            expected_bytes=original_bytes,
+            replacement_bytes=intended_written_bytes,
+            transaction_sha256=canonical_swap_transaction_sha256,
+            swap_suffix=ZETTEL_EDGE_CANONICAL_SWAP_SUFFIX,
+            max_bytes=ZETTEL_EDGE_MAX_ZETTEL_BYTES,
+            error_prefix="zettel_edge",
+        )
         zettel_written = True
+        written_bytes = intended_written_bytes
+        if not hmac.compare_digest(
+            source_path.read_bytes(),
+            intended_written_bytes,
+        ):
+            raise OSError("zettel_edge_canonical_swap_verification_failed")
         write_json_new_file(receipt_path, receipt)
     except OSError:
-        if zettel_written:
-            write_text_atomic(source_path, original_text)
         if receipt_path.exists():
-            try:
-                receipt_path.unlink()
-            except OSError:
-                pass
+            _created_file_cleanup_if_exact(
+                receipt_path,
+                hashlib.sha256(receipt_bytes).hexdigest(),
+            )
+        _restore_indexed_zettel_bytes_and_reseal(
+            root,
+            source_path,
+            original_bytes=original_bytes,
+            written_bytes=written_bytes if zettel_written else None,
+            expected_generation=expected_index_generation,
+            lease_token=index_lease_token,
+            error_prefix="zettel_edge_write",
+        )
         raise
 
-    return zettel_edge_result(
+    expected_written_sha256 = hashlib.sha256(
+        written_bytes if written_bytes is not None else b""
+    ).hexdigest()
+    generated_index_updated = False
+    try:
+        generated_index_updated = upsert_zettel_index_entry(
+            root,
+            source_path,
+            updated_frontmatter,
+            source_body,
+            expected_generation=expected_index_generation,
+            expected_file_sha256=expected_written_sha256,
+            lease_token=index_lease_token,
+        )
+        if not generated_index_updated:
+            raise sqlite3.IntegrityError(INDEX_REBUILD_REQUIRED)
+    except (ArchiveServiceError, OSError, sqlite3.Error):
+        index_marked_dirty = mark_archive_index_dirty(
+            root,
+            expected_generation=expected_index_generation,
+            lease_token=index_lease_token,
+        )
+        result = zettel_edge_result(
+            archive_id=archive_id,
+            dry_run=False,
+            source_summary=source_summary,
+            target_summary=target_summary,
+            entity_type_contract=entity_type_contract,
+            edge_type=normalized_edge_type,
+            visibility=normalized_visibility,
+            proposed_edge=proposed_edge,
+            edge_id=edge_id,
+            receipt_path=receipt_relative,
+            reviewed_by=reviewed_by,
+            would_change=would_change,
+            files_written=[source_summary["path"], receipt_relative],
+            blockers=[INDEX_REBUILD_REQUIRED],
+            warnings=warnings,
+        )
+        result.update(
+            {
+                "state": "zettel_edge_written_index_update_failed",
+                "generated_index_updated": False,
+                "index_marked_dirty": index_marked_dirty,
+                "index_generation": expected_index_generation,
+                "partial_result": {
+                    "zettel_and_receipt_written": True,
+                    "index_current": False,
+                },
+            }
+        )
+        return result
+
+    result = zettel_edge_result(
         archive_id=archive_id,
         dry_run=False,
         source_summary=source_summary,
@@ -71114,6 +74879,14 @@ def zettel_edge_write(
         blockers=[],
         warnings=warnings,
     )
+    result.update(
+        {
+            "generated_index_updated": True,
+            "index_marked_dirty": False,
+            "index_generation": expected_index_generation,
+        }
+    )
+    return result
 
 
 def zettel_edge_batch_confidence_rank(value: Any) -> int:
@@ -71981,6 +75754,15 @@ def zettel_edge_revert(
     blockers: list[str] = []
     warnings: list[str] = []
 
+    # Revert is also an indexed Zet mutation.  Its reviewed preview must carry
+    # the same fail-closed precondition as the forward edge writer.
+    try:
+        index_evidence = require_current_zettel_index(root)
+    except (ArchiveServiceError, OSError, ValueError):
+        index_evidence = {"ok": False}
+    if index_evidence.get("ok") is not True:
+        blockers.append(INDEX_REBUILD_REQUIRED)
+
     if dry_run and approve:
         blockers.append("Use either --dry-run or --approve, not both.")
     if not dry_run and not approve:
@@ -72098,7 +75880,6 @@ def zettel_edge_revert(
     assert reviewed_by is not None
 
     assert source_original_bytes is not None
-    original_text = decode_utf8_with_universal_newlines(source_original_bytes)
     updated_frontmatter = copy.deepcopy(source_frontmatter)
     updated_edges = list(source_frontmatter.get("edges") or [])
     reverted_edge = updated_edges.pop(edge_index)
@@ -72106,6 +75887,18 @@ def zettel_edge_revert(
     updated_frontmatter["edges"] = updated_edges
     updated_frontmatter["updated_at"] = now
     updated_text = "---\n" + dump_yaml(updated_frontmatter) + "---\n" + source_body
+    intended_written_bytes = updated_text.encode("utf-8")
+    canonical_swap_transaction_sha256 = "sha256:" + sha256_json_hex(
+        {
+            "action": "zettel_edge_revert_canonical_compare_and_swap",
+            "edge_id": edge_summary.get("edge_id"),
+            "source_sha256": source_summary.get("current_sha256"),
+            "replacement_sha256": (
+                "sha256:"
+                + hashlib.sha256(intended_written_bytes).hexdigest()
+            ),
+        }
+    )
     revert_receipt = {
         "schema_version": "wom-kit/zettel-edge-revert-receipt/v0.1",
         "lifecycle_action": "zettel_edge_revert_write",
@@ -72163,22 +75956,144 @@ def zettel_edge_revert(
             raise ArchiveServiceError("zettel_edge_source_changed_after_approval")
     except OSError:
         raise ArchiveServiceError("zettel_edge_source_changed_after_approval") from None
-    zettel_written = False
+    expected_index_generation = (
+        _current_archive_index_generation_for_mutation(root)
+    )
+    index_lease_token = begin_archive_index_mutation(
+        root,
+        expected_generation=expected_index_generation,
+    )
     try:
-        write_text_atomic(source_path, updated_text)
+        final_source_bytes = source_path.read_bytes()
+    except OSError:
+        _restore_indexed_zettel_bytes_and_reseal(
+            root,
+            source_path,
+            original_bytes=source_original_bytes,
+            written_bytes=None,
+            expected_generation=expected_index_generation,
+            lease_token=index_lease_token,
+            error_prefix="zettel_edge_revert",
+        )
+        raise ArchiveServiceError(
+            "zettel_edge_source_changed_after_approval"
+        ) from None
+    if (
+        not hmac.compare_digest(final_source_bytes, source_original_bytes)
+        or revert_receipt_path.exists()
+    ):
+        _restore_indexed_zettel_bytes_and_reseal(
+            root,
+            source_path,
+            original_bytes=source_original_bytes,
+            written_bytes=None,
+            expected_generation=expected_index_generation,
+            lease_token=index_lease_token,
+            error_prefix="zettel_edge_revert",
+        )
+        raise ArchiveServiceError(
+            "zettel_edge_source_changed_after_approval"
+        )
+    zettel_written = False
+    written_bytes: bytes | None = None
+    revert_receipt_bytes = (
+        json.dumps(
+            json_safe(revert_receipt),
+            indent=2,
+            ensure_ascii=False,
+            default=str,
+        )
+        + "\n"
+    ).encode("utf-8")
+    try:
+        _replace_regular_file_bytes_compare_and_swap(
+            root,
+            source_path,
+            expected_bytes=source_original_bytes,
+            replacement_bytes=intended_written_bytes,
+            transaction_sha256=canonical_swap_transaction_sha256,
+            swap_suffix=ZETTEL_EDGE_REVERT_CANONICAL_SWAP_SUFFIX,
+            max_bytes=ZETTEL_EDGE_MAX_ZETTEL_BYTES,
+            error_prefix="zettel_edge_revert",
+        )
         zettel_written = True
+        written_bytes = intended_written_bytes
+        if not hmac.compare_digest(
+            source_path.read_bytes(),
+            intended_written_bytes,
+        ):
+            raise OSError(
+                "zettel_edge_revert_canonical_swap_verification_failed"
+            )
         write_json_new_file(revert_receipt_path, revert_receipt)
     except OSError:
-        if zettel_written:
-            write_text_atomic(source_path, original_text)
         if revert_receipt_path.exists():
-            try:
-                revert_receipt_path.unlink()
-            except OSError:
-                pass
+            _created_file_cleanup_if_exact(
+                revert_receipt_path,
+                hashlib.sha256(revert_receipt_bytes).hexdigest(),
+            )
+        _restore_indexed_zettel_bytes_and_reseal(
+            root,
+            source_path,
+            original_bytes=source_original_bytes,
+            written_bytes=written_bytes if zettel_written else None,
+            expected_generation=expected_index_generation,
+            lease_token=index_lease_token,
+            error_prefix="zettel_edge_revert",
+        )
         raise
 
-    return zettel_edge_revert_result(
+    expected_written_sha256 = hashlib.sha256(
+        written_bytes if written_bytes is not None else b""
+    ).hexdigest()
+    generated_index_updated = False
+    try:
+        generated_index_updated = upsert_zettel_index_entry(
+            root,
+            source_path,
+            updated_frontmatter,
+            source_body,
+            expected_generation=expected_index_generation,
+            expected_file_sha256=expected_written_sha256,
+            lease_token=index_lease_token,
+        )
+        if not generated_index_updated:
+            raise sqlite3.IntegrityError(INDEX_REBUILD_REQUIRED)
+    except (ArchiveServiceError, OSError, sqlite3.Error):
+        index_marked_dirty = mark_archive_index_dirty(
+            root,
+            expected_generation=expected_index_generation,
+            lease_token=index_lease_token,
+        )
+        result = zettel_edge_revert_result(
+            archive_id=archive_id,
+            dry_run=False,
+            approve=True,
+            reviewed_by=reviewed_by,
+            edge_receipt_path=receipt_relative,
+            revert_receipt_path=revert_receipt_relative,
+            source_summary=source_summary,
+            edge_summary=edge_summary,
+            would_change=would_change,
+            files_written=[source_summary["path"], revert_receipt_relative],
+            blockers=[INDEX_REBUILD_REQUIRED],
+            warnings=warnings,
+        )
+        result.update(
+            {
+                "state": "zettel_edge_reverted_index_update_failed",
+                "generated_index_updated": False,
+                "index_marked_dirty": index_marked_dirty,
+                "index_generation": expected_index_generation,
+                "partial_result": {
+                    "zettel_and_revert_receipt_written": True,
+                    "index_current": False,
+                },
+            }
+        )
+        return result
+
+    result = zettel_edge_revert_result(
         archive_id=archive_id,
         dry_run=False,
         approve=True,
@@ -72192,6 +76107,14 @@ def zettel_edge_revert(
         blockers=[],
         warnings=warnings,
     )
+    result.update(
+        {
+            "generated_index_updated": True,
+            "index_marked_dirty": False,
+            "index_generation": expected_index_generation,
+        }
+    )
+    return result
 
 
 def zettel_edge_batch_revert_result(
@@ -124593,10 +128516,181 @@ def index_archive(
     *,
     progress_callback: Callable[[str, str, int | None, int | None], None] | None = None,
 ) -> dict[str, Any]:
+    """Rebuild only while no indexed writer owns the cross-process lease."""
+
+    root = require_existing_archive_root(archive_root)
+    if progress_callback is not None:
+        progress_callback("index-lock-and-schema", "start", None, None)
+    key = _archive_index_mutation_lease_key(root)
+    with _ARCHIVE_INDEX_MUTATION_LEASE_GUARD:
+        if key in _ARCHIVE_INDEX_MUTATION_LEASES:
+            raise ArchiveServiceError("archive_index_mutation_in_progress")
+    rebuild_lock = _ArchiveIndexMutationLock(root, blocking=False)
+    try:
+        rebuild_lock.__enter__()
+    except OSError:
+        raise ArchiveServiceError("archive_index_mutation_in_progress") from None
+    try:
+        return _index_archive_locked(
+            root,
+            progress_callback=progress_callback,
+            initial_progress_emitted=True,
+        )
+    finally:
+        rebuild_lock.__exit__(None, None, None)
+
+
+def _mark_archive_index_dirty_while_rebuild_locked(
+    root: Path,
+    *,
+    expected_generation: str,
+) -> bool:
+    """Dirty a just-committed rebuild while its outer OS lease is still held."""
+
+    db_path = root / INDEX_RELATIVE_PATH
+    if (
+        not db_path.is_file()
+        or INDEX_GENERATION_RE.fullmatch(expected_generation) is None
+    ):
+        return False
+    try:
+        conn = connect_archive_index(db_path, write=True, row_factory=True)
+    except sqlite3.Error:
+        return False
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        metadata = read_archive_index_metadata(conn)
+        if (
+            metadata.get("schema") != INDEX_METADATA_SCHEMA
+            or metadata.get("generation") != expected_generation
+            or metadata.get("state")
+            not in {INDEX_STATE_CURRENT, INDEX_STATE_DIRTY}
+        ):
+            conn.rollback()
+            return False
+        conn.execute(
+            "INSERT OR REPLACE INTO index_metadata(key, value) VALUES ('state', ?)",
+            (INDEX_STATE_DIRTY,),
+        )
+        conn.execute(
+            "INSERT OR REPLACE INTO index_metadata(key, value) VALUES ('updated_at', ?)",
+            (datetime.now().astimezone().replace(microsecond=0).isoformat(),),
+        )
+        conn.execute(
+            "INSERT OR REPLACE INTO index_metadata(key, value) VALUES ('updated_by', ?)",
+            (f"wom-kit/{WOM_KIT_VERSION}",),
+        )
+        conn.execute(
+            "DELETE FROM index_metadata WHERE key IN (?, ?)",
+            (INDEX_SEAL_PENDING_KEY, INDEX_MUTATION_OWNER_KEY),
+        )
+        conn.commit()
+        return _archive_index_dirty_is_durably_proven(
+            root,
+            expected_generation=expected_generation,
+            expected_mutation_owner_sha256=None,
+        )
+    except BaseException as exc:
+        if conn.in_transaction:
+            try:
+                conn.rollback()
+            except BaseException:
+                pass
+        dirty_proven = _archive_index_dirty_is_durably_proven(
+            root,
+            expected_generation=expected_generation,
+            expected_mutation_owner_sha256=None,
+        )
+        if dirty_proven and not isinstance(exc, Exception):
+            raise
+        return dirty_proven
+    finally:
+        conn.close()
+
+
+def _archive_index_rebuild_commit_outcome(
+    root: Path,
+    *,
+    expected_new_generation: str,
+    pre_rebuild_database_existed: bool,
+    pre_rebuild_metadata: Mapping[str, str] | None,
+) -> str:
+    """Classify an ambiguous rebuild commit from one fresh durable read."""
+
+    db_path = root / INDEX_RELATIVE_PATH
+    if not db_path.is_file():
+        return (
+            "precommit_fail_closed"
+            if not pre_rebuild_database_existed
+            else "uncertain"
+        )
+    try:
+        proof_conn = connect_archive_index(db_path, row_factory=True)
+    except (OSError, sqlite3.Error, ValueError):
+        return "uncertain"
+    try:
+        proof_conn.execute("BEGIN")
+        metadata = read_archive_index_metadata(proof_conn)
+    except (OSError, sqlite3.Error, ValueError):
+        return "uncertain"
+    finally:
+        if proof_conn.in_transaction:
+            proof_conn.rollback()
+        proof_conn.close()
+    if metadata.get("generation") == expected_new_generation:
+        return "new_generation_visible"
+    if pre_rebuild_metadata is not None and metadata == dict(
+        pre_rebuild_metadata
+    ):
+        return "precommit_rolled_back"
+    if not pre_rebuild_database_existed and not metadata:
+        return "precommit_fail_closed"
+    return "uncertain"
+
+
+def _index_archive_locked(
+    archive_root: Path | str,
+    *,
+    progress_callback: Callable[[str, str, int | None, int | None], None] | None = None,
+    initial_progress_emitted: bool = False,
+) -> dict[str, Any]:
     root = require_existing_archive_root(archive_root)
     archive_id = read_archive_id(root)
     db_path = archive_internal_path(root, INDEX_RELATIVE_PATH)
     db_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        authority_fence = _ArchiveIndexAuthorityFence(root)
+    except OSError:
+        raise ArchiveServiceError(
+            "archive_index_live_authority_watcher_unavailable"
+        ) from None
+    pre_rebuild_database_existed = db_path.is_file()
+    pre_rebuild_metadata: dict[str, str] | None = None
+    if pre_rebuild_database_existed:
+        try:
+            pre_rebuild_conn = connect_archive_index(
+                db_path,
+                row_factory=True,
+            )
+            try:
+                pre_rebuild_conn.execute("BEGIN")
+                pre_rebuild_metadata = read_archive_index_metadata(
+                    pre_rebuild_conn
+                )
+            finally:
+                if pre_rebuild_conn.in_transaction:
+                    pre_rebuild_conn.rollback()
+                pre_rebuild_conn.close()
+        except ArchiveIndexReadBoundaryError as exc:
+            if str(exc) != INDEX_REBUILD_REQUIRED:
+                _close_archive_index_authority_fence(authority_fence)
+                raise
+            pre_rebuild_metadata = None
+        except (OSError, sqlite3.Error, ValueError):
+            pre_rebuild_metadata = None
+        except BaseException:
+            _close_archive_index_authority_fence(authority_fence)
+            raise
 
     zettel_count = 0
     object_count = 0
@@ -124616,10 +128710,25 @@ def index_archive(
     try:
         rebuild_session.__enter__()
     except PrivateObjetIndexRebuildError as exc:
+        _close_archive_index_authority_fence(authority_fence)
         raise ArchiveServiceError(exc.code) from None
-    conn = rebuild_session.connection
+    except BaseException:
+        _close_archive_index_authority_fence(authority_fence)
+        raise
     try:
-        if progress_callback is not None:
+        authority_fence.reset_manifest_watcher_after_internal_setup()
+    except OSError as exc:
+        try:
+            rebuild_session.__exit__(type(exc), exc, exc.__traceback__)
+        except PrivateObjetIndexRebuildError as rebuild_exc:
+            _close_archive_index_authority_fence(authority_fence)
+            raise ArchiveServiceError(rebuild_exc.code) from None
+        _close_archive_index_authority_fence(authority_fence)
+        raise ArchiveServiceError(INDEX_REBUILD_REQUIRED) from None
+    conn = rebuild_session.connection
+    commit_attempted = False
+    try:
+        if progress_callback is not None and not initial_progress_emitted:
             progress_callback("index-lock-and-schema", "start", None, None)
         conn.executescript(
             """
@@ -124632,6 +128741,10 @@ def index_archive(
               kind TEXT,
               body TEXT,
               frontmatter_json TEXT,
+              file_sha256 TEXT,
+              file_dev TEXT,
+              file_ino TEXT,
+              file_ctime_ns TEXT,
               file_size INTEGER,
               file_mtime_ns INTEGER,
               body_sha256 TEXT,
@@ -124649,6 +128762,12 @@ def index_archive(
               logical_key TEXT,
               mime TEXT,
               manifest_json TEXT
+            );
+            CREATE TABLE IF NOT EXISTS objet_manifest_projection (
+              record_ordinal INTEGER PRIMARY KEY,
+              object_id TEXT NOT NULL,
+              record_sha256 TEXT NOT NULL,
+              record_json TEXT NOT NULL
             );
             CREATE TABLE IF NOT EXISTS derived_texts (
               derived_text_id TEXT PRIMARY KEY,
@@ -124703,6 +128822,7 @@ def index_archive(
             );
             DELETE FROM zettels;
             DELETE FROM objects;
+            DELETE FROM objet_manifest_projection;
             DELETE FROM derived_texts;
             DELETE FROM views;
             DELETE FROM source_map_entries;
@@ -124717,6 +128837,14 @@ def index_archive(
             "CREATE INDEX IF NOT EXISTS zettels_duplicate_candidates "
             "ON zettels(status, normalized_title, body_prefix_sha256, "
             "zettel_id, path)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS zettels_id_path "
+            "ON zettels(zettel_id, path)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS objet_manifest_projection_object "
+            "ON objet_manifest_projection(object_id, record_ordinal)"
         )
         conn.execute(
             "CREATE INDEX IF NOT EXISTS zettels_view_origin_time "
@@ -124769,8 +128897,8 @@ def index_archive(
         def insert_quarantined_zettel_row(
             relative_path: str,
             *,
-            file_size: int,
-            file_mtime_ns: int,
+            file_sha256: str,
+            file_generation: Mapping[str, int],
             issue_code: str,
         ) -> None:
             # Replace any previously indexed plaintext with a content-free row.
@@ -124780,12 +128908,13 @@ def index_archive(
                 """
                 INSERT OR REPLACE INTO zettels(
                   path, zettel_id, title, status, kind, body, frontmatter_json,
+                  file_sha256, file_dev, file_ino, file_ctime_ns,
                   file_size, file_mtime_ns, body_sha256, approved_body_sha256,
                   forbidden_location_reference_found, normalized_title,
                   body_prefix_sha256, origin_class, minted_at, created_at,
                   mint_receipt_path
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     relative_path,
@@ -124795,8 +128924,12 @@ def index_archive(
                     None,
                     "",
                     "",
-                    file_size,
-                    file_mtime_ns,
+                    file_sha256,
+                    str(file_generation["file_dev"]),
+                    str(file_generation["file_ino"]),
+                    str(file_generation["file_ctime_ns"]),
+                    file_generation["file_size"],
+                    file_generation["file_mtime_ns"],
                     "",
                     "",
                     0,
@@ -124817,36 +128950,31 @@ def index_archive(
         for path_index, path in enumerate(zettel_paths, start=1):
             relative_path = archive_relative_path(path, root)
             try:
-                zettel_stat = path.stat()
-                zettel_mtime_ns = zettel_stat.st_mtime_ns
-                zettel_size = zettel_stat.st_size
-            except OSError:
-                zettel_mtime_ns = 0
-                zettel_size = 0
+                zettel_snapshot = archive_index_stable_file_snapshot(
+                    root,
+                    path,
+                    max_bytes=ZETTEL_OBJET_LINK_ZETTEL_MAX_BYTES,
+                )
+            except OSError as exc:
+                raise ArchiveServiceError(
+                    "archive_index_zettel_generation_unavailable"
+                ) from exc
+            zettel_generation = zettel_snapshot["file_generation"]
+            zettel_mtime_ns = zettel_generation["file_mtime_ns"]
             index_stat_snapshot_rows.append(
                 {
                     "path": relative_path,
-                    "file_size": zettel_size,
-                    "file_mtime_ns": zettel_mtime_ns,
+                    **zettel_generation,
                 }
             )
             try:
-                text = path.read_text(encoding="utf-8")
+                text = zettel_snapshot["raw"].decode("utf-8")
             except UnicodeError:
                 insert_quarantined_zettel_row(
                     relative_path,
-                    file_size=zettel_size,
-                    file_mtime_ns=zettel_mtime_ns,
+                    file_sha256=zettel_snapshot["file_sha256"],
+                    file_generation=zettel_generation,
                     issue_code="frontmatter_unicode_error",
-                )
-                zettel_count += 1
-                continue
-            except OSError:
-                insert_quarantined_zettel_row(
-                    relative_path,
-                    file_size=zettel_size,
-                    file_mtime_ns=zettel_mtime_ns,
-                    issue_code="frontmatter_io_error",
                 )
                 zettel_count += 1
                 continue
@@ -124854,8 +128982,8 @@ def index_archive(
             if boundary["state"] == "blocked":
                 insert_quarantined_zettel_row(
                     relative_path,
-                    file_size=zettel_size,
-                    file_mtime_ns=zettel_mtime_ns,
+                    file_sha256=zettel_snapshot["file_sha256"],
+                    file_generation=zettel_generation,
                     issue_code=str(boundary["reason"]),
                 )
                 zettel_count += 1
@@ -124879,12 +129007,13 @@ def index_archive(
                 """
                 INSERT OR REPLACE INTO zettels(
                   path, zettel_id, title, status, kind, body, frontmatter_json,
+                  file_sha256, file_dev, file_ino, file_ctime_ns,
                   file_size, file_mtime_ns, body_sha256, approved_body_sha256,
                   forbidden_location_reference_found, normalized_title,
                   body_prefix_sha256, origin_class, minted_at, created_at,
                   mint_receipt_path
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     relative_path,
@@ -124894,8 +129023,12 @@ def index_archive(
                     frontmatter.get("kind"),
                     "" if redacted else body,
                     "" if redacted else json.dumps(frontmatter, ensure_ascii=False, default=str),
-                    zettel_size,
-                    zettel_mtime_ns,
+                    zettel_snapshot["file_sha256"],
+                    str(zettel_generation["file_dev"]),
+                    str(zettel_generation["file_ino"]),
+                    str(zettel_generation["file_ctime_ns"]),
+                    zettel_generation["file_size"],
+                    zettel_generation["file_mtime_ns"],
                     "" if redacted else sha256_text(body),
                     "" if redacted else approved_body_sha256,
                     1 if (not redacted and contains_forbidden_location_reference(text)) else 0,
@@ -124947,23 +129080,20 @@ def index_archive(
                 "One or more zettels were indexed as content-free quarantine rows; repair is required."
             )
 
-        manifest_path = root / "objects" / "manifests" / "files.jsonl"
-        manifest_lines = manifest_path.read_text(encoding="utf-8").splitlines() if manifest_path.is_file() else []
-        manifest_line_count = len(manifest_lines)
+        try:
+            manifest_snapshot = archive_index_strict_manifest_snapshot(root)
+        except (ArchiveServiceError, OSError) as exc:
+            raise ArchiveServiceError("archive_index_manifest_invalid") from exc
+        manifest_records = manifest_snapshot["records"]
+        manifest_line_count = len(manifest_records)
         if progress_callback is not None:
             progress_callback("index-objects", "start", 0, manifest_line_count)
-        for line_index, raw_line in enumerate(manifest_lines, start=1):
+        for line_index, projected_record in enumerate(manifest_records, start=1):
             if progress_callback is not None and (
                 line_index == 1 or line_index == manifest_line_count or line_index % 250 == 0
             ):
                 progress_callback("index-objects", "scanned", line_index, manifest_line_count)
-            line = raw_line.strip()
-            if not line:
-                continue
-            try:
-                record = json.loads(line)
-            except json.JSONDecodeError:
-                continue
+            record = projected_record["record"]
             conn.execute(
                 """
                 INSERT OR REPLACE INTO objects(object_id, logical_key, mime, manifest_json)
@@ -124974,6 +129104,20 @@ def index_archive(
                     record.get("logical_key"),
                     record.get("mime"),
                     json.dumps(record, ensure_ascii=False, default=str),
+                ),
+            )
+            conn.execute(
+                """
+                INSERT INTO objet_manifest_projection(
+                  record_ordinal, object_id, record_sha256, record_json
+                )
+                VALUES (?, ?, ?, ?)
+                """,
+                (
+                    projected_record["record_ordinal"],
+                    record["object_id"],
+                    projected_record["record_sha256"],
+                    projected_record["record_json"],
                 ),
             )
             object_count += 1
@@ -125100,6 +129244,11 @@ def index_archive(
 
         if progress_callback is not None:
             progress_callback("index-commit", "start", None, None)
+        seal_pending_nonce = (
+            "seal:" + secrets.token_hex(16)
+            if not quarantined_zettels
+            else None
+        )
         replace_archive_index_metadata(
             conn,
             canonical_zettel_count=canonical_metadata_count,
@@ -125108,22 +129257,182 @@ def index_archive(
             quarantined_zettel_count=len(quarantined_zettels),
             zettel_row_count=len(index_stat_snapshot_rows),
             live_snapshot_sha256=archive_index_snapshot_sha256(index_stat_snapshot_rows),
+            manifest_sha256=manifest_snapshot["file_sha256"],
+            manifest_record_count=manifest_snapshot["record_count"],
+            manifest_file_generation=manifest_snapshot["file_generation"],
             state=INDEX_STATE_CURRENT if not quarantined_zettels else INDEX_STATE_DIRTY,
             generation=index_generation,
+            seal_pending_nonce=seal_pending_nonce,
         )
         rebuild_session.install_private_rows_after_public()
+        closing_zettel_snapshot = strict_live_zettel_stat_snapshot(
+            root,
+            index_stat_snapshot_rows,
+            _authority_fence=authority_fence,
+        )
+        if (
+            closing_zettel_snapshot.get("reason_codes")
+            or closing_zettel_snapshot.get("live_snapshot_sha256")
+            != archive_index_snapshot_sha256(index_stat_snapshot_rows)
+        ):
+            raise ArchiveServiceError(
+                "archive_index_source_changed_during_rebuild"
+            )
+        closing_manifest_snapshot = archive_index_stable_file_snapshot(
+            root,
+            root / ZETTEL_OBJET_LINK_MANIFEST_RELATIVE_PATH,
+            max_bytes=ZETTEL_OBJET_LINK_MANIFEST_MAX_BYTES,
+        )
+        if (
+            closing_manifest_snapshot["file_sha256"]
+            != manifest_snapshot["file_sha256"]
+            or closing_manifest_snapshot["file_generation"]
+            != manifest_snapshot["file_generation"]
+        ):
+            raise ArchiveServiceError(
+                "archive_index_source_changed_during_rebuild"
+            )
+        commit_attempted = True
         rebuild_session.validate_and_commit()
     except BaseException as exc:
+        rebuild_failure: BaseException = exc
         try:
             rebuild_session.__exit__(type(exc), exc, exc.__traceback__)
         except PrivateObjetIndexRebuildError as rebuild_exc:
-            raise ArchiveServiceError(rebuild_exc.code) from None
-        raise
+            rebuild_failure = ArchiveServiceError(rebuild_exc.code)
+        _close_archive_index_authority_fence(authority_fence)
+        if commit_attempted:
+            commit_outcome = _archive_index_rebuild_commit_outcome(
+                root,
+                expected_new_generation=index_generation,
+                pre_rebuild_database_existed=(
+                    pre_rebuild_database_existed
+                ),
+                pre_rebuild_metadata=pre_rebuild_metadata,
+            )
+            if commit_outcome == "new_generation_visible":
+                if not _mark_archive_index_dirty_while_rebuild_locked(
+                    root,
+                    expected_generation=index_generation,
+                ):
+                    raise _ArchiveIndexDirtyRestoreUncertainError(
+                        "archive_index_dirty_restore_uncertain"
+                    ) from rebuild_failure
+            elif commit_outcome not in {
+                "precommit_rolled_back",
+                "precommit_fail_closed",
+            }:
+                raise _ArchiveIndexDirtyRestoreUncertainError(
+                    "archive_index_dirty_restore_uncertain"
+                ) from rebuild_failure
+        raise rebuild_failure
     else:
         try:
             rebuild_session.__exit__(None, None, None)
         except PrivateObjetIndexRebuildError as exc:
+            _close_archive_index_authority_fence(authority_fence)
+            commit_outcome = _archive_index_rebuild_commit_outcome(
+                root,
+                expected_new_generation=index_generation,
+                pre_rebuild_database_existed=(
+                    pre_rebuild_database_existed
+                ),
+                pre_rebuild_metadata=pre_rebuild_metadata,
+            )
+            if commit_outcome == "new_generation_visible":
+                dirty_proven = _mark_archive_index_dirty_while_rebuild_locked(
+                    root,
+                    expected_generation=index_generation,
+                )
+            else:
+                dirty_proven = commit_outcome in {
+                    "precommit_rolled_back",
+                    "precommit_fail_closed",
+                }
+            if not dirty_proven:
+                raise _ArchiveIndexDirtyRestoreUncertainError(
+                    "archive_index_dirty_restore_uncertain"
+                ) from exc
             raise ArchiveServiceError(exc.code) from None
+
+    index_complete = not quarantined_zettels
+    try:
+        if index_complete:
+            if seal_pending_nonce is None:
+                raise OSError("archive_index_seal_pending_missing")
+            post_commit_evidence = require_current_zettel_index(
+                root,
+                _authority_fence=authority_fence,
+                _allow_seal_pending=seal_pending_nonce,
+                _allow_active_mutation=True,
+            )
+            if (
+                not post_commit_evidence.get("ok")
+                or post_commit_evidence.get("generation")
+                != index_generation
+            ):
+                raise OSError("archive_index_post_commit_target_changed")
+            authority_fence.arm_closing_guard()
+            authority_fence.verify_clean()
+            authority_fence.close()
+            publish_conn = connect_archive_index(
+                root / INDEX_RELATIVE_PATH,
+                write=True,
+                row_factory=True,
+            )
+            try:
+                if not _publish_archive_index_completed_seal(
+                    publish_conn,
+                    expected_generation=index_generation,
+                    expected_seal_pending=seal_pending_nonce,
+                    expected_mutation_owner_sha256=None,
+                ):
+                    raise OSError(
+                        "archive_index_seal_publication_uncertain"
+                    )
+            finally:
+                publish_conn.close()
+        else:
+            post_commit_zettels = strict_live_zettel_stat_snapshot(
+                root,
+                index_stat_snapshot_rows,
+                _authority_fence=authority_fence,
+            )
+            if (
+                post_commit_zettels.get("reason_codes")
+                or post_commit_zettels.get("live_snapshot_sha256")
+                != archive_index_snapshot_sha256(
+                    index_stat_snapshot_rows
+                )
+            ):
+                raise OSError("archive_index_post_commit_target_changed")
+            post_commit_manifest = archive_index_stable_file_snapshot(
+                root,
+                root / ZETTEL_OBJET_LINK_MANIFEST_RELATIVE_PATH,
+                max_bytes=ZETTEL_OBJET_LINK_MANIFEST_MAX_BYTES,
+            )
+            if (
+                post_commit_manifest.get("file_sha256")
+                != manifest_snapshot["file_sha256"]
+                or post_commit_manifest.get("file_generation")
+                != manifest_snapshot["file_generation"]
+            ):
+                raise OSError("archive_index_post_commit_target_changed")
+            authority_fence.arm_closing_guard()
+            authority_fence.verify_clean()
+            authority_fence.close()
+    except BaseException as exc:
+        _close_archive_index_authority_fence(authority_fence)
+        if not _mark_archive_index_dirty_while_rebuild_locked(
+            root,
+            expected_generation=index_generation,
+        ):
+            raise _ArchiveIndexDirtyRestoreUncertainError(
+                "archive_index_dirty_restore_uncertain"
+            ) from exc
+        if not isinstance(exc, Exception):
+            raise
+        raise ArchiveServiceError(INDEX_REBUILD_REQUIRED) from None
 
     if progress_callback is not None:
         try:
@@ -125138,7 +129447,6 @@ def index_archive(
                 "archive_index_post_commit_progress_failed"
             ) from None
 
-    index_complete = not quarantined_zettels
     return {
         "ok": index_complete,
         "state": "completed" if index_complete else "completed_with_quarantined_zettels",
@@ -125167,6 +129475,9 @@ def archive_index_snapshot_sha256(rows: Iterable[dict[str, Any]]) -> str:
     normalized = [
         [
             str(row.get("path") or ""),
+            int(row.get("file_dev") or 0),
+            int(row.get("file_ino") or 0),
+            int(row.get("file_ctime_ns") or 0),
             int(row.get("file_size") or 0),
             int(row.get("file_mtime_ns") or 0),
         ]
@@ -125186,8 +129497,12 @@ def replace_archive_index_metadata(
     quarantined_zettel_count: int,
     zettel_row_count: int | None = None,
     live_snapshot_sha256: str | None = None,
+    manifest_sha256: str | None = None,
+    manifest_record_count: int | None = None,
+    manifest_file_generation: Mapping[str, int] | None = None,
     state: str = INDEX_STATE_CURRENT,
     generation: str | None = None,
+    seal_pending_nonce: str | None = None,
 ) -> None:
     conn.execute(
         """
@@ -125207,6 +129522,36 @@ def replace_archive_index_metadata(
         and INDEX_SNAPSHOT_SHA256_RE.fullmatch(live_snapshot_sha256)
         else ""
     )
+    existing_metadata = read_archive_index_metadata(conn)
+    manifest_sha256_value = (
+        manifest_sha256
+        if isinstance(manifest_sha256, str)
+        and INDEX_SNAPSHOT_SHA256_RE.fullmatch(manifest_sha256)
+        else str(existing_metadata.get("manifest_sha256") or "")
+    )
+    if manifest_record_count is None:
+        manifest_record_count_value = str(
+            existing_metadata.get("manifest_record_count") or ""
+        )
+    else:
+        manifest_record_count_value = str(max(0, int(manifest_record_count)))
+    manifest_generation_values: dict[str, str] = {}
+    for field in (
+        "file_dev",
+        "file_ino",
+        "file_ctime_ns",
+        "file_size",
+        "file_mtime_ns",
+    ):
+        metadata_key = "manifest_" + field
+        if manifest_file_generation is None:
+            manifest_generation_values[metadata_key] = str(
+                existing_metadata.get(metadata_key) or ""
+            )
+        else:
+            manifest_generation_values[metadata_key] = str(
+                max(0, int(manifest_file_generation.get(field, -1)))
+            )
     payload = {
         "schema": INDEX_METADATA_SCHEMA,
         "state": normalized_state,
@@ -125215,11 +129560,31 @@ def replace_archive_index_metadata(
         "canonical_max_mtime_ns": str(max(0, canonical_max_mtime_ns)),
         "zettel_row_count": str(max(0, int(zettel_row_count or 0))),
         "live_snapshot_sha256": snapshot_value,
+        "manifest_sha256": manifest_sha256_value,
+        "manifest_record_count": manifest_record_count_value,
+        **manifest_generation_values,
+        "zettel_identity_projection_sha256": (
+            archive_index_zettel_identity_projection_sha256(conn)
+        ),
         "index_complete": "true" if index_complete else "false",
         "quarantined_zettel_count": str(max(0, quarantined_zettel_count)),
         "updated_at": datetime.now().astimezone().replace(microsecond=0).isoformat(),
         "updated_by": f"wom-kit/{WOM_KIT_VERSION}",
     }
+    if normalized_state == INDEX_STATE_CURRENT and seal_pending_nonce is None:
+        conn.execute(
+            "DELETE FROM index_metadata WHERE key = ?",
+            (INDEX_MUTATION_OWNER_KEY,),
+        )
+        conn.execute(
+            "DELETE FROM index_metadata WHERE key = ?",
+            (INDEX_SEAL_PENDING_KEY,),
+        )
+    elif (
+        seal_pending_nonce is not None
+        and INDEX_SEAL_PENDING_RE.fullmatch(seal_pending_nonce)
+    ):
+        payload[INDEX_SEAL_PENDING_KEY] = seal_pending_nonce
     for key, value in payload.items():
         conn.execute("INSERT OR REPLACE INTO index_metadata(key, value) VALUES (?, ?)", (key, value))
 
@@ -125227,6 +129592,10 @@ def replace_archive_index_metadata(
 def ensure_archive_index_zettel_columns(conn: sqlite3.Connection) -> None:
     existing = {str(row[1]) for row in conn.execute("PRAGMA table_info(zettels)").fetchall()}
     columns = {
+        "file_sha256": "TEXT",
+        "file_dev": "TEXT",
+        "file_ino": "TEXT",
+        "file_ctime_ns": "TEXT",
         "file_size": "INTEGER",
         "file_mtime_ns": "INTEGER",
         "body_sha256": "TEXT",
@@ -125252,6 +129621,78 @@ def upsert_zettel_index_entry(
     *,
     expected_generation: str | None = None,
     expected_file_sha256: str | None = None,
+    lease_token: ArchiveIndexMutationLeaseToken | None = None,
+    _final_authority_check: Callable[[], bool] | None = None,
+    _retain_lease_on_failure: bool = False,
+) -> bool:
+    """Run one row delta, releasing or explicitly retaining its writer lease."""
+
+    if INDEX_GENERATION_RE.fullmatch(str(expected_generation or "")) is None:
+        return False
+    try:
+        _require_archive_index_mutation_lease(
+            root,
+            expected_generation=str(expected_generation),
+            lease_token=lease_token,
+        )
+    except ArchiveServiceError:
+        return False
+    release_lease = True
+    try:
+        updated = _upsert_zettel_index_entry_with_lease(
+            root,
+            zettel_path,
+            frontmatter,
+            body,
+            expected_generation=expected_generation,
+            expected_file_sha256=expected_file_sha256,
+            _final_authority_check=_final_authority_check,
+        )
+        if (
+            not updated
+            and (
+                _final_authority_check is not None
+                or _retain_lease_on_failure
+            )
+        ):
+            # Exact-operation callers own rollback.  Keep their token valid
+            # until they either restore the canonical bytes and reseal, or
+            # explicitly prove and publish the dirty recovery state.
+            release_lease = False
+        return updated
+    except (
+        _ArchiveIndexDirtyRestoreUncertainError,
+        _ArchiveIndexFinalAuthorityChangedError,
+    ):
+        release_lease = False
+        raise
+    except BaseException:
+        if (
+            _final_authority_check is not None
+            or _retain_lease_on_failure
+        ):
+            # Interrupts and unexpected post-commit failures still belong to
+            # the exact-operation caller until its canonical rollback and
+            # terminal index proof have completed.
+            release_lease = False
+        raise
+    finally:
+        if release_lease:
+            _release_archive_index_mutation_lease(
+                root,
+                lease_token=lease_token,
+            )
+
+
+def _upsert_zettel_index_entry_with_lease(
+    root: Path,
+    zettel_path: Path,
+    frontmatter: dict[str, Any],
+    body: str,
+    *,
+    expected_generation: str | None = None,
+    expected_file_sha256: str | None = None,
+    _final_authority_check: Callable[[], bool] | None = None,
 ) -> bool:
     """Apply one canonical row delta and reseal its precommitted dirty generation."""
 
@@ -125267,20 +129708,31 @@ def upsert_zettel_index_entry(
     ):
         return False
 
+    try:
+        authority_fence = _ArchiveIndexAuthorityFence(root)
+    except OSError:
+        return False
     relative = archive_relative_path(zettel_path, root)
     try:
-        exact_bytes = zettel_path.read_bytes()
-        if hashlib.sha256(exact_bytes).hexdigest() != expected_file_sha256:
+        zettel_snapshot = archive_index_stable_file_snapshot(
+            root,
+            zettel_path,
+            max_bytes=ZETTEL_OBJET_LINK_ZETTEL_MAX_BYTES,
+        )
+        exact_bytes = zettel_snapshot["raw"]
+        if zettel_snapshot["file_sha256"] != f"sha256:{expected_file_sha256}":
+            _close_archive_index_authority_fence(authority_fence)
             return False
         boundary = parse_zettel_content_boundary(
             decode_utf8_with_universal_newlines(exact_bytes)
         )
-        zettel_stat = zettel_path.stat()
     except (OSError, UnicodeError):
+        _close_archive_index_authority_fence(authority_fence)
         return False
-    if boundary["state"] == "blocked" or zettel_stat.st_size != len(exact_bytes):
+    if boundary["state"] == "blocked":
         # A quarantined row is never a successful mint/promote delta.  The
         # already-committed dirty intent remains the honest recovery state.
+        _close_archive_index_authority_fence(authority_fence)
         return False
     frontmatter = boundary["frontmatter"]
     body = boundary["body"]
@@ -125288,7 +129740,11 @@ def upsert_zettel_index_entry(
     zettel_id = str(frontmatter.get("id") or "")
     redacted = zettel_status == "redacted"
 
-    conn = connect_archive_index(db_path, write=True)
+    try:
+        conn = connect_archive_index(db_path, write=True)
+    except sqlite3.Error:
+        _close_archive_index_authority_fence(authority_fence)
+        return False
     try:
         conn.execute("BEGIN IMMEDIATE")
         metadata = read_archive_index_metadata(conn)
@@ -125307,8 +129763,7 @@ def upsert_zettel_index_entry(
             else old_row["zettel_id"] if old_row is not None
             else ""
         ) or "")
-        zettel_size = zettel_stat.st_size
-        zettel_mtime_ns = zettel_stat.st_mtime_ns
+        zettel_generation = zettel_snapshot["file_generation"]
         draft_creation = frontmatter.get("draft_creation") if isinstance(frontmatter.get("draft_creation"), dict) else {}
         approved_body_sha256 = draft_creation.get("approved_body_sha256")
         if not isinstance(approved_body_sha256, str) or not SHA256_RE.match(approved_body_sha256):
@@ -125319,12 +129774,13 @@ def upsert_zettel_index_entry(
             """
             INSERT OR REPLACE INTO zettels(
               path, zettel_id, title, status, kind, body, frontmatter_json,
+              file_sha256, file_dev, file_ino, file_ctime_ns,
               file_size, file_mtime_ns, body_sha256, approved_body_sha256,
               forbidden_location_reference_found, normalized_title,
               body_prefix_sha256, origin_class, minted_at, created_at,
               mint_receipt_path
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 relative,
@@ -125334,8 +129790,12 @@ def upsert_zettel_index_entry(
                 frontmatter.get("kind"),
                 "" if redacted else body,
                 "" if redacted else json.dumps(json_safe(frontmatter), ensure_ascii=False, default=str),
-                zettel_size,
-                zettel_mtime_ns,
+                zettel_snapshot["file_sha256"],
+                str(zettel_generation["file_dev"]),
+                str(zettel_generation["file_ino"]),
+                str(zettel_generation["file_ctime_ns"]),
+                zettel_generation["file_size"],
+                zettel_generation["file_mtime_ns"],
                 "" if redacted else sha256_text(body),
                 "" if redacted else approved_body_sha256,
                 1 if (not redacted and contains_forbidden_location_reference(full_text)) else 0,
@@ -125379,10 +129839,31 @@ def upsert_zettel_index_entry(
             root,
             conn,
             expected_generation=expected_generation,
+            _authority_fence=authority_fence,
         )
-        if sha256_path(zettel_path) != expected_file_sha256:
-            raise sqlite3.IntegrityError(INDEX_REBUILD_REQUIRED)
-        conn.commit()
+
+        def final_zettel_target_is_exact() -> bool:
+            if sha256_path(zettel_path) != expected_file_sha256:
+                return False
+            if _final_authority_check is None:
+                return True
+            return bool(_final_authority_check())
+
+        return _commit_archive_index_seal_with_fence(
+            root,
+            conn,
+            expected_generation=str(expected_generation),
+            mutation_owner_sha256=(
+                str(metadata.get(INDEX_MUTATION_OWNER_KEY) or "") or None
+            ),
+            authority_fence=authority_fence,
+            final_target_check=final_zettel_target_is_exact,
+        )
+    except (
+        _ArchiveIndexDirtyRestoreUncertainError,
+        _ArchiveIndexFinalAuthorityChangedError,
+    ):
+        raise
     except (OSError, sqlite3.IntegrityError, ArchiveServiceError, ValueError):
         if conn.in_transaction:
             conn.rollback()
@@ -125392,11 +129873,396 @@ def upsert_zettel_index_entry(
             conn.rollback()
         raise
     finally:
+        _close_archive_index_authority_fence(authority_fence)
         conn.close()
-    return True
+
+
+def upsert_zettel_index_entries(
+    root: Path,
+    entries: Iterable[Mapping[str, Any]],
+    *,
+    expected_generation: str | None = None,
+    expected_mutation_owner_sha256: str | None = None,
+    lease_token: ArchiveIndexMutationLeaseToken | None = None,
+) -> bool:
+    """Run one batch delta and always relinquish its writer lease."""
+
+    if INDEX_GENERATION_RE.fullmatch(str(expected_generation or "")) is None:
+        return False
+    try:
+        _require_archive_index_mutation_lease(
+            root,
+            expected_generation=str(expected_generation),
+            lease_token=lease_token,
+        )
+    except ArchiveServiceError:
+        return False
+    release_lease = True
+    try:
+        return _upsert_zettel_index_entries_with_lease(
+            root,
+            entries,
+            expected_generation=expected_generation,
+            expected_mutation_owner_sha256=expected_mutation_owner_sha256,
+        )
+    except _ArchiveIndexDirtyRestoreUncertainError:
+        release_lease = False
+        raise
+    finally:
+        if release_lease:
+            _release_archive_index_mutation_lease(
+                root,
+                lease_token=lease_token,
+            )
+
+
+def _upsert_zettel_index_entries_with_lease(
+    root: Path,
+    entries: Iterable[Mapping[str, Any]],
+    *,
+    expected_generation: str | None = None,
+    expected_mutation_owner_sha256: str | None = None,
+) -> bool:
+    """Apply a complete Zet batch delta and seal one dirty generation.
+
+    Every entry is rebound to its exact on-disk bytes before the transaction.
+    All row, edge, facet, full-live-tree, and manifest-generation checks share
+    one SQLite transaction; any mismatch rolls the whole projection delta back
+    and leaves the already-committed generation dirty.
+    """
+
+    db_path = root / INDEX_RELATIVE_PATH
+    if (
+        not db_path.is_file()
+        or not INDEX_GENERATION_RE.fullmatch(str(expected_generation or ""))
+        or (
+            expected_mutation_owner_sha256 is not None
+            and INDEX_SNAPSHOT_SHA256_RE.fullmatch(
+                expected_mutation_owner_sha256
+            )
+            is None
+        )
+        or isinstance(entries, (str, bytes, bytearray, Mapping))
+    ):
+        return False
+    try:
+        raw_entries = tuple(entries)
+    except (TypeError, ValueError):
+        return False
+    if not raw_entries:
+        return False
+
+    try:
+        authority_fence = _ArchiveIndexAuthorityFence(root)
+    except OSError:
+        return False
+    prepared: list[dict[str, Any]] = []
+    seen_relatives: set[str] = set()
+    for entry in raw_entries:
+        if (
+            not isinstance(entry, Mapping)
+            or set(entry)
+            != {
+                "path",
+                "frontmatter",
+                "body",
+                "expected_file_sha256",
+            }
+            or not isinstance(entry.get("path"), Path)
+            or not isinstance(entry.get("frontmatter"), Mapping)
+            or not isinstance(entry.get("body"), str)
+            or not SHA256_RE.fullmatch(
+                str(entry.get("expected_file_sha256") or "")
+            )
+        ):
+            _close_archive_index_authority_fence(authority_fence)
+            return False
+        zettel_path = entry["path"]
+        expected_file_sha256 = str(entry["expected_file_sha256"])
+        try:
+            relative = archive_relative_path(zettel_path, root)
+            if relative in seen_relatives:
+                _close_archive_index_authority_fence(authority_fence)
+                return False
+            zettel_snapshot = archive_index_stable_file_snapshot(
+                root,
+                zettel_path,
+                max_bytes=ZETTEL_OBJET_LINK_ZETTEL_MAX_BYTES,
+            )
+            exact_bytes = zettel_snapshot["raw"]
+            if (
+                zettel_snapshot["file_sha256"]
+                != f"sha256:{expected_file_sha256}"
+            ):
+                _close_archive_index_authority_fence(authority_fence)
+                return False
+            boundary = parse_zettel_content_boundary(
+                decode_utf8_with_universal_newlines(exact_bytes)
+            )
+        except (ArchiveServiceError, OSError, UnicodeError, ValueError):
+            _close_archive_index_authority_fence(authority_fence)
+            return False
+        if boundary["state"] == "blocked":
+            _close_archive_index_authority_fence(authority_fence)
+            return False
+        seen_relatives.add(relative)
+        prepared.append(
+            {
+                "path": zettel_path,
+                "relative": relative,
+                "expected_file_sha256": expected_file_sha256,
+                "snapshot": zettel_snapshot,
+                "frontmatter": boundary["frontmatter"],
+                "body": boundary["body"],
+            }
+        )
+
+    try:
+        conn = connect_archive_index(db_path, write=True)
+    except sqlite3.Error:
+        _close_archive_index_authority_fence(authority_fence)
+        return False
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        metadata = read_archive_index_metadata(conn)
+        if (
+            metadata.get("schema") != INDEX_METADATA_SCHEMA
+            or metadata.get("state") != INDEX_STATE_DIRTY
+            or metadata.get("generation") != expected_generation
+            or (
+                bool(metadata.get(INDEX_MUTATION_OWNER_KEY))
+                and (
+                    expected_mutation_owner_sha256 is None
+                    or not hmac.compare_digest(
+                        str(metadata.get(INDEX_MUTATION_OWNER_KEY) or ""),
+                        expected_mutation_owner_sha256,
+                    )
+                )
+            )
+            or (
+                expected_mutation_owner_sha256 is not None
+                and not metadata.get(INDEX_MUTATION_OWNER_KEY)
+            )
+        ):
+            raise sqlite3.IntegrityError(INDEX_REBUILD_REQUIRED)
+        ensure_archive_index_zettel_columns(conn)
+
+        for entry in prepared:
+            relative = str(entry["relative"])
+            zettel_path = entry["path"]
+            expected_file_sha256 = str(entry["expected_file_sha256"])
+            zettel_snapshot = entry["snapshot"]
+            frontmatter = entry["frontmatter"]
+            body = str(entry["body"])
+            zettel_status = frontmatter.get("status")
+            zettel_id = str(frontmatter.get("id") or "")
+            redacted = zettel_status == "redacted"
+
+            old_row = conn.execute(
+                "SELECT zettel_id FROM zettels WHERE path = ?",
+                (relative,),
+            ).fetchone()
+            old_zettel_id = str(
+                (
+                    old_row[0]
+                    if old_row is not None
+                    and not isinstance(old_row, sqlite3.Row)
+                    else old_row["zettel_id"]
+                    if old_row is not None
+                    else ""
+                )
+                or ""
+            )
+            zettel_generation = zettel_snapshot["file_generation"]
+            draft_creation = (
+                frontmatter.get("draft_creation")
+                if isinstance(frontmatter.get("draft_creation"), dict)
+                else {}
+            )
+            approved_body_sha256 = draft_creation.get(
+                "approved_body_sha256"
+            )
+            if (
+                not isinstance(approved_body_sha256, str)
+                or not SHA256_RE.match(approved_body_sha256)
+            ):
+                approved_body_sha256 = None
+            full_text = "---\n" + dump_yaml(frontmatter) + "---\n" + body
+            projection = zettel_index_projection(root, frontmatter, body)
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO zettels(
+                  path, zettel_id, title, status, kind, body,
+                  frontmatter_json, file_sha256, file_dev, file_ino,
+                  file_ctime_ns, file_size, file_mtime_ns, body_sha256,
+                  approved_body_sha256, forbidden_location_reference_found,
+                  normalized_title, body_prefix_sha256, origin_class,
+                  minted_at, created_at, mint_receipt_path
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    relative,
+                    zettel_id or None,
+                    "" if redacted else frontmatter.get("title"),
+                    zettel_status,
+                    frontmatter.get("kind"),
+                    "" if redacted else body,
+                    ""
+                    if redacted
+                    else json.dumps(
+                        json_safe(frontmatter),
+                        ensure_ascii=False,
+                        default=str,
+                    ),
+                    zettel_snapshot["file_sha256"],
+                    str(zettel_generation["file_dev"]),
+                    str(zettel_generation["file_ino"]),
+                    str(zettel_generation["file_ctime_ns"]),
+                    zettel_generation["file_size"],
+                    zettel_generation["file_mtime_ns"],
+                    "" if redacted else sha256_text(body),
+                    "" if redacted else approved_body_sha256,
+                    1
+                    if (
+                        not redacted
+                        and contains_forbidden_location_reference(full_text)
+                    )
+                    else 0,
+                    "" if redacted else projection["normalized_title"],
+                    "" if redacted else projection["body_prefix_sha256"],
+                    None if redacted else projection["origin_class"],
+                    None if redacted else projection["minted_at"],
+                    None if redacted else projection["created_at"],
+                    None if redacted else projection["mint_receipt_path"],
+                ),
+            )
+
+            if old_zettel_id:
+                conn.execute(
+                    "DELETE FROM edges WHERE from_id = ?",
+                    (old_zettel_id,),
+                )
+                conn.execute(
+                    "DELETE FROM zettel_facets WHERE zettel_id = ?",
+                    (old_zettel_id,),
+                )
+            if zettel_id:
+                conn.execute(
+                    "DELETE FROM edges WHERE from_id = ?",
+                    (zettel_id,),
+                )
+                conn.execute(
+                    "DELETE FROM zettel_facets WHERE zettel_id = ?",
+                    (zettel_id,),
+                )
+                if not redacted:
+                    for ref in collect_referenced_zets(frontmatter):
+                        conn.execute(
+                            "INSERT INTO edges(from_id, to_id, edge_type) "
+                            "VALUES (?, ?, ?)",
+                            (zettel_id, ref["id"], ref.get("edge_type")),
+                        )
+                    facets = frontmatter.get("facets")
+                    if isinstance(facets, dict):
+                        for facet_key, facet_value in facets.items():
+                            values = (
+                                facet_value
+                                if isinstance(facet_value, list)
+                                else [facet_value]
+                            )
+                            for item in values:
+                                if isinstance(item, (str, int, float, bool)):
+                                    conn.execute(
+                                        "INSERT INTO zettel_facets("
+                                        "zettel_id, facet_key, facet_value) "
+                                        "VALUES (?, ?, ?)",
+                                        (
+                                            zettel_id,
+                                            str(facet_key),
+                                            str(item),
+                                        ),
+                                    )
+            if sha256_path(zettel_path) != expected_file_sha256:
+                raise sqlite3.IntegrityError(INDEX_REBUILD_REQUIRED)
+
+        seal_archive_index_mutation(
+            root,
+            conn,
+            expected_generation=expected_generation,
+            _authority_fence=authority_fence,
+        )
+
+        def final_batch_targets_are_exact() -> bool:
+            return not any(
+                sha256_path(entry["path"])
+                != str(entry["expected_file_sha256"])
+                for entry in prepared
+            )
+
+        return _commit_archive_index_seal_with_fence(
+            root,
+            conn,
+            expected_generation=str(expected_generation),
+            mutation_owner_sha256=(
+                str(metadata.get(INDEX_MUTATION_OWNER_KEY) or "") or None
+            ),
+            authority_fence=authority_fence,
+            final_target_check=final_batch_targets_are_exact,
+        )
+    except _ArchiveIndexDirtyRestoreUncertainError:
+        raise
+    except (OSError, sqlite3.IntegrityError, ArchiveServiceError, ValueError):
+        if conn.in_transaction:
+            conn.rollback()
+        return False
+    except BaseException:
+        if conn.in_transaction:
+            conn.rollback()
+        raise
+    finally:
+        _close_archive_index_authority_fence(authority_fence)
+        conn.close()
 
 
 def delete_zettel_index_entry(
+    root: Path,
+    relative_path: str,
+    *,
+    expected_generation: str | None = None,
+    lease_token: ArchiveIndexMutationLeaseToken | None = None,
+) -> bool:
+    """Run one row deletion and always relinquish its writer lease."""
+
+    if INDEX_GENERATION_RE.fullmatch(str(expected_generation or "")) is None:
+        return False
+    try:
+        _require_archive_index_mutation_lease(
+            root,
+            expected_generation=str(expected_generation),
+            lease_token=lease_token,
+        )
+    except ArchiveServiceError:
+        return False
+    release_lease = True
+    try:
+        return _delete_zettel_index_entry_with_lease(
+            root,
+            relative_path,
+            expected_generation=expected_generation,
+        )
+    except _ArchiveIndexDirtyRestoreUncertainError:
+        release_lease = False
+        raise
+    finally:
+        if release_lease:
+            _release_archive_index_mutation_lease(
+                root,
+                lease_token=lease_token,
+            )
+
+
+def _delete_zettel_index_entry_with_lease(
     root: Path,
     relative_path: str,
     *,
@@ -125410,9 +130276,18 @@ def delete_zettel_index_entry(
     if not INDEX_GENERATION_RE.fullmatch(str(expected_generation or "")):
         return False
     retired_path = resolve_archive_relative_path(root, relative_path)
-    if retired_path.exists():
+    try:
+        authority_fence = _ArchiveIndexAuthorityFence(root)
+    except OSError:
         return False
-    conn = connect_archive_index(db_path, write=True, row_factory=True)
+    if retired_path.exists():
+        _close_archive_index_authority_fence(authority_fence)
+        return False
+    try:
+        conn = connect_archive_index(db_path, write=True, row_factory=True)
+    except (OSError, sqlite3.Error, ValueError):
+        _close_archive_index_authority_fence(authority_fence)
+        return False
     try:
         conn.execute("BEGIN IMMEDIATE")
         metadata = read_archive_index_metadata(conn)
@@ -125446,11 +130321,20 @@ def delete_zettel_index_entry(
             root,
             conn,
             expected_generation=expected_generation,
+            _authority_fence=authority_fence,
         )
-        if retired_path.exists():
-            raise sqlite3.IntegrityError(INDEX_REBUILD_REQUIRED)
-        conn.commit()
-        return True
+        return _commit_archive_index_seal_with_fence(
+            root,
+            conn,
+            expected_generation=str(expected_generation),
+            mutation_owner_sha256=(
+                str(metadata.get(INDEX_MUTATION_OWNER_KEY) or "") or None
+            ),
+            authority_fence=authority_fence,
+            final_target_check=lambda: not retired_path.exists(),
+        )
+    except _ArchiveIndexDirtyRestoreUncertainError:
+        raise
     except (OSError, sqlite3.IntegrityError, ArchiveServiceError, ValueError):
         if conn.in_transaction:
             conn.rollback()
@@ -125460,6 +130344,11 @@ def delete_zettel_index_entry(
             conn.rollback()
         raise
     finally:
+        if authority_fence is not None:
+            try:
+                authority_fence.close()
+            except OSError:
+                pass
         conn.close()
 
 
@@ -131995,6 +136884,28 @@ def _append_bytes_once(path: Path, value: bytes) -> None:
         os.fsync(handle.fileno())
 
 
+def _jsonl_records_post_bytes(
+    before: bytes,
+    records: Iterable[Mapping[str, Any]],
+) -> bytes:
+    appended = (
+        (b"\n" if before and not before.endswith(b"\n") else b"")
+        + b"".join(
+            (
+                json.dumps(
+                    dict(record),
+                    ensure_ascii=False,
+                    default=str,
+                    separators=(",", ":"),
+                )
+                + "\n"
+            ).encode("utf-8")
+            for record in records
+        )
+    )
+    return before + appended
+
+
 def _append_jsonl_records_outcome_aware(
     path: Path,
     records: list[dict[str, Any]],
@@ -132019,22 +136930,8 @@ def _append_jsonl_records_outcome_aware(
         if reason is not None or raw is None:
             raise PublicationOutcomeUnverified("manifest_before_unverified")
         before = raw
-    appended = (
-        (b"\n" if before and not before.endswith(b"\n") else b"")
-        + b"".join(
-            (
-                json.dumps(
-                    record,
-                    ensure_ascii=False,
-                    default=str,
-                    separators=(",", ":"),
-                )
-                + "\n"
-            ).encode("utf-8")
-            for record in records
-        )
-    )
-    expected = before + appended
+    expected = _jsonl_records_post_bytes(before, records)
+    appended = expected[len(before) :]
 
     def classify_after_exception() -> str:
         if _stable_exact_bytes_observation(path, expected) == "verified_exact":
@@ -134509,6 +139406,8 @@ def _objet_capture_item_status_class(entry: dict[str, Any], *, approve: bool) ->
     ok_states = OBJET_CAPTURE_ORIGINAL_OK_ACTIONS if approve else OBJET_CAPTURE_ORIGINAL_OK_PLANNED_ACTIONS
     if original_state not in ok_states:
         return "blocked"
+    if approve and entry.get("blockers"):
+        return "partial"
     derived_sub = entry.get("derived_text")
     if isinstance(derived_sub, dict) and (
         derived_sub.get("blockers") or derived_sub.get("item_status") == "not_attempted"
@@ -134546,6 +139445,8 @@ def objet_capture_files_written(
     item_results: list[dict[str, Any]],
     *,
     receipt_path: str | None,
+    generated_index_updated: bool = False,
+    index_marked_dirty: bool = False,
 ) -> list[str]:
     """Project only artifacts this exact capture attempt verifiably changed.
 
@@ -134589,6 +139490,8 @@ def objet_capture_files_written(
             append_relative(DERIVED_TEXT_MANIFEST_RELATIVE_PATH)
         append_relative(derived.get("receipt_path"))
 
+    if generated_index_updated or index_marked_dirty:
+        append_relative(INDEX_RELATIVE_PATH)
     append_relative(receipt_path)
     return unique_preserve_order(changed)
 
@@ -134732,6 +139635,10 @@ def _objet_capture_run(
         }
     selection = selection_raw
     selection_sha256 = sha256_json_value(selection)
+    manifest_mutation_owner_sha256 = archive_manifest_mutation_owner_sha256(
+        operation="objet_capture",
+        operation_binding_sha256=selection_sha256,
+    )
     envelope_blockers = objet_capture_envelope_blockers(selection, archive_id)
     context_warnings: list[str] = []
     project_intake_context = objet_capture_project_intake_context(
@@ -134766,6 +139673,72 @@ def _objet_capture_run(
     aborted = False
 
     if approve:
+        # Read-only preflight: if this exact selection needs a central manifest
+        # append, index authority must exist before object bytes, receipt
+        # directories, or any other operation-owned evidence can be created.
+        preflight_canonical_ids = objet_capture_canonical_record_ids(
+            load_manifest_records(root)
+        )
+        preflight_appended: set[str] = set()
+        preflight_items = [
+            _objet_capture_process_item(
+                root,
+                item,
+                approve=False,
+                canonical_ids=preflight_canonical_ids,
+                appended_this_run=preflight_appended,
+                captured_at=captured_at,
+                reviewed_by=None,
+                selection=selection,
+                selection_sha256=selection_sha256,
+                manifest_appender=lambda _record: None,
+                capture_enabled=capture_enabled,
+            )
+            for item in items_sorted
+        ]
+        manifest_write_planned = any(
+            item.get("planned_action") in {"capture", "repair_append"}
+            for item in preflight_items
+        )
+        if manifest_write_planned:
+            try:
+                preflight_manifest = archive_index_stable_file_snapshot(
+                    root,
+                    root / ZETTEL_OBJET_LINK_MANIFEST_RELATIVE_PATH,
+                    max_bytes=ZETTEL_OBJET_LINK_MANIFEST_MAX_BYTES,
+                )
+                require_archive_manifest_index_mutation_authority(
+                    root,
+                    operation_owner_sha256=manifest_mutation_owner_sha256,
+                    expected_pre_manifest_sha256=preflight_manifest[
+                        "file_sha256"
+                    ],
+                    expected_post_manifest_sha256=preflight_manifest[
+                        "file_sha256"
+                    ],
+                )
+            except (ArchiveServiceError, OSError, sqlite3.Error, ValueError):
+                return {
+                    "ok": False,
+                    **base_output,
+                    "status_class": "blocked",
+                    "aborted": False,
+                    "reviewed_by": reviewed_by,
+                    "captured_at": captured_at,
+                    "items": preflight_items,
+                    "receipt_path": None,
+                    "summary": objet_capture_summary(
+                        preflight_items,
+                        approve=False,
+                    ),
+                    "blockers": [INDEX_REBUILD_REQUIRED],
+                    "warnings": unique_preserve_order(context_warnings),
+                    "files_written": [],
+                    "generated_index_updated": False,
+                    "index_marked_dirty": False,
+                    "index_generation": None,
+                    "index_mutation_resumed": False,
+                }
         # Pre-flight the receipt directory BEFORE any byte/manifest write: the always-receipt
         # audit guarantee is only meaningful if the receipt is known writable up front.
         try:
@@ -134775,6 +139748,12 @@ def _objet_capture_run(
         manifest_path = archive_internal_path(root, "objects/manifests/files.jsonl")
         receipt_path_value: str | None = None
         receipt_write_failed = False
+        manifest_index_generation: str | None = None
+        manifest_index_lease_token: ArchiveIndexMutationLeaseToken | None = None
+        manifest_index_updated = False
+        manifest_index_rebuild_required = False
+        manifest_index_resumed = False
+        manifest_index_started_this_run = False
         with _ObjetCaptureManifestLock(root):
             canonical_ids = objet_capture_canonical_record_ids(load_manifest_records(root))
             pending_manifest_records: list[dict[str, Any]] = []
@@ -134821,6 +139800,53 @@ def _objet_capture_run(
                 # which is why phase 2 may not run against a buffered handle.
                 if pending_manifest_records:
                     try:
+                        before_manifest = archive_index_stable_file_snapshot(
+                            root,
+                            manifest_path,
+                            max_bytes=ZETTEL_OBJET_LINK_MANIFEST_MAX_BYTES,
+                        )
+                        expected_manifest_bytes = _jsonl_records_post_bytes(
+                            before_manifest["raw"],
+                            pending_manifest_records,
+                        )
+                        expected_manifest_sha256 = (
+                            "sha256:"
+                            + hashlib.sha256(expected_manifest_bytes).hexdigest()
+                        )
+                        (
+                            manifest_index_generation,
+                            manifest_index_began,
+                            manifest_index_lease_token,
+                        ) = prepare_archive_manifest_index_mutation(
+                            root,
+                            operation_owner_sha256=(
+                                manifest_mutation_owner_sha256
+                            ),
+                            expected_pre_manifest_sha256=before_manifest[
+                                "file_sha256"
+                            ],
+                            expected_post_manifest_sha256=(
+                                expected_manifest_sha256
+                            ),
+                        )
+                        manifest_index_started_this_run = (
+                            manifest_index_started_this_run
+                            or manifest_index_began
+                        )
+                        manifest_index_resumed = not manifest_index_began
+                    except (ArchiveServiceError, OSError, sqlite3.Error, ValueError):
+                        manifest_index_rebuild_required = True
+                        aborted = True
+                        for entry in item_results:
+                            if entry.get("action") in OBJET_CAPTURE_ORIGINAL_OK_ACTIONS:
+                                entry.setdefault("blockers", []).append(
+                                    INDEX_REBUILD_REQUIRED
+                                )
+                    if manifest_index_rebuild_required:
+                        pending_manifest_records = []
+
+                if pending_manifest_records:
+                    try:
                         append_outcome = _append_jsonl_records_outcome_aware(
                             manifest_path,
                             pending_manifest_records,
@@ -134836,12 +139862,135 @@ def _objet_capture_run(
                                 entry["planned_action"] = "blocked"
                                 entry["action"] = "blocked"
                                 entry["blockers"].append("manifest_append_failed")
+                        manifest_index_updated = (
+                            replace_archive_index_manifest_projection(
+                                root,
+                                expected_generation=str(
+                                    manifest_index_generation or ""
+                                ),
+                                expected_manifest_sha256=before_manifest[
+                                    "file_sha256"
+                                ],
+                                expected_mutation_owner_sha256=(
+                                    manifest_mutation_owner_sha256
+                                ),
+                                lease_token=manifest_index_lease_token,
+                            )
+                        )
+                        if not manifest_index_updated:
+                            manifest_index_rebuild_required = True
+                    else:
+                        manifest_index_updated = (
+                            replace_archive_index_manifest_projection(
+                                root,
+                                expected_generation=str(
+                                    manifest_index_generation or ""
+                                ),
+                                expected_manifest_sha256=(
+                                    expected_manifest_sha256
+                                ),
+                                expected_mutation_owner_sha256=(
+                                    manifest_mutation_owner_sha256
+                                ),
+                                lease_token=manifest_index_lease_token,
+                            )
+                        )
+                        if not manifest_index_updated:
+                            manifest_index_rebuild_required = True
+
+                # A previous run can stop after the exact manifest append but
+                # before its SQLite delta.  An idempotent replay has no pending
+                # manifest rows, so repair that owned dirty generation without
+                # beginning a new mutation.  A genuinely current no-op performs
+                # no begin and no index write.
+                if (
+                    not pending_manifest_records
+                    and not manifest_index_rebuild_required
+                    and item_results
+                    and all(
+                        entry.get("action") == "skip_already_present"
+                        for entry in item_results
+                    )
+                ):
+                    index_evidence = require_current_zettel_index(root)
+                    if (
+                        not index_evidence.get("ok")
+                        and "archive_index_dirty"
+                        in set(index_evidence.get("reason_codes") or [])
+                    ):
+                        try:
+                            resumed_manifest = archive_index_stable_file_snapshot(
+                                root,
+                                manifest_path,
+                                max_bytes=ZETTEL_OBJET_LINK_MANIFEST_MAX_BYTES,
+                            )
+                            (
+                                manifest_index_generation,
+                                manifest_index_began,
+                                manifest_index_lease_token,
+                            ) = prepare_archive_manifest_index_mutation(
+                                root,
+                                operation_owner_sha256=(
+                                    manifest_mutation_owner_sha256
+                                ),
+                                expected_pre_manifest_sha256=resumed_manifest[
+                                    "file_sha256"
+                                ],
+                                expected_post_manifest_sha256=resumed_manifest[
+                                    "file_sha256"
+                                ],
+                            )
+                            manifest_index_started_this_run = (
+                                manifest_index_started_this_run
+                                or manifest_index_began
+                            )
+                            if manifest_index_began:
+                                raise ArchiveServiceError(INDEX_REBUILD_REQUIRED)
+                            manifest_index_resumed = True
+                            manifest_index_updated = (
+                                replace_archive_index_manifest_projection(
+                                    root,
+                                    expected_generation=manifest_index_generation,
+                                    expected_manifest_sha256=resumed_manifest[
+                                        "file_sha256"
+                                    ],
+                                    expected_mutation_owner_sha256=(
+                                        manifest_mutation_owner_sha256
+                                    ),
+                                    lease_token=manifest_index_lease_token,
+                                )
+                            )
+                            if not manifest_index_updated:
+                                manifest_index_rebuild_required = True
+                        except (
+                            ArchiveServiceError,
+                            OSError,
+                            sqlite3.Error,
+                            ValueError,
+                        ):
+                            manifest_index_rebuild_required = True
+
+                if manifest_index_rebuild_required:
+                    aborted = True
+                    for entry in item_results:
+                        if entry.get("action") in OBJET_CAPTURE_ORIGINAL_OK_ACTIONS:
+                            blockers = entry.setdefault("blockers", [])
+                            if INDEX_REBUILD_REQUIRED not in blockers:
+                                blockers.append(INDEX_REBUILD_REQUIRED)
+                        derived = entry.get("derived_text")
+                        if isinstance(derived, dict):
+                            derived["item_status"] = "not_attempted"
+                            derived_blockers = derived.setdefault("blockers", [])
+                            if INDEX_REBUILD_REQUIRED not in derived_blockers:
+                                derived_blockers.append(INDEX_REBUILD_REQUIRED)
 
                 # Phase 2 — derived halves, same sorted order, inside the still-held
                 # _ObjetCaptureManifestLock. _DerivedTextManifestLock nests inside it:
                 # lock order is ObjetCapture -> DerivedText, never the reverse; no
                 # reverse ordering exists anywhere in this file — keep it that way.
                 for item, item_result in zip(items_sorted, item_results):
+                    if manifest_index_rebuild_required:
+                        break
                     if "derived_text" not in item:
                         continue
                     try:
@@ -134931,6 +140080,20 @@ def _objet_capture_run(
             if receipt_write_failed
             else _objet_capture_run_status_class(item_results, approve=True)
         )
+        manifest_index_marked_dirty = False
+        if (
+            manifest_index_generation is not None
+            and manifest_index_lease_token is not None
+            and not manifest_index_updated
+        ):
+            manifest_index_marked_dirty = mark_archive_index_dirty(
+                root,
+                expected_generation=manifest_index_generation,
+                expected_mutation_owner_sha256=(
+                    manifest_mutation_owner_sha256
+                ),
+                lease_token=manifest_index_lease_token,
+            )
         result = {
             "ok": not run_blockers and not aborted,
             **base_output,
@@ -134951,7 +140114,13 @@ def _objet_capture_run(
             "files_written": objet_capture_files_written(
                 item_results,
                 receipt_path=receipt_path_value,
+                generated_index_updated=manifest_index_updated,
+                index_marked_dirty=manifest_index_marked_dirty,
             ),
+            "generated_index_updated": manifest_index_updated,
+            "index_marked_dirty": manifest_index_marked_dirty,
+            "index_generation": manifest_index_generation,
+            "index_mutation_resumed": manifest_index_resumed,
         }
         if run_status_class == "partial":
             # v0.3.151 ai_operator_rule: a partial outcome must point at the safe

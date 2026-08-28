@@ -22,7 +22,7 @@ from contextlib import ExitStack
 from datetime import datetime, timezone
 from html.parser import HTMLParser
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 from . import archive_services, command_status, operation_approval_binding
 from .exact_human_approval import (
@@ -4291,6 +4291,12 @@ def _zettel_objet_manifest_record_is_complete(value: Any) -> bool:
     )
 
 
+def _zettel_objet_link_use_windows_projection_watchers() -> bool:
+    """Expose only the final projection platform choice as a test seam."""
+
+    return os.name == "nt"
+
+
 def _require_exact_zettel_objet_manifest_target(
     root: Path,
     *,
@@ -4415,6 +4421,507 @@ def _validated_zettel_objet_link_content(
         ) from None
 
 
+_ZETTEL_OBJET_LINK_PROJECTION_FAILURE_CODES = frozenset(
+    {
+        "zettel_identity_projection_stale",
+        "zettel_identity_duplicate",
+        "zettel_tree_changed_during_plan",
+        "manifest_changed",
+        "zettel_objet_link_zettel_unavailable",
+    }
+)
+
+
+def _zettel_objet_link_projection_failure_result(
+    reason_code: str,
+) -> dict[str, Any]:
+    """Return one content-free, fixed-code projection failure."""
+
+    safe_reason = (
+        reason_code
+        if reason_code in _ZETTEL_OBJET_LINK_PROJECTION_FAILURE_CODES
+        else "zettel_identity_projection_stale"
+    )
+    return {
+        "ok": False,
+        "state": "blocked",
+        "dry_run": True,
+        "lifecycle_action": "zettel_objet_link_plan",
+        "summary": {},
+        "data": {},
+        "blockers": [safe_reason],
+        "reason_codes": [safe_reason],
+        "warnings": [],
+        "would_change": [],
+        "privacy_guards": {
+            "label_echoed": False,
+            "zettel_body_echoed": False,
+            "object_bytes_read": False,
+            "provider_called": False,
+            "network_checked": False,
+            "local_absolute_path_echoed": False,
+            "writes": False,
+        },
+    }
+
+
+def _zettel_objet_link_asset_is_exact(
+    item: Any,
+    *,
+    object_id: str,
+    role: str,
+    label: str | None,
+) -> bool:
+    """Match the complete canonical asset shape, not only its object ID."""
+
+    expected: dict[str, Any] = {"object_id": object_id, "role": role}
+    if label is not None:
+        expected["label"] = label
+    return isinstance(item, Mapping) and dict(item) == expected
+
+
+def _zettel_objet_link_already_present_result(
+    *,
+    root: Path,
+    archive_id: str,
+    zettel_path: Path,
+    zettel_relative: str,
+    safe_zettel_id: str,
+    before_sha256: str,
+    normalized_object_id: str,
+    normalized_role: str,
+    safe_label: str | None,
+    existing_assets: list[Any],
+    manifest_record_set_sha256: str,
+    matching_manifest_records: list[dict[str, Any]],
+    index_generation: str | None = None,
+    manifest_sha256: str | None = None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Finish an idempotent exact-link plan before write-artifact planning."""
+
+    label_sha256 = (
+        _sha256_bytes(safe_label.encode("utf-8"))
+        if safe_label is not None
+        else ZETTEL_OBJET_LINK_ABSENT_LABEL_SHA256
+    )
+    binding = {
+        "schema": "wom-kit/zettel-objet-link-plan-binding/v0.3",
+        "state": "already_present",
+        "archive_id": archive_id,
+        "zettel_id": safe_zettel_id,
+        "zettel_path": zettel_relative,
+        "zettel_sha256": before_sha256,
+        "object_id": normalized_object_id,
+        "role": normalized_role,
+        "label_sha256": label_sha256,
+        "manifest_record_count": len(matching_manifest_records),
+        "manifest_record_set_sha256": manifest_record_set_sha256,
+        "index_generation": index_generation,
+        "manifest_sha256": manifest_sha256,
+    }
+    plan_sha256 = _sha256_bytes(_canonical_json_bytes(binding))
+    result = {
+        "ok": True,
+        "state": "already_present",
+        "dry_run": True,
+        "lifecycle_action": "zettel_objet_link_plan",
+        "archive_id": archive_id,
+        "summary": {
+            "zettel_id": safe_zettel_id,
+            "zettel_path": zettel_relative,
+            "object_id": normalized_object_id,
+            "role": normalized_role,
+            "label_present": safe_label is not None,
+            "current_asset_count": len(existing_assets),
+            "manifest_record_verified": len(matching_manifest_records) == 1,
+            "manifest_record_count": len(matching_manifest_records),
+            "manifest_record_set_sha256": manifest_record_set_sha256,
+            "zettel_sha256": before_sha256,
+            "label_sha256": label_sha256,
+            "index_generation": index_generation,
+            "manifest_sha256": manifest_sha256,
+            "plan_sha256": plan_sha256,
+        },
+        "data": {
+            "record_shape": {
+                "required_fields": ["object_id", "role"],
+                "optional_fields": ["label"],
+                "unknown_fields_allowed": False,
+            },
+            "manifest_record_set_complete": True,
+            "manifest_record_set_unique": len(matching_manifest_records) == 1,
+            "authority_projection": {
+                "generation": index_generation,
+                "manifest_sha256": manifest_sha256,
+            },
+        },
+        "blockers": [],
+        "reason_codes": [],
+        "warnings": [],
+        "would_change": [],
+        "privacy_guards": {
+            "label_echoed": False,
+            "zettel_body_echoed": False,
+            "object_bytes_read": False,
+            "provider_called": False,
+            "network_checked": False,
+            "local_absolute_path_echoed": False,
+            "writes": False,
+        },
+    }
+    return result, {
+        "root": root,
+        "zettel_path": zettel_path,
+        "zettel_relative": zettel_relative,
+        "safe_zettel_id": safe_zettel_id,
+        "object_id": normalized_object_id,
+        "role": normalized_role,
+        "safe_label": safe_label,
+        "plan_sha256": plan_sha256,
+        "already_present": True,
+    }
+
+
+def build_zettel_objet_link_authority_projection(
+    archive_root: Path | str,
+    *,
+    progress_callback: Any = None,
+) -> dict[str, Any]:
+    """Build the generation-bound authority accelerator used by link plans."""
+
+    return archive_services.build_zettel_objet_link_authority_projection(
+        archive_root,
+        progress_callback=progress_callback,
+    )
+
+
+def _zettel_objet_link_effective_authority_projection(
+    archive_root: Path | str,
+    supplied: Mapping[str, Any] | None,
+) -> tuple[Mapping[str, Any] | None, dict[str, Any] | None]:
+    """Require the projection on the production path, building it if omitted."""
+
+    try:
+        projection: Any = (
+            supplied
+            if supplied is not None
+            else build_zettel_objet_link_authority_projection(archive_root)
+        )
+    except (
+        archive_services.ArchiveServiceError,
+        OSError,
+        RecursionError,
+        TypeError,
+        UnicodeError,
+        ValueError,
+    ):
+        return None, _zettel_objet_link_projection_failure_result(
+            "zettel_identity_projection_stale"
+        )
+    if not isinstance(projection, Mapping) or projection.get("ok") is not True:
+        raw_codes = (
+            projection.get("reason_codes")
+            if isinstance(projection, Mapping)
+            else None
+        )
+        reason_code = (
+            str(raw_codes[0])
+            if isinstance(raw_codes, list) and raw_codes
+            else "zettel_identity_projection_stale"
+        )
+        return None, _zettel_objet_link_projection_failure_result(reason_code)
+    return projection, None
+
+
+def _lookup_zettel_objet_link_authority_projection(
+    root: Path,
+    *,
+    authority_projection: Mapping[str, Any],
+    zettel_id: str | None,
+    relative_path: str | None,
+    object_id: str,
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    """Isolate the private projection lookup behind one redacting adapter."""
+
+    try:
+        lookup = archive_services.lookup_zettel_objet_link_authority_projection(
+            root,
+            authority_projection=authority_projection,
+            zettel_id=zettel_id,
+            relative_path=relative_path,
+            object_id=object_id,
+        )
+    except (archive_services.ArchiveServiceError, OSError, TypeError, ValueError):
+        return None, _zettel_objet_link_projection_failure_result(
+            "zettel_identity_projection_stale"
+        )
+    if not isinstance(lookup, Mapping) or lookup.get("ok") is not True:
+        raw_codes = lookup.get("reason_codes") if isinstance(lookup, Mapping) else None
+        reason_code = (
+            str(raw_codes[0])
+            if isinstance(raw_codes, list) and raw_codes
+            else "zettel_identity_projection_stale"
+        )
+        return None, _zettel_objet_link_projection_failure_result(reason_code)
+    return dict(lookup), None
+
+
+def _reprove_zettel_objet_link_dirty_projection(
+    root: Path,
+    *,
+    authority_projection: Mapping[str, Any],
+    archive_id: str,
+    expected_generation: str,
+    expected_manifest_sha256: str,
+    zettel_relative: str,
+    zettel_id: str,
+    expected_zettel_bytes: bytes,
+    object_id: str,
+    expected_manifest_record_set_sha256: str,
+) -> dict[str, Any]:
+    """Reprove one link target while this writer owns a dirty index generation.
+
+    The ordinary public projection lookup intentionally refuses a dirty index.
+    After ``begin_archive_index_mutation`` that is exactly the state a writer
+    must own, so this private proof compares the complete live path/stat set
+    against the still-generation-bound rows with only the selected Zet replaced
+    by its approved new generation.  The caller keeps Windows directory
+    watchers armed across this proof and the following delta/seal transaction.
+    """
+
+    projection_generation = str(authority_projection.get("generation") or "")
+    projection_manifest_sha256 = str(
+        authority_projection.get("manifest_sha256") or ""
+    )
+    try:
+        projection_manifest_count = int(
+            authority_projection.get("manifest_record_count", -1)
+        )
+        normalized_relative = archive_services.normalize_archive_relative_path(
+            zettel_relative
+        )
+    except (archive_services.ArchivePathError, TypeError, ValueError):
+        raise archive_services.ArchiveServiceError(
+            "zettel_identity_projection_stale"
+        ) from None
+    normalized_object_id = str(object_id or "").strip().lower()
+    if (
+        authority_projection.get("ok") is not True
+        or authority_projection.get("schema")
+        != archive_services.ZETTEL_OBJET_LINK_AUTHORITY_PROJECTION_SCHEMA
+        or projection_generation != expected_generation
+        or projection_manifest_sha256 != expected_manifest_sha256
+        or re.fullmatch(r"gen:[0-9a-f]{32}", expected_generation) is None
+        or re.fullmatch(r"sha256:[0-9a-f]{64}", expected_manifest_sha256)
+        is None
+        or projection_manifest_count < 0
+        or not normalized_relative.startswith(
+            archive_services.VALID_ZETTEL_FOLDERS
+        )
+        or archive_services.OBJECT_ID_RE.fullmatch(normalized_object_id) is None
+        or not isinstance(expected_zettel_bytes, bytes)
+        or not expected_zettel_bytes
+    ):
+        raise archive_services.ArchiveServiceError(
+            "zettel_identity_projection_stale"
+        )
+
+    db_path = root / archive_services.INDEX_RELATIVE_PATH
+    conn = archive_services.connect_archive_index(
+        db_path,
+        row_factory=True,
+    )
+    try:
+        conn.execute("BEGIN")
+        metadata = archive_services.read_archive_index_metadata(conn)
+        try:
+            recorded_manifest_count = int(
+                metadata.get("manifest_record_count", "-1")
+            )
+        except ValueError:
+            recorded_manifest_count = -1
+        manifest_generation = (
+            archive_services._archive_index_metadata_file_generation(
+                metadata,
+                prefix="manifest_",
+            )
+        )
+        if (
+            metadata.get("schema") != archive_services.INDEX_METADATA_SCHEMA
+            or metadata.get("state") != archive_services.INDEX_STATE_DIRTY
+            or metadata.get("generation") != expected_generation
+            or metadata.get("manifest_sha256") != expected_manifest_sha256
+            or recorded_manifest_count != projection_manifest_count
+            or manifest_generation is None
+        ):
+            raise archive_services.ArchiveServiceError(
+                "zettel_identity_projection_stale"
+            )
+
+        selected_rows = conn.execute(
+            "SELECT path, zettel_id, status, file_sha256, file_dev, file_ino, "
+            "file_ctime_ns, file_size, file_mtime_ns FROM zettels "
+            "WHERE path = ? LIMIT 2",
+            (normalized_relative,),
+        ).fetchall()
+        if len(selected_rows) != 1:
+            raise archive_services.ArchiveServiceError(
+                "zettel_objet_link_zettel_authority_changed_after_approval"
+            )
+        selected_row = selected_rows[0]
+        if (
+            str(selected_row["zettel_id"] or "") != zettel_id
+            or int(
+                conn.execute(
+                    "SELECT COUNT(*) FROM zettels WHERE zettel_id = ?",
+                    (zettel_id,),
+                ).fetchone()[0]
+            )
+            != 1
+        ):
+            raise archive_services.ArchiveServiceError(
+                "zettel_objet_link_zettel_authority_changed_after_approval"
+            )
+
+        selected_path = archive_services.resolve_archive_relative_path(
+            root,
+            normalized_relative,
+        )
+        try:
+            selected_snapshot = archive_services.archive_index_stable_file_snapshot(
+                root,
+                selected_path,
+                max_bytes=ZETTEL_OBJET_LINK_MAX_ZETTEL_BYTES,
+            )
+            if selected_snapshot["raw"] != expected_zettel_bytes:
+                raise OSError("zettel_objet_link_selected_bytes_changed")
+            selected_frontmatter, _selected_body = (
+                _validated_zettel_objet_link_content(
+                    selected_snapshot["raw"],
+                    archive_id=archive_id,
+                    requested_zettel_id=zettel_id,
+                )
+            )
+            if selected_frontmatter.get("id") != zettel_id:
+                raise OSError("zettel_objet_link_selected_identity_changed")
+        except (
+            archive_services.ArchiveServiceError,
+            OSError,
+            UnicodeError,
+            TypeError,
+            ValueError,
+        ):
+            raise archive_services.ArchiveServiceError(
+                "zettel_objet_link_zettel_authority_changed_after_approval"
+            ) from None
+
+        indexed_rows = archive_services.archive_index_zettel_stat_rows(conn)
+        adjusted_rows: list[dict[str, Any]] = []
+        selected_replaced = False
+        for indexed_row in indexed_rows:
+            adjusted = dict(indexed_row)
+            if str(adjusted.get("path") or "") == normalized_relative:
+                adjusted.update(selected_snapshot["file_generation"])
+                selected_replaced = True
+            adjusted_rows.append(adjusted)
+        if not selected_replaced:
+            raise archive_services.ArchiveServiceError(
+                "zettel_identity_projection_stale"
+            )
+        live_snapshot = archive_services.strict_live_zettel_stat_snapshot(
+            root,
+            adjusted_rows,
+        )
+        if (
+            live_snapshot.get("reason_codes")
+            or int(live_snapshot.get("live_zettel_count", -1))
+            != len(adjusted_rows)
+        ):
+            raise archive_services.ArchiveServiceError(
+                "zettel_objet_link_zettel_authority_changed_after_approval"
+            )
+
+        projection_row_count = int(
+            conn.execute(
+                "SELECT COUNT(*) FROM objet_manifest_projection"
+            ).fetchone()[0]
+        )
+        if projection_row_count != recorded_manifest_count:
+            raise archive_services.ArchiveServiceError(
+                "zettel_identity_projection_stale"
+            )
+        manifest_rows = conn.execute(
+            "SELECT record_ordinal, object_id, record_sha256, record_json "
+            "FROM objet_manifest_projection WHERE object_id = ? "
+            "ORDER BY record_ordinal",
+            (normalized_object_id,),
+        ).fetchall()
+        matching_records: list[dict[str, Any]] = []
+        for manifest_row in manifest_rows:
+            record_json = str(manifest_row["record_json"] or "")
+            record = json.loads(record_json)
+            expected_record_sha256 = "sha256:" + hashlib.sha256(
+                (record_json + "\n").encode("utf-8")
+            ).hexdigest()
+            if (
+                not archive_services.archive_index_manifest_record_is_strict(
+                    record
+                )
+                or record.get("object_id") != normalized_object_id
+                or str(manifest_row["record_sha256"] or "")
+                != expected_record_sha256
+            ):
+                raise archive_services.ArchiveServiceError(
+                    "zettel_identity_projection_stale"
+                )
+            matching_records.append(record)
+        if (
+            len(matching_records) != 1
+            or _sha256_bytes(_canonical_json_bytes(matching_records))
+            != expected_manifest_record_set_sha256
+        ):
+            raise _ZettelObjetLinkManifestChangedAfterApproval(
+                "zettel_objet_link_manifest_changed_after_approval"
+            )
+
+        manifest_path = root / "objects" / "manifests" / "files.jsonl"
+        try:
+            manifest_snapshot = archive_services.archive_index_stable_file_snapshot(
+                root,
+                manifest_path,
+                max_bytes=ZETTEL_OBJET_LINK_MAX_MANIFEST_BYTES,
+            )
+        except (OSError, ValueError):
+            raise _ZettelObjetLinkManifestChangedAfterApproval(
+                "zettel_objet_link_manifest_changed_after_approval"
+            ) from None
+        if (
+            manifest_snapshot["file_sha256"] != expected_manifest_sha256
+            or manifest_snapshot["file_generation"] != manifest_generation
+        ):
+            raise _ZettelObjetLinkManifestChangedAfterApproval(
+                "zettel_objet_link_manifest_changed_after_approval"
+            )
+        return {
+            "generation": expected_generation,
+            "live_snapshot_sha256": live_snapshot["live_snapshot_sha256"],
+            "manifest_sha256": expected_manifest_sha256,
+            "selected_file_generation": selected_snapshot["file_generation"],
+        }
+    except _ZettelObjetLinkManifestChangedAfterApproval:
+        raise
+    except archive_services.ArchiveServiceError:
+        raise
+    except (OSError, TypeError, UnicodeError, ValueError):
+        raise archive_services.ArchiveServiceError(
+            "zettel_identity_projection_stale"
+        ) from None
+    finally:
+        if conn.in_transaction:
+            conn.rollback()
+        conn.close()
+
+
 def _zettel_objet_link_plan_core(
     archive_root: Path | str,
     *,
@@ -4423,6 +4930,7 @@ def _zettel_objet_link_plan_core(
     object_id: str | None,
     role: str,
     label: str | None,
+    authority_projection: Mapping[str, Any] | None = None,
     created_control_artifact_for_approved_absent: bool = False,
     held_control_artifact_verified_exact: bool = False,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -4449,30 +4957,240 @@ def _zettel_objet_link_plan_core(
     before_sha256: str | None = None
     safe_zettel_id: str | None = None
     zettel_relative: str | None = None
+    index_generation: str | None = None
+    manifest_sha256: str | None = None
+    manifest_record: dict[str, Any] | None = None
+    matching_manifest_records: list[dict[str, Any]] = []
+    manifest_record_set_complete = False
     if bool(zettel_id) != bool(relative_path):
-        try:
-            (
-                zettel_path,
-                zettel_relative,
-                before_bytes,
-                zettel_frontmatter,
-                zettel_body,
-            ) = _resolve_zettel_objet_link_target_bound(
-                root,
-                archive_id=archive_id,
-                zettel_id=zettel_id,
-                relative_path=relative_path,
+        if authority_projection is not None:
+            projection_lookup, projection_failure = (
+                _lookup_zettel_objet_link_authority_projection(
+                    root,
+                    authority_projection=authority_projection,
+                    zettel_id=zettel_id,
+                    relative_path=relative_path,
+                    object_id=normalized_object_id,
+                )
             )
-            safe_zettel_id = _safe_zettel_id(zettel_frontmatter.get("id"))
-            if (
-                safe_zettel_id is None
-                or zettel_frontmatter.get("status")
-                not in archive_services.ZETTEL_QUERYABLE_STATUSES
+            if projection_failure is not None:
+                return projection_failure, {
+                    "root": root,
+                    "plan_sha256": None,
+                    "projection_failure": True,
+                }
+            try:
+                if projection_lookup is None:
+                    raise ValueError("projection_lookup_missing")
+                projected_zettel = projection_lookup.get("zettel")
+                raw_manifest_records = projection_lookup.get("manifest_records")
+                if not isinstance(projected_zettel, Mapping) or not isinstance(
+                    raw_manifest_records,
+                    list,
+                ):
+                    raise ValueError("projection_lookup_shape_invalid")
+                projected_relative = archive_services.normalize_archive_relative_path(
+                    str(projected_zettel.get("path") or "")
+                )
+                if (
+                    not projected_relative.startswith(
+                        archive_services.VALID_ZETTEL_FOLDERS
+                    )
+                    or not projected_relative.casefold().endswith(".md")
+                ):
+                    raise ValueError("projection_zettel_path_invalid")
+                projected_raw = projected_zettel.get("raw_bytes")
+                projected_frontmatter = projected_zettel.get("frontmatter_json")
+                projected_body = projected_zettel.get("body")
+                projected_file_sha256 = str(
+                    projected_zettel.get("file_sha256") or ""
+                )
+                if (
+                    not isinstance(projected_raw, bytes)
+                    or not isinstance(projected_frontmatter, Mapping)
+                    or not isinstance(projected_body, str)
+                    or not re.fullmatch(
+                        r"sha256:[0-9a-f]{64}", projected_file_sha256
+                    )
+                    or _sha256_bytes(projected_raw)
+                    != projected_file_sha256.removeprefix("sha256:")
+                ):
+                    raise ValueError("projection_zettel_generation_invalid")
+                zettel_path = _zettel_objet_link_known_internal_path(
+                    root,
+                    projected_relative,
+                )
+                zettel_relative = projected_relative
+                before_bytes = projected_raw
+                before_sha256 = projected_file_sha256.removeprefix("sha256:")
+                # SQLite's general-purpose ``body`` projection is suitable for
+                # search but may normalize the separator suffix.  A writer must
+                # preserve every exact body byte (leading blank lines, tabs and
+                # four-space Markdown code blocks), so derive its body from the
+                # already generation-bound raw bytes and use the indexed JSON
+                # only as an equality check.
+                exact_frontmatter, exact_body = (
+                    _validated_zettel_objet_link_content(
+                        projected_raw,
+                        archive_id=archive_id,
+                        requested_zettel_id=str(
+                            projected_zettel.get("zettel_id") or ""
+                        ),
+                    )
+                )
+                if dict(projected_frontmatter) != exact_frontmatter:
+                    raise ValueError("projection_frontmatter_mismatch")
+                zettel_frontmatter = exact_frontmatter
+                zettel_body = exact_body
+                safe_zettel_id = _safe_zettel_id(zettel_frontmatter.get("id"))
+                if (
+                    safe_zettel_id is None
+                    or safe_zettel_id != projected_zettel.get("zettel_id")
+                    or zettel_frontmatter.get("archive_id") != archive_id
+                    or zettel_frontmatter.get("status")
+                    not in archive_services.ZETTEL_QUERYABLE_STATUSES
+                ):
+                    raise ValueError("projection_zettel_identity_invalid")
+                matching_manifest_records = []
+                for raw_record in raw_manifest_records:
+                    if not isinstance(raw_record, Mapping):
+                        raise ValueError("projection_manifest_record_invalid")
+                    record_value = raw_record.get("record")
+                    record = (
+                        dict(record_value)
+                        if isinstance(record_value, Mapping)
+                        else dict(raw_record)
+                    )
+                    matching_manifest_records.append(record)
+                manifest_record_set_complete = True
+                if len(matching_manifest_records) == 1:
+                    manifest_record = matching_manifest_records[0]
+                elif not matching_manifest_records:
+                    blockers.append("zettel_objet_link_manifest_record_missing")
+                else:
+                    blockers.append("zettel_objet_link_manifest_record_ambiguous")
+                index_generation = str(
+                    projection_lookup.get("generation") or ""
+                )
+                manifest_sha256 = str(
+                    projection_lookup.get("manifest_sha256") or ""
+                )
+                if (
+                    not re.fullmatch(r"gen:[0-9a-f]{32}", index_generation)
+                    or not re.fullmatch(
+                        r"sha256:[0-9a-f]{64}",
+                        manifest_sha256,
+                    )
+                ):
+                    raise ValueError("projection_binding_invalid")
+            except (
+                archive_services.ArchivePathError,
+                archive_services.ArchiveServiceError,
+                OSError,
+                TypeError,
+                ValueError,
             ):
+                return _zettel_objet_link_projection_failure_result(
+                    "zettel_identity_projection_stale"
+                ), {
+                    "root": root,
+                    "plan_sha256": None,
+                    "projection_failure": True,
+                }
+        else:
+            try:
+                (
+                    zettel_path,
+                    zettel_relative,
+                    before_bytes,
+                    zettel_frontmatter,
+                    zettel_body,
+                ) = _resolve_zettel_objet_link_target_bound(
+                    root,
+                    archive_id=archive_id,
+                    zettel_id=zettel_id,
+                    relative_path=relative_path,
+                )
+                safe_zettel_id = _safe_zettel_id(zettel_frontmatter.get("id"))
+                if (
+                    safe_zettel_id is None
+                    or zettel_frontmatter.get("status")
+                    not in archive_services.ZETTEL_QUERYABLE_STATUSES
+                ):
+                    blockers.append("zettel_objet_link_zettel_unavailable")
+                before_sha256 = _sha256_bytes(before_bytes)
+            except (archive_services.ArchiveServiceError, OSError):
                 blockers.append("zettel_objet_link_zettel_unavailable")
-            before_sha256 = _sha256_bytes(before_bytes)
-        except (archive_services.ArchiveServiceError, OSError):
-            blockers.append("zettel_objet_link_zettel_unavailable")
+
+    if (
+        authority_projection is None
+        and archive_services.OBJECT_ID_RE.fullmatch(normalized_object_id)
+    ):
+        try:
+            all_manifest_records = _strict_zettel_objet_manifest_records(root)
+        except archive_services.ArchiveServiceError:
+            blockers.append("zettel_objet_link_manifest_set_incomplete")
+        else:
+            manifest_record_set_complete = True
+            matching_manifest_records = [
+                record
+                for record in all_manifest_records
+                if str(record.get("object_id") or "").strip().lower()
+                == normalized_object_id
+            ]
+            if len(matching_manifest_records) == 1:
+                manifest_record = matching_manifest_records[0]
+            elif not matching_manifest_records:
+                blockers.append("zettel_objet_link_manifest_record_missing")
+            else:
+                blockers.append("zettel_objet_link_manifest_record_ambiguous")
+
+    manifest_record_set_sha256 = _sha256_bytes(
+        _canonical_json_bytes(matching_manifest_records)
+    )
+    assets = zettel_frontmatter.get("assets")
+    if zettel_path is not None and not isinstance(assets, list):
+        blockers.append("zettel_objet_link_assets_not_array")
+        assets = []
+    existing_assets = assets if isinstance(assets, list) else []
+    if (
+        not blockers
+        and zettel_path is not None
+        and zettel_relative is not None
+        and safe_zettel_id is not None
+        and before_sha256 is not None
+        and any(
+            _zettel_objet_link_asset_is_exact(
+                item,
+                object_id=normalized_object_id,
+                role=normalized_role,
+                label=safe_label,
+            )
+            for item in existing_assets
+        )
+    ):
+        return _zettel_objet_link_already_present_result(
+            root=root,
+            archive_id=archive_id,
+            zettel_path=zettel_path,
+            zettel_relative=zettel_relative,
+            safe_zettel_id=safe_zettel_id,
+            before_sha256=before_sha256,
+            normalized_object_id=normalized_object_id,
+            normalized_role=normalized_role,
+            safe_label=safe_label,
+            existing_assets=existing_assets,
+            manifest_record_set_sha256=manifest_record_set_sha256,
+            matching_manifest_records=matching_manifest_records,
+            index_generation=index_generation,
+            manifest_sha256=manifest_sha256,
+        )
+    if any(
+        isinstance(item, Mapping)
+        and item.get("object_id") == normalized_object_id
+        for item in existing_assets
+    ):
+        blockers.append("zettel_objet_link_already_present")
 
     control_artifact_relative: str | None = None
     control_artifact_path: Path | None = None
@@ -4531,41 +5249,6 @@ def _zettel_objet_link_plan_core(
                 blockers.append(
                     "zettel_objet_link_lock_artifact_transition_invalid"
                 )
-
-    manifest_record: dict[str, Any] | None = None
-    matching_manifest_records: list[dict[str, Any]] = []
-    manifest_record_set_complete = False
-    if archive_services.OBJECT_ID_RE.fullmatch(normalized_object_id):
-        try:
-            all_manifest_records = _strict_zettel_objet_manifest_records(root)
-        except archive_services.ArchiveServiceError:
-            blockers.append("zettel_objet_link_manifest_set_incomplete")
-        else:
-            manifest_record_set_complete = True
-            matching_manifest_records = [
-                record
-                for record in all_manifest_records
-                if str(record.get("object_id") or "").strip().lower()
-                == normalized_object_id
-            ]
-            if len(matching_manifest_records) == 1:
-                manifest_record = matching_manifest_records[0]
-            elif not matching_manifest_records:
-                blockers.append("zettel_objet_link_manifest_record_missing")
-            else:
-                blockers.append("zettel_objet_link_manifest_record_ambiguous")
-
-    assets = zettel_frontmatter.get("assets")
-    if zettel_path is not None and not isinstance(assets, list):
-        blockers.append("zettel_objet_link_assets_not_array")
-        assets = []
-    existing_assets = assets if isinstance(assets, list) else []
-    if any(
-        isinstance(item, dict)
-        and item.get("object_id") == normalized_object_id
-        for item in existing_assets
-    ):
-        blockers.append("zettel_objet_link_already_present")
 
     link_seed = {
         "archive_id": archive_id,
@@ -4637,9 +5320,6 @@ def _zettel_objet_link_plan_core(
         else:
             blockers.append("zettel_objet_link_receipt_collision")
 
-    manifest_record_set_sha256 = _sha256_bytes(
-        _canonical_json_bytes(matching_manifest_records)
-    )
     label_sha256 = (
         _sha256_bytes(safe_label.encode("utf-8"))
         if safe_label is not None
@@ -4817,7 +5497,7 @@ def _zettel_objet_link_plan_core(
             "sha256": ZETTEL_OBJET_LINK_LOCK_SHA256,
         }
     plan_binding = {
-        "schema": "wom-kit/zettel-objet-link-plan-binding/v0.2",
+        "schema": "wom-kit/zettel-objet-link-plan-binding/v0.3",
         "archive_id": archive_id,
         "zettel_id": safe_zettel_id,
         "zettel_path": zettel_relative,
@@ -4827,6 +5507,8 @@ def _zettel_objet_link_plan_core(
         "manifest_record_set_sha256": manifest_record_set_sha256,
         "manifest_record_set_complete": manifest_record_set_complete,
         "manifest_record_set_unique": len(matching_manifest_records) == 1,
+        "index_generation": index_generation,
+        "manifest_sha256": manifest_sha256,
         "role": normalized_role,
         "label_sha256": label_sha256,
         "link_id": link_id,
@@ -4862,6 +5544,8 @@ def _zettel_objet_link_plan_core(
             "manifest_record_verified": manifest_record is not None,
             "manifest_record_count": len(matching_manifest_records),
             "manifest_record_set_sha256": manifest_record_set_sha256,
+            "index_generation": index_generation,
+            "manifest_sha256": manifest_sha256,
             "zettel_sha256": before_sha256,
             "label_sha256": label_sha256,
             "receipt_path": receipt_relative,
@@ -4889,6 +5573,10 @@ def _zettel_objet_link_plan_core(
             "exact_byte_revert_supported": True,
             "manifest_record_set_complete": manifest_record_set_complete,
             "manifest_record_set_unique": len(matching_manifest_records) == 1,
+            "authority_projection": {
+                "generation": index_generation,
+                "manifest_sha256": manifest_sha256,
+            },
             "support_effect_set": support_effect_set,
             "control_artifact": control_artifact,
             "parent_directory_effects_implied_by_bound_artifact_paths": True,
@@ -4944,6 +5632,8 @@ def _zettel_objet_link_plan_core(
         "manifest_record": manifest_record,
         "matching_manifest_records": matching_manifest_records,
         "manifest_record_set_sha256": manifest_record_set_sha256,
+        "index_generation": index_generation,
+        "manifest_sha256": manifest_sha256,
         "object_id": normalized_object_id,
         "role": normalized_role,
         "safe_label": safe_label,
@@ -4982,7 +5672,16 @@ def zettel_objet_link_plan(
     object_id: str | None,
     role: str,
     label: str | None = None,
+    authority_projection: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
+    effective_projection, projection_failure = (
+        _zettel_objet_link_effective_authority_projection(
+            archive_root,
+            authority_projection,
+        )
+    )
+    if projection_failure is not None:
+        return projection_failure
     result, _private = _zettel_objet_link_plan_core(
         archive_root,
         zettel_id=zettel_id,
@@ -4990,6 +5689,7 @@ def zettel_objet_link_plan(
         object_id=object_id,
         role=role,
         label=label,
+        authority_projection=effective_projection,
     )
     return result
 
@@ -5034,6 +5734,7 @@ def zettel_objet_link_apply(
     object_id: str | None,
     role: str,
     label: str | None = None,
+    authority_projection: Mapping[str, Any] | None = None,
     expected_plan_sha256: str | None,
     reviewed_by: str | None,
     expected_exact_approval_plan_sha256: str | None = None,
@@ -5047,6 +5748,20 @@ def zettel_objet_link_apply(
             expected_exact_approval_target_binding_sha256
         ),
     )
+    effective_projection, projection_failure = (
+        _zettel_objet_link_effective_authority_projection(
+            archive_root,
+            authority_projection,
+        )
+    )
+    if projection_failure is not None:
+        return {
+            **projection_failure,
+            "dry_run": False,
+            "approved": False,
+            "lifecycle_action": "zettel_objet_link_apply",
+            "files_written": [],
+        }
     result, private = _zettel_objet_link_plan_core(
         archive_root,
         zettel_id=zettel_id,
@@ -5054,6 +5769,7 @@ def zettel_objet_link_apply(
         object_id=object_id,
         role=role,
         label=label,
+        authority_projection=effective_projection,
     )
     blockers = list(result["blockers"])
     expected = str(expected_plan_sha256 or "").strip().lower()
@@ -5064,6 +5780,26 @@ def zettel_objet_link_apply(
         blockers.append("zettel_objet_link_plan_changed")
     if reviewer is None:
         blockers.append("zettel_objet_link_reviewer_invalid")
+    if result.get("state") == "already_present":
+        if blockers:
+            return {
+                **result,
+                "ok": False,
+                "state": "blocked",
+                "dry_run": False,
+                "approved": False,
+                "lifecycle_action": "zettel_objet_link_apply",
+                "blockers": archive_services.unique_preserve_order(blockers),
+                "would_change": [],
+                "files_written": [],
+            }
+        return {
+            **result,
+            "dry_run": False,
+            "approved": False,
+            "lifecycle_action": "zettel_objet_link_apply",
+            "files_written": [],
+        }
     if (
         blockers
         or private["safe_zettel_id"] is None
@@ -5153,6 +5889,7 @@ def zettel_objet_link_apply(
             object_id=object_id,
             role=role,
             label=label,
+            authority_projection=effective_projection,
             created_control_artifact_for_approved_absent=(
                 control_lock.created_from_absent
             ),
@@ -5315,13 +6052,18 @@ def zettel_objet_link_apply(
             raise archive_services.ArchiveServiceError(
                 "zettel_objet_link_zettel_changed_after_approval"
             )
-        _require_exact_zettel_objet_manifest_target(
-            root,
-            object_id=fresh_private["object_id"],
-            expected_record_set_sha256=(
-                fresh_private["manifest_record_set_sha256"]
-            ),
-        )
+        # POSIX still uses the legacy descriptor-held whole-tree proof below.
+        # On Windows the generation-bound projection has already proved the
+        # exact manifest bytes and target row, and a new subtree watcher will
+        # cover the final dirty-generation proof through index sealing.
+        if os.name != "nt":
+            _require_exact_zettel_objet_manifest_target(
+                root,
+                object_id=fresh_private["object_id"],
+                expected_record_set_sha256=(
+                    fresh_private["manifest_record_set_sha256"]
+                ),
+            )
         try:
             archive_services._read_activity_group_regular_bytes_bound(
                 root,
@@ -5398,6 +6140,21 @@ def zettel_objet_link_apply(
                     "zettel_objet_link_transaction_evidence_present"
                 )
 
+        index_generation = str(fresh_private.get("index_generation") or "")
+        if re.fullmatch(r"gen:[0-9a-f]{32}", index_generation) is None:
+            raise archive_services.ArchiveServiceError(
+                "zettel_identity_projection_stale"
+            )
+        # Commit the same-generation dirty intent before the first indexed
+        # canonical byte can change.  A crash from this point onward therefore
+        # cannot leave an old row advertised as current.
+        index_lease_token = archive_services.begin_archive_index_mutation(
+            root,
+            expected_generation=index_generation,
+        )
+        index_mutation_started = True
+        generated_index_updated = False
+        index_marked_dirty = False
         snapshot_created = False
         receipt_created = False
         receipt_bytes = b""
@@ -5510,48 +6267,300 @@ def zettel_objet_link_apply(
                         "zettel_objet_link_transaction_readback_failed"
             )
             control_lock.verify_exact()
-            # Reject already-observed manifest drift before the more expensive
-            # joint final proof below.  This check is not itself the success
-            # linearization point because Zettel uniqueness must overlap it.
-            _require_exact_zettel_objet_manifest_target(
-                root,
-                object_id=fresh_private["object_id"],
-                expected_record_set_sha256=(
-                    fresh_private["manifest_record_set_sha256"]
-                ),
-            )
             try:
-                (
-                    final_zettel_path,
-                    final_zettel_relative,
-                    final_zettel_bytes,
-                    _final_frontmatter,
-                    _final_body,
-                ) = _resolve_zettel_objet_link_target_bound(
-                    root,
-                    archive_id=str(fresh["archive_id"]),
-                    zettel_id=None,
-                    relative_path=fresh_private["zettel_relative"],
-                    final_manifest_object_id=fresh_private["object_id"],
-                    final_manifest_record_set_sha256=(
-                        fresh_private["manifest_record_set_sha256"]
-                    ),
+                cross_platform_projection_fence = (
+                    archive_services._ArchiveIndexAuthorityFence(root)
                 )
-            except _ZettelObjetLinkManifestChangedAfterApproval:
-                raise
-            except (archive_services.ArchiveServiceError, OSError):
+            except OSError:
                 raise archive_services.ArchiveServiceError(
                     "zettel_objet_link_zettel_authority_changed_after_approval"
                 ) from None
-            if (
-                final_zettel_path != fresh_private["zettel_path"]
-                or final_zettel_relative != fresh_private["zettel_relative"]
-                or final_zettel_bytes != updated_bytes
-            ):
-                raise archive_services.ArchiveServiceError(
-                    "zettel_objet_link_zettel_authority_changed_after_approval"
+            parent_stack.callback(cross_platform_projection_fence.close)
+            cross_platform_projection_verified = False
+
+            def cross_platform_projection_authority_is_clean() -> bool:
+                nonlocal cross_platform_projection_verified
+                if cross_platform_projection_verified:
+                    return True
+                cross_platform_projection_fence.arm_closing_guard()
+                cross_platform_projection_fence.verify_clean()
+                cross_platform_projection_fence.close()
+                cross_platform_projection_verified = True
+                return True
+
+            if _zettel_objet_link_use_windows_projection_watchers():
+                try:
+                    with ExitStack() as final_projection_stack:
+                        archive_binding = final_projection_stack.enter_context(
+                            archive_services._activity_group_bound_directory_chain(
+                                root,
+                                root,
+                            )
+                        )
+                        final_watchers: list[
+                            _ZettelObjetLinkWindowsDirectoryWatcher
+                        ] = []
+                        root_watcher = _ZettelObjetLinkWindowsDirectoryWatcher(
+                            archive_binding,
+                            watch_subtree=False,
+                            names_only=True,
+                        )
+                        final_watchers.append(root_watcher)
+                        final_projection_stack.callback(root_watcher.close)
+                        for folder_name in ("zettels", "inbox"):
+                            folder_path = _zettel_objet_link_known_internal_path(
+                                root,
+                                folder_name,
+                            )
+                            try:
+                                folder_binding = (
+                                    final_projection_stack.enter_context(
+                                        archive_services._activity_group_bound_directory_chain(
+                                            root,
+                                            folder_path,
+                                        )
+                                    )
+                                )
+                            except FileNotFoundError:
+                                continue
+                            folder_watcher = (
+                                _ZettelObjetLinkWindowsDirectoryWatcher(
+                                    folder_binding,
+                                    watch_subtree=True,
+                                )
+                            )
+                            final_watchers.append(folder_watcher)
+                            final_projection_stack.callback(folder_watcher.close)
+                        manifest_parent = (
+                            _zettel_objet_link_known_internal_path(
+                                root,
+                                "objects/manifests",
+                            )
+                        )
+                        manifest_binding = (
+                            final_projection_stack.enter_context(
+                                archive_services._activity_group_bound_directory_chain(
+                                    root,
+                                    manifest_parent,
+                                )
+                            )
+                        )
+                        manifest_watcher = (
+                            _ZettelObjetLinkWindowsDirectoryWatcher(
+                                manifest_binding,
+                                watch_subtree=False,
+                            )
+                        )
+                        final_watchers.append(manifest_watcher)
+                        final_projection_stack.callback(manifest_watcher.close)
+
+                        _reprove_zettel_objet_link_dirty_projection(
+                            root,
+                            authority_projection=effective_projection,
+                            archive_id=str(fresh["archive_id"]),
+                            expected_generation=index_generation,
+                            expected_manifest_sha256=str(
+                                fresh_private["manifest_sha256"]
+                            ),
+                            zettel_relative=fresh_private[
+                                "zettel_relative"
+                            ],
+                            zettel_id=fresh_private["safe_zettel_id"],
+                            expected_zettel_bytes=updated_bytes,
+                            object_id=fresh_private["object_id"],
+                            expected_manifest_record_set_sha256=(
+                                fresh_private[
+                                    "manifest_record_set_sha256"
+                                ]
+                            ),
+                        )
+
+                        final_projection_authority_verified = False
+
+                        def final_projection_authority_is_clean() -> bool:
+                            nonlocal final_projection_authority_verified
+                            if final_projection_authority_verified:
+                                return True
+                            for final_watcher in final_watchers:
+                                final_watcher.verify_clean()
+                            # Directory-chain identity checks are part of the
+                            # proof too.  Close them while the index mutation
+                            # lease is still held, so a late failure can be
+                            # converted back to durable dirty before release.
+                            final_projection_stack.close()
+                            if not (
+                                cross_platform_projection_authority_is_clean()
+                            ):
+                                return False
+                            final_projection_authority_verified = True
+                            return True
+
+                        generated_index_updated = (
+                            archive_services.upsert_zettel_index_entry(
+                                root,
+                                fresh_private["zettel_path"],
+                                updated_frontmatter,
+                                fresh_private["zettel_body"],
+                                expected_generation=index_generation,
+                                expected_file_sha256=after_sha256,
+                                lease_token=index_lease_token,
+                                _final_authority_check=(
+                                    final_projection_authority_is_clean
+                                ),
+                                _retain_lease_on_failure=True,
+                            )
+                        )
+                except _ZettelObjetLinkManifestChangedAfterApproval:
+                    raise
+                except archive_services.ArchiveServiceError:
+                    raise
+                except OSError:
+                    raise archive_services.ArchiveServiceError(
+                        "zettel_objet_link_zettel_authority_changed_after_approval"
+                    ) from None
+            else:
+                # Portable fallback keeps the older descriptor-held complete
+                # proof until a cross-platform subtree notification primitive
+                # can provide the same transient-change guarantee.
+                _require_exact_zettel_objet_manifest_target(
+                    root,
+                    object_id=fresh_private["object_id"],
+                    expected_record_set_sha256=(
+                        fresh_private["manifest_record_set_sha256"]
+                    ),
                 )
-        except BaseException:
+                try:
+                    (
+                        final_zettel_path,
+                        final_zettel_relative,
+                        final_zettel_bytes,
+                        _final_frontmatter,
+                        _final_body,
+                    ) = _resolve_zettel_objet_link_target_bound(
+                        root,
+                        archive_id=str(fresh["archive_id"]),
+                        zettel_id=None,
+                        relative_path=fresh_private["zettel_relative"],
+                        final_manifest_object_id=fresh_private["object_id"],
+                        final_manifest_record_set_sha256=(
+                            fresh_private[
+                                "manifest_record_set_sha256"
+                            ]
+                        ),
+                    )
+                except _ZettelObjetLinkManifestChangedAfterApproval:
+                    raise
+                except (archive_services.ArchiveServiceError, OSError):
+                    raise archive_services.ArchiveServiceError(
+                        "zettel_objet_link_zettel_authority_changed_after_approval"
+                    ) from None
+                if (
+                    final_zettel_path != fresh_private["zettel_path"]
+                    or final_zettel_relative
+                    != fresh_private["zettel_relative"]
+                    or final_zettel_bytes != updated_bytes
+                ):
+                    raise archive_services.ArchiveServiceError(
+                        "zettel_objet_link_zettel_authority_changed_after_approval"
+                    )
+                generated_index_updated = (
+                    archive_services.upsert_zettel_index_entry(
+                        root,
+                        fresh_private["zettel_path"],
+                        updated_frontmatter,
+                        fresh_private["zettel_body"],
+                        expected_generation=index_generation,
+                        expected_file_sha256=after_sha256,
+                        lease_token=index_lease_token,
+                        _final_authority_check=(
+                            cross_platform_projection_authority_is_clean
+                        ),
+                        _retain_lease_on_failure=True,
+                    )
+                )
+            if not generated_index_updated:
+                if not cross_platform_projection_verified:
+                    # The final source proof did not reach its stable point.
+                    # The public upsert deliberately retained our exact lease,
+                    # so route through the canonical CAS rollback before any
+                    # dirty publication is allowed to consume that token.
+                    try:
+                        archive_services._require_archive_index_mutation_lease(
+                            root,
+                            expected_generation=index_generation,
+                            lease_token=index_lease_token,
+                        )
+                    except archive_services.ArchiveServiceError:
+                        raise archive_services._ArchiveIndexDirtyRestoreUncertainError(
+                            "archive_index_dirty_restore_uncertain"
+                        ) from None
+                    raise archive_services.ArchiveServiceError(
+                        "zettel_objet_link_zettel_authority_changed_after_approval"
+                    )
+                index_marked_dirty = archive_services.mark_archive_index_dirty(
+                    root,
+                    expected_generation=index_generation,
+                    lease_token=index_lease_token,
+                )
+                if not index_marked_dirty:
+                    raise archive_services._ArchiveIndexDirtyRestoreUncertainError(
+                        "archive_index_dirty_restore_uncertain"
+                    )
+                return {
+                    **fresh,
+                    "ok": False,
+                    "state": "zettel_objet_link_written_index_update_failed",
+                    "dry_run": False,
+                    "approved": True,
+                    "lifecycle_action": "zettel_objet_link_apply",
+                    "summary": {
+                        **fresh["summary"],
+                        "current_asset_count": (
+                            len(fresh_private["existing_assets"]) + 1
+                        ),
+                        "zettel_sha256": after_sha256,
+                    },
+                    "blockers": [archive_services.INDEX_REBUILD_REQUIRED],
+                    "would_change": [],
+                    "files_written": [
+                        fresh_private["zettel_relative"],
+                        *([snapshot_relative] if snapshot_created else []),
+                        *(
+                            [fresh_private["control_artifact_relative"]]
+                            if control_lock.created_from_absent
+                            else []
+                        ),
+                        fresh_private["receipt_relative"],
+                        archive_services.INDEX_RELATIVE_PATH,
+                    ],
+                    "generated_index_updated": False,
+                    "index_marked_dirty": index_marked_dirty,
+                    "index_generation": index_generation,
+                    "partial_result": {
+                        "link_and_receipt_written": True,
+                        "index_current": False,
+                    },
+                    "privacy_guards": {
+                        **fresh["privacy_guards"],
+                        "writes": True,
+                    },
+                }
+        except archive_services._ArchiveIndexDirtyRestoreUncertainError:
+            # The public upsert deliberately retained this exact token.  Make
+            # DIRTY durable before any canonical rollback, and do not consume
+            # the token in the ordinary second-upsert recovery path.
+            if index_mutation_started and not (
+                archive_services._ensure_archive_index_dirty_with_retained_lease(
+                    root,
+                    expected_generation=index_generation,
+                    lease_token=index_lease_token,
+                )
+            ):
+                raise archive_services._ArchiveIndexDirtyRestoreUncertainError(
+                    "archive_index_dirty_restore_uncertain"
+                ) from None
+            raise
+        except BaseException as apply_exc:
             # A writer can raise after publication.  Delete recovery evidence
             # only when the canonical zettel is independently proven back at
             # its approved pre-write bytes.  If the current state is our exact
@@ -5604,12 +6613,61 @@ def zettel_objet_link_apply(
                 canonical_restored = (
                     rollback_final_bytes == fresh_private["before_bytes"]
                 )
+            if index_mutation_started:
+                if canonical_restored:
+                    # A compare-and-swap rollback changes the live file
+                    # generation even when the exact approved bytes return.
+                    # Upsert the restored row so the old generation is never
+                    # resealed against stale stat metadata.
+                    restored_index_updated = (
+                        archive_services.upsert_zettel_index_entry(
+                            root,
+                            fresh_private["zettel_path"],
+                            fresh_private["zettel_frontmatter"],
+                            fresh_private["zettel_body"],
+                            expected_generation=index_generation,
+                            expected_file_sha256=fresh_private["before_sha256"],
+                            lease_token=index_lease_token,
+                            _retain_lease_on_failure=True,
+                        )
+                    )
+                    if not restored_index_updated:
+                        index_marked_dirty = (
+                            archive_services.mark_archive_index_dirty(
+                                root,
+                                expected_generation=index_generation,
+                                lease_token=index_lease_token,
+                            )
+                        )
+                        if not index_marked_dirty:
+                            raise archive_services._ArchiveIndexDirtyRestoreUncertainError(
+                                "archive_index_dirty_restore_uncertain"
+                            )
+                else:
+                    index_marked_dirty = (
+                        archive_services.mark_archive_index_dirty(
+                            root,
+                            expected_generation=index_generation,
+                            lease_token=index_lease_token,
+                        )
+                    )
+                    if not index_marked_dirty:
+                        raise archive_services._ArchiveIndexDirtyRestoreUncertainError(
+                            "archive_index_dirty_restore_uncertain"
+                        )
             # Never detach an exact-byte observation from a later pathname
             # deletion. A same-user process could replace the receipt or
             # snapshot between those operations and make cleanup delete
             # foreign evidence. Even after a proven canonical CAS rollback,
             # retain every created support artifact for explicit
             # reconciliation of the durable started claim.
+            if isinstance(
+                apply_exc,
+                archive_services._ArchiveIndexFinalAuthorityChangedError,
+            ):
+                raise archive_services.ArchiveServiceError(
+                    "zettel_objet_link_zettel_authority_changed_after_approval"
+                ) from None
             raise
 
     return {
@@ -5646,7 +6704,11 @@ def zettel_objet_link_apply(
                 else []
             ),
             fresh_private["receipt_relative"],
+            archive_services.INDEX_RELATIVE_PATH,
         ],
+        "generated_index_updated": generated_index_updated,
+        "index_marked_dirty": False,
+        "index_generation": index_generation,
         "privacy_guards": {**fresh["privacy_guards"], "writes": True},
     }
 
@@ -7757,6 +8819,14 @@ def _batch_capture_result_shape_valid(
         or len(set(files_written)) != len(files_written)
     ):
         return False
+    generated_index_updated = capture.get("generated_index_updated")
+    index_marked_dirty = capture.get("index_marked_dirty")
+    if (
+        not isinstance(generated_index_updated, bool)
+        or not isinstance(index_marked_dirty, bool)
+        or (generated_index_updated and index_marked_dirty)
+    ):
+        return False
 
     items = capture.get("items")
     if not isinstance(items, list) or not all(
@@ -7802,6 +8872,8 @@ def _batch_capture_result_shape_valid(
         expected_files_written = archive_services.objet_capture_files_written(
             items,
             receipt_path=receipt_path,
+            generated_index_updated=generated_index_updated,
+            index_marked_dirty=index_marked_dirty,
         )
     except Exception:
         return False
@@ -8862,6 +9934,10 @@ def _objet_capture_batch_apply_legacy_core(
         "next_safe_actions": next_safe_actions,
         "would_change": [],
         "files_written": aggregate_files_written,
+        "generated_index_updated": capture.get("generated_index_updated", False),
+        "index_marked_dirty": capture.get("index_marked_dirty", False),
+        "index_generation": capture.get("index_generation"),
+        "index_mutation_resumed": capture.get("index_mutation_resumed", False),
         "privacy_guards": {
             **result["privacy_guards"],
             "writes": True,
