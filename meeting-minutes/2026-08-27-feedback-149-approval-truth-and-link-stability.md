@@ -81,3 +81,21 @@ generation-bound zet/manifest projections, deterministic `already_present`,
 writer-wide index lifecycle integration, distinct content-free reason codes,
 and declared cold/warm Windows performance gates. This preserves honest early
 truth in v0.4.11 without pretending the open writer's latency is solved.
+
+## Release-candidate correction loop
+
+The first public CI run exposed two tests that still observed the previous
+implementation rather than the current contracts. The quarantine test watched
+`os.walk` even though Doctor now uses the bounded `os.scandir` traversal, and
+the MCP test still expected the historical revision-plan status. Both tests
+were updated to assert the new behavior without weakening the underlying
+security or privacy checks.
+
+That review also found stale current guidance in the revision-plan guide,
+revision-writer guide, capability matrix, and installed AI operator contract.
+They still told operators to hand a green revision plan to
+`zet-revision-write --dry-run`. All current guidance was corrected before
+release: validation hashes are review evidence only, successful validation
+remains `approval_fixed_closed`, and v0.4.11 exposes no actionable writer
+handoff. Historical release notes remain unchanged as historical evidence.
+These documentation corrections change no client data and open no writer.
