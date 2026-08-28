@@ -66,12 +66,14 @@ PLAN_SCHEMA = "wom-kit/object-storage-bytes-preservation-plan/v0.2"
 RESULT_SCHEMA = "wom-kit/object-storage-bytes-preservation-result/v0.2"
 VERIFY_SCHEMA = "wom-kit/object-storage-bytes-preservation-verification/v0.2"
 LEGACY_RECEIPT_SCHEMA = "wom-kit/object-storage-bytes-preserved-receipt/v0.1"
-RECEIPT_SCHEMA = "wom-kit/object-storage-preservation-terminal-receipt/v0.2"
+PREVIOUS_RECEIPT_SCHEMA = "wom-kit/object-storage-preservation-terminal-receipt/v0.2"
+RECEIPT_SCHEMA = "wom-kit/object-storage-preservation-terminal-receipt/v0.3"
 CONTROL_SCHEMA = "wom-kit/object-storage-bytes-preservation-control/v0.3"
 LEGACY_CONTROL_SCHEMA = "wom-kit/object-storage-bytes-preservation-control/v0.2"
 REMOTE_QUERY_SCHEMA = "wom-kit/object-storage-remote-query-result/v0.1"
 LEDGER_SCHEMA = "wom-kit/object-storage-bytes-preservation-ledger/v0.2"
 LEGACY_LEDGER_SCHEMA = "wom-kit/object-storage-bytes-preservation-ledger/v0.1"
+CALL_JOURNAL_SCHEMA = "wom-kit/object-storage-provider-call-journal/v0.3"
 OPERATION = ExactHumanApprovalOperation.object_storage_bytes_preservation.value
 
 RECEIPT_ROOT = "receipts/providers/object-storage-bytes-preserved"
@@ -678,6 +680,8 @@ def _receipt_document(
     preservation_status: str,
     classified_at: str,
     provider_put_call_count: int,
+    provider_put_call_charged_count: int,
+    provider_put_call_count_evidence: str,
     remote_state: str,
 ) -> dict[str, Any]:
     if preservation_status not in _TERMINAL_STATUSES:
@@ -702,6 +706,8 @@ def _receipt_document(
         "preservation_status": preservation_status,
         "classified_at": classified_at,
         "provider_put_call_count": provider_put_call_count,
+        "provider_put_call_charged_count": provider_put_call_charged_count,
+        "provider_put_call_count_evidence": provider_put_call_count_evidence,
         "bytes_uploaded": size_bytes if preservation_status == "bytes_preserved" else 0,
         "formal_adoption_status": "not_adopted",
         "manifest_location_updated": False,
@@ -750,7 +756,7 @@ def _existing_receipt_matches(
             store_ref=store_ref,
             inventory_sha256=inventory_sha256,
         )
-    if document.get("schema_version") != RECEIPT_SCHEMA:
+    if document.get("schema_version") not in {PREVIOUS_RECEIPT_SCHEMA, RECEIPT_SCHEMA}:
         return False
     required = {
         "schema_version",
@@ -778,15 +784,30 @@ def _existing_receipt_matches(
         "provider_url_echoed",
         "local_path_echoed",
     }
+    extended_count_contract = (
+        "provider_put_call_charged_count" in document
+        or "provider_put_call_count_evidence" in document
+    )
+    if extended_count_contract:
+        required |= {
+            "provider_put_call_charged_count",
+            "provider_put_call_count_evidence",
+        }
     if set(document) != required:
         return False
     status = document.get("preservation_status")
     put_calls = document.get("provider_put_call_count")
+    charged_calls = document.get("provider_put_call_charged_count", put_calls)
+    count_evidence = document.get("provider_put_call_count_evidence", "exact_observed")
     classified_at = document.get("classified_at")
     if (
         status not in _TERMINAL_STATUSES
         or type(put_calls) is not int
         or put_calls < 0
+        or type(charged_calls) is not int
+        or charged_calls < put_calls
+        or count_evidence not in {"exact_observed", "conservative_reserved"}
+        or (count_evidence == "exact_observed" and charged_calls != put_calls)
         or type(classified_at) is not str
         or not classified_at
         or _SHA256_RE.fullmatch(str(document.get("exact_operation_manifest_sha256") or ""))
@@ -1486,6 +1507,261 @@ def _ledger_relative(manifest_sha256: str) -> str:
     return f"{LEDGER_ROOT}/{digest}.object-storage-bytes-preservation.jsonl"
 
 
+def _call_journal_relative(manifest_sha256: str) -> str:
+    if _SHA256_RE.fullmatch(str(manifest_sha256 or "")) is None:
+        raise _fail("object_storage_preservation_control_invalid")
+    digest = manifest_sha256.removeprefix("sha256:")
+    return f"{LEDGER_ROOT}/{digest}.object-storage-provider-calls.jsonl"
+
+
+class _ManifestBoundProviderCallJournal:
+    """Write-ahead, fsynced reservations for preservation provider mutations."""
+
+    _PHASES = frozenset(
+        {"put_object", "create_multipart", "put_part", "complete_multipart", "abort_multipart"}
+    )
+
+    def __init__(
+        self,
+        plan: ObjectStorageBytesPreservationPlan,
+        *,
+        prior_calls: int,
+        prior_calls_by_object: Mapping[str, int],
+    ) -> None:
+        if plan.manifest is None or type(prior_calls) is not int or prior_calls < 0:
+            raise _fail("object_storage_preservation_control_invalid")
+        self.plan = plan
+        self.path = archive_services.archive_internal_path(
+            plan.archive_root, _call_journal_relative(plan.manifest.manifest_sha256)
+        )
+        self.prior_calls = prior_calls
+        self.prior_calls_by_object = dict(prior_calls_by_object)
+        self._reservations: list[dict[str, Any]] = []
+        self._observed: set[str] = set()
+        if self.path.exists():
+            self._load()
+        else:
+            header = {
+                "schema_version": CALL_JOURNAL_SCHEMA,
+                "event": "journal_header",
+                "manifest_sha256": plan.manifest.manifest_sha256,
+                "prior_accounted_put_calls": prior_calls,
+                "prior_accounted_put_calls_by_object": self.prior_calls_by_object,
+                "private_control_document": True,
+            }
+            self._append_raw(header)
+
+    def _append_raw(self, row: Mapping[str, Any]) -> None:
+        raw = _canonical_bytes(dict(row)) + b"\n"
+        if len(raw) > _MAX_MANIFEST_LINE_BYTES:
+            raise _fail("object_storage_preservation_control_invalid")
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            root = self.plan.archive_root.resolve(strict=True)
+            parent = self.path.parent.resolve(strict=True)
+            if not parent.is_relative_to(root):
+                raise OSError("unsafe call journal parent")
+            if self.path.exists():
+                _plain_regular_file(self.path, max_bytes=_MAX_LEDGER_BYTES)
+            flags = os.O_WRONLY | os.O_APPEND | os.O_CREAT | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
+            descriptor = os.open(self.path, flags, 0o600)
+            try:
+                opened = os.fstat(descriptor)
+                if (
+                    not stat.S_ISREG(opened.st_mode)
+                    or int(getattr(opened, "st_nlink", 1)) != 1
+                    or opened.st_size + len(raw) > _MAX_LEDGER_BYTES
+                ):
+                    raise OSError("unsafe call journal")
+                offset = 0
+                while offset < len(raw):
+                    written = os.write(descriptor, raw[offset:])
+                    if written <= 0:
+                        raise OSError("short call journal append")
+                    offset += written
+                os.fsync(descriptor)
+            finally:
+                os.close(descriptor)
+        except Exception:
+            raise _fail("object_storage_preservation_control_invalid") from None
+
+    def _load(self) -> None:
+        try:
+            _plain_regular_file(self.path, max_bytes=_MAX_LEDGER_BYTES)
+            raw = self.path.read_bytes()
+            if not raw.endswith(b"\n"):
+                raise ValueError("torn call journal")
+            rows = [_strict_json(line) for line in raw.splitlines()]
+            header = rows[0]
+            if (
+                set(header) != {
+                    "schema_version", "event", "manifest_sha256",
+                    "prior_accounted_put_calls", "prior_accounted_put_calls_by_object",
+                    "private_control_document",
+                }
+                or header.get("schema_version") != CALL_JOURNAL_SCHEMA
+                or header.get("event") != "journal_header"
+                or header.get("manifest_sha256") != self.plan.manifest.manifest_sha256
+                or type(header.get("prior_accounted_put_calls")) is not int
+                or int(header["prior_accounted_put_calls"]) < 0
+                or not isinstance(header.get("prior_accounted_put_calls_by_object"), dict)
+                or header.get("private_control_document") is not True
+            ):
+                raise ValueError("call journal header")
+            self.prior_calls = int(header["prior_accounted_put_calls"])
+            self.prior_calls_by_object = dict(header["prior_accounted_put_calls_by_object"])
+            if (
+                any(
+                    object_id not in {spec.object_id for spec in self.plan.specs}
+                    or type(count) is not int
+                    or count < 0
+                    for object_id, count in self.prior_calls_by_object.items()
+                )
+                or sum(self.prior_calls_by_object.values()) != self.prior_calls
+            ):
+                raise ValueError("call journal prior calls")
+            seen: set[str] = set()
+            reservation_count = 0
+            for row in rows[1:]:
+                if row.get("event") == "call_observed":
+                    if set(row) != {
+                        "schema_version", "event", "manifest_sha256",
+                        "reservation_id", "observed_at",
+                    }:
+                        raise ValueError("call observation fields")
+                    reservation_id = str(row.get("reservation_id") or "")
+                    if (
+                        row.get("schema_version") != CALL_JOURNAL_SCHEMA
+                        or row.get("manifest_sha256") != self.plan.manifest.manifest_sha256
+                        or reservation_id not in seen
+                        or reservation_id in self._observed
+                    ):
+                        raise ValueError("call observation binding")
+                    datetime.fromisoformat(str(row.get("observed_at") or "").replace("Z", "+00:00"))
+                    self._observed.add(reservation_id)
+                    continue
+                if set(row) != {
+                    "schema_version", "event", "manifest_sha256", "reservation_id",
+                    "target_identity_sha256", "object_id", "remote_key_sha256",
+                    "call_kind", "call_seq", "attempt", "part_number",
+                    "upload_id_sha256", "reserved_at",
+                }:
+                    raise ValueError("call journal fields")
+                object_id = str(row.get("object_id") or "")
+                spec = next((item for item in self.plan.specs if item.object_id == object_id), None)
+                reservation_id = str(row.get("reservation_id") or "")
+                phase = str(row.get("call_kind") or "")
+                reservation_count += 1
+                expected_id = "call_" + hashlib.sha256(
+                    f"{self.plan.manifest.manifest_sha256}\x00{object_id}\x00{phase}\x00{reservation_count}".encode("ascii")
+                ).hexdigest()
+                if (
+                    row.get("schema_version") != CALL_JOURNAL_SCHEMA
+                    or row.get("event") != "call_reserved"
+                    or row.get("manifest_sha256") != self.plan.manifest.manifest_sha256
+                    or spec is None
+                    or phase not in self._PHASES
+                    or row.get("call_seq") != reservation_count
+                    or type(row.get("attempt")) is not int
+                    or int(row["attempt"]) < 1
+                    or (
+                        row.get("part_number") is not None
+                        and (type(row.get("part_number")) is not int or int(row["part_number"]) < 1)
+                    )
+                    or (
+                        row.get("upload_id_sha256") is not None
+                        and _SHA256_RE.fullmatch(str(row.get("upload_id_sha256"))) is None
+                    )
+                    or reservation_id != expected_id
+                    or reservation_id in seen
+                    or row.get("target_identity_sha256") != spec.target_identity_sha256
+                    or row.get("remote_key_sha256") != _sha256_document(spec.remote_key)
+                ):
+                    raise ValueError("call journal binding")
+                datetime.fromisoformat(str(row.get("reserved_at") or "").replace("Z", "+00:00"))
+                seen.add(reservation_id)
+                self._reservations.append(dict(row))
+        except Exception:
+            raise _fail("object_storage_preservation_control_invalid") from None
+
+    def reserve(
+        self,
+        spec: _PreservationSpec,
+        phase: str,
+        *,
+        attempt: int,
+        part_number: int | None,
+        upload_id: str | None,
+    ) -> str:
+        if phase not in self._PHASES:
+            raise _fail("object_storage_preservation_control_invalid")
+        sequence = len(self._reservations) + 1
+        reservation_id = "call_" + hashlib.sha256(
+            f"{self.plan.manifest.manifest_sha256}\x00{spec.object_id}\x00{phase}\x00{sequence}".encode("ascii")
+        ).hexdigest()
+        row = {
+            "schema_version": CALL_JOURNAL_SCHEMA,
+            "event": "call_reserved",
+            "manifest_sha256": self.plan.manifest.manifest_sha256,
+            "reservation_id": reservation_id,
+            "target_identity_sha256": spec.target_identity_sha256,
+            "object_id": spec.object_id,
+            "remote_key_sha256": _sha256_document(spec.remote_key),
+            "call_kind": phase,
+            "call_seq": sequence,
+            "attempt": attempt,
+            "part_number": part_number,
+            "upload_id_sha256": (
+                None if upload_id is None else _sha256_document(upload_id)
+            ),
+            "reserved_at": _now_iso(),
+        }
+        self._append_raw(row)
+        self._reservations.append(row)
+        return reservation_id
+
+    def observe(self, reservation_id: str) -> None:
+        if (
+            reservation_id in self._observed
+            or reservation_id not in {str(row["reservation_id"]) for row in self._reservations}
+        ):
+            raise _fail("object_storage_preservation_control_invalid")
+        row = {
+            "schema_version": CALL_JOURNAL_SCHEMA,
+            "event": "call_observed",
+            "manifest_sha256": self.plan.manifest.manifest_sha256,
+            "reservation_id": reservation_id,
+            "observed_at": _now_iso(),
+        }
+        self._append_raw(row)
+        self._observed.add(reservation_id)
+
+    def charged_calls(self) -> int:
+        return self.prior_calls + len(self._reservations)
+
+    def reserved_calls_for(self, spec: _PreservationSpec) -> int:
+        return sum(row["object_id"] == spec.object_id for row in self._reservations)
+
+    def charged_calls_for(self, spec: _PreservationSpec) -> int:
+        return self.prior_calls_by_object.get(spec.object_id, 0) + self.reserved_calls_for(spec)
+
+    def observed_calls_for(self, spec: _PreservationSpec) -> int:
+        prior = self.prior_calls_by_object.get(spec.object_id, 0)
+        return prior + sum(
+            row["object_id"] == spec.object_id
+            and row["reservation_id"] in self._observed
+            for row in self._reservations
+        )
+
+    def unresolved_phases_for(self, spec: _PreservationSpec) -> set[str]:
+        return {
+            str(row["call_kind"])
+            for row in self._reservations
+            if row["object_id"] == spec.object_id
+            and row["reservation_id"] not in self._observed
+        }
+
+
 class _ManifestBoundPreservationLedger(archive_services._ResumeLedger):
     """Private append-only provider ledger bound to one exact manifest.
 
@@ -1558,6 +1834,16 @@ class _ManifestBoundPreservationLedger(archive_services._ResumeLedger):
         self._total_put_call_count = 0
         for row in self._rows_cache:
             self._index_row(row)
+        journal_path = archive_services.archive_internal_path(
+            plan.archive_root, _call_journal_relative(plan.manifest.manifest_sha256)
+        )
+        self.call_journal: _ManifestBoundProviderCallJournal | None = None
+        if journal_path.exists():
+            self.call_journal = _ManifestBoundProviderCallJournal(
+                plan,
+                prior_calls=self._total_put_call_count,
+                prior_calls_by_object=self._put_calls_by_object,
+            )
 
     def _index_row(self, row: Mapping[str, Any]) -> None:
         object_id = str(row["object_id"])
@@ -1870,7 +2156,63 @@ class _ManifestBoundPreservationLedger(archive_services._ResumeLedger):
         }
 
     def total_put_calls(self) -> int:
-        return self._total_put_call_count
+        return (
+            self._total_put_call_count
+            if self.call_journal is None
+            else self.call_journal.charged_calls()
+        )
+
+    def reserve_provider_mutation(
+        self,
+        spec: _PreservationSpec,
+        phase: str,
+        *,
+        attempt: int,
+        part_number: int | None,
+        upload_id: str | None,
+    ) -> str:
+        if self.call_journal is None:
+            self.call_journal = _ManifestBoundProviderCallJournal(
+                self.plan,
+                prior_calls=self._total_put_call_count,
+                prior_calls_by_object=self._put_calls_by_object,
+            )
+        return self.call_journal.reserve(
+            spec,
+            phase,
+            attempt=attempt,
+            part_number=part_number,
+            upload_id=upload_id,
+        )
+
+    def observe_provider_mutation(self, reservation_id: str) -> None:
+        if self.call_journal is None:
+            raise _fail("object_storage_preservation_control_invalid")
+        self.call_journal.observe(reservation_id)
+
+    def charged_calls_for(self, spec: _PreservationSpec) -> int:
+        return (
+            self._put_calls_by_object.get(spec.object_id, 0)
+            if self.call_journal is None
+            else self.call_journal.charged_calls_for(spec)
+        )
+
+    def call_count_evidence_for(self, spec: _PreservationSpec) -> str:
+        return (
+            "conservative_reserved"
+            if self.charged_calls_for(spec) > self.observed_calls_for(spec)
+            else "exact_observed"
+        )
+
+    def observed_calls_for(self, spec: _PreservationSpec) -> int:
+        return (
+            self._put_calls_by_object.get(spec.object_id, 0)
+            if self.call_journal is None
+            else self.call_journal.observed_calls_for(spec)
+        )
+
+    def unresolved_provider_phases_for(self, spec: _PreservationSpec) -> set[str]:
+        return set() if self.call_journal is None else self.call_journal.unresolved_phases_for(spec)
 
 
 def _receipt_path(plan: ObjectStorageBytesPreservationPlan, spec: _PreservationSpec) -> Path:
@@ -1911,9 +2253,16 @@ def _read_terminal_receipt(
         inventory_sha256=plan.source_inventory_sha256,
         preservation_status=str(terminal["preservation_status"]),
         classified_at=str(terminal["completed_at"]),
-        provider_put_call_count=ledger.put_calls_for(spec),
+        provider_put_call_count=ledger.observed_calls_for(spec),
+        provider_put_call_charged_count=ledger.charged_calls_for(spec),
+        provider_put_call_count_evidence=ledger.call_count_evidence_for(spec),
         remote_state=str(terminal["remote_state"]),
     )
+    if "provider_put_call_charged_count" not in document:
+        expected["schema_version"] = PREVIOUS_RECEIPT_SCHEMA
+        expected.pop("provider_put_call_charged_count")
+        expected.pop("provider_put_call_count_evidence")
+        expected["provider_put_call_count"] = ledger.put_calls_for(spec)
     if document != expected:
         raise _fail("object_storage_preservation_receipt_conflict")
     return document
@@ -1940,7 +2289,9 @@ def _create_terminal_receipt(
         inventory_sha256=plan.source_inventory_sha256,
         preservation_status=str(terminal["preservation_status"]),
         classified_at=str(terminal["completed_at"]),
-        provider_put_call_count=ledger.put_calls_for(spec),
+        provider_put_call_count=ledger.observed_calls_for(spec),
+        provider_put_call_charged_count=ledger.charged_calls_for(spec),
+        provider_put_call_count_evidence=ledger.call_count_evidence_for(spec),
         remote_state=str(terminal["remote_state"]),
     )
     _create_or_match_receipt(
@@ -2046,6 +2397,82 @@ class _Verifier:
         return spec.receipt_token
 
 
+class _JournaledPreservationTransport:
+    """Preservation-only write-ahead boundary around provider mutations."""
+
+    def __init__(
+        self,
+        transport: archive_services.ObjectStorageTransport,
+        ledger: _ManifestBoundPreservationLedger,
+        spec: _PreservationSpec,
+    ) -> None:
+        self.transport = transport
+        self.ledger = ledger
+        self.spec = spec
+        self.attempt = 0
+
+    def head_object(self, **kwargs: Any) -> Mapping[str, Any]:
+        return self.transport.head_object(**kwargs)
+
+    def _mutate(
+        self,
+        phase: str,
+        call: Callable[[], Any],
+        *,
+        part_number: int | None = None,
+        upload_id: str | None = None,
+    ) -> Any:
+        if phase in {"put_object", "create_multipart"}:
+            self.attempt += 1
+        reservation_id = self.ledger.reserve_provider_mutation(
+            self.spec,
+            phase,
+            attempt=max(1, self.attempt),
+            part_number=part_number,
+            upload_id=upload_id,
+        )
+        try:
+            result = call()
+        except Exception:
+            self.ledger.observe_provider_mutation(reservation_id)
+            raise
+        self.ledger.observe_provider_mutation(reservation_id)
+        return result
+
+    def put_object(self, **kwargs: Any) -> Mapping[str, Any]:
+        return self._mutate("put_object", lambda: self.transport.put_object(**kwargs))
+
+    def create_multipart(self, **kwargs: Any) -> str:
+        return self._mutate(
+            "create_multipart", lambda: self.transport.create_multipart(**kwargs)
+        )
+
+    def put_part(self, **kwargs: Any) -> Mapping[str, Any]:
+        return self._mutate(
+            "put_part",
+            lambda: self.transport.put_part(**kwargs),
+            part_number=kwargs.get("part_number"),
+            upload_id=kwargs.get("upload_id"),
+        )
+
+    def complete_multipart(self, **kwargs: Any) -> Mapping[str, Any]:
+        return self._mutate(
+            "complete_multipart",
+            lambda: self.transport.complete_multipart(**kwargs),
+            upload_id=kwargs.get("upload_id"),
+        )
+
+    def abort_multipart(self, **kwargs: Any) -> Mapping[str, Any]:
+        return self._mutate(
+            "abort_multipart",
+            lambda: self.transport.abort_multipart(**kwargs),
+            upload_id=kwargs.get("upload_id"),
+        )
+
+    def delete_object(self, **kwargs: Any) -> Mapping[str, Any]:
+        return self.transport.delete_object(**kwargs)
+
+
 class _Writer:
     def __init__(
         self,
@@ -2103,6 +2530,18 @@ class _Writer:
             expected_sha256=digest,
             heartbeat=heartbeat,
         )
+        unresolved_multipart = self.ledger.unresolved_provider_phases_for(spec) & {
+            "create_multipart",
+            "put_part",
+            "complete_multipart",
+            "abort_multipart",
+        }
+        if unresolved_multipart and before.state != "verified_match":
+            # An unknown multipart mutation may have allocated an upload id,
+            # published the object, or left cleanup incomplete.  Only exact
+            # remote bytes can close it automatically; every other state stays
+            # nonterminal for explicit cleanup/reconciliation.
+            raise _fail("object_storage_preservation_remote_unavailable")
         if before.state == "verified_match":
             self.ledger.append_terminal(
                 spec,
@@ -2118,7 +2557,9 @@ class _Writer:
                 raise _fail("object_storage_preservation_upload_failed")
             result = _call_with_heartbeat(
                 lambda: archive_services._object_storage_execute_one_upload(
-                    transport=self.transport,
+                    transport=_JournaledPreservationTransport(
+                        self.transport, self.ledger, spec
+                    ),
                     key=spec.remote_key,
                     data_path=spec.local_path,
                     size=spec.size_bytes,
@@ -2615,6 +3056,8 @@ def _durable_result_counts(
     counts = {status: 0 for status in sorted(_TERMINAL_STATUSES)}
     bytes_uploaded = 0
     provider_put_calls = 0
+    provider_put_calls_charged = 0
+    conservative = False
     for spec in plan.specs:
         receipt = _read_terminal_receipt(plan, spec, ledger)
         if receipt is None:
@@ -2625,12 +3068,21 @@ def _durable_result_counts(
         counts[status] += 1
         bytes_uploaded += int(receipt.get("bytes_uploaded") or 0)
         provider_put_calls += int(receipt.get("provider_put_call_count") or 0)
+        charged = int(
+            receipt.get("provider_put_call_charged_count", receipt.get("provider_put_call_count") or 0)
+        )
+        provider_put_calls_charged += charged
+        conservative = conservative or receipt.get("provider_put_call_count_evidence") == "conservative_reserved"
     if sum(counts.values()) != len(plan.specs):
         raise _fail("object_storage_preservation_receipt_conflict")
     return {
         "classification_counts": counts,
         "bytes_uploaded": bytes_uploaded,
         "provider_put_call_count": provider_put_calls,
+        "provider_put_call_charged_count": provider_put_calls_charged,
+        "provider_put_call_count_evidence": (
+            "conservative_reserved" if conservative else "exact_observed"
+        ),
     }
 
 
@@ -2689,6 +3141,8 @@ def _apply_with_store(
         == len(plan.specs),
         "bytes_uploaded": durable["bytes_uploaded"],
         "provider_put_call_count": durable["provider_put_call_count"],
+        "provider_put_call_charged_count": durable["provider_put_call_charged_count"],
+        "provider_put_call_count_evidence": durable["provider_put_call_count_evidence"],
         "expected_no_retry_provider_put_call_count": writer.expected_no_retry_put_calls,
         "manifest_bound_provider_put_call_ceiling": writer.manifest_bound_put_call_ceiling,
         "independent_remote_verification": True,
