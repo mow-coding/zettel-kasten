@@ -352,6 +352,9 @@ class Letter136SourceFidelityFacetTests(unittest.TestCase):
         self.assertIsNone(preview["approval_handoff"]["receipt_ref"])
         self.assertTrue(preview["approval_handoff"]["required_review_bindings"])
 
+        indexed = archive_services.index_archive(self.root)
+        self.assertTrue(indexed["ok"], indexed)
+
         create_context = ExactHumanApprovalContext(
             operation=ExactHumanApprovalOperation.create_draft,
             archive_identity_sha256=exact_human_approval_archive_identity_sha256(
@@ -735,6 +738,8 @@ class Letter136SourceFidelityFacetTests(unittest.TestCase):
             ),
             b"w" * 32,
         )
+        indexed = archive_services.index_archive(self.root)
+        self.assertTrue(indexed["ok"], indexed)
         vocabulary = archive_services.facet_vocabulary(self.root, dry_run=True)
         vocabulary["keys"] = [
             *vocabulary["keys"],

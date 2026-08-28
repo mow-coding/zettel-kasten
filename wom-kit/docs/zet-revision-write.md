@@ -1,16 +1,16 @@
 # Canonical zet Revision Write
 
-Status: fixed closed in v0.4.11; v0.3 receipts remain readable
+Status: fixed closed in v0.4.12; v0.3 receipts remain readable
 
 `zet-revision-plan` can validate a private proposal against the current
-canonical zet for human review. In v0.4.11 that validation result is not an
+canonical zet for human review. In v0.4.12 that validation result is not an
 actionable handoff to `zet-revision-write`: its hashes and `plan_digest` are
 evidence only and grant no approval authority. The result reports
 `approval_fixed_closed`, `approved_write_implemented: false`, and
 `actionable_handoff_available: false`.
 
 The historical writer changed canonical bytes, private snapshot/manifest
-state, lock state, and receipt history as one compound effect. v0.4.11 has no
+state, lock state, and receipt history as one compound effect. v0.4.12 has no
 exact-human binding for that complete effect set, so no supported preview,
 handoff, or apply workflow is exposed from the current validation result.
 
@@ -42,7 +42,7 @@ zet together. The plan is not approval and writes nothing.
 ## Step 2: Stop After Validation
 
 Do not transfer the returned bindings into `zet-revision-write`, and do not
-edit the canonical zet by hand to bypass the closed workflow. v0.4.11 exposes
+edit the canonical zet by hand to bypass the closed workflow. v0.4.12 exposes
 no supported next-step writer command from a green validation result. No
 reviewer flags, validation digest, or stale v0.3 receipt can grant authority.
 
@@ -84,7 +84,7 @@ CLI output does not echo the zet id, canonical path, proposal filename,
 reviewer id, title, abstract, body, custom frontmatter value, provider URL,
 absolute path, or secret. The digest-only receipt path is safe to return.
 
-The supported v0.4.11 validation workflow does not enter that writer, create
+The supported v0.4.12 validation workflow does not enter that writer, create
 its lock, preserve a new snapshot, replace a canonical zet, or create a
 revision receipt.
 
@@ -108,7 +108,7 @@ blocks and stays available for human inspection.
 
 ## Honest Stop
 
-A v0.4.11 validation result can prove only that one proposal was structurally
+A v0.4.12 validation result can prove only that one proposal was structurally
 checked against the exact current canonical bytes. It cannot report a writer
 preview, approval, or `applied` state. Historical `applied` receipts remain
 auditable evidence of their recorded local event but do not authorize replay.

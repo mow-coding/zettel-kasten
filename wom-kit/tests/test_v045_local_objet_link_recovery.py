@@ -54,6 +54,8 @@ class V045LocalObjetLinkRecoveryTests(unittest.TestCase):
             )
         zettel.write_text(text, encoding="utf-8", newline="")
         self.write_receipt(root)
+        indexed = archive_services.index_archive(root)
+        self.assertTrue(indexed["ok"], indexed)
         return root
 
     @staticmethod

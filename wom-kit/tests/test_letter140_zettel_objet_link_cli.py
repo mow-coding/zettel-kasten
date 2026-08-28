@@ -12,7 +12,7 @@ from unittest import mock
 
 from jsonschema import Draft202012Validator
 
-from wom_kit import archive_cli
+from wom_kit import archive_cli, archive_services
 from wom_kit.exact_human_approval import CLAIMS_RELATIVE_ROOT
 from wom_kit.exact_human_approval_windows import APPROVE_BUTTON_ID
 from wom_kit.exact_human_approval_workflow import (
@@ -55,6 +55,12 @@ class _EphemeralKeyProvider:
 
 
 class Letter140ZettelObjetLinkCliTests(unittest.TestCase):
+    @staticmethod
+    def prepare_index(root: Path) -> None:
+        indexed = archive_services.index_archive(root)
+        if indexed.get("ok") is not True:
+            raise AssertionError(indexed)
+
     @staticmethod
     def run_cli(values: list[str]) -> tuple[int, str, str]:
         stdout = io.StringIO()
@@ -108,6 +114,7 @@ class Letter140ZettelObjetLinkCliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary) / "archive"
             shutil.copytree(FIXTURE, root)
+            self.prepare_index(root)
             zettel_path = root / "zettels" / f"{ZETTEL_ID}.md"
             before = zettel_path.read_bytes()
             common = [
@@ -211,6 +218,7 @@ class Letter140ZettelObjetLinkCliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary) / "archive"
             shutil.copytree(FIXTURE, root)
+            self.prepare_index(root)
             zettel_path = root / "zettels" / f"{ZETTEL_ID}.md"
             before = zettel_path.read_bytes()
             common = [
@@ -274,6 +282,7 @@ class Letter140ZettelObjetLinkCliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary) / "archive"
             shutil.copytree(FIXTURE, root)
+            self.prepare_index(root)
             manifest = root / "objects" / "manifests" / "files.jsonl"
             digest = OBJECT_ID.removeprefix("sha256:")
             deep_value = "[" * 2_000 + "0" + "]" * 2_000
@@ -340,6 +349,7 @@ class Letter140ZettelObjetLinkCliTests(unittest.TestCase):
                 with tempfile.TemporaryDirectory() as temporary:
                     root = Path(temporary) / "archive"
                     shutil.copytree(FIXTURE, root)
+                    self.prepare_index(root)
                     zettel_path = root / "zettels" / f"{ZETTEL_ID}.md"
                     before = zettel_path.read_bytes()
                     common = [

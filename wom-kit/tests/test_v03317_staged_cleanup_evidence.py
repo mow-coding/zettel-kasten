@@ -221,6 +221,9 @@ class StagedCleanupEvidenceV03317Tests(unittest.TestCase):
             manifest_path=request_path,
         )
         self.assertTrue(plan["ok"], plan)
+        indexed = archive_services.index_archive(archive_root)
+        self.assertTrue(indexed["ok"], indexed)
+        self.assertEqual(indexed["index_state"], "current", indexed)
         # Install bounded pre-v0.4 capture evidence so the tests below keep
         # exercising the read-only cleanup verifier.  The public v0.4 batch
         # writer and its derived-text register remain deliberately fail-closed.

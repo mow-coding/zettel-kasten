@@ -87,6 +87,7 @@ class ObjectStorageAdoptionError(RuntimeError):
         "object_storage_adoption_resume_invalid",
         "object_storage_adoption_setup_evidence_missing",
         "object_storage_adoption_setup_evidence_mismatch",
+        "archive_index_rebuild_required",
     }
 
     def __init__(self, code: str) -> None:
@@ -986,8 +987,73 @@ def _batch_state(plan: ObjectStorageFormalAdoptionPlan) -> bytes | None:
     return _manifest_batch_token(specs)
 
 
+def _manifest_before_snapshot_path(
+    plan: ObjectStorageFormalAdoptionPlan,
+) -> Path:
+    if plan.manifest is None or _SHA256_RE.fullmatch(
+        plan.manifest.manifest_sha256
+    ) is None:
+        raise _fail("object_storage_adoption_plan_invalid")
+    digest = plan.manifest.manifest_sha256.removeprefix("sha256:")
+    return plan.archive_root.joinpath(
+        *Path(CONTROL_ROOT).parts,
+        f"{digest}.object-storage-formal-adoption.manifest-before.bin",
+    )
+
+
+def _create_or_match_manifest_before_snapshot(
+    plan: ObjectStorageFormalAdoptionPlan,
+    raw: bytes,
+) -> None:
+    path = _manifest_before_snapshot_path(plan)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        existing = path.read_bytes()
+    except FileNotFoundError:
+        try:
+            outcome = archive_services._create_only_bytes_outcome_aware(
+                path,
+                raw,
+            )
+        except FileExistsError:
+            existing = path.read_bytes()
+        else:
+            if outcome != "verified_exact":
+                raise _fail("archive_index_rebuild_required")
+            return
+    except OSError:
+        raise _fail("archive_index_rebuild_required") from None
+    if existing != raw:
+        raise _fail("archive_index_rebuild_required")
+
+
+def _load_manifest_before_snapshot(
+    plan: ObjectStorageFormalAdoptionPlan,
+) -> bytes:
+    try:
+        raw = _manifest_before_snapshot_path(plan).read_bytes()
+    except OSError:
+        raise _fail("archive_index_rebuild_required") from None
+    if not raw or len(raw) > archive_services.ZETTEL_OBJET_LINK_MANIFEST_MAX_BYTES:
+        raise _fail("archive_index_rebuild_required")
+    return raw
+
+
+@dataclass
+class _ManifestIndexLifecycle:
+    generation: str | None = None
+    lease_token: archive_services.ArchiveIndexMutationLeaseToken | None = None
+    original_bytes: bytes | None = None
+    written_bytes: bytes | None = None
+    updated: bool = False
+    resumed: bool = False
+
+
 def _apply_manifest_batch(
-    plan: ObjectStorageFormalAdoptionPlan, *, destination_present: bool
+    plan: ObjectStorageFormalAdoptionPlan,
+    *,
+    destination_present: bool,
+    lifecycle: _ManifestIndexLifecycle | None = None,
 ) -> int:
     specs = plan.adoption_specs
     if not specs:
@@ -999,13 +1065,28 @@ def _apply_manifest_batch(
     manifest_path = archive_services.archive_internal_path(
         plan.archive_root, "objects/manifests/files.jsonl"
     )
+    if plan.manifest is None:
+        raise _fail("object_storage_adoption_plan_invalid")
+    manifest_mutation_owner_sha256 = (
+        archive_services.archive_manifest_mutation_owner_sha256(
+            operation="object_storage_formal_adoption",
+            operation_binding_sha256=plan.manifest.manifest_sha256,
+        )
+    )
     changed = 0
     seen: dict[str, int] = {item.object_id: 0 for item in specs}
     with archive_services._ObjetCaptureManifestLock(plan.archive_root):
         rewritten: list[str] = []
         try:
-            raw_lines = manifest_path.read_text(encoding="utf-8").splitlines()
-        except OSError:
+            before_snapshot = archive_services.archive_index_stable_file_snapshot(
+                plan.archive_root,
+                manifest_path,
+                max_bytes=(
+                    archive_services.ZETTEL_OBJET_LINK_MANIFEST_MAX_BYTES
+                ),
+            )
+            raw_lines = before_snapshot["raw"].decode("utf-8").splitlines()
+        except (OSError, UnicodeError):
             raise _fail("object_storage_adoption_plan_changed") from None
         for raw_line in raw_lines:
             if not raw_line.strip():
@@ -1046,7 +1127,223 @@ def _apply_manifest_batch(
         if any(value != 1 for value in seen.values()):
             raise _fail("object_storage_adoption_plan_changed")
         if changed:
-            archive_services._atomic_write_text(manifest_path, "\n".join(rewritten) + "\n")
+            replacement_bytes = ("\n".join(rewritten) + "\n").encode("utf-8")
+
+            if not destination_present:
+                if lifecycle is not None and lifecycle.original_bytes is None:
+                    lifecycle.original_bytes = _load_manifest_before_snapshot(
+                        plan
+                    )
+                    lifecycle.written_bytes = before_snapshot["raw"]
+                if (
+                    lifecycle is None
+                    or lifecycle.original_bytes is None
+                    or lifecycle.written_bytes is None
+                    or before_snapshot["raw"] != lifecycle.written_bytes
+                ):
+                    raise _fail("archive_index_rebuild_required")
+                try:
+                    rollback_generation, rollback_began, rollback_lease_token = (
+                        archive_services.prepare_archive_manifest_index_mutation(
+                            plan.archive_root,
+                            operation_owner_sha256=(
+                                manifest_mutation_owner_sha256
+                            ),
+                            expected_pre_manifest_sha256=before_snapshot[
+                                "file_sha256"
+                            ],
+                            expected_post_manifest_sha256=(
+                                "sha256:"
+                                + hashlib.sha256(
+                                    lifecycle.original_bytes
+                                ).hexdigest()
+                            ),
+                        )
+                    )
+                except archive_services.ArchiveServiceError:
+                    raise _fail("archive_index_rebuild_required") from None
+                lifecycle.generation = rollback_generation
+                lifecycle.lease_token = rollback_lease_token
+                lifecycle.resumed = lifecycle.resumed or not rollback_began
+                if not archive_services.restore_archive_manifest_bytes_and_reseal(
+                    plan.archive_root,
+                    original_bytes=lifecycle.original_bytes,
+                    written_bytes=lifecycle.written_bytes,
+                    expected_generation=rollback_generation,
+                    expected_mutation_owner_sha256=(
+                        manifest_mutation_owner_sha256
+                    ),
+                    lease_token=rollback_lease_token,
+                    error_prefix="object_storage_adoption",
+                ):
+                    raise _fail("archive_index_rebuild_required")
+                lifecycle.updated = True
+                return changed
+
+            replacement_sha256 = (
+                "sha256:" + hashlib.sha256(replacement_bytes).hexdigest()
+            )
+            try:
+                generation, began, lease_token = (
+                    archive_services.prepare_archive_manifest_index_mutation(
+                        plan.archive_root,
+                        operation_owner_sha256=(
+                            manifest_mutation_owner_sha256
+                        ),
+                        expected_pre_manifest_sha256=before_snapshot[
+                            "file_sha256"
+                        ],
+                        expected_post_manifest_sha256=replacement_sha256,
+                    )
+                )
+            except archive_services.ArchiveServiceError:
+                raise _fail("archive_index_rebuild_required") from None
+            if lifecycle is not None:
+                lifecycle.generation = generation
+                lifecycle.lease_token = lease_token
+                lifecycle.original_bytes = before_snapshot["raw"]
+                lifecycle.written_bytes = replacement_bytes
+                lifecycle.resumed = not began
+            try:
+                _create_or_match_manifest_before_snapshot(
+                    plan,
+                    before_snapshot["raw"],
+                )
+            except BaseException:
+                archive_services.mark_archive_index_dirty(
+                    plan.archive_root,
+                    expected_generation=generation,
+                    expected_mutation_owner_sha256=(
+                        manifest_mutation_owner_sha256
+                    ),
+                    lease_token=lease_token,
+                )
+                raise
+            try:
+                archive_services._replace_regular_file_bytes_compare_and_swap(
+                    plan.archive_root,
+                    manifest_path,
+                    expected_bytes=before_snapshot["raw"],
+                    replacement_bytes=replacement_bytes,
+                    transaction_sha256=manifest_mutation_owner_sha256,
+                    swap_suffix=".object-storage-adoption-manifest.swap",
+                    max_bytes=(
+                        archive_services.ZETTEL_OBJET_LINK_MANIFEST_MAX_BYTES
+                    ),
+                    error_prefix="object_storage_adoption",
+                )
+            except Exception:
+                try:
+                    observed = manifest_path.read_bytes()
+                except OSError:
+                    observed = None
+                if observed == replacement_bytes:
+                    pass
+                elif observed == before_snapshot["raw"]:
+                    archive_services.replace_archive_index_manifest_projection(
+                        plan.archive_root,
+                        expected_generation=generation,
+                        expected_manifest_sha256=before_snapshot["file_sha256"],
+                        expected_mutation_owner_sha256=(
+                            manifest_mutation_owner_sha256
+                        ),
+                        lease_token=lease_token,
+                    )
+                    raise
+                else:
+                    archive_services.mark_archive_index_dirty(
+                        plan.archive_root,
+                        expected_generation=generation,
+                        expected_mutation_owner_sha256=(
+                            manifest_mutation_owner_sha256
+                        ),
+                        lease_token=lease_token,
+                    )
+                    raise _fail("archive_index_rebuild_required") from None
+            updated = archive_services.replace_archive_index_manifest_projection(
+                plan.archive_root,
+                expected_generation=generation,
+                expected_manifest_sha256=replacement_sha256,
+                expected_mutation_owner_sha256=(
+                    manifest_mutation_owner_sha256
+                ),
+                lease_token=lease_token,
+            )
+            if not updated:
+                archive_services.mark_archive_index_dirty(
+                    plan.archive_root,
+                    expected_generation=generation,
+                    expected_mutation_owner_sha256=(
+                        manifest_mutation_owner_sha256
+                    ),
+                    lease_token=lease_token,
+                )
+                raise _fail("archive_index_rebuild_required")
+            if lifecycle is not None:
+                lifecycle.updated = True
+        elif destination_present:
+            # Resume the one honest partial state: the manifest already has the
+            # exact post-state while its projection remains same-generation
+            # dirty.  A current idempotent no-op performs neither begin nor DB
+            # writes.
+            evidence = archive_services.require_current_zettel_index(
+                plan.archive_root
+            )
+            if (
+                not evidence.get("ok")
+                and "archive_index_dirty"
+                in set(evidence.get("reason_codes") or [])
+            ):
+                try:
+                    current_snapshot = (
+                        archive_services.archive_index_stable_file_snapshot(
+                            plan.archive_root,
+                            manifest_path,
+                            max_bytes=(
+                                archive_services
+                                .ZETTEL_OBJET_LINK_MANIFEST_MAX_BYTES
+                            ),
+                        )
+                    )
+                    generation, began, lease_token = (
+                        archive_services.prepare_archive_manifest_index_mutation(
+                            plan.archive_root,
+                            operation_owner_sha256=(
+                                manifest_mutation_owner_sha256
+                            ),
+                            expected_pre_manifest_sha256=current_snapshot[
+                                "file_sha256"
+                            ],
+                            expected_post_manifest_sha256=current_snapshot[
+                                "file_sha256"
+                            ],
+                        )
+                    )
+                except (archive_services.ArchiveServiceError, OSError):
+                    raise _fail("archive_index_rebuild_required") from None
+                if began or not archive_services.replace_archive_index_manifest_projection(
+                    plan.archive_root,
+                    expected_generation=generation,
+                    expected_manifest_sha256=current_snapshot["file_sha256"],
+                    expected_mutation_owner_sha256=(
+                        manifest_mutation_owner_sha256
+                    ),
+                    lease_token=lease_token,
+                ):
+                    archive_services.mark_archive_index_dirty(
+                        plan.archive_root,
+                        expected_generation=generation,
+                        expected_mutation_owner_sha256=(
+                            manifest_mutation_owner_sha256
+                        ),
+                        lease_token=lease_token,
+                    )
+                    raise _fail("archive_index_rebuild_required")
+                if lifecycle is not None:
+                    lifecycle.generation = generation
+                    lifecycle.lease_token = lease_token
+                    lifecycle.updated = True
+                    lifecycle.resumed = True
     return changed
 
 
@@ -1171,6 +1468,7 @@ class _Writer:
         self.remote_head_verified_count = 0
         self.receipts_created_count = 0
         self.manifest_update_count = 0
+        self.manifest_index_lifecycle = _ManifestIndexLifecycle()
 
     def write_field(
         self,
@@ -1208,7 +1506,9 @@ class _Writer:
             if value not in {None, expected}:
                 raise ValueError("write boundary")
             self.manifest_update_count += _apply_manifest_batch(
-                self.plan, destination_present=value is not None
+                self.plan,
+                destination_present=value is not None,
+                lifecycle=self.manifest_index_lifecycle,
             )
             return
         raise ValueError("write boundary")
@@ -1219,6 +1519,39 @@ def _execution_adapters(
     transport: archive_services.ObjectStorageTransport,
 ) -> tuple[_Payloads, _Writer, _Verifier]:
     return _Payloads(plan), _Writer(plan, transport), _Verifier(plan, transport)
+
+
+def _require_manifest_index_authority(
+    plan: ObjectStorageFormalAdoptionPlan,
+) -> None:
+    if not plan.adoption_specs:
+        return
+    manifest_path = archive_services.archive_internal_path(
+        plan.archive_root,
+        "objects/manifests/files.jsonl",
+    )
+    try:
+        if plan.manifest is None:
+            raise _fail("object_storage_adoption_plan_invalid")
+        manifest_mutation_owner_sha256 = (
+            archive_services.archive_manifest_mutation_owner_sha256(
+                operation="object_storage_formal_adoption",
+                operation_binding_sha256=plan.manifest.manifest_sha256,
+            )
+        )
+        snapshot = archive_services.archive_index_stable_file_snapshot(
+            plan.archive_root,
+            manifest_path,
+            max_bytes=archive_services.ZETTEL_OBJET_LINK_MANIFEST_MAX_BYTES,
+        )
+        archive_services.require_archive_manifest_index_mutation_authority(
+            plan.archive_root,
+            operation_owner_sha256=manifest_mutation_owner_sha256,
+            expected_pre_manifest_sha256=snapshot["file_sha256"],
+            expected_post_manifest_sha256=snapshot["file_sha256"],
+        )
+    except (archive_services.ArchiveServiceError, OSError):
+        raise _fail("archive_index_rebuild_required") from None
 
 
 def _approval_binding(plan: ObjectStorageFormalAdoptionPlan) -> ExactOperationApprovalBinding:
@@ -1509,6 +1842,7 @@ def _apply_with_store(
 ) -> dict[str, Any]:
     if plan.manifest is None:
         raise _fail("object_storage_adoption_no_writes")
+    _require_manifest_index_authority(plan)
     payloads, writer, verifier = _execution_adapters(plan, transport)
     core = apply_exact_operation(
         plan.manifest,
@@ -1520,6 +1854,21 @@ def _apply_with_store(
         resume=resume,
         progress_hook=progress_hook,
     )
+    if plan.adoption_specs and core.get("status") == "completed":
+        evidence = archive_services.require_current_zettel_index(
+            plan.archive_root
+        )
+        if not evidence.get("ok"):
+            _apply_manifest_batch(
+                plan,
+                destination_present=True,
+                lifecycle=writer.manifest_index_lifecycle,
+            )
+            evidence = archive_services.require_current_zettel_index(
+                plan.archive_root
+            )
+        if not evidence.get("ok"):
+            raise _fail("archive_index_rebuild_required")
     return {
         "schema_version": RESULT_SCHEMA,
         "ok": core.get("status") == "completed",
@@ -1535,6 +1884,9 @@ def _apply_with_store(
             plan.counts["mapped_conflicting_definition_count"]
         ),
         "manifest_location_updates": writer.manifest_update_count,
+        "generated_index_updated": writer.manifest_index_lifecycle.updated,
+        "index_generation": writer.manifest_index_lifecycle.generation,
+        "index_mutation_resumed": writer.manifest_index_lifecycle.resumed,
         "central_manifest_rewrite_count_ceiling": 1,
         "provider_head_called": True,
         "provider_put_called": False,
@@ -1556,6 +1908,7 @@ def _apply_core(
     progress_hook: Callable[[ExactOperationProgress], None] | None = None,
 ) -> dict[str, Any]:
     current = _fresh_revalidated(plan)
+    _require_manifest_index_authority(current)
     authority = _assert_approved(current, claim, context)
     with exact_operation_writer_lock(current.archive_root) as writer_lock:
         _persist_control(current)
@@ -1617,6 +1970,7 @@ def resume_object_storage_formal_adoption(
         or _SHA256_RE.fullmatch(str(execution_sha256 or "")) is None
     ):
         raise _fail("object_storage_adoption_resume_invalid")
+    _require_manifest_index_authority(plan)
     context = object_storage_formal_adoption_context(plan, reviewer_claim=reviewer_claim)
     with exact_operation_writer_lock(plan.archive_root) as writer_lock:
         checkpoints = FileExactOperationCheckpointStore(

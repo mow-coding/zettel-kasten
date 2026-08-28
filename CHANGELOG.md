@@ -6,6 +6,31 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.4.12 - 2026-08-29
+
+- Replaced repeated full-tree/full-manifest `zettel-objet-link` discovery with
+  a generation-bound SQLite authority that retains strict identity,
+  duplicate-ID, path, descriptor, watcher, and stable-point checks.
+- Made exact existing links return deterministic `already_present` without
+  approval or any canonical, manifest, receipt, checkpoint, or index write.
+- Extended supported zet and Objet-manifest writers with one same-generation
+  dirty-intent and exact delta lifecycle. Partial effects or delta failures stay
+  dirty and return `archive_index_rebuild_required`; missing or stale authority
+  blocks before write, and safe resume reuses only the same dirty generation.
+- Synchronized parser, help, structured status, runtime dispatch, and tests to
+  47 approval-available, 67 approval-fixed-closed, and 201 not-exposed paths;
+  useful read-only previews do not grant writer authority.
+- Hardened the public Windows full-profile gate for 8,616 zets, 22,441 Objets,
+  and a 37.0 MiB manifest. The final evidence must measure the actual serialized
+  progress stream's first write, first flush, and flush gaps; scan that stream
+  for private values; and bind source-tree, commit-object, benchmark-script,
+  wheel-byte, loaded-runtime, and wheel-package-tree hashes. The v0.4.12 tag
+  and release are created only after the final candidate replaces the
+  superseded callback-timing result with committed v0.2 evidence.
+- Kept installation separate from client execution. After updating the intended
+  project, the AI performs explicit `archive index` and `archive index-health`
+  verification; the person does not count archive records or compare hashes.
+
 ## v0.4.11 - 2026-08-28
 
 - Bound project-runtime alignment to fresh installed payload, module inventory,

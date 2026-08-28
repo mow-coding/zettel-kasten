@@ -95,16 +95,18 @@ jobs:
           # The unsharded Windows suite reached 59 minutes on v0.3.299. Four
           # deterministic source-balanced shards retain every module while
           # reducing wall-clock time. The deterministic zero shard receives
-          # the monolithic test_cli.py module, so zero shards get the longer
-          # timeout on every interpreter/platform. The second Windows shard
-          # contains process-heavy MCP subprocess suites and also needs full
-          # release-grade headroom instead of a near-zero 45-minute margin.
+          # the monolithic test_cli.py module. Its final v0.4.12 Windows run
+          # took 74 minutes before checkout and dependency installation, so it
+          # needs 90 minutes of honest job headroom. Linux zero shards retain
+          # 75 minutes. The second Windows shard contains process-heavy MCP
+          # subprocess suites and also needs 75 minutes instead of a near-zero
+          # 45-minute margin.
           - os: windows-latest
             python-version: '3.12'
             shard_index: 1
             shard_index_zero: 0
             shard_count: 4
-            timeout-minutes: 75
+            timeout-minutes: 90
           - os: windows-latest
             python-version: '3.12'
             shard_index: 2
@@ -219,6 +221,56 @@ jobs:
             exit 1
           fi
 
+  link_index_scale:
+    name: v0.4.12 link-index scale gate (Windows py3.12)
+    if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
+    runs-on: windows-latest
+    timeout-minutes: 10
+    env:
+      PYTHONPATH: wom-kit/src
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - name: Install runtime dependencies
+        run: >-
+          python -m pip install --disable-pip-version-check
+          -r wom-kit/cli/requirements.txt
+
+      - name: Build exact v0.4.12 benchmark wheel outside the checkout
+        shell: pwsh
+        run: |
+          $wheelDir = Join-Path $env:RUNNER_TEMP "wom-v0412-link-index-wheel"
+          New-Item -ItemType Directory -Force -Path $wheelDir | Out-Null
+          python -m pip wheel --disable-pip-version-check --no-deps --wheel-dir $wheelDir ./wom-kit
+          $wheels = @(Get-ChildItem -LiteralPath $wheelDir -Filter "wom_kit-0.4.12-*.whl" -File)
+          if ($wheels.Count -ne 1) {
+            Write-Error "Expected exactly one v0.4.12 benchmark wheel."
+            exit 1
+          }
+          "V0412_BENCHMARK_WHEEL=$($wheels[0].FullName)" >> $env:GITHUB_ENV
+
+      - name: Run exact v0.4.12 link-index scale benchmark
+        shell: pwsh
+        run: |
+          python -B wom-kit/tools/benchmark_v0412_link_index.py `
+            --profile full `
+            --format json `
+            --wheel "$env:V0412_BENCHMARK_WHEEL"
+
+      - name: Assert benchmark left the worktree clean
+        shell: pwsh
+        run: |
+          $changes = git status --porcelain
+          if ($changes) {
+            Write-Error "The link-index scale benchmark modified repository files."
+            $changes
+            exit 1
+          }
+
   required:
     name: Required CI
     if: always() && (github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch')
@@ -226,6 +278,7 @@ jobs:
       - gate
       - tests
       - doctor_scale
+      - link_index_scale
     runs-on: ubuntu-latest
     steps:
       - name: Require every gate and test shard
@@ -233,7 +286,9 @@ jobs:
           GATE_RESULT: ${{ needs.gate.result }}
           TESTS_RESULT: ${{ needs.tests.result }}
           DOCTOR_SCALE_RESULT: ${{ needs.doctor_scale.result }}
+          LINK_INDEX_SCALE_RESULT: ${{ needs.link_index_scale.result }}
         run: |
           test "$GATE_RESULT" = "success"
           test "$TESTS_RESULT" = "success"
           test "$DOCTOR_SCALE_RESULT" = "success"
+          test "$LINK_INDEX_SCALE_RESULT" = "success"

@@ -1,8 +1,10 @@
 # WOM-kit Version Truth Source
 
-Status: v0.4.11 live project-runtime binding and Deep Doctor evidence
+Status: v0.4.12 generation-bound link authority and honest writer index lifecycle
 
-Current checkpoint: Status: v0.4.11 runtime, byte-evidence, and operator truth
+Current checkpoint: Status: v0.4.12 indexed-link and same-generation delta-or-dirty truth
+
+Previous checkpoint: Status: v0.4.11 runtime, byte-evidence, and operator truth
 
 Previous checkpoint: Status: v0.4.10 authenticated batch intake and capture
 
@@ -38,23 +40,28 @@ or runtime workflow. This page defines the safe order for checking them.
 
 ## Current Public Tool
 
-The v0.4.11 URL is a conditional release-artifact contract. Use it only after
+The v0.4.12 URL is a conditional release-artifact contract. Use it only after
 the matching public GitHub Release exists and lists the exact wheel:
 
 ```powershell
-py -m venv .wom-bootstrap-v0411
-& .\.wom-bootstrap-v0411\Scripts\python.exe -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.11/wom_kit-0.4.11-py3-none-any.whl"
-& .\.wom-bootstrap-v0411\Scripts\archive.exe --version
+py -m venv .wom-bootstrap-v0412
+& .\.wom-bootstrap-v0412\Scripts\python.exe -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.12/wom_kit-0.4.12-py3-none-any.whl"
+& .\.wom-bootstrap-v0412\Scripts\archive.exe --version
 ```
 
-Require exactly `archive 0.4.11` from a new process. The installed runtime keeps
-the exact-approved Git writer, source-property backfill, bounded R2 recovery,
-receipt-bound local recovery, and interruption-safe integrity repair, but a
+Require exactly `archive 0.4.12` from a new process. The installed runtime adds
+generation-bound link authority, deterministic `already_present`, and the
+same-generation delta-or-dirty lifecycle across indexed zet writers. A
 bootstrap install alone changes no archive, remote ref, project-local source
 mirror, pin, shared PATH tool, or other project. Project update is a separate
 native exact-human workflow that creates and activates the project-local
-runtime with its own receipt. See [Git Backup Plan And Reconciliation Plan](git-backup-plan.md) and
-[ExactOperationManifest v1](exact-operation-manifest-v1.md).
+runtime with its own receipt. After it succeeds, the AI explicitly runs
+`archive index <archive-root> --progress --format json` and
+`archive index-health <archive-root> --dry-run --progress --format json`, then
+verifies counts, hashes, generation, and health. The person does not count or
+compare those technical values. See [Git Backup Plan And Reconciliation Plan](git-backup-plan.md),
+[ExactOperationManifest v1](exact-operation-manifest-v1.md), and the
+[v0.4.12 release note](releases/v0.4.12.md).
 
 ## Canonical Checks
 
@@ -75,7 +82,7 @@ form is for AI runtimes and scripts. `runtime-context` includes the same
 version summary under `wom_kit_version`, so an agent can confirm archive identity
 and kit version in one read-only request.
 
-For a v0.4.11 project, the `project_runtime` object is also canonical evidence.
+For a v0.4.12 project, the `project_runtime` object is also canonical evidence.
 It separately reports the versioned receipt, a freshly observed installed-
 payload tree hash, installed module inventory, stable launcher, current
 executable/module/prefix and isolated Python flags, project-relative

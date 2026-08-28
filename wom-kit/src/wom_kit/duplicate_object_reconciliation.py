@@ -31,6 +31,7 @@ from typing import Any, Callable, Mapping
 
 import yaml
 
+from . import archive_services
 from .exact_human_approval import (
     _ClaimedExactHumanApproval,
     _audit_exact_human_approval_terminal_record_core,
@@ -154,6 +155,7 @@ class DuplicateObjectReconciliationError(RuntimeError):
         "duplicate_object_revert_approval_required",
         "duplicate_object_revert_conflict",
         "duplicate_object_revert_state_unknown",
+        "archive_index_rebuild_required",
     }
 
     def __init__(self, code: str) -> None:
@@ -909,6 +911,33 @@ def _atomic_replace(root: Path, path: Path, raw: bytes) -> None:
             temporary.unlink()
         except FileNotFoundError:
             pass
+
+
+def _replace_manifest_compare_and_swap(
+    root: Path,
+    *,
+    expected_bytes: bytes,
+    replacement_bytes: bytes,
+    transaction_sha256: str,
+    swap_suffix: str,
+    error_prefix: str,
+) -> None:
+    """Replace the object manifest through the shared index-aware CAS primitive.
+
+    Keeping this narrow wrapper local gives interruption tests a stable seam while
+    preserving the shared compare-and-swap and regular-file safety contract.
+    """
+
+    archive_services._replace_regular_file_bytes_compare_and_swap(
+        root,
+        _manifest_path(root),
+        expected_bytes=expected_bytes,
+        replacement_bytes=replacement_bytes,
+        transaction_sha256=transaction_sha256,
+        swap_suffix=swap_suffix,
+        max_bytes=MAX_MANIFEST_BYTES,
+        error_prefix=error_prefix,
+    )
 
 
 def _read_safe_internal_file(
@@ -2750,6 +2779,42 @@ def _apply_duplicate_object_reconciliation_revert_core(
 ) -> dict[str, Any]:
     if type(plan) is not _DuplicateObjectReconciliationRevertPlan:
         raise _fail("duplicate_object_revert_plan_invalid")
+    root, archive_id = _safe_root(plan.archive_root)
+    if root != plan.archive_root or archive_id != plan.archive_id:
+        raise _fail("duplicate_object_revert_plan_invalid")
+    current_manifest = _read_manifest(root)
+    source_journal = _strict_json_document(plan._source_journal_bytes)
+    manifest_mutation_owner_sha256 = (
+        archive_services.archive_manifest_mutation_owner_sha256(
+            operation="duplicate_object_reconcile",
+            operation_binding_sha256=str(source_journal["plan_sha256"]),
+        )
+    )
+    try:
+        archive_services.require_archive_manifest_index_mutation_authority(
+            root,
+            operation_owner_sha256=manifest_mutation_owner_sha256,
+            expected_pre_manifest_sha256=_sha256(current_manifest),
+            expected_post_manifest_sha256=plan.manifest_restore_sha256,
+        )
+    except archive_services.ArchiveServiceError:
+        raise _fail("archive_index_rebuild_required") from None
+    with archive_services._ObjetCaptureManifestLock(root):
+        return _apply_duplicate_object_reconciliation_revert_locked_core(
+            plan,
+            approval_claim,
+            context=context,
+        )
+
+
+def _apply_duplicate_object_reconciliation_revert_locked_core(
+    plan: _DuplicateObjectReconciliationRevertPlan,
+    approval_claim: _ClaimedExactHumanApproval,
+    *,
+    context: ExactHumanApprovalContext,
+) -> dict[str, Any]:
+    if type(plan) is not _DuplicateObjectReconciliationRevertPlan:
+        raise _fail("duplicate_object_revert_plan_invalid")
     if (
         type(approval_claim) is not _ClaimedExactHumanApproval
         or type(context) is not ExactHumanApprovalContext
@@ -2791,6 +2856,12 @@ def _apply_duplicate_object_reconciliation_revert_core(
         terminal_auditor=terminal_auditor,
     )
     source_journal = _strict_json_document(plan._source_journal_bytes)
+    manifest_mutation_owner_sha256 = (
+        archive_services.archive_manifest_mutation_owner_sha256(
+            operation="duplicate_object_reconcile",
+            operation_binding_sha256=str(source_journal["plan_sha256"]),
+        )
+    )
     try:
         source_claim_status = (
             approval_claim.approval_integrity_reference_status(
@@ -2867,12 +2938,45 @@ def _apply_duplicate_object_reconciliation_revert_core(
         except ExactHumanApprovalError:
             raise _fail("duplicate_object_revert_evidence_invalid") from None
 
+    if execution["state"] in {"absent", "restore_required"}:
+        try:
+            archive_services.require_archive_manifest_index_mutation_authority(
+                root,
+                operation_owner_sha256=manifest_mutation_owner_sha256,
+                expected_pre_manifest_sha256=_sha256(current_manifest),
+                expected_post_manifest_sha256=plan.manifest_restore_sha256,
+            )
+        except archive_services.ArchiveServiceError:
+            raise _fail("archive_index_rebuild_required") from None
+    else:
+        index_evidence = archive_services.require_current_zettel_index(root)
+        if "archive_index_dirty" in set(
+            index_evidence.get("reason_codes") or []
+        ):
+            try:
+                archive_services.require_archive_manifest_index_mutation_authority(
+                    root,
+                    operation_owner_sha256=manifest_mutation_owner_sha256,
+                    expected_pre_manifest_sha256=_sha256(current_manifest),
+                    expected_post_manifest_sha256=_sha256(current_manifest),
+                )
+            except archive_services.ArchiveServiceError:
+                raise _fail("archive_index_rebuild_required") from None
+
     revert_id = execution["revert_id"]
     lock_path = execution["lock_path"]
     post_snapshot_path = execution["snapshot_path"]
     journal_path = execution["journal_path"]
     receipt_path = execution["receipt_path"]
     manifest_write_performed = False
+    manifest_mutation_attempted = False
+    manifest_projection_update_required = False
+    manifest_index_generation: str | None = None
+    manifest_index_lease_token: (
+        archive_services.ArchiveIndexMutationLeaseToken | None
+    ) = None
+    manifest_index_resumed = False
+    manifest_index_updated = False
     try:
         journal = execution["journal"]
         journal_raw = execution["journal_raw"]
@@ -3010,17 +3114,99 @@ def _apply_duplicate_object_reconciliation_revert_core(
 
         if execution["state"] in {"absent", "restore_required"}:
             try:
-                _atomic_replace(
+                (
+                    manifest_index_generation,
+                    manifest_index_began,
+                    manifest_index_lease_token,
+                ) = archive_services.prepare_archive_manifest_index_mutation(
                     root,
-                    _manifest_path(root),
-                    plan._manifest_restore_bytes,
+                    operation_owner_sha256=manifest_mutation_owner_sha256,
+                    expected_pre_manifest_sha256=(
+                        plan.manifest_current_sha256
+                    ),
+                    expected_post_manifest_sha256=(
+                        plan.manifest_restore_sha256
+                    ),
+                )
+            except archive_services.ArchiveServiceError:
+                raise _fail("archive_index_rebuild_required") from None
+            manifest_index_resumed = not manifest_index_began
+            manifest_mutation_attempted = True
+            manifest_projection_update_required = True
+            try:
+                _replace_manifest_compare_and_swap(
+                    root,
+                    expected_bytes=plan._manifest_current_bytes,
+                    replacement_bytes=plan._manifest_restore_bytes,
+                    transaction_sha256=manifest_mutation_owner_sha256,
+                    swap_suffix=".duplicate-object-revert-manifest.swap",
+                    error_prefix="duplicate_object_revert",
                 )
             except BaseException:
                 if _read_manifest(root) != plan._manifest_restore_bytes:
                     raise _fail("duplicate_object_revert_state_unknown") from None
-            manifest_write_performed = True
+            else:
+                manifest_write_performed = True
         if _read_manifest(root) != plan._manifest_restore_bytes:
             raise _fail("duplicate_object_revert_state_unknown")
+        if manifest_projection_update_required:
+            manifest_index_updated = (
+                archive_services.replace_archive_index_manifest_projection(
+                    root,
+                    expected_generation=str(manifest_index_generation or ""),
+                    expected_manifest_sha256=plan.manifest_restore_sha256,
+                    expected_mutation_owner_sha256=(
+                        manifest_mutation_owner_sha256
+                    ),
+                    lease_token=manifest_index_lease_token,
+                )
+            )
+            if not manifest_index_updated:
+                raise _fail("archive_index_rebuild_required")
+        else:
+            index_evidence = archive_services.require_current_zettel_index(root)
+            if (
+                not index_evidence.get("ok")
+                and "archive_index_dirty"
+                in set(index_evidence.get("reason_codes") or [])
+            ):
+                try:
+                    (
+                        manifest_index_generation,
+                        manifest_index_began,
+                        manifest_index_lease_token,
+                    ) = archive_services.prepare_archive_manifest_index_mutation(
+                        root,
+                        operation_owner_sha256=(
+                            manifest_mutation_owner_sha256
+                        ),
+                        expected_pre_manifest_sha256=(
+                            plan.manifest_restore_sha256
+                        ),
+                        expected_post_manifest_sha256=(
+                            plan.manifest_restore_sha256
+                        ),
+                    )
+                except archive_services.ArchiveServiceError:
+                    raise _fail("archive_index_rebuild_required") from None
+                if manifest_index_began:
+                    raise _fail("archive_index_rebuild_required")
+                manifest_index_resumed = True
+                manifest_index_updated = (
+                    archive_services.replace_archive_index_manifest_projection(
+                        root,
+                        expected_generation=manifest_index_generation,
+                        expected_manifest_sha256=(
+                            plan.manifest_restore_sha256
+                        ),
+                        expected_mutation_owner_sha256=(
+                            manifest_mutation_owner_sha256
+                        ),
+                        lease_token=manifest_index_lease_token,
+                    )
+                )
+                if not manifest_index_updated:
+                    raise _fail("archive_index_rebuild_required")
 
         receipt_raw = _canonical_bytes(
             _revert_receipt_document(
@@ -3108,10 +3294,27 @@ def _apply_duplicate_object_reconciliation_revert_core(
             "object_ids_echoed": False,
             "paths_echoed": False,
             "row_content_echoed": False,
+            "generated_index_updated": manifest_index_updated,
+            "index_generation": manifest_index_generation,
+            "index_mutation_resumed": manifest_index_resumed,
         }
     except DuplicateObjectReconciliationError:
+        if manifest_mutation_attempted and manifest_index_generation is not None:
+            archive_services.mark_archive_index_dirty(
+                root,
+                expected_generation=manifest_index_generation,
+                expected_mutation_owner_sha256=manifest_mutation_owner_sha256,
+                lease_token=manifest_index_lease_token,
+            )
         raise
     except BaseException:
+        if manifest_mutation_attempted and manifest_index_generation is not None:
+            archive_services.mark_archive_index_dirty(
+                root,
+                expected_generation=manifest_index_generation,
+                expected_mutation_owner_sha256=manifest_mutation_owner_sha256,
+                lease_token=manifest_index_lease_token,
+            )
         raise _fail("duplicate_object_revert_state_unknown") from None
 
 
@@ -3582,6 +3785,40 @@ def _apply_duplicate_object_reconciliation_core(
     *,
     context: ExactHumanApprovalContext,
 ) -> dict[str, Any]:
+    if type(plan) is not _DuplicateObjectReconciliationPlan or not plan.approveable:
+        raise _fail("duplicate_object_human_resolution_required")
+    root, archive_id = _safe_root(plan.archive_root)
+    if archive_id != plan.archive_id or root != plan.archive_root:
+        raise _fail("duplicate_object_plan_invalid")
+    manifest_mutation_owner_sha256 = (
+        archive_services.archive_manifest_mutation_owner_sha256(
+            operation="duplicate_object_reconcile",
+            operation_binding_sha256=plan.plan_sha256,
+        )
+    )
+    try:
+        archive_services.require_archive_manifest_index_mutation_authority(
+            root,
+            operation_owner_sha256=manifest_mutation_owner_sha256,
+            expected_pre_manifest_sha256=plan.manifest_sha256,
+            expected_post_manifest_sha256=_sha256(plan._replacement_bytes),
+        )
+    except archive_services.ArchiveServiceError:
+        raise _fail("archive_index_rebuild_required") from None
+    with archive_services._ObjetCaptureManifestLock(root):
+        return _apply_duplicate_object_reconciliation_locked_core(
+            plan,
+            approval_claim,
+            context=context,
+        )
+
+
+def _apply_duplicate_object_reconciliation_locked_core(
+    plan: _DuplicateObjectReconciliationPlan,
+    approval_claim: _ClaimedExactHumanApproval,
+    *,
+    context: ExactHumanApprovalContext,
+) -> dict[str, Any]:
     """Apply one bounded duplicate plan from a current authenticated claim.
 
     The shared exact-human workflow owns terminal claim finalization.  This
@@ -3603,6 +3840,12 @@ def _apply_duplicate_object_reconciliation_core(
     root, archive_id = _safe_root(plan.archive_root)
     if archive_id != plan.archive_id or root != plan.archive_root:
         raise _fail("duplicate_object_plan_invalid")
+    manifest_mutation_owner_sha256 = (
+        archive_services.archive_manifest_mutation_owner_sha256(
+            operation="duplicate_object_reconcile",
+            operation_binding_sha256=plan.plan_sha256,
+        )
+    )
     current = _read_manifest(root)
     if current != plan._manifest_bytes:
         raise _fail("duplicate_object_manifest_changed")
@@ -3616,6 +3859,12 @@ def _apply_duplicate_object_reconciliation_core(
     lock_created = False
     manifest_replaced = False
     manifest_mutation_attempted = False
+    manifest_index_generation: str | None = None
+    manifest_index_lease_token: (
+        archive_services.ArchiveIndexMutationLeaseToken | None
+    ) = None
+    manifest_index_resumed = False
+    manifest_index_updated = False
     try:
         try:
             approval_reference = (
@@ -3641,6 +3890,17 @@ def _apply_duplicate_object_reconciliation_core(
             or fresh_plan._replacement_bytes != plan._replacement_bytes
         ):
             raise _fail("duplicate_object_local_evidence_changed")
+        try:
+            archive_services.require_archive_manifest_index_mutation_authority(
+                root,
+                operation_owner_sha256=manifest_mutation_owner_sha256,
+                expected_pre_manifest_sha256=plan.manifest_sha256,
+                expected_post_manifest_sha256=_sha256(
+                    plan._replacement_bytes
+                ),
+            )
+        except archive_services.ArchiveServiceError:
+            raise _fail("archive_index_rebuild_required") from None
 
         existing_lock = _optional_safe_internal_file(
             root,
@@ -3781,11 +4041,45 @@ def _apply_duplicate_object_reconciliation_core(
             _create_only(root, snapshot_path, plan._manifest_bytes)
         if existing_journal is None:
             _create_only(root, journal_path, _canonical_bytes(journal))
+        try:
+            (
+                manifest_index_generation,
+                manifest_index_began,
+                manifest_index_lease_token,
+            ) = archive_services.prepare_archive_manifest_index_mutation(
+                root,
+                operation_owner_sha256=manifest_mutation_owner_sha256,
+                expected_pre_manifest_sha256=plan.manifest_sha256,
+                expected_post_manifest_sha256=_sha256(plan._replacement_bytes),
+            )
+        except archive_services.ArchiveServiceError:
+            raise _fail("archive_index_rebuild_required") from None
+        manifest_index_resumed = not manifest_index_began
         manifest_mutation_attempted = True
-        _atomic_replace(root, _manifest_path(root), plan._replacement_bytes)
+        _replace_manifest_compare_and_swap(
+            root,
+            expected_bytes=plan._manifest_bytes,
+            replacement_bytes=plan._replacement_bytes,
+            transaction_sha256=manifest_mutation_owner_sha256,
+            swap_suffix=".duplicate-object-reconcile-manifest.swap",
+            error_prefix="duplicate_object_reconcile",
+        )
         manifest_replaced = True
         if _read_manifest(root) != plan._replacement_bytes:
             raise OSError("manifest_verification_failed")
+        manifest_index_updated = (
+            archive_services.replace_archive_index_manifest_projection(
+                root,
+                expected_generation=manifest_index_generation,
+                expected_manifest_sha256=_sha256(plan._replacement_bytes),
+                expected_mutation_owner_sha256=(
+                    manifest_mutation_owner_sha256
+                ),
+                lease_token=manifest_index_lease_token,
+            )
+        )
+        if not manifest_index_updated:
+            raise _fail("archive_index_rebuild_required")
         receipt = _forward_receipt_document(
             plan,
             reconciliation_id=reconcile_id,
@@ -3847,12 +4141,29 @@ def _apply_duplicate_object_reconciliation_core(
             "unresolved_distinct_rows_modified": False,
             "object_ids_echoed": False,
             "paths_echoed": False,
+            "generated_index_updated": manifest_index_updated,
+            "index_generation": manifest_index_generation,
+            "index_mutation_resumed": manifest_index_resumed,
         }
     except FileExistsError:
         raise _fail("duplicate_object_reconciliation_conflict") from None
     except DuplicateObjectReconciliationError:
+        if manifest_mutation_attempted and manifest_index_generation is not None:
+            archive_services.mark_archive_index_dirty(
+                root,
+                expected_generation=manifest_index_generation,
+                expected_mutation_owner_sha256=manifest_mutation_owner_sha256,
+                lease_token=manifest_index_lease_token,
+            )
         raise
     except BaseException:
+        if manifest_mutation_attempted and manifest_index_generation is not None:
+            archive_services.mark_archive_index_dirty(
+                root,
+                expected_generation=manifest_index_generation,
+                expected_mutation_owner_sha256=manifest_mutation_owner_sha256,
+                lease_token=manifest_index_lease_token,
+            )
         code = (
             "duplicate_object_reconciliation_state_unknown"
             if manifest_mutation_attempted

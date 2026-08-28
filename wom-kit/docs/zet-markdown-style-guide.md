@@ -1,6 +1,6 @@
 # zet Markdown Style Guide
 
-Status: v0.4.11 zet Markdown authoring and safe human-view checkpoint
+Status: v0.4.12 zet Markdown authoring and safe human-view checkpoint
 Extended: v0.3.301 human-record integrity rules; v0.4.11 display projection
 
 WOM zets are Markdown-compatible today. That is useful for authoring and import

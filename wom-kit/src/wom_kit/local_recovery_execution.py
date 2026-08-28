@@ -67,6 +67,7 @@ from .operation_approval_binding import (
     OperationApprovalBindingError,
     exact_operation_manifest_approval_binding,
 )
+from .zettel_index_batch_lifecycle import ZettelIndexBatchLifecycle
 
 
 APPLY_OPERATION = "local_recovery"
@@ -1292,6 +1293,14 @@ class _Verifier(_Boundary):
 
 
 class _Writer(_Boundary):
+    def __init__(
+        self,
+        plan: LocalRecoveryPlan,
+        index_lifecycle: ZettelIndexBatchLifecycle,
+    ) -> None:
+        super().__init__(plan)
+        self.index_lifecycle = index_lifecycle
+
     def write_field(
         self,
         *,
@@ -1322,6 +1331,7 @@ class _Writer(_Boundary):
                     }
                 )
             )
+            self.index_lifecycle.before_canonical_write()
             archive_services._replace_regular_file_bytes_compare_and_swap(
                 self.root,
                 path,
@@ -1372,6 +1382,30 @@ class _Writer(_Boundary):
         else:
             raise ValueError("target")
         heartbeat()
+
+
+def _zettel_index_entries(
+    plan: LocalRecoveryPlan,
+) -> tuple[dict[str, Any], ...]:
+    entries: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for spec in plan.specs:
+        if spec.target_kind != "zettel" or spec.target_relative in seen:
+            continue
+        seen.add(spec.target_relative)
+        path, raw, frontmatter, body = _zettel_snapshot(
+            plan.archive_root,
+            spec,
+        )
+        entries.append(
+            {
+                "path": path,
+                "frontmatter": frontmatter,
+                "body": body,
+                "expected_file_sha256": hashlib.sha256(raw).hexdigest(),
+            }
+        )
+    return tuple(entries)
 
 
 def _binding(plan: LocalRecoveryPlan, *, mode: str):
@@ -2247,6 +2281,52 @@ def _completed_subset_supersession_pending(
     return parent, pending, public
 
 
+def _index_precondition_blocked_result(
+    plan: LocalRecoveryPlan,
+    manifest: ExactOperationManifest,
+    *,
+    mode: str,
+    lifecycle: ZettelIndexBatchLifecycle,
+) -> dict[str, Any]:
+    field_count = sum(len(item.fields) for item in manifest.items)
+    return {
+        "schema_version": RESULT_SCHEMA,
+        "ok": False,
+        "state": "local_recovery_index_rebuild_required",
+        "domain": plan.domain,
+        "mode": mode,
+        "manifest_sha256": plan.manifest.manifest_sha256,
+        "operation_manifest_sha256": manifest.manifest_sha256,
+        "reason_codes": [archive_services.INDEX_REBUILD_REQUIRED],
+        "blockers": [archive_services.INDEX_REBUILD_REQUIRED],
+        "item_count": len(plan.specs),
+        "field_count": field_count,
+        "written_field_count": 0,
+        "resumed_field_count": 0,
+        "applied_field_count": 0,
+        "reverted_field_count": 0,
+        "remaining_field_count": field_count,
+        "checkpointed_field_count": 0,
+        "written_before_checkpoint_field_count": 0,
+        "writes_performed": False,
+        "resume_supported": False,
+        "subset_revert_supported": False,
+        "next_safe_actions": list(
+            archive_services.INDEX_REBUILD_NEXT_SAFE_ACTIONS
+        ),
+        "automatic_retry_allowed": False,
+        "field_scoped_revert_supported": True,
+        "common_exact_operation_manifest_used": True,
+        "independent_verification": True,
+        "operator_counting_required": False,
+        "provider_called": False,
+        "credential_values_read": False,
+        "private_values_echoed": False,
+        "paths_echoed": False,
+        **lifecycle.precondition_truth(),
+    }
+
+
 def _run_with_store(
     plan: LocalRecoveryPlan,
     authority: ExactOperationApprovalAuthority,
@@ -2255,10 +2335,31 @@ def _run_with_store(
     mode: str,
     resume: bool,
     progress_hook: Callable[[ExactOperationProgress], None] | None,
+    index_lifecycle: ZettelIndexBatchLifecycle | None = None,
 ) -> dict[str, Any]:
     manifest = _operation_manifest(plan, mode=mode)
     payloads = _Payloads(plan.specs)
-    writer = _Writer(plan)
+    index_lifecycle = index_lifecycle or ZettelIndexBatchLifecycle.inspect(
+        plan.archive_root,
+        has_zettel_targets=any(
+            spec.target_kind == "zettel" for spec in plan.specs
+        ),
+        allow_dirty_resume=resume or mode == "revert",
+        operation_owner_sha256=(
+            archive_services.archive_manifest_mutation_owner_sha256(
+                operation="local_recovery",
+                operation_binding_sha256=plan.manifest.manifest_sha256,
+            )
+        ),
+    )
+    if index_lifecycle.precondition_blocked:
+        return _index_precondition_blocked_result(
+            plan,
+            manifest,
+            mode=mode,
+            lifecycle=index_lifecycle,
+        )
+    writer = _Writer(plan, index_lifecycle)
     verifier = _Verifier(plan)
     selected_fields = (
         tuple(
@@ -2293,6 +2394,7 @@ def _run_with_store(
                 progress_hook=progress_hook,
             )
     except Exception as error:
+        index_truth = index_lifecycle.interrupted()
         try:
             inspection = inspect_exact_operation_state(
                 manifest,
@@ -2389,8 +2491,18 @@ def _run_with_store(
             "credential_values_read": False,
             "private_values_echoed": False,
             "paths_echoed": False,
+            **index_truth,
         }
-    return {
+    try:
+        index_entries = (
+            _zettel_index_entries(plan)
+            if index_lifecycle.mutation_active
+            else ()
+        )
+        index_truth = index_lifecycle.finalize(index_entries)
+    except Exception:
+        index_truth = index_lifecycle.delta_failed()
+    result = {
         "schema_version": RESULT_SCHEMA,
         "ok": core.get("status") == "completed",
         "state": "reverted" if mode == "revert" else "applied",
@@ -2411,7 +2523,22 @@ def _run_with_store(
         "credential_values_read": False,
         "private_values_echoed": False,
         "paths_echoed": False,
+        **index_truth,
     }
+    if index_truth["index_rebuild_required"]:
+        result.update(
+            {
+                "ok": False,
+                "state": (
+                    "reverted_index_update_failed"
+                    if mode == "revert"
+                    else "applied_index_update_failed"
+                ),
+                "reason_codes": [archive_services.INDEX_REBUILD_REQUIRED],
+                "blockers": [archive_services.INDEX_REBUILD_REQUIRED],
+            }
+        )
+    return result
 
 
 def _execute_core(
@@ -2426,6 +2553,26 @@ def _execute_core(
     authority = _authority(plan, claim, context, mode=mode)
     manifest = _operation_manifest(plan, mode=mode)
     with exact_operation_writer_lock(plan.archive_root) as writer_lock:
+        index_lifecycle = ZettelIndexBatchLifecycle.inspect(
+            plan.archive_root,
+            has_zettel_targets=any(
+                spec.target_kind == "zettel" for spec in plan.specs
+            ),
+            allow_dirty_resume=resume or mode == "revert",
+            operation_owner_sha256=(
+                archive_services.archive_manifest_mutation_owner_sha256(
+                    operation="local_recovery",
+                    operation_binding_sha256=plan.manifest.manifest_sha256,
+                )
+            ),
+        )
+        if index_lifecycle.precondition_blocked:
+            return _index_precondition_blocked_result(
+                plan,
+                manifest,
+                mode=mode,
+                lifecycle=index_lifecycle,
+            )
         # Revert may use an observed-post subset manifest that did not exist
         # until after the original interruption. Persist its exact private
         # values only after native approval, just like an initial apply.
@@ -2457,6 +2604,7 @@ def _execute_core(
             mode=mode,
             resume=resume,
             progress_hook=progress_hook,
+            index_lifecycle=index_lifecycle,
         )
         if supersession is not None and result.get("ok") is True:
             parent, pending = supersession
@@ -2476,6 +2624,27 @@ def execute_local_recovery(
         raise _fail("local_recovery_plan_blocked")
     if mode == "revert" and not plan.loaded_from_control:
         raise _fail("local_recovery_control_invalid")
+    manifest = _operation_manifest(plan, mode=mode)
+    index_lifecycle = ZettelIndexBatchLifecycle.inspect(
+        plan.archive_root,
+        has_zettel_targets=any(
+            spec.target_kind == "zettel" for spec in plan.specs
+        ),
+        allow_dirty_resume=mode == "revert",
+        operation_owner_sha256=(
+            archive_services.archive_manifest_mutation_owner_sha256(
+                operation="local_recovery",
+                operation_binding_sha256=plan.manifest.manifest_sha256,
+            )
+        ),
+    )
+    if index_lifecycle.precondition_blocked:
+        return _index_precondition_blocked_result(
+            plan,
+            manifest,
+            mode=mode,
+            lifecycle=index_lifecycle,
+        )
     context = local_recovery_context(
         plan,
         mode=mode,

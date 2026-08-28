@@ -616,6 +616,11 @@ class Letter136ExactHumanCliTests(unittest.TestCase):
                         return_value="archive:test",
                     ),
                     patch.object(
+                        archive_cli.archive_services,
+                        "require_current_zettel_index",
+                        return_value={"ok": True},
+                    ),
+                    patch.object(
                         archive_cli,
                         "_execute_exact_human_approved_write",
                         return_value=dict(partial),

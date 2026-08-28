@@ -3045,7 +3045,7 @@ def _git_backup_plan_with_pinned_git(
             if blockers
             else [
                 "Review each ordinal change against local private evidence.",
-                "Keep all writers paused; v0.4.2 intentionally has no Git writer.",
+                "This plan is read-only; exact commit and non-force push are available only through an approved git-backup-reconcile-plan selection.",
                 "Rerun reconcile against the exact plan commitments before any future approved writer.",
             ]
         ),
@@ -3349,7 +3349,12 @@ def git_backup_reconcile_plan(
         "would_change": [],
         "files_written": [],
         "next_safe_actions": (
-            ["All requested bindings match this read-only observation; a writer is still unavailable in v0.4.2."]
+            [
+                "All requested bindings match this read-only observation. "
+                "Have the AI prepare a private exact selection manifest for "
+                "the reviewed commit groups, then rerun this command in "
+                "dry-run mode before approval."
+            ]
             if not blockers
             else ["Treat the plan as stale or blocked and perform no Git write."]
         ),
