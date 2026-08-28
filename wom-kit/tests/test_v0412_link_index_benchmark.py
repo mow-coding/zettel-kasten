@@ -30,10 +30,38 @@ REFERENCE_PATH = (
     / "v0.4.12-link-index-windows-reference.json"
 )
 SHA256_PATTERN = r"^sha256:[0-9a-f]{64}$"
+REFERENCE_SHA256 = (
+    "c3c768a573fc2a7206a1a8bd11d673c9c05f5daac9026e562978c44a6fae8492"
+)
+V0412_RELEASE_NOTES_SHA256 = (
+    "1e0a0ffd9a29d505f6a91541797d4227770cf687e633d1a822f64e153c9849fa"
+)
+V0412_BENCHMARK_SHA256 = (
+    "d521a0d308008c64ea0bd9e79975747106b3a5f3e308519d11fe32d8ffbb64ff"
+)
 
 
-def _build_source_bound_test_wheel(directory: Path) -> Path:
-    wheel = directory / "wom_kit-0.4.12-py3-none-any.whl"
+def _source_version() -> str:
+    source = (PACKAGE_ROOT / "__init__.py").read_text(encoding="utf-8")
+    matches = re.findall(
+        r'(?m)^__version__ = "('
+        r"(?:0|[1-9][0-9]*)\."
+        r"(?:0|[1-9][0-9]*)\."
+        r'(?:0|[1-9][0-9]*))"\r?$',
+        source,
+    )
+    if len(matches) != 1 or source.count("__version__") != 1:
+        raise AssertionError("source version declaration is not exact")
+    return matches[0]
+
+
+def _build_source_bound_test_wheel(
+    directory: Path,
+    *,
+    version: str | None = None,
+) -> Path:
+    version = version or _source_version()
+    wheel = directory / f"wom_kit-{version}-py3-none-any.whl"
     with zipfile.ZipFile(wheel, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         for path in sorted(PACKAGE_ROOT.rglob("*")):
             if not path.is_file():
@@ -46,11 +74,11 @@ def _build_source_bound_test_wheel(directory: Path) -> Path:
                 continue
             archive.write(path, Path(*relative_parts).as_posix())
         archive.writestr(
-            "wom_kit-0.4.12.dist-info/METADATA",
-            "Metadata-Version: 2.1\nName: wom-kit\nVersion: 0.4.12\n",
+            f"wom_kit-{version}.dist-info/METADATA",
+            f"Metadata-Version: 2.1\nName: wom-kit\nVersion: {version}\n",
         )
         archive.writestr(
-            "wom_kit-0.4.12.dist-info/WHEEL",
+            f"wom_kit-{version}.dist-info/WHEEL",
             "Wheel-Version: 1.0\nTag: py3-none-any\n",
         )
     return wheel
@@ -104,7 +132,12 @@ class V0412LinkIndexBenchmarkTests(unittest.TestCase):
         )
 
     def test_committed_windows_reference_and_required_ci_are_exact(self) -> None:
-        report = json.loads(REFERENCE_PATH.read_text(encoding="utf-8"))
+        reference_raw = REFERENCE_PATH.read_bytes()
+        self.assertEqual(
+            hashlib.sha256(reference_raw).hexdigest(),
+            REFERENCE_SHA256,
+        )
+        report = json.loads(reference_raw.decode("utf-8", "strict"))
         self.assertTrue(report["ok"], report)
         self.assertEqual(
             report["schema"],
@@ -182,6 +215,17 @@ class V0412LinkIndexBenchmarkTests(unittest.TestCase):
         recorded_commit_oid = str(provenance["git_commit_oid"]).split(
             ":", 1
         )[1]
+        tag_ref = "refs/tags/v0.4.12"
+        self.assertEqual(
+            git_bytes("cat-file", "-t", tag_ref)
+            .decode("ascii", "strict")
+            .strip(),
+            "tag",
+        )
+        tag_commit_oid = git_bytes(
+            "rev-parse",
+            f"{tag_ref}^{{commit}}",
+        ).decode("ascii", "strict").strip()
         ancestry = subprocess.run(
             [
                 "git",
@@ -190,7 +234,7 @@ class V0412LinkIndexBenchmarkTests(unittest.TestCase):
                 "merge-base",
                 "--is-ancestor",
                 recorded_commit_oid,
-                "HEAD",
+                tag_commit_oid,
             ],
             check=False,
             stdout=subprocess.DEVNULL,
@@ -217,43 +261,42 @@ class V0412LinkIndexBenchmarkTests(unittest.TestCase):
             "rev-parse",
             f"{recorded_commit_oid}:wom-kit/src/wom_kit",
         ).decode("ascii", "strict").strip()
-        current_source_tree_oid = git_bytes(
+        tag_source_tree_oid = git_bytes(
             "rev-parse",
-            "HEAD:wom-kit/src/wom_kit",
+            f"{tag_commit_oid}:wom-kit/src/wom_kit",
         ).decode("ascii", "strict").strip()
-        self.assertEqual(recorded_source_tree_oid, current_source_tree_oid)
+        self.assertEqual(recorded_source_tree_oid, tag_source_tree_oid)
         self.assertEqual(
             provenance["git_source_tree_oid"].split(":", 1)[1],
-            recorded_source_tree_oid,
+            tag_source_tree_oid,
         )
         recorded_benchmark = git_bytes(
             "cat-file",
             "blob",
             f"{recorded_commit_oid}:wom-kit/tools/benchmark_v0412_link_index.py",
         )
-        current_head_benchmark = git_bytes(
+        tag_benchmark = git_bytes(
             "cat-file",
             "blob",
-            "HEAD:wom-kit/tools/benchmark_v0412_link_index.py",
+            f"{tag_commit_oid}:wom-kit/tools/benchmark_v0412_link_index.py",
         )
-        current_benchmark = BENCHMARK_PATH.read_bytes()
-        self.assertEqual(recorded_benchmark, current_head_benchmark)
-        self.assertEqual(current_head_benchmark, current_benchmark)
-        self.assertEqual(recorded_benchmark, current_benchmark)
+        self.assertEqual(recorded_benchmark, tag_benchmark)
+        self.assertEqual(
+            hashlib.sha256(tag_benchmark).hexdigest(),
+            V0412_BENCHMARK_SHA256,
+        )
         self.assertEqual(
             provenance["benchmark_script_sha256"],
-            "sha256:" + hashlib.sha256(current_benchmark).hexdigest(),
+            "sha256:" + V0412_BENCHMARK_SHA256,
         )
-
-        namespace = runpy.run_path(str(BENCHMARK_PATH))
-        current_inventory = namespace["_source_package_inventory"]()
-        committed_inventory = namespace["_git_head_package_inventory"](
-            "wom-kit/src"
+        tag_release_notes = git_bytes(
+            "cat-file",
+            "blob",
+            f"{tag_commit_oid}:wom-kit/docs/releases/v0.4.12.md",
         )
-        self.assertEqual(current_inventory, committed_inventory)
         self.assertEqual(
-            provenance["source_tree_sha256"],
-            namespace["_inventory_sha256"](current_inventory),
+            hashlib.sha256(tag_release_notes).hexdigest(),
+            V0412_RELEASE_NOTES_SHA256,
         )
 
         rendered = REFERENCE_PATH.read_text(encoding="utf-8")
@@ -264,6 +307,8 @@ class V0412LinkIndexBenchmarkTests(unittest.TestCase):
         )
         self.assertIn("link_index_scale:", workflow)
         self.assertIn("pip wheel", workflow)
+        self.assertIn('-Filter "wom_kit-*.whl"', workflow)
+        self.assertNotIn('wom_kit-0.4.12-*.whl', workflow)
         self.assertIn("--wheel", workflow)
         self.assertIn("--profile full", workflow)
         self.assertIn("- link_index_scale", workflow)
@@ -273,6 +318,88 @@ class V0412LinkIndexBenchmarkTests(unittest.TestCase):
             "wom-kit/tools/benchmark_v0412_link_index.py text eol=lf",
             attributes,
         )
+
+    def test_candidate_version_is_strictly_derived_from_source(self) -> None:
+        namespace = runpy.run_path(str(BENCHMARK_PATH))
+        version_globals = namespace["_source_expected_version"].__globals__
+        original_package_root = version_globals["PACKAGE_ROOT"]
+        with tempfile.TemporaryDirectory(
+            prefix="wom-link-index-source-version-"
+        ) as temporary:
+            package_root = Path(temporary) / "wom_kit"
+            package_root.mkdir()
+            init_path = package_root / "__init__.py"
+            version_globals["PACKAGE_ROOT"] = package_root
+            try:
+                init_path.write_text(
+                    '"""Synthetic package."""\n\n__version__ = "9.8.7"\n',
+                    encoding="utf-8",
+                )
+                self.assertEqual(
+                    namespace["_source_expected_version"](),
+                    "9.8.7",
+                )
+
+                invalid_sources = (
+                    "__version__ = '9.8.7'\n",
+                    '__version__ = "09.8.7"\n',
+                    '__version__ = "9.8.7rc1"\n',
+                    '__version__ = "9.8.7"\n__version__ = "9.8.8"\n',
+                    '# __version__\nVERSION = "9.8.7"\n',
+                )
+                for invalid_source in invalid_sources:
+                    with self.subTest(source=invalid_source):
+                        init_path.write_text(invalid_source, encoding="utf-8")
+                        with self.assertRaisesRegex(
+                            namespace["BenchmarkContractError"],
+                            "benchmark_source_version_invalid",
+                        ):
+                            namespace["_source_expected_version"]()
+            finally:
+                version_globals["PACKAGE_ROOT"] = original_package_root
+
+    def test_candidate_wheel_metadata_must_match_source_version(self) -> None:
+        namespace = runpy.run_path(str(BENCHMARK_PATH))
+        saved_modules = {
+            name: module
+            for name, module in sys.modules.items()
+            if name == "wom_kit" or name.startswith("wom_kit.")
+        }
+        for name in saved_modules:
+            sys.modules.pop(name, None)
+        try:
+            with tempfile.TemporaryDirectory(
+                prefix="wom-link-index-wrong-wheel-version-"
+            ) as temporary:
+                temporary_root = Path(temporary)
+                wheel = _build_source_bound_test_wheel(
+                    temporary_root,
+                    version="99.99.99",
+                )
+                provenance = namespace["_provenance_document"](wheel)
+                self.assertEqual(
+                    provenance["source_version"],
+                    _source_version(),
+                )
+                self.assertEqual(provenance["wheel_version"], "99.99.99")
+                self.assertFalse(provenance["wheel_version_exact"])
+                with self.assertRaisesRegex(
+                    namespace["BenchmarkContractError"],
+                    "benchmark_runtime_wheel_binding_mismatch",
+                ):
+                    with namespace["_activated_captured_wheel_runtime"](
+                        wheel,
+                        provenance,
+                        runtime_root=temporary_root / "runtime",
+                    ):
+                        self.fail(
+                            "version-mismatched wheel runtime was activated"
+                        )
+        finally:
+            for name in tuple(sys.modules):
+                if name == "wom_kit" or name.startswith("wom_kit."):
+                    sys.modules.pop(name, None)
+            sys.modules.update(saved_modules)
 
     def test_reduced_benchmark_captures_real_serialized_progress_and_provenance(
         self,
@@ -377,6 +504,8 @@ class V0412LinkIndexBenchmarkTests(unittest.TestCase):
         self.assertTrue(provenance["wheel_matches_source_tree"])
         self.assertTrue(provenance["wheel_distribution_exact"])
         self.assertTrue(provenance["wheel_version_exact"])
+        self.assertEqual(provenance["source_version"], _source_version())
+        self.assertEqual(provenance["wheel_version"], _source_version())
         self.assertRegex(
             provenance["loaded_runtime_package_tree_sha256"],
             SHA256_PATTERN,
@@ -940,7 +1069,7 @@ class V0412LinkIndexBenchmarkTests(unittest.TestCase):
             package.mkdir(parents=True)
             tools.mkdir(parents=True)
             (package / "__init__.py").write_text(
-                '__version__ = "0.4.12"\n',
+                '__version__ = "9.8.7"\n',
                 encoding="utf-8",
             )
             benchmark = tools / "benchmark_v0412_link_index.py"
@@ -973,7 +1102,7 @@ class V0412LinkIndexBenchmarkTests(unittest.TestCase):
                 "IGNORED_PACKAGE_MEMBER = True\n",
                 encoding="utf-8",
             )
-            wheel = repo / "wom_kit-0.4.12-py3-none-any.whl"
+            wheel = repo / "wom_kit-9.8.7-py3-none-any.whl"
             with zipfile.ZipFile(
                 wheel,
                 "w",
@@ -985,11 +1114,11 @@ class V0412LinkIndexBenchmarkTests(unittest.TestCase):
                 )
                 archive.write(ignored, "wom_kit/ghost.py")
                 archive.writestr(
-                    "wom_kit-0.4.12.dist-info/METADATA",
-                    "Metadata-Version: 2.1\nName: wom-kit\nVersion: 0.4.12\n",
+                    "wom_kit-9.8.7.dist-info/METADATA",
+                    "Metadata-Version: 2.1\nName: wom-kit\nVersion: 9.8.7\n",
                 )
                 archive.writestr(
-                    "wom_kit-0.4.12.dist-info/WHEEL",
+                    "wom_kit-9.8.7.dist-info/WHEEL",
                     "Wheel-Version: 1.0\nTag: py3-none-any\n",
                 )
 
@@ -1001,6 +1130,9 @@ class V0412LinkIndexBenchmarkTests(unittest.TestCase):
             provenance = namespace["_provenance_document"](wheel)
 
         self.assertTrue(provenance["wheel_matches_source_tree"])
+        self.assertEqual(provenance["source_version"], "9.8.7")
+        self.assertEqual(provenance["wheel_version"], "9.8.7")
+        self.assertTrue(provenance["wheel_version_exact"])
         self.assertFalse(provenance["source_tree_matches_git_commit"])
         self.assertEqual(provenance["source_inventory_delta_count"], 1)
         self.assertEqual(provenance["git_status_change_count"], 0)
