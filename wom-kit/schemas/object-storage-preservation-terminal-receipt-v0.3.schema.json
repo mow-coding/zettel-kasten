@@ -55,4 +55,3 @@
     "sha256_ref": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
   }
 }
-
