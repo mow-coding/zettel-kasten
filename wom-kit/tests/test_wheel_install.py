@@ -1012,6 +1012,7 @@ class InstalledEntrypointTests(unittest.TestCase):
         )
         python = self.scripts / "python.exe"
         fixture_root = self.temp_root / "v049-fixture"
+        archive_template = self.temp_root / "archive-template"
         archive_entrypoint = check_wheel_install.executable(
             self.scripts, "archive"
         )
@@ -1060,16 +1061,21 @@ class InstalledEntrypointTests(unittest.TestCase):
                 python,
                 archive_entrypoint,
                 fixture_root,
+                archive_template,
                 cwd=self.temp_root,
             )
 
         self.assertEqual(evidence, expected)
         command = run_mock.call_args.args[0]
         self.assertEqual(command[:3], [str(python), "-I", "-c"])
-        self.assertEqual(command[-2:], [str(fixture_root), str(archive_entrypoint)])
+        self.assertEqual(
+            command[-3:],
+            [str(fixture_root), str(archive_entrypoint), str(archive_template)],
+        )
         self.assertIn("archive_cli.main", command[3])
         self.assertIn("source-intake-record", command[3])
         self.assertIn("objet-capture-selection", command[3])
+        self.assertIn("index_archive", command[3])
         self.assertIn("object-storage", command[3])
         self.assertIn("duplicate-object-reconcile", command[3])
         self.assertLess(
@@ -1092,6 +1098,7 @@ class InstalledEntrypointTests(unittest.TestCase):
                     python,
                     archive_entrypoint,
                     fixture_root,
+                    archive_template,
                     cwd=self.temp_root,
                 )
 
@@ -1103,6 +1110,7 @@ class InstalledEntrypointTests(unittest.TestCase):
         )
         python = self.scripts / "python.exe"
         fixture_root = self.temp_root / "v0410-batch-fixture"
+        archive_template = self.temp_root / "archive-template"
         expected = {
             "ok": True,
             "schema": check_wheel_install.INSTALLED_V0410_BATCH_SMOKE_SCHEMA,
@@ -1136,6 +1144,7 @@ class InstalledEntrypointTests(unittest.TestCase):
                 check_wheel_install._check_installed_v0410_batch_workflow(
                     python,
                     fixture_root,
+                    archive_template,
                     cwd=self.temp_root,
                 )
             )
@@ -1143,9 +1152,10 @@ class InstalledEntrypointTests(unittest.TestCase):
         self.assertEqual(evidence, expected)
         command = run_mock.call_args.args[0]
         self.assertEqual(command[:3], [str(python), "-I", "-c"])
-        self.assertEqual(command[-1], str(fixture_root))
+        self.assertEqual(command[-2:], [str(fixture_root), str(archive_template)])
         self.assertIn("source-intake-batch", command[3])
         self.assertIn("objet-capture-batch", command[3])
+        self.assertIn("index_archive", command[3])
         self.assertIn('"--no-progress"', command[3])
         self.assertNotIn('"--manifest",\n    prepared_ref', command[3])
         self.assertLess(
@@ -1168,6 +1178,7 @@ class InstalledEntrypointTests(unittest.TestCase):
                 check_wheel_install._check_installed_v0410_batch_workflow(
                     python,
                     fixture_root,
+                    archive_template,
                     cwd=self.temp_root,
                 )
 
@@ -1181,6 +1192,7 @@ class InstalledEntrypointTests(unittest.TestCase):
         )
         python = self.scripts / "python.exe"
         fixture_root = self.temp_root / "v0411-truth-fixture"
+        archive_template = self.temp_root / "archive-template"
         expected = {
             "ok": True,
             "schema": check_wheel_install.INSTALLED_V0411_TRUTH_SMOKE_SCHEMA,
@@ -1225,6 +1237,7 @@ class InstalledEntrypointTests(unittest.TestCase):
                 check_wheel_install._check_installed_v0411_truth_contracts(
                     python,
                     fixture_root,
+                    archive_template,
                     cwd=self.temp_root,
                     expected_package_version=self.PACKAGE_VERSION,
                 )
@@ -1233,8 +1246,14 @@ class InstalledEntrypointTests(unittest.TestCase):
         self.assertEqual(evidence, expected)
         command = run_mock.call_args.args[0]
         self.assertEqual(command[:4], [str(python), "-I", "-B", "-c"])
-        self.assertEqual(command[-2:], [str(fixture_root), self.PACKAGE_VERSION])
+        self.assertEqual(
+            command[-3:],
+            [str(fixture_root), self.PACKAGE_VERSION, str(archive_template)],
+        )
         self.assertIn("wom_kit.__version__", command[4])
+        self.assertIn("shutil.copytree", command[4])
+        self.assertIn("read_archive_id", command[4])
+        self.assertIn("installed_v0411_fixture_zettel_collision", command[4])
         self.assertIn("zet-self-contained-check", command[4])
         self.assertIn("EXPECTED_MISSING_OPTIONS", command[4])
         self.assertIn("promotion_duplicate_index_rows", command[4])
@@ -1250,6 +1269,7 @@ class InstalledEntrypointTests(unittest.TestCase):
                 check_wheel_install._check_installed_v0411_truth_contracts(
                     python,
                     fixture_root,
+                    archive_template,
                     cwd=self.temp_root,
                     expected_package_version=self.PACKAGE_VERSION,
                 )

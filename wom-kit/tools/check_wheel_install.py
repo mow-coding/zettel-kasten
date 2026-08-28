@@ -227,6 +227,7 @@ INSTALLED_V049_SMOKE_SCRIPT = r'''
 import hashlib
 import io
 import json
+import shutil
 import subprocess
 import sys
 from contextlib import redirect_stderr, redirect_stdout
@@ -253,6 +254,9 @@ ROOT.mkdir(parents=True, exist_ok=False)
 ARCHIVE_ENTRYPOINT = Path(sys.argv[2])
 if not ARCHIVE_ENTRYPOINT.is_file():
     raise RuntimeError("installed_v049_entrypoint_missing")
+ARCHIVE_TEMPLATE = Path(sys.argv[3])
+if not ARCHIVE_TEMPLATE.is_dir():
+    raise RuntimeError("installed_v049_archive_template_missing")
 REVIEWER = "person:installed-wheel-smoke"
 PRIVATE_MARKER = "SYNTHETIC_PRIVATE_VALUE_MUST_NOT_ESCAPE"
 
@@ -395,8 +399,7 @@ def _write_archive(root, archive_id):
 
 def _capture_flow():
     root = ROOT / "capture"
-    archive_id = "archive:test:installed-v049-capture"
-    _write_archive(root, archive_id)
+    shutil.copytree(ARCHIVE_TEMPLATE, root)
     staged_relative = "staging/incoming/synthetic.bin"
     staged_payload = b"installed wheel exact local capture\n"
     staged = root.joinpath(*staged_relative.split("/"))
@@ -408,7 +411,7 @@ def _capture_flow():
         redact_local_paths=True,
     )
     source_plan_path = root / "workbench" / "source-intake-plan.json"
-    source_plan_path.parent.mkdir(parents=True)
+    source_plan_path.parent.mkdir(parents=True, exist_ok=True)
     source_plan_path.write_text(
         json.dumps(source_record, indent=2, ensure_ascii=False) + "\n",
         encoding="utf-8",
@@ -482,6 +485,12 @@ def _capture_flow():
             "json",
         ]
     )
+    indexed = archive_services.index_archive(root)
+    if (
+        not indexed.get("ok")
+        or indexed.get("index_state") != archive_services.INDEX_STATE_CURRENT
+    ):
+        raise RuntimeError("installed_v049_capture_index_failed")
     capture = _run_cli(
         [
             "objet-capture",
@@ -622,7 +631,7 @@ def _storage_flow():
 
 def _duplicate_flow():
     root = ROOT / "duplicate"
-    _write_archive(root, "archive:test:installed-v049-duplicate")
+    shutil.copytree(ARCHIVE_TEMPLATE, root)
     payload = b"installed wheel strict duplicate pair\n"
     digest = hashlib.sha256(payload).hexdigest()
     canonical_key = "objects/sha256/" + digest[:2] + "/" + digest
@@ -667,13 +676,23 @@ def _duplicate_flow():
         "provenance": {"source": "external-ledger", "marker": PRIVATE_MARKER},
     }
     manifest = root / "objects" / "manifests" / "files.jsonl"
-    manifest.parent.mkdir(parents=True)
-    original = b"".join(
+    manifest.parent.mkdir(parents=True, exist_ok=True)
+    existing_manifest = manifest.read_bytes() if manifest.is_file() else b""
+    if existing_manifest and not existing_manifest.endswith(b"\n"):
+        raise RuntimeError("installed_v049_manifest_fixture_invalid")
+    existing_line_count = sum(bool(line) for line in existing_manifest.splitlines())
+    original = existing_manifest + b"".join(
         json.dumps(row, sort_keys=True, separators=(",", ":")).encode("utf-8")
         + b"\n"
         for row in (canonical, external)
     )
     manifest.write_bytes(original)
+    indexed = archive_services.index_archive(root)
+    if (
+        not indexed.get("ok")
+        or indexed.get("index_state") != archive_services.INDEX_STATE_CURRENT
+    ):
+        raise RuntimeError("installed_v049_duplicate_index_failed")
     _run_console(
         [
             "duplicate-object-reconcile",
@@ -698,9 +717,16 @@ def _duplicate_flow():
     reconciled_lines = [
         line for line in manifest.read_text(encoding="utf-8").splitlines() if line
     ]
-    if len(reconciled_lines) != 1:
+    if len(reconciled_lines) != existing_line_count + 1:
         raise RuntimeError("installed_v049_duplicate_apply_failed")
-    reconciled = json.loads(reconciled_lines[0])
+    reconciled_targets = [
+        row
+        for row in (json.loads(line) for line in reconciled_lines)
+        if row.get("object_id") == "sha256:" + digest
+    ]
+    if len(reconciled_targets) != 1:
+        raise RuntimeError("installed_v049_duplicate_target_failed")
+    reconciled = reconciled_targets[0]
     if (
         applied.get("reconciled_canonical_external_pair_count") != 1
         or reconciled.get("logical_key") != canonical_key
@@ -815,6 +841,7 @@ INSTALLED_V0410_BATCH_SMOKE_SCRIPT = r'''
 import hashlib
 import io
 import json
+import shutil
 import sys
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
@@ -822,6 +849,7 @@ from unittest import mock
 
 from wom_kit import (
     archive_cli,
+    archive_services,
     objet_capture_batch_exact,
     source_intake_batch_exact,
 )
@@ -832,7 +860,10 @@ from wom_kit.exact_human_approval_workflow import (
 
 
 ROOT = Path(sys.argv[1])
-ROOT.mkdir(parents=True, exist_ok=False)
+ARCHIVE_TEMPLATE = Path(sys.argv[2])
+if not ARCHIVE_TEMPLATE.is_dir():
+    raise RuntimeError("installed_v0410_archive_template_missing")
+shutil.copytree(ARCHIVE_TEMPLATE, ROOT)
 REVIEWER = "person:installed-v0410-batch-smoke"
 PRIVATE_MARKER = b"SYNTHETIC_PRIVATE_V0410_BATCH_VALUE_MUST_NOT_ESCAPE"
 ITEM_COUNT = 3
@@ -925,12 +956,8 @@ def _run_cli(arguments):
     return value
 
 
-(ROOT / "archive.yml").write_text(
-    "archive_id: archive:test:installed-v0410-batch\n",
-    encoding="utf-8",
-)
 staging = ROOT / "staging" / "incoming"
-staging.mkdir(parents=True)
+staging.mkdir(parents=True, exist_ok=True)
 payloads = []
 request_items = []
 for index in range(ITEM_COUNT):
@@ -952,7 +979,7 @@ request = {
     "items": request_items,
 }
 request_path = ROOT / "workbench" / "source-intake-batch-request.json"
-request_path.parent.mkdir()
+request_path.parent.mkdir(exist_ok=True)
 request_path.write_text(
     json.dumps(request, ensure_ascii=True, sort_keys=True, separators=(",", ":")),
     encoding="utf-8",
@@ -1034,6 +1061,12 @@ capture_common = [
     "--format",
     "json",
 ]
+indexed = archive_services.index_archive(ROOT)
+if (
+    not indexed.get("ok")
+    or indexed.get("index_state") != archive_services.INDEX_STATE_CURRENT
+):
+    raise RuntimeError("installed_v0410_capture_index_failed")
 with (
     mock.patch(
         "wom_kit.exact_human_approval_workflow._production_key_provider",
@@ -1145,6 +1178,7 @@ import hashlib
 import io
 import json
 import os
+import shutil
 import sys
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
@@ -1157,6 +1191,9 @@ from wom_kit import completion_workflows
 
 ROOT = Path(sys.argv[1])
 EXPECTED_VERSION = sys.argv[2]
+ARCHIVE_TEMPLATE = Path(sys.argv[3])
+if not ARCHIVE_TEMPLATE.is_dir():
+    raise RuntimeError("installed_v0411_archive_template_missing")
 PRIVATE_MARKER = "SYNTHETIC_PRIVATE_V0411_VALUE_MUST_NOT_ESCAPE"
 ZET_ID = "zet_20260827_installed_v0411_truth"
 EXPECTED_MISSING_OPTIONS = [
@@ -1264,17 +1301,14 @@ if (
 ):
     _fail("installed_v0411_self_contained_help_failed")
 
-ROOT.mkdir(parents=True, exist_ok=False)
-(ROOT / "archive.yml").write_text(
-    "archive_id: archive:test:installed-v0411-truth\n"
-    "name: Installed v0.4.11 truth fixture\n"
-    "type: personal\n",
-    encoding="utf-8",
-)
+shutil.copytree(ARCHIVE_TEMPLATE, ROOT)
+archive_id = archive_services.read_archive_id(ROOT)
 zettels = ROOT / "zettels"
-zettels.mkdir()
-(ROOT / "objects" / "manifests").mkdir(parents=True)
+zettels.mkdir(exist_ok=True)
+(ROOT / "objects" / "manifests").mkdir(parents=True, exist_ok=True)
 zet_path = zettels / (ZET_ID + ".md")
+if zet_path.exists():
+    _fail("installed_v0411_fixture_zettel_collision")
 zet_path.write_text(
     "---\n"
     "id: " + ZET_ID + "\n"
@@ -1282,7 +1316,7 @@ zet_path.write_text(
     "abstract: Synthetic content-free installed-wheel verification.\n"
     "created_at: '2026-08-27T00:00:00+09:00'\n"
     "updated_at: '2026-08-27T00:00:00+09:00'\n"
-    "archive_id: archive:test:installed-v0411-truth\n"
+    "archive_id: " + archive_id + "\n"
     "status: canonical\n"
     "kind: permanent_note\n"
     "facets: {}\n"
@@ -1291,7 +1325,7 @@ zet_path.write_text(
     "source_refs: []\n"
     "provenance:\n"
     "  created_by: person:installed-wheel-smoke\n"
-    "  created_in: archive:test:installed-v0411-truth\n"
+    "  created_in: " + archive_id + "\n"
     "  source: synthetic_installed_wheel_smoke\n"
     "  derived_from: []\n"
     "visibility:\n"
@@ -3099,6 +3133,7 @@ def _check_installed_v049_workflows(
     python: Path,
     archive_entrypoint: Path,
     fixture_root: Path,
+    archive_template: Path,
     *,
     cwd: Path,
 ) -> dict[str, Any]:
@@ -3112,6 +3147,7 @@ def _check_installed_v049_workflows(
             INSTALLED_V049_SMOKE_SCRIPT,
             str(fixture_root),
             str(archive_entrypoint),
+            str(archive_template),
         ],
         cwd=cwd,
         label="installed v0.4.10 recovery workflows",
@@ -3168,6 +3204,7 @@ def _check_installed_v049_workflows(
 def _check_installed_v0410_batch_workflow(
     python: Path,
     fixture_root: Path,
+    archive_template: Path,
     *,
     cwd: Path,
 ) -> dict[str, Any]:
@@ -3180,6 +3217,7 @@ def _check_installed_v0410_batch_workflow(
             "-c",
             INSTALLED_V0410_BATCH_SMOKE_SCRIPT,
             str(fixture_root),
+            str(archive_template),
         ],
         cwd=cwd,
         label="installed v0.4.10 source-intake/capture batch workflow",
@@ -3224,6 +3262,7 @@ def _check_installed_v0410_batch_workflow(
 def _check_installed_v0411_truth_contracts(
     python: Path,
     fixture_root: Path,
+    archive_template: Path,
     *,
     cwd: Path,
     expected_package_version: str,
@@ -3239,6 +3278,7 @@ def _check_installed_v0411_truth_contracts(
             INSTALLED_V0411_TRUTH_SMOKE_SCRIPT,
             str(fixture_root),
             expected_package_version,
+            str(archive_template),
         ],
         cwd=cwd,
         label="installed v0.4.11 operator truth contracts",
@@ -3577,18 +3617,21 @@ def check_wheel(output_dir: Path | None = None) -> dict[str, Any]:
             python,
             archive,
             temp_root / "v049-recovery-archives",
+            source_copy / "examples" / "fake-life-archive",
             cwd=temp_root,
         )
         v0410_batch_workflow_evidence = (
             _check_installed_v0410_batch_workflow(
                 python,
                 temp_root / "v0410-batch-archive",
+                source_copy / "examples" / "fake-life-archive",
                 cwd=temp_root,
             )
         )
         v0411_truth_evidence = _check_installed_v0411_truth_contracts(
             python,
             temp_root / "v0411-truth-archive",
+            source_copy / "examples" / "fake-life-archive",
             cwd=temp_root,
             expected_package_version=package_version,
         )
