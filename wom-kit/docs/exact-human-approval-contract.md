@@ -1,6 +1,6 @@
 # Exact Human Approval Contract
 
-Status: v0.4.12 generation-bound link authority and parser-derived fixed-close truth; v0.4.0 one-use authority baseline preserved
+Status: v0.4.13 exact object-storage preservation authority; v0.4.0 one-use authority baseline preserved
 
 ## Purpose
 
@@ -64,6 +64,15 @@ canonical mutation. Once a supported indexed writer begins, it must either seal
 the exact same-generation delta or leave that generation dirty and report
 `archive_index_rebuild_required`; ambiguous partial effects are never reported
 as success.
+
+v0.4.13 keeps the same human boundary for exact emergency object-storage
+preservation. WOM verifies canonical setup evidence, the complete local source
+set, content-addressed targets, conditional create semantics, provider call
+budget, HEAD plus complete GET rehash, durable resume ledger, and terminal
+receipts. The person sees the plain effect and chooses run or cancel; they do
+not count objects, compare hashes, or inspect internal identifiers. The
+approval grants no overwrite, remote deletion, conflict merge, formal adoption,
+or whole-archive backup claim.
 
 The current parser-derived inventory is 47 approval-available, 67 fixed-closed,
 and 201 not-exposed paths. `zet-revision-restore-proposal-from-snapshot

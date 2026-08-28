@@ -2,11 +2,19 @@
 
 상태: 공개 navigation baseline
 날짜: 2026-05-27
-갱신: 2026-08-28
+갱신: 2026-08-29
 철학 갱신: 2026-07-15
 하네스 호환 경계 갱신: 2026-07-16
 
-현재 v0.4.12 변경점: `zettel-objet-link`는 현재 generation-bound SQLite
+현재 v0.4.13 변경점: local object-storage readiness는 엄격한 legacy bridge보다
+canonical exact setup 근거를 먼저 검사하고, malformed·orphan·변경 중·대소문자
+충돌·다른 namespace 근거를 비공개 setup 값 없이 보고합니다. 좁은 긴급 보존
+경로는 conditional create-only single/multipart 발행, HEAD와 전체 GET 재해시,
+manifest-bound resume, terminal receipt 세 상태를 사용합니다. overwrite로
+fallback하거나 보존한 바이트를 formal adoption이라고 부르지 않습니다. 공개나
+설치만으로 client archive를 바꾸거나 provider를 호출하지 않습니다.
+
+과거 v0.4.12 변경점: `zettel-objet-link`는 현재 generation-bound SQLite
 projection을 권한으로 사용하고 승인이나 쓰기 없이 결정적인 `already_present`를
 반환합니다. index를 쓰는 zet writer는 같은-generation dirty intent와 정확한
 delta-or-dirty lifecycle을 공유하며, projection이 없거나 stale이면 정본 쓰기 전에
@@ -518,6 +526,7 @@ local archive
 - [v0.2.11 Delegate Capability Contract Work Log](../plans/work-log-2026-05-23-delegate-capability-contract.md)
 - [Changelog](../../CHANGELOG.md)
 - [Release Notes](releases/)
+- [v0.4.13 릴리스 노트](releases/v0.4.13.md)
 - [v0.4.12 릴리스 노트](releases/v0.4.12.md)
 - [v0.4.11 릴리스 노트](releases/v0.4.11.md)
 - [v0.4.10 릴리스 노트](releases/v0.4.10.md)

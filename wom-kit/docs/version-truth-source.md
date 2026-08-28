@@ -1,8 +1,10 @@
 # WOM-kit Version Truth Source
 
-Status: v0.4.12 generation-bound link authority and honest writer index lifecycle
+Status: v0.4.13 exact setup evidence and create-only object-storage preservation
 
-Current checkpoint: Status: v0.4.12 indexed-link and same-generation delta-or-dirty truth
+Current checkpoint: Status: v0.4.13 exact setup and remote preservation truth
+
+Previous checkpoint: Status: v0.4.12 indexed-link and same-generation delta-or-dirty truth
 
 Previous checkpoint: Status: v0.4.11 runtime, byte-evidence, and operator truth
 
@@ -40,28 +42,28 @@ or runtime workflow. This page defines the safe order for checking them.
 
 ## Current Public Tool
 
-The v0.4.12 URL is a conditional release-artifact contract. Use it only after
+The v0.4.13 URL is a conditional release-artifact contract. Use it only after
 the matching public GitHub Release exists and lists the exact wheel:
 
 ```powershell
-py -m venv .wom-bootstrap-v0412
-& .\.wom-bootstrap-v0412\Scripts\python.exe -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.12/wom_kit-0.4.12-py3-none-any.whl"
-& .\.wom-bootstrap-v0412\Scripts\archive.exe --version
+py -m venv .wom-bootstrap-v0413
+& .\.wom-bootstrap-v0413\Scripts\python.exe -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.13/wom_kit-0.4.13-py3-none-any.whl"
+& .\.wom-bootstrap-v0413\Scripts\archive.exe --version
 ```
 
-Require exactly `archive 0.4.12` from a new process. The installed runtime adds
-generation-bound link authority, deterministic `already_present`, and the
-same-generation delta-or-dirty lifecycle across indexed zet writers. A
-bootstrap install alone changes no archive, remote ref, project-local source
-mirror, pin, shared PATH tool, or other project. Project update is a separate
-native exact-human workflow that creates and activates the project-local
-runtime with its own receipt. After it succeeds, the AI explicitly runs
-`archive index <archive-root> --progress --format json` and
-`archive index-health <archive-root> --dry-run --progress --format json`, then
-verifies counts, hashes, generation, and health. The person does not count or
-compare those technical values. See [Git Backup Plan And Reconciliation Plan](git-backup-plan.md),
-[ExactOperationManifest v1](exact-operation-manifest-v1.md), and the
-[v0.4.12 release note](releases/v0.4.12.md).
+Require exactly `archive 0.4.13` from a new process. The installed runtime adds
+exact-first object-storage setup evidence and conditional create-only emergency
+preservation with durable three-state receipts and manifest-bound resume.
+A bootstrap install alone changes no archive, remote ref, project-local source
+mirror, pin, shared PATH tool, other project, or provider. Project update is a
+separate native exact-human workflow that creates and activates the
+project-local runtime with its own receipt. Provider access and byte
+preservation require another explicit client-authorized operation. WOM verifies
+counts, hashes, setup identity, drift, provider evidence, checkpoints, and
+receipts; the person does not count or compare technical values. See
+[ExactOperationManifest v1](exact-operation-manifest-v1.md), the
+[object-storage execution contract](object-storage-adapter-execution-contract.md),
+and the [v0.4.13 release note](releases/v0.4.13.md).
 
 ## Canonical Checks
 
@@ -82,7 +84,7 @@ form is for AI runtimes and scripts. `runtime-context` includes the same
 version summary under `wom_kit_version`, so an agent can confirm archive identity
 and kit version in one read-only request.
 
-For a v0.4.12 project, the `project_runtime` object is also canonical evidence.
+For a v0.4.13 project, the `project_runtime` object is also canonical evidence.
 It separately reports the versioned receipt, a freshly observed installed-
 payload tree hash, installed module inventory, stable launcher, current
 executable/module/prefix and isolated Python flags, project-relative

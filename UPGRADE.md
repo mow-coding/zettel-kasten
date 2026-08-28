@@ -24,6 +24,44 @@ Before upgrading a real archive:
 
 The archive should never silently rewrite memory.
 
+## v0.4.13 Exact Setup Evidence And Create-Only Byte Preservation
+
+Install the exact public wheel only after the matching release and asset exist:
+
+```powershell
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.13/wom_kit-0.4.13-py3-none-any.whl"
+archive --version
+```
+
+Require exactly `archive 0.4.13` from a new process. A shared PATH executable is
+not proof that the intended client project was updated. Use the project-local
+launcher after the separate reviewed `project-version-update` succeeds.
+
+v0.4.13 does not require a public archive-format migration. It tightens two
+existing object-storage paths:
+
+- setup readiness now trusts the canonical exact binding and receipt first;
+  malformed, orphaned, changing, case-colliding, and cross-provider evidence
+  fails closed without echoing private setup values;
+- `object-storage-adopt-existing --preserve-local-only` publishes remote bytes
+  create-only for single and multipart objects and independently verifies them
+  with HEAD plus a complete GET rehash.
+
+The AI should run the dry-run, verify the complete machine evidence, and show
+the person only the plain operation effect. The person chooses run or cancel;
+they do not count records or compare hashes. A live provider call occurs only
+after the client explicitly authorizes the exact operation in its intended
+project runtime. Publishing, installing, or planning the release performs no
+upload.
+
+A successful item is classified as `bytes_preserved` or
+`already_remote_verified`. A proven conflicting remote object becomes
+`review_required` without overwrite. Unavailable or uncertain provider
+evidence remains resumable and has no terminal success receipt. None of these
+states adds a formal-adoption manifest location. See the
+[v0.4.13 release note](wom-kit/docs/releases/v0.4.13.md) and the
+[object-storage execution contract](wom-kit/docs/object-storage-adapter-execution-contract.md).
+
 ## v0.4.12 Generation-Bound Link and Index Authority
 
 Install only after the matching public Release lists the exact wheel:

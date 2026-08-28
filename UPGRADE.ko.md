@@ -2,6 +2,41 @@
 
 [English Upgrade Guide](UPGRADE.md)
 
+## v0.4.13 정확한 setup 근거와 create-only 바이트 보존
+
+일치하는 공개 릴리스와 자산이 실제로 존재한 뒤에만 정확한 wheel을 설치합니다.
+
+```powershell
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.13/wom_kit-0.4.13-py3-none-any.whl"
+archive --version
+```
+
+새 프로세스에서 정확히 `archive 0.4.13`인지 확인합니다. 공용 PATH 실행 파일의
+버전만으로 특정 client project가 업데이트됐다고 판단하지 않습니다. 별도의
+검토된 `project-version-update`가 끝난 뒤에는 project-local launcher를 씁니다.
+
+v0.4.13은 공개 archive format migration을 요구하지 않습니다. 기존
+object-storage 경로 두 곳을 더 엄격하게 만듭니다.
+
+- setup readiness는 canonical exact binding과 receipt를 먼저 신뢰합니다.
+  malformed, orphan, 변경 중, 대소문자 충돌, 다른 provider namespace의 근거는
+  비공개 setup 값을 출력하지 않고 fail-closed됩니다.
+- `object-storage-adopt-existing --preserve-local-only`는 single·multipart
+  object를 create-only로 발행하고 HEAD와 전체 GET 재해시로 독립 검증합니다.
+
+AI가 dry-run과 전체 기계 근거를 검증하고 사람에게는 쉬운 작업 효과만
+보여줍니다. 사람은 실행 또는 취소만 결정하며 record를 세거나 해시를 비교하지
+않습니다. live provider call은 client가 의도한 project runtime에서 exact 작업을
+명시적으로 승인한 뒤에만 발생합니다. 공개·설치·계획만으로 upload되지 않습니다.
+
+성공 항목은 `bytes_preserved` 또는 `already_remote_verified`로 분류됩니다.
+확인된 원격 충돌은 덮어쓰지 않고 `review_required`가 됩니다. 사용할 수 없거나
+불확실한 provider 근거는 terminal 성공 receipt 없이 resume 대상으로 남습니다.
+어느 상태도 formal-adoption manifest location을 추가하지 않습니다.
+[v0.4.13 릴리스 노트](wom-kit/docs/releases/v0.4.13.md)와
+[object-storage 실행 계약](wom-kit/docs/object-storage-adapter-execution-contract.md)을
+보세요.
+
 ## v0.4.12 generation-bound link와 index 권한
 
 일치하는 공개 Release가 정확한 wheel을 자산으로 나열한 뒤에만 설치합니다.
