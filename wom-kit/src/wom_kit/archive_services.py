@@ -123424,7 +123424,7 @@ class ObjectStorageTransport(Protocol):
         # -> same shape as put_object result
         ...
 
-    def abort_multipart(self, *, key: str, upload_id: str) -> None:
+    def abort_multipart(self, *, key: str, upload_id: str) -> dict[str, Any]:
         ...
 
     def delete_object(self, *, key: str) -> None:
@@ -123469,7 +123469,7 @@ class NullTransport:
     ) -> dict[str, Any]:
         raise ObjectStorageTransportNotImplemented(self._MESSAGE)
 
-    def abort_multipart(self, *, key: str, upload_id: str) -> None:
+    def abort_multipart(self, *, key: str, upload_id: str) -> dict[str, Any]:
         raise ObjectStorageTransportNotImplemented(self._MESSAGE)
 
     def delete_object(self, *, key: str) -> None:
@@ -123508,7 +123508,9 @@ _SIGV4_AUTH_ERROR_CODES = frozenset(
         "AccessDenied",
     }
 )
-_SIGV4_RATE_LIMITED_CODES = frozenset({"SlowDown", "InternalError", "ServiceUnavailable"})
+_SIGV4_RATE_LIMITED_CODES = frozenset(
+    {"SlowDown", "InternalError", "ServiceUnavailable", "ClientDisconnect"}
+)
 _SIGV4_PRECONDITION_FAILED_CODES = frozenset({"PreconditionFailed"})
 _SIGV4_CONDITIONAL_CONFLICT_CODES = frozenset({"ConditionalRequestConflict"})
 
@@ -123519,19 +123521,19 @@ def _object_storage_classify_http_status(status: int, error_code: str | None) ->
     can never succeed. Keyed on code (not just status) because 400 is ambiguous.
     """
     code = str(error_code or "")
-    if 200 <= int(status) < 300:
-        return "ok"
-    if int(status) == 412 or code in _SIGV4_PRECONDITION_FAILED_CODES:
+    if code in _SIGV4_PRECONDITION_FAILED_CODES or int(status) == 412:
         return "precondition_failed"
-    if int(status) == 409 and code in _SIGV4_CONDITIONAL_CONFLICT_CODES:
+    if code in _SIGV4_CONDITIONAL_CONFLICT_CODES or int(status) == 409:
         return "conditional_conflict"
     if code in _SIGV4_AUTH_ERROR_CODES:
         return "auth"
     if code in _SIGV4_RATE_LIMITED_CODES:
         return "rate_limited"
+    if 200 <= int(status) < 300:
+        return "ok"
     if int(status) in (403, 400):
         return "auth"
-    if int(status) in (429, 503, 500):
+    if int(status) == 429 or 500 <= int(status) <= 599:
         return "rate_limited"
     return "failed"
 
@@ -124011,6 +124013,8 @@ class _S3CompatibleTransport:
             query={"uploads": ""},
         )
         status = int(response.get("status") or 0)
+        if response.get("transport_error"):
+            raise _ObjectStorageProviderError("rate_limited")
         if status != 200:
             error_code = _sigv4_extract_error_code(response.get("body"))
             status_class = (
@@ -124048,6 +124052,8 @@ class _S3CompatibleTransport:
             data_bytes=data,
         )
         status = int(response.get("status") or 0)
+        if response.get("transport_error"):
+            raise _ObjectStorageProviderError("rate_limited")
         if not (200 <= status < 300):
             error_code = _sigv4_extract_error_code(response.get("body"))
             raise _ObjectStorageProviderError(_object_storage_classify_http_status(status, error_code))
@@ -124120,23 +124126,29 @@ class _S3CompatibleTransport:
         body = response.get("body")
         error_code = _sigv4_extract_error_code(body)
         if error_code:
-            if error_code in _SIGV4_AUTH_ERROR_CODES:
-                return {"status_class": "auth"}
-            if error_code in _SIGV4_RATE_LIMITED_CODES:
-                return {"status_class": "rate_limited"}
-            return {"status_class": "failed"}
+            status_class = _object_storage_classify_http_status(status, error_code)
+            return {"status_class": "failed" if status_class == "ok" else status_class}
         error_text = body.decode("utf-8", "replace") if isinstance(body, (bytes, bytearray)) else str(body or "")
         if re.search(r"<Error(?:\s|>)", error_text):
             return {"status_class": "failed"}
         return {"status_class": "ok"}
 
-    def abort_multipart(self, *, key: str, upload_id: str) -> None:
-        self._dispatch(
+    def abort_multipart(self, *, key: str, upload_id: str) -> dict[str, Any]:
+        response = self._dispatch(
             method="DELETE",
             key=key,
             payload_hash=SIGV4_EMPTY_SHA256_HEX,
             query={"uploadId": str(upload_id)},
         )
+        status = int(response.get("status") or 0)
+        if response.get("transport_error"):
+            return {"status_class": "rate_limited"}
+        error_code = (
+            _sigv4_extract_error_code(response.get("body"))
+            if not (200 <= status < 300)
+            else None
+        )
+        return {"status_class": _object_storage_classify_http_status(status, error_code)}
 
     def delete_object(self, *, key: str) -> None:
         # Not used by the executor without a generation-bound condition.
@@ -125147,6 +125159,7 @@ def _object_storage_execute_one_upload(
     rng: Callable[[], float] = random.random,
     force_upload: bool = False,
     create_only: bool = False,
+    max_provider_mutation_calls: int | None = None,
     multipart_part_size_bytes: int = OBJECT_STORAGE_MULTIPART_PART_SIZE_BYTES,
 ) -> dict[str, Any]:
     """Per-object upload spine (§2.3). Ledger read -> HEAD-before -> PUT/multipart
@@ -125180,6 +125193,14 @@ def _object_storage_execute_one_upload(
     skip authority that survives a remote wipe -> silent data loss on restore).
     """
     _ = skip_uploaded  # Layer-A cost-skip is enforced upstream; see docstring.
+    if (
+        max_provider_mutation_calls is not None
+        and (
+            type(max_provider_mutation_calls) is not int
+            or max_provider_mutation_calls < 0
+        )
+    ):
+        raise ArchiveServiceError("invalid object-storage provider-call budget")
     object_id = f"sha256:{content_sha256}"
     key_hint = key
     # Ledger authority: a terminal-success row means this object is done (§3.3,
@@ -125201,6 +125222,8 @@ def _object_storage_execute_one_upload(
 
     attempts = 0
     backoff_ms_total = 0
+    put_calls = 0
+    multipart_cleanup_state = "not_applicable"
     try:
         # HEAD-before (Layer B correctness). Only suppressed by Layer A upstream.
         # force_upload also skips it: the caller's F0-b HEAD already proved
@@ -125251,12 +125274,31 @@ def _object_storage_execute_one_upload(
 
         # remote_absent -> BOUNDED-RETRY upload loop (SA-3).
         is_multipart = size >= multipart_threshold_bytes
-        put_calls = 0
         part_count = 1
         status_class = "failed"
         retries = 0
         while True:
             if is_multipart:
+                if max_provider_mutation_calls is not None:
+                    expected_parts = max(
+                        1,
+                        (size + multipart_part_size_bytes - 1)
+                        // multipart_part_size_bytes,
+                    )
+                    # Reserve one call for AbortMultipartUpload before starting
+                    # an attempt. A failed complete must not consume the ceiling
+                    # and leave cleanup authority silently unresolved.
+                    safe_attempt_calls = expected_parts + 3
+                    if max_provider_mutation_calls - put_calls < safe_attempt_calls:
+                        return _object_storage_failed_result(
+                            object_id,
+                            key_hint,
+                            "failed_provider_call_ceiling",
+                            attempts,
+                            backoff_ms_total,
+                            put_calls,
+                            multipart_cleanup_state="not_started",
+                        )
                 put_result, part_count = _object_storage_multipart_put(
                     transport=transport,
                     key=key,
@@ -125264,11 +125306,30 @@ def _object_storage_execute_one_upload(
                     content_sha256=content_sha256,
                     part_size_bytes=multipart_part_size_bytes,
                     create_only=create_only,
+                    max_provider_mutation_calls=(
+                        None
+                        if max_provider_mutation_calls is None
+                        else max(0, max_provider_mutation_calls - put_calls)
+                    ),
                 )
-                # Each multipart run issues create + N put_part + complete; count
-                # the mutating provider calls for the cumulative PUT ceiling (SA-2).
-                put_calls += 1 + max(1, part_count) + 1
+                mutation_calls = int(put_result.get("provider_mutation_calls") or 0)
+                put_calls += mutation_calls
+                multipart_cleanup_state = str(
+                    put_result.get("multipart_cleanup_state") or "unconfirmed"
+                )
             else:
+                if (
+                    max_provider_mutation_calls is not None
+                    and put_calls >= max_provider_mutation_calls
+                ):
+                    return _object_storage_failed_result(
+                        object_id,
+                        key_hint,
+                        "failed_provider_call_ceiling",
+                        attempts,
+                        backoff_ms_total,
+                        put_calls,
+                    )
                 put_kwargs = {
                     "key": key,
                     "data_path": data_path,
@@ -125277,16 +125338,22 @@ def _object_storage_execute_one_upload(
                 }
                 if create_only:
                     put_kwargs["create_only"] = True
+                put_calls += 1
                 put_result = transport.put_object(**put_kwargs)
                 part_count = 1
-                put_calls += 1
             attempts += 1
             status_class = str(put_result.get("status_class") or "failed")
             if status_class == "ok":
                 break
             if status_class == "auth":
                 return _object_storage_failed_result(
-                    object_id, key_hint, "failed_auth", attempts, backoff_ms_total, put_calls
+                    object_id,
+                    key_hint,
+                    "failed_auth",
+                    attempts,
+                    backoff_ms_total,
+                    put_calls,
+                    multipart_cleanup_state=multipart_cleanup_state,
                 )
             if status_class == "precondition_failed":
                 return _object_storage_failed_result(
@@ -125296,6 +125363,7 @@ def _object_storage_execute_one_upload(
                     attempts,
                     backoff_ms_total,
                     put_calls,
+                    multipart_cleanup_state=multipart_cleanup_state,
                 )
             if status_class == "conditional_conflict":
                 return _object_storage_failed_result(
@@ -125305,6 +125373,27 @@ def _object_storage_execute_one_upload(
                     attempts,
                     backoff_ms_total,
                     put_calls,
+                    multipart_cleanup_state=multipart_cleanup_state,
+                )
+            if status_class == "cleanup_unverified":
+                return _object_storage_failed_result(
+                    object_id,
+                    key_hint,
+                    "failed_cleanup_unverified",
+                    attempts,
+                    backoff_ms_total,
+                    put_calls,
+                    multipart_cleanup_state=multipart_cleanup_state,
+                )
+            if status_class == "provider_call_ceiling":
+                return _object_storage_failed_result(
+                    object_id,
+                    key_hint,
+                    "failed_provider_call_ceiling",
+                    attempts,
+                    backoff_ms_total,
+                    put_calls,
+                    multipart_cleanup_state=multipart_cleanup_state,
                 )
             if status_class == "rate_limited" and retries + 1 < max_attempts:
                 sleep_ms = _object_storage_backoff_ms(retries, rng)
@@ -125314,10 +125403,22 @@ def _object_storage_execute_one_upload(
                 continue
             if status_class == "rate_limited":
                 return _object_storage_failed_result(
-                    object_id, key_hint, "failed_rate_limited", attempts, backoff_ms_total, put_calls
+                    object_id,
+                    key_hint,
+                    "failed_rate_limited",
+                    attempts,
+                    backoff_ms_total,
+                    put_calls,
+                    multipart_cleanup_state=multipart_cleanup_state,
                 )
             return _object_storage_failed_result(
-                object_id, key_hint, "failed_upload", attempts, backoff_ms_total, put_calls
+                object_id,
+                key_hint,
+                "failed_upload",
+                attempts,
+                backoff_ms_total,
+                put_calls,
+                multipart_cleanup_state=multipart_cleanup_state,
             )
 
         # HEAD-after: verify non-secret size + full-object sha256. Never pass on size alone.
@@ -125340,7 +125441,13 @@ def _object_storage_execute_one_upload(
             # digest is not proof that the remote object is wrong. Preserve the
             # possibly-correct upload and fail closed without DELETE.
             return _object_storage_failed_result(
-                object_id, key_hint, "failed_upload", attempts, backoff_ms_total, put_calls
+                object_id,
+                key_hint,
+                "failed_upload",
+                attempts,
+                backoff_ms_total,
+                put_calls,
+                multipart_cleanup_state=multipart_cleanup_state,
             )
         head_after_ok = (
             head_after.get("present")
@@ -125353,7 +125460,13 @@ def _object_storage_execute_one_upload(
             # a correct concurrent replacement. Preserve the remote object until
             # a provider-neutral conditional-delete contract exists.
             return _object_storage_failed_result(
-                object_id, key_hint, "failed_upload", attempts, backoff_ms_total, put_calls
+                object_id,
+                key_hint,
+                "failed_upload",
+                attempts,
+                backoff_ms_total,
+                put_calls,
+                multipart_cleanup_state=multipart_cleanup_state,
             )
 
         result = {
@@ -125365,6 +125478,7 @@ def _object_storage_execute_one_upload(
             "attempts": attempts,
             "backoff_ms_total": backoff_ms_total,
             "put_calls": put_calls,
+            "multipart_cleanup_state": multipart_cleanup_state,
             "provider_api_called": True,
         }
         ledger.append({**result, "completed_at": _object_storage_now_iso()})
@@ -125374,7 +125488,13 @@ def _object_storage_execute_one_upload(
     except ArchiveServiceError:
         # Any provider-adjacent error is reduced to a status class; no body surfaced.
         return _object_storage_failed_result(
-            object_id, key_hint, "failed_upload", attempts, backoff_ms_total, 0
+            object_id,
+            key_hint,
+            "failed_upload",
+            attempts,
+            backoff_ms_total,
+            put_calls,
+            multipart_cleanup_state=multipart_cleanup_state,
         )
 
 
@@ -125385,6 +125505,7 @@ def _object_storage_failed_result(
     attempts: int,
     backoff_ms_total: int = 0,
     put_calls: int = 0,
+    multipart_cleanup_state: str = "not_applicable",
 ) -> dict[str, Any]:
     return {
         "object_id": object_id,
@@ -125395,6 +125516,7 @@ def _object_storage_failed_result(
         "attempts": attempts,
         "backoff_ms_total": int(backoff_ms_total),
         "put_calls": int(put_calls),
+        "multipart_cleanup_state": multipart_cleanup_state,
         "provider_api_called": True,
     }
 
@@ -125407,6 +125529,7 @@ def _object_storage_multipart_put(
     content_sha256: str,
     part_size_bytes: int = OBJECT_STORAGE_MULTIPART_PART_SIZE_BYTES,
     create_only: bool = False,
+    max_provider_mutation_calls: int | None = None,
 ) -> tuple[dict[str, Any], int]:
     # A provider error at ANY multipart step (create / put_part / complete) must
     # surface its REAL status_class so the executor's bounded retry loop can retry
@@ -125417,15 +125540,69 @@ def _object_storage_multipart_put(
     # parts are orphaned.
     part_number = 0
     upload_id = None
+    mutation_calls = 0
+    cleanup_state = "not_started"
+
+    def budget_available() -> bool:
+        return (
+            max_provider_mutation_calls is None
+            or mutation_calls < max_provider_mutation_calls
+        )
+
+    def finish(status_class: str, *, original_status_class: str | None = None):
+        result = {
+            "status_class": status_class,
+            "provider_mutation_calls": mutation_calls,
+            "multipart_cleanup_state": cleanup_state,
+        }
+        if original_status_class is not None:
+            result["original_status_class"] = original_status_class
+        return result, part_number
+
+    def abort_in_flight() -> bool:
+        nonlocal mutation_calls, cleanup_state
+        if upload_id is None:
+            cleanup_state = "not_required"
+            return True
+        if not budget_available():
+            cleanup_state = "unconfirmed_budget_exhausted"
+            return False
+        mutation_calls += 1
+        try:
+            aborted = transport.abort_multipart(key=key, upload_id=upload_id)
+        except Exception:
+            cleanup_state = "unconfirmed_abort_error"
+            return False
+        if (
+            isinstance(aborted, Mapping)
+            and str(aborted.get("status_class") or "failed") == "ok"
+        ):
+            cleanup_state = "confirmed_aborted"
+            return True
+        cleanup_state = "unconfirmed_abort_response"
+        return False
+
     try:
+        if not budget_available():
+            return finish("provider_call_ceiling")
+        mutation_calls += 1
         upload_id = transport.create_multipart(key=key)
+        cleanup_state = "in_flight"
         parts: list[dict[str, Any]] = []
         with data_path.open("rb") as handle:
             while True:
                 chunk = handle.read(part_size_bytes)
                 if not chunk:
                     break
+                if not budget_available():
+                    if abort_in_flight():
+                        return finish("provider_call_ceiling")
+                    return finish(
+                        "cleanup_unverified",
+                        original_status_class="provider_call_ceiling",
+                    )
                 part_number += 1
+                mutation_calls += 1
                 part = transport.put_part(
                     key=key, upload_id=upload_id, part_number=part_number, data=chunk
                 )
@@ -125438,27 +125615,31 @@ def _object_storage_multipart_put(
         }
         if create_only:
             complete_kwargs["create_only"] = True
+        if not budget_available():
+            if abort_in_flight():
+                return finish("provider_call_ceiling")
+            return finish(
+                "cleanup_unverified",
+                original_status_class="provider_call_ceiling",
+            )
+        mutation_calls += 1
         completed = transport.complete_multipart(**complete_kwargs)
         if str(completed.get("status_class") or "failed") != "ok":
-            try:
-                transport.abort_multipart(key=key, upload_id=upload_id)
-            except ArchiveServiceError:
-                pass
-        return completed, part_number
+            original = str(completed.get("status_class") or "failed")
+            if not abort_in_flight():
+                return finish("cleanup_unverified", original_status_class=original)
+            return finish(original)
+        cleanup_state = "completed"
+        return finish("ok")
     except _ObjectStorageProviderError as exc:
-        if upload_id is not None:
-            try:
-                transport.abort_multipart(key=key, upload_id=upload_id)
-            except ArchiveServiceError:
-                pass
-        return {"status_class": str(exc.status_class or "failed")}, part_number
-    except ArchiveServiceError:
-        if upload_id is not None:
-            try:
-                transport.abort_multipart(key=key, upload_id=upload_id)
-            except ArchiveServiceError:
-                pass
-        return {"status_class": "failed"}, part_number
+        original = str(exc.status_class or "failed")
+        if not abort_in_flight():
+            return finish("cleanup_unverified", original_status_class=original)
+        return finish(original)
+    except Exception:
+        if not abort_in_flight():
+            return finish("cleanup_unverified", original_status_class="failed")
+        return finish("failed")
 
 
 def _object_storage_now_iso() -> str:
