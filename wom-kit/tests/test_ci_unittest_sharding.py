@@ -159,6 +159,10 @@ class CiUnittestShardingTests(unittest.TestCase):
         current = None
         for raw_line in workflow.splitlines():
             line = raw_line.strip()
+            if current is not None and line == "steps:":
+                matrix_rows.append(current)
+                current = None
+                break
             if line.startswith("- os:"):
                 if current is not None:
                     matrix_rows.append(current)
