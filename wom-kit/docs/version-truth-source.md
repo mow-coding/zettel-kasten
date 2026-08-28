@@ -1,8 +1,10 @@
 # WOM-kit Version Truth Source
 
-Status: v0.4.10 bounded batch operability and project-isolated runtime
+Status: v0.4.11 live project-runtime binding and Deep Doctor evidence
 
-Current checkpoint: Status: v0.4.10 authenticated batch intake and capture
+Current checkpoint: Status: v0.4.11 runtime, byte-evidence, and operator truth
+
+Previous checkpoint: Status: v0.4.10 authenticated batch intake and capture
 
 Previous checkpoint: Status: v0.4.9 single-file intake and truthful doctor operability
 
@@ -36,16 +38,16 @@ or runtime workflow. This page defines the safe order for checking them.
 
 ## Current Public Tool
 
-The v0.4.10 URL is a conditional release-artifact contract. Use it only after
+The v0.4.11 URL is a conditional release-artifact contract. Use it only after
 the matching public GitHub Release exists and lists the exact wheel:
 
 ```powershell
-py -m venv .wom-bootstrap-v0410
-& .\.wom-bootstrap-v0410\Scripts\python.exe -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.10/wom_kit-0.4.10-py3-none-any.whl"
-& .\.wom-bootstrap-v0410\Scripts\archive.exe --version
+py -m venv .wom-bootstrap-v0411
+& .\.wom-bootstrap-v0411\Scripts\python.exe -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.11/wom_kit-0.4.11-py3-none-any.whl"
+& .\.wom-bootstrap-v0411\Scripts\archive.exe --version
 ```
 
-Require exactly `archive 0.4.10` from a new process. The installed runtime keeps
+Require exactly `archive 0.4.11` from a new process. The installed runtime keeps
 the exact-approved Git writer, source-property backfill, bounded R2 recovery,
 receipt-bound local recovery, and interruption-safe integrity repair, but a
 bootstrap install alone changes no archive, remote ref, project-local source
@@ -73,10 +75,13 @@ form is for AI runtimes and scripts. `runtime-context` includes the same
 version summary under `wom_kit_version`, so an agent can confirm archive identity
 and kit version in one read-only request.
 
-For a v0.4.3-or-newer project, the `project_runtime` object is also canonical
-evidence. It reports the exact versioned runtime receipt, stable launcher,
-project-relative `project_runtime_argv`, pin/runtime agreement, and whether the
-running process matches the project. Ordinary writes should use
+For a v0.4.11 project, the `project_runtime` object is also canonical evidence.
+It separately reports the versioned receipt, a freshly observed installed-
+payload tree hash, installed module inventory, stable launcher, current
+executable/module/prefix and isolated Python flags, project-relative
+`project_runtime_argv`, pin/runtime agreement, and whether the running process
+matches the project. A receipt or matching version number alone is not live
+process proof. Ordinary writes should use
 `.\.zettel-kasten\bin\archive.cmd`. A different running version is blocked
 before an approved writer dispatches with `project_runtime_mismatch`; the
 result changes no files and returns the exact project-local argv.

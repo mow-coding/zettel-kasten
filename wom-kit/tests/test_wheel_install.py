@@ -102,7 +102,7 @@ def patch_zip_member_name_bytes(wheel: Path, old_name: str, new_name: str) -> No
 
 
 class InstalledEntrypointTests(unittest.TestCase):
-    PACKAGE_VERSION = "0.4.10"
+    PACKAGE_VERSION = "0.4.11"
     SERVER_NAME = "zettel-kasten-archive-mcp"
 
     def setUp(self) -> None:
@@ -889,6 +889,12 @@ class InstalledEntrypointTests(unittest.TestCase):
             "item_count": 3,
             "fresh_separate_approvals": True,
         }
+        v0411_truth_evidence = {
+            "ok": True,
+            "schema": check_wheel_install.INSTALLED_V0411_TRUTH_SMOKE_SCHEMA,
+            "package_version": self.PACKAGE_VERSION,
+            "isolated_installed_package": True,
+        }
         result = check_wheel_install._wheel_install_success_result(
             package_version=self.PACKAGE_VERSION,
             wheel_counts=wheel_counts,
@@ -902,6 +908,7 @@ class InstalledEntrypointTests(unittest.TestCase):
             letter140_link_evidence=letter140_evidence,
             v049_workflow_evidence=v049_evidence,
             v0410_batch_workflow_evidence=v0410_batch_evidence,
+            v0411_truth_evidence=v0411_truth_evidence,
             wheel_filename="wom_kit-0.3.296-py3-none-any.whl",
             wheel_sha256="a" * 64,
             artifact_preserved=True,
@@ -924,6 +931,7 @@ class InstalledEntrypointTests(unittest.TestCase):
                 "installed_letter140_link_workflow": letter140_evidence,
                 "installed_v049_recovery_workflows": v049_evidence,
                 "installed_v0410_batch_workflow": v0410_batch_evidence,
+                "installed_v0411_truth_contracts": v0411_truth_evidence,
                 "runtime_skill_lifecycle": "passed",
                 "onboarding_preview": "passed",
                 "onboarding_write": "fixed_closed",
@@ -1157,6 +1165,87 @@ class InstalledEntrypointTests(unittest.TestCase):
         ):
             with self.assertRaises(check_wheel_install.WheelCheckError):
                 check_wheel_install._check_installed_v0410_batch_workflow(
+                    python,
+                    fixture_root,
+                    cwd=self.temp_root,
+                )
+
+    def test_installed_v0411_truth_contracts_require_exact_isolated_evidence(
+        self,
+    ) -> None:
+        compile(
+            check_wheel_install.INSTALLED_V0411_TRUTH_SMOKE_SCRIPT,
+            "<installed-v0411-truth-wheel-smoke>",
+            "exec",
+        )
+        python = self.scripts / "python.exe"
+        fixture_root = self.temp_root / "v0411-truth-fixture"
+        expected = {
+            "ok": True,
+            "schema": check_wheel_install.INSTALLED_V0411_TRUTH_SMOKE_SCHEMA,
+            "package_version": self.PACKAGE_VERSION,
+            "isolated_installed_package": True,
+            "isolated_python_flags": True,
+            "revision_and_discard": {
+                "approval_status": "approval_fixed_closed",
+                "approved_write_implemented": False,
+                "actionable_handoff_available": False,
+                "validation_digest_is_approval_authority": False,
+                "approval_attempts_fixed_closed_without_effects": True,
+            },
+            "self_contained_check": {
+                "works_without_dry_run_flag": True,
+                "dry_run_flag_is_optional_compatibility": True,
+                "read_only_bytes_unchanged": True,
+            },
+            "create_draft": {
+                "missing_required_option_count": 5,
+                "all_missing_options_reported_once": True,
+                "service_not_called": True,
+                "files_written": False,
+            },
+            "stale_index": {
+                "rebuild_required": True,
+                "generated_index_used": False,
+                "duplicate_conclusion_made": False,
+            },
+            "provider_api_called": False,
+            "credential_value_read": False,
+            "private_values_echoed": False,
+            "absolute_paths_echoed": False,
+            "production_archive_touched": False,
+        }
+        with mock.patch.object(
+            check_wheel_install,
+            "_run_installed_entrypoint",
+            return_value=json.dumps(expected),
+        ) as run_mock:
+            evidence = (
+                check_wheel_install._check_installed_v0411_truth_contracts(
+                    python,
+                    fixture_root,
+                    cwd=self.temp_root,
+                )
+            )
+
+        self.assertEqual(evidence, expected)
+        command = run_mock.call_args.args[0]
+        self.assertEqual(command[:4], [str(python), "-I", "-B", "-c"])
+        self.assertEqual(command[-1], str(fixture_root))
+        self.assertIn("wom_kit.__version__", command[4])
+        self.assertIn("zet-self-contained-check", command[4])
+        self.assertIn("EXPECTED_MISSING_OPTIONS", command[4])
+        self.assertIn("promotion_duplicate_index_rows", command[4])
+
+        invalid = json.loads(json.dumps(expected))
+        invalid["stale_index"]["duplicate_conclusion_made"] = True
+        with mock.patch.object(
+            check_wheel_install,
+            "_run_installed_entrypoint",
+            return_value=json.dumps(invalid),
+        ):
+            with self.assertRaises(check_wheel_install.WheelCheckError):
+                check_wheel_install._check_installed_v0411_truth_contracts(
                     python,
                     fixture_root,
                     cwd=self.temp_root,

@@ -2,6 +2,43 @@
 
 [English Upgrade Guide](UPGRADE.md)
 
+## v0.4.11 런타임 정합과 깊은 검증
+
+정확히 일치하는 공개 Release가 wheel을 나열하고 실제 규모 Doctor 근거가
+통과한 뒤에만 설치합니다.
+
+```powershell
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.11/wom_kit-0.4.11-py3-none-any.whl"
+archive --version
+```
+
+새 프로세스에서 정확히 `archive 0.4.11`인지 확인합니다. 이 공용 명령은
+부트스트랩일 뿐 특정 클라이언트 프로젝트가 업데이트됐다는 증거가 아닙니다.
+검토한 `project-version-update`에만 사용한 뒤, 일반 프로젝트 작업은 그
+프로젝트의 `.zettel-kasten/bin/archive.cmd`로 실행합니다. v0.4.11은 새로 읽은
+설치 payload, module inventory, launcher, 현재 process, project pin, 실행
+버전을 함께 검증합니다. 버전 숫자만 같은 공용 명령은 project runtime으로
+인정하지 않습니다.
+
+Deep Doctor는 계속 기본값이며 고유 오브제마다 정확히 한 번 byte hash를
+검증합니다. 빠른 구조 점검만 필요할 때에만 Operational mode를 선택하세요.
+그 결과는 전체 byte 무결성을 증명하지 않았다고 명시하며 `--strict`와 함께
+쓸 수 없습니다. 발행 생명주기의 SHA 불일치는 하나의 정확한 시간순 직접
+영수증 chain이 현재 byte까지 이어질 때만 완화됩니다. 완료 시점이 결속되지
+않은 local-recovery 상태 근거는 계속 사람 검토가 필요한 ERROR입니다.
+
+native 결정은 WOM 용어로 로컬 zet·초안·엣지·오브제 대상을 보여 주되 그
+비공개 미리보기를 공개 출력이나 durable 영수증에 복사하지 않습니다. 문서
+읽기 표면은 표시용 사본에서만 범위 물결표와 닫히지 않은 강조를 escape하며
+정본 zet byte는 그대로 둡니다. revision·discard의 읽기 전용 미리보기는 쓰기
+권한이 아니고, 고정 차단된 writer는 계속 닫혀 있습니다.
+
+전체 트리를 반복해서 읽는 `zettel-objet-link`와 증분 index 구조는 v0.4.12
+작업입니다. v0.4.11은 속도를 위해 identity·중복 ID·watcher·stable-point
+검사를 제거하지 않습니다. 공개·설치·테스트만으로 클라이언트 보관함은
+바뀌지 않으며, 클라이언트가 업데이트와 project-scoped 검사를 실행할 시점을
+결정합니다. [v0.4.11 릴리스 노트](wom-kit/docs/releases/v0.4.11.md)를 보세요.
+
 ## v0.4.10 제한된 배치 반입과 캡처
 
 일치하는 공개 Release가 정확한 wheel을 자산으로 나열한 뒤에만 설치합니다.

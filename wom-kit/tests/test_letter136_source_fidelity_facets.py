@@ -608,9 +608,14 @@ class Letter136SourceFidelityFacetTests(unittest.TestCase):
                 ]
             )
         self.assertEqual(code, 1)
+        blocked_create = json.loads(output.getvalue())
         self.assertEqual(
-            json.loads(output.getvalue())["reason_codes"],
+            blocked_create["reason_codes"],
             ["create_draft_ai_replay_identity_required"],
+        )
+        self.assertEqual(
+            blocked_create["missing_required_options"],
+            ["--draft-id", "--created-at"],
         )
 
         blocked_revision = archive_services.blocked_zet_revision_plan_payload(

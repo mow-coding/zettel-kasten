@@ -1,6 +1,6 @@
 # Exact Human Approval Contract
 
-Status: v0.4.10 bounded batch intake/capture authority plus prior exact-operation boundaries; v0.4.0 one-use authority baseline preserved
+Status: v0.4.11 canonical local target previews and truthful fixed-close authority; v0.4.0 one-use authority baseline preserved
 
 ## Purpose
 
@@ -65,9 +65,12 @@ operation plan:
 - target-set digest and other operation-specific safe digests;
 - reviewer label and one-use policy.
 
-Private body text, titles, labels, paths, source locators, provider values, and
-credentials are never written into an approval request, popup result, claim,
-CLI result, MCP result, or log.
+Private body text, source locators, provider values, and credentials are never
+written into an approval request, popup result, claim, CLI result, MCP result,
+or log. The native popup may display one bounded local-only filename, title,
+zet/objet identity, or relation when that value is already covered by the
+validated operation plan. Those preview values are not copied into the popup
+result, public binding, claim, CLI/MCP result, machine details, receipt, or log.
 
 The person is not asked to count targets, compare digests, or determine whether
 the canonical state is complete. A mismatch, drift, or incomplete machine
