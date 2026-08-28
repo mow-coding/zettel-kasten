@@ -25,8 +25,13 @@ the wrong resource identity or expose private setup values.
    Keep unavailable evidence nonterminal; preserve proven conflicts as durable
    `review_required` evidence without overwrite or automatic deletion.
 5. Bind the private resume ledger and terminal receipts to the exact operation
-   manifest. Account for every real provider mutation call and enforce the
-   remaining call ceiling before each next call.
+   manifest. Before each provider mutation, durably reserve and charge one
+   manifest-bound budget unit. Distinguish that conservative charge from an
+   observed transport attempt; a crash-ambiguous reservation remains charged.
+   Resume must query the exact remote target first. Only verified matching
+   bytes permit no-PUT finalization. Absence, provider unavailability, and
+   uncertain multipart cleanup remain nonterminal and grant no automatic retry
+   authority.
 6. Keep byte preservation distinct from formal adoption. It changes no central
    object-manifest location and proves no whole-archive backup claim.
 

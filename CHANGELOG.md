@@ -20,8 +20,14 @@ This project uses semantic versioning for public compatibility checkpoints.
 - Kept unavailable or uncertain remote evidence nonterminal and resumable,
   including incomplete responses and uncertain multipart cleanup.
 - Bound the private resume ledger and separate immutable terminal receipts to
-  the exact manifest, counted every real provider mutation call, and enforced
-  the remaining call ceiling before each mutation.
+  the exact manifest. Before each provider mutation, the ledger durably
+  reserves and charges one manifest-bound budget unit. A crash may leave the
+  transport attempt unobserved, but the reservation stays charged rather than
+  becoming retry authority.
+- Made resume query the exact remote target first. Only verified matching bytes
+  allow no-PUT finalization; absence, provider unavailability, or uncertain
+  multipart cleanup remains nonterminal and grants no automatic retry
+  authority.
 - Preserved the human and client boundary: people decide only the plain exact
   operation; WOM verifies technical evidence. Publishing or installing the
   release neither calls a provider nor changes a client archive, and byte
