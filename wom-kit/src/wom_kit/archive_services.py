@@ -123391,8 +123391,17 @@ class ObjectStorageTransport(Protocol):
         # avoid downloading 158 GB just to confirm a skip.
         ...
 
-    def put_object(self, *, key: str, data_path: Path, size: int, content_sha256: str) -> dict[str, Any]:
-        # -> {"status_class": "ok"|"auth"|"rate_limited"|"failed",
+    def put_object(
+        self,
+        *,
+        key: str,
+        data_path: Path,
+        size: int,
+        content_sha256: str,
+        create_only: bool = False,
+    ) -> dict[str, Any]:
+        # -> {"status_class": "ok"|"precondition_failed"|
+        #     "conditional_conflict"|"auth"|"rate_limited"|"failed",
         #     "size": int, "checksum_sha256": str | None, "etag_opaque": str | None}
         ...
 
@@ -123404,7 +123413,13 @@ class ObjectStorageTransport(Protocol):
         ...
 
     def complete_multipart(
-        self, *, key: str, upload_id: str, parts: list[dict[str, Any]], content_sha256: str
+        self,
+        *,
+        key: str,
+        upload_id: str,
+        parts: list[dict[str, Any]],
+        content_sha256: str,
+        create_only: bool = False,
     ) -> dict[str, Any]:
         # -> same shape as put_object result
         ...
@@ -123426,7 +123441,15 @@ class NullTransport:
     def head_object(self, *, key: str, presence_only: bool = False) -> dict[str, Any]:
         raise ObjectStorageTransportNotImplemented(self._MESSAGE)
 
-    def put_object(self, *, key: str, data_path: Path, size: int, content_sha256: str) -> dict[str, Any]:
+    def put_object(
+        self,
+        *,
+        key: str,
+        data_path: Path,
+        size: int,
+        content_sha256: str,
+        create_only: bool = False,
+    ) -> dict[str, Any]:
         raise ObjectStorageTransportNotImplemented(self._MESSAGE)
 
     def create_multipart(self, *, key: str) -> str:
@@ -123436,7 +123459,13 @@ class NullTransport:
         raise ObjectStorageTransportNotImplemented(self._MESSAGE)
 
     def complete_multipart(
-        self, *, key: str, upload_id: str, parts: list[dict[str, Any]], content_sha256: str
+        self,
+        *,
+        key: str,
+        upload_id: str,
+        parts: list[dict[str, Any]],
+        content_sha256: str,
+        create_only: bool = False,
     ) -> dict[str, Any]:
         raise ObjectStorageTransportNotImplemented(self._MESSAGE)
 
@@ -123480,6 +123509,8 @@ _SIGV4_AUTH_ERROR_CODES = frozenset(
     }
 )
 _SIGV4_RATE_LIMITED_CODES = frozenset({"SlowDown", "InternalError", "ServiceUnavailable"})
+_SIGV4_PRECONDITION_FAILED_CODES = frozenset({"PreconditionFailed"})
+_SIGV4_CONDITIONAL_CONFLICT_CODES = frozenset({"ConditionalRequestConflict"})
 
 
 def _object_storage_classify_http_status(status: int, error_code: str | None) -> str:
@@ -123490,6 +123521,10 @@ def _object_storage_classify_http_status(status: int, error_code: str | None) ->
     code = str(error_code or "")
     if 200 <= int(status) < 300:
         return "ok"
+    if int(status) == 412 or code in _SIGV4_PRECONDITION_FAILED_CODES:
+        return "precondition_failed"
+    if int(status) == 409 and code in _SIGV4_CONDITIONAL_CONFLICT_CODES:
+        return "conditional_conflict"
     if code in _SIGV4_AUTH_ERROR_CODES:
         return "auth"
     if code in _SIGV4_RATE_LIMITED_CODES:
@@ -123913,7 +123948,15 @@ class _S3CompatibleTransport:
             return hashlib.sha256(value).hexdigest(), len(value), True
         return None, None, False
 
-    def put_object(self, *, key: str, data_path: Path, size: int, content_sha256: str) -> dict[str, Any]:
+    def put_object(
+        self,
+        *,
+        key: str,
+        data_path: Path,
+        size: int,
+        content_sha256: str,
+        create_only: bool = False,
+    ) -> dict[str, Any]:
         # Single-part PUT signs the REAL lowercase-hex payload hash (CA-2), giving
         # R2 free SigV4 wire-integrity on the body. We do NOT send
         # x-amz-checksum-sha256: R2 marks that header "Feature Not Implemented",
@@ -123921,14 +123964,20 @@ class _S3CompatibleTransport:
         # (CB-Q2), not by a stored server-side checksum. An explicit octet-stream
         # Content-Type keeps the stored object's metadata correct and stops the
         # default sender from defaulting to application/x-www-form-urlencoded.
+        extra_headers = {
+            "content-length": str(size),
+            "content-type": "application/octet-stream",
+        }
+        if create_only:
+            # This header is part of the SigV4 canonical header block.  R2/S3
+            # evaluates it atomically with the write, closing the HEAD -> PUT
+            # race without an unconditional fallback.
+            extra_headers["if-none-match"] = "*"
         response = self._dispatch(
             method="PUT",
             key=key,
             payload_hash=str(content_sha256),
-            extra_headers={
-                "content-length": str(size),
-                "content-type": "application/octet-stream",
-            },
+            extra_headers=extra_headers,
             data_path=data_path,
         )
         return self._put_result(response, size, content_sha256)
@@ -124009,7 +124058,13 @@ class _S3CompatibleTransport:
         return {"etag_opaque": etag_match or f"part-{part_number}", "part_number": part_number}
 
     def complete_multipart(
-        self, *, key: str, upload_id: str, parts: list[dict[str, Any]], content_sha256: str
+        self,
+        *,
+        key: str,
+        upload_id: str,
+        parts: list[dict[str, Any]],
+        content_sha256: str,
+        create_only: bool = False,
     ) -> dict[str, Any]:
         # CompleteMultipartUpload carries ONLY the part list (PartNumber + ETag).
         # No top-level <ChecksumSHA256>: for SHA-256 that would be a COMPOSITE
@@ -124032,12 +124087,21 @@ class _S3CompatibleTransport:
             "</CompleteMultipartUpload>"
         ).encode("utf-8")
         payload_hash = hashlib.sha256(payload).hexdigest()
+        extra_headers = {
+            "content-length": str(len(payload)),
+            "content-type": "text/xml",
+        }
+        if create_only:
+            # Multipart parts are private to the upload id.  The only atomic
+            # publish boundary is CompleteMultipartUpload, so the condition is
+            # signed here (not on CreateMultipartUpload or UploadPart).
+            extra_headers["if-none-match"] = "*"
         response = self._dispatch(
             method="POST",
             key=key,
             payload_hash=payload_hash,
             query={"uploadId": str(upload_id)},
-            extra_headers={"content-length": str(len(payload)), "content-type": "text/xml"},
+            extra_headers=extra_headers,
             data_bytes=payload,
         )
         status = int(response.get("status") or 0)
@@ -125082,6 +125146,7 @@ def _object_storage_execute_one_upload(
     sleep: Callable[[float], None] = time.sleep,
     rng: Callable[[], float] = random.random,
     force_upload: bool = False,
+    create_only: bool = False,
     multipart_part_size_bytes: int = OBJECT_STORAGE_MULTIPART_PART_SIZE_BYTES,
 ) -> dict[str, Any]:
     """Per-object upload spine (§2.3). Ledger read -> HEAD-before -> PUT/multipart
@@ -125169,11 +125234,7 @@ def _object_storage_execute_one_upload(
                     "put_calls": 0,
                     "provider_api_called": True,
                 }
-                ledger.append(
-                    _ResumeLedger.build_row(
-                        {**result, "completed_at": _object_storage_now_iso()}
-                    )
-                )
+                ledger.append({**result, "completed_at": _object_storage_now_iso()})
                 return result
             # Present but different bytes: fail closed, never overwrite.
             return {
@@ -125202,14 +125263,21 @@ def _object_storage_execute_one_upload(
                     data_path=data_path,
                     content_sha256=content_sha256,
                     part_size_bytes=multipart_part_size_bytes,
+                    create_only=create_only,
                 )
                 # Each multipart run issues create + N put_part + complete; count
                 # the mutating provider calls for the cumulative PUT ceiling (SA-2).
                 put_calls += 1 + max(1, part_count) + 1
             else:
-                put_result = transport.put_object(
-                    key=key, data_path=data_path, size=size, content_sha256=content_sha256
-                )
+                put_kwargs = {
+                    "key": key,
+                    "data_path": data_path,
+                    "size": size,
+                    "content_sha256": content_sha256,
+                }
+                if create_only:
+                    put_kwargs["create_only"] = True
+                put_result = transport.put_object(**put_kwargs)
                 part_count = 1
                 put_calls += 1
             attempts += 1
@@ -125219,6 +125287,24 @@ def _object_storage_execute_one_upload(
             if status_class == "auth":
                 return _object_storage_failed_result(
                     object_id, key_hint, "failed_auth", attempts, backoff_ms_total, put_calls
+                )
+            if status_class == "precondition_failed":
+                return _object_storage_failed_result(
+                    object_id,
+                    key_hint,
+                    "conditional_precondition_failed",
+                    attempts,
+                    backoff_ms_total,
+                    put_calls,
+                )
+            if status_class == "conditional_conflict":
+                return _object_storage_failed_result(
+                    object_id,
+                    key_hint,
+                    "conditional_conflict",
+                    attempts,
+                    backoff_ms_total,
+                    put_calls,
                 )
             if status_class == "rate_limited" and retries + 1 < max_attempts:
                 sleep_ms = _object_storage_backoff_ms(retries, rng)
@@ -125281,11 +125367,7 @@ def _object_storage_execute_one_upload(
             "put_calls": put_calls,
             "provider_api_called": True,
         }
-        ledger.append(
-            _ResumeLedger.build_row(
-                {**result, "completed_at": _object_storage_now_iso()}
-            )
-        )
+        ledger.append({**result, "completed_at": _object_storage_now_iso()})
         return result
     except ObjectStorageTransportNotImplemented:
         raise
@@ -125324,6 +125406,7 @@ def _object_storage_multipart_put(
     data_path: Path,
     content_sha256: str,
     part_size_bytes: int = OBJECT_STORAGE_MULTIPART_PART_SIZE_BYTES,
+    create_only: bool = False,
 ) -> tuple[dict[str, Any], int]:
     # A provider error at ANY multipart step (create / put_part / complete) must
     # surface its REAL status_class so the executor's bounded retry loop can retry
@@ -125347,9 +125430,15 @@ def _object_storage_multipart_put(
                     key=key, upload_id=upload_id, part_number=part_number, data=chunk
                 )
                 parts.append(part)
-        completed = transport.complete_multipart(
-            key=key, upload_id=upload_id, parts=parts, content_sha256=content_sha256
-        )
+        complete_kwargs = {
+            "key": key,
+            "upload_id": upload_id,
+            "parts": parts,
+            "content_sha256": content_sha256,
+        }
+        if create_only:
+            complete_kwargs["create_only"] = True
+        completed = transport.complete_multipart(**complete_kwargs)
         if str(completed.get("status_class") or "failed") != "ok":
             try:
                 transport.abort_multipart(key=key, upload_id=upload_id)
