@@ -1126,6 +1126,87 @@ class ObjectStorageSetupRegistrationTests(unittest.TestCase):
         self.assertIn(relative, unreadable["blockers"][0])
         self.assertNotIn("provider_setup_receipt_unreadable", unreadable["blockers"])
 
+    def test_cross_namespace_valid_receipts_never_expose_private_resource_values(
+        self,
+    ) -> None:
+        self.install_historical_bridge(mismatch=False)
+        receipt_root = self.root / "receipts" / "providers"
+        original_r2 = next(receipt_root.glob("*.object-storage-setup.json"))
+        misnamed_r2 = receipt_root / "misnamed.github-repository-setup.json"
+        original_r2.rename(misnamed_r2)
+        (self.root / "provider-bindings.yml").unlink()
+
+        r2_status = archive_services.provider_setup_status(self.root)
+
+        self.assertFalse(r2_status["ok"], r2_status)
+        self.assertEqual(r2_status["receipt_count"], 1)
+        self.assertEqual(len(r2_status["orphan_receipts"]), 1)
+        r2_orphan = r2_status["orphan_receipts"][0]
+        self.assertEqual(r2_orphan["provider"], "object_storage")
+        self.assertEqual(
+            r2_orphan["reason_code"],
+            "object_storage_setup_receipt_without_binding",
+        )
+        self.assertIsNone(r2_orphan["receipt_path"])
+        self.assertEqual(r2_orphan["resource"], {})
+        r2_rendered = json.dumps(r2_status, ensure_ascii=False, sort_keys=True)
+        for private in (
+            BUCKET,
+            STORE_REF,
+            ENDPOINT_REF,
+            PROFILE_ID,
+            PROFILE_SLUG,
+            misnamed_r2.relative_to(self.root).as_posix(),
+        ):
+            self.assertNotIn(private, r2_rendered)
+
+        misnamed_r2.unlink()
+        private_repo = "private-github-repository-sentinel"
+        opposite_path = receipt_root / "private-bucket.object-storage-setup.json"
+        github_receipt = archive_services.build_github_provider_setup_receipt(
+            archive_id=archive_services.read_archive_id(self.root),
+            profile_id="profile:private-github",
+            profile_slug="private-github",
+            github_owner="private-owner-sentinel",
+            github_account_ref="github:account:private",
+            repo_name=private_repo,
+            visibility="private",
+            remote_protocol="ssh",
+            receipt_path=opposite_path.relative_to(self.root).as_posix(),
+            reviewed_by="person:private-reviewer",
+            timestamp="2026-08-29T00:00:00+09:00",
+            dry_run=False,
+            manual_steps=[],
+        )
+        opposite_path.write_text(
+            json.dumps(github_receipt, ensure_ascii=True, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+
+        github_status = archive_services.provider_setup_status(self.root)
+
+        self.assertFalse(github_status["ok"], github_status)
+        self.assertEqual(github_status["receipt_count"], 1)
+        self.assertEqual(len(github_status["orphan_receipts"]), 1)
+        github_orphan = github_status["orphan_receipts"][0]
+        self.assertEqual(github_orphan["provider"], "unknown")
+        self.assertEqual(
+            github_orphan["reason_code"],
+            "provider_setup_receipt_namespace_mismatch",
+        )
+        self.assertIsNone(github_orphan["receipt_path"])
+        self.assertEqual(github_orphan["resource"], {})
+        github_rendered = json.dumps(
+            github_status, ensure_ascii=False, sort_keys=True
+        )
+        for private in (
+            private_repo,
+            "private-owner-sentinel",
+            "github:account:private",
+            opposite_path.relative_to(self.root).as_posix(),
+        ):
+            self.assertNotIn(private, github_rendered)
+
     def test_historical_bridge_rejects_incomplete_or_extended_receipts(self) -> None:
         self.install_historical_bridge(mismatch=False)
         receipt_path = next(

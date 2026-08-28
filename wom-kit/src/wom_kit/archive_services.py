@@ -95302,10 +95302,8 @@ def load_provider_setup_receipts(
                     )
                 )
             continue
-        if github_filename:
-            entries.append({"path": relative, "receipt": json_safe(data)})
-            continue
-        if object_storage_filename or data.get("provider") == "object_storage":
+        content_provider = str(data.get("provider") or "").strip().lower()
+        if content_provider == "object_storage":
             if private_entries is not None:
                 private_entries.append(
                     _private_provider_setup_receipt_entry(
@@ -95314,6 +95312,21 @@ def load_provider_setup_receipts(
                         provider="object_storage",
                         raw=raw,
                         reason_code=None,
+                    )
+                )
+            continue
+        if github_filename:
+            entries.append({"path": relative, "receipt": json_safe(data)})
+            continue
+        if object_storage_filename:
+            if private_entries is not None:
+                private_entries.append(
+                    _private_provider_setup_receipt_entry(
+                        root,
+                        path,
+                        provider="unknown",
+                        raw=raw,
+                        reason_code="provider_setup_receipt_namespace_mismatch",
                     )
                 )
             continue
