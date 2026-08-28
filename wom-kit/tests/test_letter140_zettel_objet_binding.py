@@ -218,8 +218,8 @@ class Letter140ZettelObjetBindingTests(unittest.TestCase):
             context
         )
         self.assertIn("선택한 연결만 추가합니다", primary)
-        self.assertNotIn("작업: 제텔-오브제 연결 생성", primary)
-        self.assertIn("작업: 제텔-오브제 연결 생성", advanced)
+        self.assertNotIn("작업: zet-오브제 연결 생성", primary)
+        self.assertIn("작업: zet-오브제 연결 생성", advanced)
         self.assertNotIn("PRIVATE_ZETTEL_ID", primary + "\n" + advanced)
 
     def test_every_target_and_effect_component_changes_the_binding(self) -> None:
