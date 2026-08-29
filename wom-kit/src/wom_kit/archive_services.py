@@ -7395,6 +7395,13 @@ def read_zettel(
             "marker_counts": dict(projection_metadata["counts"]),
             "source_body_available_via": "section=body",
         }
+    if body_page is not None:
+        body_page["display_projection_state"] = (
+            "deferred_until_complete_body"
+        )
+        body_page["display_projection_reason"] = (
+            "page_boundary_context_incomplete"
+        )
 
     result = {
         "path": archive_relative_path(path, root),
@@ -31515,6 +31522,12 @@ def notion_import_locator_loss_audit(
     # this import lazy so the audit can reuse the canonical sidecar reader
     # without introducing a module-import cycle.
     from . import completion_workflows
+    from .local_locator_recovery import (
+        verified_notion_locator_resolution_evidence,
+    )
+    from .local_recovery_execution import (
+        local_recovery_zettel_identity_sha256,
+    )
 
     root = require_existing_archive_root(archive_root)
     archive_id = read_archive_id(root)
@@ -31532,11 +31545,23 @@ def notion_import_locator_loss_audit(
     classified: list[dict[str, Any]] = []
     body_text_read = False
     external_locator_sidecar_bytes_read = False
+    if progress_callback is not None:
+        # Emit an observable state before receipt validation or archive
+        # enumeration.  Both can be expensive on a real Windows archive.  A
+        # temporary denominator preserves the established ``0/<total>`` CLI
+        # progress-line contract until discovery supplies the real total.
+        progress_callback("notion-locator-loss", "start", 0, 1)
+    verified_resolution = verified_notion_locator_resolution_evidence(root)
+    verified_resolution_by_target = verified_resolution.get(
+        "by_target_identity", {}
+    )
+    if not isinstance(verified_resolution_by_target, dict):
+        verified_resolution_by_target = {}
+        blockers.append("local_locator_resolution_ledger_scan_invalid")
+    blockers.extend(verified_resolution.get("blockers") or [])
 
     zettel_paths = iter_zettel_paths(root)
     zettel_total = len(zettel_paths)
-    if progress_callback is not None:
-        progress_callback("notion-locator-loss", "start", 0, zettel_total)
 
     for path_index, path in enumerate(zettel_paths, start=1):
         scanned_zettel_count += 1
@@ -31606,8 +31631,17 @@ def notion_import_locator_loss_audit(
                         sidecar_state = "absent"
 
                 marker_count: int | None = None
+                body: str | None = None
+                raw, raw_reason = _bounded_stable_regular_file_read(
+                    path,
+                    max_bytes=NOTION_LOCATOR_EVIDENCE_MAX_CANONICAL_FILE_BYTES,
+                )
                 try:
-                    text = path.read_text(encoding="utf-8-sig")
+                    if raw is None or raw_reason is not None:
+                        raise OSError("canonical_body_unreadable")
+                    # Decode bytes directly so CRLF remains part of the exact
+                    # body hash recorded by the approved recovery ledger.
+                    text = raw.decode("utf-8-sig")
                 except (OSError, UnicodeError):
                     unreadable_zettel_count += 1
                 else:
@@ -31620,6 +31654,75 @@ def notion_import_locator_loss_audit(
                         marker_count = body.count(
                             NOTION_IMPORT_LOCATOR_OMISSION_MARKER
                         )
+
+                verified_reference_resolution_count = 0
+                verified_reference_review_pending_count = 0
+                verified_reference_classified_count = 0
+                verified_reference_resolution_state = "not_present"
+                if safe_zettel_id is not None and body is not None:
+                    try:
+                        relative_path = archive_relative_path(path, root)
+                        target_identity = (
+                            local_recovery_zettel_identity_sha256(
+                                archive_id,
+                                safe_zettel_id,
+                                relative_path,
+                            )
+                        )
+                    except Exception:
+                        target_identity = None
+                    resolution_row = (
+                        verified_resolution_by_target.get(target_identity)
+                        if target_identity is not None
+                        else None
+                    )
+                    if isinstance(resolution_row, dict):
+                        current_body_sha256 = "sha256:" + hashlib.sha256(
+                            body.encode("utf-8")
+                        ).hexdigest()
+                        current_identity_matches = bool(
+                            frontmatter.get("id") == safe_zettel_id
+                            and frontmatter.get("archive_id") == archive_id
+                            and frontmatter.get("status") == "canonical"
+                            and notion_import_locator_omitted_count(frontmatter)
+                            == resolution_row.get(
+                                "expected_declared_omission_count"
+                            )
+                        )
+                        if not current_identity_matches:
+                            verified_reference_resolution_state = (
+                                "current_identity_drifted"
+                            )
+                        elif (
+                            current_body_sha256
+                            == resolution_row.get("expected_body_sha256")
+                            and type(
+                                resolution_row.get(
+                                    "resolved_occurrence_count"
+                                )
+                            )
+                            is int
+                        ):
+                            verified_reference_resolution_count = int(
+                                resolution_row["resolved_occurrence_count"]
+                            )
+                            verified_reference_review_pending_count = int(
+                                resolution_row.get(
+                                    "review_pending_occurrence_count"
+                                )
+                                or 0
+                            )
+                            verified_reference_classified_count = int(
+                                resolution_row.get(
+                                    "classified_occurrence_count"
+                                )
+                                or 0
+                            )
+                            verified_reference_resolution_state = "verified"
+                        else:
+                            verified_reference_resolution_state = (
+                                "current_body_drifted"
+                            )
 
                 active_locator_count: int | None = None
                 occurrence_bound_locator_count: int | None = None
@@ -31706,55 +31809,89 @@ def notion_import_locator_loss_audit(
                                 "marker_frontmatter_count_mismatch"
                             )
 
-                        if sidecar_state == "absent":
-                            unresolved_reason_codes.append(
-                                "external_locator_sidecar_absent"
-                            )
-                        elif sidecar_state == "malformed":
-                            unresolved_reason_codes.append(
-                                sidecar_error
-                                or "external_locator_sidecar_malformed"
-                            )
-                        elif occurrence_binding_state == "no_active_locators":
-                            unresolved_reason_codes.append(
-                                "external_locator_sidecar_no_active_locators"
-                            )
-                        elif occurrence_binding_state == "all_unbound":
-                            unresolved_reason_codes.append(
-                                "external_locator_occurrence_anchor_absent"
-                            )
-                        elif occurrence_binding_state == "mixed":
-                            unresolved_reason_codes.append(
-                                "external_locator_occurrence_anchor_incomplete"
-                            )
-                        elif occurrence_binding_state == "all_bound":
-                            # An occurrence anchor is a useful diagnostic
-                            # coordinate, but the sidecar schema does not bind
-                            # it to a completed recovery receipt.  Never let a
-                            # manually supplied (or provenance-labelled) anchor
-                            # reduce the unresolved-loss count by itself.
-                            unresolved_reason_codes.append(
-                                "external_locator_occurrence_recovery_receipt_missing"
-                            )
-
+                        exact_reference_classification_complete = bool(
+                            occurrence_total is not None
+                            and verified_reference_resolution_state
+                            == "verified"
+                            and verified_reference_classified_count
+                            == occurrence_total
+                            and verified_reference_resolution_count >= 0
+                            and verified_reference_review_pending_count >= 0
+                            and verified_reference_resolution_count
+                            + verified_reference_review_pending_count
+                            <= verified_reference_classified_count
+                        )
                         if (
                             occurrence_total is not None
-                            and occurrence_binding_state == "all_bound"
-                            and occurrence_bound_anchor_count is not None
-                            and occurrence_bound_anchor_count
+                            and verified_reference_resolution_count
                             > occurrence_total
                         ):
                             unresolved_reason_codes.append(
-                                "external_locator_occurrence_anchor_count_exceeds_omissions"
+                                "verified_reference_resolution_count_exceeds_omissions"
                             )
+                        elif not exact_reference_classification_complete:
+                            if verified_reference_resolution_state == (
+                                "current_body_drifted"
+                            ):
+                                unresolved_reason_codes.append(
+                                    "verified_reference_resolution_body_drifted"
+                                )
+                            if verified_reference_resolution_state == (
+                                "current_identity_drifted"
+                            ):
+                                unresolved_reason_codes.append(
+                                    "verified_reference_resolution_identity_drifted"
+                                )
+                            if sidecar_state == "absent":
+                                unresolved_reason_codes.append(
+                                    "external_locator_sidecar_absent"
+                                )
+                            elif sidecar_state == "malformed":
+                                unresolved_reason_codes.append(
+                                    sidecar_error
+                                    or "external_locator_sidecar_malformed"
+                                )
+                            elif occurrence_binding_state == "no_active_locators":
+                                unresolved_reason_codes.append(
+                                    "external_locator_sidecar_no_active_locators"
+                                )
+                            elif occurrence_binding_state == "all_unbound":
+                                unresolved_reason_codes.append(
+                                    "external_locator_occurrence_anchor_absent"
+                                )
+                            elif occurrence_binding_state == "mixed":
+                                unresolved_reason_codes.append(
+                                    "external_locator_occurrence_anchor_incomplete"
+                                )
+                            elif occurrence_binding_state == "all_bound":
+                                # An occurrence anchor is useful diagnostic
+                                # evidence, but only a completed exact receipt
+                                # may reduce the unresolved count.
+                                unresolved_reason_codes.append(
+                                    "external_locator_occurrence_recovery_receipt_missing"
+                                )
+
+                            if (
+                                occurrence_total is not None
+                                and occurrence_binding_state == "all_bound"
+                                and occurrence_bound_anchor_count is not None
+                                and occurrence_bound_anchor_count
+                                > occurrence_total
+                            ):
+                                unresolved_reason_codes.append(
+                                    "external_locator_occurrence_anchor_count_exceeds_omissions"
+                                )
 
                         if unresolved_reason_codes:
                             unresolved_occurrence_count = None
                             unresolved_occurrence_state = "unknown"
                         else:
-                            unresolved_occurrence_count = (
+                            unresolved_occurrence_count = max(
+                                0,
                                 int(occurrence_total or 0)
-                                - int(occurrence_bound_anchor_count or 0)
+                                - int(
+                                    verified_reference_resolution_count or 0
+                                ),
                             )
                             unresolved_occurrence_state = "known"
 
@@ -31782,6 +31919,18 @@ def notion_import_locator_loss_audit(
                         ),
                         "occurrence_bound_anchor_count": (
                             occurrence_bound_anchor_count
+                        ),
+                        "verified_reference_resolution_state": (
+                            verified_reference_resolution_state
+                        ),
+                        "verified_reference_resolution_count": (
+                            verified_reference_resolution_count
+                        ),
+                        "verified_reference_review_pending_count": (
+                            verified_reference_review_pending_count
+                        ),
+                        "verified_reference_classified_count": (
+                            verified_reference_classified_count
                         ),
                         "unresolved_occurrence_count": (
                             unresolved_occurrence_count
@@ -31984,6 +32133,38 @@ def notion_import_locator_loss_audit(
                 int(item["occurrence_bound_anchor_count"] or 0)
                 for item in classified
             ),
+            "verified_reference_resolution_zettel_count": sum(
+                1
+                for item in classified
+                if item["verified_reference_resolution_state"] == "verified"
+            ),
+            "verified_reference_resolution_count": sum(
+                int(item["verified_reference_resolution_count"] or 0)
+                for item in classified
+                if item["verified_reference_resolution_state"] == "verified"
+            ),
+            "verified_reference_review_pending_count": sum(
+                int(item["verified_reference_review_pending_count"] or 0)
+                for item in classified
+                if item["verified_reference_resolution_state"] == "verified"
+            ),
+            "verified_reference_classified_count": sum(
+                int(item["verified_reference_classified_count"] or 0)
+                for item in classified
+                if item["verified_reference_resolution_state"] == "verified"
+            ),
+            "verified_reference_resolution_ledger_count": int(
+                verified_resolution.get("verified_ledger_count") or 0
+            ),
+            "skipped_legacy_resolution_ledger_count": int(
+                verified_resolution.get("skipped_legacy_ledger_count") or 0
+            ),
+            "conflicted_resolution_target_count": int(
+                verified_resolution.get("conflicted_target_count") or 0
+            ),
+            "scanned_exact_operation_receipt_count": int(
+                verified_resolution.get("exact_operation_receipt_count") or 0
+            ),
             "occurrence_resolution_known_zettel_count": sum(
                 1
                 for item in loss_items
@@ -32018,7 +32199,10 @@ def notion_import_locator_loss_audit(
             "external_locator_sidecar_state_audited": True,
             "occurrence_anchor_presence_audited": True,
             "anchored_locator_sidecar_claimed_resolved": False,
-            "verified_occurrence_recovery_receipt_supported": False,
+            "verified_occurrence_recovery_receipt_supported": True,
+            "verified_reference_resolution_receipt_supported": True,
+            "composite_recovery_receipt_supported": True,
+            "legacy_resolution_ledger_accepted": False,
             "unbound_locator_sidecar_claimed_resolved": False,
             "source_mirror_read_by_this_command": False,
             "provider_locator_reconstruction_implemented": False,
@@ -32042,6 +32226,10 @@ def notion_import_locator_loss_audit(
             "external_locator_refs_echoed": False,
             "external_locator_paths_echoed": False,
             "external_locator_occurrence_anchors_echoed": False,
+            "verified_resolution_target_identities_echoed": False,
+            "verified_resolution_ledgers_read": bool(
+                verified_resolution.get("verified_ledger_count")
+            ),
             "page_titles_echoed": False,
             "absolute_local_paths_echoed": False,
             "account_ids_echoed": False,
@@ -134763,12 +134951,19 @@ def _inspect_bound_zettel_file(
 
 def strict_local_zettel_snapshots(
     archive_root: Path,
+    *,
+    progress_callback: Callable[
+        [str, str, int | None, int | None], None
+    ]
+    | None = None,
 ) -> list[_StrictLocalZettelSnapshot]:
     """Inspect local Markdown zettels while their directories and files are bound."""
 
     archive_root = archive_root.resolve(strict=True)
     snapshots: list[_StrictLocalZettelSnapshot] = []
     reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+    if progress_callback is not None:
+        progress_callback("strict-local-zettels", "start", 0, None)
 
     def visit(
         binding: _BoundDirectory,
@@ -134853,6 +135048,15 @@ def strict_local_zettel_snapshots(
                         mtime=mtime,
                     )
                 )
+                if progress_callback is not None and (
+                    len(snapshots) == 1 or len(snapshots) % 250 == 0
+                ):
+                    progress_callback(
+                        "strict-local-zettels",
+                        "scanned",
+                        len(snapshots),
+                        None,
+                    )
             except OSError as exc:
                 raise ObjetRediscoveryArchiveBoundaryError(
                     "local zettel file boundary is unsafe"
@@ -134871,6 +135075,13 @@ def strict_local_zettel_snapshots(
             raise ObjetRediscoveryArchiveBoundaryError(
                 "local zettel directory boundary is unreadable"
             ) from exc
+    if progress_callback is not None:
+        progress_callback(
+            "strict-local-zettels",
+            "done",
+            len(snapshots),
+            len(snapshots),
+        )
     return sorted(snapshots, key=lambda snapshot: snapshot.relative_path)
 
 

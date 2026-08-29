@@ -1,7 +1,8 @@
 # zet Markdown Style Guide
 
-Status: v0.4.12 zet Markdown authoring and safe human-view checkpoint
-Extended: v0.3.301 human-record integrity rules; v0.4.11 display projection
+Status: v0.4.14 zet Markdown authoring and complete-document display boundary
+Extended: v0.3.301 human-record integrity rules; v0.4.11 display projection;
+v0.4.14 bounded-page deferral
 
 WOM zets are Markdown-compatible today. That is useful for authoring and import
 compatibility, but it means AI writers must avoid punctuation that Markdown
@@ -85,22 +86,32 @@ Human-facing viewers should hide frontmatter by default or show it in a folded
 metadata panel. AI assistants should lead with the body or overview and mention
 frontmatter only when it affects the user's decision.
 
-In v0.4.11 an unpaged `--section document` read also returns WOM-safe Markdown:
+Since v0.4.11 an unpaged `--section document` read returns WOM-safe Markdown.
+In v0.4.14, every unpaged body-bearing CLI text read (`body`, `document`, or
+`all`) uses the same human display projection, while structured JSON, service,
+and MCP `body` reads retain the canonical source:
 
 - single range tildes and unmatched `~~` or `**` are backslash-escaped;
 - completed `~~strike~~`, completed `**bold**`, inline code, fenced code, and
   indented code are preserved;
 - the canonical file and canonical body hash stay unchanged;
-- `--section body` remains the exact decoded canonical body route;
-- bounded pages remain canonical source pages so cursors and the complete body
-  hash never mix canonical and derived text.
+- `--section body --format json`, service, and MCP remain exact decoded
+  canonical body routes;
+- every request with `body_max_chars` or `body_cursor` remains a canonical
+  source page, even when that page reaches the end, so cursors and the complete
+  body hash never mix canonical and derived text.
 
 The result's `display` and `integrity` fields distinguish the source hash from
-the returned display hash. The projection is not a new zet, repair, or write.
+the returned display hash. In v0.4.14, a bounded page omits `display` and reports
+`body_page.display_projection_state: deferred_until_complete_body` with reason
+`page_boundary_context_incomplete`. Assemble and hash-verify the complete body
+before applying the pure display projection; never project pages independently.
+The projection is not a new zet, repair, or write.
 
 ## Safety Boundary
 
 The style-guide command itself is read-only and does not read zet bodies. The
-separate `read-zettel --section document` command reads only the selected local
-zet and derives its display copy in memory; neither command writes zets, mints
-zets, or calls providers.
+separate `read-zettel` command reads only the selected local zet and derives a
+display copy in memory for human text output; neither command writes zets,
+mints zets, or calls providers. Structured body reads remain canonical.
+Publishing or installing the release changes no canonical Markdown by itself.

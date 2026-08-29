@@ -24,6 +24,41 @@ Before upgrading a real archive:
 
 The archive should never silently rewrite memory.
 
+## v0.4.14 Reference-Aware Local Recovery And Safer Decisions
+
+Install the exact public wheel only after the matching release and asset exist:
+
+```powershell
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.14/wom_kit-0.4.14-py3-none-any.whl"
+archive --version
+```
+
+Require exactly `archive 0.4.14` from a new process. A shared PATH executable is
+not proof that the intended client project was updated. Use the project-local
+launcher only after the separate reviewed `project-version-update` succeeds.
+
+v0.4.14 does not require a public archive-format migration. It corrects local
+recovery and human viewing:
+
+- `external-locator-record --all-markup-receipts --dry-run` discovers and
+  verifies the fixed historical receipt set itself. It preserves exact reviewed
+  references, classifies partial evidence, and proposes one private ledger; it
+  does not restore complete old bodies over valid current content.
+- identifier-title recovery may take the private mirror folder, but only an
+  exact unambiguous Markdown/index pair is accepted;
+- supported native decisions may show a bounded local target clue only when the
+  plan already binds the exact current zet bytes. Unsafe clues are omitted;
+- complete body-bearing CLI text output uses a display-only Markdown projection;
+  structured JSON/service/MCP body reads stay canonical, and bounded pages
+  remain canonical source while deferring projection.
+
+The AI runs and verifies the complete dry-run. The person does not count rows,
+copy receipt paths, or compare hashes; they review the plain operation and
+choose run or cancel. Publishing or installing the release performs no client
+recovery. A client result requires that project's separately approved run,
+durable receipt, and independent verification. See the
+[v0.4.14 release note](wom-kit/docs/releases/v0.4.14.md).
+
 ## v0.4.13 Exact Setup Evidence And Create-Only Byte Preservation
 
 Install the exact public wheel only after the matching release and asset exist:

@@ -1467,6 +1467,20 @@ def _authority(
         raise _fail("local_recovery_approval_required") from None
 
 
+def _completion_authenticator(
+    claim: _ClaimedExactHumanApproval,
+) -> Callable[[bytes], Mapping[str, Any]]:
+    """Bind the terminal exact-operation result to the live human claim."""
+
+    def authenticate(payload: bytes) -> Mapping[str, Any]:
+        return {
+            "approval_reference": claim.public_reference(),
+            "terminal_mac": claim.exact_terminal_record_mac(payload),
+        }
+
+    return authenticate
+
+
 def _resume_relative(
     manifest_sha256: str,
     mode: str,
@@ -2335,6 +2349,7 @@ def _run_with_store(
     mode: str,
     resume: bool,
     progress_hook: Callable[[ExactOperationProgress], None] | None,
+    completion_authenticator: Callable[[bytes], Mapping[str, Any]] | None = None,
     index_lifecycle: ZettelIndexBatchLifecycle | None = None,
 ) -> dict[str, Any]:
     manifest = _operation_manifest(plan, mode=mode)
@@ -2378,6 +2393,7 @@ def _run_with_store(
                 verifier=verifier,
                 checkpoint_store=checkpoints,
                 approval_authority=authority,
+                completion_authenticator=completion_authenticator,
                 resume=resume,
                 progress_hook=progress_hook,
             )
@@ -2390,6 +2406,7 @@ def _run_with_store(
                 verifier=verifier,
                 checkpoint_store=checkpoints,
                 approval_authority=authority,
+                completion_authenticator=completion_authenticator,
                 resume=resume,
                 progress_hook=progress_hook,
             )
@@ -2604,6 +2621,7 @@ def _execute_core(
             mode=mode,
             resume=resume,
             progress_hook=progress_hook,
+            completion_authenticator=_completion_authenticator(claim),
             index_lifecycle=index_lifecycle,
         )
         if supersession is not None and result.get("ok") is True:
@@ -3094,6 +3112,7 @@ def resume_local_recovery(
                 mode=mode,
                 resume=True,
                 progress_hook=progress_hook,
+                completion_authenticator=_completion_authenticator(claim),
             )
             if pending is not None and resumed.get("ok") is True:
                 parent, pending_document = pending

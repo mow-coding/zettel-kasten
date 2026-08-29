@@ -13,6 +13,7 @@ import tempfile
 import time
 import unittest
 from unittest import mock
+from urllib.parse import unquote, urlparse
 import warnings
 import zipfile
 
@@ -102,7 +103,7 @@ def patch_zip_member_name_bytes(wheel: Path, old_name: str, new_name: str) -> No
 
 
 class InstalledEntrypointTests(unittest.TestCase):
-    PACKAGE_VERSION = "0.4.13"
+    PACKAGE_VERSION = "0.4.14"
     SERVER_NAME = "zettel-kasten-archive-mcp"
 
     def setUp(self) -> None:
@@ -895,6 +896,12 @@ class InstalledEntrypointTests(unittest.TestCase):
             "package_version": self.PACKAGE_VERSION,
             "isolated_installed_package": True,
         }
+        v0414_recovery_evidence = {
+            "ok": True,
+            "schema": check_wheel_install.INSTALLED_V0414_RECOVERY_SMOKE_SCHEMA,
+            "package_version": self.PACKAGE_VERSION,
+            "isolated_installed_package": True,
+        }
         result = check_wheel_install._wheel_install_success_result(
             package_version=self.PACKAGE_VERSION,
             wheel_counts=wheel_counts,
@@ -909,6 +916,7 @@ class InstalledEntrypointTests(unittest.TestCase):
             v049_workflow_evidence=v049_evidence,
             v0410_batch_workflow_evidence=v0410_batch_evidence,
             v0411_truth_evidence=v0411_truth_evidence,
+            v0414_recovery_evidence=v0414_recovery_evidence,
             wheel_filename="wom_kit-0.3.296-py3-none-any.whl",
             wheel_sha256="a" * 64,
             artifact_preserved=True,
@@ -932,6 +940,9 @@ class InstalledEntrypointTests(unittest.TestCase):
                 "installed_v049_recovery_workflows": v049_evidence,
                 "installed_v0410_batch_workflow": v0410_batch_evidence,
                 "installed_v0411_truth_contracts": v0411_truth_evidence,
+                "installed_v0414_recovery_contracts": (
+                    v0414_recovery_evidence
+                ),
                 "runtime_skill_lifecycle": "passed",
                 "onboarding_preview": "passed",
                 "onboarding_write": "fixed_closed",
@@ -1273,6 +1284,216 @@ class InstalledEntrypointTests(unittest.TestCase):
                     cwd=self.temp_root,
                     expected_package_version=self.PACKAGE_VERSION,
                 )
+
+    def test_installed_v0414_recovery_contracts_require_exact_isolated_evidence(
+        self,
+    ) -> None:
+        compile(
+            check_wheel_install.INSTALLED_V0414_RECOVERY_SMOKE_SCRIPT,
+            "<installed-v0414-recovery-wheel-smoke>",
+            "exec",
+        )
+        python = self.scripts / "python.exe"
+        fixture_root = self.temp_root / "v0414-recovery-fixture"
+        archive_template = self.temp_root / "archive-template"
+        expected = {
+            "ok": True,
+            "schema": check_wheel_install.INSTALLED_V0414_RECOVERY_SMOKE_SCHEMA,
+            "package_version": self.PACKAGE_VERSION,
+            "isolated_installed_package": True,
+            "isolated_python_flags": True,
+            "all_markup_receipts": {
+                "parser_available": True,
+                "discovery_count": 1,
+                "cli_audit_passed": True,
+                "operator_counting_required": False,
+            },
+            "locator_v02": {
+                "ledger_schema": (
+                    "wom-kit/notion-locator-orphan-recovery-ledger/v0.2"
+                ),
+                "synthetic_apply_completed": True,
+                "approval_claim_succeeded": True,
+                "native_decision_call_count": 1,
+                "synthetic_key_provider_call_count": 3,
+                "verified_ledger_count": 1,
+                "verified_resolution_row_count": 1,
+                "audit_unresolved_occurrence_state": "known",
+                "audit_unresolved_occurrence_count": 0,
+            },
+            "read_zettel": {
+                "incomplete_page_projection_deferred": True,
+                "source_page_text_exact": True,
+                "canonical_file_bytes_unchanged": True,
+            },
+            "title_source": {
+                "exact_file_entrypoint_ready": True,
+                "containing_folder_entrypoint_ready": True,
+                "entrypoint_plans_identical": True,
+                "source_index_row_count": 1,
+                "public_cli_apply_completed": True,
+                "native_decision_call_count": 1,
+                "synthetic_key_provider_call_count": 1,
+                "approval_claim_succeeded": True,
+                "title_field_applied": True,
+                "canonical_body_unchanged": True,
+            },
+            "approval_preview": {
+                "safe_draft_title_primary_label": True,
+                "unsafe_absolute_path_rejected": True,
+                "unsafe_optional_labels_suppressed": True,
+                "unsafe_credential_shapes_rejected": True,
+                "safe_colon_labels_available": True,
+                "machine_binding_digests_unchanged": True,
+                "private_value_echoed": False,
+            },
+            "safety_observation": {
+                "network_and_process_deny_hook_active": True,
+                "production_credential_provider_deny_hook_active": True,
+                "outside_synthetic_filesystem_deny_hook_active": True,
+                "public_output_observed": True,
+                "provider_attempt_count": 0,
+                "production_credential_provider_attempt_count": 0,
+                "outside_synthetic_filesystem_attempt_count": 0,
+            },
+            "provider_api_called": False,
+            "credential_value_read": False,
+            "production_archive_touched": False,
+            "private_values_echoed": False,
+            "absolute_paths_echoed": False,
+        }
+        with mock.patch.object(
+            check_wheel_install,
+            "_run_installed_entrypoint",
+            return_value=json.dumps(expected),
+        ) as run_mock:
+            evidence = (
+                check_wheel_install._check_installed_v0414_recovery_contracts(
+                    python,
+                    fixture_root,
+                    archive_template,
+                    cwd=self.temp_root,
+                    expected_package_version=self.PACKAGE_VERSION,
+                )
+            )
+
+        self.assertEqual(evidence, expected)
+        command = run_mock.call_args.args[0]
+        self.assertEqual(command[:4], [str(python), "-I", "-B", "-c"])
+        self.assertEqual(
+            command[-3:],
+            [str(fixture_root), self.PACKAGE_VERSION, str(archive_template)],
+        )
+        embedded = command[4]
+        self.assertIn('"--all-markup-receipts"', embedded)
+        self.assertIn("discover_markup_normalization_receipts", embedded)
+        self.assertIn("notion_locator_orphan_recovery_execution_plan", embedded)
+        self.assertIn("verified_notion_locator_resolution_evidence", embedded)
+        self.assertIn("deferred_until_complete_body", embedded)
+        self.assertIn("_binding_with_primary_bound_zettel_preview", embedded)
+        self.assertIn("SAFE_DRAFT_TITLE", embedded)
+        self.assertIn("zet_identifier_title_recovery_plan", embedded)
+        self.assertIn('"pages.markdown.jsonl"', embedded)
+        self.assertIn('"pages.index.jsonl"', embedded)
+        self.assertIn('"zet-title-remap-write"', embedded)
+        self.assertIn("_execute_exact_human_approved_write_core", embedded)
+        self.assertIn("sys.addaudithook(_deny_unexpected_external_effects)", embedded)
+        self.assertIn("_deny_production_credential_provider", embedded)
+        observed_prefix = embedded.split("evidence = {", 1)[0]
+        for field in (
+            "provider_api_called",
+            "credential_value_read",
+            "production_archive_touched",
+            "private_values_echoed",
+            "absolute_paths_echoed",
+        ):
+            self.assertIn(field + " =", observed_prefix)
+            self.assertNotIn(f'"{field}": False', observed_prefix)
+
+        invalid = json.loads(json.dumps(expected))
+        invalid["title_source"]["native_decision_call_count"] = 0
+        with mock.patch.object(
+            check_wheel_install,
+            "_run_installed_entrypoint",
+            return_value=json.dumps(invalid),
+        ):
+            with self.assertRaises(check_wheel_install.WheelCheckError):
+                check_wheel_install._check_installed_v0414_recovery_contracts(
+                    python,
+                    fixture_root,
+                    archive_template,
+                    cwd=self.temp_root,
+                    expected_package_version=self.PACKAGE_VERSION,
+                )
+
+    def test_installed_v0414_audit_policy_allows_only_read_only_directory_opens_outside_roots(
+        self,
+    ) -> None:
+        embedded = check_wheel_install.INSTALLED_V0414_RECOVERY_SMOKE_SCRIPT
+        policy_source = embedded[
+            embedded.index("def _path_is_within_allowed_roots") : embedded.index(
+                "\ndef _deny_production_credential_provider"
+            )
+        ]
+        allowed_root = self.temp_root / "allowed"
+        outside_root = self.temp_root / "outside"
+        allowed_root.mkdir()
+        outside_root.mkdir()
+        observations = {
+            "provider_attempt_count": 0,
+            "production_credential_provider_attempt_count": 0,
+            "outside_synthetic_filesystem_attempt_count": 0,
+            "public_cli_approval_call_count": 0,
+        }
+        namespace = {
+            "ALLOWED_FILESYSTEM_ROOTS": (allowed_root.resolve(),),
+            "Path": Path,
+            "SAFETY_OBSERVATIONS": observations,
+            "os": os,
+            "unquote": unquote,
+            "urlparse": urlparse,
+        }
+        directory_flag = 0x10000
+        with (
+            mock.patch.object(os, "O_DIRECTORY", directory_flag, create=True),
+            mock.patch.object(os, "O_ACCMODE", 3, create=True),
+        ):
+            exec(policy_source, namespace)
+            deny = namespace["_deny_unexpected_external_effects"]
+
+            deny(
+                "open",
+                (str(outside_root), None, os.O_RDONLY | directory_flag),
+            )
+            deny(
+                "open",
+                (str(allowed_root / "fixture.json"), "r", os.O_RDONLY),
+            )
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "installed_v0414_outside_synthetic_path_denied",
+            ):
+                deny(
+                    "open",
+                    (str(outside_root / "private.json"), "r", os.O_RDONLY),
+                )
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "installed_v0414_outside_synthetic_path_denied",
+            ):
+                deny(
+                    "open",
+                    (
+                        str(outside_root),
+                        None,
+                        os.O_WRONLY | directory_flag,
+                    ),
+                )
+
+        self.assertEqual(
+            observations["outside_synthetic_filesystem_attempt_count"],
+            2,
+        )
 
     def test_installed_strict_doctor_explicitly_disables_default_progress(self) -> None:
         source = Path(check_wheel_install.__file__).read_text(encoding="utf-8")
