@@ -1551,6 +1551,11 @@ print(
 INSTALLED_V0414_RECOVERY_SMOKE_SCHEMA = (
     "wom-kit/installed-v0414-recovery-wheel-smoke/v0.1"
 )
+# Keep the large trusted smoke program off the Windows command line. The
+# entrypoint runner already supplies bounded stdin after descendant containment.
+INSTALLED_V0414_STDIN_LOADER = (
+    "import sys;exec(compile(sys.stdin.read(),'<wom-v0414-smoke>','exec'))"
+)
 INSTALLED_V0414_RECOVERY_SMOKE_SCRIPT = r'''
 import argparse
 import hashlib
@@ -1558,37 +1563,120 @@ import io
 import json
 import os
 import shutil
+import stat
 import sys
+import threading
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest import mock
 from urllib.parse import unquote, urlparse
 
-import wom_kit
-from wom_kit import (
-    archive_cli,
-    archive_services,
-    completion_workflows,
-    exact_human_approval_workflow,
-    local_locator_recovery,
-    local_recovery_execution,
-)
-from wom_kit.exact_human_approval_windows import (
-    APPROVE_BUTTON_ID,
-    ExactHumanApprovalOperation,
-    ExactHumanApprovalTargetPreview,
-    ExactHumanApprovalWindowsError,
-    exact_human_approval_safe_content_preview,
-)
-from wom_kit.local_locator_recovery import (
-    ORPHAN_RECOVERY_LEDGER_SCHEMA,
-    discover_markup_normalization_receipts,
-    notion_locator_orphan_recovery_execution_plan,
-    verified_notion_locator_resolution_evidence,
-)
-from wom_kit.local_title_recovery import zet_identifier_title_recovery_plan
-from wom_kit.operation_approval_binding import ExactOperationApprovalBinding
 
+# Register the only audit dispatcher before any installed WOM module executes.
+# Its policy pointer changes atomically after the complete guards are ready, so
+# package hooks registered later can never run ahead of WOM's complete policy.
+_IMPORT_TIME_POLICY_STATE = {"handler": None}
+_IMPORT_TIME_ALLOWED_ROOTS = tuple(
+    dict.fromkeys(
+        Path(value).resolve()
+        for value in (
+            sys.argv[1],
+            sys.argv[3],
+            Path.cwd(),
+            sys.prefix,
+            sys.base_prefix,
+        )
+    )
+)
+
+
+def _import_time_path_is_allowed(value):
+    if isinstance(value, int):
+        return value in {0, 1, 2}
+    try:
+        candidate = Path(os.fsdecode(value)).resolve()
+    except (OSError, TypeError, ValueError):
+        return False
+    return any(
+        candidate == allowed or allowed in candidate.parents
+        for allowed in _IMPORT_TIME_ALLOWED_ROOTS
+    )
+
+
+def _import_time_open_arguments_are_mutating(arguments):
+    if len(arguments) < 3:
+        return True
+    mode = arguments[1]
+    flags = arguments[2]
+    if isinstance(mode, str) and any(token in mode for token in "wax+"):
+        return True
+    if not isinstance(flags, int):
+        return True
+    access_mode = getattr(os, "O_ACCMODE", 3)
+    if flags & access_mode != getattr(os, "O_RDONLY", 0):
+        return True
+    mutation_flags = 0
+    for name in (
+        "O_APPEND",
+        "O_CREAT",
+        "O_EXCL",
+        "O_TEMPORARY",
+        "O_TRUNC",
+    ):
+        mutation_flags |= getattr(os, name, 0)
+    temporary_file_flag = getattr(os, "O_TMPFILE", 0)
+    return bool(
+        flags & mutation_flags
+        or (
+            temporary_file_flag
+            and flags & temporary_file_flag == temporary_file_flag
+        )
+    )
+
+
+def _deny_import_time_external_effects(event, arguments):
+    if event in {
+        "socket.connect",
+        "socket.getaddrinfo",
+        "subprocess.Popen",
+        "os.system",
+    } or event.startswith("winreg."):
+        raise RuntimeError("installed_v0414_import_time_effect_denied")
+    if event == "open" and _import_time_open_arguments_are_mutating(arguments):
+        raise RuntimeError("installed_v0414_import_time_mutation_denied")
+    if event in {
+        "os.remove",
+        "os.rename",
+        "os.rmdir",
+        "os.mkdir",
+        "os.chmod",
+        "os.utime",
+        "os.link",
+        "os.symlink",
+        "os.truncate",
+        "sqlite3.connect",
+    }:
+        raise RuntimeError("installed_v0414_import_time_mutation_denied")
+    path_indexes = {
+        "open": (0,),
+        "os.listdir": (0,),
+        "os.scandir": (0,),
+    }.get(event, ())
+    for index in path_indexes:
+        if index >= len(arguments) or arguments[index] is None:
+            continue
+        if not _import_time_path_is_allowed(arguments[index]):
+            raise RuntimeError("installed_v0414_import_time_path_denied")
+
+
+def _dispatch_installed_v0414_policy(event, arguments):
+    handler = _IMPORT_TIME_POLICY_STATE["handler"]
+    if handler is None:
+        return _deny_import_time_external_effects(event, arguments)
+    return handler(event, arguments)
+
+
+sys.addaudithook(_dispatch_installed_v0414_policy)
 
 ROOT = Path(sys.argv[1])
 EXPECTED_VERSION = sys.argv[2]
@@ -1612,22 +1700,111 @@ SAFETY_OBSERVATIONS = {
 }
 OBSERVED_PUBLIC_OUTPUT = []
 ALLOWED_FILESYSTEM_ROOTS = ()
+WRITABLE_FILESYSTEM_ROOTS = ()
 
 
 def _fail(code):
     raise RuntimeError(code)
 
 
-def _path_is_within_allowed_roots(value):
-    if isinstance(value, int):
+def _audit_open_arguments_are_mutating(arguments):
+    if len(arguments) < 3:
         return True
+    mode = arguments[1]
+    flags = arguments[2]
+    if isinstance(mode, str) and any(token in mode for token in "wax+"):
+        return True
+    if not isinstance(flags, int):
+        return True
+    access_mode = getattr(os, "O_ACCMODE", 3)
+    if flags & access_mode != getattr(os, "O_RDONLY", 0):
+        return True
+    mutation_flags = 0
+    for name in (
+        "O_APPEND",
+        "O_CREAT",
+        "O_EXCL",
+        "O_TEMPORARY",
+        "O_TRUNC",
+    ):
+        mutation_flags |= getattr(os, name, 0)
+    temporary_file_flag = getattr(os, "O_TMPFILE", 0)
+    return bool(
+        flags & mutation_flags
+        or (
+            temporary_file_flag
+            and flags & temporary_file_flag == temporary_file_flag
+        )
+    )
+
+
+def _path_is_within_roots(value, roots):
+    if isinstance(value, int):
+        bound_path = _BOUND_DIRECTORY_PATHS.get(value)
+        expected_identity = _BOUND_DIRECTORY_IDENTITIES.get(value)
+        if bound_path is None or expected_identity is None:
+            bound_path = _BOUND_REGULAR_FILE_PATHS.get(value)
+            expected_identity = _BOUND_REGULAR_FILE_IDENTITIES.get(value)
+        try:
+            current_identity = _descriptor_identity(value)
+        except OSError:
+            return False
+        return bool(
+            bound_path is not None
+            and expected_identity is not None
+            and current_identity == expected_identity
+            and _bound_path_identity_matches(bound_path, expected_identity)
+            and any(
+                bound_path == allowed or allowed in bound_path.parents
+                for allowed in roots
+            )
+        )
     try:
         candidate = Path(os.fsdecode(value)).resolve()
     except (OSError, TypeError, ValueError):
         return False
     return any(
         candidate == allowed or allowed in candidate.parents
-        for allowed in ALLOWED_FILESYSTEM_ROOTS
+        for allowed in roots
+    )
+
+
+def _path_is_within_allowed_roots(value):
+    return _path_is_within_roots(value, ALLOWED_FILESYSTEM_ROOTS)
+
+
+def _path_is_within_writable_roots(value):
+    return _path_is_within_roots(value, WRITABLE_FILESYSTEM_ROOTS)
+
+
+_ORIGINAL_OS_OPEN = os.open
+_ORIGINAL_OS_CLOSE = os.close
+_ORIGINAL_OS_DUP = os.dup
+_BOUND_DIRECTORY_PATHS = {}
+_BOUND_DIRECTORY_IDENTITIES = {}
+_BOUND_REGULAR_FILE_PATHS = {}
+_BOUND_REGULAR_FILE_IDENTITIES = {}
+_RELATIVE_DESCRIPTOR_FILE_OPEN = threading.local()
+
+
+def _read_only_open_flags_are_safe(flags):
+    if not isinstance(flags, int):
+        return False
+    access_mode = getattr(os, "O_ACCMODE", 3)
+    if flags & access_mode != getattr(os, "O_RDONLY", 0):
+        return False
+    mutation_flags = 0
+    for name in (
+        "O_APPEND",
+        "O_CREAT",
+        "O_EXCL",
+        "O_TEMPORARY",
+        "O_TRUNC",
+    ):
+        mutation_flags |= getattr(os, name, 0)
+    temporary_file_flag = getattr(os, "O_TMPFILE", 0)
+    return not (flags & mutation_flags) and not (
+        temporary_file_flag and flags & temporary_file_flag == temporary_file_flag
     )
 
 
@@ -1639,18 +1816,302 @@ def _read_only_directory_descriptor_open_is_allowed(event, arguments):
     if arguments[1] is not None:
         return False
     flags = arguments[2]
-    if not isinstance(flags, int):
-        return False
     directory_flag = getattr(os, "O_DIRECTORY", 0)
-    if not directory_flag or not (flags & directory_flag):
+    return bool(
+        directory_flag
+        and isinstance(flags, int)
+        and flags & directory_flag
+        and _read_only_open_flags_are_safe(flags)
+    )
+
+
+def _relative_descriptor_file_open_is_allowed(event, arguments):
+    allowance = getattr(_RELATIVE_DESCRIPTOR_FILE_OPEN, "allowance", None)
+    if (
+        event != "open"
+        or not isinstance(allowance, dict)
+        or allowance.get("used") is not False
+        or len(arguments) < 3
+    ):
         return False
-    access_mode = getattr(os, "O_ACCMODE", 3)
-    if flags & access_mode != getattr(os, "O_RDONLY", 0):
+    if arguments[1] is not None:
         return False
-    mutation_flags = 0
-    for name in ("O_APPEND", "O_CREAT", "O_EXCL", "O_TMPFILE", "O_TRUNC"):
-        mutation_flags |= getattr(os, name, 0)
-    return not (flags & mutation_flags)
+    try:
+        path_text = os.fsdecode(arguments[0])
+    except (TypeError, ValueError):
+        return False
+    if (
+        path_text != allowance.get("path")
+        or not _open_audit_flags_match(
+            allowance.get("flags"),
+            arguments[2],
+        )
+    ):
+        return False
+    # This one-shot thread-local marker is consumed by the first matching
+    # audit event. Other threads never inherit the allowance.
+    allowance["used"] = True
+    return True
+
+
+def _descriptor_identity(descriptor):
+    observed = os.fstat(descriptor)
+    identity = int(observed.st_dev), int(observed.st_ino)
+    if identity[1] == 0:
+        raise OSError("installed_v0414_descriptor_identity_unavailable")
+    return identity
+
+
+def _bound_path_identity_matches(path, expected_identity):
+    try:
+        observed = os.stat(path, follow_symlinks=False)
+    except OSError:
+        return False
+    return (
+        int(observed.st_dev),
+        int(observed.st_ino),
+    ) == expected_identity
+
+
+def _single_descriptor_child_name_is_safe(path_text, supplied):
+    return bool(
+        path_text not in {"", ".", ".."}
+        and not supplied.is_absolute()
+        and supplied.parent == Path(".")
+    )
+
+
+def _bound_directory_descriptor_path(descriptor):
+    if not isinstance(descriptor, int) or isinstance(descriptor, bool):
+        return None
+    parent = _BOUND_DIRECTORY_PATHS.get(descriptor)
+    expected_identity = _BOUND_DIRECTORY_IDENTITIES.get(descriptor)
+    try:
+        current_identity = _descriptor_identity(descriptor)
+    except OSError:
+        return None
+    if (
+        parent is None
+        or expected_identity is None
+        or current_identity != expected_identity
+        or not _bound_path_identity_matches(parent, expected_identity)
+    ):
+        return None
+    return parent
+
+
+def _descriptor_relative_path_is_allowed(value, descriptor, *, writable=False):
+    try:
+        path_text = os.fsdecode(value)
+        supplied = Path(path_text)
+    except (TypeError, ValueError):
+        return False
+    if supplied.is_absolute() or descriptor in (None, -1):
+        return (
+            _path_is_within_writable_roots(supplied)
+            if writable
+            else _path_is_within_allowed_roots(supplied)
+        )
+    if not _single_descriptor_child_name_is_safe(path_text, supplied):
+        return False
+    parent = _bound_directory_descriptor_path(descriptor)
+    if parent is None:
+        return False
+    candidate = (parent / supplied).resolve()
+    return (
+        _path_is_within_writable_roots(candidate)
+        if writable
+        else _path_is_within_allowed_roots(candidate)
+    )
+
+
+def _open_audit_flags_match(requested, audited):
+    if not isinstance(requested, int) or not isinstance(audited, int):
+        return False
+    automatic_flags = (
+        getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NOINHERIT", 0)
+    )
+    return (requested & ~automatic_flags) == (audited & ~automatic_flags)
+
+
+def _guarded_os_open(path, flags, mode=0o777, *, dir_fd=None):
+    try:
+        path_text = os.fsdecode(path)
+        supplied = Path(path_text)
+    except (TypeError, ValueError):
+        SAFETY_OBSERVATIONS["outside_synthetic_filesystem_attempt_count"] += 1
+        raise RuntimeError("installed_v0414_open_path_invalid") from None
+    temporary_file_flag = getattr(os, "O_TMPFILE", 0)
+    if (
+        temporary_file_flag
+        and isinstance(flags, int)
+        and flags & temporary_file_flag == temporary_file_flag
+    ):
+        SAFETY_OBSERVATIONS["outside_synthetic_filesystem_attempt_count"] += 1
+        raise RuntimeError("installed_v0414_anonymous_tmpfile_denied")
+    relative_descriptor_open = dir_fd is not None and not supplied.is_absolute()
+    if relative_descriptor_open:
+        if not _single_descriptor_child_name_is_safe(path_text, supplied):
+            SAFETY_OBSERVATIONS["outside_synthetic_filesystem_attempt_count"] += 1
+            raise RuntimeError("installed_v0414_relative_open_name_denied")
+        parent = _bound_directory_descriptor_path(dir_fd)
+        if parent is None:
+            SAFETY_OBSERVATIONS["outside_synthetic_filesystem_attempt_count"] += 1
+            raise RuntimeError("installed_v0414_unbound_directory_descriptor_denied")
+        candidate = (parent / supplied).resolve()
+    else:
+        candidate = supplied.resolve()
+    directory_flag = getattr(os, "O_DIRECTORY", 0)
+    directory_open = bool(
+        directory_flag
+        and isinstance(flags, int)
+        and flags & directory_flag
+        and not (
+            temporary_file_flag
+            and flags & temporary_file_flag == temporary_file_flag
+        )
+    )
+    allowance = None
+    if relative_descriptor_open and not directory_open:
+        candidate_allowed = (
+            _path_is_within_allowed_roots(candidate)
+            if _read_only_open_flags_are_safe(flags)
+            else _path_is_within_writable_roots(candidate)
+        )
+        if not isinstance(flags, int) or not candidate_allowed:
+            SAFETY_OBSERVATIONS["outside_synthetic_filesystem_attempt_count"] += 1
+            raise RuntimeError("installed_v0414_outside_synthetic_path_denied")
+        allowance = {"path": path_text, "flags": flags, "used": False}
+        _RELATIVE_DESCRIPTOR_FILE_OPEN.allowance = allowance
+    try:
+        # Pass an already-normalized immutable string so a re-entrant
+        # PathLike.__fspath__ cannot run while the audit allowance is live.
+        descriptor = _ORIGINAL_OS_OPEN(path_text, flags, mode, dir_fd=dir_fd)
+    finally:
+        if allowance is not None:
+            try:
+                del _RELATIVE_DESCRIPTOR_FILE_OPEN.allowance
+            except AttributeError:
+                pass
+    if allowance is not None and allowance["used"] is not True:
+        _ORIGINAL_OS_CLOSE(descriptor)
+        SAFETY_OBSERVATIONS["outside_synthetic_filesystem_attempt_count"] += 1
+        raise RuntimeError("installed_v0414_relative_open_audit_not_consumed")
+    if directory_open or _path_is_within_allowed_roots(candidate):
+        try:
+            identity = _descriptor_identity(descriptor)
+        except OSError:
+            _ORIGINAL_OS_CLOSE(descriptor)
+            raise RuntimeError("installed_v0414_directory_descriptor_unreadable")
+        if directory_open:
+            _BOUND_DIRECTORY_PATHS[descriptor] = candidate
+            _BOUND_DIRECTORY_IDENTITIES[descriptor] = identity
+        else:
+            _BOUND_REGULAR_FILE_PATHS[descriptor] = candidate
+            _BOUND_REGULAR_FILE_IDENTITIES[descriptor] = identity
+    return descriptor
+
+
+def _guarded_os_close(descriptor):
+    try:
+        return _ORIGINAL_OS_CLOSE(descriptor)
+    finally:
+        _BOUND_DIRECTORY_PATHS.pop(descriptor, None)
+        _BOUND_DIRECTORY_IDENTITIES.pop(descriptor, None)
+        _BOUND_REGULAR_FILE_PATHS.pop(descriptor, None)
+        _BOUND_REGULAR_FILE_IDENTITIES.pop(descriptor, None)
+
+
+def _windows_untracked_regular_descriptor_path(descriptor):
+    if os.name != "nt":
+        return None
+    try:
+        import ctypes
+        import msvcrt
+        from ctypes import wintypes
+
+        handle = msvcrt.get_osfhandle(descriptor)
+        if handle == -1:
+            return None
+        get_final_path = ctypes.WinDLL(
+            "kernel32",
+            use_last_error=True,
+        ).GetFinalPathNameByHandleW
+        get_final_path.argtypes = [
+            wintypes.HANDLE,
+            wintypes.LPWSTR,
+            wintypes.DWORD,
+            wintypes.DWORD,
+        ]
+        get_final_path.restype = wintypes.DWORD
+        required = int(get_final_path(handle, None, 0, 0))
+        if required <= 0 or required > 32_768:
+            return None
+        buffer = ctypes.create_unicode_buffer(required + 1)
+        written = int(get_final_path(handle, buffer, len(buffer), 0))
+        if written <= 0 or written >= len(buffer):
+            return None
+        path_text = buffer.value
+        if path_text.startswith("\\\\?\\UNC\\"):
+            path_text = "\\\\" + path_text[8:]
+        elif path_text.startswith("\\\\?\\"):
+            path_text = path_text[4:]
+        candidate = Path(path_text).resolve()
+        observed = os.fstat(descriptor)
+        identity = (int(observed.st_dev), int(observed.st_ino))
+        if (
+            not stat.S_ISREG(observed.st_mode)
+            or identity[1] == 0
+            or not _path_is_within_allowed_roots(candidate)
+            or not _bound_path_identity_matches(candidate, identity)
+        ):
+            return None
+        return candidate
+    except (AttributeError, OSError, TypeError, ValueError):
+        return None
+
+
+def _guarded_os_dup(descriptor):
+    if (
+        descriptor not in _BOUND_DIRECTORY_PATHS
+        and descriptor not in _BOUND_REGULAR_FILE_PATHS
+    ):
+        adopted_path = _windows_untracked_regular_descriptor_path(descriptor)
+        if adopted_path is not None:
+            try:
+                adopted_identity = _descriptor_identity(descriptor)
+            except OSError:
+                adopted_identity = None
+            if adopted_identity is not None:
+                _BOUND_REGULAR_FILE_PATHS[descriptor] = adopted_path
+                _BOUND_REGULAR_FILE_IDENTITIES[descriptor] = adopted_identity
+    if not _path_is_within_allowed_roots(descriptor):
+        SAFETY_OBSERVATIONS["outside_synthetic_filesystem_attempt_count"] += 1
+        raise RuntimeError("installed_v0414_unbound_descriptor_dup_denied")
+    directory_path = _BOUND_DIRECTORY_PATHS.get(descriptor)
+    regular_path = _BOUND_REGULAR_FILE_PATHS.get(descriptor)
+    source_identity = (
+        _BOUND_DIRECTORY_IDENTITIES.get(descriptor)
+        if directory_path is not None
+        else _BOUND_REGULAR_FILE_IDENTITIES.get(descriptor)
+    )
+    duplicate = _ORIGINAL_OS_DUP(descriptor)
+    try:
+        duplicate_identity = _descriptor_identity(duplicate)
+    except OSError:
+        _ORIGINAL_OS_CLOSE(duplicate)
+        raise RuntimeError("installed_v0414_duplicated_descriptor_unreadable")
+    if source_identity is None or duplicate_identity != source_identity:
+        _ORIGINAL_OS_CLOSE(duplicate)
+        raise RuntimeError("installed_v0414_duplicated_descriptor_changed")
+    if directory_path is not None:
+        _BOUND_DIRECTORY_PATHS[duplicate] = directory_path
+        _BOUND_DIRECTORY_IDENTITIES[duplicate] = duplicate_identity
+    else:
+        _BOUND_REGULAR_FILE_PATHS[duplicate] = regular_path
+        _BOUND_REGULAR_FILE_IDENTITIES[duplicate] = duplicate_identity
+    return duplicate
 
 
 def _sqlite_connect_target_is_allowed(value):
@@ -1662,14 +2123,14 @@ def _sqlite_connect_target_is_allowed(value):
         return True
     parsed = urlparse(target)
     if parsed.scheme != "file":
-        return _path_is_within_allowed_roots(target)
+        return _path_is_within_writable_roots(target)
     if parsed.netloc not in {"", "localhost"}:
         return False
     path_text = unquote(parsed.path)
     if os.name == "nt" and len(path_text) >= 3:
         if path_text[0] == "/" and path_text[2] == ":":
             path_text = path_text[1:]
-    return _path_is_within_allowed_roots(path_text)
+    return _path_is_within_writable_roots(path_text)
 
 
 def _deny_unexpected_external_effects(event, arguments):
@@ -1681,23 +2142,72 @@ def _deny_unexpected_external_effects(event, arguments):
     }:
         SAFETY_OBSERVATIONS["provider_attempt_count"] += 1
         raise RuntimeError("installed_v0414_provider_effect_denied")
+    if event.startswith("winreg."):
+        SAFETY_OBSERVATIONS[
+            "production_credential_provider_attempt_count"
+        ] += 1
+        raise RuntimeError("installed_v0414_production_registry_denied")
     if _read_only_directory_descriptor_open_is_allowed(event, arguments):
         # local_title_recovery binds a supplied source by opening the POSIX
         # directory chain from '/'. O_DIRECTORY prevents these descriptor-only
         # probes from becoming reads of regular-file content.
         return
+    if _relative_descriptor_file_open_is_allowed(event, arguments):
+        return
+    if event == "open":
+        value = arguments[0] if arguments else None
+        allowed = (
+            _path_is_within_writable_roots(value)
+            if _audit_open_arguments_are_mutating(arguments)
+            else _path_is_within_allowed_roots(value)
+        )
+        if allowed:
+            return
+        SAFETY_OBSERVATIONS["outside_synthetic_filesystem_attempt_count"] += 1
+        raise RuntimeError("installed_v0414_outside_synthetic_path_denied")
+    if event == "os.truncate":
+        value = arguments[0] if arguments else None
+        if _path_is_within_writable_roots(value):
+            return
+        SAFETY_OBSERVATIONS["outside_synthetic_filesystem_attempt_count"] += 1
+        raise RuntimeError("installed_v0414_outside_synthetic_path_denied")
+    descriptor_relative_path_indexes = {
+        "os.remove": ((0, 1),),
+        "os.rename": ((0, 2), (1, 3)),
+        "os.rmdir": ((0, 1),),
+        "os.mkdir": ((0, 2),),
+        "os.chmod": ((0, 2),),
+        "os.utime": ((0, 3),),
+        "os.link": ((0, 2), (1, 3)),
+        # A relative symlink source is interpreted from its destination
+        # directory when the link is later traversed, so bind both strings to
+        # the destination dir_fd and keep links pointing outside fail-closed.
+        "os.symlink": ((0, 2), (1, 2)),
+    }.get(event)
+    if descriptor_relative_path_indexes is not None:
+        for path_index, descriptor_index in descriptor_relative_path_indexes:
+            if path_index >= len(arguments):
+                continue
+            value = arguments[path_index]
+            if value is None:
+                continue
+            descriptor = (
+                arguments[descriptor_index]
+                if descriptor_index < len(arguments)
+                else None
+            )
+            if _descriptor_relative_path_is_allowed(
+                value,
+                descriptor,
+                writable=True,
+            ):
+                continue
+            SAFETY_OBSERVATIONS["outside_synthetic_filesystem_attempt_count"] += 1
+            raise RuntimeError("installed_v0414_outside_synthetic_path_denied")
+        return
     path_argument_indexes = {
-        "open": (0,),
         "os.listdir": (0,),
         "os.scandir": (0,),
-        "os.remove": (0,),
-        "os.rename": (0, 1),
-        "os.rmdir": (0,),
-        "os.mkdir": (0,),
-        "os.chmod": (0,),
-        "os.utime": (0,),
-        "os.link": (0, 1),
-        "os.symlink": (0, 1),
         "sqlite3.connect": (0,),
     }.get(event, ())
     for index in path_argument_indexes:
@@ -1861,14 +2371,7 @@ def _run_json_cli(arguments, forbidden_values):
     return result
 
 
-if wom_kit.__version__ != EXPECTED_VERSION:
-    _fail("installed_v0414_package_version_failed")
-module_path = Path(wom_kit.__file__).resolve()
 installed_prefix = Path(sys.prefix).resolve()
-if module_path != installed_prefix and installed_prefix not in module_path.parents:
-    _fail("installed_v0414_module_not_isolated_install")
-if sys.flags.isolated != 1 or sys.flags.dont_write_bytecode != 1:
-    _fail("installed_v0414_python_isolation_flags_failed")
 ALLOWED_FILESYSTEM_ROOTS = tuple(
     dict.fromkeys(
         path.resolve()
@@ -1880,7 +2383,44 @@ ALLOWED_FILESYSTEM_ROOTS = tuple(
         )
     )
 )
-sys.addaudithook(_deny_unexpected_external_effects)
+WRITABLE_FILESYSTEM_ROOTS = (ROOT.resolve(),)
+os.open = _guarded_os_open
+os.close = _guarded_os_close
+os.dup = _guarded_os_dup
+_IMPORT_TIME_POLICY_STATE["handler"] = _deny_unexpected_external_effects
+
+import wom_kit
+from wom_kit import (
+    archive_cli,
+    archive_services,
+    completion_workflows,
+    exact_human_approval_workflow,
+    local_locator_recovery,
+    local_recovery_execution,
+)
+from wom_kit.exact_human_approval_windows import (
+    APPROVE_BUTTON_ID,
+    ExactHumanApprovalOperation,
+    ExactHumanApprovalTargetPreview,
+    ExactHumanApprovalWindowsError,
+    exact_human_approval_safe_content_preview,
+)
+from wom_kit.local_locator_recovery import (
+    ORPHAN_RECOVERY_LEDGER_SCHEMA,
+    discover_markup_normalization_receipts,
+    notion_locator_orphan_recovery_execution_plan,
+    verified_notion_locator_resolution_evidence,
+)
+from wom_kit.local_title_recovery import zet_identifier_title_recovery_plan
+from wom_kit.operation_approval_binding import ExactOperationApprovalBinding
+
+if wom_kit.__version__ != EXPECTED_VERSION:
+    _fail("installed_v0414_package_version_failed")
+module_path = Path(wom_kit.__file__).resolve()
+if module_path != installed_prefix and installed_prefix not in module_path.parents:
+    _fail("installed_v0414_module_not_isolated_install")
+if sys.flags.isolated != 1 or sys.flags.dont_write_bytecode != 1:
+    _fail("installed_v0414_python_isolation_flags_failed")
 production_credential_provider_patcher = mock.patch.object(
     exact_human_approval_workflow,
     "_production_key_provider",
@@ -4298,13 +4838,14 @@ def _check_installed_v0414_recovery_contracts(
             "-I",
             "-B",
             "-c",
-            INSTALLED_V0414_RECOVERY_SMOKE_SCRIPT,
+            INSTALLED_V0414_STDIN_LOADER,
             str(fixture_root),
             expected_package_version,
             str(archive_template),
         ],
         cwd=cwd,
         label="installed v0.4.14 recovery and approval-preview contracts",
+        input_text=INSTALLED_V0414_RECOVERY_SMOKE_SCRIPT,
     )
     evidence = _parse_entrypoint_json_object(
         stdout,
