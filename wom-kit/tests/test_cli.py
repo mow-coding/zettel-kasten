@@ -12464,7 +12464,7 @@ class ArchiveCliTests(unittest.TestCase):
             ["project_runtime_mismatch"],
         )
         self.assertEqual(result["project_pin"], "v0.4.2")
-        self.assertEqual(result["running_version"], "v0.4.13")
+        self.assertEqual(result["running_version"], "v0.4.14")
         self.assertEqual(
             result["project_runtime_argv"],
             [r".\.zettel-kasten\bin\archive.cmd"],
@@ -27990,10 +27990,10 @@ state:
 
     # ------------------------------------------------------------------
     # v0.3.166 — selectable key strategy + safe adopt-existing (§12).
-    # The REAL basoon colon-bearing prefix is pinned (not a placeholder).
+    # A synthetic colon-bearing archive prefix is pinned.
     # ------------------------------------------------------------------
 
-    _BASOON_PREFIX = "archives/archive:personal:basoon/objets"
+    _SYNTHETIC_PREFIX = "archives/archive:personal:synthetic-client/objets"
 
     def _adopt_env(self):
         return patch.dict(
@@ -28005,7 +28005,7 @@ state:
     def _adopt_run(self, root, **kwargs):
         defaults = dict(
             provider_kind="cloudflare-r2",
-            store_ref="r2-basoon-20260704",
+            store_ref="r2-synthetic-client-20260704",
             access_key_id_ref="env:WOM_R2_ACCESS_KEY_ID",
             secret_access_key_ref="env:WOM_R2_SECRET_ACCESS_KEY",
         )
@@ -28534,13 +28534,13 @@ state:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")
             key = archive_services.object_storage_remote_key(
-                strategy="prefix", key_prefix=self._BASOON_PREFIX, digest=_FAKE_SHA_A
+                strategy="prefix", key_prefix=self._SYNTHETIC_PREFIX, digest=_FAKE_SHA_A
             )
             changed = archive_services._object_storage_apply_declared_adopt_location(
                 archive_root,
                 object_id=f"sha256:{_FAKE_SHA_A}",
                 provider_kind="cloudflare-r2",
-                store_ref="r2-basoon-20260704",
+                store_ref="r2-synthetic-client-20260704",
                 digest=_FAKE_SHA_A,
                 key_strategy="prefix",
                 remote_key=key,
@@ -28555,7 +28555,7 @@ state:
                 max_objects=1,
                 reviewed_by="kim",
                 key_strategy="prefix",
-                key_prefix=self._BASOON_PREFIX,
+                key_prefix=self._SYNTHETIC_PREFIX,
                 dry_run=True,
                 skip_existing_wom_uploaded=True,
                 progress_callback=lambda stage, message, current, total: events.append(
@@ -28585,13 +28585,13 @@ state:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")
             key = archive_services.object_storage_remote_key(
-                strategy="prefix", key_prefix=self._BASOON_PREFIX, digest=_FAKE_SHA_A
+                strategy="prefix", key_prefix=self._SYNTHETIC_PREFIX, digest=_FAKE_SHA_A
             )
             changed = archive_services._object_storage_apply_declared_adopt_location(
                 archive_root,
                 object_id=f"sha256:{_FAKE_SHA_A}",
                 provider_kind="cloudflare-r2",
-                store_ref="legacy-r2-basoon",
+                store_ref="legacy-r2-synthetic-client",
                 digest=_FAKE_SHA_A,
                 key_strategy="prefix",
                 remote_key=key,
@@ -28606,7 +28606,7 @@ state:
                 max_objects=1,
                 reviewed_by="kim",
                 key_strategy="prefix",
-                key_prefix=self._BASOON_PREFIX,
+                key_prefix=self._SYNTHETIC_PREFIX,
                 dry_run=True,
                 skip_existing_wom_uploaded=True,
                 progress_callback=lambda stage, message, current, total: events.append(
@@ -28637,14 +28637,14 @@ state:
         with tempfile.TemporaryDirectory() as tmp:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")
             expected_key = archive_services.object_storage_remote_key(
-                strategy="prefix", key_prefix=self._BASOON_PREFIX, digest=_FAKE_SHA_A
+                strategy="prefix", key_prefix=self._SYNTHETIC_PREFIX, digest=_FAKE_SHA_A
             )
-            stale_key = f"{self._BASOON_PREFIX}/{_FAKE_SHA_A}/legacy"
+            stale_key = f"{self._SYNTHETIC_PREFIX}/{_FAKE_SHA_A}/legacy"
             changed = archive_services._object_storage_apply_wom_uploaded_location(
                 archive_root,
                 object_id=f"sha256:{_FAKE_SHA_A}",
                 provider_kind="cloudflare-r2",
-                store_ref="r2-basoon-20260704",
+                store_ref="r2-synthetic-client-20260704",
                 digest=_FAKE_SHA_A,
                 execution_receipt_ref="receipts/providers/object-storage-executions/expected.json",
                 uploaded_at="2026-07-06T00:00:00Z",
@@ -28658,7 +28658,7 @@ state:
                 archive_root,
                 object_id=f"sha256:{_FAKE_SHA_A}",
                 provider_kind="cloudflare-r2",
-                store_ref="r2-basoon-20260704",
+                store_ref="r2-synthetic-client-20260704",
                 digest=_FAKE_SHA_A,
                 execution_receipt_ref="receipts/providers/object-storage-executions/stale.json",
                 uploaded_at="2026-07-06T00:00:01Z",
@@ -28676,7 +28676,7 @@ state:
                 max_objects=1,
                 reviewed_by="kim",
                 key_strategy="prefix",
-                key_prefix=self._BASOON_PREFIX,
+                key_prefix=self._SYNTHETIC_PREFIX,
                 dry_run=True,
                 skip_existing_wom_uploaded=True,
                 progress_callback=lambda stage, message, current, total: events.append(
@@ -28717,32 +28717,32 @@ state:
 
     def test_object_storage_prefix_key_byte_exact(self) -> None:  # §12.1
         remote_key = archive_services.object_storage_remote_key(
-            strategy="prefix", key_prefix=self._BASOON_PREFIX,
+            strategy="prefix", key_prefix=self._SYNTHETIC_PREFIX,
             digest=_FAKE_SHA_A, ext="jpg", append_extension=True,
         )
         self.assertEqual(
             remote_key,
-            f"archives/archive:personal:basoon/objets/{_FAKE_SHA_A}.jpg",
+            f"archives/archive:personal:synthetic-client/objets/{_FAKE_SHA_A}.jpg",
         )
 
     def test_object_storage_prefix_key_edge_matrix(self) -> None:  # §12.2
         a = archive_services
         # no-ext -> <prefix>/<sha> with NO trailing dot
-        no_ext = a.object_storage_remote_key(strategy="prefix", key_prefix=self._BASOON_PREFIX, digest=_FAKE_SHA_A, append_extension=True)
-        self.assertEqual(no_ext, f"{self._BASOON_PREFIX}/{_FAKE_SHA_A}")
+        no_ext = a.object_storage_remote_key(strategy="prefix", key_prefix=self._SYNTHETIC_PREFIX, digest=_FAKE_SHA_A, append_extension=True)
+        self.assertEqual(no_ext, f"{self._SYNTHETIC_PREFIX}/{_FAKE_SHA_A}")
         self.assertFalse(no_ext.endswith("."))
         # trailing-slash prefix normalizes identically to no-slash
-        with_slash = a.object_storage_remote_key(strategy="prefix", key_prefix=self._BASOON_PREFIX + "/", digest=_FAKE_SHA_A, ext="jpg", append_extension=True)
-        without_slash = a.object_storage_remote_key(strategy="prefix", key_prefix=self._BASOON_PREFIX, digest=_FAKE_SHA_A, ext="jpg", append_extension=True)
+        with_slash = a.object_storage_remote_key(strategy="prefix", key_prefix=self._SYNTHETIC_PREFIX + "/", digest=_FAKE_SHA_A, ext="jpg", append_extension=True)
+        without_slash = a.object_storage_remote_key(strategy="prefix", key_prefix=self._SYNTHETIC_PREFIX, digest=_FAKE_SHA_A, ext="jpg", append_extension=True)
         self.assertEqual(with_slash, without_slash)
         # nested multi-slash literal prefix survives
         nested = a.object_storage_remote_key(strategy="prefix", key_prefix="a/b/c/d", digest=_FAKE_SHA_A)
         self.assertEqual(nested, f"a/b/c/d/{_FAKE_SHA_A}")
         # colon survives the §5 remote-key validator
-        self.assertTrue(a.safe_object_storage_remote_key(f"{self._BASOON_PREFIX}/{_FAKE_SHA_A}.jpg"))
+        self.assertTrue(a.safe_object_storage_remote_key(f"{self._SYNTHETIC_PREFIX}/{_FAKE_SHA_A}.jpg"))
         # append_extension off => no extension even when recoverable
-        off = a.object_storage_remote_key(strategy="prefix", key_prefix=self._BASOON_PREFIX, digest=_FAKE_SHA_A, ext="jpg", append_extension=False)
-        self.assertEqual(off, f"{self._BASOON_PREFIX}/{_FAKE_SHA_A}")
+        off = a.object_storage_remote_key(strategy="prefix", key_prefix=self._SYNTHETIC_PREFIX, digest=_FAKE_SHA_A, ext="jpg", append_extension=False)
+        self.assertEqual(off, f"{self._SYNTHETIC_PREFIX}/{_FAKE_SHA_A}")
 
     # --- §12.3 HEAD-before finds client-scheme object -> skip, no re-PUT ---
 
@@ -28798,13 +28798,13 @@ state:
         # a template missing <sha> is refused at parse (the resolver only accepts
         # a prefix and appends the digest, so an operator cannot omit it, but a
         # remote_key that lacks the digest must be rejected by the binding audit)
-        good = {"remote_key": f"{self._BASOON_PREFIX}/{_FAKE_SHA_A}", "key_strategy": "prefix"}
+        good = {"remote_key": f"{self._SYNTHETIC_PREFIX}/{_FAKE_SHA_A}", "key_strategy": "prefix"}
         self.assertTrue(a.object_storage_location_remote_key_binds_digest(good, f"sha256:{_FAKE_SHA_A}"))
         # a remote_key for the WRONG object (a different digest) is rejected
-        wrong = {"remote_key": f"{self._BASOON_PREFIX}/{_FAKE_SHA_B}", "key_strategy": "prefix"}
+        wrong = {"remote_key": f"{self._SYNTHETIC_PREFIX}/{_FAKE_SHA_B}", "key_strategy": "prefix"}
         self.assertFalse(a.object_storage_location_remote_key_binds_digest(wrong, f"sha256:{_FAKE_SHA_A}"))
         # a remote_key that dropped the digest entirely is rejected
-        empty = {"remote_key": f"{self._BASOON_PREFIX}/thumbnail", "key_strategy": "prefix"}
+        empty = {"remote_key": f"{self._SYNTHETIC_PREFIX}/thumbnail", "key_strategy": "prefix"}
         self.assertFalse(a.object_storage_location_remote_key_binds_digest(empty, f"sha256:{_FAKE_SHA_A}"))
 
     # --- §12.10 doctor/audit on a prefix-strategy location ---
@@ -28826,7 +28826,7 @@ state:
     def test_object_storage_remote_key_leak_guard(self) -> None:  # §12.12
         a = archive_services
         # A realistic remote_key is green for public-privacy containment.
-        self.assertTrue(a.safe_object_storage_remote_key(f"{self._BASOON_PREFIX}/{_FAKE_SHA_A}.jpg"))
+        self.assertTrue(a.safe_object_storage_remote_key(f"{self._SYNTHETIC_PREFIX}/{_FAKE_SHA_A}.jpg"))
         # A bucket/URL/host can never enter a remote_key.
         self.assertFalse(a.safe_object_storage_remote_key("https://acct.r2.cloudflarestorage.com/bucket/key"))
         self.assertFalse(a.safe_object_storage_remote_key("s3://my-bucket/objets/" + _FAKE_SHA_A))
@@ -28836,7 +28836,7 @@ state:
 
     # --- §12.13 partial-adopt report ---
 
-    def _seed_proven_tier2(self, root, *, provider="cloudflare-r2", store="r2-basoon-20260704"):
+    def _seed_proven_tier2(self, root, *, provider="cloudflare-r2", store="r2-synthetic-client-20260704"):
         """Seed prior UPLOAD success receipts so the store proves upload tier >= 2
         (a multipart / large-object proof), which an object-storage-UPLOAD batch
         (requested upload tier 3) requires under the SA-6 tiered gate. Uses
@@ -28914,7 +28914,7 @@ state:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")
             self.assert_object_storage_adopt_fails_closed(archive_root)
 
-    # --- §12.19a (v0.3.174) EXACT basoon scenario: a REAL verified tiny-first
+    # --- §12.19a (v0.3.174) exact synthetic scenario: a verified tiny-first
     #     adopt (NOT a fabricated 5 GiB upload receipt) unlocks a batch adopt ---
 
     def _executions_dir(self, root):
@@ -29062,7 +29062,7 @@ state:
             archive_root = self.copy_fake_archive(Path(tmp) / "archive")
             self.assert_object_storage_adopt_fails_closed(archive_root)
 
-    # --- §8.8 leak: a basoon archive-id key passes; a bucket/host/URL key refused ---
+    # --- §8.8 leak: a synthetic archive-id key passes; bucket/host/URL refused ---
 
     def test_key_map_leak_guard(self) -> None:  # §8.8
         with tempfile.TemporaryDirectory() as tmp:
@@ -29078,7 +29078,7 @@ state:
             # A dry-run with --key-append-extension, no --key-map => hint fires.
             result = self._adopt_run(
                 archive_root, max_objects=10, reviewed_by="kim",
-                key_strategy="prefix", key_prefix=self._BASOON_PREFIX,
+                key_strategy="prefix", key_prefix=self._SYNTHETIC_PREFIX,
                 append_extension=True, dry_run=True,
             )
             joined = " ".join(result["warnings"])
@@ -29086,7 +29086,7 @@ state:
             self.assertIn("runbook", joined)
             self.assertIn("mime", joined)
             # No hint when --key-map IS supplied.
-            key_map = self._write_key_map(tmp, [(_FAKE_SHA_A, f"{self._BASOON_PREFIX}/{_FAKE_SHA_A}")])
+            key_map = self._write_key_map(tmp, [(_FAKE_SHA_A, f"{self._SYNTHETIC_PREFIX}/{_FAKE_SHA_A}")])
             result2 = self._adopt_run(
                 archive_root, max_objects=10, reviewed_by="kim",
                 key_map_path=key_map, append_extension=True, dry_run=True,
@@ -32592,7 +32592,7 @@ state:
                     "anchored_locator_sidecar_claimed_resolved"
                 ]
             )
-            self.assertFalse(
+            self.assertTrue(
                 result["current_capability"][
                     "verified_occurrence_recovery_receipt_supported"
                 ]

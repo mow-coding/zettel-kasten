@@ -38,7 +38,11 @@ class OperationApprovalBindingTests(unittest.TestCase):
             "source_fidelity": None,
             "scratch_cleanup": {"count": 0},
             "receipt_preview": {
-                "source": {"sha256": "1" * 64, "path": "inbox/private.md"}
+                "source": {"sha256": "1" * 64, "path": "inbox/private.md"},
+                "zettel": {
+                    "id": "PRIVATE_ZET_ID",
+                    "title": "검토할 zet 제목",
+                },
             },
             "would_change": ["private path"],
         }
@@ -51,8 +55,10 @@ class OperationApprovalBindingTests(unittest.TestCase):
         self.assertEqual(first.target_preview.kind, "zet")
         self.assertEqual(first.target_preview.primary, "private.md")
         self.assertIsNone(first.target_preview.secondary)
+        self.assertEqual(first.target_preview.primary_label, "검토할 zet 제목")
         self.assertNotIn("PRIVATE_ZET_ID", json.dumps(first.public_document()))
         self.assertNotIn("private.md", json.dumps(first.public_document()))
+        self.assertNotIn("검토할 zet 제목", json.dumps(first.public_document()))
         changed = copy.deepcopy(plan)
         changed["checklist"][0]["status"] = "failed"
         second = mint_zet_approval_binding(changed)
@@ -77,6 +83,24 @@ class OperationApprovalBindingTests(unittest.TestCase):
         with self.assertRaises(OperationApprovalBindingError) as captured:
             mint_zet_approval_binding(plan)
         self.assertEqual(captured.exception.code, "operation_approval_plan_invalid")
+
+    def test_mint_preview_suppresses_unsafe_bound_title_without_blocking_plan(self) -> None:
+        windows_path = r"C:" + r"\Users\private\do-not-show.md"
+        for unsafe_title in (
+            windows_path,
+            f"Path note `{windows_path}`",
+            f"Path note {{{windows_path}}}",
+            "owner@example.com 사건",
+            "https://private.example 사건",
+        ):
+            with self.subTest(unsafe_title=unsafe_title):
+                plan = self.mint_plan()
+                plan["receipt_preview"]["zettel"]["title"] = unsafe_title
+
+                binding = mint_zet_approval_binding(plan)
+
+                self.assertEqual(binding.target_preview.primary, "private.md")
+                self.assertIsNone(binding.target_preview.primary_label)
 
     def test_mint_binding_ignores_only_volatile_scratch_receipt_locator(self) -> None:
         plan = self.mint_plan()

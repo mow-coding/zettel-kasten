@@ -2,6 +2,41 @@
 
 [English Upgrade Guide](UPGRADE.md)
 
+## v0.4.14 참조를 보존하는 로컬 복구와 이해하기 쉬운 승인
+
+일치하는 공개 릴리스와 자산이 실제로 존재한 뒤에만 정확한 wheel을 설치합니다.
+
+```powershell
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.14/wom_kit-0.4.14-py3-none-any.whl"
+archive --version
+```
+
+새 프로세스에서 정확히 `archive 0.4.14`인지 확인합니다. 공용 PATH 실행 파일의
+버전만으로 특정 client project가 업데이트됐다고 판단하지 않습니다. 별도의
+검토된 `project-version-update`가 끝난 뒤 project-local launcher를 씁니다.
+
+v0.4.14는 공개 archive format migration을 요구하지 않습니다. 로컬 복구와
+사람용 보기를 다음처럼 바로잡습니다.
+
+- `external-locator-record --all-markup-receipts --dry-run`이 고정된 과거
+  receipt 전체를 스스로 찾고 검증합니다. 정확한 현재 참조는 보존하고 일부만
+  증명된 항목은 검토 상태로 분류하며, 과거 본문 전체를 현재 내용 위에
+  덮어쓰지 않습니다.
+- 식별자 제목 복구는 private mirror 폴더를 받을 수 있지만, 정확하고 모호하지
+  않은 Markdown/index 한 쌍만 인정합니다.
+- 지원되는 native 승인창은 plan이 정확한 현재 zet byte를 이미 결속한 경우에만
+  짧은 로컬 대상 단서를 보여줍니다. 위험한 단서는 생략합니다.
+- 본문이 포함된 완전한 CLI text 출력은 표시 전용 Markdown 투영을 사용합니다.
+  구조화된 JSON/service/MCP 본문은 정본을 유지하고, 제한된 페이지도 정본
+  source를 유지한 채 전체 본문을 모을 때까지 투영을 미룹니다.
+
+AI가 완전한 dry-run과 기계 근거를 검사합니다. 사람은 행을 세거나 receipt
+경로를 복사하거나 hash를 비교하지 않고 쉬운 작업 설명을 본 뒤 실행 또는
+취소만 고릅니다. 공개하거나 설치하는 것만으로 client 복구는 실행되지
+않습니다. 실제 결과는 해당 project에서 별도 승인된 실행, 영수증, 독립
+검증이 있어야 합니다. [v0.4.14 릴리스 노트](wom-kit/docs/releases/v0.4.14.md)를
+보세요.
+
 ## v0.4.13 정확한 setup 근거와 create-only 바이트 보존
 
 일치하는 공개 릴리스와 자산이 실제로 존재한 뒤에만 정확한 wheel을 설치합니다.

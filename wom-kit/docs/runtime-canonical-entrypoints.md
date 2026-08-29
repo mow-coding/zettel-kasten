@@ -1,6 +1,8 @@
 # Runtime Canonical Entry Points
 
-Status: v0.4.13 exact setup evidence and create-only object-storage preservation
+Status: v0.4.14 reference-aware local recovery and safe decision views
+
+Previous checkpoint: Status: v0.4.13 exact setup evidence and create-only object-storage preservation
 
 Previous checkpoint: Status: v0.4.12 generation-bound link authority and honest index lifecycle
 
@@ -36,7 +38,29 @@ The underlying raw context packet remains available through:
 archive runtime-context <archive-root> --format json
 ```
 
-## v0.4.13 Current Runtime Delta
+## v0.4.14 Current Runtime Delta
+
+`external-locator-record --all-markup-receipts` discovers the fixed historical
+normalization receipt inventory without making the operator copy paths or count
+rows. It replays those transactions with their exact reviewed reference
+bindings. Verified current references remain intact, partial coverage is
+classified explicitly, and the exact operation writes only one private
+classification ledger. Native approval, checkpoints, resume, independent
+verification, and exact revert all bind that ledger.
+
+Supported native decisions may show a bounded local title, archive-relative
+file identity, role, endpoints, and plain clue only when the plan already binds
+the exact current zet bytes. Unsafe or stale clues are omitted and never enter
+the machine plan, approval digest, receipt, or public output. Complete
+`read-zettel --section document` results use a pure WOM-safe Markdown display
+projection; incomplete pages remain canonical source and defer projection.
+
+Installing this runtime does not inspect or change a client archive. The
+client's project update and the separately approved private recovery remain
+distinct operations. WOM verifies technical evidence; the person chooses only
+the plain run or cancel action.
+
+## v0.4.13 Historical Runtime Delta
 
 Local object-storage readiness resolves canonical exact setup evidence before
 any legacy bridge. Malformed, orphaned, disabled, changing, case-colliding, or
@@ -165,7 +189,7 @@ archive capabilities --machine --format json
 
 Its `data.approval_status_inventory` distinguishes
 `approval_available`, `approval_fixed_closed`, and `approval_not_exposed` for
-every canonical executable command path and its aliases. The current v0.4.13
+every canonical executable command path and its aliases. The current v0.4.14
 working-tree parser reports 315 canonical executable paths, 259 alias paths,
 and 574 total invocation paths: 47 operation-specific approval routes, 67
 fixed-closed routes, and 201 routes without an approval mode. Nine paths have
@@ -203,11 +227,11 @@ documented plans, previews, and audits remain available; a closed approval still
 itself is separately reopened with an exact target/tag/source/rollback binding.
 
 When an older global CLI must be replaced and the exact public
-v0.4.13 GitHub Release wheel has been independently confirmed, use the public
+v0.4.14 GitHub Release wheel has been independently confirmed, use the public
 wheel directly:
 
 ```powershell
-uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.13/wom_kit-0.4.13-py3-none-any.whl"
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.14/wom_kit-0.4.14-py3-none-any.whl"
 archive --version
 ```
 

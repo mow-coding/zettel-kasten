@@ -1,10 +1,12 @@
-"""Deterministic, content-free exact-human bindings for legacy writers.
+"""Deterministic, content-free durable exact-human bindings for legacy writers.
 
 The affected writers already construct comprehensive dry-run plans.  This
 module turns those plans into one stable plan digest and one target-set digest
-without reflecting their private values into the dialog, result, or log.  The
-same derivation is run once before the dialog and again inside each writer
-immediately before mutation; any drift fails closed.
+without reflecting private values into a durable result or log.  A small
+local-only identity label may be attached to the native dialog separately; it
+never changes the public binding.  The same digest derivation is run once
+before the dialog and again inside each writer immediately before mutation;
+any drift fails closed.
 """
 
 from __future__ import annotations
@@ -26,6 +28,7 @@ from .exact_human_approval_windows import (
     ExactHumanApprovalContext,
     ExactHumanApprovalOperation,
     ExactHumanApprovalTargetPreview,
+    exact_human_approval_safe_content_preview,
     exact_human_approval_warning_codes,
 )
 
@@ -298,6 +301,28 @@ def _required_target_preview_identity(*values: Any) -> str:
     raise _fail("operation_approval_plan_invalid")
 
 
+def _optional_bound_preview_label(value: Any) -> str | None:
+    """Return a small plan-bound label only when it is safe for the dialog.
+
+    Labels remain local-only.  Suppressing an unsafe or oversized label must
+    not block an otherwise valid write because the exact id/file identity is
+    still shown and the machine binding is unchanged.
+    """
+
+    return exact_human_approval_safe_content_preview(
+        value,
+        max_characters=160,
+        max_utf8_bytes=640,
+    )
+
+
+def _bound_receipt_zettel_title(receipt: Mapping[str, Any]) -> str | None:
+    zettel = receipt.get("zettel")
+    if not isinstance(zettel, Mapping):
+        return None
+    return _optional_bound_preview_label(zettel.get("title"))
+
+
 def _runtime_distribution_key(value: str) -> str:
     return re.sub(r"[-_.]+", "-", value).casefold()
 
@@ -548,6 +573,7 @@ def mint_zet_approval_binding(
         target_preview=ExactHumanApprovalTargetPreview(
             kind="zet",
             primary=preview_identity,
+            primary_label=_bound_receipt_zettel_title(receipt),
         ),
     )
 
@@ -670,6 +696,7 @@ def _promotion_approval_binding(
                 _target_preview_leaf(required_text["proposed_canonical_path"])
                 or required_text["zettel_id"]
             ),
+            primary_label=_bound_receipt_zettel_title(receipt),
         ),
     )
 

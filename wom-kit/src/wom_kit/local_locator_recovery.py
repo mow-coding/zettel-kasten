@@ -10,22 +10,34 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
+import stat
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable
 
 from . import archive_services, completion_workflows
-from .exact_human_approval import exact_human_approval_archive_identity_sha256
+from .exact_human_approval import (
+    audit_exact_human_approval_succeeded_terminal_record_read_only,
+    exact_human_approval_archive_identity_sha256,
+)
+from .exact_human_approval_windows import ExactHumanApprovalOperation
 from .exact_operation_manifest import (
+    EXACT_OPERATION_RECEIPTS_ROOT,
     ExactFieldEffect,
     ExactOperationEvidence,
     ExactOperationItem,
     ExactOperationManifest,
+    ExactOperationManifestError,
+    _load_exact_operation_checkpoints_read_only,
+    exact_operation_completion_authentication_payload,
     hash_field_value,
+    load_exact_operation_final_receipt_read_only,
 )
 from .local_recovery_execution import (
     APPLY_OPERATION,
+    LEDGER_ROOT,
     LocalRecoveryFieldSpec,
     LocalRecoveryPlan,
     _marker_projection as _execution_marker_projection,
@@ -39,11 +51,27 @@ from .local_recovery_execution import (
 
 MIRROR_RECOVERY_SCHEMA = "wom-kit/notion-locator-mirror-recovery-plan/v0.1"
 ORPHAN_RECOVERY_SCHEMA = "wom-kit/notion-locator-orphan-recovery-plan/v0.1"
+ORPHAN_RECOVERY_LEDGER_SCHEMA = (
+    "wom-kit/notion-locator-orphan-recovery-ledger/v0.2"
+)
+ORPHAN_RECOVERY_LEGACY_LEDGER_SCHEMAS = frozenset(
+    {"wom-kit/notion-locator-orphan-recovery-ledger/v0.1"}
+)
+ORPHAN_RECOVERY_EVIDENCE_SCHEMA = (
+    "wom-kit/notion-locator-orphan-recovery-evidence/v1"
+)
+COMPOSITE_LOCAL_RECOVERY_EVIDENCE_SCHEMA = (
+    "wom-kit/local-recovery-composite-evidence/v1"
+)
 MAX_MIRROR_BYTES = 64 * 1024 * 1024
 MAX_MIRROR_ROWS = 10_000
 MAX_MIRROR_LINE_BYTES = 16 * 1024 * 1024
 MAX_MARKUP_RECEIPTS = 100
+MAX_MARKUP_BINDING_MANIFESTS = 100
+MAX_VERIFIED_RESOLUTION_LEDGERS = 4096
+MAX_EXACT_OPERATION_RECEIPTS = 4096
 MAX_RETURNED_ITEMS = 10_000
+_MARKUP_BINDING_MANIFEST_ROOT = ".wom-scratch/markup-bindings"
 _URL_RE = re.compile(r"(?i)\bhttps?://[^\s<>\")\]]+")
 _MARKUP_RECEIPT_RE = re.compile(
     r"receipts/markup-normalization/[0-9a-f]{64}\.json"
@@ -764,6 +792,192 @@ def _read_markup_receipt(
     return raw, receipt
 
 
+def discover_markup_normalization_receipts(
+    archive_root: Path | str,
+) -> list[str]:
+    """Return every canonical markup receipt without exposing file names.
+
+    This is the operator-friendly replacement for manually counting or
+    copying receipt paths.  Only the fixed receipt directory and exact
+    64-hex filenames are accepted; malformed or excessive inventories stop
+    the whole discovery instead of silently selecting a subset.
+    """
+
+    root = archive_services.require_existing_archive_root(archive_root)
+    directory = archive_services.archive_internal_path(
+        root,
+        "receipts/markup-normalization",
+    )
+    entries = _safe_private_entries(
+        directory,
+        maximum=MAX_MARKUP_RECEIPTS,
+        missing_ok=False,
+    )
+    relatives: list[str] = []
+    for path in entries:
+        relative = archive_services.archive_relative_path(path, root)
+        raw, reason = archive_services._bounded_stable_regular_file_read(
+            path,
+            max_bytes=64 * 1024 * 1024,
+        )
+        if (
+            _MARKUP_RECEIPT_RE.fullmatch(relative) is None
+            or raw is None
+            or reason is not None
+        ):
+            raise archive_services.ArchiveServiceError(
+                "local_locator_markup_receipt_inventory_invalid"
+            )
+        relatives.append(relative)
+    if not relatives:
+        raise archive_services.ArchiveServiceError(
+            "local_locator_markup_receipt_inventory_empty"
+        )
+    return sorted(relatives)
+
+
+def _plain_private_directory(path: Path) -> bool:
+    try:
+        info = os.lstat(path)
+    except OSError:
+        return False
+    return bool(
+        stat.S_ISDIR(info.st_mode)
+        and not stat.S_ISLNK(info.st_mode)
+        and not bool(getattr(info, "st_file_attributes", 0) & 0x400)
+    )
+
+
+def _receipt_reference_bindings(
+    root: Path,
+    receipt: dict[str, Any],
+    *,
+    validation_context: dict[str, Any],
+    progress_callback: Callable[[str, str, int | None, int | None], None]
+    | None = None,
+) -> tuple[
+    dict[str, dict[str, dict[int | None, dict[str, Any]]]],
+    str | None,
+]:
+    """Load the one hash-bound historical binding manifest, if declared.
+
+    The operator is never asked to locate or compare this private file.  WOM
+    searches only the fixed ignored-local binding directory, requires one
+    unique byte-for-byte SHA-256 match, and then reuses the original strict
+    binding validator against the current archive.
+    """
+
+    expected = receipt.get("binding_manifest_sha256")
+    if expected is None:
+        return {}, None
+    if (
+        not isinstance(expected, str)
+        or re.fullmatch(r"[0-9a-f]{64}", expected) is None
+    ):
+        raise archive_services.ArchiveServiceError(
+            "local_locator_markup_binding_evidence_invalid"
+        )
+    directory = archive_services.archive_internal_path(
+        root,
+        _MARKUP_BINDING_MANIFEST_ROOT,
+    )
+    if not _plain_private_directory(directory):
+        raise archive_services.ArchiveServiceError(
+            "local_locator_markup_binding_evidence_missing"
+        )
+    try:
+        entries = tuple(sorted(directory.iterdir(), key=lambda path: path.name))
+    except OSError as exc:
+        raise archive_services.ArchiveServiceError(
+            "local_locator_markup_binding_evidence_invalid"
+        ) from exc
+    if len(entries) > MAX_MARKUP_BINDING_MANIFESTS:
+        raise archive_services.ArchiveServiceError(
+            "local_locator_markup_binding_evidence_invalid"
+        )
+    matches: list[Path] = []
+    for path in entries:
+        if path.suffix.casefold() != ".json":
+            continue
+        raw, reason = archive_services._bounded_stable_regular_file_read(
+            path,
+            max_bytes=64 * 1024 * 1024,
+        )
+        if raw is None or reason is not None:
+            raise archive_services.ArchiveServiceError(
+                "local_locator_markup_binding_evidence_invalid"
+            )
+        if hashlib.sha256(raw).hexdigest() == expected:
+            matches.append(path)
+    if len(matches) != 1:
+        raise archive_services.ArchiveServiceError(
+            "local_locator_markup_binding_evidence_missing"
+            if not matches
+            else "local_locator_markup_binding_evidence_ambiguous"
+        )
+    bindings, actual, blockers = completion_workflows._markup_reference_bindings(
+        root,
+        binding_manifest=matches[0],
+        validation_context=validation_context,
+        progress_callback=progress_callback,
+    )
+    if actual != expected or blockers:
+        raise archive_services.ArchiveServiceError(
+            "local_locator_markup_binding_evidence_invalid"
+        )
+    return bindings, expected
+
+
+def _path_bound_reference_bindings(
+    all_bindings: dict[
+        str,
+        dict[str, dict[int | None, dict[str, Any]]],
+    ],
+    *,
+    zettel_id: str,
+    relative_path: str,
+) -> dict[str, dict[int | None, dict[str, Any]]]:
+    bound: dict[str, dict[int | None, dict[str, Any]]] = {}
+    for tag_sha256, selectors in all_bindings.get(zettel_id, {}).items():
+        selected = {
+            selector: binding
+            for selector, binding in selectors.items()
+            if binding.get("source_relative_path") == relative_path
+        }
+        if selected:
+            bound[tag_sha256] = selected
+    return bound
+
+
+def _trace_binding_replacement(
+    trace: dict[str, Any],
+    bindings: dict[str, dict[int | None, dict[str, Any]]],
+) -> str | None:
+    tag_sha256 = trace.get("tag_sha256")
+    occurrence_index = trace.get("occurrence_index")
+    if (
+        not isinstance(tag_sha256, str)
+        or type(occurrence_index) is not int
+    ):
+        return None
+    selectors = bindings.get(tag_sha256, {})
+    binding = selectors.get(occurrence_index)
+    if binding is None:
+        binding = selectors.get(None)
+    if not isinstance(binding, dict):
+        return None
+    replacement = binding.get("replacement")
+    if (
+        not isinstance(replacement, str)
+        or completion_workflows._sha256_bytes(replacement.encode("utf-8"))
+        != trace.get("replacement_sha256")
+        or binding.get("binding_kind") != trace.get("binding_kind")
+        or binding.get("binding_id") != trace.get("binding_id")
+    ):
+        return None
+    return replacement
+
+
 def _receipt_snapshot_bytes(
     root: Path,
     item: dict[str, Any],
@@ -843,8 +1057,17 @@ def notion_locator_orphan_recovery_plan(
         blockers.append("local_locator_markup_receipt_set_invalid")
         markup_receipts = []
 
-    receipt_rows: list[tuple[str, dict[str, Any]]] = []
+    receipt_rows: list[
+        tuple[
+            str,
+            dict[str, Any],
+            dict[str, dict[str, dict[int | None, dict[str, Any]]]],
+            str | None,
+        ]
+    ] = []
     receipt_refs: list[str] = []
+    binding_manifest_refs: list[str] = []
+    binding_validation_context: dict[str, Any] = {}
     try:
         for receipt_relative in sorted(markup_receipts):
             receipt_raw, receipt = _read_markup_receipt(
@@ -854,6 +1077,18 @@ def notion_locator_orphan_recovery_plan(
             )
             receipt_sha256 = _sha(receipt_raw)
             receipt_refs.append(receipt_sha256)
+            receipt_bindings, binding_manifest_sha256 = (
+                _receipt_reference_bindings(
+                    root,
+                    receipt,
+                    validation_context=binding_validation_context,
+                    progress_callback=progress_callback,
+                )
+            )
+            if binding_manifest_sha256 is not None:
+                binding_manifest_refs.append(
+                    "sha256:" + binding_manifest_sha256
+                )
             transaction_root = (
                 ".wom-scratch/markup-normalization/transactions/"
                 + receipt["plan_sha256"]
@@ -896,7 +1131,14 @@ def notion_locator_orphan_recovery_plan(
                     raise archive_services.ArchiveServiceError(
                         "local_locator_markup_receipt_invalid"
                     )
-                receipt_rows.append((receipt_sha256, item))
+                receipt_rows.append(
+                    (
+                        receipt_sha256,
+                        item,
+                        receipt_bindings,
+                        binding_manifest_sha256,
+                    )
+                )
     except (archive_services.ArchiveServiceError, OSError, ValueError):
         return {
             "ok": False,
@@ -922,9 +1164,12 @@ def notion_locator_orphan_recovery_plan(
     exact_specs: list[LocalRecoveryFieldSpec] = []
     state_counts = {
         "normal_maintain": 0,
+        "resolved_by_verified_reference": 0,
         "restore_ready": 0,
         "review_pending": 0,
     }
+    ledger_items: list[dict[str, Any]] = []
+    orphan_target_identities: set[str] = set()
     removed_marker_count = 0
     preexisting_orphan_row_count = 0
     if progress_callback is not None:
@@ -935,6 +1180,8 @@ def notion_locator_orphan_recovery_plan(
         for transaction_ordinal, (
             receipt_sha256,
             item,
+            receipt_bindings,
+            binding_manifest_sha256,
         ) in enumerate(receipt_rows):
             before_raw = _receipt_snapshot_bytes(
                 root, item, "before_snapshot_path", "before_sha256"
@@ -976,6 +1223,60 @@ def notion_locator_orphan_recovery_plan(
             if new_orphans <= 0 or after_count != 0:
                 continue
 
+            path_bound_bindings = _path_bound_reference_bindings(
+                receipt_bindings,
+                zettel_id=str(expected_zettel_id),
+                relative_path=str(item.get("path") or ""),
+            )
+            replay = completion_workflows._normalize_markup_body(
+                before_body,
+                bindings=path_bound_bindings,
+            )
+            replay_exact = bool(
+                not replay.get("blocker_codes")
+                and replay.get("normalized_body") == after_body
+            )
+            applied_binding_traces = [
+                trace
+                for trace in replay.get("applied_reference_bindings", [])
+                if isinstance(trace, dict)
+            ]
+            marker_binding_traces = [
+                trace
+                for trace in applied_binding_traces
+                if int(trace.get("source_omission_marker_count") or 0) > 0
+            ]
+            verified_reference_marker_count = sum(
+                int(trace.get("source_omission_marker_count") or 0)
+                for trace in marker_binding_traces
+            )
+            verified_replacements: list[str] = []
+            trace_invalid = False
+            for trace in marker_binding_traces:
+                replacement = _trace_binding_replacement(
+                    trace,
+                    path_bound_bindings,
+                )
+                if (
+                    replacement is None
+                    or int(
+                        trace.get("replacement_omission_marker_count") or 0
+                    )
+                    != 0
+                ):
+                    trace_invalid = True
+                    break
+                verified_replacements.append(replacement)
+            verified_reference_resolution_candidate = bool(
+                replay_exact
+                and not trace_invalid
+                and before_count - after_count == new_orphans
+                and marker_binding_traces
+                and 0 < verified_reference_marker_count <= new_orphans
+            )
+            verified_reference_resolved_count = 0
+            review_pending_orphan_count = 0
+
             target_path = archive_services.archive_internal_path(
                 root, str(item.get("path") or "")
             )
@@ -988,15 +1289,61 @@ def notion_locator_orphan_recovery_plan(
             if current_raw is None or reason is not None:
                 state = "review_pending"
                 current_body = ""
+                current_declared = None
                 blocker_codes = ["current_canonical_unreadable"]
             else:
-                _current_frontmatter, current_body = _zettel_parts(current_raw)
+                current_frontmatter, current_body = _zettel_parts(current_raw)
                 current_count = current_body.count(marker)
-                if _marker_projection(current_body) == _marker_projection(
+                current_declared = (
+                    archive_services.notion_import_locator_omitted_count(
+                        current_frontmatter
+                    )
+                )
+                current_canonical_identity_matches = bool(
+                    current_frontmatter.get("id") == expected_zettel_id
+                    and current_frontmatter.get("archive_id") == archive_id
+                    and current_frontmatter.get("status") == "canonical"
+                )
+                current_omission_identity_matches = bool(
+                    archive_services.notion_import_frontmatter_is_notion(
+                        current_frontmatter
+                    )
+                    and current_declared == declared
+                )
+                if not current_canonical_identity_matches:
+                    state = "review_pending"
+                    blocker_codes = ["current_canonical_identity_changed"]
+                elif not current_omission_identity_matches:
+                    state = "review_pending"
+                    blocker_codes = ["current_omission_identity_changed"]
+                elif _marker_projection(current_body) == _marker_projection(
                     before_body
                 ):
                     state = "normal_maintain"
                     blocker_codes = []
+                elif (
+                    current_count == after_count
+                    and current_body == after_body
+                    and verified_reference_resolution_candidate
+                ):
+                    verified_reference_resolved_count = (
+                        verified_reference_marker_count
+                    )
+                    review_pending_orphan_count = (
+                        new_orphans - verified_reference_resolved_count
+                    )
+                    state = (
+                        "resolved_by_verified_reference"
+                        if review_pending_orphan_count == 0
+                        else "partially_resolved_by_verified_reference"
+                    )
+                    blocker_codes = (
+                        []
+                        if review_pending_orphan_count == 0
+                        else [
+                            "verified_reference_marker_coverage_incomplete"
+                        ]
+                    )
                 elif (
                     current_count == after_count
                     and current_body == after_body
@@ -1020,7 +1367,29 @@ def notion_locator_orphan_recovery_plan(
                         blocker_codes.append(
                             "current_body_diverged_after_transaction"
                         )
-            state_counts[state] += new_orphans
+                    if not replay_exact:
+                        blocker_codes.append(
+                            "historical_markup_transaction_not_exactly_replayable"
+                        )
+                    if verified_reference_marker_count:
+                        blocker_codes.append(
+                            "verified_reference_marker_coverage_incomplete"
+                        )
+            if state == "normal_maintain":
+                state_counts["normal_maintain"] += new_orphans
+            elif state == "restore_ready":
+                state_counts["restore_ready"] += new_orphans
+            elif state in {
+                "resolved_by_verified_reference",
+                "partially_resolved_by_verified_reference",
+            }:
+                state_counts["resolved_by_verified_reference"] += (
+                    verified_reference_resolved_count
+                )
+                state_counts["review_pending"] += review_pending_orphan_count
+            else:
+                review_pending_orphan_count = new_orphans
+                state_counts["review_pending"] += new_orphans
             target_ref = _sha(
                 _canonical_bytes(
                     {
@@ -1046,7 +1415,76 @@ def notion_locator_orphan_recovery_plan(
                     "item_ref_sha256": item_ref,
                     "state": state,
                     "orphan_row_count": new_orphans,
+                    "verified_reference_binding_count": len(
+                        marker_binding_traces
+                    ),
+                    "verified_reference_marker_count": (
+                        verified_reference_marker_count
+                    ),
+                    "verified_reference_resolved_count": (
+                        verified_reference_resolved_count
+                    ),
+                    "review_pending_orphan_count": (
+                        review_pending_orphan_count
+                    ),
                     "blocker_codes": blocker_codes,
+                }
+            )
+            target_identity = local_recovery_zettel_identity_sha256(
+                archive_id,
+                str(item["zettel_id"]),
+                str(item["path"]),
+            )
+            orphan_target_identities.add(target_identity)
+            ledger_items.append(
+                {
+                    "ordinal": len(public_items) - 1,
+                    "item_ref_sha256": item_ref,
+                    "target_identity_sha256": target_identity,
+                    "state": state,
+                    "orphan_row_count": new_orphans,
+                    "verified_reference_marker_count": (
+                        verified_reference_marker_count
+                    ),
+                    "verified_reference_binding_count": len(
+                        marker_binding_traces
+                    ),
+                    "verified_reference_resolved_count": (
+                        verified_reference_resolved_count
+                    ),
+                    "review_pending_orphan_count": (
+                        review_pending_orphan_count
+                    ),
+                    "declared_omission_count": declared,
+                    "blocker_codes": blocker_codes,
+                    "current_body_sha256": (
+                        _sha(current_body.encode("utf-8"))
+                        if current_raw is not None
+                        else None
+                    ),
+                    "expected_post_body_sha256": (
+                        _sha(
+                            (
+                                before_body
+                                if state == "restore_ready"
+                                else current_body
+                            ).encode("utf-8")
+                        )
+                        if current_raw is not None
+                        else None
+                    ),
+                    "historical_after_body_sha256": _sha(
+                        after_body.encode("utf-8")
+                    ),
+                    "receipt_sha256": receipt_sha256,
+                    "binding_manifest_sha256": (
+                        "sha256:" + binding_manifest_sha256
+                        if binding_manifest_sha256 is not None
+                        else None
+                    ),
+                    "verified_replacement_set_sha256": _sha(
+                        _canonical_bytes(sorted(verified_replacements))
+                    ),
                 }
             )
             if state == "restore_ready" and current_raw is not None:
@@ -1061,17 +1499,12 @@ def notion_locator_orphan_recovery_plan(
                         "orphan_row_count": new_orphans,
                     }
                 )
-                identity = local_recovery_zettel_identity_sha256(
-                    archive_id,
-                    item["zettel_id"],
-                    item["path"],
-                )
                 exact_item = ExactOperationItem(
                         ordinal=len(exact_items),
                         item_id=f"item:{transaction_ordinal:06d}",
                         target_kind="zettel",
                         target_ref=target_ref,
-                        target_identity_sha256=identity,
+                        target_identity_sha256=target_identity,
                         fields=(
                             ExactFieldEffect(
                                 field_ref=(
@@ -1138,6 +1571,9 @@ def notion_locator_orphan_recovery_plan(
         "markup_receipt_set_sha256": _sha(
             _canonical_bytes(sorted(receipt_refs))
         ),
+        "binding_manifest_set_sha256": _sha(
+            _canonical_bytes(sorted(binding_manifest_refs))
+        ),
         "markup_transaction_item_set_sha256": _sha(
             _canonical_bytes(
                 [
@@ -1151,7 +1587,12 @@ def notion_locator_orphan_recovery_plan(
                             }
                         )
                     )
-                    for receipt_sha256, item in receipt_rows
+                    for (
+                        receipt_sha256,
+                        item,
+                        _receipt_bindings,
+                        _binding_manifest_sha256,
+                    ) in receipt_rows
                 ]
             )
         ),
@@ -1178,6 +1619,18 @@ def notion_locator_orphan_recovery_plan(
                 ]
             )
         ),
+        "resolved_by_verified_reference_set_sha256": _sha(
+            _canonical_bytes(
+                [
+                    item["item_ref_sha256"]
+                    for item in public_items
+                    if int(
+                        item.get("verified_reference_resolved_count") or 0
+                    )
+                    > 0
+                ]
+            )
+        ),
         "normal_maintain_set_sha256": _sha(
             _canonical_bytes(
                 [
@@ -1192,7 +1645,7 @@ def notion_locator_orphan_recovery_plan(
                 [
                     item["item_ref_sha256"]
                     for item in public_items
-                    if item["state"] == "review_pending"
+                    if int(item.get("review_pending_orphan_count") or 0) > 0
                 ]
             )
         ),
@@ -1202,26 +1655,29 @@ def notion_locator_orphan_recovery_plan(
         "markup_transaction_item_count": len(receipt_rows),
         "removed_marker_count": removed_marker_count,
         "preexisting_orphan_row_count": preexisting_orphan_row_count,
-        "orphan_zettel_count": len(public_items),
+        "orphan_zettel_count": len(orphan_target_identities),
         "orphan_row_count": orphan_row_count,
         "classified_orphan_row_count": sum(state_counts.values()),
         "normal_maintain_count": state_counts["normal_maintain"],
+        "resolved_by_verified_reference_count": state_counts[
+            "resolved_by_verified_reference"
+        ],
         "restore_ready_count": state_counts["restore_ready"],
         "review_pending_count": state_counts["review_pending"],
     }
     operation_evidence = ExactOperationEvidence(
-        schema="wom-kit/notion-locator-orphan-recovery-evidence/v1",
+        schema=ORPHAN_RECOVERY_EVIDENCE_SCHEMA,
         counts=tuple(sorted(counts.items())),
         digests=tuple(sorted(digests.items())),
     )
     marker_item_count = len(exact_items)
     ledger_bytes = _canonical_bytes(
         {
-            "schema": "wom-kit/notion-locator-orphan-recovery-ledger/v0.1",
+            "schema": ORPHAN_RECOVERY_LEDGER_SCHEMA,
             "archive_identity_sha256": (
                 exact_human_approval_archive_identity_sha256(archive_id)
             ),
-            "classification_items": public_items,
+            "classification_items": ledger_items,
             "operation_evidence": operation_evidence.document(),
             "private_values_echoed": False,
         }
@@ -1334,6 +1790,575 @@ def notion_locator_orphan_recovery_plan(
             public_summary=result["summary"],
         )
     return result
+
+
+def _safe_private_entries(
+    directory: Path,
+    *,
+    maximum: int,
+    missing_ok: bool,
+) -> tuple[Path, ...]:
+    if not directory.exists():
+        if missing_ok:
+            return ()
+        raise archive_services.ArchiveServiceError(
+            "local_locator_resolution_evidence_invalid"
+        )
+    if not _plain_private_directory(directory):
+        raise archive_services.ArchiveServiceError(
+            "local_locator_resolution_evidence_invalid"
+        )
+    try:
+        entries = tuple(sorted(directory.iterdir(), key=lambda path: path.name))
+    except OSError as exc:
+        raise archive_services.ArchiveServiceError(
+            "local_locator_resolution_evidence_invalid"
+        ) from exc
+    if len(entries) > maximum:
+        raise archive_services.ArchiveServiceError(
+            "local_locator_resolution_evidence_invalid"
+        )
+    return entries
+
+
+def _receipt_orphan_evidence_refs(
+    evidence: ExactOperationEvidence,
+) -> tuple[str, ...]:
+    """Return orphan-member evidence hashes carried by one exact receipt.
+
+    A standalone orphan recovery carries its evidence directly.  The combined
+    locator recovery rewrites the outer manifest with composite evidence, so
+    the original orphan evidence is carried under a deterministic member key.
+    Only these two fixed schemas are eligible; legacy or unrelated evidence is
+    ignored rather than promoted into resolution proof.
+    """
+
+    if evidence.schema == ORPHAN_RECOVERY_EVIDENCE_SCHEMA:
+        return (evidence.evidence_sha256,)
+    if evidence.schema != COMPOSITE_LOCAL_RECOVERY_EVIDENCE_SCHEMA:
+        return ()
+    digests = dict(evidence.digests)
+    refs = [
+        value
+        for key, value in sorted(digests.items())
+        if re.fullmatch(r"member_[0-9]{2}_evidence_sha256", key)
+    ]
+    return tuple(dict.fromkeys(refs))
+
+
+def _merge_verified_resolution_candidate(
+    by_target: dict[str, dict[str, Any]],
+    conflicted_targets: set[str],
+    *,
+    target_identity: str,
+    candidate: dict[str, Any],
+) -> bool:
+    """Merge one target result and remove all trust after a disagreement.
+
+    Returns ``True`` only when this call newly discovers a conflict.  Once a
+    target conflicts, later identical rows cannot accidentally reinstate it.
+    """
+
+    if target_identity in conflicted_targets:
+        return False
+    previous = by_target.get(target_identity)
+    if previous is not None and previous != candidate:
+        by_target.pop(target_identity, None)
+        conflicted_targets.add(target_identity)
+        return True
+    by_target[target_identity] = candidate
+    return False
+
+
+def _verified_resolution_receipts_by_evidence(
+    root: Path,
+    *,
+    claim_key_provider: Any | None = None,
+) -> tuple[dict[str, list[dict[str, Any]]], list[str], int]:
+    """Index completed, approved exact-operation receipts by evidence hash."""
+
+    directory = archive_services.archive_internal_path(
+        root,
+        EXACT_OPERATION_RECEIPTS_ROOT,
+    )
+    try:
+        entries = _safe_private_entries(
+            directory,
+            maximum=MAX_EXACT_OPERATION_RECEIPTS,
+            missing_ok=True,
+        )
+    except archive_services.ArchiveServiceError:
+        return {}, ["local_locator_resolution_receipt_scan_invalid"], 0
+    indexed: dict[str, list[dict[str, Any]]] = {}
+    scanned = 0
+    for path in entries:
+        match = re.fullmatch(r"([0-9a-f]{64})\.json", path.name)
+        if match is None:
+            return {}, ["local_locator_resolution_receipt_scan_invalid"], scanned
+        execution_sha256 = "sha256:" + match.group(1)
+        try:
+            receipt = load_exact_operation_final_receipt_read_only(
+                root,
+                execution_sha256,
+            )
+        except (ExactOperationManifestError, OSError, ValueError):
+            return {}, ["local_locator_resolution_receipt_scan_invalid"], scanned
+        scanned += 1
+        if receipt is None:
+            return {}, ["local_locator_resolution_receipt_scan_invalid"], scanned
+        result = receipt.get("result")
+        if not isinstance(result, dict):
+            return {}, ["local_locator_resolution_receipt_scan_invalid"], scanned
+        evidence_document = result.get("operation_evidence")
+        if not isinstance(evidence_document, dict):
+            continue
+        try:
+            evidence = ExactOperationEvidence.from_document(
+                evidence_document
+            )
+        except ExactOperationManifestError:
+            return {}, ["local_locator_resolution_receipt_scan_invalid"], scanned
+        evidence_refs = _receipt_orphan_evidence_refs(evidence)
+        if not evidence_refs:
+            continue
+        approval_binding = result.get("approval_binding_sha256")
+        completion_authentication = result.get("completion_authentication")
+        if (
+            result.get("status") != "completed"
+            or result.get("mode") != "apply"
+            or not isinstance(approval_binding, str)
+            or re.fullmatch(r"sha256:[0-9a-f]{64}", approval_binding) is None
+            or not isinstance(completion_authentication, dict)
+            or completion_authentication.get("operation") != APPLY_OPERATION
+            or not isinstance(
+                completion_authentication.get("approval_reference"),
+                dict,
+            )
+            or not isinstance(
+                completion_authentication.get("target_binding_sha256"),
+                str,
+            )
+            or not isinstance(
+                completion_authentication.get("terminal_mac"),
+                str,
+            )
+        ):
+            continue
+        try:
+            completion_payload = (
+                exact_operation_completion_authentication_payload(result)
+            )
+        except ExactOperationManifestError:
+            continue
+        if not audit_exact_human_approval_succeeded_terminal_record_read_only(
+            root,
+            completion_authentication["approval_reference"],
+            expected_operation=ExactHumanApprovalOperation.local_recovery,
+            expected_plan_sha256=result.get("manifest_sha256"),
+            expected_target_binding_sha256=completion_authentication[
+                "target_binding_sha256"
+            ],
+            payload=completion_payload,
+            expected_mac=completion_authentication["terminal_mac"],
+            key_provider=claim_key_provider,
+        ):
+            continue
+        try:
+            checkpoints = _load_exact_operation_checkpoints_read_only(
+                root,
+                execution_sha256,
+                heartbeat=None,
+            )
+        except (ExactOperationManifestError, OSError, ValueError):
+            return {}, ["local_locator_resolution_receipt_scan_invalid"], scanned
+        candidate = {
+            "result": result,
+            "checkpoints": checkpoints,
+        }
+        for evidence_ref in evidence_refs:
+            indexed.setdefault(evidence_ref, []).append(candidate)
+    return indexed, [], scanned
+
+
+def verified_notion_locator_resolution_evidence(
+    archive_root: Path | str,
+    *,
+    _claim_key_provider: Any | None = None,
+) -> dict[str, Any]:
+    """Read completed resolution ledgers without exposing target identities.
+
+    The returned ``by_target_identity`` map is private in-process evidence for
+    the locator-loss audit.  Callers must never serialize it.  Every accepted
+    ledger is byte-hashed, self-consistent with its operation evidence, and
+    paired with the approved exact-operation final receipt and checkpoint that
+    independently observed the ledger write.
+    """
+
+    root = archive_services.require_existing_archive_root(archive_root)
+    archive_id = archive_services.read_archive_id(root)
+    archive_identity = exact_human_approval_archive_identity_sha256(archive_id)
+    receipts_by_evidence, blockers, receipt_count = (
+        _verified_resolution_receipts_by_evidence(
+            root,
+            claim_key_provider=_claim_key_provider,
+        )
+    )
+    directory = archive_services.archive_internal_path(
+        root,
+        f"{LEDGER_ROOT}/notion_locator_orphan",
+    )
+    try:
+        entries = _safe_private_entries(
+            directory,
+            maximum=MAX_VERIFIED_RESOLUTION_LEDGERS,
+            missing_ok=True,
+        )
+    except archive_services.ArchiveServiceError:
+        entries = ()
+        blockers.append("local_locator_resolution_ledger_scan_invalid")
+
+    by_target: dict[str, dict[str, Any]] = {}
+    conflicted_targets: set[str] = set()
+    verified_ledger_count = 0
+    skipped_legacy_ledger_count = 0
+    for path in entries:
+        match = re.fullmatch(r"([0-9a-f]{64})\.json", path.name)
+        raw, reason = archive_services._bounded_stable_regular_file_read(
+            path,
+            max_bytes=64 * 1024 * 1024,
+        )
+        if (
+            match is None
+            or raw is None
+            or reason is not None
+            or not raw.endswith(b"\n")
+            or hashlib.sha256(raw).hexdigest() != match.group(1)
+        ):
+            blockers.append("local_locator_resolution_ledger_scan_invalid")
+            continue
+        try:
+            document = json.loads(
+                raw[:-1].decode("ascii"),
+                object_pairs_hook=_reject_duplicate_pairs,
+                parse_constant=_reject_nonfinite,
+            )
+        except (UnicodeError, json.JSONDecodeError, RecursionError, ValueError):
+            blockers.append("local_locator_resolution_ledger_scan_invalid")
+            continue
+        if (
+            not isinstance(document, dict)
+            or _canonical_bytes(document) + b"\n" != raw
+        ):
+            blockers.append("local_locator_resolution_ledger_scan_invalid")
+            continue
+        if document.get("schema") in ORPHAN_RECOVERY_LEGACY_LEDGER_SCHEMAS:
+            if (
+                document.get("archive_identity_sha256") == archive_identity
+                and document.get("private_values_echoed") is False
+            ):
+                skipped_legacy_ledger_count += 1
+            else:
+                blockers.append("local_locator_resolution_ledger_scan_invalid")
+            continue
+        if (
+            set(document)
+            != {
+                "schema",
+                "archive_identity_sha256",
+                "classification_items",
+                "operation_evidence",
+                "private_values_echoed",
+            }
+            or document.get("schema") != ORPHAN_RECOVERY_LEDGER_SCHEMA
+            or document.get("archive_identity_sha256") != archive_identity
+            or document.get("private_values_echoed") is not False
+            or not isinstance(document.get("classification_items"), list)
+            or len(document["classification_items"]) > MAX_RETURNED_ITEMS
+        ):
+            blockers.append("local_locator_resolution_ledger_scan_invalid")
+            continue
+        try:
+            evidence = ExactOperationEvidence.from_document(
+                document["operation_evidence"]
+            )
+        except (ExactOperationManifestError, KeyError, TypeError):
+            blockers.append("local_locator_resolution_ledger_scan_invalid")
+            continue
+        if evidence.schema != ORPHAN_RECOVERY_EVIDENCE_SCHEMA:
+            blockers.append("local_locator_resolution_ledger_scan_invalid")
+            continue
+        candidates = receipts_by_evidence.get(evidence.evidence_sha256, [])
+        ledger_field_hash = hash_field_value(raw)
+        completed = [
+            candidate
+            for candidate in candidates
+            if sum(
+                1
+                for row in candidate["checkpoints"]
+                if row.get("stage") == "field_verified"
+                and row.get("field_ref") == "classification.ledger"
+                and row.get("observed_sha256") == ledger_field_hash
+            )
+            == 1
+        ]
+        if not completed:
+            blockers.append("local_locator_resolution_receipt_missing")
+            continue
+
+        public_projection: list[dict[str, Any]] = []
+        ledger_valid = True
+        resolved_rows: list[dict[str, Any]] = []
+        auditable_rows: list[dict[str, Any]] = []
+        expected_item_keys = {
+            "ordinal",
+            "item_ref_sha256",
+            "target_identity_sha256",
+            "state",
+            "orphan_row_count",
+            "verified_reference_marker_count",
+            "verified_reference_binding_count",
+            "verified_reference_resolved_count",
+            "review_pending_orphan_count",
+            "declared_omission_count",
+            "blocker_codes",
+            "current_body_sha256",
+            "expected_post_body_sha256",
+            "historical_after_body_sha256",
+            "receipt_sha256",
+            "binding_manifest_sha256",
+            "verified_replacement_set_sha256",
+        }
+        for ordinal, item in enumerate(document["classification_items"]):
+            if not isinstance(item, dict) or set(item) != expected_item_keys:
+                ledger_valid = False
+                break
+            public_projection.append(
+                {
+                    "ordinal": item.get("ordinal"),
+                    "item_ref_sha256": item.get("item_ref_sha256"),
+                    "state": item.get("state"),
+                    "orphan_row_count": item.get("orphan_row_count"),
+                    "verified_reference_binding_count": item.get(
+                        "verified_reference_binding_count"
+                    ),
+                    "verified_reference_marker_count": item.get(
+                        "verified_reference_marker_count"
+                    ),
+                    "verified_reference_resolved_count": item.get(
+                        "verified_reference_resolved_count"
+                    ),
+                    "review_pending_orphan_count": item.get(
+                        "review_pending_orphan_count"
+                    ),
+                    "blocker_codes": item.get("blocker_codes"),
+                }
+            )
+            if (
+                item.get("ordinal") != ordinal
+                or re.fullmatch(
+                    r"sha256:[0-9a-f]{64}",
+                    str(item.get("item_ref_sha256") or ""),
+                )
+                is None
+                or re.fullmatch(
+                    r"sha256:[0-9a-f]{64}",
+                    str(item.get("target_identity_sha256") or ""),
+                )
+                is None
+                or type(item.get("orphan_row_count")) is not int
+                or int(item["orphan_row_count"]) <= 0
+                or type(item.get("verified_reference_marker_count")) is not int
+                or int(item["verified_reference_marker_count"]) < 0
+                or type(item.get("verified_reference_binding_count")) is not int
+                or int(item["verified_reference_binding_count"]) < 0
+                or type(item.get("verified_reference_resolved_count"))
+                is not int
+                or int(item["verified_reference_resolved_count"]) < 0
+                or type(item.get("review_pending_orphan_count")) is not int
+                or int(item["review_pending_orphan_count"]) < 0
+                or type(item.get("declared_omission_count")) is not int
+                or int(item["declared_omission_count"])
+                < int(item["orphan_row_count"])
+                or not isinstance(item.get("blocker_codes"), list)
+                or item.get("state")
+                not in {
+                    "normal_maintain",
+                    "resolved_by_verified_reference",
+                    "partially_resolved_by_verified_reference",
+                    "restore_ready",
+                    "review_pending",
+                }
+            ):
+                ledger_valid = False
+                break
+            resolved_count = int(item["verified_reference_resolved_count"])
+            review_count = int(item["review_pending_orphan_count"])
+            if item.get("state") in {
+                "resolved_by_verified_reference",
+                "partially_resolved_by_verified_reference",
+            }:
+                if (
+                    resolved_count <= 0
+                    or resolved_count + review_count
+                    != item["orphan_row_count"]
+                    or (
+                        item.get("state")
+                        == "resolved_by_verified_reference"
+                        and review_count != 0
+                    )
+                    or (
+                        item.get("state")
+                        == "partially_resolved_by_verified_reference"
+                        and review_count <= 0
+                    )
+                ):
+                    ledger_valid = False
+                    break
+            elif item.get("state") == "review_pending":
+                if resolved_count != 0 or review_count != item["orphan_row_count"]:
+                    ledger_valid = False
+                    break
+            elif resolved_count != 0 or review_count != 0:
+                ledger_valid = False
+                break
+            current_body_sha256 = item.get("current_body_sha256")
+            expected_post_body_sha256 = item.get(
+                "expected_post_body_sha256"
+            )
+            current_body_readable = bool(
+                re.fullmatch(
+                    r"sha256:[0-9a-f]{64}",
+                    str(current_body_sha256 or ""),
+                )
+            )
+            expected_post_body_readable = bool(
+                re.fullmatch(
+                    r"sha256:[0-9a-f]{64}",
+                    str(expected_post_body_sha256 or ""),
+                )
+            )
+            if current_body_readable != expected_post_body_readable:
+                ledger_valid = False
+                break
+            if not current_body_readable:
+                if (
+                    current_body_sha256 is not None
+                    or expected_post_body_sha256 is not None
+                    or item.get("state") != "review_pending"
+                ):
+                    ledger_valid = False
+                    break
+            else:
+                if (
+                    item.get("state") != "restore_ready"
+                    and expected_post_body_sha256 != current_body_sha256
+                ):
+                    ledger_valid = False
+                    break
+                auditable_rows.append(item)
+            if re.fullmatch(
+                r"sha256:[0-9a-f]{64}",
+                str(item.get("historical_after_body_sha256") or ""),
+            ) is None:
+                ledger_valid = False
+                break
+            if item.get("state") == "restore_ready" and (
+                current_body_sha256
+                != item.get("historical_after_body_sha256")
+            ):
+                ledger_valid = False
+                break
+            if resolved_count == 0:
+                continue
+            if (
+                item["verified_reference_marker_count"]
+                != resolved_count
+                or item["verified_reference_binding_count"] <= 0
+                or item.get("current_body_sha256")
+                != item.get("historical_after_body_sha256")
+                or re.fullmatch(
+                    r"sha256:[0-9a-f]{64}",
+                    str(item.get("current_body_sha256") or ""),
+                )
+                is None
+                or re.fullmatch(
+                    r"sha256:[0-9a-f]{64}",
+                    str(item.get("binding_manifest_sha256") or ""),
+                )
+                is None
+            ):
+                ledger_valid = False
+                break
+            resolved_rows.append(item)
+        evidence_counts = dict(evidence.counts)
+        evidence_digests = dict(evidence.digests)
+        if (
+            not ledger_valid
+            or evidence_counts.get("classified_orphan_row_count")
+            != sum(int(item["orphan_row_count"]) for item in document["classification_items"])
+            or evidence_counts.get("resolved_by_verified_reference_count")
+            != sum(
+                int(item["verified_reference_resolved_count"])
+                for item in resolved_rows
+            )
+            or evidence_counts.get("review_pending_count")
+            != sum(
+                int(item["review_pending_orphan_count"])
+                for item in document["classification_items"]
+            )
+            or evidence_digests.get("orphan_classification_set_sha256")
+            != _sha(_canonical_bytes(public_projection))
+        ):
+            blockers.append("local_locator_resolution_ledger_scan_invalid")
+            continue
+        verified_ledger_count += 1
+        for item in auditable_rows:
+            target_identity = str(item["target_identity_sha256"])
+            candidate = {
+                "resolved_occurrence_count": int(
+                    item["verified_reference_resolved_count"]
+                ),
+                "review_pending_occurrence_count": int(
+                    item["review_pending_orphan_count"]
+                ),
+                "classified_occurrence_count": int(item["orphan_row_count"]),
+                "expected_body_sha256": str(
+                    item["expected_post_body_sha256"]
+                ),
+                "expected_declared_omission_count": int(
+                    item["declared_omission_count"]
+                ),
+            }
+            if _merge_verified_resolution_candidate(
+                by_target,
+                conflicted_targets,
+                target_identity=target_identity,
+                candidate=candidate,
+            ):
+                blockers.append("local_locator_resolution_ledger_conflict")
+    return {
+        "by_target_identity": by_target,
+        "verified_ledger_count": verified_ledger_count,
+        "skipped_legacy_ledger_count": skipped_legacy_ledger_count,
+        "conflicted_target_count": len(conflicted_targets),
+        "verified_resolution_zettel_count": len(by_target),
+        "verified_resolution_row_count": sum(
+            int(item["resolved_occurrence_count"])
+            for item in by_target.values()
+        ),
+        "verified_classified_row_count": sum(
+            int(item["classified_occurrence_count"])
+            for item in by_target.values()
+        ),
+        "verified_review_pending_row_count": sum(
+            int(item["review_pending_occurrence_count"])
+            for item in by_target.values()
+        ),
+        "exact_operation_receipt_count": receipt_count,
+        "blockers": archive_services.unique_preserve_order(blockers),
+        "private_values_echoed": False,
+        "paths_echoed": False,
+    }
 
 
 def _privacy_guards() -> dict[str, bool]:
@@ -1452,9 +2477,11 @@ def notion_locator_local_recovery_execution_plan(
 
 
 __all__ = [
+    "discover_markup_normalization_receipts",
     "notion_locator_local_recovery_execution_plan",
     "notion_locator_mirror_recovery_execution_plan",
     "notion_locator_mirror_recovery_plan",
     "notion_locator_orphan_recovery_execution_plan",
     "notion_locator_orphan_recovery_plan",
+    "verified_notion_locator_resolution_evidence",
 ]

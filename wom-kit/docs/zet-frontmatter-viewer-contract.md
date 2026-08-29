@@ -1,6 +1,6 @@
 # zet Frontmatter Viewer Contract
 
-Status: v0.4.11 canonical-storage versus WOM-safe human-document view
+Status: v0.4.14 complete-document WOM-safe view and bounded-source paging
 
 Canonical WOM zets are Markdown files with YAML frontmatter. That frontmatter is
 part of the storage format, not the human document body.
@@ -36,11 +36,12 @@ or:
 archive read-zettel <archive-root> --path zettels/example.md --section document
 ```
 
-Text output in `document` mode prints only the body. It does not print raw
-frontmatter fences or the CLI metadata header. For an unpaged document read,
-the returned body is a display-only WOM-safe Markdown projection: Korean range
-tildes and unmatched `~~` or `**` cannot accidentally open GFM markup, while
-completed intentional markup and code remain unchanged.
+Text output is a human display surface. In `document` mode it prints only the
+body and omits both raw frontmatter fences and the CLI metadata header. For any
+unpaged body-bearing text read (`body`, `document`, or `all`), the characters
+printed to the terminal are a display-only WOM-safe Markdown projection: Korean
+range tildes and unmatched `~~` or `**` cannot accidentally open GFM markup,
+while completed intentional markup and code remain unchanged.
 
 JSON output keeps a small machine-readable envelope:
 
@@ -80,10 +81,26 @@ archive read-zettel <archive-root> --zettel-id <id> --section document --body-cu
 
 Offsets count Unicode code points. If the body changes between pages, the read
 fails instead of joining two versions. Paging never changes canonical files.
-Bounded pages intentionally return canonical source characters rather than a
-display projection. This keeps every cursor and `body_sha256` bound to one
-unchanged source. A viewer may apply the same pure projection only after it has
-assembled and hash-verified the complete body.
+
+Every request that supplies `body_max_chars` or `body_cursor` is a bounded page,
+including a first page that happens to reach the end of the body. Every bounded
+page returns canonical source characters rather than a display projection. Its
+JSON result omits `display`, sets
+`integrity.returned_body_is_display_projection` to `false`, and records:
+
+```json
+{
+  "body_page": {
+    "display_projection_state": "deferred_until_complete_body",
+    "display_projection_reason": "page_boundary_context_incomplete"
+  }
+}
+```
+
+This prevents a page boundary from changing the meaning of fences, code spans,
+or paired Markdown delimiters and keeps every cursor and `body_sha256` bound to
+one unchanged source. A viewer may apply the same pure projection only after it
+has assembled and hash-verified the complete body.
 
 ## Canonical versus display hashes
 
@@ -94,9 +111,11 @@ are a derived human view. When projection is active, `display` repeats both
 hashes and content-free marker counts. It never includes a body excerpt, title,
 or local absolute path.
 
-Use `--section body` when a tool needs the exact decoded canonical Markdown.
+Use `--section body --format json`, the service API, or MCP when a tool needs the
+exact decoded canonical Markdown. Plain text CLI output is intentionally a
+human display copy even when `--section body` or `--section all` is selected.
 Use an unpaged `--section document` when the next surface will render Markdown
-for a person.
+for a person without metadata. Do not project each page independently.
 
 ## Raw Markdown View
 
@@ -116,7 +135,8 @@ When an AI assistant presents a zet to a human:
 - use `--section document` for a body-first document read;
 - treat its `display` metadata as a derived-view label, never as a canonical
   write instruction;
-- use `--section body` for exact canonical Markdown bytes after UTF-8 decoding;
+- use `--section body --format json`, the service API, or MCP for exact
+  canonical Markdown after UTF-8 decoding;
 - for a large body, use bounded JSON pages and bind every continuation to the
   first page's complete body hash;
 - use `--section details` only when the user asks to inspect metadata.
@@ -125,3 +145,5 @@ When an AI assistant presents a zet to a human:
 
 This release does not add a web UI, editor, or Markdown renderer. It adds a
 stable read-only CLI contract that a UI, editor, or AI runtime can call.
+Installing the release changes no zet; both canonical paging and the safe
+complete-document view occur only when the read command is invoked.

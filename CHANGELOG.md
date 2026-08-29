@@ -6,6 +6,34 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.4.14 - 2026-08-29
+
+- Replaced whole-body historical omission restoration with exact replay of the
+  original normalization plus reviewed reference bindings. Verified current
+  references remain intact, partial coverage stays explicit, and weak evidence
+  is never promoted to an automatic body or link write.
+- Added complete safe markup-receipt discovery and a private classification
+  ledger bound to `ExactOperationManifest v1`, native approval, durable
+  checkpoints, resume, independent verification, and exact revert. WOM derives
+  counts and hashes; the person chooses only run or cancel.
+- Made locator-loss auditing recognize approved standalone and combined local
+  recovery receipts, preserve CRLF body identity, require current canonical zet
+  and omission identity, ignore known legacy ledgers as non-authoritative, and
+  remove conflicting target evidence from resolution counts.
+- Made identifier-title recovery accept a containing mirror folder only when
+  the required Markdown/index pair is exact, safe, and unambiguous.
+- Added local-only, current-byte-bound target clues to supported native Windows
+  decisions. Unsafe, stale, redacted, path-like, locator-like, email-like, and
+  secret-like text is omitted and never enters plans, digests, receipts, or
+  public output.
+- Added a display-only complete-document Markdown projection for literal range
+  tildes and incomplete emphasis delimiters while preserving intentional markup
+  and code. Incomplete pages remain canonical source and explicitly defer the
+  projection until complete hash-verified assembly.
+- Kept the client boundary explicit: publishing and installing this release do
+  not inspect or change an archive, and private recovery is complete only after
+  the client-authorized receipt and independent post-state verification.
+
 ## v0.4.13 - 2026-08-29
 
 - Made local object-storage setup evidence exact-first and content-free across

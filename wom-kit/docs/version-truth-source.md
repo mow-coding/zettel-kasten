@@ -1,8 +1,10 @@
 # WOM-kit Version Truth Source
 
-Status: v0.4.13 exact setup evidence and create-only object-storage preservation
+Status: v0.4.14 reference-aware local recovery and safe decision views
 
-Current checkpoint: Status: v0.4.13 exact setup and remote preservation truth
+Current checkpoint: Status: v0.4.14 current-reference and client-execution truth
+
+Previous checkpoint: Status: v0.4.13 exact setup and remote preservation truth
 
 Previous checkpoint: Status: v0.4.12 indexed-link and same-generation delta-or-dirty truth
 
@@ -42,28 +44,28 @@ or runtime workflow. This page defines the safe order for checking them.
 
 ## Current Public Tool
 
-The v0.4.13 URL is a conditional release-artifact contract. Use it only after
+The v0.4.14 URL is a conditional release-artifact contract. Use it only after
 the matching public GitHub Release exists and lists the exact wheel:
 
 ```powershell
-py -m venv .wom-bootstrap-v0413
-& .\.wom-bootstrap-v0413\Scripts\python.exe -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.13/wom_kit-0.4.13-py3-none-any.whl"
-& .\.wom-bootstrap-v0413\Scripts\archive.exe --version
+py -m venv .wom-bootstrap-v0414
+& .\.wom-bootstrap-v0414\Scripts\python.exe -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.14/wom_kit-0.4.14-py3-none-any.whl"
+& .\.wom-bootstrap-v0414\Scripts\archive.exe --version
 ```
 
-Require exactly `archive 0.4.13` from a new process. The installed runtime adds
-exact-first object-storage setup evidence and conditional create-only emergency
-preservation with durable three-state receipts and manifest-bound resume.
+Require exactly `archive 0.4.14` from a new process. The installed runtime adds
+reference-aware local locator classification, exact private ledger execution,
+safe hash-bound decision clues, and a complete-document Markdown display view.
 A bootstrap install alone changes no archive, remote ref, project-local source
 mirror, pin, shared PATH tool, other project, or provider. Project update is a
 separate native exact-human workflow that creates and activates the
-project-local runtime with its own receipt. Provider access and byte
-preservation require another explicit client-authorized operation. WOM verifies
-counts, hashes, setup identity, drift, provider evidence, checkpoints, and
-receipts; the person does not count or compare technical values. See
+project-local runtime with its own receipt. Private recovery requires another
+explicit client-authorized operation. WOM verifies counts, hashes, current zet
+and omission identity, receipt lineage, drift, checkpoints, and receipts; the
+person does not count or compare technical values. See
 [ExactOperationManifest v1](exact-operation-manifest-v1.md), the
-[object-storage execution contract](object-storage-adapter-execution-contract.md),
-and the [v0.4.13 release note](releases/v0.4.13.md).
+[locator-loss audit](notion-import-locator-loss-audit.md), and the
+[v0.4.14 release note](releases/v0.4.14.md).
 
 ## Canonical Checks
 
@@ -84,7 +86,7 @@ form is for AI runtimes and scripts. `runtime-context` includes the same
 version summary under `wom_kit_version`, so an agent can confirm archive identity
 and kit version in one read-only request.
 
-For a v0.4.13 project, the `project_runtime` object is also canonical evidence.
+For a v0.4.14 project, the `project_runtime` object is also canonical evidence.
 It separately reports the versioned receipt, a freshly observed installed-
 payload tree hash, installed module inventory, stable launcher, current
 executable/module/prefix and isolated Python flags, project-relative

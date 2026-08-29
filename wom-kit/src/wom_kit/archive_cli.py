@@ -389,7 +389,7 @@ import sys
 import threading
 import time
 from contextlib import ExitStack, contextmanager, nullcontext, redirect_stderr
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date, datetime, timezone
 from fnmatch import fnmatchcase
 from pathlib import Path, PurePosixPath
@@ -444,6 +444,7 @@ from .exact_human_approval_windows import (
     ExactHumanApprovalContext,
     ExactHumanApprovalOperation,
     ExactHumanApprovalTargetPreview,
+    exact_human_approval_safe_content_preview,
     exact_human_approval_warning_codes,
     ExactHumanApprovalWindowsError,
 )
@@ -454,6 +455,7 @@ from .exact_human_approval_workflow import (
     _resume_exact_human_approved_transaction_core,
 )
 from .exact_operation_manifest import ExactOperationManifestError, ExactOperationProgress
+from .markdown_display import project_wom_safe_markdown
 from .resource_paths import runtime_release_note_path, runtime_resource_root
 from .schema_validator import validate_schema
 
@@ -13253,6 +13255,17 @@ def command_zettel_edge(args: argparse.Namespace) -> int:
             binding = operation_approval_binding.zettel_edge_approval_binding(
                 preview
             )
+            source_preview = (
+                preview.get("source")
+                if isinstance(preview.get("source"), dict)
+                else {}
+            )
+            binding = _binding_with_primary_bound_zettel_preview(
+                binding,
+                archive_root,
+                relative_path=source_preview.get("path"),
+                expected_file_sha256=source_preview.get("current_sha256"),
+            )
             context = binding.context(
                 archive_id=archive_services.read_archive_id(archive_root),
                 reviewer_claim=str(args.reviewed_by or "").strip(),
@@ -19715,11 +19728,22 @@ def command_read_zettel(args: argparse.Namespace) -> int:
     if args.format == "json":
         print_json(result)
     else:
+        integrity = (
+            result.get("integrity")
+            if isinstance(result.get("integrity"), dict)
+            else {}
+        )
+        returned_body = str(result.get("body", ""))
+        human_body = (
+            returned_body
+            if integrity.get("returned_body_is_display_projection") is True
+            else str(project_wom_safe_markdown(returned_body)["text"])
+        )
         if result.get("section") == "document":
             if result.get("body_omitted"):
                 print("(body omitted)")
             else:
-                print(result["body"].rstrip())
+                print(str(human_body).rstrip())
             return 0
         frontmatter = result["frontmatter"]
         print(f"Path: {result['path']}")
@@ -19744,7 +19768,7 @@ def command_read_zettel(args: argparse.Namespace) -> int:
         if result.get("body_omitted"):
             print("(body omitted)")
         else:
-            print(result["body"].rstrip())
+            print(str(human_body).rstrip())
     return 0
 
 
@@ -20021,9 +20045,34 @@ def command_notion_import_locator_loss_audit(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         return 1
+    markup_receipts = list(getattr(args, "markup_receipt", None) or [])
+    all_markup_receipts = bool(
+        getattr(args, "all_markup_receipts", False)
+    )
+    if markup_receipts and all_markup_receipts:
+        print(
+            "Use either --markup-receipt or --all-markup-receipts, not both.",
+            file=sys.stderr,
+        )
+        return 1
+    if all_markup_receipts:
+        try:
+            from .local_locator_recovery import (
+                discover_markup_normalization_receipts,
+            )
+
+            markup_receipts = discover_markup_normalization_receipts(
+                Path(args.archive_root)
+            )
+        except Exception:
+            print(
+                "Markup receipt discovery failed safely.",
+                file=sys.stderr,
+            )
+            return 1
     if (
         getattr(args, "expected_orphan_row_count", None) is not None
-        and not getattr(args, "markup_receipt", None)
+        and not markup_receipts
     ):
         print(
             "--expected-orphan-row-count requires at least one "
@@ -20042,9 +20091,6 @@ def command_notion_import_locator_loss_audit(args: argparse.Namespace) -> int:
             dry_run=True,
             max_items=args.max_items,
             progress_callback=progress_callback,
-        )
-        markup_receipts = list(
-            getattr(args, "markup_receipt", None) or []
         )
         if markup_receipts:
             from .local_locator_recovery import (
@@ -20107,9 +20153,10 @@ def command_notion_import_locator_loss_audit(args: argparse.Namespace) -> int:
             )
             print(
                 "- transaction-created orphan rows "
-                "maintain/restore/review: "
+                "total; maintain/resolved/restore/review: "
                 f"{orphan_summary.get('orphan_row_count', 0)} "
                 f"{orphan_summary.get('normal_maintain_count', 0)}/"
+                f"{orphan_summary.get('resolved_by_verified_reference_count', 0)}/"
                 f"{orphan_summary.get('restore_ready_count', 0)}/"
                 f"{orphan_summary.get('review_pending_count', 0)}"
             )
@@ -20336,6 +20383,29 @@ def _print_local_recovery_execution_result(
     print(f"WOM local recovery: {result.get('state') or 'blocked'}")
     print(f"- domain: {result.get('domain') or '-'}")
     print(f"- items: {result.get('item_count', manifest_item_count)}")
+    summary = (
+        result.get("summary")
+        if isinstance(result.get("summary"), dict)
+        else {}
+    )
+    if result.get("domain") == "notion_locator_orphan" and summary:
+        print(
+            "- locator rows classified: "
+            f"{summary.get('classified_orphan_row_count', 0)}/"
+            f"{summary.get('orphan_row_count', 0)}"
+        )
+        print(
+            "- already resolved by verified references: "
+            f"{summary.get('resolved_by_verified_reference_count', 0)}"
+        )
+        print(
+            "- omission markers safe to restore: "
+            f"{summary.get('restore_ready_count', 0)}"
+        )
+        print(
+            "- rows held for review: "
+            f"{summary.get('review_pending_count', 0)}"
+        )
     print(f"- fields written this run: {result.get('written_field_count', 0)}")
     print(f"- fields resumed: {result.get('resumed_field_count', 0)}")
     if result.get("manifest_sha256"):
@@ -20971,6 +21041,12 @@ def command_zettel_objet_link(args: argparse.Namespace) -> int:
                     preview
                 )
             )
+            binding = _binding_with_primary_bound_zettel_preview(
+                binding,
+                archive_root,
+                relative_path=summary.get("zettel_path"),
+                expected_file_sha256=summary.get("zettel_sha256"),
+            )
             reviewer = str(args.reviewed_by).strip()
             context = binding.context(
                 archive_id=preview_archive_id,
@@ -21265,11 +21341,49 @@ def command_external_locator_plan(args: argparse.Namespace) -> int:
 def command_external_locator_record(args: argparse.Namespace) -> int:
     source_mirror = getattr(args, "source_mirror", None)
     markup_receipts = list(getattr(args, "markup_receipt", None) or [])
+    all_markup_receipts = bool(
+        getattr(args, "all_markup_receipts", False)
+    )
+    if markup_receipts and all_markup_receipts:
+        return _recognized_command_cli_error(
+            args,
+            command="external-locator-record",
+            lifecycle_action="external_locator_local_recovery",
+            error_class="usage",
+            reason_code="local_recovery_markup_receipt_mode_mixed",
+            text_message=(
+                "Use either --markup-receipt or --all-markup-receipts, "
+                "not both."
+            ),
+            exit_code=2,
+        )
+    if all_markup_receipts:
+        try:
+            from .local_locator_recovery import (
+                discover_markup_normalization_receipts,
+            )
+
+            markup_receipts = discover_markup_normalization_receipts(
+                Path(args.archive_root)
+            )
+        except Exception:
+            return _recognized_command_cli_error(
+                args,
+                command="external-locator-record",
+                lifecycle_action="external_locator_local_recovery",
+                error_class="precondition",
+                reason_code="local_recovery_markup_receipt_discovery_failed",
+                text_message=(
+                    "WOM could not safely discover the complete markup "
+                    "receipt inventory. No write was attempted."
+                ),
+            )
     resume_recovery = bool(getattr(args, "resume_recovery", False))
     revert_recovery = bool(getattr(args, "revert_recovery", False))
     recovery_mode = bool(
         source_mirror
         or markup_receipts
+        or all_markup_receipts
         or resume_recovery
         or revert_recovery
     )
@@ -21339,7 +21453,7 @@ def command_external_locator_record(args: argparse.Namespace) -> int:
                 exit_code=2,
             )
         if (resume_recovery or revert_recovery) and (
-            source_mirror or markup_receipts
+            source_mirror or markup_receipts or all_markup_receipts
         ):
             return _recognized_command_cli_error(
                 args,
@@ -21354,7 +21468,7 @@ def command_external_locator_record(args: argparse.Namespace) -> int:
                 exit_code=2,
             )
         if not (resume_recovery or revert_recovery) and not (
-            source_mirror or markup_receipts
+            source_mirror or markup_receipts or all_markup_receipts
         ):
             return _recognized_command_cli_error(
                 args,
@@ -21408,6 +21522,8 @@ def command_external_locator_record(args: argparse.Namespace) -> int:
                 "canonical-locators",
                 "locator-classification",
                 "markup-receipts",
+                "strict-local-zettels",
+                "markup-reference-bindings",
                 "orphan-classification",
             ),
         )
@@ -21975,6 +22091,112 @@ def _exact_human_approval_context(
     )
 
 
+def _bounded_plain_approval_preview(
+    value: Any,
+    *,
+    max_characters: int,
+    max_utf8_bytes: int,
+) -> str | None:
+    """Collapse one already-sanitized overview value into a dialog clue."""
+
+    return exact_human_approval_safe_content_preview(
+        value,
+        max_characters=max_characters,
+        max_utf8_bytes=max_utf8_bytes,
+        truncate=True,
+    )
+
+
+def _draft_exact_human_approval_target_preview(
+    *,
+    primary: str,
+    title: Any,
+) -> ExactHumanApprovalTargetPreview:
+    """Keep draft approval available when its optional title is unsafe to show."""
+
+    return ExactHumanApprovalTargetPreview(
+        kind="draft",
+        primary=primary,
+        primary_label=exact_human_approval_safe_content_preview(
+            title,
+            max_characters=160,
+            max_utf8_bytes=640,
+        ),
+    )
+
+
+def _binding_with_primary_bound_zettel_preview(
+    binding: operation_approval_binding.ExactOperationApprovalBinding,
+    archive_root: Path,
+    *,
+    relative_path: Any,
+    expected_file_sha256: Any,
+) -> operation_approval_binding.ExactOperationApprovalBinding:
+    """Add a local-only title/gist from the exact bytes the plan already binds.
+
+    This helper never changes the machine plan or target digests.  It accepts a
+    content clue only after ``read-zettel`` proves the archive-relative file's
+    current SHA-256 equals the digest already present in the operation plan.
+    Missing, unsafe, redacted, or changed evidence simply leaves the original
+    identity-only preview in place.
+    """
+
+    target = getattr(binding, "target_preview", None)
+    if target is None or type(relative_path) is not str:
+        return binding
+    try:
+        expected = _exact_human_sha256_ref(expected_file_sha256)
+        selected = archive_services.read_zettel(
+            archive_root,
+            relative_path=relative_path,
+            section="overview",
+        )
+        integrity = (
+            selected.get("integrity")
+            if isinstance(selected.get("integrity"), dict)
+            else {}
+        )
+        if (
+            selected.get("redacted") is True
+            or not secrets.compare_digest(
+                str(integrity.get("file_sha256") or ""),
+                expected,
+            )
+        ):
+            return binding
+        overview = (
+            selected.get("overview")
+            if isinstance(selected.get("overview"), dict)
+            else {}
+        )
+        title = _bounded_plain_approval_preview(
+            overview.get("title"),
+            max_characters=160,
+            max_utf8_bytes=640,
+        )
+        gist = _bounded_plain_approval_preview(
+            overview.get("gist"),
+            max_characters=180,
+            max_utf8_bytes=720,
+        )
+        if title is None and gist is None:
+            return binding
+        enriched = replace(
+            target,
+            primary_label=title or target.primary_label,
+            source_preview=gist,
+        )
+        return replace(binding, target_preview=enriched)
+    except (
+        archive_services.ArchiveServiceError,
+        ExactHumanApprovalWindowsError,
+        OSError,
+        TypeError,
+        ValueError,
+    ):
+        return binding
+
+
 def _exact_human_approval_cli_error(
     args: argparse.Namespace,
     *,
@@ -22519,12 +22741,11 @@ def command_create_draft(args: argparse.Namespace) -> int:
                     if isinstance(preview.get("warnings"), list)
                     else []
                 ),
-                target_preview=ExactHumanApprovalTargetPreview(
-                    kind="draft",
+                target_preview=_draft_exact_human_approval_target_preview(
                     primary=PurePosixPath(
                         str(preview.get("proposed_path") or args.draft_id)
                     ).name,
-                    secondary=str(args.title),
+                    title=args.title,
                 ),
             )
 
@@ -24335,6 +24556,12 @@ def command_promote(args: argparse.Namespace) -> int:
                 preview
             )
         )
+        binding = _binding_with_primary_bound_zettel_preview(
+            binding,
+            archive_root,
+            relative_path=preview.get("draft_path"),
+            expected_file_sha256=preview.get("source_sha256"),
+        )
         context = binding.context(
             archive_id=archive_services.read_archive_id(archive_root),
             reviewer_claim=str(args.reviewed_by).strip(),
@@ -24497,6 +24724,22 @@ def command_mint_zettel(args: argparse.Namespace) -> int:
                 )
             binding = operation_approval_binding.mint_zet_approval_binding(
                 preview
+            )
+            receipt_preview = (
+                preview.get("receipt_preview")
+                if isinstance(preview.get("receipt_preview"), dict)
+                else {}
+            )
+            receipt_source = (
+                receipt_preview.get("source")
+                if isinstance(receipt_preview.get("source"), dict)
+                else {}
+            )
+            binding = _binding_with_primary_bound_zettel_preview(
+                binding,
+                archive_root,
+                relative_path=preview.get("draft_path"),
+                expected_file_sha256=receipt_source.get("sha256"),
             )
             context = binding.context(
                 archive_id=archive_services.read_archive_id(archive_root),
@@ -24857,6 +25100,22 @@ def command_retire_draft(args: argparse.Namespace) -> int:
                 )
             binding = operation_approval_binding.retire_draft_approval_binding(
                 preview
+            )
+            receipt_preview = (
+                preview.get("receipt_preview")
+                if isinstance(preview.get("receipt_preview"), dict)
+                else {}
+            )
+            receipt_source = (
+                receipt_preview.get("source")
+                if isinstance(receipt_preview.get("source"), dict)
+                else {}
+            )
+            binding = _binding_with_primary_bound_zettel_preview(
+                binding,
+                archive_root,
+                relative_path=receipt_source.get("path"),
+                expected_file_sha256=receipt_source.get("sha256"),
             )
             context = binding.context(
                 archive_id=archive_services.read_archive_id(archive_root),
@@ -37546,6 +37805,14 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     notion_import_locator_loss_audit.add_argument(
+        "--all-markup-receipts",
+        action="store_true",
+        help=(
+            "Safely discover the complete fixed markup-normalization receipt "
+            "inventory; do not make the operator count or copy paths."
+        ),
+    )
+    notion_import_locator_loss_audit.add_argument(
         "--expected-orphan-row-count",
         type=int,
         help="Optional reviewed orphan-row inventory bound to the plan.",
@@ -37885,6 +38152,14 @@ def build_parser() -> argparse.ArgumentParser:
             "receipt-proven omission markers in the same batch."
         ),
     )
+    external_locator_record.add_argument(
+        "--all-markup-receipts",
+        action="store_true",
+        help=(
+            "Safely discover every fixed markup-normalization receipt and "
+            "bind the complete inventory to one recovery plan."
+        ),
+    )
     external_locator_record.add_argument("--expected-zettel-count", type=int)
     external_locator_record.add_argument("--expected-pair-count", type=int)
     external_locator_record.add_argument(
@@ -37934,6 +38209,7 @@ def build_parser() -> argparse.ArgumentParser:
             "allowed_flags": [
                 "--source-mirror",
                 "--markup-receipt",
+                "--all-markup-receipts",
                 "--resume-recovery",
                 "--revert-recovery",
             ],

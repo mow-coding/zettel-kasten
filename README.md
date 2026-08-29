@@ -34,10 +34,10 @@ not re-grow baseline ladders or tag lists here.
 Current public baseline:
 
 ```text
-v0.4.13
+v0.4.14
 ```
 
-Previous public baseline: v0.4.12.
+Previous public baseline: v0.4.13.
 
 Full release history: see [CHANGELOG.md](CHANGELOG.md) and [wom-kit/docs/releases/](wom-kit/docs/releases/).
 
@@ -57,7 +57,7 @@ matching GitHub Release exists and lists this wheel. The versioned URL alone is
 not proof that the asset is available.
 
 ```powershell
-uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.13/wom_kit-0.4.13-py3-none-any.whl"
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.14/wom_kit-0.4.14-py3-none-any.whl"
 archive --version
 ```
 
@@ -100,8 +100,8 @@ approval-gated write, or docs-only), see the
 - v0.4.4 makes native execution confirmation human-centered: WOM verifies counts, hashes, canonical state, completeness, and drift, while the person decides only whether to run the plainly described operation now. Technical bindings remain available under collapsed details and in durable receipts; see the [Exact Human Approval Contract](wom-kit/docs/exact-human-approval-contract.md) and [v0.4.4 release notes](wom-kit/docs/releases/v0.4.4.md),
 - v0.4.5 makes that human-centered confirmation usable from a clean Windows wheel install by activating Common Controls v6 and correcting the byte-packed Task Dialog ABI; it does not weaken machine verification or restore a human digest checklist; see the [v0.4.5 release notes](wom-kit/docs/releases/v0.4.5.md),
 - v0.4.6 adds exact, resumable R2 recovery inside the existing adoption family: local-only bytes can be content-addressed and independently rehashed without being mislabeled as adopted, while verified non-conflicting key-map entries can be recorded with one final manifest projection and conflicts remain explicit review debt; see the [v0.4.6 release notes](wom-kit/docs/releases/v0.4.6.md),
-- v0.4.12 makes the current generation-bound SQLite projection the authority for `zettel-objet-link`, returns deterministic `already_present` without approval or writes, and gives zet writers a same-generation delta-or-dirty lifecycle that fails before canonical writes when the index must be rebuilt. The parser-derived inventory is 47 approval-available and 67 fixed-closed paths. Installing the release changes no client archive; after an update the AI runs the explicit index rebuild and health check and verifies the technical evidence, while the person does not count files or compare hashes. See the [v0.4.12 release notes](wom-kit/docs/releases/v0.4.12.md),
 - v0.4.13 makes local object-storage setup evidence exact-first and privacy-safe, then makes single and multipart emergency preservation create-only at the remote publish point. New or already-present matching bytes require HEAD plus a complete GET rehash, proven conflicts become non-overwriting review evidence, unavailable states remain resumable, and preservation still does not claim formal adoption. Publishing or installing the release performs no client or provider operation; see the [v0.4.13 release notes](wom-kit/docs/releases/v0.4.13.md),
+- v0.4.14 makes historical locator recovery reference-aware instead of restoring whole old bodies: exact reviewed replacements remain intact, partial evidence becomes explicit review debt, and one private classification ledger carries native approval, checkpoints, resume, verification, and revert. Hash-bound local decision clues identify the target without entering plans or receipts, while complete human-document reads protect literal range tildes and incomplete emphasis without changing canonical bytes. Installing the release changes no client archive; see the [v0.4.14 release notes](wom-kit/docs/releases/v0.4.14.md),
 - a Windows-native, spawned-child credential-intake and authenticated lifecycle plus historical v0.3.320 Notion-recovery evidence: the one-use capability, pre-secret-read authenticated claim, endpoint/scope/budget checks, and three-way content-free evidence remain auditable. In v0.4.0 Notion recovery approval is fixed fail-closed before credential read, provider call, or archive mutation with `compound_exact_human_approval_binding_required`; the read-only plan and verified local replay remain available. WOM never accepts a PAT through argv/stdin/environment, searches a workspace broadly, writes to Notion, or rewrites canonical zets; see [Letters 118 and 119](wom-kit/docs/letter118-119-credential-continuity-and-notion-page-recovery.md) and the [Credential Capability Contract](wom-kit/docs/credential-capability-contract.md),
 - one fail-closed current-index authority for protected search, structured `view-zets`, and mint planning; `mint-zet --progress` now emits content-free start and heartbeat evidence to stderr while reserving stdout for the final result, and the separate operator-feedback body companion uses an exact six-section private request plus digest-bound human approval and lifecycle checking without submitting externally or proving real-archive repair; see [Letters 120 and 123](wom-kit/docs/letter120-123-index-lifecycle-and-feedback-body.md),
 - a private source-fidelity gate for every new AI-assisted or AI-generated draft: one manifested content-addressed source, explicit `verbatim`, `faithful_summary`, or `sanitized_derivative` mode, dry-run hashes, and attributed human replay are required before a write; `private_self` verbatim preserves personal source data while credential secrets block, declared AI provenance cannot downgrade to the human route, mint re-verifies the private receipt, and audience metadata never shares or exports anything; see [Source Fidelity And Private Verbatim Preservation](wom-kit/docs/source-fidelity-and-private-verbatim.md),
@@ -523,7 +523,7 @@ WOM, `zettel-kasten`, `zet`, and `ZET` are managed as a versioned protocol famil
 Release tags are compatibility checkpoints:
 
 ```text
-v0.4.13 (current checkpoint)
+v0.4.14 (current checkpoint)
 ```
 
 Public releases from `v0.2.5` onward are tagged as compatibility checkpoints.

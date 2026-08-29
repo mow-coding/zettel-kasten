@@ -106,6 +106,12 @@ before approving any frontmatter rewrite.
 Current public baseline:
 
 ```text
+v0.4.14
+```
+
+Previous public baseline:
+
+```text
 v0.4.13
 ```
 
@@ -116,11 +122,11 @@ This baseline is for early review and prototyping. It is not yet a stable `v1.0.
 The current `wom-kit` package metadata is:
 
 ```text
-0.4.13
+0.4.14
 ```
 
 Therefore the current public compatibility tag for this repository should be:
 
 ```text
-v0.4.13
+v0.4.14
 ```
