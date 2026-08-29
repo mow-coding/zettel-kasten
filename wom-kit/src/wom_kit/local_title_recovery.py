@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
+import stat
+from contextlib import contextmanager
 from pathlib import Path, PurePosixPath
-from typing import Any, Callable
+from typing import Any, Callable, Iterator
 
 from . import archive_services
 from .exact_human_approval import exact_human_approval_archive_identity_sha256
@@ -43,6 +46,14 @@ _RECEIPT_NAME_RE = re.compile(
 
 class _DuplicateKey(ValueError):
     pass
+
+
+class _SourceTitleMirrorError(archive_services.ArchiveServiceError):
+    """A privacy-safe source-mirror refusal with a stable public code."""
+
+    def __init__(self, reason_code: str) -> None:
+        super().__init__(reason_code)
+        self.reason_code = reason_code
 
 
 def _reject_duplicate_pairs(
@@ -590,36 +601,330 @@ def zet_title_field_local_recovery_plan(
     return result
 
 
+def _source_title_is_reparse(value: os.stat_result) -> bool:
+    reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+    return bool(
+        reparse_flag
+        and getattr(value, "st_file_attributes", 0) & reparse_flag
+    )
+
+
+def _source_title_bound_child_stat(
+    parent: archive_services._BoundDirectory,
+    path: Path,
+) -> os.stat_result:
+    if path.parent != parent.path:
+        raise OSError("source_title_bound_child_parent_mismatch")
+    if parent.descriptor is not None:
+        return os.stat(
+            path.name,
+            dir_fd=parent.descriptor,
+            follow_symlinks=False,
+        )
+    return os.stat(path, follow_symlinks=False)
+
+
+def _source_title_bound_error_reason(
+    error: OSError,
+    *,
+    default: str,
+) -> str:
+    code = str(error).casefold()
+    if "unsafe" in code or "reparse" in code:
+        return "identifier_title_source_mirror_entry_unsafe"
+    if "changed" in code or "mismatch" in code:
+        return "identifier_title_source_mirror_changed_during_read"
+    return default
+
+
+def _read_bound_source_title_file(
+    held: archive_services._BoundRegularFile,
+    *,
+    max_bytes: int,
+) -> bytes:
+    """Read one already-held mirror file without reopening its path."""
+
+    try:
+        initial = held.initial_stat
+        if not stat.S_ISREG(initial.st_mode) or _source_title_is_reparse(initial):
+            raise _SourceTitleMirrorError(
+                "identifier_title_source_mirror_entry_unsafe"
+            )
+        if initial.st_size > max_bytes:
+            raise _SourceTitleMirrorError(
+                "identifier_title_source_mirror_too_large"
+            )
+        os.lseek(held.descriptor, 0, os.SEEK_SET)
+        chunks: list[bytes] = []
+        total = 0
+        while True:
+            chunk = os.read(
+                held.descriptor,
+                min(1024 * 1024, max_bytes + 1 - total),
+            )
+            if not chunk:
+                break
+            total += len(chunk)
+            if total > max_bytes:
+                raise _SourceTitleMirrorError(
+                    "identifier_title_source_mirror_too_large"
+                )
+            chunks.append(chunk)
+        final = os.fstat(held.descriptor)
+        if (
+            archive_services._bound_file_state(final)
+            != archive_services._bound_file_state(initial)
+            or total != final.st_size
+        ):
+            raise _SourceTitleMirrorError(
+                "identifier_title_source_mirror_changed_during_read"
+            )
+        return b"".join(chunks)
+    except _SourceTitleMirrorError:
+        raise
+    except OSError as exc:
+        raise _SourceTitleMirrorError(
+            _source_title_bound_error_reason(
+                exc,
+                default="identifier_title_source_mirror_unreadable",
+            )
+        ) from exc
+
+
+@contextmanager
+def _bound_source_title_pair_in_directory(
+    directory: archive_services._BoundDirectory,
+    *,
+    expected_markdown_stat: os.stat_result | None = None,
+) -> Iterator[
+    tuple[
+        archive_services._BoundRegularFile,
+        archive_services._BoundRegularFile,
+    ]
+]:
+    """Hold both exact pair members across the complete bounded read."""
+
+    expected_names = ("pages.markdown.jsonl", "pages.index.jsonl")
+    folded_counts = {name: 0 for name in expected_names}
+    exact_names: set[str] = set()
+    try:
+        with archive_services._scan_bound_directory(directory) as entries:
+            for entry in entries:
+                folded = entry.name.casefold()
+                for expected in expected_names:
+                    if folded == expected.casefold():
+                        folded_counts[expected] += 1
+                        if entry.name == expected:
+                            exact_names.add(expected)
+    except OSError as exc:
+        raise _SourceTitleMirrorError(
+            _source_title_bound_error_reason(
+                exc,
+                default="identifier_title_source_mirror_unreadable",
+            )
+        ) from exc
+    if any(count > 1 for count in folded_counts.values()):
+        raise _SourceTitleMirrorError(
+            "identifier_title_source_mirror_layout_ambiguous"
+        )
+    if any(
+        folded_counts[name] == 1 and name not in exact_names
+        for name in expected_names
+    ):
+        raise _SourceTitleMirrorError(
+            "identifier_title_source_mirror_layout_name_mismatch"
+        )
+    if not exact_names:
+        raise _SourceTitleMirrorError(
+            "identifier_title_source_mirror_pair_missing"
+        )
+    if exact_names != set(expected_names):
+        raise _SourceTitleMirrorError(
+            "identifier_title_source_mirror_pair_incomplete"
+        )
+
+    markdown_path = directory.path / "pages.markdown.jsonl"
+    title_path = directory.path / "pages.index.jsonl"
+    try:
+        markdown_stat = _source_title_bound_child_stat(
+            directory,
+            markdown_path,
+        )
+        title_stat = _source_title_bound_child_stat(directory, title_path)
+    except FileNotFoundError as exc:
+        raise _SourceTitleMirrorError(
+            "identifier_title_source_mirror_changed_during_read"
+        ) from exc
+    except OSError as exc:
+        raise _SourceTitleMirrorError(
+            _source_title_bound_error_reason(
+                exc,
+                default="identifier_title_source_mirror_unreadable",
+            )
+        ) from exc
+    for observed in (markdown_stat, title_stat):
+        if stat.S_ISLNK(observed.st_mode) or _source_title_is_reparse(observed):
+            raise _SourceTitleMirrorError(
+                "identifier_title_source_mirror_entry_unsafe"
+            )
+        if not stat.S_ISREG(observed.st_mode):
+            raise _SourceTitleMirrorError(
+                "identifier_title_source_mirror_layout_invalid"
+            )
+    if expected_markdown_stat is not None and (
+        int(markdown_stat.st_dev),
+        int(markdown_stat.st_ino),
+    ) != (
+        int(expected_markdown_stat.st_dev),
+        int(expected_markdown_stat.st_ino),
+    ):
+        raise _SourceTitleMirrorError(
+            "identifier_title_source_mirror_changed_during_read"
+        )
+
+    try:
+        with archive_services._hold_bound_regular_file(
+            directory,
+            markdown_path,
+            markdown_stat,
+        ) as markdown_file:
+            with archive_services._hold_bound_regular_file(
+                directory,
+                title_path,
+                title_stat,
+            ) as title_file:
+                yield markdown_file, title_file
+    except _SourceTitleMirrorError:
+        raise
+    except FileNotFoundError as exc:
+        raise _SourceTitleMirrorError(
+            "identifier_title_source_mirror_changed_during_read"
+        ) from exc
+    except OSError as exc:
+        raise _SourceTitleMirrorError(
+            _source_title_bound_error_reason(
+                exc,
+                default="identifier_title_source_mirror_unreadable",
+            )
+        ) from exc
+
+
+@contextmanager
+def _bound_source_title_mirror_pair(
+    source_mirror: Path | str,
+) -> Iterator[
+    tuple[
+        archive_services._BoundRegularFile,
+        archive_services._BoundRegularFile,
+    ]
+]:
+    """Bind every ancestor, the mirror directory, and both exact files."""
+
+    try:
+        supplied = Path(os.path.abspath(os.fspath(source_mirror)))
+        anchor = Path(supplied.anchor)
+    except (OSError, TypeError, ValueError) as exc:
+        raise _SourceTitleMirrorError(
+            "identifier_title_source_mirror_unreadable"
+        ) from exc
+    if not supplied.anchor:
+        raise _SourceTitleMirrorError(
+            "identifier_title_source_mirror_unreadable"
+        )
+
+    # A filesystem root can itself be the containing folder.  It has no child
+    # name to classify, so bind it directly and apply the same exact pair scan.
+    if supplied.parent == supplied:
+        try:
+            with archive_services._bound_directory_chain(
+                anchor,
+                supplied,
+            ) as directory:
+                with _bound_source_title_pair_in_directory(directory) as pair:
+                    yield pair
+            return
+        except _SourceTitleMirrorError:
+            raise
+        except OSError as exc:
+            raise _SourceTitleMirrorError(
+                _source_title_bound_error_reason(
+                    exc,
+                    default="identifier_title_source_mirror_unreadable",
+                )
+            ) from exc
+
+    try:
+        with archive_services._bound_directory_chain(
+            anchor,
+            supplied.parent,
+        ) as parent:
+            try:
+                supplied_stat = _source_title_bound_child_stat(parent, supplied)
+            except FileNotFoundError as exc:
+                raise _SourceTitleMirrorError(
+                    "identifier_title_source_mirror_missing"
+                ) from exc
+            if stat.S_ISLNK(supplied_stat.st_mode) or _source_title_is_reparse(
+                supplied_stat
+            ):
+                raise _SourceTitleMirrorError(
+                    "identifier_title_source_mirror_entry_unsafe"
+                )
+            if stat.S_ISREG(supplied_stat.st_mode):
+                if supplied.name != "pages.markdown.jsonl":
+                    raise _SourceTitleMirrorError(
+                        "identifier_title_source_mirror_entrypoint_invalid"
+                    )
+                with _bound_source_title_pair_in_directory(
+                    parent,
+                    expected_markdown_stat=supplied_stat,
+                ) as pair:
+                    yield pair
+                return
+            if not stat.S_ISDIR(supplied_stat.st_mode):
+                raise _SourceTitleMirrorError(
+                    "identifier_title_source_mirror_layout_invalid"
+                )
+            with archive_services._bound_child_directory(
+                anchor,
+                parent,
+                supplied,
+                supplied_stat,
+            ) as directory:
+                with _bound_source_title_pair_in_directory(directory) as pair:
+                    yield pair
+    except _SourceTitleMirrorError:
+        raise
+    except FileNotFoundError as exc:
+        raise _SourceTitleMirrorError(
+            "identifier_title_source_mirror_changed_during_read"
+        ) from exc
+    except OSError as exc:
+        raise _SourceTitleMirrorError(
+            _source_title_bound_error_reason(
+                exc,
+                default="identifier_title_source_mirror_unreadable",
+            )
+        ) from exc
+
+
 def _source_title_index(
     source_mirror: Path | str,
     *,
     progress_callback: Callable[[str, str, int | None, int | None], None]
     | None = None,
 ) -> tuple[bytes, dict[str, dict[str, Any]], int]:
-    markdown_path = Path(source_mirror)
-    if markdown_path.name != "pages.markdown.jsonl":
-        raise archive_services.ArchiveServiceError(
-            "identifier_title_source_index_invalid"
-        )
-    title_path = markdown_path.with_name("pages.index.jsonl")
-    markdown_raw, markdown_reason = (
-        archive_services._bounded_stable_regular_file_read(
-            markdown_path,
+    with _bound_source_title_mirror_pair(source_mirror) as (
+        markdown_file,
+        title_file,
+    ):
+        markdown_raw = _read_bound_source_title_file(
+            markdown_file,
             max_bytes=MAX_SOURCE_INDEX_BYTES,
         )
-    )
-    title_raw, title_reason = archive_services._bounded_stable_regular_file_read(
-        title_path,
-        max_bytes=MAX_SOURCE_INDEX_BYTES,
-    )
-    if (
-        markdown_raw is None
-        or markdown_reason is not None
-        or title_raw is None
-        or title_reason is not None
-    ):
-        raise archive_services.ArchiveServiceError(
-            "identifier_title_source_index_invalid"
+        title_raw = _read_bound_source_title_file(
+            title_file,
+            max_bytes=MAX_SOURCE_INDEX_BYTES,
         )
     markdown_lines = markdown_raw.splitlines()
     title_lines = title_raw.splitlines()
@@ -629,8 +934,8 @@ def _source_title_index(
         or len(markdown_lines) > MAX_SOURCE_INDEX_ROWS
         or len(title_lines) > MAX_SOURCE_INDEX_ROWS
     ):
-        raise archive_services.ArchiveServiceError(
-            "identifier_title_source_index_invalid"
+        raise _SourceTitleMirrorError(
+            "identifier_title_source_mirror_content_invalid"
         )
     markdown_index: dict[str, str] = {}
     if progress_callback is not None:
@@ -654,12 +959,12 @@ def _source_title_index(
             RecursionError,
             ValueError,
         ) as exc:
-            raise archive_services.ArchiveServiceError(
-                "identifier_title_source_index_invalid"
+            raise _SourceTitleMirrorError(
+                "identifier_title_source_mirror_content_invalid"
             ) from exc
         if not isinstance(document, dict):
-            raise archive_services.ArchiveServiceError(
-                "identifier_title_source_index_invalid"
+            raise _SourceTitleMirrorError(
+                "identifier_title_source_mirror_content_invalid"
             )
         return document
 
@@ -675,8 +980,8 @@ def _source_title_index(
             or not isinstance(markdown, str)
             or source_id in markdown_index
         ):
-            raise archive_services.ArchiveServiceError(
-                "identifier_title_source_index_invalid"
+            raise _SourceTitleMirrorError(
+                "identifier_title_source_mirror_content_invalid"
             )
         markdown_index[source_id] = _sha(line)
         if progress_callback is not None and (
@@ -700,13 +1005,13 @@ def _source_title_index(
             or not isinstance(source_title, str)
             or source_id in index
         ):
-            raise archive_services.ArchiveServiceError(
-                "identifier_title_source_index_invalid"
+            raise _SourceTitleMirrorError(
+                "identifier_title_source_mirror_content_invalid"
             )
         markdown_row_sha256 = markdown_index.get(source_id)
         if markdown_row_sha256 is None:
-            raise archive_services.ArchiveServiceError(
-                "identifier_title_source_index_invalid"
+            raise _SourceTitleMirrorError(
+                "identifier_title_source_mirror_content_invalid"
             )
         title_row_sha256 = _sha(line)
         index[source_id] = {
@@ -733,8 +1038,8 @@ def _source_title_index(
                 "title-source-index", "scanned", completed, total_rows
             )
     if set(index) != set(markdown_index):
-        raise archive_services.ArchiveServiceError(
-            "identifier_title_source_index_invalid"
+        raise _SourceTitleMirrorError(
+            "identifier_title_source_mirror_content_invalid"
         )
     source_evidence = _canonical_bytes(
         {
@@ -776,6 +1081,29 @@ def zet_identifier_title_recovery_plan(
             source_mirror,
             progress_callback=progress_callback,
         )
+    except _SourceTitleMirrorError as exc:
+        return {
+            "ok": False,
+            "schema": IDENTIFIER_RECOVERY_SCHEMA,
+            "lifecycle_action": "zet_identifier_title_recovery_plan",
+            "state": "blocked",
+            "dry_run": True,
+            "summary": {
+                "identifier_title_count": 0,
+                "classified_identifier_title_count": 0,
+                "source_mirror_state": "invalid",
+                "source_mirror_reason_code": exc.reason_code,
+            },
+            "items": [],
+            "exact_operation_manifest": None,
+            "blockers": [
+                "identifier_title_recovery_evidence_invalid",
+                exc.reason_code,
+            ],
+            "warnings": [],
+            "would_change": [],
+            "privacy_guards": _privacy_guards(),
+        }
     except (
         archive_services.ArchiveServiceError,
         OSError,

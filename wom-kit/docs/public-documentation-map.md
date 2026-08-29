@@ -6,7 +6,16 @@ Updated: 2026-08-29
 Philosophy clarified: 2026-07-15
 Harness compatibility clarified: 2026-07-16
 
-Current v0.4.13 delta: local object-storage readiness validates canonical exact
+Current v0.4.14 delta: historical locator recovery replays exact normalization
+and reviewed binding evidence so current verified references remain intact.
+Partial evidence becomes explicit review debt and one private classification
+ledger carries native approval, checkpoints, resume, independent verification,
+and revert. Hash-bound local decision clues never enter durable or public
+output. Complete human-document reads use a display-only Markdown projection;
+incomplete pages retain canonical source. Publishing or installing the release
+changes no client archive.
+
+Historical v0.4.13 delta: local object-storage readiness validates canonical exact
 setup evidence before a strict legacy bridge and reports malformed, orphaned,
 changing, case-colliding, or cross-namespace evidence without exposing private
 setup values. The narrow emergency preservation route uses conditional
@@ -543,6 +552,7 @@ These documents record public-safe work already performed.
 - [v0.2.11 Delegate Capability Contract Work Log](../plans/work-log-2026-05-23-delegate-capability-contract.md)
 - [Changelog](../../CHANGELOG.md)
 - [Release Notes](releases/)
+- [v0.4.14 Release Note](releases/v0.4.14.md)
 - [v0.4.13 Release Note](releases/v0.4.13.md)
 - [v0.4.12 Release Note](releases/v0.4.12.md)
 - [v0.4.11 Release Note](releases/v0.4.11.md)

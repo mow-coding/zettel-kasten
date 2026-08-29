@@ -9,7 +9,7 @@ from wom_kit import __version__
 
 KIT_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = KIT_ROOT.parent
-EXPECTED_CURRENT_VERSION = "0.4.13"
+EXPECTED_CURRENT_VERSION = "0.4.14"
 EXPECTED_CURRENT_TAG = f"v{EXPECTED_CURRENT_VERSION}"
 CURRENT_VERSION = f"v{__version__}"
 CURRENT_RELEASE_NOTE = f"{EXPECTED_CURRENT_TAG}.md"
@@ -20,8 +20,8 @@ CURRENT_WHEEL_URL = (
     f"wom_kit-{EXPECTED_CURRENT_VERSION}-py3-none-any.whl"
 )
 CURRENT_RUNTIME_STATUS = (
-    f"Status: {CURRENT_VERSION} exact setup evidence and create-only "
-    "object-storage preservation"
+    f"Status: {CURRENT_VERSION} reference-aware local recovery and safe "
+    "decision views"
 )
 CURRENT_MATRIX_VERSION = f"Version: {CURRENT_VERSION} implementation and release scope"
 MATRIX_PATH = KIT_ROOT / "docs" / "capability-matrix.md"
@@ -2191,7 +2191,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, tiro_text)
         for phrase in (
-            "Status: v0.4.12 zet Markdown authoring and safe human-view checkpoint",
+            "Status: v0.4.14 zet Markdown authoring and complete-document display boundary",
             "archive zet-markdown-style-guide <archive-root> --topic range_tilde --dry-run --format json",
             "A ~ B",
             "A~~B",

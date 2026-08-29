@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import io
+import json
 import shutil
 import tempfile
 import unittest
@@ -9,6 +10,10 @@ from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 
 from wom_kit import archive_cli, archive_services
+from wom_kit.exact_human_approval_windows import (
+    ExactHumanApprovalOperation,
+    ExactHumanApprovalTargetPreview,
+)
 from wom_kit.markdown_display import (
     WOM_SAFE_MARKDOWN_DISPLAY_SCHEMA,
     _backslash_escape_mask,
@@ -16,6 +21,7 @@ from wom_kit.markdown_display import (
     _protect_inline_links,
     project_wom_safe_markdown,
 )
+from wom_kit.operation_approval_binding import ExactOperationApprovalBinding
 
 
 class WomSafeMarkdownDisplayTests(unittest.TestCase):
@@ -694,6 +700,7 @@ class WomSafeMarkdownReadZettelIntegrationTests(unittest.TestCase):
             self.assertEqual(document["display"]["profile"], "wom_safe_markdown")
             self.assertTrue(document["display"]["display_only"])
             self.assertTrue(document["display"]["canonical_source_unchanged"])
+            self.assertNotIn("body", document["display"])
             self.assertEqual(
                 document["integrity"]["body_sha256"],
                 canonical["integrity"]["body_sha256"],
@@ -706,26 +713,65 @@ class WomSafeMarkdownReadZettelIntegrationTests(unittest.TestCase):
                 document["integrity"]["returned_body_sha256"],
             )
 
-    def test_body_pages_remain_hash_bound_canonical_source_pages(self) -> None:
+    def test_body_pages_keep_canonical_cursor_and_defer_display_projection(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root, _path, zettel_id = self.make_archive(Path(tmp))
             result = archive_services.read_zettel(
                 root,
                 zettel_id=zettel_id,
                 section="document",
-                body_max_chars=12,
+                body_cursor=10,
+                body_max_chars=38,
+                expected_body_sha256=archive_services.read_zettel(
+                    root,
+                    zettel_id=zettel_id,
+                    section="body",
+                )["integrity"]["body_sha256"],
             )
             canonical = archive_services.read_zettel(
                 root,
                 zettel_id=zettel_id,
                 section="body",
             )
+            structured_page = archive_services.read_zettel(
+                root,
+                zettel_id=zettel_id,
+                section="body",
+                body_cursor=10,
+                body_max_chars=38,
+                expected_body_sha256=canonical["integrity"]["body_sha256"],
+            )
 
+            source_page = canonical["body"][10:48]
             self.assertNotIn("display", result)
             self.assertFalse(
                 result["integrity"]["returned_body_is_display_projection"]
             )
-            self.assertEqual(result["body"], canonical["body"][:12])
+            self.assertEqual(result["body"], source_page)
+            self.assertEqual(result["body_page"]["returned_chars"], len(source_page))
+            self.assertEqual(
+                result["body_page"]["display_projection_state"],
+                "deferred_until_complete_body",
+            )
+            self.assertEqual(
+                result["body_page"]["display_projection_reason"],
+                "page_boundary_context_incomplete",
+            )
+            self.assertEqual(
+                result["integrity"]["returned_body_sha256"],
+                "sha256:" + hashlib.sha256(source_page.encode("utf-8")).hexdigest(),
+            )
+            self.assertEqual(structured_page["body"], source_page)
+            self.assertFalse(
+                structured_page["integrity"][
+                    "returned_body_is_display_projection"
+                ]
+            )
+            self.assertNotIn("display", structured_page)
+            self.assertEqual(
+                structured_page["body_page"]["display_projection_state"],
+                "deferred_until_complete_body",
+            )
 
     def test_document_text_cli_emits_the_safe_projection(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -750,6 +796,191 @@ class WomSafeMarkdownReadZettelIntegrationTests(unittest.TestCase):
             self.assertIn("3\\~5", stdout.getvalue())
             self.assertIn("\\*\\*열린 강조", stdout.getvalue())
             self.assertEqual(path.read_bytes(), before)
+
+    def test_default_body_text_cli_uses_display_copy_but_json_keeps_source(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root, path, zettel_id = self.make_archive(Path(tmp))
+            before = path.read_bytes()
+            stdout = io.StringIO()
+            stderr = io.StringIO()
+            with redirect_stdout(stdout), redirect_stderr(stderr):
+                code = archive_cli.main(
+                    ["read-zettel", str(root), "--zettel-id", zettel_id]
+                )
+
+            self.assertEqual(code, 0, stderr.getvalue())
+            self.assertIn("3\\~5", stdout.getvalue())
+            self.assertIn("서울\\~부산", stdout.getvalue())
+            self.assertIn("\\*\\*열린 강조", stdout.getvalue())
+            structured = archive_services.read_zettel(
+                root,
+                zettel_id=zettel_id,
+                section="body",
+            )
+            self.assertIn("3~5", structured["body"])
+            self.assertIn("**열린 강조", structured["body"])
+            self.assertNotIn("display", structured)
+            self.assertEqual(path.read_bytes(), before)
+
+    def test_all_text_cli_uses_display_copy_but_json_keeps_source(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root, path, zettel_id = self.make_archive(Path(tmp))
+            before = path.read_bytes()
+
+            text_stdout = io.StringIO()
+            text_stderr = io.StringIO()
+            with redirect_stdout(text_stdout), redirect_stderr(text_stderr):
+                text_code = archive_cli.main(
+                    [
+                        "read-zettel",
+                        str(root),
+                        "--zettel-id",
+                        zettel_id,
+                        "--section",
+                        "all",
+                    ]
+                )
+
+            json_stdout = io.StringIO()
+            json_stderr = io.StringIO()
+            with redirect_stdout(json_stdout), redirect_stderr(json_stderr):
+                json_code = archive_cli.main(
+                    [
+                        "read-zettel",
+                        str(root),
+                        "--zettel-id",
+                        zettel_id,
+                        "--section",
+                        "all",
+                        "--format",
+                        "json",
+                    ]
+                )
+
+            self.assertEqual(text_code, 0, text_stderr.getvalue())
+            self.assertEqual(json_code, 0, json_stderr.getvalue())
+            self.assertIn("3\\~5", text_stdout.getvalue())
+            self.assertIn("\\*\\*열린 강조", text_stdout.getvalue())
+            structured = json.loads(json_stdout.getvalue())
+            self.assertIn("3~5", structured["body"])
+            self.assertIn("**열린 강조", structured["body"])
+            self.assertNotIn("display", structured)
+            self.assertEqual(path.read_bytes(), before)
+
+    def test_approval_preview_is_added_only_for_exact_hash_bound_zettel_bytes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root, path, _zettel_id = self.make_archive(Path(tmp))
+            binding = ExactOperationApprovalBinding(
+                operation=ExactHumanApprovalOperation.mint_zet,
+                plan_sha256="sha256:" + "1" * 64,
+                target_binding_sha256="sha256:" + "2" * 64,
+                warning_codes=(),
+                review_binding_codes=("draft_bytes_digest",),
+                target_preview=ExactHumanApprovalTargetPreview(
+                    kind="zet",
+                    primary=path.name,
+                ),
+            )
+            exact_sha = "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
+
+            enriched = archive_cli._binding_with_primary_bound_zettel_preview(
+                binding,
+                root,
+                relative_path=f"zettels/{path.name}",
+                expected_file_sha256=exact_sha,
+            )
+            self.assertEqual(enriched.plan_sha256, binding.plan_sha256)
+            self.assertEqual(
+                enriched.target_binding_sha256,
+                binding.target_binding_sha256,
+            )
+            self.assertEqual(
+                enriched.target_preview.primary_label,
+                "Fake thought while eating alone",
+            )
+            self.assertIsNotNone(enriched.target_preview.source_preview)
+            self.assertIn("3~5", enriched.target_preview.source_preview)
+
+            stale = archive_cli._binding_with_primary_bound_zettel_preview(
+                binding,
+                root,
+                relative_path=f"zettels/{path.name}",
+                expected_file_sha256="sha256:" + "f" * 64,
+            )
+            self.assertIs(stale, binding)
+
+    def test_approval_preview_omits_wrapped_absolute_path_without_blocking(self) -> None:
+        windows_path = r"C:" + r"\Users\alice\note.md"
+        escaped_windows_path = r"C:" + r"\\Users\\alice\\note.md"
+        for unsafe_title in (
+            f"Path note `{windows_path}`",
+            f"Path note {{{windows_path}}}",
+            f"Path note “{escaped_windows_path}”",
+            "a" * 170 + f" `{windows_path}`",
+        ):
+            with self.subTest(unsafe_title=unsafe_title), tempfile.TemporaryDirectory() as tmp:
+                root, path, _zettel_id = self.make_archive(Path(tmp))
+                frontmatter, body = archive_services.split_zettel_text(
+                    path.read_text(encoding="utf-8")
+                )
+                frontmatter["title"] = unsafe_title
+                path.write_text(
+                    "---\n"
+                    + archive_cli.dump_yaml(frontmatter)
+                    + "---\n\n"
+                    + body,
+                    encoding="utf-8",
+                    newline="",
+                )
+                binding = ExactOperationApprovalBinding(
+                    operation=ExactHumanApprovalOperation.mint_zet,
+                    plan_sha256="sha256:" + "1" * 64,
+                    target_binding_sha256="sha256:" + "2" * 64,
+                    warning_codes=(),
+                    review_binding_codes=("draft_bytes_digest",),
+                    target_preview=ExactHumanApprovalTargetPreview(
+                        kind="zet",
+                        primary=path.name,
+                    ),
+                )
+                exact_sha = (
+                    "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
+                )
+
+                enriched = archive_cli._binding_with_primary_bound_zettel_preview(
+                    binding,
+                    root,
+                    relative_path=f"zettels/{path.name}",
+                    expected_file_sha256=exact_sha,
+                )
+
+                self.assertEqual(enriched.plan_sha256, binding.plan_sha256)
+                self.assertEqual(
+                    enriched.target_binding_sha256,
+                    binding.target_binding_sha256,
+                )
+                self.assertIsNone(enriched.target_preview.primary_label)
+                self.assertNotIn("Users", repr(enriched))
+
+    def test_draft_unsafe_title_falls_back_to_identity_without_blocking(self) -> None:
+        safe = archive_cli._draft_exact_human_approval_target_preview(
+            primary="draft.md",
+            title="검토할 초안 제목",
+        )
+        self.assertEqual(safe.primary_label, "검토할 초안 제목")
+
+        for unsafe_title in (
+            r"C:\Research\note.md 검토",
+            "https://example.com 분석",
+            "owner@example.com 사건",
+        ):
+            with self.subTest(unsafe_title=unsafe_title):
+                fallback = archive_cli._draft_exact_human_approval_target_preview(
+                    primary="draft.md",
+                    title=unsafe_title,
+                )
+                self.assertEqual(fallback.primary, "draft.md")
+                self.assertIsNone(fallback.primary_label)
 
 
 if __name__ == "__main__":

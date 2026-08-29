@@ -6,7 +6,15 @@
 철학 갱신: 2026-07-15
 하네스 호환 경계 갱신: 2026-07-16
 
-현재 v0.4.13 변경점: local object-storage readiness는 엄격한 legacy bridge보다
+현재 v0.4.14 변경점: 과거 locator 복구는 정확한 정규화와 검토된 binding 근거를
+재생하여 검증된 현재 참조를 그대로 보존합니다. 일부만 증명된 근거는 명시적인
+검토 부채가 되고, 비공개 분류 원장 하나가 native 승인·checkpoint·resume·독립
+검증·revert에 결속됩니다. 해시에 결속된 로컬 대상 단서는 영속·공개 출력에
+들어가지 않습니다. 완전한 사람용 문서는 표시 전용 Markdown 투영을 사용하고,
+불완전 페이지는 정본 source를 유지합니다. 공개나 설치만으로 client archive는
+바뀌지 않습니다.
+
+과거 v0.4.13 변경점: local object-storage readiness는 엄격한 legacy bridge보다
 canonical exact setup 근거를 먼저 검사하고, malformed·orphan·변경 중·대소문자
 충돌·다른 namespace 근거를 비공개 setup 값 없이 보고합니다. 좁은 긴급 보존
 경로는 conditional create-only single/multipart 발행, HEAD와 전체 GET 재해시,
@@ -526,6 +534,7 @@ local archive
 - [v0.2.11 Delegate Capability Contract Work Log](../plans/work-log-2026-05-23-delegate-capability-contract.md)
 - [Changelog](../../CHANGELOG.md)
 - [Release Notes](releases/)
+- [v0.4.14 릴리스 노트](releases/v0.4.14.md)
 - [v0.4.13 릴리스 노트](releases/v0.4.13.md)
 - [v0.4.12 릴리스 노트](releases/v0.4.12.md)
 - [v0.4.11 릴리스 노트](releases/v0.4.11.md)

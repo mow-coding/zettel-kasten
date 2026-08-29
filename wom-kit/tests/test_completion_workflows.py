@@ -5827,8 +5827,15 @@ class CompletionWorkflowTests(unittest.TestCase):
                 completion_workflows.archive_services.strict_local_zettel_snapshots
             )
 
-            def inject_duplicate_after_snapshot(root: Path) -> list[object]:
-                snapshots = strict_snapshots(root)
+            def inject_duplicate_after_snapshot(
+                root: Path,
+                *,
+                progress_callback=None,
+            ) -> list[object]:
+                snapshots = strict_snapshots(
+                    root,
+                    progress_callback=progress_callback,
+                )
                 duplicate_path.write_bytes(source_path.read_bytes())
                 return snapshots
 
@@ -7436,6 +7443,176 @@ class CompletionWorkflowTests(unittest.TestCase):
                     result["counts"]["reference_binding_applied"],
                     0,
                 )
+
+    def test_markup_normalization_traces_applied_reference_bindings_privately(self) -> None:
+        marker = (
+            completion_workflows.archive_services.NOTION_IMPORT_LOCATOR_OMISSION_MARKER
+        )
+        fragment = f'<file src="{marker}"></file>'
+        tag_sha256 = hashlib.sha256(fragment.encode("utf-8")).hexdigest()
+        first_replacement = "[BOUND-A]"
+        second_replacement = f"[BOUND-B] {marker}"
+        first_binding_id = "sha256:" + ("a" * 64)
+        second_binding_id = "sha256:" + ("b" * 64)
+
+        result = completion_workflows._normalize_markup_body(
+            f"{fragment}\n{fragment}\n",
+            bindings={
+                tag_sha256: {
+                    1: {
+                        "binding_kind": "objet",
+                        "binding_id": first_binding_id,
+                        "replacement": first_replacement,
+                        "occurrence_index": 1,
+                    },
+                    2: {
+                        "binding_kind": "objet",
+                        "binding_id": second_binding_id,
+                        "replacement": second_replacement,
+                        "occurrence_index": 2,
+                    },
+                }
+            },
+        )
+
+        self.assertTrue(result["changed"], result)
+        self.assertEqual(result["blocker_codes"], [])
+        self.assertEqual(
+            result["normalized_body"],
+            f"{first_replacement}\n{second_replacement}\n",
+        )
+        expected = [
+            {
+                "tag_name": "file",
+                "tag_sha256": tag_sha256,
+                "occurrence_index": occurrence_index,
+                "binding_kind": "objet",
+                "binding_id": binding_id,
+                "source_fragment_sha256": tag_sha256,
+                "source_omission_marker_count": 1,
+                "replacement_sha256": hashlib.sha256(
+                    replacement.encode("utf-8")
+                ).hexdigest(),
+                "replacement_omission_marker_count": replacement.count(
+                    marker
+                ),
+            }
+            for occurrence_index, binding_id, replacement in (
+                (1, first_binding_id, first_replacement),
+                (2, second_binding_id, second_replacement),
+            )
+        ]
+        self.assertEqual(result["applied_reference_bindings"], expected)
+        serialized_evidence = json.dumps(
+            result["applied_reference_bindings"],
+            sort_keys=True,
+        )
+        self.assertNotIn(fragment, serialized_evidence)
+        self.assertNotIn(first_replacement, serialized_evidence)
+        self.assertNotIn(second_replacement, serialized_evidence)
+
+    def test_markup_normalization_withholds_applied_trace_when_not_committed(self) -> None:
+        fragment = '<file src="opaque"></file>'
+        tag_sha256 = hashlib.sha256(fragment.encode("utf-8")).hexdigest()
+        binding = {
+            "binding_kind": "objet",
+            "binding_id": "sha256:" + ("a" * 64),
+            "replacement": "[BOUND]",
+        }
+        blocked_body = fragment + "\n<unknown:unsupported/>\n"
+
+        blocked = completion_workflows._normalize_markup_body(
+            blocked_body,
+            bindings={tag_sha256: binding},
+        )
+        self.assertFalse(blocked["changed"])
+        self.assertEqual(blocked["normalized_body"], blocked_body)
+        self.assertIn("unknown_semantic_markup", blocked["blocker_codes"])
+        self.assertEqual(blocked["applied_reference_bindings"], [])
+
+        no_op = completion_workflows._normalize_markup_body(
+            fragment,
+            bindings={
+                tag_sha256: {
+                    **binding,
+                    "replacement": fragment,
+                }
+            },
+        )
+        self.assertFalse(no_op["changed"])
+        self.assertEqual(no_op["normalized_body"], fragment)
+        self.assertEqual(no_op["applied_reference_bindings"], [])
+
+        protected = completion_workflows._normalize_markup_body(
+            f"`{fragment}`",
+            bindings={tag_sha256: binding},
+        )
+        self.assertEqual(protected["applied_reference_bindings"], [])
+
+    def test_markup_zettel_analysis_keeps_binding_trace_out_of_public_item(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_root = self.fake_archive(Path(tmp) / "archive")
+            zettel_id = "zet_20260829_private_binding_trace"
+            marker = (
+                completion_workflows.archive_services.NOTION_IMPORT_LOCATOR_OMISSION_MARKER
+            )
+            fragment = f'<file src="{marker}"></file>'
+            path = self.write_markup_zettel(
+                archive_root,
+                zettel_id,
+                fragment + "\n",
+            )
+            relative_path = (
+                completion_workflows.archive_services.archive_relative_path(
+                    path,
+                    archive_root,
+                )
+            )
+            tag_sha256 = hashlib.sha256(
+                fragment.encode("utf-8")
+            ).hexdigest()
+            replacement = "[BOUND]"
+
+            public, private = completion_workflows._markup_zettel_analysis(
+                archive_root,
+                path,
+                policy="normalize",
+                bindings_by_zettel={
+                    zettel_id: {
+                        tag_sha256: {
+                            1: {
+                                "binding_kind": "objet",
+                                "binding_id": "sha256:" + ("a" * 64),
+                                "replacement": replacement,
+                                "occurrence_index": 1,
+                                "source_relative_path": relative_path,
+                            }
+                        }
+                    }
+                },
+            )
+
+            self.assertEqual(public["state"], "ready")
+            self.assertNotIn("applied_reference_bindings", public)
+            self.assertIsNotNone(private)
+            self.assertEqual(
+                private["applied_reference_bindings"],
+                [
+                    {
+                        "tag_name": "file",
+                        "tag_sha256": tag_sha256,
+                        "occurrence_index": 1,
+                        "binding_kind": "objet",
+                        "binding_id": "sha256:" + ("a" * 64),
+                        "source_fragment_sha256": tag_sha256,
+                        "source_omission_marker_count": 1,
+                        "replacement_sha256": hashlib.sha256(
+                            replacement.encode("utf-8")
+                        ).hexdigest(),
+                        "replacement_omission_marker_count": 0,
+                    }
+                ],
+            )
 
     def test_markup_normalization_file_reference_regex_edge_cases(self) -> None:
         def digest(fragment: str) -> str:

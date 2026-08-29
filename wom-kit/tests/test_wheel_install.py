@@ -7,12 +7,15 @@ import io
 import json
 import os
 from pathlib import Path
+import stat
 import struct
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from unittest import mock
+from urllib.parse import unquote, urlparse
 import warnings
 import zipfile
 
@@ -102,7 +105,7 @@ def patch_zip_member_name_bytes(wheel: Path, old_name: str, new_name: str) -> No
 
 
 class InstalledEntrypointTests(unittest.TestCase):
-    PACKAGE_VERSION = "0.4.13"
+    PACKAGE_VERSION = "0.4.14"
     SERVER_NAME = "zettel-kasten-archive-mcp"
 
     def setUp(self) -> None:
@@ -895,6 +898,12 @@ class InstalledEntrypointTests(unittest.TestCase):
             "package_version": self.PACKAGE_VERSION,
             "isolated_installed_package": True,
         }
+        v0414_recovery_evidence = {
+            "ok": True,
+            "schema": check_wheel_install.INSTALLED_V0414_RECOVERY_SMOKE_SCHEMA,
+            "package_version": self.PACKAGE_VERSION,
+            "isolated_installed_package": True,
+        }
         result = check_wheel_install._wheel_install_success_result(
             package_version=self.PACKAGE_VERSION,
             wheel_counts=wheel_counts,
@@ -909,6 +918,7 @@ class InstalledEntrypointTests(unittest.TestCase):
             v049_workflow_evidence=v049_evidence,
             v0410_batch_workflow_evidence=v0410_batch_evidence,
             v0411_truth_evidence=v0411_truth_evidence,
+            v0414_recovery_evidence=v0414_recovery_evidence,
             wheel_filename="wom_kit-0.3.296-py3-none-any.whl",
             wheel_sha256="a" * 64,
             artifact_preserved=True,
@@ -932,6 +942,9 @@ class InstalledEntrypointTests(unittest.TestCase):
                 "installed_v049_recovery_workflows": v049_evidence,
                 "installed_v0410_batch_workflow": v0410_batch_evidence,
                 "installed_v0411_truth_contracts": v0411_truth_evidence,
+                "installed_v0414_recovery_contracts": (
+                    v0414_recovery_evidence
+                ),
                 "runtime_skill_lifecycle": "passed",
                 "onboarding_preview": "passed",
                 "onboarding_write": "fixed_closed",
@@ -1273,6 +1286,676 @@ class InstalledEntrypointTests(unittest.TestCase):
                     cwd=self.temp_root,
                     expected_package_version=self.PACKAGE_VERSION,
                 )
+
+    def test_installed_v0414_recovery_contracts_require_exact_isolated_evidence(
+        self,
+    ) -> None:
+        compile(
+            check_wheel_install.INSTALLED_V0414_RECOVERY_SMOKE_SCRIPT,
+            "<installed-v0414-recovery-wheel-smoke>",
+            "exec",
+        )
+        python = self.scripts / "python.exe"
+        fixture_root = self.temp_root / "v0414-recovery-fixture"
+        archive_template = self.temp_root / "archive-template"
+        expected = {
+            "ok": True,
+            "schema": check_wheel_install.INSTALLED_V0414_RECOVERY_SMOKE_SCHEMA,
+            "package_version": self.PACKAGE_VERSION,
+            "isolated_installed_package": True,
+            "isolated_python_flags": True,
+            "all_markup_receipts": {
+                "parser_available": True,
+                "discovery_count": 1,
+                "cli_audit_passed": True,
+                "operator_counting_required": False,
+            },
+            "locator_v02": {
+                "ledger_schema": (
+                    "wom-kit/notion-locator-orphan-recovery-ledger/v0.2"
+                ),
+                "synthetic_apply_completed": True,
+                "approval_claim_succeeded": True,
+                "native_decision_call_count": 1,
+                "synthetic_key_provider_call_count": 3,
+                "verified_ledger_count": 1,
+                "verified_resolution_row_count": 1,
+                "audit_unresolved_occurrence_state": "known",
+                "audit_unresolved_occurrence_count": 0,
+            },
+            "read_zettel": {
+                "incomplete_page_projection_deferred": True,
+                "source_page_text_exact": True,
+                "canonical_file_bytes_unchanged": True,
+            },
+            "title_source": {
+                "exact_file_entrypoint_ready": True,
+                "containing_folder_entrypoint_ready": True,
+                "entrypoint_plans_identical": True,
+                "source_index_row_count": 1,
+                "public_cli_apply_completed": True,
+                "native_decision_call_count": 1,
+                "synthetic_key_provider_call_count": 1,
+                "approval_claim_succeeded": True,
+                "title_field_applied": True,
+                "canonical_body_unchanged": True,
+            },
+            "approval_preview": {
+                "safe_draft_title_primary_label": True,
+                "unsafe_absolute_path_rejected": True,
+                "unsafe_optional_labels_suppressed": True,
+                "unsafe_credential_shapes_rejected": True,
+                "safe_colon_labels_available": True,
+                "machine_binding_digests_unchanged": True,
+                "private_value_echoed": False,
+            },
+            "safety_observation": {
+                "network_and_process_deny_hook_active": True,
+                "production_credential_provider_deny_hook_active": True,
+                "outside_synthetic_filesystem_deny_hook_active": True,
+                "public_output_observed": True,
+                "provider_attempt_count": 0,
+                "production_credential_provider_attempt_count": 0,
+                "outside_synthetic_filesystem_attempt_count": 0,
+            },
+            "provider_api_called": False,
+            "credential_value_read": False,
+            "production_archive_touched": False,
+            "private_values_echoed": False,
+            "absolute_paths_echoed": False,
+        }
+        with mock.patch.object(
+            check_wheel_install,
+            "_run_installed_entrypoint",
+            return_value=json.dumps(expected),
+        ) as run_mock:
+            evidence = (
+                check_wheel_install._check_installed_v0414_recovery_contracts(
+                    python,
+                    fixture_root,
+                    archive_template,
+                    cwd=self.temp_root,
+                    expected_package_version=self.PACKAGE_VERSION,
+                )
+            )
+
+        self.assertEqual(evidence, expected)
+        command = run_mock.call_args.args[0]
+        self.assertEqual(command[:4], [str(python), "-I", "-B", "-c"])
+        self.assertEqual(
+            command[-3:],
+            [str(fixture_root), self.PACKAGE_VERSION, str(archive_template)],
+        )
+        self.assertEqual(
+            command[4],
+            check_wheel_install.INSTALLED_V0414_STDIN_LOADER,
+        )
+        self.assertLess(len(command[4]), 256)
+        embedded = run_mock.call_args.kwargs["input_text"]
+        self.assertEqual(
+            embedded,
+            check_wheel_install.INSTALLED_V0414_RECOVERY_SMOKE_SCRIPT,
+        )
+        self.assertIn('"--all-markup-receipts"', embedded)
+        self.assertIn("discover_markup_normalization_receipts", embedded)
+        self.assertIn("notion_locator_orphan_recovery_execution_plan", embedded)
+        self.assertIn("verified_notion_locator_resolution_evidence", embedded)
+        self.assertIn("deferred_until_complete_body", embedded)
+        self.assertIn("_binding_with_primary_bound_zettel_preview", embedded)
+        self.assertIn("SAFE_DRAFT_TITLE", embedded)
+        self.assertIn("zet_identifier_title_recovery_plan", embedded)
+        self.assertIn('"pages.markdown.jsonl"', embedded)
+        self.assertIn('"pages.index.jsonl"', embedded)
+        self.assertIn('"zet-title-remap-write"', embedded)
+        self.assertIn("_execute_exact_human_approved_write_core", embedded)
+        dispatcher_hook = embedded.index(
+            "sys.addaudithook(_dispatch_installed_v0414_policy)"
+        )
+        installed_import = embedded.index("import wom_kit")
+        complete_switch = embedded.index(
+            '_IMPORT_TIME_POLICY_STATE["handler"] = '
+            "_deny_unexpected_external_effects"
+        )
+        os_guard = embedded.index("os.open = _guarded_os_open")
+        self.assertLess(dispatcher_hook, os_guard)
+        self.assertLess(os_guard, complete_switch)
+        self.assertLess(complete_switch, installed_import)
+        self.assertIn("_deny_production_credential_provider", embedded)
+        observed_prefix = embedded.split("evidence = {", 1)[0]
+        for field in (
+            "provider_api_called",
+            "credential_value_read",
+            "production_archive_touched",
+            "private_values_echoed",
+            "absolute_paths_echoed",
+        ):
+            self.assertIn(field + " =", observed_prefix)
+            self.assertNotIn(f'"{field}": False', observed_prefix)
+
+        invalid = json.loads(json.dumps(expected))
+        invalid["title_source"]["native_decision_call_count"] = 0
+        with mock.patch.object(
+            check_wheel_install,
+            "_run_installed_entrypoint",
+            return_value=json.dumps(invalid),
+        ):
+            with self.assertRaises(check_wheel_install.WheelCheckError):
+                check_wheel_install._check_installed_v0414_recovery_contracts(
+                    python,
+                    fixture_root,
+                    archive_template,
+                    cwd=self.temp_root,
+                    expected_package_version=self.PACKAGE_VERSION,
+                )
+
+    def test_installed_v0414_audit_policy_allows_only_read_only_directory_opens_outside_roots(
+        self,
+    ) -> None:
+        embedded = check_wheel_install.INSTALLED_V0414_RECOVERY_SMOKE_SCRIPT
+        policy_source = embedded[
+            embedded.index("def _audit_open_arguments_are_mutating") : embedded.index(
+                "\ndef _deny_production_credential_provider"
+            )
+        ]
+        allowed_root = self.temp_root / "allowed"
+        read_only_root = self.temp_root / "read-only"
+        outside_root = self.temp_root / "outside"
+        allowed_root.mkdir()
+        read_only_root.mkdir()
+        outside_root.mkdir()
+        observations = {
+            "provider_attempt_count": 0,
+            "production_credential_provider_attempt_count": 0,
+            "outside_synthetic_filesystem_attempt_count": 0,
+            "public_cli_approval_call_count": 0,
+        }
+        namespace = {
+            "ALLOWED_FILESYSTEM_ROOTS": (
+                allowed_root.resolve(),
+                read_only_root.resolve(),
+            ),
+            "WRITABLE_FILESYSTEM_ROOTS": (allowed_root.resolve(),),
+            "Path": Path,
+            "SAFETY_OBSERVATIONS": observations,
+            "os": os,
+            "stat": stat,
+            "threading": threading,
+            "unquote": unquote,
+            "urlparse": urlparse,
+        }
+        directory_flag = 0x10000
+        delete_on_close_flag = 0x40
+        temporary_file_flag = directory_flag | 0x400000
+        with (
+            mock.patch.object(os, "O_DIRECTORY", directory_flag, create=True),
+            mock.patch.object(os, "O_ACCMODE", 3, create=True),
+            mock.patch.object(
+                os,
+                "O_TEMPORARY",
+                delete_on_close_flag,
+                create=True,
+            ),
+            mock.patch.object(
+                os,
+                "O_TMPFILE",
+                temporary_file_flag,
+                create=True,
+            ),
+        ):
+            exec(policy_source, namespace)
+            deny = namespace["_deny_unexpected_external_effects"]
+
+            deny(
+                "open",
+                (str(outside_root), None, os.O_RDONLY | directory_flag),
+            )
+            deny(
+                "open",
+                (str(allowed_root / "fixture.json"), "r", os.O_RDONLY),
+            )
+            deny(
+                "open",
+                (str(read_only_root / "fixture.json"), "r", os.O_RDONLY),
+            )
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "installed_v0414_outside_synthetic_path_denied",
+            ):
+                deny(
+                    "open",
+                    (str(read_only_root / "fixture.json"), "w", os.O_WRONLY),
+                )
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "installed_v0414_outside_synthetic_path_denied",
+            ):
+                deny("os.remove", (str(read_only_root / "fixture.json"), -1))
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "installed_v0414_outside_synthetic_path_denied",
+            ):
+                deny(
+                    "open",
+                    (str(outside_root / "private.json"), "r", os.O_RDONLY),
+                )
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "installed_v0414_outside_synthetic_path_denied",
+            ):
+                deny(
+                    "open",
+                    (
+                        str(outside_root),
+                        None,
+                        os.O_WRONLY | directory_flag,
+                    ),
+                )
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "installed_v0414_outside_synthetic_path_denied",
+            ):
+                deny(
+                    "open",
+                    (
+                        str(outside_root),
+                        None,
+                        os.O_RDONLY | temporary_file_flag,
+                    ),
+                )
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "installed_v0414_outside_synthetic_path_denied",
+            ):
+                deny(
+                    "open",
+                    (
+                        str(read_only_root / "fixture.json"),
+                        None,
+                        os.O_RDONLY | delete_on_close_flag,
+                    ),
+                )
+            deny(
+                "os.truncate",
+                (str(allowed_root / "fixture.json"), 0),
+            )
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "installed_v0414_outside_synthetic_path_denied",
+            ):
+                deny(
+                    "os.truncate",
+                    (str(read_only_root / "fixture.json"), 0),
+                )
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "installed_v0414_outside_synthetic_path_denied",
+            ):
+                deny("os.truncate", (987654, 0))
+
+        self.assertEqual(
+            observations["outside_synthetic_filesystem_attempt_count"],
+            8,
+        )
+
+    def test_installed_v0414_import_policy_denies_delete_on_close_and_truncate(
+        self,
+    ) -> None:
+        embedded = check_wheel_install.INSTALLED_V0414_RECOVERY_SMOKE_SCRIPT
+        policy_source = embedded[
+            embedded.index("def _import_time_path_is_allowed") : embedded.index(
+                "\ndef _dispatch_installed_v0414_policy"
+            )
+        ]
+        allowed_root = self.temp_root / "import-root"
+        allowed_root.mkdir()
+        namespace = {
+            "_IMPORT_TIME_ALLOWED_ROOTS": (allowed_root.resolve(),),
+            "Path": Path,
+            "os": os,
+        }
+        delete_on_close_flag = 0x40
+        with (
+            mock.patch.object(os, "O_ACCMODE", 3, create=True),
+            mock.patch.object(
+                os,
+                "O_TEMPORARY",
+                delete_on_close_flag,
+                create=True,
+            ),
+        ):
+            exec(policy_source, namespace)
+            deny = namespace["_deny_import_time_external_effects"]
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "installed_v0414_import_time_mutation_denied",
+            ):
+                deny(
+                    "open",
+                    (
+                        str(allowed_root / "fixture.json"),
+                        None,
+                        os.O_RDONLY | delete_on_close_flag,
+                    ),
+                )
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "installed_v0414_import_time_mutation_denied",
+            ):
+                deny(
+                    "os.truncate",
+                    (str(allowed_root / "fixture.json"), 0),
+                )
+
+    def test_installed_v0414_audit_policy_binds_relative_file_opens_to_known_directory_fds(
+        self,
+    ) -> None:
+        embedded = check_wheel_install.INSTALLED_V0414_RECOVERY_SMOKE_SCRIPT
+        policy_source = embedded[
+            embedded.index("def _audit_open_arguments_are_mutating") : embedded.index(
+                "\ndef _deny_production_credential_provider"
+            )
+        ]
+        allowed_root = self.temp_root / "allowed-fd-root"
+        outside_root = self.temp_root / "outside-fd-root"
+        allowed_root.mkdir()
+        outside_root.mkdir()
+        fixture_path = allowed_root / "fixture.json"
+        mutation_path = allowed_root / "new-ledger.json"
+        fixture_path.write_text("fixture", encoding="utf-8")
+        mutation_path.write_text("ledger", encoding="utf-8")
+        observations = {
+            "provider_attempt_count": 0,
+            "production_credential_provider_attempt_count": 0,
+            "outside_synthetic_filesystem_attempt_count": 0,
+            "public_cli_approval_call_count": 0,
+        }
+        namespace: dict[str, object] = {
+            "ALLOWED_FILESYSTEM_ROOTS": (allowed_root.resolve(),),
+            "WRITABLE_FILESYSTEM_ROOTS": (allowed_root.resolve(),),
+            "Path": Path,
+            "SAFETY_OBSERVATIONS": observations,
+            "os": os,
+            "stat": stat,
+            "threading": threading,
+            "unquote": unquote,
+            "urlparse": urlparse,
+        }
+        issued_descriptors = iter((101, 102, 103, 104, 105))
+        closed_descriptors: list[int] = []
+        allowed_identity = (
+            allowed_root.stat().st_dev,
+            allowed_root.stat().st_ino,
+        )
+        outside_identity = (
+            outside_root.stat().st_dev,
+            outside_root.stat().st_ino,
+        )
+        fixture_identity = (
+            fixture_path.stat().st_dev,
+            fixture_path.stat().st_ino,
+        )
+        mutation_identity = (
+            mutation_path.stat().st_dev,
+            mutation_path.stat().st_ino,
+        )
+        descriptor_identities = {
+            101: allowed_identity,
+            102: fixture_identity,
+            103: outside_identity,
+            104: fixture_identity,
+            105: mutation_identity,
+            201: fixture_identity,
+            202: fixture_identity,
+            301: fixture_identity,
+        }
+
+        class DescriptorStat:
+            def __init__(self, identity):
+                self.st_dev, self.st_ino = identity
+
+        opened_paths: list[object] = []
+
+        def audited_open(path, flags, mode=0o777, *, dir_fd=None):
+            del mode, dir_fd
+            opened_paths.append(path)
+            namespace["_deny_unexpected_external_effects"](
+                "open",
+                (path, None, flags | getattr(os, "O_CLOEXEC", 0)),
+            )
+            return next(issued_descriptors)
+
+        def observed_close(descriptor):
+            closed_descriptors.append(descriptor)
+
+        def observed_fstat(descriptor):
+            return DescriptorStat(descriptor_identities[descriptor])
+
+        def observed_dup(descriptor):
+            if descriptor == 102:
+                return 201
+            if descriptor == 301:
+                return 202
+            self.fail(f"unexpected descriptor duplicate: {descriptor}")
+
+        directory_flag = 0x10000
+        temporary_file_flag = directory_flag | 0x400000
+        with (
+            mock.patch.object(os, "O_DIRECTORY", directory_flag, create=True),
+            mock.patch.object(os, "O_ACCMODE", 3, create=True),
+            mock.patch.object(
+                os,
+                "O_TMPFILE",
+                temporary_file_flag,
+                create=True,
+            ),
+            mock.patch.object(os, "open", audited_open),
+            mock.patch.object(os, "close", observed_close),
+            mock.patch.object(os, "dup", observed_dup),
+            mock.patch.object(os, "fstat", observed_fstat),
+        ):
+            exec(policy_source, namespace)
+            guarded_open = namespace["_guarded_os_open"]
+            guarded_close = namespace["_guarded_os_close"]
+            deny = namespace["_deny_unexpected_external_effects"]
+
+            allowed_fd = guarded_open(
+                str(allowed_root),
+                os.O_RDONLY | directory_flag,
+            )
+            file_fd = guarded_open(
+                "fixture.json",
+                os.O_RDONLY,
+                dir_fd=allowed_fd,
+            )
+            duplicated_file_fd = namespace["_guarded_os_dup"](file_fd)
+            deny("open", (duplicated_file_fd, "r", os.O_RDONLY))
+            namespace["_windows_untracked_regular_descriptor_path"] = (
+                lambda descriptor: fixture_path.resolve()
+                if descriptor == 301
+                else None
+            )
+            adopted_file_fd = namespace["_guarded_os_dup"](301)
+            deny("open", (adopted_file_fd, "r", os.O_RDONLY))
+            deny("os.scandir", (allowed_fd,))
+            outside_fd = guarded_open(
+                str(outside_root),
+                os.O_RDONLY | directory_flag,
+            )
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "installed_v0414_outside_synthetic_path_denied",
+            ):
+                deny("os.scandir", (outside_fd,))
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "installed_v0414_outside_synthetic_path_denied",
+            ):
+                guarded_open(
+                    "private.json",
+                    os.O_RDONLY,
+                    dir_fd=outside_fd,
+                )
+            deny(
+                "os.link",
+                ("temporary", "swap", allowed_fd, allowed_fd),
+            )
+            deny("os.remove", ("temporary", allowed_fd))
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "installed_v0414_outside_synthetic_path_denied",
+            ):
+                deny(
+                    "os.link",
+                    ("temporary", "swap", outside_fd, outside_fd),
+                )
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "installed_v0414_outside_synthetic_path_denied",
+            ):
+                deny("os.remove", ("../escape", allowed_fd))
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "installed_v0414_relative_open_name_denied",
+            ):
+                guarded_open(
+                    "nested/private.json",
+                    os.O_RDONLY,
+                    dir_fd=allowed_fd,
+                )
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "installed_v0414_anonymous_tmpfile_denied",
+            ):
+                guarded_open(
+                    "anonymous",
+                    os.O_RDWR | temporary_file_flag,
+                    dir_fd=allowed_fd,
+                )
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "installed_v0414_unbound_descriptor_dup_denied",
+            ):
+                namespace["_guarded_os_dup"](outside_fd)
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "installed_v0414_outside_synthetic_path_denied",
+            ):
+                deny("open", ("fixture.json", None, os.O_RDONLY))
+            descriptor_identities[allowed_fd] = outside_identity
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "installed_v0414_unbound_directory_descriptor_denied",
+            ):
+                guarded_open(
+                    "private-after-fd-swap.json",
+                    os.O_RDONLY,
+                    dir_fd=allowed_fd,
+                )
+
+            class ReentrantPath:
+                def __init__(self):
+                    self.calls = 0
+
+                def __fspath__(self):
+                    self.calls += 1
+                    if self.calls > 1:
+                        deny("open", ("fixture.json", None, os.O_RDONLY))
+                    return "fixture.json"
+
+            descriptor_identities[allowed_fd] = allowed_identity
+            descriptor_identities[allowed_fd] = (allowed_identity[0], 0)
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "installed_v0414_unbound_directory_descriptor_denied",
+            ):
+                guarded_open(
+                    "identity-zero.json",
+                    os.O_RDONLY,
+                    dir_fd=allowed_fd,
+                )
+            descriptor_identities[allowed_fd] = allowed_identity
+            reentrant = ReentrantPath()
+            second_file_fd = guarded_open(
+                reentrant,
+                os.O_RDONLY,
+                dir_fd=allowed_fd,
+            )
+            self.assertEqual(reentrant.calls, 1)
+            self.assertIsInstance(opened_paths[-1], str)
+            mutation_fd = guarded_open(
+                "new-ledger.json",
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                dir_fd=allowed_fd,
+            )
+            deny("open", (mutation_fd, "w", os.O_WRONLY))
+
+            allowance = namespace["_RELATIVE_DESCRIPTOR_FILE_OPEN"]
+            allowance.allowance = {
+                "path": "thread-local.json",
+                "flags": os.O_RDONLY,
+                "used": False,
+            }
+            thread_errors: list[str] = []
+
+            def attempt_from_other_thread():
+                try:
+                    deny(
+                        "open",
+                        ("thread-local.json", None, os.O_RDONLY),
+                    )
+                except RuntimeError as exc:
+                    thread_errors.append(str(exc))
+
+            worker = threading.Thread(target=attempt_from_other_thread)
+            worker.start()
+            worker.join()
+            try:
+                self.assertEqual(
+                    thread_errors,
+                    ["installed_v0414_outside_synthetic_path_denied"],
+                )
+                deny(
+                    "open",
+                    ("thread-local.json", None, os.O_RDONLY),
+                )
+                with self.assertRaisesRegex(
+                    RuntimeError,
+                    "installed_v0414_outside_synthetic_path_denied",
+                ):
+                    deny(
+                        "open",
+                        ("thread-local.json", None, os.O_RDONLY),
+                    )
+            finally:
+                del allowance.allowance
+
+            for descriptor in (
+                mutation_fd,
+                second_file_fd,
+                adopted_file_fd,
+                301,
+                duplicated_file_fd,
+                file_fd,
+                outside_fd,
+                allowed_fd,
+            ):
+                guarded_close(descriptor)
+
+        self.assertEqual(
+            closed_descriptors,
+            [105, 104, 202, 301, 201, 102, 103, 101],
+        )
+        self.assertEqual(namespace["_BOUND_DIRECTORY_PATHS"], {})
+        self.assertEqual(namespace["_BOUND_DIRECTORY_IDENTITIES"], {})
+        self.assertEqual(namespace["_BOUND_REGULAR_FILE_PATHS"], {})
+        self.assertEqual(namespace["_BOUND_REGULAR_FILE_IDENTITIES"], {})
+        self.assertFalse(
+            hasattr(namespace["_RELATIVE_DESCRIPTOR_FILE_OPEN"], "allowance")
+        )
+        self.assertEqual(
+            observations["outside_synthetic_filesystem_attempt_count"],
+            12,
+        )
 
     def test_installed_strict_doctor_explicitly_disables_default_progress(self) -> None:
         source = Path(check_wheel_install.__file__).read_text(encoding="utf-8")

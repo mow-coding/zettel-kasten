@@ -351,8 +351,8 @@ class Letter136ExactHumanCliTests(unittest.TestCase):
             self.assertIn("sha256:" + TARGET_SHA256, advanced)
             self.assertRegex(advanced, r"warning_set_[0-9a-f]{52}")
             rendered = primary + "\n" + advanced
-            self.assertIn("초안: zet_20260820_exact_human_test", primary)
-            self.assertIn("제목: PRIVATE TITLE MUST NOT LEAK", primary)
+            self.assertIn("초안: PRIVATE TITLE MUST NOT LEAK", primary)
+            self.assertIn("파일: zet_20260820_exact_human_test", primary)
             self.assertNotIn("PRIVATE TITLE", advanced)
             self.assertNotIn("PRIVATE BODY", rendered)
             self.assertNotIn("private-warning-detail", rendered)

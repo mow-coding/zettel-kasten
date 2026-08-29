@@ -1548,6 +1548,1495 @@ print(
     )
 )
 '''
+INSTALLED_V0414_RECOVERY_SMOKE_SCHEMA = (
+    "wom-kit/installed-v0414-recovery-wheel-smoke/v0.1"
+)
+# Keep the large trusted smoke program off the Windows command line. The
+# entrypoint runner already supplies bounded stdin after descendant containment.
+INSTALLED_V0414_STDIN_LOADER = (
+    "import sys;exec(compile(sys.stdin.read(),'<wom-v0414-smoke>','exec'))"
+)
+INSTALLED_V0414_RECOVERY_SMOKE_SCRIPT = r'''
+import argparse
+import hashlib
+import io
+import json
+import os
+import shutil
+import stat
+import sys
+import threading
+from contextlib import redirect_stderr, redirect_stdout
+from pathlib import Path
+from unittest import mock
+from urllib.parse import unquote, urlparse
+
+
+# Register the only audit dispatcher before any installed WOM module executes.
+# Its policy pointer changes atomically after the complete guards are ready, so
+# package hooks registered later can never run ahead of WOM's complete policy.
+_IMPORT_TIME_POLICY_STATE = {"handler": None}
+_IMPORT_TIME_ALLOWED_ROOTS = tuple(
+    dict.fromkeys(
+        Path(value).resolve()
+        for value in (
+            sys.argv[1],
+            sys.argv[3],
+            Path.cwd(),
+            sys.prefix,
+            sys.base_prefix,
+        )
+    )
+)
+
+
+def _import_time_path_is_allowed(value):
+    if isinstance(value, int):
+        return value in {0, 1, 2}
+    try:
+        candidate = Path(os.fsdecode(value)).resolve()
+    except (OSError, TypeError, ValueError):
+        return False
+    return any(
+        candidate == allowed or allowed in candidate.parents
+        for allowed in _IMPORT_TIME_ALLOWED_ROOTS
+    )
+
+
+def _import_time_open_arguments_are_mutating(arguments):
+    if len(arguments) < 3:
+        return True
+    mode = arguments[1]
+    flags = arguments[2]
+    if isinstance(mode, str) and any(token in mode for token in "wax+"):
+        return True
+    if not isinstance(flags, int):
+        return True
+    access_mode = getattr(os, "O_ACCMODE", 3)
+    if flags & access_mode != getattr(os, "O_RDONLY", 0):
+        return True
+    mutation_flags = 0
+    for name in (
+        "O_APPEND",
+        "O_CREAT",
+        "O_EXCL",
+        "O_TEMPORARY",
+        "O_TRUNC",
+    ):
+        mutation_flags |= getattr(os, name, 0)
+    temporary_file_flag = getattr(os, "O_TMPFILE", 0)
+    return bool(
+        flags & mutation_flags
+        or (
+            temporary_file_flag
+            and flags & temporary_file_flag == temporary_file_flag
+        )
+    )
+
+
+def _deny_import_time_external_effects(event, arguments):
+    if event in {
+        "socket.connect",
+        "socket.getaddrinfo",
+        "subprocess.Popen",
+        "os.system",
+    } or event.startswith("winreg."):
+        raise RuntimeError("installed_v0414_import_time_effect_denied")
+    if event == "open" and _import_time_open_arguments_are_mutating(arguments):
+        raise RuntimeError("installed_v0414_import_time_mutation_denied")
+    if event in {
+        "os.remove",
+        "os.rename",
+        "os.rmdir",
+        "os.mkdir",
+        "os.chmod",
+        "os.utime",
+        "os.link",
+        "os.symlink",
+        "os.truncate",
+        "sqlite3.connect",
+    }:
+        raise RuntimeError("installed_v0414_import_time_mutation_denied")
+    path_indexes = {
+        "open": (0,),
+        "os.listdir": (0,),
+        "os.scandir": (0,),
+    }.get(event, ())
+    for index in path_indexes:
+        if index >= len(arguments) or arguments[index] is None:
+            continue
+        if not _import_time_path_is_allowed(arguments[index]):
+            raise RuntimeError("installed_v0414_import_time_path_denied")
+
+
+def _dispatch_installed_v0414_policy(event, arguments):
+    handler = _IMPORT_TIME_POLICY_STATE["handler"]
+    if handler is None:
+        return _deny_import_time_external_effects(event, arguments)
+    return handler(event, arguments)
+
+
+sys.addaudithook(_dispatch_installed_v0414_policy)
+
+ROOT = Path(sys.argv[1])
+EXPECTED_VERSION = sys.argv[2]
+ARCHIVE_TEMPLATE = Path(sys.argv[3])
+if not ARCHIVE_TEMPLATE.is_dir():
+    raise RuntimeError("installed_v0414_archive_template_missing")
+ZET_ID = "zet_20240504_fake_lunch_thought"
+SOURCE_ID = "123456781234123412341234567890ab"
+OBJECT_ID = (
+    "sha256:"
+    "acc6e73fb84988ecb538dfc0ceb883b88694e469a05172a5aeb0cce8902ce136"
+)
+PRIVATE_MARKER = "SYNTHETIC_V0414_PRIVATE_VALUE_MUST_NOT_ESCAPE"
+SAFE_DRAFT_TITLE = "Synthetic installed wheel draft title"
+RECOVERED_TITLE = "Synthetic installed wheel recovered title"
+SAFETY_OBSERVATIONS = {
+    "provider_attempt_count": 0,
+    "production_credential_provider_attempt_count": 0,
+    "outside_synthetic_filesystem_attempt_count": 0,
+    "public_cli_approval_call_count": 0,
+}
+OBSERVED_PUBLIC_OUTPUT = []
+ALLOWED_FILESYSTEM_ROOTS = ()
+WRITABLE_FILESYSTEM_ROOTS = ()
+
+
+def _fail(code):
+    raise RuntimeError(code)
+
+
+def _audit_open_arguments_are_mutating(arguments):
+    if len(arguments) < 3:
+        return True
+    mode = arguments[1]
+    flags = arguments[2]
+    if isinstance(mode, str) and any(token in mode for token in "wax+"):
+        return True
+    if not isinstance(flags, int):
+        return True
+    access_mode = getattr(os, "O_ACCMODE", 3)
+    if flags & access_mode != getattr(os, "O_RDONLY", 0):
+        return True
+    mutation_flags = 0
+    for name in (
+        "O_APPEND",
+        "O_CREAT",
+        "O_EXCL",
+        "O_TEMPORARY",
+        "O_TRUNC",
+    ):
+        mutation_flags |= getattr(os, name, 0)
+    temporary_file_flag = getattr(os, "O_TMPFILE", 0)
+    return bool(
+        flags & mutation_flags
+        or (
+            temporary_file_flag
+            and flags & temporary_file_flag == temporary_file_flag
+        )
+    )
+
+
+def _path_is_within_roots(value, roots):
+    if isinstance(value, int):
+        bound_path = _BOUND_DIRECTORY_PATHS.get(value)
+        expected_identity = _BOUND_DIRECTORY_IDENTITIES.get(value)
+        if bound_path is None or expected_identity is None:
+            bound_path = _BOUND_REGULAR_FILE_PATHS.get(value)
+            expected_identity = _BOUND_REGULAR_FILE_IDENTITIES.get(value)
+        try:
+            current_identity = _descriptor_identity(value)
+        except OSError:
+            return False
+        return bool(
+            bound_path is not None
+            and expected_identity is not None
+            and current_identity == expected_identity
+            and _bound_path_identity_matches(bound_path, expected_identity)
+            and any(
+                bound_path == allowed or allowed in bound_path.parents
+                for allowed in roots
+            )
+        )
+    try:
+        candidate = Path(os.fsdecode(value)).resolve()
+    except (OSError, TypeError, ValueError):
+        return False
+    return any(
+        candidate == allowed or allowed in candidate.parents
+        for allowed in roots
+    )
+
+
+def _path_is_within_allowed_roots(value):
+    return _path_is_within_roots(value, ALLOWED_FILESYSTEM_ROOTS)
+
+
+def _path_is_within_writable_roots(value):
+    return _path_is_within_roots(value, WRITABLE_FILESYSTEM_ROOTS)
+
+
+_ORIGINAL_OS_OPEN = os.open
+_ORIGINAL_OS_CLOSE = os.close
+_ORIGINAL_OS_DUP = os.dup
+_BOUND_DIRECTORY_PATHS = {}
+_BOUND_DIRECTORY_IDENTITIES = {}
+_BOUND_REGULAR_FILE_PATHS = {}
+_BOUND_REGULAR_FILE_IDENTITIES = {}
+_RELATIVE_DESCRIPTOR_FILE_OPEN = threading.local()
+
+
+def _read_only_open_flags_are_safe(flags):
+    if not isinstance(flags, int):
+        return False
+    access_mode = getattr(os, "O_ACCMODE", 3)
+    if flags & access_mode != getattr(os, "O_RDONLY", 0):
+        return False
+    mutation_flags = 0
+    for name in (
+        "O_APPEND",
+        "O_CREAT",
+        "O_EXCL",
+        "O_TEMPORARY",
+        "O_TRUNC",
+    ):
+        mutation_flags |= getattr(os, name, 0)
+    temporary_file_flag = getattr(os, "O_TMPFILE", 0)
+    return not (flags & mutation_flags) and not (
+        temporary_file_flag and flags & temporary_file_flag == temporary_file_flag
+    )
+
+
+def _read_only_directory_descriptor_open_is_allowed(event, arguments):
+    """Permit POSIX ancestor binding without permitting file-content reads."""
+
+    if event != "open" or len(arguments) < 3:
+        return False
+    if arguments[1] is not None:
+        return False
+    flags = arguments[2]
+    directory_flag = getattr(os, "O_DIRECTORY", 0)
+    return bool(
+        directory_flag
+        and isinstance(flags, int)
+        and flags & directory_flag
+        and _read_only_open_flags_are_safe(flags)
+    )
+
+
+def _relative_descriptor_file_open_is_allowed(event, arguments):
+    allowance = getattr(_RELATIVE_DESCRIPTOR_FILE_OPEN, "allowance", None)
+    if (
+        event != "open"
+        or not isinstance(allowance, dict)
+        or allowance.get("used") is not False
+        or len(arguments) < 3
+    ):
+        return False
+    if arguments[1] is not None:
+        return False
+    try:
+        path_text = os.fsdecode(arguments[0])
+    except (TypeError, ValueError):
+        return False
+    if (
+        path_text != allowance.get("path")
+        or not _open_audit_flags_match(
+            allowance.get("flags"),
+            arguments[2],
+        )
+    ):
+        return False
+    # This one-shot thread-local marker is consumed by the first matching
+    # audit event. Other threads never inherit the allowance.
+    allowance["used"] = True
+    return True
+
+
+def _descriptor_identity(descriptor):
+    observed = os.fstat(descriptor)
+    identity = int(observed.st_dev), int(observed.st_ino)
+    if identity[1] == 0:
+        raise OSError("installed_v0414_descriptor_identity_unavailable")
+    return identity
+
+
+def _bound_path_identity_matches(path, expected_identity):
+    try:
+        observed = os.stat(path, follow_symlinks=False)
+    except OSError:
+        return False
+    return (
+        int(observed.st_dev),
+        int(observed.st_ino),
+    ) == expected_identity
+
+
+def _single_descriptor_child_name_is_safe(path_text, supplied):
+    return bool(
+        path_text not in {"", ".", ".."}
+        and not supplied.is_absolute()
+        and supplied.parent == Path(".")
+    )
+
+
+def _bound_directory_descriptor_path(descriptor):
+    if not isinstance(descriptor, int) or isinstance(descriptor, bool):
+        return None
+    parent = _BOUND_DIRECTORY_PATHS.get(descriptor)
+    expected_identity = _BOUND_DIRECTORY_IDENTITIES.get(descriptor)
+    try:
+        current_identity = _descriptor_identity(descriptor)
+    except OSError:
+        return None
+    if (
+        parent is None
+        or expected_identity is None
+        or current_identity != expected_identity
+        or not _bound_path_identity_matches(parent, expected_identity)
+    ):
+        return None
+    return parent
+
+
+def _descriptor_relative_path_is_allowed(value, descriptor, *, writable=False):
+    try:
+        path_text = os.fsdecode(value)
+        supplied = Path(path_text)
+    except (TypeError, ValueError):
+        return False
+    if supplied.is_absolute() or descriptor in (None, -1):
+        return (
+            _path_is_within_writable_roots(supplied)
+            if writable
+            else _path_is_within_allowed_roots(supplied)
+        )
+    if not _single_descriptor_child_name_is_safe(path_text, supplied):
+        return False
+    parent = _bound_directory_descriptor_path(descriptor)
+    if parent is None:
+        return False
+    candidate = (parent / supplied).resolve()
+    return (
+        _path_is_within_writable_roots(candidate)
+        if writable
+        else _path_is_within_allowed_roots(candidate)
+    )
+
+
+def _open_audit_flags_match(requested, audited):
+    if not isinstance(requested, int) or not isinstance(audited, int):
+        return False
+    automatic_flags = (
+        getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NOINHERIT", 0)
+    )
+    return (requested & ~automatic_flags) == (audited & ~automatic_flags)
+
+
+def _guarded_os_open(path, flags, mode=0o777, *, dir_fd=None):
+    try:
+        path_text = os.fsdecode(path)
+        supplied = Path(path_text)
+    except (TypeError, ValueError):
+        SAFETY_OBSERVATIONS["outside_synthetic_filesystem_attempt_count"] += 1
+        raise RuntimeError("installed_v0414_open_path_invalid") from None
+    temporary_file_flag = getattr(os, "O_TMPFILE", 0)
+    if (
+        temporary_file_flag
+        and isinstance(flags, int)
+        and flags & temporary_file_flag == temporary_file_flag
+    ):
+        SAFETY_OBSERVATIONS["outside_synthetic_filesystem_attempt_count"] += 1
+        raise RuntimeError("installed_v0414_anonymous_tmpfile_denied")
+    relative_descriptor_open = dir_fd is not None and not supplied.is_absolute()
+    if relative_descriptor_open:
+        if not _single_descriptor_child_name_is_safe(path_text, supplied):
+            SAFETY_OBSERVATIONS["outside_synthetic_filesystem_attempt_count"] += 1
+            raise RuntimeError("installed_v0414_relative_open_name_denied")
+        parent = _bound_directory_descriptor_path(dir_fd)
+        if parent is None:
+            SAFETY_OBSERVATIONS["outside_synthetic_filesystem_attempt_count"] += 1
+            raise RuntimeError("installed_v0414_unbound_directory_descriptor_denied")
+        candidate = (parent / supplied).resolve()
+    else:
+        candidate = supplied.resolve()
+    directory_flag = getattr(os, "O_DIRECTORY", 0)
+    directory_open = bool(
+        directory_flag
+        and isinstance(flags, int)
+        and flags & directory_flag
+        and not (
+            temporary_file_flag
+            and flags & temporary_file_flag == temporary_file_flag
+        )
+    )
+    allowance = None
+    if relative_descriptor_open and not directory_open:
+        candidate_allowed = (
+            _path_is_within_allowed_roots(candidate)
+            if _read_only_open_flags_are_safe(flags)
+            else _path_is_within_writable_roots(candidate)
+        )
+        if not isinstance(flags, int) or not candidate_allowed:
+            SAFETY_OBSERVATIONS["outside_synthetic_filesystem_attempt_count"] += 1
+            raise RuntimeError("installed_v0414_outside_synthetic_path_denied")
+        allowance = {"path": path_text, "flags": flags, "used": False}
+        _RELATIVE_DESCRIPTOR_FILE_OPEN.allowance = allowance
+    try:
+        # Pass an already-normalized immutable string so a re-entrant
+        # PathLike.__fspath__ cannot run while the audit allowance is live.
+        descriptor = _ORIGINAL_OS_OPEN(path_text, flags, mode, dir_fd=dir_fd)
+    finally:
+        if allowance is not None:
+            try:
+                del _RELATIVE_DESCRIPTOR_FILE_OPEN.allowance
+            except AttributeError:
+                pass
+    if allowance is not None and allowance["used"] is not True:
+        _ORIGINAL_OS_CLOSE(descriptor)
+        SAFETY_OBSERVATIONS["outside_synthetic_filesystem_attempt_count"] += 1
+        raise RuntimeError("installed_v0414_relative_open_audit_not_consumed")
+    if directory_open or _path_is_within_allowed_roots(candidate):
+        try:
+            identity = _descriptor_identity(descriptor)
+        except OSError:
+            _ORIGINAL_OS_CLOSE(descriptor)
+            raise RuntimeError("installed_v0414_directory_descriptor_unreadable")
+        if directory_open:
+            _BOUND_DIRECTORY_PATHS[descriptor] = candidate
+            _BOUND_DIRECTORY_IDENTITIES[descriptor] = identity
+        else:
+            _BOUND_REGULAR_FILE_PATHS[descriptor] = candidate
+            _BOUND_REGULAR_FILE_IDENTITIES[descriptor] = identity
+    return descriptor
+
+
+def _guarded_os_close(descriptor):
+    try:
+        return _ORIGINAL_OS_CLOSE(descriptor)
+    finally:
+        _BOUND_DIRECTORY_PATHS.pop(descriptor, None)
+        _BOUND_DIRECTORY_IDENTITIES.pop(descriptor, None)
+        _BOUND_REGULAR_FILE_PATHS.pop(descriptor, None)
+        _BOUND_REGULAR_FILE_IDENTITIES.pop(descriptor, None)
+
+
+def _windows_untracked_regular_descriptor_path(descriptor):
+    if os.name != "nt":
+        return None
+    try:
+        import ctypes
+        import msvcrt
+        from ctypes import wintypes
+
+        handle = msvcrt.get_osfhandle(descriptor)
+        if handle == -1:
+            return None
+        get_final_path = ctypes.WinDLL(
+            "kernel32",
+            use_last_error=True,
+        ).GetFinalPathNameByHandleW
+        get_final_path.argtypes = [
+            wintypes.HANDLE,
+            wintypes.LPWSTR,
+            wintypes.DWORD,
+            wintypes.DWORD,
+        ]
+        get_final_path.restype = wintypes.DWORD
+        required = int(get_final_path(handle, None, 0, 0))
+        if required <= 0 or required > 32_768:
+            return None
+        buffer = ctypes.create_unicode_buffer(required + 1)
+        written = int(get_final_path(handle, buffer, len(buffer), 0))
+        if written <= 0 or written >= len(buffer):
+            return None
+        path_text = buffer.value
+        if path_text.startswith("\\\\?\\UNC\\"):
+            path_text = "\\\\" + path_text[8:]
+        elif path_text.startswith("\\\\?\\"):
+            path_text = path_text[4:]
+        candidate = Path(path_text).resolve()
+        observed = os.fstat(descriptor)
+        identity = (int(observed.st_dev), int(observed.st_ino))
+        if (
+            not stat.S_ISREG(observed.st_mode)
+            or identity[1] == 0
+            or not _path_is_within_allowed_roots(candidate)
+            or not _bound_path_identity_matches(candidate, identity)
+        ):
+            return None
+        return candidate
+    except (AttributeError, OSError, TypeError, ValueError):
+        return None
+
+
+def _guarded_os_dup(descriptor):
+    if (
+        descriptor not in _BOUND_DIRECTORY_PATHS
+        and descriptor not in _BOUND_REGULAR_FILE_PATHS
+    ):
+        adopted_path = _windows_untracked_regular_descriptor_path(descriptor)
+        if adopted_path is not None:
+            try:
+                adopted_identity = _descriptor_identity(descriptor)
+            except OSError:
+                adopted_identity = None
+            if adopted_identity is not None:
+                _BOUND_REGULAR_FILE_PATHS[descriptor] = adopted_path
+                _BOUND_REGULAR_FILE_IDENTITIES[descriptor] = adopted_identity
+    if not _path_is_within_allowed_roots(descriptor):
+        SAFETY_OBSERVATIONS["outside_synthetic_filesystem_attempt_count"] += 1
+        raise RuntimeError("installed_v0414_unbound_descriptor_dup_denied")
+    directory_path = _BOUND_DIRECTORY_PATHS.get(descriptor)
+    regular_path = _BOUND_REGULAR_FILE_PATHS.get(descriptor)
+    source_identity = (
+        _BOUND_DIRECTORY_IDENTITIES.get(descriptor)
+        if directory_path is not None
+        else _BOUND_REGULAR_FILE_IDENTITIES.get(descriptor)
+    )
+    duplicate = _ORIGINAL_OS_DUP(descriptor)
+    try:
+        duplicate_identity = _descriptor_identity(duplicate)
+    except OSError:
+        _ORIGINAL_OS_CLOSE(duplicate)
+        raise RuntimeError("installed_v0414_duplicated_descriptor_unreadable")
+    if source_identity is None or duplicate_identity != source_identity:
+        _ORIGINAL_OS_CLOSE(duplicate)
+        raise RuntimeError("installed_v0414_duplicated_descriptor_changed")
+    if directory_path is not None:
+        _BOUND_DIRECTORY_PATHS[duplicate] = directory_path
+        _BOUND_DIRECTORY_IDENTITIES[duplicate] = duplicate_identity
+    else:
+        _BOUND_REGULAR_FILE_PATHS[duplicate] = regular_path
+        _BOUND_REGULAR_FILE_IDENTITIES[duplicate] = duplicate_identity
+    return duplicate
+
+
+def _sqlite_connect_target_is_allowed(value):
+    try:
+        target = os.fsdecode(value)
+    except (TypeError, ValueError):
+        return False
+    if target == ":memory:":
+        return True
+    parsed = urlparse(target)
+    if parsed.scheme != "file":
+        return _path_is_within_writable_roots(target)
+    if parsed.netloc not in {"", "localhost"}:
+        return False
+    path_text = unquote(parsed.path)
+    if os.name == "nt" and len(path_text) >= 3:
+        if path_text[0] == "/" and path_text[2] == ":":
+            path_text = path_text[1:]
+    return _path_is_within_writable_roots(path_text)
+
+
+def _deny_unexpected_external_effects(event, arguments):
+    if event in {
+        "socket.connect",
+        "socket.getaddrinfo",
+        "subprocess.Popen",
+        "os.system",
+    }:
+        SAFETY_OBSERVATIONS["provider_attempt_count"] += 1
+        raise RuntimeError("installed_v0414_provider_effect_denied")
+    if event.startswith("winreg."):
+        SAFETY_OBSERVATIONS[
+            "production_credential_provider_attempt_count"
+        ] += 1
+        raise RuntimeError("installed_v0414_production_registry_denied")
+    if _read_only_directory_descriptor_open_is_allowed(event, arguments):
+        # local_title_recovery binds a supplied source by opening the POSIX
+        # directory chain from '/'. O_DIRECTORY prevents these descriptor-only
+        # probes from becoming reads of regular-file content.
+        return
+    if _relative_descriptor_file_open_is_allowed(event, arguments):
+        return
+    if event == "open":
+        value = arguments[0] if arguments else None
+        allowed = (
+            _path_is_within_writable_roots(value)
+            if _audit_open_arguments_are_mutating(arguments)
+            else _path_is_within_allowed_roots(value)
+        )
+        if allowed:
+            return
+        SAFETY_OBSERVATIONS["outside_synthetic_filesystem_attempt_count"] += 1
+        raise RuntimeError("installed_v0414_outside_synthetic_path_denied")
+    if event == "os.truncate":
+        value = arguments[0] if arguments else None
+        if _path_is_within_writable_roots(value):
+            return
+        SAFETY_OBSERVATIONS["outside_synthetic_filesystem_attempt_count"] += 1
+        raise RuntimeError("installed_v0414_outside_synthetic_path_denied")
+    descriptor_relative_path_indexes = {
+        "os.remove": ((0, 1),),
+        "os.rename": ((0, 2), (1, 3)),
+        "os.rmdir": ((0, 1),),
+        "os.mkdir": ((0, 2),),
+        "os.chmod": ((0, 2),),
+        "os.utime": ((0, 3),),
+        "os.link": ((0, 2), (1, 3)),
+        # A relative symlink source is interpreted from its destination
+        # directory when the link is later traversed, so bind both strings to
+        # the destination dir_fd and keep links pointing outside fail-closed.
+        "os.symlink": ((0, 2), (1, 2)),
+    }.get(event)
+    if descriptor_relative_path_indexes is not None:
+        for path_index, descriptor_index in descriptor_relative_path_indexes:
+            if path_index >= len(arguments):
+                continue
+            value = arguments[path_index]
+            if value is None:
+                continue
+            descriptor = (
+                arguments[descriptor_index]
+                if descriptor_index < len(arguments)
+                else None
+            )
+            if _descriptor_relative_path_is_allowed(
+                value,
+                descriptor,
+                writable=True,
+            ):
+                continue
+            SAFETY_OBSERVATIONS["outside_synthetic_filesystem_attempt_count"] += 1
+            raise RuntimeError("installed_v0414_outside_synthetic_path_denied")
+        return
+    path_argument_indexes = {
+        "os.listdir": (0,),
+        "os.scandir": (0,),
+        "sqlite3.connect": (0,),
+    }.get(event, ())
+    for index in path_argument_indexes:
+        if index >= len(arguments):
+            continue
+        value = arguments[index]
+        if value is None:
+            continue
+        if event == "sqlite3.connect" and _sqlite_connect_target_is_allowed(value):
+            continue
+        if event != "sqlite3.connect" and _path_is_within_allowed_roots(value):
+            continue
+        SAFETY_OBSERVATIONS["outside_synthetic_filesystem_attempt_count"] += 1
+        raise RuntimeError("installed_v0414_outside_synthetic_path_denied")
+
+
+def _deny_production_credential_provider():
+    SAFETY_OBSERVATIONS["production_credential_provider_attempt_count"] += 1
+    raise RuntimeError("installed_v0414_production_credential_provider_denied")
+
+
+class _ApprovingNative:
+    def __init__(self):
+        self.calls = []
+
+    def show(self, **kwargs):
+        self.calls.append(dict(kwargs))
+        return APPROVE_BUTTON_ID, True
+
+
+class _SyntheticKeyProvider:
+    def __init__(self):
+        self.calls = 0
+        self.create_if_missing = []
+
+    def use_key(self, _root, consumer, *, create_if_missing=False):
+        self.calls += 1
+        self.create_if_missing.append(bool(create_if_missing))
+        key = bytearray(range(32))
+        try:
+            return consumer(memoryview(key))
+        finally:
+            key[:] = b"\0" * len(key)
+
+
+def _tree_sha256(root):
+    return {
+        path.relative_to(root).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
+        for path in sorted(root.rglob("*"))
+        if path.is_file()
+    }
+
+
+def _zettel_bytes(path, *, title, body, notion=False):
+    frontmatter, _existing_body = archive_services.split_zettel_text(
+        path.read_text(encoding="utf-8")
+    )
+    frontmatter["title"] = title
+    if notion:
+        frontmatter["facets"] = {
+            "source_page_id": SOURCE_ID,
+            "source_system": "notion_db3",
+            "source_locator_omitted_count": 1,
+        }
+    return (
+        "---\n"
+        + archive_cli.dump_yaml(frontmatter)
+        + "---\n"
+        + body
+    ).encode("utf-8")
+
+
+def _write_markup_receipt(root, *, before, after, binding_manifest_sha256):
+    before_digest = hashlib.sha256(before).hexdigest()
+    after_digest = hashlib.sha256(after).hexdigest()
+    token = "4" * 64
+    transaction = ".wom-scratch/markup-normalization/transactions/" + token
+    before_relative = (
+        transaction + "/snapshots/000000.before." + before_digest + ".bin"
+    )
+    after_relative = (
+        transaction + "/snapshots/000000.after." + after_digest + ".bin"
+    )
+    for relative, raw in (
+        (before_relative, before),
+        (after_relative, after),
+    ):
+        path = root.joinpath(*relative.split("/"))
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(raw)
+    receipt_relative = "receipts/markup-normalization/" + token + ".json"
+    receipt = {
+        "schema": completion_workflows.MARKUP_NORMALIZATION_RECEIPT_SCHEMA,
+        "archive_id": archive_services.read_archive_id(root),
+        "plan_sha256": token,
+        "item_count": 1,
+        "items": [
+            {
+                "index": 0,
+                "zettel_id": ZET_ID,
+                "path": "zettels/" + ZET_ID + ".md",
+                "before_sha256": before_digest,
+                "after_sha256": after_digest,
+                "snapshot_path": before_relative,
+                "before_snapshot_path": before_relative,
+                "after_snapshot_path": after_relative,
+            }
+        ],
+        "binding_manifest_sha256": binding_manifest_sha256,
+    }
+    receipt_path = root.joinpath(*receipt_relative.split("/"))
+    receipt_path.parent.mkdir(parents=True, exist_ok=True)
+    receipt_path.write_text(json.dumps(receipt), encoding="utf-8")
+    return receipt_relative
+
+
+def _write_title_mirror_pair(root):
+    markdown_path = root / "pages.markdown.jsonl"
+    markdown_path.write_text(
+        json.dumps(
+            {
+                "page_id": SOURCE_ID,
+                "markdown": PRIVATE_MARKER + " source body",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    markdown_path.with_name("pages.index.jsonl").write_text(
+        json.dumps(
+            {
+                "page_id": SOURCE_ID,
+                "index": RECOVERED_TITLE,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    return markdown_path
+
+
+def _run_json_cli(arguments, forbidden_values):
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+    with redirect_stdout(stdout), redirect_stderr(stderr):
+        code = archive_cli.main(arguments)
+    raw_stdout = stdout.getvalue()
+    raw_stderr = stderr.getvalue()
+    OBSERVED_PUBLIC_OUTPUT.extend((raw_stdout, raw_stderr))
+    if int(code) != 0 or raw_stderr:
+        _fail("installed_v0414_cli_execution_failed")
+    try:
+        result = json.loads(raw_stdout)
+    except json.JSONDecodeError:
+        _fail("installed_v0414_cli_json_failed")
+    if not isinstance(result, dict) or result.get("ok") is not True:
+        _fail("installed_v0414_cli_result_failed")
+    for value in forbidden_values:
+        if value and (value in raw_stdout or value in raw_stderr):
+            _fail("installed_v0414_cli_private_value_echoed")
+    return result
+
+
+installed_prefix = Path(sys.prefix).resolve()
+ALLOWED_FILESYSTEM_ROOTS = tuple(
+    dict.fromkeys(
+        path.resolve()
+        for path in (
+            ROOT,
+            ARCHIVE_TEMPLATE,
+            installed_prefix,
+            Path(sys.base_prefix),
+        )
+    )
+)
+WRITABLE_FILESYSTEM_ROOTS = (ROOT.resolve(),)
+os.open = _guarded_os_open
+os.close = _guarded_os_close
+os.dup = _guarded_os_dup
+_IMPORT_TIME_POLICY_STATE["handler"] = _deny_unexpected_external_effects
+
+import wom_kit
+from wom_kit import (
+    archive_cli,
+    archive_services,
+    completion_workflows,
+    exact_human_approval_workflow,
+    local_locator_recovery,
+    local_recovery_execution,
+)
+from wom_kit.exact_human_approval_windows import (
+    APPROVE_BUTTON_ID,
+    ExactHumanApprovalOperation,
+    ExactHumanApprovalTargetPreview,
+    ExactHumanApprovalWindowsError,
+    exact_human_approval_safe_content_preview,
+)
+from wom_kit.local_locator_recovery import (
+    ORPHAN_RECOVERY_LEDGER_SCHEMA,
+    discover_markup_normalization_receipts,
+    notion_locator_orphan_recovery_execution_plan,
+    verified_notion_locator_resolution_evidence,
+)
+from wom_kit.local_title_recovery import zet_identifier_title_recovery_plan
+from wom_kit.operation_approval_binding import ExactOperationApprovalBinding
+
+if wom_kit.__version__ != EXPECTED_VERSION:
+    _fail("installed_v0414_package_version_failed")
+module_path = Path(wom_kit.__file__).resolve()
+if module_path != installed_prefix and installed_prefix not in module_path.parents:
+    _fail("installed_v0414_module_not_isolated_install")
+if sys.flags.isolated != 1 or sys.flags.dont_write_bytecode != 1:
+    _fail("installed_v0414_python_isolation_flags_failed")
+production_credential_provider_patcher = mock.patch.object(
+    exact_human_approval_workflow,
+    "_production_key_provider",
+    _deny_production_credential_provider,
+)
+production_credential_provider_patcher.start()
+
+ROOT.mkdir(parents=True, exist_ok=False)
+locator_root = ROOT / "locator"
+viewer_root = ROOT / "viewer"
+title_root = ROOT / "title"
+shutil.copytree(ARCHIVE_TEMPLATE, locator_root)
+shutil.copytree(ARCHIVE_TEMPLATE, viewer_root)
+shutil.copytree(ARCHIVE_TEMPLATE, title_root)
+
+# Prove the incomplete read page stays on canonical source text and explicitly
+# defers Markdown projection until WOM has the complete body context.
+viewer_path = viewer_root / "zettels" / (ZET_ID + ".md")
+viewer_body = (
+    "# Synthetic viewer\n\n"
+    "Range 3~5 and intentionally incomplete **emphasis for boundary testing.\n"
+)
+viewer_path.write_bytes(
+    _zettel_bytes(
+        viewer_path,
+        title="Synthetic installed wheel viewer",
+        body=viewer_body,
+    )
+)
+viewer_before = viewer_path.read_bytes()
+canonical = archive_services.read_zettel(
+    viewer_root,
+    zettel_id=ZET_ID,
+    section="body",
+)
+page = archive_services.read_zettel(
+    viewer_root,
+    zettel_id=ZET_ID,
+    section="document",
+    body_max_chars=24,
+)
+source_page = canonical["body"][:24]
+if (
+    page.get("body") != source_page
+    or "display" in page
+    or page.get("integrity", {}).get("returned_body_is_display_projection") is not False
+    or page.get("body_page", {}).get("complete") is not False
+    or page.get("body_page", {}).get("display_projection_state")
+    != "deferred_until_complete_body"
+    or page.get("body_page", {}).get("display_projection_reason")
+    != "page_boundary_context_incomplete"
+    or viewer_path.read_bytes() != viewer_before
+):
+    _fail("installed_v0414_incomplete_page_projection_contract_failed")
+
+# Prove a safe draft title is the primary human label, while unsafe absolute
+# paths cannot enter local approval labels or bound content previews and the
+# exact machine binding remains unchanged.
+safe_draft_preview = archive_cli._draft_exact_human_approval_target_preview(
+    primary=viewer_path.name,
+    title=SAFE_DRAFT_TITLE,
+)
+if (
+    safe_draft_preview.primary != viewer_path.name
+    or safe_draft_preview.primary_label != SAFE_DRAFT_TITLE
+):
+    _fail("installed_v0414_safe_draft_title_not_primary_label")
+unsafe_path = str((ROOT / "operator-local" / "secret-note.md").resolve())
+unsafe_text = PRIVATE_MARKER + " " + unsafe_path
+unsafe_rejected = False
+try:
+    ExactHumanApprovalTargetPreview(kind="zet", primary=unsafe_path)
+except ExactHumanApprovalWindowsError as exc:
+    unsafe_rejected = unsafe_path not in str(exc)
+if not unsafe_rejected:
+    _fail("installed_v0414_unsafe_approval_identity_not_rejected")
+synthetic_credential_shapes = (
+    "Bearer " + ("A" * 24),
+    "prefix_" + "nt" + "n_" + ("A" * 24),
+    "prefix_" + "github" + "_pat_" + ("A" * 24),
+    "gl" + "pat-" + ("A" * 20),
+    "xo" + "xb-" + ("A" * 20),
+    "xa" + "pp-" + ("A" * 20),
+    "AI" + "za" + ("A" * 35),
+    "AK" + "IA" + ("A" * 16),
+    "AS" + "IA" + ("A" * 16),
+    "ya" + "29." + ("A" * 24),
+    "GOC" + "SPX-" + ("A" * 20),
+    "s" + "k-proj-" + ("A" * 24),
+    "s" + "k_live_" + ("A" * 20),
+    "s" + "k_test_" + ("A" * 20),
+    "r" + "k_test_" + ("A" * 20),
+    "ey" + "J" + ("A" * 12) + "." + ("B" * 12) + "." + ("C" * 12),
+    "-----BE" + "GIN PRIVATE KEY-----",
+    "client_secret=" + ("A" * 20),
+    "Authorization: Basic " + ("A" * 20),
+)
+for unsafe_shape in synthetic_credential_shapes:
+    if exact_human_approval_safe_content_preview(unsafe_shape) is not None:
+        _fail("installed_v0414_unsafe_credential_preview_not_suppressed")
+    try:
+        ExactHumanApprovalTargetPreview(kind="zet", primary=unsafe_shape)
+    except ExactHumanApprovalWindowsError:
+        pass
+    else:
+        _fail("installed_v0414_unsafe_credential_identity_not_rejected")
+for safe_label in (
+    "AI:assistant-assisted draft",
+    "TODO:review-this-draft",
+    "sk-project-roadmap.md",
+):
+    if exact_human_approval_safe_content_preview(safe_label) != safe_label:
+        _fail("installed_v0414_safe_colon_preview_suppressed")
+    if ExactHumanApprovalTargetPreview(
+        kind="zet",
+        primary=safe_label,
+    ).primary != safe_label:
+        _fail("installed_v0414_safe_identity_suppressed")
+draft_preview = archive_cli._draft_exact_human_approval_target_preview(
+    primary=viewer_path.name,
+    title=unsafe_text,
+)
+if draft_preview.primary_label is not None:
+    _fail("installed_v0414_unsafe_draft_label_not_suppressed")
+frontmatter, _body = archive_services.split_zettel_text(
+    viewer_path.read_text(encoding="utf-8")
+)
+frontmatter["title"] = unsafe_text
+frontmatter["abstract"] = unsafe_text
+viewer_path.write_bytes(
+    (
+        "---\n"
+        + archive_cli.dump_yaml(frontmatter)
+        + "---\n"
+        + unsafe_text
+        + "\n"
+    ).encode("utf-8")
+)
+binding = ExactOperationApprovalBinding(
+    operation=ExactHumanApprovalOperation.mint_zet,
+    plan_sha256="sha256:" + "1" * 64,
+    target_binding_sha256="sha256:" + "2" * 64,
+    warning_codes=(),
+    review_binding_codes=("draft_bytes_digest",),
+    target_preview=ExactHumanApprovalTargetPreview(
+        kind="zet",
+        primary=viewer_path.name,
+    ),
+)
+enriched = archive_cli._binding_with_primary_bound_zettel_preview(
+    binding,
+    viewer_root,
+    relative_path="zettels/" + viewer_path.name,
+    expected_file_sha256=(
+        "sha256:" + hashlib.sha256(viewer_path.read_bytes()).hexdigest()
+    ),
+)
+if (
+    enriched.target_preview.primary_label is not None
+    or enriched.target_preview.source_preview is not None
+    or enriched.plan_sha256 != binding.plan_sha256
+    or enriched.target_binding_sha256 != binding.target_binding_sha256
+    or unsafe_path in repr(enriched)
+    or PRIVATE_MARKER in repr(enriched)
+):
+    _fail("installed_v0414_bound_approval_preview_privacy_failed")
+
+# Prove the installed title-recovery planner accepts the exact paired file and
+# its containing folder as equivalent entrypoints. Then cross the public CLI
+# approval route with only an in-process synthetic native decision/key.
+title_path = title_root / "zettels" / (ZET_ID + ".md")
+title_body = "Synthetic canonical title-recovery body\n"
+title_path.write_bytes(
+    _zettel_bytes(
+        title_path,
+        title=SOURCE_ID,
+        body=title_body,
+        notion=True,
+    )
+)
+title_source_root = ROOT / "private-title-source"
+title_source_root.mkdir()
+title_markdown_path = _write_title_mirror_pair(title_source_root)
+title_file_plan = zet_identifier_title_recovery_plan(
+    title_root,
+    source_mirror=title_markdown_path,
+    expected_identifier_title_count=1,
+)
+title_folder_plan = zet_identifier_title_recovery_plan(
+    title_root,
+    source_mirror=title_source_root,
+    expected_identifier_title_count=1,
+)
+title_summary = title_file_plan.get("summary", {})
+if (
+    title_file_plan.get("ok") is not True
+    or title_folder_plan.get("ok") is not True
+    or title_summary.get("source_index_row_count") != 1
+    or title_summary.get("identifier_title_count") != 1
+    or title_summary.get("exact_recovery_ready_count") != 1
+    or title_folder_plan.get("summary") != title_summary
+    or title_folder_plan.get("exact_operation_manifest")
+    != title_file_plan.get("exact_operation_manifest")
+):
+    _fail("installed_v0414_title_pair_entrypoints_failed")
+title_plan_text = json.dumps(title_folder_plan, sort_keys=True)
+if any(
+    value in title_plan_text
+    for value in (
+        str(title_source_root),
+        str(title_markdown_path),
+        SOURCE_ID,
+        ZET_ID,
+        RECOVERED_TITLE,
+        PRIVATE_MARKER,
+    )
+):
+    _fail("installed_v0414_title_pair_plan_privacy_failed")
+title_indexed = archive_services.index_archive(title_root)
+if (
+    title_indexed.get("ok") is not True
+    or title_indexed.get("index_state") != archive_services.INDEX_STATE_CURRENT
+):
+    _fail("installed_v0414_title_fixture_index_failed")
+
+approving_native = _ApprovingNative()
+synthetic_key_provider = _SyntheticKeyProvider()
+
+
+def _execute_with_synthetic_native(archive_root, context, writer):
+    SAFETY_OBSERVATIONS["public_cli_approval_call_count"] += 1
+    return exact_human_approval_workflow._execute_exact_human_approved_write_core(
+        archive_root,
+        context,
+        writer,
+        native=approving_native,
+        key_provider=synthetic_key_provider,
+    )
+
+
+with mock.patch.object(
+    local_recovery_execution,
+    "_execute_exact_human_approved_write",
+    _execute_with_synthetic_native,
+):
+    title_cli_apply = _run_json_cli(
+        [
+            "zet-title-remap-write",
+            str(title_root),
+            "--source-mirror",
+            str(title_source_root),
+            "--expected-identifier-title-count",
+            "1",
+            "--approve",
+            "--reviewed-by",
+            "person:installed-wheel-smoke",
+            "--format",
+            "json",
+        ],
+        (
+            str(ROOT),
+            str(title_root),
+            str(title_source_root),
+            str(title_markdown_path),
+            SOURCE_ID,
+            ZET_ID,
+            RECOVERED_TITLE,
+            PRIVATE_MARKER,
+        ),
+    )
+title_frontmatter, title_after_body = archive_services.require_readable_zettel_content(
+    title_path
+)
+title_approval = title_cli_apply.get("exact_human_approval", {})
+native_payload = repr(approving_native.calls)
+if (
+    title_frontmatter.get("title") != RECOVERED_TITLE
+    or title_after_body != title_body
+    or title_approval.get("status") != "succeeded"
+    or SAFETY_OBSERVATIONS["public_cli_approval_call_count"] != 1
+    or len(approving_native.calls) != 1
+    or synthetic_key_provider.calls != 1
+    or synthetic_key_provider.create_if_missing != [True]
+    or PRIVATE_MARKER in native_payload
+    or str(title_source_root) in native_payload
+):
+    _fail("installed_v0414_title_cli_approval_binding_failed")
+
+# Build one receipt-bound locator case, discover it through the operator-facing
+# --all-markup-receipts route, then apply and independently audit the durable
+# v0.2 resolution ledger. Everything is synthetic and local.
+locator_path = locator_root / "zettels" / (ZET_ID + ".md")
+marker = archive_services.NOTION_IMPORT_LOCATOR_OMISSION_MARKER
+source_fragment = '<file src="' + marker + '"></file>'
+before = _zettel_bytes(
+    locator_path,
+    title="Synthetic current title",
+    body=source_fragment + "\n",
+    notion=True,
+)
+replacement = "[Attached objet](wom-objet:" + OBJECT_ID + ")"
+after = _zettel_bytes(
+    locator_path,
+    title="Synthetic current title",
+    body=replacement + "\n",
+    notion=True,
+)
+locator_path.write_bytes(after)
+binding_document = {
+    "schema": completion_workflows.MARKUP_REFERENCE_BINDING_MANIFEST_SCHEMA,
+    "archive_id": archive_services.read_archive_id(locator_root),
+    "bindings": [
+        {
+            "zettel_id": ZET_ID,
+            "tag_sha256": completion_workflows._sha256_bytes(
+                source_fragment.encode("utf-8")
+            ),
+            "binding_kind": "objet",
+            "binding_id": OBJECT_ID,
+        }
+    ],
+}
+binding_raw = json.dumps(binding_document).encode("utf-8")
+binding_path = (
+    locator_root / ".wom-scratch" / "markup-bindings" / "reviewed.json"
+)
+binding_path.parent.mkdir(parents=True, exist_ok=True)
+binding_path.write_bytes(binding_raw)
+receipt_relative = _write_markup_receipt(
+    locator_root,
+    before=before,
+    after=after,
+    binding_manifest_sha256=hashlib.sha256(binding_raw).hexdigest(),
+)
+discovered = discover_markup_normalization_receipts(locator_root)
+if discovered != [receipt_relative]:
+    _fail("installed_v0414_all_markup_receipt_discovery_failed")
+parser = archive_cli.build_parser()
+parsed = parser.parse_args(
+    [
+        "notion-import-locator-loss-audit",
+        str(locator_root),
+        "--all-markup-receipts",
+        "--expected-orphan-row-count",
+        "1",
+        "--dry-run",
+        "--format",
+        "json",
+    ]
+)
+if parsed.all_markup_receipts is not True:
+    _fail("installed_v0414_all_markup_receipts_parser_missing")
+cli_audit = _run_json_cli(
+    [
+        "notion-import-locator-loss-audit",
+        str(locator_root),
+        "--all-markup-receipts",
+        "--expected-orphan-row-count",
+        "1",
+        "--dry-run",
+        "--format",
+        "json",
+    ],
+    (
+        str(ROOT),
+        SOURCE_ID,
+        ZET_ID,
+        OBJECT_ID,
+        source_fragment,
+        replacement,
+    ),
+)
+orphan_summary = cli_audit.get("orphan_recovery", {}).get("summary", {})
+if (
+    orphan_summary.get("orphan_row_count") != 1
+    or orphan_summary.get("resolved_by_verified_reference_count") != 1
+    or orphan_summary.get("classified_orphan_row_count") != 1
+):
+    _fail("installed_v0414_all_markup_receipts_execution_failed")
+
+indexed = archive_services.index_archive(locator_root)
+if (
+    indexed.get("ok") is not True
+    or indexed.get("index_state") != archive_services.INDEX_STATE_CURRENT
+):
+    _fail("installed_v0414_locator_fixture_index_failed")
+execution = notion_locator_orphan_recovery_execution_plan(
+    locator_root,
+    markup_receipts=discovered,
+    expected_orphan_row_count=1,
+)
+locator_native = _ApprovingNative()
+locator_key_provider = _SyntheticKeyProvider()
+
+
+def _execute_locator_with_synthetic_native(archive_root, context, writer):
+    return exact_human_approval_workflow._execute_exact_human_approved_write_core(
+        archive_root,
+        context,
+        writer,
+        native=locator_native,
+        key_provider=locator_key_provider,
+    )
+
+
+with mock.patch.object(
+    local_recovery_execution,
+    "_execute_exact_human_approved_write",
+    _execute_locator_with_synthetic_native,
+):
+    applied = local_recovery_execution.execute_local_recovery(
+        execution,
+        reviewer_claim="person:installed-wheel-smoke",
+        progress_hook=None,
+    )
+locator_approval = applied.get("exact_human_approval", {})
+if (
+    applied.get("ok") is not True
+    or locator_approval.get("status") != "succeeded"
+    or len(locator_native.calls) != 1
+    or locator_key_provider.calls != 1
+    or locator_key_provider.create_if_missing != [True]
+):
+    _fail("installed_v0414_locator_apply_failed")
+ledger_paths = sorted(
+    (
+        locator_root
+        / "profiles"
+        / "local"
+        / "local-recovery"
+        / "ledgers"
+        / "notion_locator_orphan"
+    ).glob("*.json")
+)
+if len(ledger_paths) != 1:
+    _fail("installed_v0414_locator_ledger_count_failed")
+try:
+    ledger = json.loads(ledger_paths[0].read_text(encoding="ascii"))
+except (OSError, UnicodeError, json.JSONDecodeError):
+    _fail("installed_v0414_locator_ledger_read_failed")
+if (
+    ledger.get("schema") != ORPHAN_RECOVERY_LEDGER_SCHEMA
+    or ORPHAN_RECOVERY_LEDGER_SCHEMA
+    != "wom-kit/notion-locator-orphan-recovery-ledger/v0.2"
+):
+    _fail("installed_v0414_locator_ledger_schema_failed")
+verified = verified_notion_locator_resolution_evidence(
+    locator_root,
+    _claim_key_provider=locator_key_provider,
+)
+
+
+def _verified_locator_with_synthetic_key(archive_root):
+    return verified_notion_locator_resolution_evidence(
+        archive_root,
+        _claim_key_provider=locator_key_provider,
+    )
+
+
+with mock.patch.object(
+    local_locator_recovery,
+    "verified_notion_locator_resolution_evidence",
+    _verified_locator_with_synthetic_key,
+):
+    audit = archive_services.notion_import_locator_loss_audit(locator_root)
+audit_summary = audit.get("summary", {})
+if (
+    verified.get("blockers") != []
+    or verified.get("verified_ledger_count") != 1
+    or verified.get("verified_resolution_row_count") != 1
+    or audit.get("ok") is not True
+    or audit_summary.get("verified_reference_resolution_count") != 1
+    or audit_summary.get("unresolved_occurrence_state") != "known"
+    or audit_summary.get("unresolved_occurrence_count") != 0
+    or locator_key_provider.calls != 3
+    or locator_key_provider.create_if_missing != [True, False, False]
+):
+    _fail("installed_v0414_locator_verified_audit_failed")
+
+observed_public_output = "".join(OBSERVED_PUBLIC_OUTPUT)
+
+
+def _public_output_contains(value):
+    if not value:
+        return False
+    encoded = json.dumps(str(value))[1:-1]
+    return str(value) in observed_public_output or encoded in observed_public_output
+
+
+provider_api_called = SAFETY_OBSERVATIONS["provider_attempt_count"] != 0
+credential_value_read = (
+    SAFETY_OBSERVATIONS["production_credential_provider_attempt_count"] != 0
+)
+production_archive_touched = (
+    SAFETY_OBSERVATIONS["outside_synthetic_filesystem_attempt_count"] != 0
+)
+private_values_echoed = any(
+    _public_output_contains(value)
+    for value in (
+        PRIVATE_MARKER,
+        SOURCE_ID,
+        ZET_ID,
+        OBJECT_ID,
+        RECOVERED_TITLE,
+        source_fragment,
+        replacement,
+    )
+)
+absolute_paths_echoed = any(
+    _public_output_contains(value)
+    for value in (
+        ROOT,
+        locator_root,
+        viewer_root,
+        title_root,
+        title_source_root,
+        title_markdown_path,
+        unsafe_path,
+    )
+)
+if any(
+    (
+        provider_api_called,
+        credential_value_read,
+        production_archive_touched,
+        private_values_echoed,
+        absolute_paths_echoed,
+    )
+):
+    _fail("installed_v0414_observed_safety_boundary_failed")
+
+evidence = {
+    "ok": True,
+    "schema": "wom-kit/installed-v0414-recovery-wheel-smoke/v0.1",
+    "package_version": EXPECTED_VERSION,
+    "isolated_installed_package": True,
+    "isolated_python_flags": True,
+    "all_markup_receipts": {
+        "parser_available": True,
+        "discovery_count": 1,
+        "cli_audit_passed": True,
+        "operator_counting_required": False,
+    },
+    "locator_v02": {
+        "ledger_schema": "wom-kit/notion-locator-orphan-recovery-ledger/v0.2",
+        "synthetic_apply_completed": True,
+        "approval_claim_succeeded": locator_approval.get("status") == "succeeded",
+        "native_decision_call_count": len(locator_native.calls),
+        "synthetic_key_provider_call_count": locator_key_provider.calls,
+        "verified_ledger_count": 1,
+        "verified_resolution_row_count": 1,
+        "audit_unresolved_occurrence_state": "known",
+        "audit_unresolved_occurrence_count": 0,
+    },
+    "read_zettel": {
+        "incomplete_page_projection_deferred": True,
+        "source_page_text_exact": True,
+        "canonical_file_bytes_unchanged": True,
+    },
+    "title_source": {
+        "exact_file_entrypoint_ready": True,
+        "containing_folder_entrypoint_ready": True,
+        "entrypoint_plans_identical": True,
+        "source_index_row_count": title_summary.get("source_index_row_count"),
+        "public_cli_apply_completed": title_cli_apply.get("ok") is True,
+        "native_decision_call_count": len(approving_native.calls),
+        "synthetic_key_provider_call_count": synthetic_key_provider.calls,
+        "approval_claim_succeeded": title_approval.get("status") == "succeeded",
+        "title_field_applied": title_frontmatter.get("title") == RECOVERED_TITLE,
+        "canonical_body_unchanged": title_after_body == title_body,
+    },
+    "approval_preview": {
+        "safe_draft_title_primary_label": (
+            safe_draft_preview.primary_label == SAFE_DRAFT_TITLE
+        ),
+        "unsafe_absolute_path_rejected": True,
+        "unsafe_optional_labels_suppressed": True,
+        "unsafe_credential_shapes_rejected": True,
+        "safe_colon_labels_available": True,
+        "machine_binding_digests_unchanged": True,
+        "private_value_echoed": private_values_echoed,
+    },
+    "safety_observation": {
+        "network_and_process_deny_hook_active": True,
+        "production_credential_provider_deny_hook_active": True,
+        "outside_synthetic_filesystem_deny_hook_active": True,
+        "public_output_observed": bool(OBSERVED_PUBLIC_OUTPUT),
+        "provider_attempt_count": SAFETY_OBSERVATIONS["provider_attempt_count"],
+        "production_credential_provider_attempt_count": SAFETY_OBSERVATIONS[
+            "production_credential_provider_attempt_count"
+        ],
+        "outside_synthetic_filesystem_attempt_count": SAFETY_OBSERVATIONS[
+            "outside_synthetic_filesystem_attempt_count"
+        ],
+    },
+    "provider_api_called": provider_api_called,
+    "credential_value_read": credential_value_read,
+    "production_archive_touched": production_archive_touched,
+    "private_values_echoed": private_values_echoed,
+    "absolute_paths_echoed": absolute_paths_echoed,
+}
+serialized = json.dumps(evidence, sort_keys=True)
+if any(
+    value in serialized
+    for value in (
+        unsafe_path,
+        PRIVATE_MARKER,
+        str(ROOT),
+        SOURCE_ID,
+        ZET_ID,
+        RECOVERED_TITLE,
+    )
+):
+    _fail("installed_v0414_result_privacy_failed")
+print(serialized)
+'''
 WHEEL_PRIVACY_TEXT_EXTENSIONS = frozenset(
     {
         ".cfg",
@@ -3058,6 +4547,7 @@ def _wheel_install_success_result(
     v049_workflow_evidence: dict[str, Any],
     v0410_batch_workflow_evidence: dict[str, Any],
     v0411_truth_evidence: dict[str, Any],
+    v0414_recovery_evidence: dict[str, Any],
     wheel_filename: str,
     wheel_sha256: str,
     artifact_preserved: bool,
@@ -3075,6 +4565,7 @@ def _wheel_install_success_result(
         "installed_v049_recovery_workflows": v049_workflow_evidence,
         "installed_v0410_batch_workflow": v0410_batch_workflow_evidence,
         "installed_v0411_truth_contracts": v0411_truth_evidence,
+        "installed_v0414_recovery_contracts": v0414_recovery_evidence,
         "runtime_skill_lifecycle": "passed",
         "onboarding_preview": "passed",
         "onboarding_write": "fixed_closed",
@@ -3327,6 +4818,111 @@ def _check_installed_v0411_truth_contracts(
             "Installed v0.4.11 wheel did not prove the exact expected "
             "fixed-close, read-only, prerequisite, stale-index, isolation, "
             "and privacy truth contracts."
+        )
+    return evidence
+
+
+def _check_installed_v0414_recovery_contracts(
+    python: Path,
+    fixture_root: Path,
+    archive_template: Path,
+    *,
+    cwd: Path,
+    expected_package_version: str,
+) -> dict[str, Any]:
+    """Prove the v0.4.14 recovery/UI safety contracts from the installed wheel."""
+
+    stdout = _run_installed_entrypoint(
+        [
+            str(python),
+            "-I",
+            "-B",
+            "-c",
+            INSTALLED_V0414_STDIN_LOADER,
+            str(fixture_root),
+            expected_package_version,
+            str(archive_template),
+        ],
+        cwd=cwd,
+        label="installed v0.4.14 recovery and approval-preview contracts",
+        input_text=INSTALLED_V0414_RECOVERY_SMOKE_SCRIPT,
+    )
+    evidence = _parse_entrypoint_json_object(
+        stdout,
+        label="Installed v0.4.14 recovery contract output",
+    )
+    expected = {
+        "ok": True,
+        "schema": INSTALLED_V0414_RECOVERY_SMOKE_SCHEMA,
+        "package_version": expected_package_version,
+        "isolated_installed_package": True,
+        "isolated_python_flags": True,
+        "all_markup_receipts": {
+            "parser_available": True,
+            "discovery_count": 1,
+            "cli_audit_passed": True,
+            "operator_counting_required": False,
+        },
+        "locator_v02": {
+            "ledger_schema": (
+                "wom-kit/notion-locator-orphan-recovery-ledger/v0.2"
+            ),
+            "synthetic_apply_completed": True,
+            "approval_claim_succeeded": True,
+            "native_decision_call_count": 1,
+            "synthetic_key_provider_call_count": 3,
+            "verified_ledger_count": 1,
+            "verified_resolution_row_count": 1,
+            "audit_unresolved_occurrence_state": "known",
+            "audit_unresolved_occurrence_count": 0,
+        },
+        "read_zettel": {
+            "incomplete_page_projection_deferred": True,
+            "source_page_text_exact": True,
+            "canonical_file_bytes_unchanged": True,
+        },
+        "title_source": {
+            "exact_file_entrypoint_ready": True,
+            "containing_folder_entrypoint_ready": True,
+            "entrypoint_plans_identical": True,
+            "source_index_row_count": 1,
+            "public_cli_apply_completed": True,
+            "native_decision_call_count": 1,
+            "synthetic_key_provider_call_count": 1,
+            "approval_claim_succeeded": True,
+            "title_field_applied": True,
+            "canonical_body_unchanged": True,
+        },
+        "approval_preview": {
+            "safe_draft_title_primary_label": True,
+            "unsafe_absolute_path_rejected": True,
+            "unsafe_optional_labels_suppressed": True,
+            "unsafe_credential_shapes_rejected": True,
+            "safe_colon_labels_available": True,
+            "machine_binding_digests_unchanged": True,
+            "private_value_echoed": False,
+        },
+        "safety_observation": {
+            "network_and_process_deny_hook_active": True,
+            "production_credential_provider_deny_hook_active": True,
+            "outside_synthetic_filesystem_deny_hook_active": True,
+            "public_output_observed": True,
+            "provider_attempt_count": 0,
+            "production_credential_provider_attempt_count": 0,
+            "outside_synthetic_filesystem_attempt_count": 0,
+        },
+        "provider_api_called": False,
+        "credential_value_read": False,
+        "production_archive_touched": False,
+        "private_values_echoed": False,
+        "absolute_paths_echoed": False,
+    }
+    if evidence != expected:
+        raise WheelCheckError(
+            "Installed v0.4.14 wheel did not prove the exact expected "
+            "all-receipt discovery, locator v0.2 apply/audit, paged-read "
+            "projection deferral, paired title recovery, public approval "
+            "binding, and observed safety/privacy contracts."
         )
     return evidence
 
@@ -3635,6 +5231,13 @@ def check_wheel(output_dir: Path | None = None) -> dict[str, Any]:
             cwd=temp_root,
             expected_package_version=package_version,
         )
+        v0414_recovery_evidence = _check_installed_v0414_recovery_contracts(
+            python,
+            temp_root / "v0414-recovery-archives",
+            source_copy / "examples" / "fake-life-archive",
+            cwd=temp_root,
+            expected_package_version=package_version,
+        )
 
         wheel_sha256 = hashlib.sha256(wheel.read_bytes()).hexdigest()
         artifact_preserved = False
@@ -3659,6 +5262,7 @@ def check_wheel(output_dir: Path | None = None) -> dict[str, Any]:
             v049_workflow_evidence=v049_workflow_evidence,
             v0410_batch_workflow_evidence=v0410_batch_workflow_evidence,
             v0411_truth_evidence=v0411_truth_evidence,
+            v0414_recovery_evidence=v0414_recovery_evidence,
             wheel_filename=wheel.name,
             wheel_sha256=wheel_sha256,
             artifact_preserved=artifact_preserved,

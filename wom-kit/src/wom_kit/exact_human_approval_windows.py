@@ -1,11 +1,13 @@
-"""Native Windows confirmation for one exact, content-free write plan.
+"""Native Windows confirmation for one exact write plan.
 
 This module establishes *interactive intent*, not human identity.  The live
 boundary is one standard Windows task dialog.  Its primary surface asks one
 human decision in ordinary language.  Machine-owned SHA-256 bindings and
-warning/review codes remain available only through progressive disclosure;
-private archive paths, source text, facet values, and secrets are never
-accepted by the API.
+warning/review codes remain available only through progressive disclosure.
+The durable context stays content-free.  A caller may add one local-only
+filename/title and a bounded privacy-filtered content clue after proving it
+came from bytes already bound by the plan; the preview is never written into
+a claim, receipt, log, or public result.
 
 The dialog alone is not write authority.  A caller must combine an approved
 decision with the authenticated, one-use receipt/claim boundary in
@@ -80,6 +82,60 @@ _MAX_WARNING_BYTES = 256 * 1024
 _TARGET_PREVIEW_KINDS = frozenset({"draft", "zet", "zet_edge", "zet_objet"})
 _MAX_TARGET_PREVIEW_CHARACTERS = 240
 _MAX_TARGET_PREVIEW_UTF8_BYTES = 1024
+_MAX_TARGET_CONTENT_PREVIEW_CHARACTERS = 180
+_MAX_TARGET_CONTENT_PREVIEW_UTF8_BYTES = 720
+_PREVIEW_ABSOLUTE_PATH_RE = re.compile(
+    r"(?i)(?:"
+    r"(?<![A-Z0-9])[A-Z]:[\\/]"
+    r"|[\\/]{2}[^\\/\s]+[\\/]+[^\s]+"
+    r"|(?<![A-Z0-9])/(?!/)[^/\s]+(?:/[^\s]*)?"
+    r")",
+)
+_PREVIEW_URL_RE = re.compile(
+    r"(?i)(?:https?|file|s3|r2|gs|ssh)://|\bwww\."
+)
+_PREVIEW_SECRET_ASSIGNMENT_RE = re.compile(
+    r"(?i)(?:"
+    r"(?:api[_ -]?key|aws[_ -]?secret[_ -]?access[_ -]?key|"
+    r"secret[_ -]?access[_ -]?key|access[_ -]?token|client[_ -]?secret|"
+    r"password|passwd|credential|secret|token)\s*[:=]\s*\S+"
+    r"|authorization\s*:\s*(?:basic|bearer)\s+\S+"
+    r")"
+)
+_PREVIEW_SECRET_TOKEN_RE = re.compile(
+    r"(?i)(?:"
+    r"(?<![A-Z0-9])bearer\s+[A-Z0-9._~+/=-]{12,}"
+    r"|(?<![A-Z0-9])eyJ[A-Z0-9_-]{8,}\.[A-Z0-9_-]{8,}\.[A-Z0-9_-]{8,}(?![A-Z0-9_-])"
+    r"|(?<![A-Z0-9])gh[pousr]_[A-Z0-9_]{20,}(?![A-Z0-9_])"
+    r"|(?<![A-Z0-9])github_pat_[A-Z0-9_]{20,}(?![A-Z0-9_])"
+    r"|(?<![A-Z0-9])glpat-[A-Z0-9_-]{16,}(?![A-Z0-9_-])"
+    r"|(?<![A-Z0-9])xox[baprs]-[A-Z0-9-]{10,}(?![A-Z0-9-])"
+    r"|(?<![A-Z0-9])xapp-[A-Z0-9-]{10,}(?![A-Z0-9-])"
+    r"|(?<![A-Z0-9])(?:secret_|ntn_)[A-Z0-9]{20,}(?![A-Z0-9])"
+    r"|(?<![A-Z0-9])AIza[0-9A-Z_-]{35}(?![0-9A-Z_-])"
+    r"|(?<![A-Z0-9])(?:AKIA|ASIA)[0-9A-Z]{16}(?![0-9A-Z])"
+    r"|(?<![A-Z0-9])ya29\.[0-9A-Z_-]{20,}(?![0-9A-Z_-])"
+    r"|(?<![A-Z0-9])GOCSPX-[0-9A-Z_-]{16,}(?![0-9A-Z_-])"
+    r"|(?<![A-Z0-9])sk-(?:proj-)?[A-Z0-9_-]{20,}(?![A-Z0-9_-])"
+    r"|(?<![A-Z0-9])(?:sk|rk)_(?:live|test)_[A-Z0-9]{16,}(?![A-Z0-9])"
+    r"|-----BEGIN (?:RSA |DSA |EC |OPENSSH )?PRIVATE KEY-----"
+    r")"
+)
+_PREVIEW_PRIVATE_ID_RE = re.compile(
+    r"(?i)(?<![0-9a-f])(?:"
+    r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+    r"|[0-9a-f]{32}"
+    r")(?![0-9a-f])"
+)
+_PREVIEW_OPAQUE_PRIVATE_LOCATOR_RE = re.compile(
+    r"(?i)(?<![A-Z0-9+.-])(?:"
+    r"notion|locator|provider|external|r2|s3|b2|gdrive|google-drive|"
+    r"wom-objet|wom-zettel|asset"
+    r"):(?!\s)\S+"
+)
+_PREVIEW_EMAIL_RE = re.compile(
+    r"(?i)(?<![A-Z0-9._%+-])[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}(?![A-Z0-9.-])"
+)
 
 
 class ExactHumanApprovalIntent(Enum):
@@ -141,8 +197,110 @@ def _validated_target_preview_text(value: str | None) -> str | None:
             }
             for character in normalized
         )
+        or _PREVIEW_ABSOLUTE_PATH_RE.search(normalized) is not None
+        or _PREVIEW_URL_RE.search(normalized) is not None
+        or _PREVIEW_SECRET_ASSIGNMENT_RE.search(normalized) is not None
+        or _PREVIEW_SECRET_TOKEN_RE.search(normalized) is not None
+        or _PREVIEW_PRIVATE_ID_RE.search(normalized) is not None
+        or _PREVIEW_EMAIL_RE.search(normalized) is not None
+        or (
+            _PREVIEW_OPAQUE_PRIVATE_LOCATOR_RE.search(normalized) is not None
+            and _SHA256_RE.fullmatch(normalized) is None
+        )
     ):
         raise _fail("exact_human_approval_context_invalid")
+    return normalized
+
+
+def _validated_target_content_preview(value: str | None) -> str | None:
+    """Validate one bounded, local-only, plain-text content clue.
+
+    The clue is deliberately stricter than an identity.  Zet/object ids may
+    legitimately resemble hashes, while prose shown as a content preview must
+    never surface an absolute local path, URL, email address, or obvious
+    credential assignment.  Callers omit this field when their exact plan
+    does not contain safely bound preview evidence.
+    """
+
+    if value is None:
+        return None
+    normalized = exact_human_approval_safe_content_preview(value)
+    if normalized is None:
+        raise _fail("exact_human_approval_context_invalid")
+    return normalized
+
+
+def exact_human_approval_safe_content_preview(
+    value: object,
+    *,
+    max_characters: int = _MAX_TARGET_CONTENT_PREVIEW_CHARACTERS,
+    max_utf8_bytes: int = _MAX_TARGET_CONTENT_PREVIEW_UTF8_BYTES,
+    truncate: bool = False,
+) -> str | None:
+    """Return one privacy-filtered local clue, or ``None`` without blocking.
+
+    The complete input is checked for private locators before optional
+    truncation.  This prevents a suffix containing a path, URL, email, or
+    credential assignment from being cut away before the privacy decision.
+    Callers use the non-raising form when an unsafe label should fall back to
+    the exact identity already present in the approval plan.
+    """
+
+    if (
+        type(value) is not str
+        or type(max_characters) is not int
+        or type(max_utf8_bytes) is not int
+        or not (1 <= max_characters <= _MAX_TARGET_CONTENT_PREVIEW_CHARACTERS)
+        or not (1 <= max_utf8_bytes <= _MAX_TARGET_CONTENT_PREVIEW_UTF8_BYTES)
+    ):
+        return None
+    normalized = unicodedata.normalize("NFC", value).strip()
+    if (
+        not normalized
+        or any(
+            character in "\r\n\t"
+            or unicodedata.category(character) in {
+                "Cc",
+                "Cf",
+                "Cs",
+                "Zl",
+                "Zp",
+            }
+            for character in normalized
+        )
+        or _PREVIEW_ABSOLUTE_PATH_RE.search(normalized) is not None
+        or _PREVIEW_URL_RE.search(normalized) is not None
+        or _PREVIEW_SECRET_ASSIGNMENT_RE.search(normalized) is not None
+        or _PREVIEW_SECRET_TOKEN_RE.search(normalized) is not None
+        or _PREVIEW_PRIVATE_ID_RE.search(normalized) is not None
+        or _PREVIEW_OPAQUE_PRIVATE_LOCATOR_RE.search(normalized) is not None
+        or _PREVIEW_EMAIL_RE.search(normalized) is not None
+    ):
+        return None
+
+    if not truncate:
+        if (
+            len(normalized) > max_characters
+            or len(normalized.encode("utf-8")) > max_utf8_bytes
+        ):
+            return None
+        return normalized
+
+    changed = False
+    if len(normalized) > max_characters:
+        normalized = normalized[: max_characters - 1].rstrip()
+        changed = True
+    while normalized and len(normalized.encode("utf-8")) > max_utf8_bytes:
+        normalized = normalized[:-1].rstrip()
+        changed = True
+    if not normalized:
+        return None
+    if changed:
+        while normalized and len((normalized + "…").encode("utf-8")) > max_utf8_bytes:
+            normalized = normalized[:-1].rstrip()
+        if not normalized:
+            return None
+        normalized += "…"
     return normalized
 
 
@@ -150,16 +308,22 @@ def _validated_target_preview_text(value: str | None) -> str | None:
 class ExactHumanApprovalTargetPreview:
     """Small local-only identity shown beside one exact approval question.
 
-    Values come from the already validated operation plan. They are never
-    written into the public binding document, approval receipt, log, or result.
-    The preview intentionally accepts identity-sized labels only, not zet body
-    text, source excerpts, provider locators, or absolute filesystem paths.
+    Values come from the already validated operation plan. The preview accepts
+    identity-sized labels and one tightly bounded local content clue. None of
+    these values enter the public binding document, approval receipt, log, or
+    result. A content clue is allowed only after a caller has checked that it
+    came from bytes already bound by the exact plan.
     """
 
     kind: str
     primary: str
     secondary: str | None = None
     relation: str | None = None
+    primary_id: str | None = None
+    secondary_id: str | None = None
+    primary_label: str | None = None
+    secondary_label: str | None = None
+    source_preview: str | None = None
 
     def __post_init__(self) -> None:
         if type(self.kind) is not str or self.kind not in _TARGET_PREVIEW_KINDS:
@@ -174,6 +338,23 @@ class ExactHumanApprovalTargetPreview:
             self,
             "relation",
             _validated_target_preview_text(self.relation),
+        )
+        for field_name in ("primary_id", "secondary_id"):
+            object.__setattr__(
+                self,
+                field_name,
+                _validated_target_preview_text(getattr(self, field_name)),
+            )
+        for field_name in ("primary_label", "secondary_label"):
+            object.__setattr__(
+                self,
+                field_name,
+                _validated_target_content_preview(getattr(self, field_name)),
+            )
+        object.__setattr__(
+            self,
+            "source_preview",
+            _validated_target_content_preview(self.source_preview),
         )
         if self.kind in {"zet_edge", "zet_objet"} and self.secondary is None:
             raise _fail("exact_human_approval_context_invalid")
@@ -813,27 +994,53 @@ def _dialog_content(context: ExactHumanApprovalContext) -> str:
     preview = context.target_preview
     if preview is not None:
         if preview.kind == "draft":
-            preview_lines = [f"초안: {preview.primary}"]
-            if preview.secondary is not None:
+            preview_lines = [
+                f"초안: {preview.primary_label or preview.primary}"
+            ]
+            if preview.primary_label is not None and preview.primary_label != preview.primary:
+                preview_lines.append(f"파일: {preview.primary}")
+            if preview.primary_id is not None and preview.primary_id != preview.primary:
+                preview_lines.append(f"ID: {preview.primary_id}")
+            if preview.primary_label is None and preview.secondary is not None:
                 preview_lines.append(f"제목: {preview.secondary}")
         elif preview.kind == "zet":
-            preview_lines = [f"zet: {preview.primary}"]
-            if preview.secondary is not None:
+            preview_lines = [f"zet: {preview.primary_label or preview.primary}"]
+            if preview.primary_label is not None and preview.primary_label != preview.primary:
+                preview_lines.append(f"파일: {preview.primary}")
+            if preview.primary_id is not None and preview.primary_id != preview.primary:
+                preview_lines.append(f"ID: {preview.primary_id}")
+            if preview.primary_label is None and preview.secondary is not None:
                 preview_lines.append(f"제목: {preview.secondary}")
         elif preview.kind == "zet_edge":
             preview_lines = [
-                f"출발 zet: {preview.primary}",
-                f"도착 zet: {preview.secondary}",
+                f"출발 zet: {preview.primary_label or preview.primary}",
+                f"도착 zet: {preview.secondary_label or preview.secondary}",
             ]
+            if preview.primary_label is not None and preview.primary_label != preview.primary:
+                preview_lines.append(f"출발 파일: {preview.primary}")
+            if preview.primary_id is not None and preview.primary_id != preview.primary:
+                preview_lines.append(f"출발 ID: {preview.primary_id}")
+            if preview.secondary_label is not None and preview.secondary_label != preview.secondary:
+                preview_lines.append(f"도착 식별자: {preview.secondary}")
+            if preview.secondary_id is not None and preview.secondary_id != preview.secondary:
+                preview_lines.append(f"도착 ID: {preview.secondary_id}")
             if preview.relation is not None:
                 preview_lines.append(f"엣지: {preview.relation}")
         else:
             preview_lines = [
-                f"zet: {preview.primary}",
-                f"오브제: {preview.secondary}",
+                f"zet: {preview.primary_label or preview.primary}",
+                f"오브제: {preview.secondary_label or preview.secondary}",
             ]
+            if preview.primary_label is not None and preview.primary_label != preview.primary:
+                preview_lines.append(f"zet 파일: {preview.primary}")
+            if preview.primary_id is not None and preview.primary_id != preview.primary:
+                preview_lines.append(f"zet ID: {preview.primary_id}")
+            if preview.secondary_label is not None and preview.secondary_label != preview.secondary:
+                preview_lines.append(f"오브제 ID: {preview.secondary}")
             if preview.relation is not None:
                 preview_lines.append(f"연결 역할: {preview.relation}")
+        if preview.source_preview is not None:
+            preview_lines.extend(["", f"짧은 내용 미리보기: {preview.source_preview}"])
         target_preview = "확인할 대상\n" + "\n".join(preview_lines) + "\n\n"
     return (
         "WOM이 대상, 현재 상태, 적용할 변경을 자동으로 검증했습니다.\n\n"
@@ -947,4 +1154,5 @@ __all__ = [
     "ExactHumanApprovalOperation",
     "ExactHumanApprovalTargetPreview",
     "ExactHumanApprovalWindowsError",
+    "exact_human_approval_safe_content_preview",
 ]

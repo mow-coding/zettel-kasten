@@ -22,7 +22,7 @@ from contextlib import ExitStack
 from datetime import datetime, timezone
 from html.parser import HTMLParser
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 
 from . import archive_services, command_status, operation_approval_binding
 from .exact_human_approval import (
@@ -10271,6 +10271,11 @@ def _markup_reference_bindings(
     root: Path,
     *,
     binding_manifest: Path | str | None,
+    validation_context: dict[str, Any] | None = None,
+    progress_callback: Callable[
+        [str, str, int | None, int | None], None
+    ]
+    | None = None,
 ) -> tuple[
     dict[
         str,
@@ -10320,32 +10325,56 @@ def _markup_reference_bindings(
         str,
         dict[str, dict[int | None, dict[str, str | int | None]]],
     ] = {}
-    objet_manifest_index: dict[str, dict[str, Any]] | None = None
-    zettel_snapshots_by_id: dict[str, list[Any]] = {}
-    zettel_snapshot_boundary_valid = True
-    try:
-        snapshots = archive_services.strict_local_zettel_snapshots(root)
-    except (
-        archive_services.ArchiveServiceError,
-        OSError,
-        RuntimeError,
-        UnicodeError,
-        ValueError,
-    ):
-        snapshots = []
-        zettel_snapshot_boundary_valid = False
-    for snapshot in snapshots:
-        frontmatter = snapshot.inspection.get("frontmatter")
-        candidate_id = (
-            frontmatter.get("id")
-            if isinstance(frontmatter, dict)
-            else None
-        )
-        if isinstance(candidate_id, str) and candidate_id:
-            zettel_snapshots_by_id.setdefault(candidate_id, []).append(
-                snapshot
+    context = validation_context if validation_context is not None else {}
+    context_root = str(root.resolve())
+    if context and context.get("root") != context_root:
+        return {}, None, ["markup_binding_manifest_invalid"]
+    if "zettel_snapshots_by_id" not in context:
+        zettel_snapshots_by_id: dict[str, list[Any]] = {}
+        zettel_snapshot_boundary_valid = True
+        try:
+            snapshots = archive_services.strict_local_zettel_snapshots(
+                root,
+                progress_callback=progress_callback,
             )
-    for item in loaded["bindings"]:
+        except (
+            archive_services.ArchiveServiceError,
+            OSError,
+            RuntimeError,
+            UnicodeError,
+            ValueError,
+        ):
+            snapshots = []
+            zettel_snapshot_boundary_valid = False
+        for snapshot in snapshots:
+            frontmatter = snapshot.inspection.get("frontmatter")
+            candidate_id = (
+                frontmatter.get("id")
+                if isinstance(frontmatter, dict)
+                else None
+            )
+            if isinstance(candidate_id, str) and candidate_id:
+                zettel_snapshots_by_id.setdefault(candidate_id, []).append(
+                    snapshot
+                )
+        context["root"] = context_root
+        context["zettel_snapshots_by_id"] = zettel_snapshots_by_id
+        context["zettel_snapshot_boundary_valid"] = (
+            zettel_snapshot_boundary_valid
+        )
+    zettel_snapshots_by_id = context["zettel_snapshots_by_id"]
+    zettel_snapshot_boundary_valid = bool(
+        context["zettel_snapshot_boundary_valid"]
+    )
+    objet_manifest_index = context.get("objet_manifest_index")
+    if progress_callback is not None:
+        progress_callback(
+            "markup-reference-bindings",
+            "start",
+            0,
+            len(loaded["bindings"]),
+        )
+    for binding_ordinal, item in enumerate(loaded["bindings"], start=1):
         if not isinstance(item, dict):
             blockers.append("markup_binding_manifest_invalid")
             continue
@@ -10505,6 +10534,7 @@ def _markup_reference_bindings(
                     ValueError,
                 ):
                     objet_manifest_index = {}
+                context["objet_manifest_index"] = objet_manifest_index
             if (
                 match is None
                 or not _verified_objet_binding(
@@ -10538,6 +10568,24 @@ def _markup_reference_bindings(
             "occurrence_index": occurrence_index,
             "source_relative_path": source_relative_path,
         }
+        if progress_callback is not None and (
+            binding_ordinal == 1
+            or binding_ordinal == len(loaded["bindings"])
+            or binding_ordinal % 250 == 0
+        ):
+            progress_callback(
+                "markup-reference-bindings",
+                "scanned",
+                binding_ordinal,
+                len(loaded["bindings"]),
+            )
+    if progress_callback is not None:
+        progress_callback(
+            "markup-reference-bindings",
+            "done",
+            len(loaded["bindings"]),
+            len(loaded["bindings"]),
+        )
     return (
         bindings,
         _sha256_bytes(raw),
@@ -11836,6 +11884,7 @@ def _normalize_markup_body(
             "reference_tag_names": [],
             "reference_tag_digests": [],
             "used_binding_selectors": [],
+            "applied_reference_bindings": [],
             "unknown_tag_names": [],
             "blocker_codes": ["markup_protected_context_unsupported"],
         }
@@ -11891,6 +11940,7 @@ def _normalize_markup_body(
 
     reference_tag_digests: list[dict[str, str | int]] = []
     used_binding_selectors: set[tuple[str, int | None]] = set()
+    provisional_reference_bindings: list[dict[str, Any]] = []
     reference_blockers: list[str] = []
     reference_occurrence_seen: dict[str, int] = {}
     paired_unbound_reference_counts = {
@@ -12013,6 +12063,42 @@ def _normalize_markup_body(
             return selectors[None]
         return selectors.get(occurrence_index)
 
+    def record_binding_application(
+        *,
+        tag_name: str,
+        fragment: str,
+        tag_sha256: str,
+        occurrence_index: int,
+        binding: dict[str, Any],
+    ) -> None:
+        """Record hash-only evidence for one successful replacement attempt."""
+
+        replacement = str(binding["replacement"])
+        if replacement == fragment:
+            return
+        omission_marker = (
+            archive_services.NOTION_IMPORT_LOCATOR_OMISSION_MARKER
+        )
+        provisional_reference_bindings.append(
+            {
+                "tag_name": tag_name,
+                "tag_sha256": tag_sha256,
+                "occurrence_index": occurrence_index,
+                "binding_kind": binding.get("binding_kind"),
+                "binding_id": binding.get("binding_id"),
+                "source_fragment_sha256": tag_sha256,
+                "source_omission_marker_count": fragment.count(
+                    omission_marker
+                ),
+                "replacement_sha256": _sha256_bytes(
+                    replacement.encode("utf-8")
+                ),
+                "replacement_omission_marker_count": replacement.count(
+                    omission_marker
+                ),
+            }
+        )
+
     def paired_reference_replacement(match: re.Match[str]) -> str:
         name = match.group("name").casefold()
         fragment = match.group(0)
@@ -12067,6 +12153,13 @@ def _normalize_markup_body(
             (tag_sha256, binding.get("occurrence_index"))
         )
         counts["reference_binding_applied"] += 1
+        record_binding_application(
+            tag_name=name,
+            fragment=fragment,
+            tag_sha256=tag_sha256,
+            occurrence_index=occurrence_index,
+            binding=binding,
+        )
         return binding["replacement"]
 
     normalized = paired_reference_re.sub(
@@ -12216,6 +12309,13 @@ def _normalize_markup_body(
             (tag_sha256, binding.get("occurrence_index"))
         )
         counts["reference_binding_applied"] += 1
+        record_binding_application(
+            tag_name=_public_markup_tag_name(name),
+            fragment=match.group(0),
+            tag_sha256=tag_sha256,
+            occurrence_index=occurrence_index,
+            binding=binding,
+        )
         return binding["replacement"]
 
     normalized = _MARKUP_TAG_RE.sub(reference_replacement, normalized)
@@ -12287,6 +12387,15 @@ def _normalize_markup_body(
                 item[0],
                 0 if item[1] is None else item[1],
             ),
+        ),
+        # Replacement attempts are intentionally hidden when any blocker
+        # restores the original body. This trace is private evidence of the
+        # normalization result, not a claim about an abandoned intermediate
+        # string.
+        "applied_reference_bindings": (
+            provisional_reference_bindings
+            if normalized != body and not restore_blocked_body
+            else []
         ),
         "unknown_tag_names": sorted(unknown_names),
         "blocker_codes": blocker_codes,
@@ -12401,6 +12510,11 @@ def _markup_zettel_analysis(
         "zettel_id": zettel_id,
         "state": state,
         "used_binding_selectors": normalized["used_binding_selectors"],
+        "applied_reference_bindings": (
+            normalized["applied_reference_bindings"]
+            if state == "ready"
+            else []
+        ),
     }
     return public, private
 
