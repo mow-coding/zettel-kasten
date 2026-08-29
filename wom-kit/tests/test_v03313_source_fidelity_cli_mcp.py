@@ -293,7 +293,7 @@ class SourceFidelityCliTests(unittest.TestCase):
         target_preview = approval_context.call_args.kwargs["target_preview"]
         self.assertEqual(target_preview.kind, "draft")
         self.assertEqual(target_preview.primary, f"{DRAFT_ID}.md")
-        self.assertEqual(target_preview.secondary, "Reviewed title")
+        self.assertEqual(target_preview.primary_label, "Reviewed title")
         self.assertEqual(create_draft.call_count, 2)
         kwargs = create_draft.call_args_list[-1].kwargs
         self.assertTrue(kwargs["approved"])

@@ -1,12 +1,61 @@
 # zet Title Remap Write
 
-Historical status: v0.3.276 approval-gated title-only write and recovery boundary
+Status: v0.4.14 receipt-bound identifier-title recovery
 
-Current v0.4.0 boundary: the exact writer dry-run remains available, but
-approval returns `compound_exact_human_approval_binding_required` before
-private target read or mutation. It creates no canonical change, snapshot,
-manifest row, journal, lock, or receipt. Historical v0.3 evidence remains
-readable; the sections below do not grant current write authority.
+Historical checkpoint: v0.3.276 approval-gated title-only write and recovery boundary
+
+## Current v0.4.14 Identifier-Title Recovery
+
+The operation-specific recovery mode accepts either:
+
+- the exact private `pages.markdown.jsonl` file; or
+- the directory that directly contains both exact-name files
+  `pages.markdown.jsonl` and `pages.index.jsonl`.
+
+Both files are always required. WOM rejects a missing pair, a wrong entrypoint,
+case-only name drift, ambiguous duplicate names, links or reparse points,
+non-regular entries, changing bytes, malformed JSONL, duplicate page ids, and
+different page-id sets. The supplied location, titles, ids, Markdown, and other
+private values are never echoed.
+
+`pages.index.jsonl` supplies the proposed title. `pages.markdown.jsonl` proves
+that the same source-page row exists and binds its bytes into the evidence set;
+body paragraphs never become a fallback title. A canonical zet is eligible only
+when its current title is identifier-shaped and its own exact source id selects
+one unique paired source record.
+
+Preview the exact recovery without writing:
+
+```powershell
+archive zet-title-remap-write <archive-root> `
+  --source-mirror <private-mirror-folder-or-pages.markdown.jsonl> `
+  --dry-run `
+  --progress `
+  --format json
+```
+
+If the plan is valid, replacing `--dry-run` with `--approve` opens one native
+human decision. WOM derives the inventory and manifest; the person is not asked
+to count titles or compare hashes. The approved apply changes only exact
+`frontmatter.title` fields and writes its private classification and execution
+evidence. Interruption resume reuses the authenticated started claim, and the
+recovery revert restores only title fields owned by that manifest. A manifest
+SHA may disambiguate multiple valid retained controls, but it is not a value the
+person must normally copy.
+
+Publishing or installing v0.4.14 does not modify a client archive. A client-side
+title recovery is complete only after the separate approved execution, durable
+receipt, and independent post-write verification succeed.
+
+## Historical Proposal Workflow
+
+Historical v0.4.0 boundary: the legacy proposal writer dry-run remains
+available, but approval returns
+`compound_exact_human_approval_binding_required` before private target read or
+mutation. It creates no canonical change, snapshot, manifest row, journal,
+lock, or receipt. Historical v0.3 evidence remains readable; the sections below
+do not grant authority to that legacy proposal mode. They do not restrict the
+separate operation-specific v0.4.14 recovery mode documented above.
 
 Use this command only after `zet-title-remap-plan` reports every row as ready
 and a human has compared every proposed title with its source record.
@@ -126,7 +175,7 @@ On Windows the implementation uses atomic replacement and flushes file
 contents. Windows does not provide the same directory `fsync` guarantee as
 POSIX, so this is not a claim of power-loss-proof storage.
 
-## Current Boundary
+## Historical Boundary
 
 The v0.3.269 writer, v0.3.270 auditor, v0.3.271 recovery planner, v0.3.272
 single-case executor, v0.3.273 completed-receipt revert planner, v0.3.274

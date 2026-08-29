@@ -1,6 +1,6 @@
 # Exact Human Approval Contract
 
-Status: v0.4.13 exact object-storage preservation authority; v0.4.0 one-use authority baseline preserved
+Status: v0.4.14 optional local decision clues; v0.4.0 one-use authority baseline preserved
 
 ## Purpose
 
@@ -17,32 +17,37 @@ unless an explicitly documented operation-specific manifest binds the complete
 target set. v0.4.10 adds only the bounded local intake/capture exception defined
 below; it does not reopen any other compound writer.
 
-The fixed v0.4.0 fail-closed set includes mint, draft-retirement, and edge
-batches; edge and batch reverts; canonical revision write and restore write;
-zettel-objet link apply and revert; Notion objet-link conversion; the
+The fixed v0.4.0 fail-closed set historically included mint, draft-retirement,
+and edge batches; edge and batch reverts; canonical revision write and restore
+write; zettel-objet link apply and revert; Notion objet-link conversion; the
 relation-candidate accept branch; activity-group membership add, remove, and
 both recovery executors; abstract-backfill write, revert, and recovery; title-
 remap write, revert, apply recovery, and revert recovery; never-minted draft
-discard and restore; and mint/retired-draft receipt reconciliation. Their
-plans, previews, and audits remain available, but an approve attempt returns
-`compound_exact_human_approval_binding_required` before any private target read
-or mutation.
+discard and restore; and mint/retired-draft receipt reconciliation. In the
+current release, only explicitly documented operation-specific modes have been
+reopened. Their legacy or unscoped forms remain fixed closed: an approve attempt
+returns `compound_exact_human_approval_binding_required` before any private
+target read or mutation.
 
-That fixed blocker also covers project update/collision mutation and bytecode
-repair; standalone AI scratch cleanup; credential lifecycle selection;
-saved-view write/revert; private objet source-metadata write; identity
-reconciliation; legacy-coordination cleanup; archive migration and revert;
-markup normalization apply/revert/recovery; Principal register/unregister;
-objet-capture enable/revoke/reenable, general selection/capture, and batch;
-external import; source registration; ownership transfer; object-storage
-mutation; Notion recovery; external-locator mutation; source-intake
-batch; quarantine decisions; and delegation. These routes have no
-v0.4 exact-human writer binding. Their approval branches fail before private
+That v0.4.0 blocker also historically covered project update/collision mutation
+and bytecode repair; standalone AI scratch cleanup; credential lifecycle
+selection; saved-view write/revert; private objet source-metadata write;
+identity reconciliation; legacy-coordination cleanup; archive migration and
+revert; markup normalization apply/revert/recovery; Principal
+register/unregister; objet-capture enable/revoke/reenable, general
+selection/capture, and batch; external import; source registration; ownership
+transfer; object-storage mutation; Notion recovery; external-locator mutation;
+source-intake batch; quarantine decisions; and delegation. Except for the
+explicit operation-specific modes documented below, those routes still have no
+current exact-human writer binding. Their approval branches fail before private
 archive, project, input, credential, or target reads and before provider calls,
 mutation, or receipt publication. Historical receipts do not reactivate them.
 
-Operation-specific exceptions do not reopen those general routes. v0.4.9 added
-one exact create-only `source-intake-record` writer. v0.4.10 separately opens
+Operation-specific exceptions do not reopen those general routes. v0.4.7 added
+receipt-bound local recovery modes for the exact locator, title, link, edge,
+and capture effects documented in the capability matrix; every legacy form
+remains closed. v0.4.9 added one exact create-only `source-intake-record`
+writer. v0.4.10 separately opens
 only bounded 1–1,000 item `source-intake-batch` and its generated local
 `objet-capture-batch` handoff. Intake uses one exact manifest, native decision,
 durable checkpoints, same-claim resume, and independent verification. Capture
@@ -74,6 +79,19 @@ not count objects, compare hashes, or inspect internal identifiers. The
 approval grants no overwrite, remote deletion, conflict merge, formal adoption,
 or whole-archive backup claim.
 
+v0.4.14 improves the information shown at that boundary without weakening it.
+An operation may derive a short local-only filename, title, gist, object role,
+or relation endpoint from current bytes already covered by the exact plan. The
+clue is optional display context, not approval authority. If optional prose
+contains a path, URL, email address, credential/token shape, provider locator,
+private UUID/compact source id, unsafe control characters, or cannot be tied to
+the current plan, WOM omits that prose and may fall back to a safe local
+identity. Unsafe optional prose does not block an otherwise valid exact
+operation. A required identity with one of those private shapes instead fails
+closed before the native dialog, so a secret is never exchanged for
+availability. Conversely, displaying a clue never repairs a stale plan or
+authorizes a different target.
+
 The current parser-derived inventory is 47 approval-available, 67 fixed-closed,
 and 201 not-exposed paths. `zet-revision-restore-proposal-from-snapshot
 --approve` and the canonical standalone command path `derive-text capture
@@ -94,12 +112,17 @@ operation plan:
 - target-set digest and other operation-specific safe digests;
 - reviewer label and one-use policy.
 
-Private body text, source locators, provider values, and credentials are never
-written into an approval request, popup result, claim, CLI result, MCP result,
-or log. The native popup may display one bounded local-only filename, title,
-zet/objet identity, or relation when that value is already covered by the
-validated operation plan. Those preview values are not copied into the popup
-result, public binding, claim, CLI/MCP result, machine details, receipt, or log.
+Full private body text, source locators, provider values, and recognized
+credential/secret-like values are never written into an approval request,
+popup result, claim, CLI result, MCP result, or log. The native popup may
+display one bounded, privacy-filtered,
+local-only filename, title, gist, zet/objet identity, role, or relation when
+that value comes from current bytes already covered by the validated operation
+plan. Unsafe optional clues are omitted without weakening the exact machine
+binding or forcing the person to inspect identifiers. Preview values are
+ephemeral: they are not copied into
+the popup result, public binding, claim, CLI/MCP result, machine details,
+receipt, or log.
 
 The person is not asked to count targets, compare digests, or determine whether
 the canonical state is complete. A mismatch, drift, or incomplete machine

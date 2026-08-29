@@ -20,6 +20,7 @@ from wom_kit.exact_human_approval_windows import (
     _activate_comctl32_v6,
     _require_comctl32_v6,
     _request_exact_human_approval_core as request_exact_human_approval,
+    exact_human_approval_safe_content_preview,
 )
 
 
@@ -39,6 +40,41 @@ class _FakeNative:
 
 
 class ExactHumanApprovalWindowsTests(unittest.TestCase):
+    @staticmethod
+    def _synthetic_private_preview_shapes() -> tuple[str, ...]:
+        return (
+            "Bearer " + ("A" * 24),
+            "prefix_" + "nt" + "n_" + ("A" * 24),
+            "prefix_" + "secret" + "_" + ("A" * 24),
+            "prefix_" + "github" + "_pat_" + ("A" * 24),
+            "gh" + "p_" + ("A" * 24),
+            "gh" + "o_" + ("A" * 24),
+            "gh" + "u_" + ("A" * 24),
+            "gh" + "s_" + ("A" * 24),
+            "gh" + "r_" + ("A" * 24),
+            "gl" + "pat-" + ("A" * 20),
+            "xo" + "xb-" + ("A" * 20),
+            "xa" + "pp-" + ("A" * 20),
+            "AI" + "za" + ("A" * 35),
+            "AK" + "IA" + ("A" * 16),
+            "AS" + "IA" + ("A" * 16),
+            "ya" + "29." + ("A" * 24),
+            "GOC" + "SPX-" + ("A" * 20),
+            "s" + "k-" + ("A" * 24),
+            "s" + "k-proj-" + ("A" * 24),
+            "s" + "k_live_" + ("A" * 20),
+            "r" + "k_live_" + ("A" * 20),
+            "s" + "k_test_" + ("A" * 20),
+            "r" + "k_test_" + ("A" * 20),
+            "ey" + "J" + ("A" * 12) + "." + ("B" * 12) + "." + ("C" * 12),
+            "-----BE" + "GIN PRIVATE KEY-----",
+            "token=" + ("A" * 20),
+            "credential=" + ("A" * 20),
+            "client_secret=" + ("A" * 20),
+            "aws_secret_access_key=" + ("A" * 20),
+            "Authorization: Basic " + ("A" * 20),
+        )
+
     def _context(self) -> ExactHumanApprovalContext:
         return ExactHumanApprovalContext(
             operation=ExactHumanApprovalOperation.create_draft,
@@ -286,6 +322,11 @@ class ExactHumanApprovalWindowsTests(unittest.TestCase):
             primary="출발-zet.md",
             secondary="도착-zet.md",
             relation="supports",
+            primary_id="zet_source_01",
+            secondary_id="zet_target_02",
+            primary_label="출발 zet 제목",
+            secondary_label="도착 zet 제목",
+            source_preview="이 연결의 출발점이 되는 짧은 내용 단서입니다.",
         )
         context = ExactHumanApprovalContext(
             operation=ExactHumanApprovalOperation.zettel_edge,
@@ -307,22 +348,124 @@ class ExactHumanApprovalWindowsTests(unittest.TestCase):
         call = native.calls[0]
         content = str(call["content"])
         self.assertIn("확인할 대상", content)
-        self.assertIn("출발 zet: 출발-zet.md", content)
-        self.assertIn("도착 zet: 도착-zet.md", content)
+        self.assertIn("출발 zet: 출발 zet 제목", content)
+        self.assertIn("도착 zet: 도착 zet 제목", content)
+        self.assertIn("출발 파일: 출발-zet.md", content)
+        self.assertIn("출발 ID: zet_source_01", content)
+        self.assertIn("도착 식별자: 도착-zet.md", content)
+        self.assertIn("도착 ID: zet_target_02", content)
         self.assertIn("엣지: supports", content)
+        self.assertIn(
+            "짧은 내용 미리보기: 이 연결의 출발점이 되는 짧은 내용 단서입니다.",
+            content,
+        )
         advanced = str(call["expanded_information"])
         self.assertNotIn("출발-zet.md", advanced)
         self.assertNotIn("도착-zet.md", advanced)
         self.assertNotIn("supports", advanced)
+        self.assertNotIn("짧은 내용 단서", advanced)
         self.assertNotIn("출발-zet.md", repr(context))
         self.assertNotIn("출발-zet.md", repr(preview))
+        self.assertNotIn("짧은 내용 단서", repr(context))
+        self.assertNotIn("짧은 내용 단서", repr(preview))
+
+    def test_content_preview_rejects_private_locators_and_secret_assignments(self) -> None:
+        windows_path = r"C:" + r"\Users\private\note.md"
+        escaped_windows_path = r"C:" + r"\\Users\\private\\note.md"
+        for unsafe in (
+            "원본은 " + escaped_windows_path + " 입니다.",
+            r"원본은 \\\\server\\share\\note.md 입니다.",
+            "원본은 /etc/private/note.md 입니다.",
+            f'원본은 "{windows_path}" 입니다.',
+            f"원본은 `{windows_path}` 입니다.",
+            f"원본은 {{{windows_path}}} 입니다.",
+            f"원본은 “{escaped_windows_path}” 입니다.",
+            f"원본은 '{windows_path}' 입니다.",
+            "https://private.example/note",
+            "password=do-not-show",
+            "owner@example.com",
+        ):
+            with self.subTest(unsafe=unsafe), self.assertRaises(
+                ExactHumanApprovalWindowsError
+            ):
+                ExactHumanApprovalTargetPreview(
+                    kind="zet",
+                    primary="safe.md",
+                    source_preview=unsafe,
+                )
+
+    def test_content_preview_omits_token_source_id_and_provider_locator_shapes(self) -> None:
+        unsafe_values = self._synthetic_private_preview_shapes() + (
+            "123e4567-e89b-12d3-a456-426614174000",
+            "0123456789abcdef0123456789abcdef",
+            "notion:private-page-reference",
+            "wom-objet:private-object-reference",
+            "s3://private-bucket/private-key",
+        )
+        for unsafe in unsafe_values:
+            with self.subTest(unsafe=unsafe):
+                self.assertIsNone(
+                    exact_human_approval_safe_content_preview(unsafe)
+                )
+                with self.assertRaises(ExactHumanApprovalWindowsError):
+                    ExactHumanApprovalTargetPreview(
+                        kind="zet",
+                        primary="safe.md",
+                        source_preview=unsafe,
+                    )
+
+    def test_required_identity_rejects_private_shapes_but_accepts_safe_hash(self) -> None:
+        unsafe_values = self._synthetic_private_preview_shapes() + (
+            "123e4567-e89b-12d3-a456-426614174000",
+            "0123456789abcdef0123456789abcdef",
+            "notion:private-page-reference",
+        )
+        for unsafe in unsafe_values:
+            with self.subTest(unsafe=unsafe), self.assertRaises(
+                ExactHumanApprovalWindowsError
+            ):
+                ExactHumanApprovalTargetPreview(kind="zet", primary=unsafe)
+
+        preview = ExactHumanApprovalTargetPreview(
+            kind="zet_objet",
+            primary="safe.md",
+            secondary=SHA_A,
+        )
+        self.assertEqual(preview.secondary, SHA_A)
+
+    def test_plain_colon_labels_and_noncredential_sk_filename_remain_available(self) -> None:
+        safe_values = (
+            "AI:assistant-assisted draft",
+            "TODO:review-this-draft",
+            "example:ordinary-label",
+            "sk-project-roadmap.md",
+        )
+        for safe in safe_values:
+            with self.subTest(safe=safe):
+                self.assertEqual(
+                    exact_human_approval_safe_content_preview(safe),
+                    safe,
+                )
+                preview = ExactHumanApprovalTargetPreview(
+                    kind="zet",
+                    primary=safe,
+                )
+                self.assertEqual(preview.primary, safe)
 
     def test_target_preview_rejects_multiline_or_directional_spoofing(self) -> None:
+        windows_path = r"C:" + r"\Users\private\draft.md"
+        escaped_windows_path = r"C:" + r"\\Users\\private\\draft.md"
         for unsafe in (
             "first\nsecond",
             "safe\u2028fake label",
             "safe\u2029fake paragraph",
             "safe\u202eevil",
+            escaped_windows_path,
+            "/etc/private/draft.md",
+            f'"{windows_path}"',
+            f"`{windows_path}`",
+            f"“{escaped_windows_path}”",
+            "https://private.example/draft",
         ):
             with self.subTest(unsafe=unsafe), self.assertRaises(
                 ExactHumanApprovalWindowsError

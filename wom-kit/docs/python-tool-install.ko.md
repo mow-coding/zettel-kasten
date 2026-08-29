@@ -1,6 +1,6 @@
 # WOM-kit Python 도구 설치
 
-상태: v0.4.13 조건부 GitHub wheel 계약; 릴리스 소스·빌드에서 exact setup과 create-only 보존 검증
+상태: v0.4.14 조건부 GitHub wheel 계약; 릴리스 소스·빌드에서 참조 보존 로컬 복구와 안전한 승인 보기 검증
 
 WOM-kit은 명령줄 도구입니다. 일반 앱 프로젝트의 Python 의존성과 섞지 말고
 별도의 격리된 Python 환경에 설치하는 것이 좋습니다.
@@ -31,16 +31,15 @@ wheel을 설치하고 그 환경의 `Scripts\archive.exe`를 정확한 경로로
 실행기는 바뀌지 않습니다. 이 경계는 WOM 명령의 프로젝트 런타임 격리이며,
 Windows 사용자 권한이나 WOM 밖의 프로그램까지 격리한다는 뜻은 아닙니다.
 
-아래 v0.4.13 URL은 조건부 계약이며 공개 자산이 실제로 존재한다는 증거가
+아래 v0.4.14 URL은 조건부 계약이며 공개 자산이 실제로 존재한다는 증거가
 아닙니다. 정확히 일치하는 GitHub Release가 존재하고 검증된 wheel을 자산으로
 나열한 뒤에만 사용하세요. 소스 상태와 릴리스 증거의 구분은
-[v0.4.13 릴리스 노트](releases/v0.4.13.md)를 보세요.
+[v0.4.14 릴리스 노트](releases/v0.4.14.md)를 보세요.
 
-설치된 이전 client에는 v0.4.13의 exact-first object-storage setup 근거,
-conditional create-only 보존, durable terminal 세 상태와 resume 계약이 없을 수
-있습니다.
+설치된 이전 client에는 v0.4.14의 참조 보존 locator 분류, exact 비공개 분류
+원장, 안전한 대상 단서, 완전한 문서 단위 Markdown 표시 계약이 없을 수 있습니다.
 저장소 파일만 업데이트해도 분리된 `uv tool` 또는 가상환경 wheel은 바뀌지
-않습니다. 검증된 v0.4.13 자산이 실제로 생긴 뒤 그
+않습니다. 검증된 v0.4.14 자산이 실제로 생긴 뒤 그
 정확한 wheel을 설치하고 새 프로세스를 시작하세요.
 
 ## 권장 프로젝트 부트스트랩
@@ -51,13 +50,13 @@ conditional create-only 보존, durable terminal 세 상태와 resume 계약이 
 프로젝트 입력이나 updater 충돌 항목이 되지 않습니다.
 
 ```powershell
-$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0413"
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0414"
 py -m venv $womBootstrapRoot
-& "$womBootstrapRoot\Scripts\python.exe" -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.13/wom_kit-0.4.13-py3-none-any.whl"
+& "$womBootstrapRoot\Scripts\python.exe" -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.14/wom_kit-0.4.14-py3-none-any.whl"
 & "$womBootstrapRoot\Scripts\archive.exe" --version
 ```
 
-새 프로세스가 정확히 `archive 0.4.13`를 보고하면 그 명시적 부트스트랩으로
+새 프로세스가 정확히 `archive 0.4.14`를 보고하면 그 명시적 부트스트랩으로
 `project-version-update`를 실행합니다. 승인 성공 뒤 프로젝트 런타임을
 검증하고 해당 launcher를 사용합니다.
 
@@ -93,11 +92,11 @@ PATH가 공유하는 실행점이지 프로젝트 폴더 전용 명령이 아닙
 
 ### 설치된 이전 전역 CLI 교체
 
-v0.4.13 Release와 wheel이 실제로 공개된 뒤, 격리된 `uv tool` 환경을 교체하고
+v0.4.14 Release와 wheel이 실제로 공개된 뒤, 격리된 `uv tool` 환경을 교체하고
 새 프로세스에서 결과를 확인합니다.
 
 ```powershell
-uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.13/wom_kit-0.4.13-py3-none-any.whl"
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.14/wom_kit-0.4.14-py3-none-any.whl"
 archive --version
 ```
 
@@ -107,7 +106,7 @@ archive --version
 옵션은 `uv`가 관리하지 않는 실행 파일도 교체할 수 있습니다. [공식 `uv tool
 install` 문서](https://docs.astral.sh/uv/reference/cli/#uv-tool-install)를 보세요.
 
-결과는 정확히 `archive 0.4.13`이어야 합니다. 이것은 전역 CLI만 바꾸는
+결과는 정확히 `archive 0.4.14`이어야 합니다. 이것은 전역 CLI만 바꾸는
 부트스트랩입니다. project-local `.zettel-kasten/source` mirror와 version pin은
 바꾸지 않습니다. project updater는 별도의 exact-human workflow이고,
 collision 변경과 bytecode repair는 계속 고정 차단됩니다. pin을 손으로 고치지
@@ -120,7 +119,7 @@ collision 변경과 bytecode repair는 계속 고정 차단됩니다. pin을 손
 
 ```powershell
 py -m venv "$HOME\.wom-tools\wom-kit"
-& "$HOME\.wom-tools\wom-kit\Scripts\python.exe" -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.13/wom_kit-0.4.13-py3-none-any.whl"
+& "$HOME\.wom-tools\wom-kit\Scripts\python.exe" -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.14/wom_kit-0.4.14-py3-none-any.whl"
 & "$HOME\.wom-tools\wom-kit\Scripts\archive.exe" --version
 ```
 

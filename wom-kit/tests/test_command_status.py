@@ -461,6 +461,7 @@ class CommandStatusArchiveParserTests(unittest.TestCase):
             "objet-capture-selection": ["--exact-existing-intake"],
             "revert-edge": ["--exact-local"],
             "external-locator-record": [
+                "--all-markup-receipts",
                 "--markup-receipt",
                 "--resume-recovery",
                 "--revert-recovery",

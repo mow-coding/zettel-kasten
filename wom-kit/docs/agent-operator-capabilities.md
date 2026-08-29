@@ -1,6 +1,6 @@
 # Agent Operator Capabilities Manifest
 
-Status: v0.4.13 working-tree parser, help, and exact object-storage truth
+Status: v0.4.14 working-tree parser, help, and reference-aware recovery truth
 
 `archive capabilities --machine` lets an AI operator ask one practical question:
 
@@ -44,7 +44,7 @@ includes:
 
 v0.4.1 introduced `data.approval_status_inventory` with schema
 `wom-kit/command-approval-status-inventory/v0.1`. v0.4.10 introduced and
-v0.4.11-v0.4.13 continue the successor v0.2 shape, which adds machine-readable conditional
+v0.4.11-v0.4.14 continue the successor v0.2 shape, which adds machine-readable conditional
 approval scope. Unlike the legacy flattened
 command summary, this inventory walks canonical executable paths at every
 parser depth and keeps all accepted alias paths attached to their canonical
@@ -72,7 +72,7 @@ These are parser facts, not execution promises. `approval_available` does not
 mean that archive-specific prerequisites have passed. `approval_not_exposed`
 does not mean that the command is read-only.
 
-For the current v0.4.13 working-tree parser, the inventory snapshot is:
+For the current v0.4.14 working-tree parser, the inventory snapshot is:
 
 ```text
 canonical executable command paths: 315
@@ -101,6 +101,16 @@ resume, and the terminal states `bytes_preserved`,
 uncertain cleanup states remain nonterminal. This narrow authority does not
 open `object-storage-upload`, unscoped legacy adoption, remote deletion,
 automatic conflict merge, or formal adoption by implication.
+
+v0.4.14 also changes no top-level command count or approval-status count. It
+extends the existing receipt-bound locator-recovery mode with safe complete
+markup-receipt discovery and verified-reference classification, while keeping
+legacy v0.1 classification ledgers non-authoritative and conflicting evidence
+fail-closed. The existing title-recovery mode accepts an exact
+`pages.markdown.jsonl` entrypoint or its containing directory only when the
+paired `pages.index.jsonl` evidence is complete and unambiguous. These are
+archive-specific prerequisites behind existing conditional parser paths, not a
+claim that installing the release applied recovery to any archive.
 
 v0.4.3 made `migrate` conditional on the sole exact-supported target. The v0.2
 inventory records the allowed argument value and the fixed-close status/reason

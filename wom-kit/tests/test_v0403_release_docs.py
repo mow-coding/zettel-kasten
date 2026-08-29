@@ -15,8 +15,8 @@ KIT = ROOT / "wom-kit"
 RESOURCE_ROOT = KIT / "src" / "wom_kit" / "_resources"
 MANIFEST_PATH = RESOURCE_ROOT / "resource-manifest.json"
 RELEASE_PATH = KIT / "docs" / "releases" / "v0.4.8.md"
-CURRENT_RELEASE_PATH = KIT / "docs" / "releases" / "v0.4.13.md"
-CURRENT_PACKAGED_RELEASE_PATH = RESOURCE_ROOT / "release-notes" / "v0.4.13.md"
+CURRENT_RELEASE_PATH = KIT / "docs" / "releases" / "v0.4.14.md"
+CURRENT_PACKAGED_RELEASE_PATH = RESOURCE_ROOT / "release-notes" / "v0.4.14.md"
 HISTORICAL_V0411_RELEASE_PATH = KIT / "docs" / "releases" / "v0.4.11.md"
 HISTORICAL_V0407_RELEASE = KIT / "docs" / "releases" / "v0.4.7.md"
 DECISION_PATH = (
@@ -38,16 +38,16 @@ class V0408AndCurrentReleaseDocsTests(unittest.TestCase):
         )
         combined = install + "\n" + install_ko
         for required in (
-            '$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\\bootstrap-v0413"',
+            '$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\\bootstrap-v0414"',
             "py -m venv $womBootstrapRoot",
             r'& "$womBootstrapRoot\Scripts\python.exe"',
             r'& "$womBootstrapRoot\Scripts\archive.exe" --version',
-            "wom_kit-0.4.13-py3-none-any.whl",
+            "wom_kit-0.4.14-py3-none-any.whl",
         ):
             with self.subTest(required=required):
                 self.assertIn(required, combined)
-        self.assertIn("exactly `archive 0.4.13`", install)
-        self.assertIn("정확히 `archive 0.4.13`", install_ko)
+        self.assertIn("exactly `archive 0.4.14`", install)
+        self.assertIn("정확히 `archive 0.4.14`", install_ko)
         self.assertNotIn(".wom-bootstrap-v043", combined)
         self.assertNotIn("exactly `archive 0.4.3`", install)
         self.assertNotIn("정확히 `archive 0.4.3`", install_ko)
@@ -101,9 +101,9 @@ class V0408AndCurrentReleaseDocsTests(unittest.TestCase):
                 self.assertIn(token, combined)
 
     def test_version_sources_and_wheel_contract_are_synchronized(self) -> None:
-        self.assertEqual(__version__, "0.4.13")
+        self.assertEqual(__version__, "0.4.14")
         self.assertIn(
-            'version = "0.4.13"',
+            'version = "0.4.14"',
             (KIT / "pyproject.toml").read_text(encoding="utf-8"),
         )
         for version_file in (
@@ -112,18 +112,18 @@ class V0408AndCurrentReleaseDocsTests(unittest.TestCase):
         ):
             with self.subTest(version_file=version_file):
                 self.assertIn(
-                    '__version__ = "0.4.13"',
+                    '__version__ = "0.4.14"',
                     version_file.read_text(encoding="utf-8"),
                 )
         self.assertIn(
-            'PACKAGE_VERSION = "0.4.13"',
+            'PACKAGE_VERSION = "0.4.14"',
             (KIT / "tests" / "test_wheel_install.py").read_text(encoding="utf-8"),
         )
         citation = (ROOT / "CITATION.cff").read_text(encoding="utf-8")
-        self.assertIn('version: "0.4.13"', citation)
+        self.assertIn('version: "0.4.14"', citation)
         self.assertIn('date-released: "2026-08-29"', citation)
         versioning = (ROOT / "VERSIONING.md").read_text(encoding="utf-8")
-        self.assertIn("Current public baseline:\n\n```text\nv0.4.13", versioning)
+        self.assertIn("Current public baseline:\n\n```text\nv0.4.14", versioning)
 
     def test_current_release_and_resources_are_packaged_exactly(self) -> None:
         self.assertEqual(
@@ -134,14 +134,15 @@ class V0408AndCurrentReleaseDocsTests(unittest.TestCase):
             path.name
             for path in (RESOURCE_ROOT / "release-notes").glob("v*.md")
         )
-        self.assertEqual(release_names, ["v0.4.13.md"])
+        self.assertEqual(release_names, ["v0.4.14.md"])
 
         manifest = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
-        self.assertEqual(manifest["version"], "0.4.13")
+        self.assertEqual(manifest["version"], "0.4.14")
         self.assertEqual(manifest["file_count"], len(manifest["files"]))
         packaged_paths = [row["packaged"] for row in manifest["files"]]
         self.assertEqual(len(packaged_paths), len(set(packaged_paths)))
-        self.assertIn("release-notes/v0.4.13.md", packaged_paths)
+        self.assertIn("release-notes/v0.4.14.md", packaged_paths)
+        self.assertNotIn("release-notes/v0.4.13.md", packaged_paths)
         self.assertNotIn("release-notes/v0.4.12.md", packaged_paths)
         self.assertNotIn("release-notes/v0.4.11.md", packaged_paths)
         self.assertNotIn("release-notes/v0.4.10.md", packaged_paths)
@@ -242,7 +243,7 @@ class V0408AndCurrentReleaseDocsTests(unittest.TestCase):
             "exact_human_approval_state_unknown",
             "next_safe_actions: [rerun_duplicate_revert_resume_with_same_reviewer]",
             "an explicit failed resume does not recurse into that advice",
-            "`verified_occurrence_recovery_receipt_supported` is false",
+            "A locator sidecar or occurrence anchor alone is not proof of resolution",
             "a successful revert durably supersedes an unfinished parent apply",
         ):
             with self.subTest(required=required):
