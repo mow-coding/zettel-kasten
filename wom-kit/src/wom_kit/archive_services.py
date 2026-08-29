@@ -124422,7 +124422,7 @@ def safe_object_storage_remote_key(value: Any) -> bool:
 
     Distinct from safe_object_storage_ref (store_ref is a slash-free label):
     a remote_key legitimately holds slashes, dots, and the colon that the
-    basoon archive-id uses as a literal key byte. FORBIDS a leading slash, any
+    an archive-id may use as a literal key byte. FORBIDS a leading slash, any
     `..` path segment, NUL/whitespace/control, empties, and — via the shared
     leak gate — any bucket name, endpoint host, or provider URL. A remote_key is
     a PATH WITHIN a bucket, never a URL and never the bucket name.
