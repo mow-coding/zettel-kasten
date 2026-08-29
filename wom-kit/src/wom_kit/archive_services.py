@@ -1891,6 +1891,7 @@ PROVIDER_REFERENCE_URLS = {
 }
 GITHUB_REPOSITORY_SETUP_RECEIPTS_DIR = "receipts/providers"
 PROVIDER_SETUP_RECEIPTS_DIR = "receipts/providers"
+PROVIDER_SETUP_STATUS_MAX_RECEIPT_BYTES = 128 * 1024
 PROVIDER_SETUP_STATUS_EXTERNAL_ACTION_KEYS = {
     "github_api_called",
     "github_repository_created",
@@ -94262,7 +94263,12 @@ def provider_setup_status(archive_root: Path | str) -> dict[str, Any]:
         blockers.append("provider-bindings.yml archive_id must match archive.yml archive_id.")
 
     bindings = provider_bindings_list(bindings_doc)
-    receipt_entries = load_provider_setup_receipts(root, blockers)
+    private_receipt_entries: list[dict[str, Any]] = []
+    receipt_entries = load_provider_setup_receipts(
+        root,
+        blockers,
+        private_entries=private_receipt_entries,
+    )
     receipts_by_key: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
     for entry in receipt_entries:
         key = provider_setup_receipt_key(entry["receipt"])
@@ -94277,6 +94283,7 @@ def provider_setup_status(archive_root: Path | str) -> dict[str, Any]:
 
     for binding in bindings:
         status = provider_setup_status_for_binding(
+            root,
             binding,
             archive_id=archive_id,
             receipts_by_key=receipts_by_key,
@@ -94286,6 +94293,32 @@ def provider_setup_status(archive_root: Path | str) -> dict[str, Any]:
         provider_statuses.append(status)
         blockers.extend(status.get("blockers") or [])
         warnings.extend(status.get("warnings") or [])
+
+    from .object_storage_setup_registration import (
+        object_storage_setup_receipt_identity,
+    )
+
+    claimed_private_paths: set[str] = set()
+    for binding in bindings:
+        provider = str(binding.get("provider") or "").strip().lower()
+        provider_kind = str(binding.get("provider_kind") or "").strip().lower()
+        if provider != "object_storage" and provider_kind not in OBJECT_STORAGE_ALLOWED_PROVIDERS:
+            continue
+        historical_path = provider_setup_expected_receipt_path(binding)
+        if historical_path:
+            claimed_private_paths.add(
+                _provider_setup_receipt_reconcile_key(historical_path)
+            )
+        try:
+            _binding_sha256, exact_path = object_storage_setup_receipt_identity(
+                binding
+            )
+        except Exception:
+            exact_path = None
+        if exact_path:
+            claimed_private_paths.add(
+                _provider_setup_receipt_reconcile_key(exact_path)
+            )
 
     orphan_receipts: list[dict[str, Any]] = []
     for key, entries in receipts_by_key.items():
@@ -94304,6 +94337,38 @@ def provider_setup_status(archive_root: Path | str) -> dict[str, Any]:
             orphan_receipts.append(orphan)
             blockers.extend(orphan["blockers"])
             merge_provider_setup_external_actions(external_actions, entry["receipt"])
+
+    for entry in private_receipt_entries:
+        if (
+            _provider_setup_receipt_reconcile_key(entry["path"])
+            in claimed_private_paths
+        ):
+            continue
+        reason_code = str(
+            entry.get("reason_code")
+            or "object_storage_setup_receipt_without_binding"
+        )
+        orphan = {
+            "status": (
+                "receipt_without_binding"
+                if entry.get("reason_code") is None
+                else "receipt_invalid"
+            ),
+            "provider": entry.get("provider") or "unknown",
+            "provider_kind": None,
+            "receipt_path": None,
+            "receipt_path_sha256": entry["path_sha256"],
+            "receipt_sha256": entry.get("receipt_sha256"),
+            "resource": {},
+            "reason_code": reason_code,
+            "blockers": [reason_code],
+            "warnings": [],
+            "private_values_echoed": False,
+            "resource_details_echoed": False,
+            "receipt_path_echoed": False,
+        }
+        orphan_receipts.append(orphan)
+        blockers.append(reason_code)
 
     managed_count = sum(1 for item in provider_statuses if item.get("setup_managed") is True)
     action_performed = any(external_actions.values())
@@ -94326,7 +94391,7 @@ def provider_setup_status(archive_root: Path | str) -> dict[str, Any]:
         "bindings_present": provider_path.is_file(),
         "binding_count": len(bindings),
         "checked_binding_count": managed_count,
-        "receipt_count": len(receipt_entries),
+        "receipt_count": len(receipt_entries) + len(private_receipt_entries),
         "receipt_dir": PROVIDER_SETUP_RECEIPTS_DIR,
         "providers": provider_statuses,
         "orphan_receipts": orphan_receipts,
@@ -94379,15 +94444,23 @@ def object_storage_adapter_readiness_plan(
 
     selected_items: list[dict[str, Any]] = []
     if normalized_provider_ref:
+        normalized_provider_ref_sha256 = "sha256:" + sha256_text(
+            normalized_provider_ref
+        )
         selected_items = [
             item
             for item in setup_managed_items
             if normalized_provider_ref
             in {
-                str(item.get("binding_id") or ""),
                 str(item.get("provider_kind") or ""),
                 str(item.get("provider") or ""),
             }
+            or normalized_provider_ref
+            == str(item.get("provider_binding_sha256") or "")
+            or normalized_provider_ref
+            == str(item.get("binding_ref_sha256") or "")
+            or normalized_provider_ref_sha256
+            == str(item.get("binding_ref_sha256") or "")
         ]
         if setup_managed_items and not selected_items:
             blockers.append("provider_ref_not_found_for_object_storage_binding")
@@ -94429,7 +94502,9 @@ def object_storage_adapter_readiness_plan(
             "selected_provider_kind": selected_provider_kind or None,
             "selected_setup_status": selected_status,
             "selected_provider_setup_ready": provider_setup_ready,
-            "selected_provider_setup_receipt_present": bool(selected and selected.get("receipt_path")),
+            "selected_provider_setup_receipt_present": bool(
+                selected and selected.get("setup_receipt_present") is True
+            ),
             "resource_details_echoed": False,
             "receipt_path_echoed": False,
         },
@@ -95026,7 +95101,134 @@ def object_storage_adapter_execution_contract(
     }
 
 
-def load_provider_setup_receipts(root: Path, blockers: list[str]) -> list[dict[str, Any]]:
+def _private_provider_setup_receipt_entry(
+    root: Path,
+    path: Path,
+    *,
+    provider: str,
+    raw: bytes | None,
+    reason_code: str | None,
+) -> dict[str, Any]:
+    relative = path.relative_to(root).as_posix()
+    return {
+        # path is retained only for internal binding reconciliation.  Public
+        # projections use its digest and never return this scalar.
+        "path": relative,
+        "path_sha256": "sha256:" + sha256_text(relative),
+        "receipt_sha256": (
+            "sha256:" + hashlib.sha256(raw).hexdigest()
+            if raw is not None
+            else None
+        ),
+        "provider": provider,
+        "reason_code": reason_code,
+    }
+
+
+def _provider_setup_receipt_reconcile_key(relative_path: str) -> str:
+    # Windows resolves the exact receipt filename case-insensitively.  POSIX
+    # keeps case-distinct files separate, so only fold on Windows.
+    return relative_path.casefold() if os.name == "nt" else relative_path
+
+
+def _provider_setup_status_stat_identity(
+    value: os.stat_result,
+) -> tuple[int, int, int, int, int, int]:
+    return (
+        int(value.st_mode),
+        int(getattr(value, "st_dev", 0)),
+        int(getattr(value, "st_ino", 0)),
+        int(value.st_size),
+        int(value.st_mtime_ns),
+        int(
+            getattr(
+                value,
+                "st_ctime_ns",
+                int(float(getattr(value, "st_ctime", 0.0)) * 1_000_000_000),
+            )
+        ),
+    )
+
+
+def _provider_setup_status_descriptor_identity(
+    value: os.stat_result,
+) -> tuple[int, int, int, int, int]:
+    identity = _provider_setup_status_stat_identity(value)
+    # Windows can expose different ctime representations through path stat and
+    # descriptor stat.  Full ctime is still compared path-before/path-after.
+    return identity[:5]
+
+
+def _provider_setup_status_is_reparse(value: os.stat_result) -> bool:
+    attributes = int(getattr(value, "st_file_attributes", 0))
+    marker = int(getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400))
+    return bool(attributes & marker)
+
+
+def _read_provider_setup_status_receipt(path: Path) -> bytes:
+    before = os.lstat(path)
+    if (
+        not stat.S_ISREG(before.st_mode)
+        or stat.S_ISLNK(before.st_mode)
+        or _provider_setup_status_is_reparse(before)
+        or before.st_size > PROVIDER_SETUP_STATUS_MAX_RECEIPT_BYTES
+    ):
+        raise OSError("unsafe provider setup receipt")
+    descriptor: int | None = None
+    try:
+        flags = os.O_RDONLY | int(getattr(os, "O_BINARY", 0))
+        flags |= int(getattr(os, "O_NOFOLLOW", 0))
+        descriptor = os.open(path, flags)
+        opened_before = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(opened_before.st_mode)
+            or _provider_setup_status_is_reparse(opened_before)
+            or _provider_setup_status_descriptor_identity(opened_before)
+            != _provider_setup_status_descriptor_identity(before)
+        ):
+            raise OSError("provider setup receipt changed before read")
+        chunks: list[bytes] = []
+        total = 0
+        while True:
+            chunk = os.read(
+                descriptor,
+                min(
+                    65_536,
+                    PROVIDER_SETUP_STATUS_MAX_RECEIPT_BYTES + 1 - total,
+                ),
+            )
+            if not chunk:
+                break
+            chunks.append(chunk)
+            total += len(chunk)
+            if total > PROVIDER_SETUP_STATUS_MAX_RECEIPT_BYTES:
+                raise OSError("provider setup receipt too large")
+        opened_after = os.fstat(descriptor)
+        after = os.lstat(path)
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+    if (
+        _provider_setup_status_descriptor_identity(opened_before)
+        != _provider_setup_status_descriptor_identity(opened_after)
+        or _provider_setup_status_stat_identity(before)
+        != _provider_setup_status_stat_identity(after)
+        or _provider_setup_status_is_reparse(after)
+        or not stat.S_ISREG(after.st_mode)
+    ):
+        raise OSError("provider setup receipt changed during read")
+    raw = b"".join(chunks)
+    if len(raw) != opened_after.st_size:
+        raise OSError("provider setup receipt changed during read")
+    return raw
+
+
+def load_provider_setup_receipts(
+    root: Path,
+    blockers: list[str],
+    *,
+    private_entries: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
     receipt_root = archive_internal_path(root, PROVIDER_SETUP_RECEIPTS_DIR)
     if not receipt_root.is_dir():
         return []
@@ -95034,19 +95236,151 @@ def load_provider_setup_receipts(root: Path, blockers: list[str]) -> list[dict[s
     entries: list[dict[str, Any]] = []
     for path in sorted(receipt_root.glob("*.json"), key=lambda item: item.name):
         relative = path.relative_to(root).as_posix()
+        object_storage_filename = path.name.endswith(".object-storage-setup.json")
+        github_filename = path.name.endswith(".github-repository-setup.json")
         try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as exc:
-            blockers.append(f"Provider setup receipt could not be read as JSON: {relative} ({exc}).")
+            raw = _read_provider_setup_status_receipt(path)
+        except OSError as exc:
+            if github_filename:
+                blockers.append(
+                    f"Provider setup receipt could not be read as JSON: {relative} ({exc})."
+                )
+            elif private_entries is not None:
+                private_entries.append(
+                    _private_provider_setup_receipt_entry(
+                        root,
+                        path,
+                        provider=("object_storage" if object_storage_filename else "unknown"),
+                        raw=None,
+                        reason_code=(
+                            "object_storage_setup_receipt_unreadable"
+                            if object_storage_filename
+                            else "provider_setup_receipt_unreadable"
+                        ),
+                    )
+                )
+            continue
+        try:
+            data = json.loads(raw.decode("utf-8"))
+        except (UnicodeError, json.JSONDecodeError) as exc:
+            if github_filename:
+                blockers.append(
+                    f"Provider setup receipt could not be read as JSON: {relative} ({exc})."
+                )
+            elif private_entries is not None:
+                private_entries.append(
+                    _private_provider_setup_receipt_entry(
+                        root,
+                        path,
+                        provider=("object_storage" if object_storage_filename else "unknown"),
+                        raw=raw,
+                        reason_code=(
+                            "object_storage_setup_receipt_invalid"
+                            if object_storage_filename
+                            else "provider_setup_receipt_invalid"
+                        ),
+                    )
+                )
             continue
         if not isinstance(data, dict):
-            blockers.append(f"Provider setup receipt must be a JSON object: {relative}.")
+            if github_filename:
+                blockers.append(
+                    f"Provider setup receipt must be a JSON object: {relative}."
+                )
+            elif private_entries is not None:
+                private_entries.append(
+                    _private_provider_setup_receipt_entry(
+                        root,
+                        path,
+                        provider=("object_storage" if object_storage_filename else "unknown"),
+                        raw=raw,
+                        reason_code=(
+                            "object_storage_setup_receipt_invalid"
+                            if object_storage_filename
+                            else "provider_setup_receipt_invalid"
+                        ),
+                    )
+                )
+            continue
+        content_provider = str(data.get("provider") or "").strip().lower()
+        if content_provider == "object_storage":
+            if private_entries is not None:
+                private_entries.append(
+                    _private_provider_setup_receipt_entry(
+                        root,
+                        path,
+                        provider="object_storage",
+                        raw=raw,
+                        reason_code=None,
+                    )
+                )
+            continue
+        if github_filename:
+            entries.append({"path": relative, "receipt": json_safe(data)})
+            continue
+        if object_storage_filename:
+            if private_entries is not None:
+                private_entries.append(
+                    _private_provider_setup_receipt_entry(
+                        root,
+                        path,
+                        provider="unknown",
+                        raw=raw,
+                        reason_code="provider_setup_receipt_namespace_mismatch",
+                    )
+                )
+            continue
+        if not github_filename and provider_setup_receipt_key(data) is None:
+            if private_entries is not None:
+                private_entries.append(
+                    _private_provider_setup_receipt_entry(
+                        root,
+                        path,
+                        provider="unknown",
+                        raw=raw,
+                        reason_code="provider_setup_receipt_invalid",
+                    )
+                )
             continue
         entries.append({"path": relative, "receipt": json_safe(data)})
+
+    if private_entries is not None:
+        exact_root = archive_internal_path(
+            root,
+            "receipts/providers/object-storage-setup-registration",
+        )
+        if exact_root.is_dir():
+            for path in sorted(exact_root.glob("*.json"), key=lambda item: item.name):
+                try:
+                    raw = _read_provider_setup_status_receipt(path)
+                except OSError:
+                    raw = None
+                    reason_code = "object_storage_setup_receipt_unreadable"
+                else:
+                    try:
+                        data = json.loads(raw.decode("utf-8"))
+                    except (UnicodeError, json.JSONDecodeError):
+                        reason_code = "object_storage_setup_receipt_invalid"
+                    else:
+                        reason_code = (
+                            None
+                            if isinstance(data, dict)
+                            else "object_storage_setup_receipt_invalid"
+                        )
+                private_entries.append(
+                    _private_provider_setup_receipt_entry(
+                        root,
+                        path,
+                        provider="object_storage",
+                        raw=raw,
+                        reason_code=reason_code,
+                    )
+                )
     return entries
 
 
 def provider_setup_status_for_binding(
+    root: Path,
     binding: dict[str, Any],
     *,
     archive_id: str,
@@ -95056,6 +95390,16 @@ def provider_setup_status_for_binding(
 ) -> dict[str, Any]:
     provider = str(binding.get("provider") or "unknown")
     provider_kind = str(binding.get("provider_kind") or "")
+    if (
+        provider.strip().lower() == "object_storage"
+        or provider_kind.strip().lower() in OBJECT_STORAGE_ALLOWED_PROVIDERS
+    ):
+        return object_storage_provider_setup_status_for_binding(
+            root,
+            binding,
+            archive_id=archive_id,
+        )
+
     binding_id = binding.get("binding_id")
     enabled = binding.get("enabled") is not False
     resource = binding.get("resource") if isinstance(binding.get("resource"), dict) else {}
@@ -95115,6 +95459,102 @@ def provider_setup_status_for_binding(
     )
     if result["blockers"]:
         result["status"] = "metadata_receipt_mismatch"
+    return result
+
+
+def object_storage_provider_setup_status_for_binding(
+    root: Path,
+    binding: dict[str, Any],
+    *,
+    archive_id: str,
+) -> dict[str, Any]:
+    """Return content-free object-storage setup truth from the exact validator."""
+
+    raw_provider_kind = str(binding.get("provider_kind") or "").strip().lower()
+    provider_kind = (
+        raw_provider_kind
+        if raw_provider_kind in OBJECT_STORAGE_ALLOWED_PROVIDERS
+        else ""
+    )
+    binding_id = str(binding.get("binding_id") or "")
+    auth = binding.get("auth") if isinstance(binding.get("auth"), dict) else {}
+    store_ref = str(auth.get("account_ref") or "")
+    enabled = binding.get("enabled") is not False
+    setup_managed = provider_setup_binding_is_managed(binding)
+    result = {
+        # Object-storage binding ids contain the private bucket slug.  Publish
+        # only stable digests and fixed states/codes; never the raw selector.
+        "binding_id": None,
+        "binding_ref_sha256": (
+            "sha256:" + sha256_text(binding_id) if binding_id else None
+        ),
+        "provider_binding_sha256": sha256_json_value(binding),
+        "receipt_sha256": None,
+        "provider": "object_storage",
+        "provider_kind": provider_kind or None,
+        "enabled": enabled,
+        "setup_managed": setup_managed,
+        "resource": {},
+        "expected_receipt_path": None,
+        "receipt_path": None,
+        "setup_receipt_present": False,
+        "setup_evidence_mode": None,
+        "status": "manual_status_untracked",
+        "reason_code": "object_storage_setup_status_untracked",
+        "external_actions": {},
+        "blockers": [],
+        "warnings": [],
+        "private_values_echoed": False,
+        "resource_details_echoed": False,
+        "receipt_path_echoed": False,
+    }
+    if not enabled:
+        result["status"] = "disabled_not_checked"
+        result["reason_code"] = "object_storage_setup_binding_disabled"
+        return result
+    if not setup_managed:
+        return result
+
+    # Local import avoids the module cycle: the exact registration module uses
+    # archive_services for binding parsing and historical-receipt validation.
+    from .object_storage_setup_registration import (
+        ObjectStorageSetupRegistrationError,
+        validate_object_storage_setup_evidence,
+    )
+
+    try:
+        evidence = validate_object_storage_setup_evidence(
+            root,
+            provider_kind=provider_kind,
+            store_ref=store_ref,
+        )
+    except ObjectStorageSetupRegistrationError as exc:
+        result["reason_code"] = exc.code
+        result["status"] = (
+            "metadata_without_receipt"
+            if exc.code == "object_storage_setup_evidence_missing"
+            else "metadata_receipt_mismatch"
+        )
+        result["blockers"] = [exc.code]
+        return result
+    except Exception:
+        # Public status must fail closed without retaining an unexpected
+        # exception, private scalar, or filesystem path in its projection.
+        result["reason_code"] = "object_storage_setup_evidence_mismatch"
+        result["status"] = "metadata_receipt_mismatch"
+        result["blockers"] = ["object_storage_setup_evidence_mismatch"]
+        return result
+
+    result.update(
+        {
+            "provider_binding_sha256": evidence.provider_binding_sha256,
+            "receipt_sha256": evidence.receipt_sha256,
+            "setup_receipt_present": True,
+            "setup_evidence_mode": evidence.mode,
+            "status": "metadata_and_receipt_present",
+            "reason_code": "object_storage_setup_evidence_valid",
+        }
+    )
     return result
 
 
@@ -110513,15 +110953,18 @@ def wom_kit_project_update_owned_lock_present(
     project_root: Path,
     lock_path: Path,
     identity: tuple[int, int] | None,
+    *,
+    expected_lock_bytes: bytes = WOM_KIT_PROJECT_UPDATE_LOCK_BYTES,
 ) -> bool:
     if (
         identity is None
+        or not expected_lock_bytes
         or _wom_kit_read_bounded_real_bytes(
             project_root,
             lock_path,
-            max_bytes=len(WOM_KIT_PROJECT_UPDATE_LOCK_BYTES),
+            max_bytes=len(expected_lock_bytes),
         )
-        != WOM_KIT_PROJECT_UPDATE_LOCK_BYTES
+        != expected_lock_bytes
     ):
         return False
     try:
@@ -118394,6 +118837,12 @@ def _wom_kit_project_version_update_legacy_core_generator(
                 rollback["prepared_runtime_bundle_removed"] = False
                 preserve_lock = True
                 raise
+            except project_runtime.PreparedRuntimeCandidateIncompleteError as failure:
+                prepared_runtime_bundle_cleanup_state = "uncertain"
+                rollback["prepared_runtime_bundle_removed"] = False
+                preserve_lock = True
+                blockers.append(str(failure))
+                raise
             except project_runtime.ProjectRuntimeError as failure:
                 blockers.append(str(failure))
                 release_current_lock_or_raise("blocked")
@@ -118934,6 +119383,11 @@ def _wom_kit_project_version_update_legacy_core_generator(
                     project_root,
                     lock_path,
                     lock_identity,
+                    expected_lock_bytes=(
+                        durable_lock_bytes
+                        if durable_lock_bytes is not None
+                        else WOM_KIT_PROJECT_UPDATE_LOCK_BYTES
+                    ),
                 )
                 and _wom_kit_project_update_git_snapshot(
                     mirror_path,
@@ -119456,7 +119910,10 @@ def _wom_kit_project_version_update_legacy_core_generator(
             )
         elif isinstance(
             failure,
-            project_runtime.PreparedRuntimeBundleCleanupError,
+            (
+                project_runtime.PreparedRuntimeBundleCleanupError,
+                project_runtime.PreparedRuntimeCandidateIncompleteError,
+            ),
         ):
             prepared_bundle_removed = False
             prepared_runtime_bundle_cleanup_state = "uncertain"
@@ -119466,7 +119923,12 @@ def _wom_kit_project_version_update_legacy_core_generator(
         if not prepared_bundle_removed:
             preserve_lock = True
             blockers.append(
-                "project_runtime_prepared_bundle_cleanup_unverified"
+                "project_runtime_candidate_cleanup_unverified"
+                if isinstance(
+                    failure,
+                    project_runtime.PreparedRuntimeCandidateIncompleteError,
+                )
+                else "project_runtime_prepared_bundle_cleanup_unverified"
             )
         potential_mutation_attempted = bool(
             source_checkout_changed
@@ -119527,6 +119989,11 @@ def _wom_kit_project_version_update_legacy_core_generator(
             project_root,
             lock_path,
             lock_identity,
+            expected_lock_bytes=(
+                durable_lock_bytes
+                if durable_lock_bytes is not None
+                else WOM_KIT_PROJECT_UPDATE_LOCK_BYTES
+            ),
         ):
             lock_missing = lock_kind_after_failure == "missing"
             lock_acquired = not lock_missing
@@ -122951,8 +123418,17 @@ class ObjectStorageTransport(Protocol):
         # avoid downloading 158 GB just to confirm a skip.
         ...
 
-    def put_object(self, *, key: str, data_path: Path, size: int, content_sha256: str) -> dict[str, Any]:
-        # -> {"status_class": "ok"|"auth"|"rate_limited"|"failed",
+    def put_object(
+        self,
+        *,
+        key: str,
+        data_path: Path,
+        size: int,
+        content_sha256: str,
+        create_only: bool = False,
+    ) -> dict[str, Any]:
+        # -> {"status_class": "ok"|"precondition_failed"|
+        #     "conditional_conflict"|"auth"|"rate_limited"|"failed",
         #     "size": int, "checksum_sha256": str | None, "etag_opaque": str | None}
         ...
 
@@ -122964,12 +123440,18 @@ class ObjectStorageTransport(Protocol):
         ...
 
     def complete_multipart(
-        self, *, key: str, upload_id: str, parts: list[dict[str, Any]], content_sha256: str
+        self,
+        *,
+        key: str,
+        upload_id: str,
+        parts: list[dict[str, Any]],
+        content_sha256: str,
+        create_only: bool = False,
     ) -> dict[str, Any]:
         # -> same shape as put_object result
         ...
 
-    def abort_multipart(self, *, key: str, upload_id: str) -> None:
+    def abort_multipart(self, *, key: str, upload_id: str) -> dict[str, Any]:
         ...
 
     def delete_object(self, *, key: str) -> None:
@@ -122986,7 +123468,15 @@ class NullTransport:
     def head_object(self, *, key: str, presence_only: bool = False) -> dict[str, Any]:
         raise ObjectStorageTransportNotImplemented(self._MESSAGE)
 
-    def put_object(self, *, key: str, data_path: Path, size: int, content_sha256: str) -> dict[str, Any]:
+    def put_object(
+        self,
+        *,
+        key: str,
+        data_path: Path,
+        size: int,
+        content_sha256: str,
+        create_only: bool = False,
+    ) -> dict[str, Any]:
         raise ObjectStorageTransportNotImplemented(self._MESSAGE)
 
     def create_multipart(self, *, key: str) -> str:
@@ -122996,11 +123486,17 @@ class NullTransport:
         raise ObjectStorageTransportNotImplemented(self._MESSAGE)
 
     def complete_multipart(
-        self, *, key: str, upload_id: str, parts: list[dict[str, Any]], content_sha256: str
+        self,
+        *,
+        key: str,
+        upload_id: str,
+        parts: list[dict[str, Any]],
+        content_sha256: str,
+        create_only: bool = False,
     ) -> dict[str, Any]:
         raise ObjectStorageTransportNotImplemented(self._MESSAGE)
 
-    def abort_multipart(self, *, key: str, upload_id: str) -> None:
+    def abort_multipart(self, *, key: str, upload_id: str) -> dict[str, Any]:
         raise ObjectStorageTransportNotImplemented(self._MESSAGE)
 
     def delete_object(self, *, key: str) -> None:
@@ -123039,7 +123535,11 @@ _SIGV4_AUTH_ERROR_CODES = frozenset(
         "AccessDenied",
     }
 )
-_SIGV4_RATE_LIMITED_CODES = frozenset({"SlowDown", "InternalError", "ServiceUnavailable"})
+_SIGV4_RATE_LIMITED_CODES = frozenset(
+    {"SlowDown", "InternalError", "ServiceUnavailable", "ClientDisconnect"}
+)
+_SIGV4_PRECONDITION_FAILED_CODES = frozenset({"PreconditionFailed"})
+_SIGV4_CONDITIONAL_CONFLICT_CODES = frozenset({"ConditionalRequestConflict"})
 
 
 def _object_storage_classify_http_status(status: int, error_code: str | None) -> str:
@@ -123048,15 +123548,19 @@ def _object_storage_classify_http_status(status: int, error_code: str | None) ->
     can never succeed. Keyed on code (not just status) because 400 is ambiguous.
     """
     code = str(error_code or "")
-    if 200 <= int(status) < 300:
-        return "ok"
+    if code in _SIGV4_PRECONDITION_FAILED_CODES or int(status) == 412:
+        return "precondition_failed"
+    if code in _SIGV4_CONDITIONAL_CONFLICT_CODES or int(status) == 409:
+        return "conditional_conflict"
     if code in _SIGV4_AUTH_ERROR_CODES:
         return "auth"
     if code in _SIGV4_RATE_LIMITED_CODES:
         return "rate_limited"
+    if 200 <= int(status) < 300:
+        return "ok"
     if int(status) in (403, 400):
         return "auth"
-    if int(status) in (429, 503, 500):
+    if int(status) == 429 or 500 <= int(status) <= 599:
         return "rate_limited"
     return "failed"
 
@@ -123473,7 +123977,15 @@ class _S3CompatibleTransport:
             return hashlib.sha256(value).hexdigest(), len(value), True
         return None, None, False
 
-    def put_object(self, *, key: str, data_path: Path, size: int, content_sha256: str) -> dict[str, Any]:
+    def put_object(
+        self,
+        *,
+        key: str,
+        data_path: Path,
+        size: int,
+        content_sha256: str,
+        create_only: bool = False,
+    ) -> dict[str, Any]:
         # Single-part PUT signs the REAL lowercase-hex payload hash (CA-2), giving
         # R2 free SigV4 wire-integrity on the body. We do NOT send
         # x-amz-checksum-sha256: R2 marks that header "Feature Not Implemented",
@@ -123481,14 +123993,20 @@ class _S3CompatibleTransport:
         # (CB-Q2), not by a stored server-side checksum. An explicit octet-stream
         # Content-Type keeps the stored object's metadata correct and stops the
         # default sender from defaulting to application/x-www-form-urlencoded.
+        extra_headers = {
+            "content-length": str(size),
+            "content-type": "application/octet-stream",
+        }
+        if create_only:
+            # This header is part of the SigV4 canonical header block.  R2/S3
+            # evaluates it atomically with the write, closing the HEAD -> PUT
+            # race without an unconditional fallback.
+            extra_headers["if-none-match"] = "*"
         response = self._dispatch(
             method="PUT",
             key=key,
             payload_hash=str(content_sha256),
-            extra_headers={
-                "content-length": str(size),
-                "content-type": "application/octet-stream",
-            },
+            extra_headers=extra_headers,
             data_path=data_path,
         )
         return self._put_result(response, size, content_sha256)
@@ -123522,6 +124040,8 @@ class _S3CompatibleTransport:
             query={"uploads": ""},
         )
         status = int(response.get("status") or 0)
+        if response.get("transport_error"):
+            raise _ObjectStorageProviderError("rate_limited")
         if status != 200:
             error_code = _sigv4_extract_error_code(response.get("body"))
             status_class = (
@@ -123559,6 +124079,8 @@ class _S3CompatibleTransport:
             data_bytes=data,
         )
         status = int(response.get("status") or 0)
+        if response.get("transport_error"):
+            raise _ObjectStorageProviderError("rate_limited")
         if not (200 <= status < 300):
             error_code = _sigv4_extract_error_code(response.get("body"))
             raise _ObjectStorageProviderError(_object_storage_classify_http_status(status, error_code))
@@ -123569,7 +124091,13 @@ class _S3CompatibleTransport:
         return {"etag_opaque": etag_match or f"part-{part_number}", "part_number": part_number}
 
     def complete_multipart(
-        self, *, key: str, upload_id: str, parts: list[dict[str, Any]], content_sha256: str
+        self,
+        *,
+        key: str,
+        upload_id: str,
+        parts: list[dict[str, Any]],
+        content_sha256: str,
+        create_only: bool = False,
     ) -> dict[str, Any]:
         # CompleteMultipartUpload carries ONLY the part list (PartNumber + ETag).
         # No top-level <ChecksumSHA256>: for SHA-256 that would be a COMPOSITE
@@ -123592,12 +124120,21 @@ class _S3CompatibleTransport:
             "</CompleteMultipartUpload>"
         ).encode("utf-8")
         payload_hash = hashlib.sha256(payload).hexdigest()
+        extra_headers = {
+            "content-length": str(len(payload)),
+            "content-type": "text/xml",
+        }
+        if create_only:
+            # Multipart parts are private to the upload id.  The only atomic
+            # publish boundary is CompleteMultipartUpload, so the condition is
+            # signed here (not on CreateMultipartUpload or UploadPart).
+            extra_headers["if-none-match"] = "*"
         response = self._dispatch(
             method="POST",
             key=key,
             payload_hash=payload_hash,
             query={"uploadId": str(upload_id)},
-            extra_headers={"content-length": str(len(payload)), "content-type": "text/xml"},
+            extra_headers=extra_headers,
             data_bytes=payload,
         )
         status = int(response.get("status") or 0)
@@ -123616,23 +124153,29 @@ class _S3CompatibleTransport:
         body = response.get("body")
         error_code = _sigv4_extract_error_code(body)
         if error_code:
-            if error_code in _SIGV4_AUTH_ERROR_CODES:
-                return {"status_class": "auth"}
-            if error_code in _SIGV4_RATE_LIMITED_CODES:
-                return {"status_class": "rate_limited"}
-            return {"status_class": "failed"}
+            status_class = _object_storage_classify_http_status(status, error_code)
+            return {"status_class": "failed" if status_class == "ok" else status_class}
         error_text = body.decode("utf-8", "replace") if isinstance(body, (bytes, bytearray)) else str(body or "")
         if re.search(r"<Error(?:\s|>)", error_text):
             return {"status_class": "failed"}
         return {"status_class": "ok"}
 
-    def abort_multipart(self, *, key: str, upload_id: str) -> None:
-        self._dispatch(
+    def abort_multipart(self, *, key: str, upload_id: str) -> dict[str, Any]:
+        response = self._dispatch(
             method="DELETE",
             key=key,
             payload_hash=SIGV4_EMPTY_SHA256_HEX,
             query={"uploadId": str(upload_id)},
         )
+        status = int(response.get("status") or 0)
+        if response.get("transport_error"):
+            return {"status_class": "rate_limited"}
+        error_code = (
+            _sigv4_extract_error_code(response.get("body"))
+            if not (200 <= status < 300)
+            else None
+        )
+        return {"status_class": _object_storage_classify_http_status(status, error_code)}
 
     def delete_object(self, *, key: str) -> None:
         # Not used by the executor without a generation-bound condition.
@@ -124642,6 +125185,8 @@ def _object_storage_execute_one_upload(
     sleep: Callable[[float], None] = time.sleep,
     rng: Callable[[], float] = random.random,
     force_upload: bool = False,
+    create_only: bool = False,
+    max_provider_mutation_calls: int | None = None,
     multipart_part_size_bytes: int = OBJECT_STORAGE_MULTIPART_PART_SIZE_BYTES,
 ) -> dict[str, Any]:
     """Per-object upload spine (§2.3). Ledger read -> HEAD-before -> PUT/multipart
@@ -124675,6 +125220,14 @@ def _object_storage_execute_one_upload(
     skip authority that survives a remote wipe -> silent data loss on restore).
     """
     _ = skip_uploaded  # Layer-A cost-skip is enforced upstream; see docstring.
+    if (
+        max_provider_mutation_calls is not None
+        and (
+            type(max_provider_mutation_calls) is not int
+            or max_provider_mutation_calls < 0
+        )
+    ):
+        raise ArchiveServiceError("invalid object-storage provider-call budget")
     object_id = f"sha256:{content_sha256}"
     key_hint = key
     # Ledger authority: a terminal-success row means this object is done (§3.3,
@@ -124696,6 +125249,8 @@ def _object_storage_execute_one_upload(
 
     attempts = 0
     backoff_ms_total = 0
+    put_calls = 0
+    multipart_cleanup_state = "not_applicable"
     try:
         # HEAD-before (Layer B correctness). Only suppressed by Layer A upstream.
         # force_upload also skips it: the caller's F0-b HEAD already proved
@@ -124729,11 +125284,7 @@ def _object_storage_execute_one_upload(
                     "put_calls": 0,
                     "provider_api_called": True,
                 }
-                ledger.append(
-                    _ResumeLedger.build_row(
-                        {**result, "completed_at": _object_storage_now_iso()}
-                    )
-                )
+                ledger.append({**result, "completed_at": _object_storage_now_iso()})
                 return result
             # Present but different bytes: fail closed, never overwrite.
             return {
@@ -124750,35 +125301,128 @@ def _object_storage_execute_one_upload(
 
         # remote_absent -> BOUNDED-RETRY upload loop (SA-3).
         is_multipart = size >= multipart_threshold_bytes
-        put_calls = 0
         part_count = 1
         status_class = "failed"
         retries = 0
         while True:
             if is_multipart:
+                if max_provider_mutation_calls is not None and not create_only:
+                    expected_parts = max(
+                        1,
+                        (size + multipart_part_size_bytes - 1)
+                        // multipart_part_size_bytes,
+                    )
+                    # Legacy overwrite-capable callers retain the conservative
+                    # full-attempt reservation. Create-only callers may safely
+                    # spend a final call on CreateMultipartUpload: a failed
+                    # create allocates no upload id, while a success that cannot
+                    # be cleaned up is surfaced as cleanup_unverified.
+                    safe_attempt_calls = expected_parts + 3
+                    if max_provider_mutation_calls - put_calls < safe_attempt_calls:
+                        return _object_storage_failed_result(
+                            object_id,
+                            key_hint,
+                            "failed_provider_call_ceiling",
+                            attempts,
+                            backoff_ms_total,
+                            put_calls,
+                            multipart_cleanup_state="not_started",
+                        )
                 put_result, part_count = _object_storage_multipart_put(
                     transport=transport,
                     key=key,
                     data_path=data_path,
                     content_sha256=content_sha256,
                     part_size_bytes=multipart_part_size_bytes,
+                    create_only=create_only,
+                    max_provider_mutation_calls=(
+                        None
+                        if max_provider_mutation_calls is None
+                        else max(0, max_provider_mutation_calls - put_calls)
+                    ),
                 )
-                # Each multipart run issues create + N put_part + complete; count
-                # the mutating provider calls for the cumulative PUT ceiling (SA-2).
-                put_calls += 1 + max(1, part_count) + 1
+                mutation_calls = int(put_result.get("provider_mutation_calls") or 0)
+                put_calls += mutation_calls
+                multipart_cleanup_state = str(
+                    put_result.get("multipart_cleanup_state") or "unconfirmed"
+                )
             else:
-                put_result = transport.put_object(
-                    key=key, data_path=data_path, size=size, content_sha256=content_sha256
-                )
-                part_count = 1
+                if (
+                    max_provider_mutation_calls is not None
+                    and put_calls >= max_provider_mutation_calls
+                ):
+                    return _object_storage_failed_result(
+                        object_id,
+                        key_hint,
+                        "failed_provider_call_ceiling",
+                        attempts,
+                        backoff_ms_total,
+                        put_calls,
+                    )
+                put_kwargs = {
+                    "key": key,
+                    "data_path": data_path,
+                    "size": size,
+                    "content_sha256": content_sha256,
+                }
+                if create_only:
+                    put_kwargs["create_only"] = True
                 put_calls += 1
+                put_result = transport.put_object(**put_kwargs)
+                part_count = 1
             attempts += 1
             status_class = str(put_result.get("status_class") or "failed")
             if status_class == "ok":
                 break
             if status_class == "auth":
                 return _object_storage_failed_result(
-                    object_id, key_hint, "failed_auth", attempts, backoff_ms_total, put_calls
+                    object_id,
+                    key_hint,
+                    "failed_auth",
+                    attempts,
+                    backoff_ms_total,
+                    put_calls,
+                    multipart_cleanup_state=multipart_cleanup_state,
+                )
+            if status_class == "precondition_failed":
+                return _object_storage_failed_result(
+                    object_id,
+                    key_hint,
+                    "conditional_precondition_failed",
+                    attempts,
+                    backoff_ms_total,
+                    put_calls,
+                    multipart_cleanup_state=multipart_cleanup_state,
+                )
+            if status_class == "conditional_conflict":
+                return _object_storage_failed_result(
+                    object_id,
+                    key_hint,
+                    "conditional_conflict",
+                    attempts,
+                    backoff_ms_total,
+                    put_calls,
+                    multipart_cleanup_state=multipart_cleanup_state,
+                )
+            if status_class == "cleanup_unverified":
+                return _object_storage_failed_result(
+                    object_id,
+                    key_hint,
+                    "failed_cleanup_unverified",
+                    attempts,
+                    backoff_ms_total,
+                    put_calls,
+                    multipart_cleanup_state=multipart_cleanup_state,
+                )
+            if status_class == "provider_call_ceiling":
+                return _object_storage_failed_result(
+                    object_id,
+                    key_hint,
+                    "failed_provider_call_ceiling",
+                    attempts,
+                    backoff_ms_total,
+                    put_calls,
+                    multipart_cleanup_state=multipart_cleanup_state,
                 )
             if status_class == "rate_limited" and retries + 1 < max_attempts:
                 sleep_ms = _object_storage_backoff_ms(retries, rng)
@@ -124788,10 +125432,22 @@ def _object_storage_execute_one_upload(
                 continue
             if status_class == "rate_limited":
                 return _object_storage_failed_result(
-                    object_id, key_hint, "failed_rate_limited", attempts, backoff_ms_total, put_calls
+                    object_id,
+                    key_hint,
+                    "failed_rate_limited",
+                    attempts,
+                    backoff_ms_total,
+                    put_calls,
+                    multipart_cleanup_state=multipart_cleanup_state,
                 )
             return _object_storage_failed_result(
-                object_id, key_hint, "failed_upload", attempts, backoff_ms_total, put_calls
+                object_id,
+                key_hint,
+                "failed_upload",
+                attempts,
+                backoff_ms_total,
+                put_calls,
+                multipart_cleanup_state=multipart_cleanup_state,
             )
 
         # HEAD-after: verify non-secret size + full-object sha256. Never pass on size alone.
@@ -124814,7 +125470,13 @@ def _object_storage_execute_one_upload(
             # digest is not proof that the remote object is wrong. Preserve the
             # possibly-correct upload and fail closed without DELETE.
             return _object_storage_failed_result(
-                object_id, key_hint, "failed_upload", attempts, backoff_ms_total, put_calls
+                object_id,
+                key_hint,
+                "failed_upload",
+                attempts,
+                backoff_ms_total,
+                put_calls,
+                multipart_cleanup_state=multipart_cleanup_state,
             )
         head_after_ok = (
             head_after.get("present")
@@ -124827,7 +125489,13 @@ def _object_storage_execute_one_upload(
             # a correct concurrent replacement. Preserve the remote object until
             # a provider-neutral conditional-delete contract exists.
             return _object_storage_failed_result(
-                object_id, key_hint, "failed_upload", attempts, backoff_ms_total, put_calls
+                object_id,
+                key_hint,
+                "failed_upload",
+                attempts,
+                backoff_ms_total,
+                put_calls,
+                multipart_cleanup_state=multipart_cleanup_state,
             )
 
         result = {
@@ -124839,20 +125507,23 @@ def _object_storage_execute_one_upload(
             "attempts": attempts,
             "backoff_ms_total": backoff_ms_total,
             "put_calls": put_calls,
+            "multipart_cleanup_state": multipart_cleanup_state,
             "provider_api_called": True,
         }
-        ledger.append(
-            _ResumeLedger.build_row(
-                {**result, "completed_at": _object_storage_now_iso()}
-            )
-        )
+        ledger.append({**result, "completed_at": _object_storage_now_iso()})
         return result
     except ObjectStorageTransportNotImplemented:
         raise
     except ArchiveServiceError:
         # Any provider-adjacent error is reduced to a status class; no body surfaced.
         return _object_storage_failed_result(
-            object_id, key_hint, "failed_upload", attempts, backoff_ms_total, 0
+            object_id,
+            key_hint,
+            "failed_upload",
+            attempts,
+            backoff_ms_total,
+            put_calls,
+            multipart_cleanup_state=multipart_cleanup_state,
         )
 
 
@@ -124863,6 +125534,7 @@ def _object_storage_failed_result(
     attempts: int,
     backoff_ms_total: int = 0,
     put_calls: int = 0,
+    multipart_cleanup_state: str = "not_applicable",
 ) -> dict[str, Any]:
     return {
         "object_id": object_id,
@@ -124873,6 +125545,7 @@ def _object_storage_failed_result(
         "attempts": attempts,
         "backoff_ms_total": int(backoff_ms_total),
         "put_calls": int(put_calls),
+        "multipart_cleanup_state": multipart_cleanup_state,
         "provider_api_called": True,
     }
 
@@ -124884,6 +125557,8 @@ def _object_storage_multipart_put(
     data_path: Path,
     content_sha256: str,
     part_size_bytes: int = OBJECT_STORAGE_MULTIPART_PART_SIZE_BYTES,
+    create_only: bool = False,
+    max_provider_mutation_calls: int | None = None,
 ) -> tuple[dict[str, Any], int]:
     # A provider error at ANY multipart step (create / put_part / complete) must
     # surface its REAL status_class so the executor's bounded retry loop can retry
@@ -124894,42 +125569,106 @@ def _object_storage_multipart_put(
     # parts are orphaned.
     part_number = 0
     upload_id = None
+    mutation_calls = 0
+    cleanup_state = "not_started"
+
+    def budget_available() -> bool:
+        return (
+            max_provider_mutation_calls is None
+            or mutation_calls < max_provider_mutation_calls
+        )
+
+    def finish(status_class: str, *, original_status_class: str | None = None):
+        result = {
+            "status_class": status_class,
+            "provider_mutation_calls": mutation_calls,
+            "multipart_cleanup_state": cleanup_state,
+        }
+        if original_status_class is not None:
+            result["original_status_class"] = original_status_class
+        return result, part_number
+
+    def abort_in_flight() -> bool:
+        nonlocal mutation_calls, cleanup_state
+        if upload_id is None:
+            cleanup_state = "not_required"
+            return True
+        if not budget_available():
+            cleanup_state = "unconfirmed_budget_exhausted"
+            return False
+        mutation_calls += 1
+        try:
+            aborted = transport.abort_multipart(key=key, upload_id=upload_id)
+        except Exception:
+            cleanup_state = "unconfirmed_abort_error"
+            return False
+        if (
+            isinstance(aborted, Mapping)
+            and str(aborted.get("status_class") or "failed") == "ok"
+        ):
+            cleanup_state = "confirmed_aborted"
+            return True
+        cleanup_state = "unconfirmed_abort_response"
+        return False
+
     try:
+        if not budget_available():
+            return finish("provider_call_ceiling")
+        mutation_calls += 1
         upload_id = transport.create_multipart(key=key)
+        cleanup_state = "in_flight"
         parts: list[dict[str, Any]] = []
         with data_path.open("rb") as handle:
             while True:
                 chunk = handle.read(part_size_bytes)
                 if not chunk:
                     break
+                if not budget_available():
+                    if abort_in_flight():
+                        return finish("provider_call_ceiling")
+                    return finish(
+                        "cleanup_unverified",
+                        original_status_class="provider_call_ceiling",
+                    )
                 part_number += 1
+                mutation_calls += 1
                 part = transport.put_part(
                     key=key, upload_id=upload_id, part_number=part_number, data=chunk
                 )
                 parts.append(part)
-        completed = transport.complete_multipart(
-            key=key, upload_id=upload_id, parts=parts, content_sha256=content_sha256
-        )
+        complete_kwargs = {
+            "key": key,
+            "upload_id": upload_id,
+            "parts": parts,
+            "content_sha256": content_sha256,
+        }
+        if create_only:
+            complete_kwargs["create_only"] = True
+        if not budget_available():
+            if abort_in_flight():
+                return finish("provider_call_ceiling")
+            return finish(
+                "cleanup_unverified",
+                original_status_class="provider_call_ceiling",
+            )
+        mutation_calls += 1
+        completed = transport.complete_multipart(**complete_kwargs)
         if str(completed.get("status_class") or "failed") != "ok":
-            try:
-                transport.abort_multipart(key=key, upload_id=upload_id)
-            except ArchiveServiceError:
-                pass
-        return completed, part_number
+            original = str(completed.get("status_class") or "failed")
+            if not abort_in_flight():
+                return finish("cleanup_unverified", original_status_class=original)
+            return finish(original)
+        cleanup_state = "completed"
+        return finish("ok")
     except _ObjectStorageProviderError as exc:
-        if upload_id is not None:
-            try:
-                transport.abort_multipart(key=key, upload_id=upload_id)
-            except ArchiveServiceError:
-                pass
-        return {"status_class": str(exc.status_class or "failed")}, part_number
-    except ArchiveServiceError:
-        if upload_id is not None:
-            try:
-                transport.abort_multipart(key=key, upload_id=upload_id)
-            except ArchiveServiceError:
-                pass
-        return {"status_class": "failed"}, part_number
+        original = str(exc.status_class or "failed")
+        if not abort_in_flight():
+            return finish("cleanup_unverified", original_status_class=original)
+        return finish(original)
+    except Exception:
+        if not abort_in_flight():
+            return finish("cleanup_unverified", original_status_class="failed")
+        return finish("failed")
 
 
 def _object_storage_now_iso() -> str:

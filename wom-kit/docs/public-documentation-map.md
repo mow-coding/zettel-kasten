@@ -2,11 +2,20 @@
 
 Status: public navigation baseline
 Date: 2026-06-02
-Updated: 2026-08-28
+Updated: 2026-08-29
 Philosophy clarified: 2026-07-15
 Harness compatibility clarified: 2026-07-16
 
-Current v0.4.12 delta: `zettel-objet-link` uses the current generation-bound
+Current v0.4.13 delta: local object-storage readiness validates canonical exact
+setup evidence before a strict legacy bridge and reports malformed, orphaned,
+changing, case-colliding, or cross-namespace evidence without exposing private
+setup values. The narrow emergency preservation route uses conditional
+create-only single or multipart publication, HEAD plus complete GET rehash,
+manifest-bound resume, and three terminal receipt states. It never falls back
+to overwrite or treats preserved bytes as formal adoption. Publishing or
+installing the release changes no client archive and calls no provider.
+
+Historical v0.4.12 delta: `zettel-objet-link` uses the current generation-bound
 SQLite projection as authority and returns deterministic `already_present`
 without approval or a write. Indexed zet writers share a same-generation
 dirty-intent and exact delta-or-dirty lifecycle; missing or stale projections
@@ -534,6 +543,7 @@ These documents record public-safe work already performed.
 - [v0.2.11 Delegate Capability Contract Work Log](../plans/work-log-2026-05-23-delegate-capability-contract.md)
 - [Changelog](../../CHANGELOG.md)
 - [Release Notes](releases/)
+- [v0.4.13 Release Note](releases/v0.4.13.md)
 - [v0.4.12 Release Note](releases/v0.4.12.md)
 - [v0.4.11 Release Note](releases/v0.4.11.md)
 - [v0.4.10 Release Note](releases/v0.4.10.md)

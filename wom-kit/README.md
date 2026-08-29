@@ -10,12 +10,12 @@ It is not a website, SaaS app, dashboard, or visual note-taking product. The int
 
 ## Install The Command-Line Tool
 
-The exact v0.4.12 GitHub Release, when present, uses the self-contained wheel
+The exact v0.4.13 GitHub Release, when present, uses the self-contained wheel
 below. Confirm that the release exists and lists the wheel before installing
 it. The versioned URL alone is not proof that the asset is available.
 
 ```powershell
-uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.12/wom_kit-0.4.12-py3-none-any.whl"
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.13/wom_kit-0.4.13-py3-none-any.whl"
 archive --version
 ```
 
@@ -51,6 +51,21 @@ binds and independently rehashes content-addressed remote bytes without calling
 them adopted. Formal adoption verifies exact key-map entries, writes immutable
 evidence, performs one final manifest projection, and leaves every conflicting
 definition in review. The legacy compound approval path remains closed.
+
+v0.4.13 makes object-storage setup evidence exact-first and keeps malformed,
+orphaned, changing, case-colliding, or cross-namespace receipts from becoming
+false readiness. Emergency preservation is create-only for both single PUT and
+multipart completion. HEAD plus a complete GET rehash is required for new and
+already-present matching bytes; proven conflicts are retained as
+`review_required`, while unavailable evidence remains nonterminal and
+resumable. Before each provider mutation, its exact private ledger durably
+reserves and charges one manifest-bound budget unit. If a crash makes the
+transport attempt unobservable, that unit stays charged. Resume first queries
+the exact remote target; only verified matching bytes allow no-PUT
+finalization. Absence, provider unavailability, and uncertain multipart cleanup
+remain nonterminal and grant no automatic retry authority. Preservation still
+does not update formal-adoption manifest state. Installing this wheel does not
+read a client archive, use credentials, or call a provider.
 
 v0.4.12 makes the current generation-bound SQLite projection the authority for
 `zettel-objet-link`. An exact existing link converges deterministically as

@@ -9,7 +9,7 @@ from wom_kit import __version__
 
 KIT_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = KIT_ROOT.parent
-EXPECTED_CURRENT_VERSION = "0.4.12"
+EXPECTED_CURRENT_VERSION = "0.4.13"
 EXPECTED_CURRENT_TAG = f"v{EXPECTED_CURRENT_VERSION}"
 CURRENT_VERSION = f"v{__version__}"
 CURRENT_RELEASE_NOTE = f"{EXPECTED_CURRENT_TAG}.md"
@@ -20,8 +20,8 @@ CURRENT_WHEEL_URL = (
     f"wom_kit-{EXPECTED_CURRENT_VERSION}-py3-none-any.whl"
 )
 CURRENT_RUNTIME_STATUS = (
-    f"Status: {CURRENT_VERSION} live runtime binding, Deep Doctor evidence, "
-    "and operator truth"
+    f"Status: {CURRENT_VERSION} exact setup evidence and create-only "
+    "object-storage preservation"
 )
 CURRENT_MATRIX_VERSION = f"Version: {CURRENT_VERSION} implementation and release scope"
 MATRIX_PATH = KIT_ROOT / "docs" / "capability-matrix.md"
@@ -6138,14 +6138,14 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         self.assertIn("docs/object-storage-recommendations.md", kit_readme_text)
         self.assertIn("object-storage-recommendation", kit_readme_text)
 
-    def test_object_storage_adapter_readiness_doc_and_matrix_keep_live_adapter_closed(self) -> None:
+    def test_object_storage_adapter_readiness_doc_and_matrix_state_exact_boundary(self) -> None:
         readiness_text = OBJECT_STORAGE_ADAPTER_READINESS_PATH.read_text(encoding="utf-8")
         matrix_text = MATRIX_PATH.read_text(encoding="utf-8")
         readme_text = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
         public_map_text = (KIT_ROOT / "docs" / "public-documentation-map.md").read_text(encoding="utf-8")
         kit_readme_text = (KIT_ROOT / "README.md").read_text(encoding="utf-8")
         for phrase in (
-            "Status: v0.3.41 read-only adapter readiness baseline",
+            "Status: v0.4.13 exact-first local setup readiness",
             "archive object-storage-adapter-readiness-plan <archive-root>",
             "object-storage-adapter-plan",
             "objet-storage-adapter-readiness",
@@ -6153,8 +6153,11 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "provider-status",
             "setup-managed",
             "provider setup receipt paths",
-            "credential policy check",
-            "human approval receipt",
+            "canonical binding identity",
+            "exact operation manifest",
+            "separately authorized credential capability",
+            "conditional create-only remote publication",
+            "HEAD plus complete GET rehash",
             "call provider APIs",
             "retrieve credential values",
             "create presigned URLs",
@@ -6172,8 +6175,8 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "call no providers",
             "retrieve no secrets",
             "create no presigned URLs",
-            "echo no bucket names",
-            "provider setup receipt paths",
+            "echo no resource/profile/credential values",
+            "Readiness is a prerequisite, not proof of current remote bytes",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)
@@ -6245,7 +6248,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         self.assertIn("[Object Storage Operation Request Plan](object-storage-operation-request-plan.md)", public_map_text)
         self.assertIn("docs/object-storage-operation-request-plan.md", kit_readme_text)
 
-    def test_object_storage_adapter_execution_contract_doc_and_matrix_keep_upload_closed(self) -> None:
+    def test_object_storage_adapter_execution_contract_states_narrow_preservation_boundary(self) -> None:
         contract_text = OBJECT_STORAGE_ADAPTER_EXECUTION_CONTRACT_PATH.read_text(encoding="utf-8")
         readiness_text = OBJECT_STORAGE_ADAPTER_READINESS_PATH.read_text(encoding="utf-8")
         request_text = OBJECT_STORAGE_OPERATION_REQUEST_PATH.read_text(encoding="utf-8")
@@ -6256,7 +6259,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         kit_readme_text = (KIT_ROOT / "README.md").read_text(encoding="utf-8")
         release_text = (KIT_ROOT / "docs" / "releases" / "v0.3.78.md").read_text(encoding="utf-8")
         for phrase in (
-            "Status: v0.3.78 read-only upload execution-contract checkpoint",
+            "Status: v0.4.13 read-only generic contract plus narrow exact preservation",
             "archive object-storage-adapter-execution-contract <archive-root>",
             "object-storage-upload-execution-contract",
             "objet-storage-adapter-execution-contract",
@@ -6274,6 +6277,13 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "write resume ledgers",
             "write execution receipts",
             "update manifests",
+            "object-storage-adopt-existing --preserve-local-only",
+            "If-None-Match: *",
+            "complete GET rehash",
+            "bytes_preserved",
+            "already_remote_verified",
+            "review_required",
+            "do not add a `wom_uploaded` manifest location",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, contract_text)
@@ -6283,17 +6293,14 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             "Status: v0.3.87 connection edge intelligence checkpoint",
             "Object storage adapter execution contract",
             "archive object-storage-adapter-execution-contract --operation upload_object --dry-run",
-            "archive object-storage-upload-execution-contract",
-            "MCP `object_storage_adapter_execution_contract`",
-            "sha256 content-addressed key shape",
-            "bounded retry/resume ledger",
-            "manifest update only after provider confirmation",
+            "read-only contract plus narrow v0.4.13 preservation implementation",
+            "content-addressed key",
+            "manifest-bound resume ledger",
+            "immutable three-state terminal receipts",
             "read no object bytes",
-            "hash no object bytes",
-            "upload nothing",
-            "write no resume ledgers or receipts",
-            "update no manifests",
-            "echo no bucket names",
+            "calls no provider",
+            "writes no ledger/receipt",
+            "does not update the formal-adoption manifest",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, matrix_text)

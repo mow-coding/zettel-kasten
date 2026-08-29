@@ -19,16 +19,11 @@ LOCK_SHA256 = "3bdad30b08eb6ba3152946ead94f1cf55a1130fadcfb1a1b6c9ef7dddd969e2a"
 
 
 class V0412ReleaseDocsTests(unittest.TestCase):
-    def test_current_version_and_packaged_release_are_exact(self) -> None:
-        self.assertEqual(__version__, "0.4.12")
-        self.assertIn('version = "0.4.12"', (KIT / "pyproject.toml").read_text(encoding="utf-8"))
-        self.assertIn('version: "0.4.12"', (ROOT / "CITATION.cff").read_text(encoding="utf-8"))
+    def test_v0412_release_is_preserved_as_source_history(self) -> None:
+        self.assertEqual(__version__, "0.4.13")
+        self.assertTrue(RELEASE.is_file())
         packaged = RESOURCE_ROOT / "release-notes" / "v0.4.12.md"
-        self.assertEqual(RELEASE.read_bytes(), packaged.read_bytes())
-        self.assertEqual(
-            sorted(path.name for path in packaged.parent.glob("v*.md")),
-            ["v0.4.12.md"],
-        )
+        self.assertFalse(packaged.exists())
         self.assertTrue((KIT / "docs" / "releases" / "v0.4.11.md").is_file())
         self.assertFalse((packaged.parent / "v0.4.11.md").exists())
 
@@ -144,7 +139,7 @@ class V0412ReleaseDocsTests(unittest.TestCase):
                 state,
             )
 
-    def test_v0412_supply_lock_is_lf_exact_and_changes_only_target_tag(self) -> None:
+    def test_v0412_supply_lock_is_historical_and_current_policy_is_v0413(self) -> None:
         current = LOCK.read_bytes()
         historical = (KIT / "project-runtime-supply-lock-v0.4.11.json").read_bytes()
         historical_lf = historical.replace(b"\r\n", b"\n")
@@ -159,8 +154,11 @@ class V0412ReleaseDocsTests(unittest.TestCase):
         policy = project_runtime.project_runtime_policy_document(policy_raw)
         self.assertIsNotNone(policy)
         assert policy is not None
-        self.assertEqual(policy["supply_lock"], "wom-kit/project-runtime-supply-lock-v0.4.12.json")
-        self.assertEqual(policy["supply_lock_sha256"], f"sha256:{LOCK_SHA256}")
+        self.assertEqual(policy["supply_lock"], "wom-kit/project-runtime-supply-lock-v0.4.13.json")
+        self.assertEqual(
+            policy["supply_lock_sha256"],
+            "sha256:6ede0cfb75b4c2715cc2d53fb1d3129898d582731057d0f4f1c3e68fcdc160dd",
+        )
 
 
 if __name__ == "__main__":

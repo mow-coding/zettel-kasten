@@ -1,8 +1,8 @@
 {
   "schema": "wom-kit/package-resource-manifest/v0.1",
-  "version": "0.4.12",
+  "version": "0.4.13",
   "source_of_truth": "wom-kit source resource directories",
-  "file_count": 165,
+  "file_count": 167,
   "files": [
     {
       "source": "schemas/activity-group-membership-receipt.schema.json",
@@ -297,6 +297,18 @@
       "packaged": "schemas/object-storage-manifest-reconcile-receipt.schema.json",
       "bytes": 1656,
       "sha256": "78a676edb3a370575c85cadaacbe0310a2d4ef4d5ee3d4205ee273f264f297ed"
+    },
+    {
+      "source": "schemas/object-storage-preservation-terminal-receipt-v0.2.schema.json",
+      "packaged": "schemas/object-storage-preservation-terminal-receipt-v0.2.schema.json",
+      "bytes": 5139,
+      "sha256": "56dcb2c39dc4681a7accc23e937ebf7dd890444a24a4ca24bbf6ec4793d420a7"
+    },
+    {
+      "source": "schemas/object-storage-preservation-terminal-receipt-v0.3.schema.json",
+      "packaged": "schemas/object-storage-preservation-terminal-receipt-v0.3.schema.json",
+      "bytes": 3112,
+      "sha256": "5e1d5a0e9bdf64082af22479578a5a1bc23c9521d4035d9d46b7614621782078"
     },
     {
       "source": "schemas/object-storage-upload-receipt.schema.json",
@@ -989,10 +1001,10 @@
       "sha256": "d619dc26af3216498c8392dfe838b0fe752d4bad9da998a58ca682d668fc510c"
     },
     {
-      "source": "docs/releases/v0.4.12.md",
-      "packaged": "release-notes/v0.4.12.md",
-      "bytes": 7458,
-      "sha256": "1e0a0ffd9a29d505f6a91541797d4227770cf687e633d1a822f64e153c9849fa"
+      "source": "docs/releases/v0.4.13.md",
+      "packaged": "release-notes/v0.4.13.md",
+      "bytes": 4787,
+      "sha256": "ada89ba9fa750ef595200d75930d0ecadbebffa8c79a62d964a87b69188da37c"
     }
   ]
 }

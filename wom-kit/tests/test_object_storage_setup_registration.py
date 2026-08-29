@@ -3,10 +3,12 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import os
 import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 from wom_kit import archive_services
@@ -707,6 +709,503 @@ class ObjectStorageSetupRegistrationTests(unittest.TestCase):
         rendered = json.dumps(public, sort_keys=True)
         self.assertNotIn(BUCKET, rendered)
         self.assertNotIn(STORE_REF, rendered)
+
+    def test_provider_status_and_readiness_use_exact_content_free_evidence(self) -> None:
+        plan = self.plan()
+        applied = apply_object_storage_setup_registration(
+            plan, approval_authority=_authority()
+        )
+        self.assertTrue(applied["ok"], applied)
+        before = _snapshot(self.root)
+
+        status = archive_services.provider_setup_status(self.root)
+        readiness = archive_services.object_storage_adapter_readiness_plan(
+            self.root, dry_run=True
+        )
+        private_selector_readiness = (
+            archive_services.object_storage_adapter_readiness_plan(
+                self.root,
+                provider_ref=str(plan.proposed_binding["binding_id"]),
+                dry_run=True,
+            )
+        )
+
+        self.assertEqual(_snapshot(self.root), before)
+        self.assertTrue(status["ok"], status)
+        self.assertEqual(status["status"], "ready")
+        self.assertEqual(status["receipt_count"], 1)
+        item = next(
+            row
+            for row in status["providers"]
+            if row.get("provider") == "object_storage"
+        )
+        self.assertEqual(item["status"], "metadata_and_receipt_present")
+        self.assertEqual(item["reason_code"], "object_storage_setup_evidence_valid")
+        self.assertEqual(item["setup_evidence_mode"], "exact_registration_v1")
+        self.assertTrue(item["setup_receipt_present"])
+        self.assertRegex(item["provider_binding_sha256"], r"^sha256:[0-9a-f]{64}$")
+        self.assertRegex(item["receipt_sha256"], r"^sha256:[0-9a-f]{64}$")
+        self.assertRegex(item["binding_ref_sha256"], r"^sha256:[0-9a-f]{64}$")
+        self.assertIsNone(item["binding_id"])
+        self.assertEqual(item["resource"], {})
+        self.assertIsNone(item["expected_receipt_path"])
+        self.assertIsNone(item["receipt_path"])
+        self.assertFalse(item["private_values_echoed"])
+        self.assertFalse(item["resource_details_echoed"])
+        self.assertFalse(item["receipt_path_echoed"])
+
+        public_digest_readiness = (
+            archive_services.object_storage_adapter_readiness_plan(
+                self.root,
+                provider_ref=item["binding_ref_sha256"],
+                dry_run=True,
+            )
+        )
+
+        self.assertTrue(readiness["ok"], readiness)
+        self.assertEqual(readiness["readiness_state"], "ready_for_future_adapter")
+        summary = readiness["provider_summary"]
+        self.assertTrue(summary["selected_provider_setup_ready"])
+        self.assertTrue(summary["selected_provider_setup_receipt_present"])
+        self.assertFalse(readiness["closed_actions"]["provider_api_called"])
+        self.assertFalse(readiness["closed_actions"]["credential_value_read"])
+        self.assertEqual(readiness["would_change"], [])
+        self.assertTrue(private_selector_readiness["ok"], private_selector_readiness)
+        self.assertTrue(private_selector_readiness["provider_ref_supplied"])
+        self.assertTrue(public_digest_readiness["ok"], public_digest_readiness)
+        self.assertTrue(public_digest_readiness["provider_ref_supplied"])
+        self.assertEqual(_snapshot(self.root), before)
+
+        rendered = json.dumps(
+            {
+                "status": status,
+                "readiness": readiness,
+                "private_selector_readiness": private_selector_readiness,
+                "public_digest_readiness": public_digest_readiness,
+            },
+            sort_keys=True,
+        )
+        for private in (
+            BUCKET,
+            STORE_REF,
+            ENDPOINT_REF,
+            PROFILE_ID,
+            PROFILE_SLUG,
+            plan.receipt_relative,
+            archive_services.OBJECT_STORAGE_PROVIDER_TOKEN_ENVS[PROVIDER],
+            str(self.root),
+        ):
+            self.assertNotIn(private, rendered)
+
+    def test_malformed_exact_receipt_never_falls_back_or_echoes_private_values(
+        self,
+    ) -> None:
+        self.install_historical_bridge(mismatch=False)
+        legacy_path = next(
+            (self.root / "receipts" / "providers").glob(
+                "*.object-storage-setup.json"
+            )
+        )
+        plan = self.plan()
+        applied = apply_object_storage_setup_registration(
+            plan, approval_authority=_authority()
+        )
+        self.assertTrue(applied["ok"], applied)
+
+        secret_sentinel = "provider-private-secret-sentinel"
+        exact_path = self.root / plan.receipt_relative
+        exact_path.write_text(
+            json.dumps({"secret": secret_sentinel}) + "\n",
+            encoding="utf-8",
+        )
+        nonstandard_legacy = legacy_path.with_name("nonstandard-private.json")
+        nonstandard_document = json.loads(legacy_path.read_text(encoding="utf-8"))
+        nonstandard_document["provider_private_scalar"] = secret_sentinel
+        nonstandard_legacy.write_text(
+            json.dumps(nonstandard_document, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        before = _snapshot(self.root)
+
+        status = archive_services.provider_setup_status(self.root)
+        readiness = archive_services.object_storage_adapter_readiness_plan(
+            self.root, dry_run=True
+        )
+
+        self.assertEqual(_snapshot(self.root), before)
+        self.assertFalse(status["ok"], status)
+        self.assertEqual(status["status"], "blocked")
+        item = next(
+            row
+            for row in status["providers"]
+            if row.get("provider") == "object_storage"
+        )
+        self.assertEqual(item["status"], "metadata_receipt_mismatch")
+        self.assertEqual(
+            item["reason_code"], "object_storage_setup_evidence_mismatch"
+        )
+        self.assertEqual(
+            item["blockers"], ["object_storage_setup_evidence_mismatch"]
+        )
+        self.assertIsNone(item["setup_evidence_mode"])
+        self.assertFalse(item["setup_receipt_present"])
+        self.assertIsNone(item["receipt_sha256"])
+        self.assertFalse(readiness["ok"], readiness)
+        self.assertIn(
+            "object_storage_setup_evidence_mismatch", readiness["blockers"]
+        )
+        self.assertIn(
+            "object_storage_provider_setup_not_ready", readiness["blockers"]
+        )
+        self.assertFalse(readiness["closed_actions"]["provider_api_called"])
+        self.assertFalse(readiness["closed_actions"]["credential_value_read"])
+
+        rendered = json.dumps(
+            {"status": status, "readiness": readiness}, sort_keys=True
+        )
+        for private in (
+            BUCKET,
+            STORE_REF,
+            ENDPOINT_REF,
+            PROFILE_ID,
+            PROFILE_SLUG,
+            secret_sentinel,
+            plan.receipt_relative,
+            legacy_path.relative_to(self.root).as_posix(),
+            nonstandard_legacy.relative_to(self.root).as_posix(),
+            str(self.root),
+        ):
+            self.assertNotIn(private, rendered)
+        self.assertNotIn("strict_historical_bridge", rendered)
+
+    def test_orphan_legacy_r2_receipt_is_counted_and_blocks_content_free(self) -> None:
+        self.install_historical_bridge(mismatch=False)
+        receipt_path = next(
+            (self.root / "receipts" / "providers").glob(
+                "*.object-storage-setup.json"
+            )
+        )
+        (self.root / "provider-bindings.yml").unlink()
+        before = _snapshot(self.root)
+
+        status = archive_services.provider_setup_status(self.root)
+
+        self.assertEqual(_snapshot(self.root), before)
+        self.assertFalse(status["ok"], status)
+        self.assertEqual(status["status"], "blocked")
+        self.assertEqual(status["binding_count"], 0)
+        self.assertEqual(status["receipt_count"], 1)
+        self.assertEqual(len(status["orphan_receipts"]), 1)
+        orphan = status["orphan_receipts"][0]
+        self.assertEqual(orphan["provider"], "object_storage")
+        self.assertEqual(orphan["status"], "receipt_without_binding")
+        self.assertEqual(
+            orphan["reason_code"],
+            "object_storage_setup_receipt_without_binding",
+        )
+        self.assertRegex(orphan["receipt_path_sha256"], r"^sha256:[0-9a-f]{64}$")
+        self.assertRegex(orphan["receipt_sha256"], r"^sha256:[0-9a-f]{64}$")
+        self.assertIsNone(orphan["receipt_path"])
+        self.assertEqual(orphan["resource"], {})
+        rendered = json.dumps(status, sort_keys=True)
+        for private in (
+            BUCKET,
+            STORE_REF,
+            ENDPOINT_REF,
+            PROFILE_ID,
+            PROFILE_SLUG,
+            receipt_path.relative_to(self.root).as_posix(),
+            str(self.root),
+        ):
+            self.assertNotIn(private, rendered)
+
+    def test_unknown_malformed_and_unreadable_receipts_use_only_codes_and_digests(
+        self,
+    ) -> None:
+        receipt_root = self.root / "receipts" / "providers"
+        receipt_root.mkdir(parents=True, exist_ok=True)
+        bucket_sentinel = "private-bucket-sentinel"
+        malformed = receipt_root / f"{bucket_sentinel}-malformed.json"
+        unreadable = receipt_root / f"{bucket_sentinel}-unreadable.json"
+        malformed.write_bytes(b"{")
+        unreadable.write_bytes(b"{}\n")
+        before = _snapshot(self.root)
+        original = archive_services._read_provider_setup_status_receipt
+
+        def deny_one(path: Path) -> bytes:
+            if path.name == unreadable.name:
+                raise OSError(f"private exception {bucket_sentinel}")
+            return original(path)
+
+        with mock.patch.object(
+            archive_services,
+            "_read_provider_setup_status_receipt",
+            side_effect=deny_one,
+        ):
+            status = archive_services.provider_setup_status(self.root)
+
+        self.assertEqual(_snapshot(self.root), before)
+        self.assertFalse(status["ok"], status)
+        self.assertEqual(status["status"], "blocked")
+        self.assertEqual(status["receipt_count"], 2)
+        self.assertEqual(len(status["orphan_receipts"]), 2, status)
+        self.assertEqual(
+            {row["reason_code"] for row in status["orphan_receipts"]},
+            {"provider_setup_receipt_invalid", "provider_setup_receipt_unreadable"},
+        )
+        for row in status["orphan_receipts"]:
+            self.assertIsNone(row["receipt_path"])
+            self.assertRegex(row["receipt_path_sha256"], r"^sha256:[0-9a-f]{64}$")
+            if row["reason_code"] == "provider_setup_receipt_invalid":
+                self.assertRegex(row["receipt_sha256"], r"^sha256:[0-9a-f]{64}$")
+            else:
+                self.assertIsNone(row["receipt_sha256"])
+        rendered = json.dumps(status, sort_keys=True)
+        self.assertNotIn(bucket_sentinel, rendered)
+        self.assertNotIn(str(self.root), rendered)
+        self.assertNotIn("private exception", rendered)
+
+    def test_disabled_r2_receipt_is_still_counted_without_echoing_it(self) -> None:
+        self.install_historical_bridge(mismatch=False)
+        provider_path = self.root / "provider-bindings.yml"
+        document = archive_services.load_yaml(provider_path.read_text(encoding="utf-8"))
+        document["bindings"][0]["enabled"] = False
+        provider_path.write_text(
+            archive_services.dump_yaml(document), encoding="utf-8"
+        )
+        before = _snapshot(self.root)
+
+        status = archive_services.provider_setup_status(self.root)
+
+        self.assertEqual(_snapshot(self.root), before)
+        self.assertTrue(status["ok"], status)
+        self.assertEqual(status["receipt_count"], 1)
+        self.assertEqual(status["orphan_receipts"], [])
+        item = next(
+            row
+            for row in status["providers"]
+            if row.get("provider") == "object_storage"
+        )
+        self.assertEqual(item["status"], "disabled_not_checked")
+        rendered = json.dumps(status, sort_keys=True)
+        for private in (BUCKET, STORE_REF, ENDPOINT_REF, PROFILE_ID, PROFILE_SLUG):
+            self.assertNotIn(private, rendered)
+
+    def test_non_ascii_profile_exact_receipt_uses_validator_canonical_identity(
+        self,
+    ) -> None:
+        private_profile_id = "profile:개인:정확한-설정"
+        arguments = self.kwargs()
+        arguments["profile_id"] = private_profile_id
+        plan = plan_object_storage_setup_registration(self.root, **arguments)
+        applied = apply_object_storage_setup_registration(
+            plan, approval_authority=_authority()
+        )
+        self.assertTrue(applied["ok"], applied)
+        before = _snapshot(self.root)
+
+        status = archive_services.provider_setup_status(self.root)
+
+        self.assertEqual(_snapshot(self.root), before)
+        self.assertTrue(status["ok"], status)
+        self.assertEqual(status["receipt_count"], 1)
+        self.assertEqual(status["orphan_receipts"], [])
+        item = status["providers"][0]
+        self.assertEqual(item["setup_evidence_mode"], "exact_registration_v1")
+        self.assertEqual(item["status"], "metadata_and_receipt_present")
+        self.assertNotIn(private_profile_id, json.dumps(status, ensure_ascii=False))
+
+    @unittest.skipUnless(os.name == "nt", "Windows case-insensitive path contract")
+    def test_windows_case_only_exact_receipt_filename_is_not_orphaned(self) -> None:
+        plan = self.plan()
+        applied = apply_object_storage_setup_registration(
+            plan, approval_authority=_authority()
+        )
+        self.assertTrue(applied["ok"], applied)
+        exact_path = self.root / plan.receipt_relative
+        temporary_path = exact_path.with_name("case-transition.json")
+        uppercase_path = exact_path.with_name(
+            exact_path.stem.upper() + exact_path.suffix
+        )
+        exact_path.rename(temporary_path)
+        temporary_path.rename(uppercase_path)
+        before = _snapshot(self.root)
+
+        status = archive_services.provider_setup_status(self.root)
+
+        self.assertEqual(_snapshot(self.root), before)
+        self.assertTrue(status["ok"], status)
+        self.assertEqual(status["receipt_count"], 1)
+        self.assertEqual(status["orphan_receipts"], [])
+        self.assertEqual(status["providers"][0]["status"], "metadata_and_receipt_present")
+
+    def test_same_size_and_mtime_receipt_replacement_fails_closed(self) -> None:
+        receipt_root = self.root / "receipts" / "providers"
+        receipt_root.mkdir(parents=True, exist_ok=True)
+        private_sentinel = "private-replacement-bucket"
+        receipt_path = receipt_root / f"{private_sentinel}.json"
+        receipt_path.write_bytes(b"{}\n")
+        original_lstat = archive_services.os.lstat
+        target_calls = 0
+
+        def replaced_lstat(path: Path | str):
+            nonlocal target_calls
+            observed = original_lstat(path)
+            if Path(path).name != receipt_path.name:
+                return observed
+            target_calls += 1
+            if target_calls != 2:
+                return observed
+            return SimpleNamespace(
+                st_mode=observed.st_mode,
+                st_dev=observed.st_dev,
+                st_ino=int(observed.st_ino) + 1,
+                st_size=observed.st_size,
+                st_mtime_ns=observed.st_mtime_ns,
+                st_ctime_ns=observed.st_ctime_ns + 1,
+                st_ctime=observed.st_ctime,
+                st_file_attributes=getattr(observed, "st_file_attributes", 0),
+            )
+
+        with mock.patch.object(
+            archive_services.os,
+            "lstat",
+            side_effect=replaced_lstat,
+        ):
+            status = archive_services.provider_setup_status(self.root)
+
+        self.assertEqual(target_calls, 2)
+        self.assertFalse(status["ok"], status)
+        self.assertEqual(status["receipt_count"], 1)
+        self.assertEqual(len(status["orphan_receipts"]), 1)
+        orphan = status["orphan_receipts"][0]
+        self.assertEqual(orphan["reason_code"], "provider_setup_receipt_unreadable")
+        self.assertIsNone(orphan["receipt_sha256"])
+        self.assertRegex(orphan["receipt_path_sha256"], r"^sha256:[0-9a-f]{64}$")
+        rendered = json.dumps(status, sort_keys=True)
+        self.assertNotIn(private_sentinel, rendered)
+        self.assertNotIn(str(self.root), rendered)
+
+    def test_malformed_and_unreadable_github_receipts_remain_legacy_owned(
+        self,
+    ) -> None:
+        receipt_root = self.root / "receipts" / "providers"
+        receipt_root.mkdir(parents=True, exist_ok=True)
+        receipt_path = receipt_root / "legacy.github-repository-setup.json"
+        relative = receipt_path.relative_to(self.root).as_posix()
+        receipt_path.write_bytes(b"{")
+
+        malformed = archive_services.provider_setup_status(self.root)
+
+        self.assertFalse(malformed["ok"], malformed)
+        self.assertEqual(malformed["receipt_count"], 0)
+        self.assertEqual(malformed["orphan_receipts"], [])
+        self.assertEqual(len(malformed["blockers"]), 1)
+        self.assertIn(relative, malformed["blockers"][0])
+        self.assertNotIn("provider_setup_receipt_invalid", malformed["blockers"])
+
+        receipt_path.write_bytes(b"{}\n")
+        original = archive_services._read_provider_setup_status_receipt
+
+        def deny_github(path: Path) -> bytes:
+            if path.name == receipt_path.name:
+                raise OSError("legacy github denied")
+            return original(path)
+
+        with mock.patch.object(
+            archive_services,
+            "_read_provider_setup_status_receipt",
+            side_effect=deny_github,
+        ):
+            unreadable = archive_services.provider_setup_status(self.root)
+
+        self.assertFalse(unreadable["ok"], unreadable)
+        self.assertEqual(unreadable["receipt_count"], 0)
+        self.assertEqual(unreadable["orphan_receipts"], [])
+        self.assertEqual(len(unreadable["blockers"]), 1)
+        self.assertIn(relative, unreadable["blockers"][0])
+        self.assertNotIn("provider_setup_receipt_unreadable", unreadable["blockers"])
+
+    def test_cross_namespace_valid_receipts_never_expose_private_resource_values(
+        self,
+    ) -> None:
+        self.install_historical_bridge(mismatch=False)
+        receipt_root = self.root / "receipts" / "providers"
+        original_r2 = next(receipt_root.glob("*.object-storage-setup.json"))
+        misnamed_r2 = receipt_root / "misnamed.github-repository-setup.json"
+        original_r2.rename(misnamed_r2)
+        (self.root / "provider-bindings.yml").unlink()
+
+        r2_status = archive_services.provider_setup_status(self.root)
+
+        self.assertFalse(r2_status["ok"], r2_status)
+        self.assertEqual(r2_status["receipt_count"], 1)
+        self.assertEqual(len(r2_status["orphan_receipts"]), 1)
+        r2_orphan = r2_status["orphan_receipts"][0]
+        self.assertEqual(r2_orphan["provider"], "object_storage")
+        self.assertEqual(
+            r2_orphan["reason_code"],
+            "object_storage_setup_receipt_without_binding",
+        )
+        self.assertIsNone(r2_orphan["receipt_path"])
+        self.assertEqual(r2_orphan["resource"], {})
+        r2_rendered = json.dumps(r2_status, ensure_ascii=False, sort_keys=True)
+        for private in (
+            BUCKET,
+            STORE_REF,
+            ENDPOINT_REF,
+            PROFILE_ID,
+            PROFILE_SLUG,
+            misnamed_r2.relative_to(self.root).as_posix(),
+        ):
+            self.assertNotIn(private, r2_rendered)
+
+        misnamed_r2.unlink()
+        private_repo = "private-github-repository-sentinel"
+        opposite_path = receipt_root / "private-bucket.object-storage-setup.json"
+        github_receipt = archive_services.build_github_provider_setup_receipt(
+            archive_id=archive_services.read_archive_id(self.root),
+            profile_id="profile:private-github",
+            profile_slug="private-github",
+            github_owner="private-owner-sentinel",
+            github_account_ref="github:account:private",
+            repo_name=private_repo,
+            visibility="private",
+            remote_protocol="ssh",
+            receipt_path=opposite_path.relative_to(self.root).as_posix(),
+            reviewed_by="person:private-reviewer",
+            timestamp="2026-08-29T00:00:00+09:00",
+            dry_run=False,
+            manual_steps=[],
+        )
+        opposite_path.write_text(
+            json.dumps(github_receipt, ensure_ascii=True, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+
+        github_status = archive_services.provider_setup_status(self.root)
+
+        self.assertFalse(github_status["ok"], github_status)
+        self.assertEqual(github_status["receipt_count"], 1)
+        self.assertEqual(len(github_status["orphan_receipts"]), 1)
+        github_orphan = github_status["orphan_receipts"][0]
+        self.assertEqual(github_orphan["provider"], "unknown")
+        self.assertEqual(
+            github_orphan["reason_code"],
+            "provider_setup_receipt_namespace_mismatch",
+        )
+        self.assertIsNone(github_orphan["receipt_path"])
+        self.assertEqual(github_orphan["resource"], {})
+        github_rendered = json.dumps(
+            github_status, ensure_ascii=False, sort_keys=True
+        )
+        for private in (
+            private_repo,
+            "private-owner-sentinel",
+            "github:account:private",
+            opposite_path.relative_to(self.root).as_posix(),
+        ):
+            self.assertNotIn(private, github_rendered)
 
     def test_historical_bridge_rejects_incomplete_or_extended_receipts(self) -> None:
         self.install_historical_bridge(mismatch=False)

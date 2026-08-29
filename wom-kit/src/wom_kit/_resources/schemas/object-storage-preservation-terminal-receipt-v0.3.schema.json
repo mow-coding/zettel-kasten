@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "wom-kit/object-storage-preservation-terminal-receipt/v0.3",
+  "title": "WOM-kit object-storage preservation terminal receipt with durable call evidence",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "object_id", "content_sha256", "size_bytes", "provider_kind",
+    "store_ref", "remote_key_strategy", "remote_key_sha256", "source_inventory_sha256",
+    "exact_operation_manifest_sha256", "receipt_state_sha256", "preservation_status",
+    "classified_at", "provider_put_call_count", "provider_put_call_charged_count",
+    "provider_put_call_count_evidence", "bytes_uploaded", "formal_adoption_status",
+    "manifest_location_updated", "remote_verification", "review_reason",
+    "remote_delete_on_revert_supported", "private_values_echoed",
+    "credential_values_echoed", "provider_url_echoed", "local_path_echoed"
+  ],
+  "properties": {
+    "schema_version": {"const": "wom-kit/object-storage-preservation-terminal-receipt/v0.3"},
+    "object_id": {"$ref": "#/$defs/sha256_ref"},
+    "content_sha256": {"$ref": "#/$defs/sha256_ref"},
+    "size_bytes": {"type": "integer", "minimum": 0},
+    "provider_kind": {"type": "string", "pattern": "^[a-z][a-z0-9-]{0,63}$"},
+    "store_ref": {"type": "string", "minLength": 1, "maxLength": 255},
+    "remote_key_strategy": {"const": "wom_bytes_preserved_v1"},
+    "remote_key_sha256": {"$ref": "#/$defs/sha256_ref"},
+    "source_inventory_sha256": {"$ref": "#/$defs/sha256_ref"},
+    "exact_operation_manifest_sha256": {"$ref": "#/$defs/sha256_ref"},
+    "receipt_state_sha256": {"$ref": "#/$defs/sha256_ref"},
+    "preservation_status": {"enum": ["bytes_preserved", "already_remote_verified", "review_required"]},
+    "classified_at": {"type": "string", "minLength": 1},
+    "provider_put_call_count": {"type": "integer", "minimum": 0},
+    "provider_put_call_charged_count": {"type": "integer", "minimum": 0},
+    "provider_put_call_count_evidence": {"enum": ["exact_observed", "conservative_reserved"]},
+    "bytes_uploaded": {"type": "integer", "minimum": 0},
+    "formal_adoption_status": {"const": "not_adopted"},
+    "manifest_location_updated": {"const": false},
+    "remote_verification": {
+      "type": "object", "additionalProperties": false,
+      "required": ["head_present", "size_match", "whole_object_sha256_match", "verification_kind"],
+      "properties": {
+        "head_present": {"const": true},
+        "size_match": {"type": "boolean"},
+        "whole_object_sha256_match": {"type": "boolean"},
+        "verification_kind": {"enum": ["head_then_get_rehash", "head_size_mismatch"]}
+      }
+    },
+    "review_reason": {"enum": [null, "remote_size_mismatch", "remote_checksum_mismatch"]},
+    "remote_delete_on_revert_supported": {"const": false},
+    "private_values_echoed": {"const": false},
+    "credential_values_echoed": {"const": false},
+    "provider_url_echoed": {"const": false},
+    "local_path_echoed": {"const": false}
+  },
+  "$defs": {
+    "sha256_ref": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+  }
+}

@@ -66,6 +66,9 @@ PUBLIC_WHEEL_PATH_RE = re.compile(
     r"v(?P<version>(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*))/"
     r"wom_kit-(?P=version)-py3-none-any\.whl$"
 )
+PROJECT_RUNTIME_TRANSIENT_UNLINK_ATTEMPTS = 8
+PROJECT_RUNTIME_TRANSIENT_UNLINK_BACKOFF_SECONDS = 0.025
+PROJECT_RUNTIME_TRANSIENT_WINDOWS_ERRORS = frozenset({5, 32, 33})
 
 
 class ProjectRuntimeError(RuntimeError):
@@ -602,8 +605,8 @@ def project_runtime_policy_document(raw: bytes | None) -> dict[str, Any] | None:
         "runtime_root": ".zettel-kasten/runtimes/vX.Y.Z",
         "active_version_pin": ".zettel-kasten/installed-version.txt",
         "launcher": ".zettel-kasten/bin/archive.cmd",
-        "supply_lock": "wom-kit/project-runtime-supply-lock-v0.4.12.json",
-        "supply_lock_sha256": "sha256:3bdad30b08eb6ba3152946ead94f1cf55a1130fadcfb1a1b6c9ef7dddd969e2a",
+        "supply_lock": "wom-kit/project-runtime-supply-lock-v0.4.13.json",
+        "supply_lock_sha256": "sha256:6ede0cfb75b4c2715cc2d53fb1d3129898d582731057d0f4f1c3e68fcdc160dd",
         "global_path_mutation": False,
     }
     if value != expected:
@@ -2346,7 +2349,10 @@ def _prune_runtime_scripts(runtime: Path) -> None:
         with os.scandir(scripts) as iterator:
             entries = list(iterator)
         for entry in entries:
-            stat_result = entry.stat(follow_symlinks=False)
+            entry_path = Path(entry.path)
+            # DirEntry.stat() can report zero device/inode values on Windows;
+            # Path.lstat() supplies the stable identity rechecked by the retry.
+            stat_result = entry_path.lstat()
             if (
                 entry.name.casefold() in allowed
                 and entry.is_file(follow_symlinks=False)
@@ -2360,12 +2366,159 @@ def _prune_runtime_scripts(runtime: Path) -> None:
                 or not entry.is_file(follow_symlinks=False)
             ):
                 raise ProjectRuntimeError("project_runtime_scripts_unsafe")
-            Path(entry.path).unlink()
+            _unlink_owned_runtime_file_with_retry(
+                runtime,
+                entry_path,
+                expected_identity=(int(stat_result.st_dev), int(stat_result.st_ino)),
+            )
     except OSError as error:
         raise ProjectRuntimeError("project_runtime_scripts_cleanup_failed") from error
     observed = {path.name.casefold() for path in scripts.iterdir()}
     if observed != allowed:
         raise ProjectRuntimeError("project_runtime_scripts_cleanup_failed")
+
+
+def _unlink_owned_runtime_file_with_retry(
+    runtime: Path,
+    path: Path,
+    *,
+    expected_identity: tuple[int, int],
+) -> None:
+    """Remove one owned runtime file despite a short Windows scanner lock.
+
+    Only Windows sharing/access conflicts are retried.  Windows deletion is
+    performed through a retained handle bound to the exact identity, bytes,
+    size, and timestamp observed before the first attempt.  A pathname swap can
+    therefore never redirect deletion to a replacement file.
+    """
+
+    try:
+        current = path.lstat()
+    except OSError as error:
+        raise ProjectRuntimeError(
+            "project_runtime_scripts_cleanup_failed"
+        ) from error
+    if (
+        not _path_is_within(path, runtime)
+        or not _existing_components_are_real(runtime, path)
+        or not stat_module.S_ISREG(current.st_mode)
+        or path.is_symlink()
+        or _is_reparse(current)
+        or (int(current.st_dev), int(current.st_ino)) != expected_identity
+        or int(current.st_nlink) != 1
+    ):
+        raise ProjectRuntimeError("project_runtime_scripts_unsafe")
+    observation = _stable_regular_file_observation(
+        path,
+        limit=64 * 1024 * 1024,
+        ancestor_root=runtime,
+        collect_bytes=False,
+    )
+    if observation is None:
+        raise ProjectRuntimeError("project_runtime_scripts_unsafe")
+    _raw, digest, size = observation
+    try:
+        approved = path.lstat()
+    except OSError as error:
+        raise ProjectRuntimeError(
+            "project_runtime_scripts_cleanup_failed"
+        ) from error
+    if (
+        not stat_module.S_ISREG(approved.st_mode)
+        or _is_reparse(approved)
+        or (int(approved.st_dev), int(approved.st_ino)) != expected_identity
+        or int(approved.st_nlink) != 1
+        or int(approved.st_size) != size
+    ):
+        raise ProjectRuntimeError("project_runtime_scripts_unsafe")
+    exact_record: dict[str, Any] = {
+        "type": "file",
+        "identity": {
+            "device": int(approved.st_dev),
+            "inode": int(approved.st_ino),
+        },
+        "size": size,
+        "mtime_ns": int(approved.st_mtime_ns),
+        "sha256": digest,
+    }
+
+    for attempt in range(PROJECT_RUNTIME_TRANSIENT_UNLINK_ATTEMPTS):
+        try:
+            _delete_exact_owned_runtime_file(runtime, path, exact_record)
+            return
+        except OSError as error:
+            transient = bool(
+                os.name == "nt"
+                and getattr(error, "code", None)
+                == "legacy_cleanup_bound_win32_open_uncertain"
+                and _winerror_from_exception_chain(error)
+                in PROJECT_RUNTIME_TRANSIENT_WINDOWS_ERRORS
+            )
+            if (
+                not transient
+                or attempt == PROJECT_RUNTIME_TRANSIENT_UNLINK_ATTEMPTS - 1
+            ):
+                if _bound_delete_error_is_unsafe(error):
+                    raise ProjectRuntimeError(
+                        "project_runtime_scripts_unsafe"
+                    ) from error
+                raise ProjectRuntimeError(
+                    "project_runtime_scripts_cleanup_failed"
+                ) from error
+            time.sleep(
+                PROJECT_RUNTIME_TRANSIENT_UNLINK_BACKOFF_SECONDS * (attempt + 1)
+            )
+    raise ProjectRuntimeError("project_runtime_scripts_cleanup_failed")
+
+
+def _delete_exact_owned_runtime_file(
+    runtime: Path,
+    path: Path,
+    exact_record: Mapping[str, Any],
+) -> None:
+    if os.name != "nt":
+        # Project runtimes are a Windows product surface.  Keep the portable
+        # unit boundary deterministic without pretending POSIX unlink is an
+        # exact compare-and-delete primitive.
+        path.unlink()
+        return
+    # Delayed import avoids the archive_services -> project_runtime import
+    # cycle; the bound-delete helper is only needed after module initialization.
+    from .legacy_cleanup_bound_delete import _delete_exact_approved_file
+
+    _delete_exact_approved_file(runtime, path, exact_record)
+
+
+def _winerror_from_exception_chain(error: BaseException) -> int | None:
+    observed: set[int] = set()
+    current: BaseException | None = error
+    while current is not None and id(current) not in observed:
+        observed.add(id(current))
+        value = getattr(current, "winerror", None)
+        if isinstance(value, int):
+            return value
+        current = current.__cause__ or current.__context__
+    return None
+
+
+def _bound_delete_error_is_unsafe(error: BaseException) -> bool:
+    code = getattr(error, "code", "")
+    return bool(
+        isinstance(code, str)
+        and (
+            "_drift" in code
+            or "_unsafe" in code
+            or "alternate_data_stream" in code
+            or code
+            in {
+                "legacy_cleanup_bound_file_hardlink",
+                "legacy_cleanup_bound_win32_file_name_uncertain",
+                "legacy_cleanup_bound_path_invalid",
+                "legacy_cleanup_bound_path_outside_root",
+                "legacy_cleanup_bound_path_stream_syntax",
+            }
+        )
+    )
 
 
 def _remove_runtime_bytecode(runtime: Path) -> None:
@@ -3110,12 +3263,17 @@ def _runtime_process_verification(
 ) -> tuple[dict[str, bool], list[dict[str, Any]], str]:
     python_executable = final / "Scripts" / "python.exe"
     site_packages = final / "Lib" / "site-packages"
+    static_stage = f"{stage_prefix}-static-inventory"
+    if progress_callback is not None:
+        progress_callback(static_stage, "start", None, None)
     static_packages, _pip_version, _artifact_top_level = _static_distribution_inventory(
         final,
         bootstrap=bootstrap,
         supply=supply,
         retained_wheels=retained_wheels,
     )
+    if progress_callback is not None:
+        progress_callback(static_stage, "done", None, None)
     if not reuse_isolated:
         _run_bounded(
             [
@@ -3287,6 +3445,14 @@ def _initialize_runtime_payload(
     stage_prefix: str,
     progress_callback: Callable[[str, str, int | None, int | None], None] | None,
 ) -> tuple[dict[str, bool], list[dict[str, Any]], str]:
+    def local_stage(name: str, action: Callable[[], None]) -> None:
+        stage = f"{stage_prefix}-{name}"
+        if progress_callback is not None:
+            progress_callback(stage, "start", None, None)
+        action()
+        if progress_callback is not None:
+            progress_callback(stage, "done", None, None)
+
     _run_bounded(
         [
             sys.executable,
@@ -3311,16 +3477,28 @@ def _initialize_runtime_payload(
         stage=f"{stage_prefix}-install",
         progress_callback=progress_callback,
     )
-    _prune_runtime_scripts(runtime)
-    _remove_runtime_bytecode(runtime)
-    _canonicalize_pyvenv_cfg(runtime)
-    _canonicalize_installed_records(
-        runtime,
-        [*wheel_paths, _trusted_pip_wheel()],
+    local_stage("prune-scripts", lambda: _prune_runtime_scripts(runtime))
+    local_stage("bytecode-cleanup", lambda: _remove_runtime_bytecode(runtime))
+    local_stage("pyvenv-canonicalize", lambda: _canonicalize_pyvenv_cfg(runtime))
+    trusted_pip_stage = f"{stage_prefix}-trusted-pip-discovery"
+    if progress_callback is not None:
+        progress_callback(trusted_pip_stage, "start", None, None)
+    trusted_pip_wheel = _trusted_pip_wheel()
+    if progress_callback is not None:
+        progress_callback(trusted_pip_stage, "done", None, None)
+    local_stage(
+        "record-canonicalize",
+        lambda: _canonicalize_installed_records(
+            runtime,
+            [*wheel_paths, trusted_pip_wheel],
+        ),
     )
-    _verify_installed_wheel_payloads(
-        runtime,
-        [*wheel_paths, _trusted_pip_wheel()],
+    local_stage(
+        "installed-payload-verify",
+        lambda: _verify_installed_wheel_payloads(
+            runtime,
+            [*wheel_paths, trusted_pip_wheel],
+        ),
     )
     return _runtime_process_verification(
         runtime,
