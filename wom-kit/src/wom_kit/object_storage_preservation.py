@@ -23,6 +23,7 @@ import stat
 import threading
 import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, Sequence
 
@@ -61,17 +62,28 @@ from .operation_approval_binding import (
 )
 
 
-PLAN_SCHEMA = "wom-kit/object-storage-bytes-preservation-plan/v0.1"
-RESULT_SCHEMA = "wom-kit/object-storage-bytes-preservation-result/v0.1"
-VERIFY_SCHEMA = "wom-kit/object-storage-bytes-preservation-verification/v0.1"
-RECEIPT_SCHEMA = "wom-kit/object-storage-bytes-preserved-receipt/v0.1"
-CONTROL_SCHEMA = "wom-kit/object-storage-bytes-preservation-control/v0.1"
+PLAN_SCHEMA = "wom-kit/object-storage-bytes-preservation-plan/v0.2"
+RESULT_SCHEMA = "wom-kit/object-storage-bytes-preservation-result/v0.2"
+VERIFY_SCHEMA = "wom-kit/object-storage-bytes-preservation-verification/v0.2"
+LEGACY_RECEIPT_SCHEMA = "wom-kit/object-storage-bytes-preserved-receipt/v0.1"
+PREVIOUS_RECEIPT_SCHEMA = "wom-kit/object-storage-preservation-terminal-receipt/v0.2"
+RECEIPT_SCHEMA = "wom-kit/object-storage-preservation-terminal-receipt/v0.3"
+CONTROL_SCHEMA = "wom-kit/object-storage-bytes-preservation-control/v0.3"
+LEGACY_CONTROL_SCHEMA = "wom-kit/object-storage-bytes-preservation-control/v0.2"
 REMOTE_QUERY_SCHEMA = "wom-kit/object-storage-remote-query-result/v0.1"
+LEDGER_SCHEMA = "wom-kit/object-storage-bytes-preservation-ledger/v0.2"
+LEGACY_LEDGER_SCHEMA = "wom-kit/object-storage-bytes-preservation-ledger/v0.1"
+CALL_JOURNAL_SCHEMA = "wom-kit/object-storage-provider-call-journal/v0.3"
 OPERATION = ExactHumanApprovalOperation.object_storage_bytes_preservation.value
 
 RECEIPT_ROOT = "receipts/providers/object-storage-bytes-preserved"
 CONTROL_ROOT = "profiles/local/exact-operations/manifests"
+LEDGER_ROOT = "profiles/local/exact-operations/ledgers"
 REMOTE_KEY_PREFIX = "wom-bytes-preserved/v1"
+
+_TERMINAL_STATUSES = frozenset(
+    {"bytes_preserved", "already_remote_verified", "review_required"}
+)
 
 _SHA256_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 _BARE_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -81,6 +93,7 @@ _MAX_MANIFEST_BYTES = 256 * 1024 * 1024
 _MAX_MANIFEST_LINE_BYTES = 4 * 1024 * 1024
 _MAX_RECEIPT_BYTES = 64 * 1024
 _MAX_CONTROL_BYTES = 64 * 1024 * 1024
+_MAX_LEDGER_BYTES = 256 * 1024 * 1024
 _HASH_CHUNK_BYTES = 1024 * 1024
 _REMOTE_HEARTBEAT_POLL_SECONDS = 1.0
 
@@ -616,7 +629,7 @@ def _receipt_relative(object_id: str, inventory_sha256: str) -> str:
     return f"{RECEIPT_ROOT}/{digest}.{inventory[:16]}.json"
 
 
-def _receipt_document(
+def _legacy_receipt_document(
     *,
     object_id: str,
     size_bytes: int,
@@ -624,16 +637,19 @@ def _receipt_document(
     store_ref: str,
     inventory_sha256: str,
 ) -> dict[str, Any]:
-    remote_key = object_storage_bytes_preserved_remote_key(object_id)
+    """Rebuild the immutable v0.1 receipt exactly as the prior release did."""
+
     return {
-        "schema_version": RECEIPT_SCHEMA,
+        "schema_version": LEGACY_RECEIPT_SCHEMA,
         "object_id": object_id,
         "content_sha256": object_id,
         "size_bytes": size_bytes,
         "provider_kind": provider_kind,
         "store_ref": store_ref,
         "remote_key_strategy": "wom_bytes_preserved_v1",
-        "remote_key_sha256": _sha256_document(remote_key),
+        "remote_key_sha256": _sha256_document(
+            object_storage_bytes_preserved_remote_key(object_id)
+        ),
         "source_inventory_sha256": inventory_sha256,
         "preservation_status": "bytes_preserved",
         "formal_adoption_status": "not_adopted",
@@ -652,6 +668,230 @@ def _receipt_document(
     }
 
 
+def _receipt_document(
+    *,
+    manifest_sha256: str,
+    receipt_token: bytes,
+    object_id: str,
+    size_bytes: int,
+    provider_kind: str,
+    store_ref: str,
+    inventory_sha256: str,
+    preservation_status: str,
+    classified_at: str,
+    provider_put_call_count: int,
+    provider_put_call_charged_count: int,
+    provider_put_call_count_evidence: str,
+    remote_state: str,
+) -> dict[str, Any]:
+    if preservation_status not in _TERMINAL_STATUSES:
+        raise _fail("object_storage_preservation_receipt_conflict")
+    if remote_state not in {"verified_match", "size_mismatch", "checksum_mismatch"}:
+        raise _fail("object_storage_preservation_receipt_conflict")
+    remote_match = remote_state == "verified_match"
+    size_match = remote_state != "size_mismatch"
+    remote_key = object_storage_bytes_preserved_remote_key(object_id)
+    return {
+        "schema_version": RECEIPT_SCHEMA,
+        "object_id": object_id,
+        "content_sha256": object_id,
+        "size_bytes": size_bytes,
+        "provider_kind": provider_kind,
+        "store_ref": store_ref,
+        "remote_key_strategy": "wom_bytes_preserved_v1",
+        "remote_key_sha256": _sha256_document(remote_key),
+        "source_inventory_sha256": inventory_sha256,
+        "exact_operation_manifest_sha256": manifest_sha256,
+        "receipt_state_sha256": _sha256_bytes(receipt_token),
+        "preservation_status": preservation_status,
+        "classified_at": classified_at,
+        "provider_put_call_count": provider_put_call_count,
+        "provider_put_call_charged_count": provider_put_call_charged_count,
+        "provider_put_call_count_evidence": provider_put_call_count_evidence,
+        "bytes_uploaded": size_bytes if preservation_status == "bytes_preserved" else 0,
+        "formal_adoption_status": "not_adopted",
+        "manifest_location_updated": False,
+        "remote_verification": {
+            "head_present": True,
+            "size_match": size_match,
+            "whole_object_sha256_match": remote_match,
+            "verification_kind": (
+                "head_then_get_rehash" if size_match else "head_size_mismatch"
+            ),
+        },
+        "review_reason": (
+            None
+            if preservation_status != "review_required"
+            else (
+                "remote_size_mismatch"
+                if remote_state == "size_mismatch"
+                else "remote_checksum_mismatch"
+            )
+        ),
+        "remote_delete_on_revert_supported": False,
+        "private_values_echoed": False,
+        "credential_values_echoed": False,
+        "provider_url_echoed": False,
+        "local_path_echoed": False,
+    }
+
+
+def _existing_receipt_matches(
+    document: Mapping[str, Any],
+    *,
+    receipt_token: bytes,
+    object_id: str,
+    size_bytes: int,
+    provider_kind: str,
+    store_ref: str,
+    inventory_sha256: str,
+) -> bool:
+    """Validate immutable v0.1/v0.2/v0.3 evidence with exact version shapes."""
+
+    if document.get("schema_version") == LEGACY_RECEIPT_SCHEMA:
+        return dict(document) == _legacy_receipt_document(
+            object_id=object_id,
+            size_bytes=size_bytes,
+            provider_kind=provider_kind,
+            store_ref=store_ref,
+            inventory_sha256=inventory_sha256,
+        )
+    schema_version = document.get("schema_version")
+    if schema_version not in {PREVIOUS_RECEIPT_SCHEMA, RECEIPT_SCHEMA}:
+        return False
+    required = {
+        "schema_version",
+        "object_id",
+        "content_sha256",
+        "size_bytes",
+        "provider_kind",
+        "store_ref",
+        "remote_key_strategy",
+        "remote_key_sha256",
+        "source_inventory_sha256",
+        "exact_operation_manifest_sha256",
+        "receipt_state_sha256",
+        "preservation_status",
+        "classified_at",
+        "provider_put_call_count",
+        "bytes_uploaded",
+        "formal_adoption_status",
+        "manifest_location_updated",
+        "remote_verification",
+        "review_reason",
+        "remote_delete_on_revert_supported",
+        "private_values_echoed",
+        "credential_values_echoed",
+        "provider_url_echoed",
+        "local_path_echoed",
+    }
+    if schema_version == RECEIPT_SCHEMA:
+        required |= {
+            "provider_put_call_charged_count",
+            "provider_put_call_count_evidence",
+        }
+    if set(document) != required:
+        return False
+    status = document.get("preservation_status")
+    put_calls = document.get("provider_put_call_count")
+    charged_calls = document.get("provider_put_call_charged_count", put_calls)
+    count_evidence = document.get("provider_put_call_count_evidence", "exact_observed")
+    classified_at = document.get("classified_at")
+    if (
+        status not in _TERMINAL_STATUSES
+        or type(put_calls) is not int
+        or put_calls < 0
+        or type(charged_calls) is not int
+        or charged_calls < put_calls
+        or count_evidence not in {"exact_observed", "conservative_reserved"}
+        or (count_evidence == "exact_observed" and charged_calls != put_calls)
+        or type(classified_at) is not str
+        or not classified_at
+        or _SHA256_RE.fullmatch(str(document.get("exact_operation_manifest_sha256") or ""))
+        is None
+        or document.get("receipt_state_sha256") != _sha256_bytes(receipt_token)
+    ):
+        return False
+    try:
+        datetime.fromisoformat(classified_at.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    if not (
+        document.get("object_id") == object_id
+        and document.get("content_sha256") == object_id
+        and document.get("size_bytes") == size_bytes
+        and document.get("provider_kind") == provider_kind
+        and document.get("store_ref") == store_ref
+        and document.get("remote_key_strategy") == "wom_bytes_preserved_v1"
+        and document.get("remote_key_sha256")
+        == _sha256_document(object_storage_bytes_preserved_remote_key(object_id))
+        and document.get("source_inventory_sha256") == inventory_sha256
+        and document.get("bytes_uploaded")
+        == (size_bytes if status == "bytes_preserved" else 0)
+        and document.get("formal_adoption_status") == "not_adopted"
+        and document.get("manifest_location_updated") is False
+        and document.get("remote_delete_on_revert_supported") is False
+        and document.get("private_values_echoed") is False
+        and document.get("credential_values_echoed") is False
+        and document.get("provider_url_echoed") is False
+        and document.get("local_path_echoed") is False
+    ):
+        return False
+    remote = document.get("remote_verification")
+    if type(remote) is not dict or set(remote) != {
+        "head_present",
+        "size_match",
+        "whole_object_sha256_match",
+        "verification_kind",
+    }:
+        return False
+    if status in {"bytes_preserved", "already_remote_verified"}:
+        return remote == {
+            "head_present": True,
+            "size_match": True,
+            "whole_object_sha256_match": True,
+            "verification_kind": "head_then_get_rehash",
+        } and document.get("review_reason") is None
+    if document.get("review_reason") == "remote_size_mismatch":
+        return remote == {
+            "head_present": True,
+            "size_match": False,
+            "whole_object_sha256_match": False,
+            "verification_kind": "head_size_mismatch",
+        }
+    if document.get("review_reason") == "remote_checksum_mismatch":
+        return remote == {
+            "head_present": True,
+            "size_match": True,
+            "whole_object_sha256_match": False,
+            "verification_kind": "head_then_get_rehash",
+        }
+    return False
+
+
+def _receipt_token(
+    *,
+    object_id: str,
+    size_bytes: int,
+    provider_kind: str,
+    store_ref: str,
+    inventory_sha256: str,
+) -> bytes:
+    remote_key = object_storage_bytes_preserved_remote_key(object_id)
+    return _canonical_bytes(
+        {
+            "schema_version": "wom-kit/object-storage-preservation-terminal-state/v0.1",
+            "object_id": object_id,
+            "size_bytes": size_bytes,
+            "provider_kind": provider_kind,
+            "store_ref": store_ref,
+            "remote_key_sha256": _sha256_document(remote_key),
+            "source_inventory_sha256": inventory_sha256,
+            "terminal_statuses": sorted(_TERMINAL_STATUSES),
+        }
+    )
+
+
 @dataclass(frozen=True, repr=False)
 class _PreservationSpec:
     object_id: str
@@ -660,7 +900,7 @@ class _PreservationSpec:
     local_path: Path
     remote_key: str
     receipt_relative: str
-    receipt_bytes: bytes
+    receipt_token: bytes
     source_token: bytes
     target_identity_sha256: str
 
@@ -677,7 +917,19 @@ def _provider_put_call_budget(
     specs: Sequence[_PreservationSpec],
 ) -> tuple[int, int]:
     no_retry = sum(_single_attempt_provider_put_calls(spec.size_bytes) for spec in specs)
-    ceiling = no_retry * archive_services.OBJECT_STORAGE_MAX_ATTEMPTS_PER_OBJECT
+    ceiling = sum(
+        (
+            _single_attempt_provider_put_calls(spec.size_bytes)
+            + (
+                1
+                if spec.size_bytes
+                >= archive_services.OBJECT_STORAGE_MULTIPART_THRESHOLD_BYTES
+                else 0
+            )
+        )
+        * archive_services.OBJECT_STORAGE_MAX_ATTEMPTS_PER_OBJECT
+        for spec in specs
+    )
     return no_retry, ceiling
 
 
@@ -691,7 +943,7 @@ def _target_identity(
 ) -> str:
     return _sha256_document(
         {
-            "schema_version": "wom-kit/object-storage-bytes-preserved-target/v0.1",
+            "schema_version": "wom-kit/object-storage-preservation-terminal-target/v0.1",
             "archive_id": archive_id,
             "object_id": object_id,
             "receipt_relative": receipt_relative,
@@ -712,6 +964,7 @@ class ObjectStorageBytesPreservationPlan:
     manifest: ExactOperationManifest | None
     specs: tuple[_PreservationSpec, ...]
     already_recorded_count: int
+    existing_review_required_count: int
     review_count: int
     selected_only: str | None
     loaded_from_control: bool = False
@@ -732,6 +985,7 @@ class ObjectStorageBytesPreservationPlan:
         other_remote = int(self.inventory["nonconflicting_remote_recorded_other_count"])
         planned = len(self.specs)
         expected_put_calls, put_call_ceiling = _provider_put_call_budget(self.specs)
+        existing_review = self.existing_review_required_count
         accounted = (
             conflict_count
             + verified_official
@@ -743,21 +997,40 @@ class ObjectStorageBytesPreservationPlan:
             "schema_version": PLAN_SCHEMA,
             "ok": self.approveable,
             "state": (
-                "ready_for_exact_human_approval"
+                (
+                    "ready_for_exact_human_approval_with_existing_review"
+                    if existing_review
+                    else "ready_for_exact_human_approval"
+                )
                 if self.approveable
                 else (
                     "no_new_bytes_to_preserve"
-                    if planned == 0 and self.review_count == 0
-                    else "review_required"
+                    if planned == 0 and self.review_count == 0 and existing_review == 0
+                    else (
+                        "existing_review_required"
+                        if planned == 0 and self.review_count == 0
+                        else "review_required"
+                    )
                 )
             ),
             "reason_codes": (
-                ["object_storage_bytes_preservation_ready"]
+                (
+                    [
+                        "object_storage_bytes_preservation_ready",
+                        "object_storage_bytes_preservation_existing_review_required",
+                    ]
+                    if existing_review
+                    else ["object_storage_bytes_preservation_ready"]
+                )
                 if self.approveable
                 else (
                     ["object_storage_bytes_preservation_no_writes"]
-                    if self.review_count == 0
-                    else ["object_storage_bytes_preservation_review_required"]
+                    if self.review_count == 0 and existing_review == 0
+                    else (
+                        ["object_storage_bytes_preservation_existing_review_required"]
+                        if self.review_count == 0
+                        else ["object_storage_bytes_preservation_review_required"]
+                    )
                 )
             ),
             "plan_sha256": self.manifest.manifest_sha256 if self.manifest else None,
@@ -777,6 +1050,8 @@ class ObjectStorageBytesPreservationPlan:
             "expected_no_retry_provider_put_call_count": expected_put_calls,
             "manifest_bound_provider_put_call_ceiling": put_call_ceiling,
             "bytes_preserved_receipt_already_recorded_count": self.already_recorded_count,
+            "existing_review_required_count": existing_review,
+            "attention_count": self.review_count + existing_review,
             "review_count": self.review_count,
             "remote_evidence_metrics": {
                 "manifest_scope_remote_key_verified_object_count": int(
@@ -822,7 +1097,7 @@ def _build_specs(
     only: str | None,
     max_objects: int | None,
     progress: Callable[[str, str, int | None, int | None], None] | None,
-) -> tuple[tuple[_PreservationSpec, ...], int, int]:
+) -> tuple[tuple[_PreservationSpec, ...], int, int, int]:
     inventory_sha = str(inventory["source_inventory_sha256"])
     selected_id = _normalize_object_id(only) if only else None
     candidates: list[tuple[str, dict[str, Any], str]] = []
@@ -846,6 +1121,7 @@ def _build_specs(
             raise _fail("object_storage_preservation_plan_invalid")
     specs: list[_PreservationSpec] = []
     already_recorded = 0
+    existing_review_required = 0
     if progress is not None:
         progress("preservation-source-hash", "start", 0, len(candidates))
     for index, (object_id, row, local_relative) in enumerate(candidates, start=1):
@@ -863,23 +1139,33 @@ def _build_specs(
             review_count += 1
             continue
         receipt_relative = _receipt_relative(object_id, inventory_sha)
-        receipt_document = _receipt_document(
+        receipt_token = _receipt_token(
             object_id=object_id,
             size_bytes=size,
             provider_kind=provider_kind,
             store_ref=store_ref,
             inventory_sha256=inventory_sha,
         )
-        receipt_bytes = _canonical_receipt_bytes(receipt_document)
         receipt_path = archive_services.archive_internal_path(root, receipt_relative)
         if receipt_path.exists():
             try:
-                existing = receipt_path.read_bytes()
-            except OSError:
+                existing = _strict_json(receipt_path.read_bytes())
+            except Exception:
                 review_count += 1
                 continue
-            if existing == receipt_bytes:
-                already_recorded += 1
+            if _existing_receipt_matches(
+                existing,
+                receipt_token=receipt_token,
+                object_id=object_id,
+                size_bytes=size,
+                provider_kind=provider_kind,
+                store_ref=store_ref,
+                inventory_sha256=inventory_sha,
+            ):
+                if existing.get("preservation_status") == "review_required":
+                    existing_review_required += 1
+                else:
+                    already_recorded += 1
                 continue
             review_count += 1
             continue
@@ -900,7 +1186,7 @@ def _build_specs(
                 local_path=local_path,
                 remote_key=object_storage_bytes_preserved_remote_key(object_id),
                 receipt_relative=receipt_relative,
-                receipt_bytes=receipt_bytes,
+                receipt_token=receipt_token,
                 source_token=source_token,
                 target_identity_sha256=_target_identity(
                     archive_id=archive_id,
@@ -915,7 +1201,7 @@ def _build_specs(
             progress("preservation-source-hash", "hashed local objects", index, len(candidates))
     if progress is not None:
         progress("preservation-source-hash", "done", len(candidates), len(candidates))
-    return tuple(specs), already_recorded, review_count
+    return tuple(specs), already_recorded, existing_review_required, review_count
 
 
 def _manifest_for_specs(
@@ -932,14 +1218,14 @@ def _manifest_for_specs(
             ExactOperationItem(
                 ordinal=ordinal,
                 item_id=item_id,
-                target_kind="object_storage_bytes_preserved_receipt",
+                target_kind="object_storage_preservation_terminal_receipt",
                 target_ref=spec.receipt_relative,
                 target_identity_sha256=spec.target_identity_sha256,
                 fields=(
                     ExactFieldEffect(
-                        field_ref="receipt_bytes",
+                        field_ref="terminal_state_token",
                         pre_sha256=hash_field_value(None),
-                        post_sha256=hash_field_value(spec.receipt_bytes),
+                        post_sha256=hash_field_value(spec.receipt_token),
                         source_sha256=hash_field_value(spec.source_token),
                     ),
                 ),
@@ -1008,7 +1294,7 @@ def _plan_core(
     )
     rows, groups = _read_manifest_groups(root, progress=progress)
     inventory, unique_rows = _inventory(rows, groups)
-    specs, already_recorded, review_count = _build_specs(
+    specs, already_recorded, existing_review_required, review_count = _build_specs(
         root,
         archive_id,
         normalized_provider,
@@ -1030,6 +1316,7 @@ def _plan_core(
         manifest=manifest,
         specs=specs,
         already_recorded_count=already_recorded,
+        existing_review_required_count=existing_review_required,
         review_count=review_count,
         selected_only=_normalize_object_id(only) if only else None,
     )
@@ -1114,9 +1401,13 @@ class ObjectStorageRemoteQueryAdapter:
         if presence_state != "present" or result.get("present") is not True:
             return ObjectStorageRemoteQueryResult("verification_unavailable", False, False, False)
         remote_size = result.get("size")
-        size_match = type(remote_size) is int and remote_size == expected_size
-        if not size_match:
+        if type(remote_size) is not int or remote_size < 0:
+            return ObjectStorageRemoteQueryResult(
+                "verification_unavailable", True, False, False
+            )
+        if remote_size != expected_size:
             return ObjectStorageRemoteQueryResult("size_mismatch", True, False, False)
+        size_match = True
         checksum = result.get("checksum_sha256")
         if (
             result.get("verification_state") not in {None, "complete"}
@@ -1202,6 +1493,812 @@ def _create_or_match_receipt(
     _read_exact_receipt(path, raw, max_bytes=max_bytes, failure_code=failure_code)
 
 
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _ledger_relative(manifest_sha256: str) -> str:
+    if _SHA256_RE.fullmatch(str(manifest_sha256 or "")) is None:
+        raise _fail("object_storage_preservation_control_invalid")
+    digest = manifest_sha256.removeprefix("sha256:")
+    return f"{LEDGER_ROOT}/{digest}.object-storage-bytes-preservation.jsonl"
+
+
+def _call_journal_relative(manifest_sha256: str) -> str:
+    if _SHA256_RE.fullmatch(str(manifest_sha256 or "")) is None:
+        raise _fail("object_storage_preservation_control_invalid")
+    digest = manifest_sha256.removeprefix("sha256:")
+    return f"{LEDGER_ROOT}/{digest}.object-storage-provider-calls.jsonl"
+
+
+class _ManifestBoundProviderCallJournal:
+    """Write-ahead, fsynced reservations for preservation provider mutations."""
+
+    _PHASES = frozenset(
+        {"put_object", "create_multipart", "put_part", "complete_multipart", "abort_multipart"}
+    )
+
+    def __init__(
+        self,
+        plan: ObjectStorageBytesPreservationPlan,
+        *,
+        prior_calls: int,
+        prior_calls_by_object: Mapping[str, int],
+    ) -> None:
+        if plan.manifest is None or type(prior_calls) is not int or prior_calls < 0:
+            raise _fail("object_storage_preservation_control_invalid")
+        self.plan = plan
+        self.path = archive_services.archive_internal_path(
+            plan.archive_root, _call_journal_relative(plan.manifest.manifest_sha256)
+        )
+        self.prior_calls = prior_calls
+        self.prior_calls_by_object = dict(prior_calls_by_object)
+        self._reservations: list[dict[str, Any]] = []
+        self._observed: set[str] = set()
+        if self.path.exists():
+            self._load()
+        else:
+            header = {
+                "schema_version": CALL_JOURNAL_SCHEMA,
+                "event": "journal_header",
+                "manifest_sha256": plan.manifest.manifest_sha256,
+                "prior_accounted_put_calls": prior_calls,
+                "prior_accounted_put_calls_by_object": self.prior_calls_by_object,
+                "private_control_document": True,
+            }
+            self._append_raw(header)
+
+    def _append_raw(self, row: Mapping[str, Any]) -> None:
+        raw = _canonical_bytes(dict(row)) + b"\n"
+        if len(raw) > _MAX_MANIFEST_LINE_BYTES:
+            raise _fail("object_storage_preservation_control_invalid")
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            root = self.plan.archive_root.resolve(strict=True)
+            parent = self.path.parent.resolve(strict=True)
+            if not parent.is_relative_to(root):
+                raise OSError("unsafe call journal parent")
+            if self.path.exists():
+                _plain_regular_file(self.path, max_bytes=_MAX_LEDGER_BYTES)
+            flags = os.O_WRONLY | os.O_APPEND | os.O_CREAT | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
+            descriptor = os.open(self.path, flags, 0o600)
+            try:
+                opened = os.fstat(descriptor)
+                if (
+                    not stat.S_ISREG(opened.st_mode)
+                    or int(getattr(opened, "st_nlink", 1)) != 1
+                    or opened.st_size + len(raw) > _MAX_LEDGER_BYTES
+                ):
+                    raise OSError("unsafe call journal")
+                offset = 0
+                while offset < len(raw):
+                    written = os.write(descriptor, raw[offset:])
+                    if written <= 0:
+                        raise OSError("short call journal append")
+                    offset += written
+                os.fsync(descriptor)
+            finally:
+                os.close(descriptor)
+        except Exception:
+            raise _fail("object_storage_preservation_control_invalid") from None
+
+    def _load(self) -> None:
+        try:
+            _plain_regular_file(self.path, max_bytes=_MAX_LEDGER_BYTES)
+            raw = self.path.read_bytes()
+            if not raw.endswith(b"\n"):
+                raise ValueError("torn call journal")
+            rows = [_strict_json(line) for line in raw.splitlines()]
+            header = rows[0]
+            if (
+                set(header) != {
+                    "schema_version", "event", "manifest_sha256",
+                    "prior_accounted_put_calls", "prior_accounted_put_calls_by_object",
+                    "private_control_document",
+                }
+                or header.get("schema_version") != CALL_JOURNAL_SCHEMA
+                or header.get("event") != "journal_header"
+                or header.get("manifest_sha256") != self.plan.manifest.manifest_sha256
+                or type(header.get("prior_accounted_put_calls")) is not int
+                or int(header["prior_accounted_put_calls"]) < 0
+                or not isinstance(header.get("prior_accounted_put_calls_by_object"), dict)
+                or header.get("private_control_document") is not True
+            ):
+                raise ValueError("call journal header")
+            self.prior_calls = int(header["prior_accounted_put_calls"])
+            self.prior_calls_by_object = dict(header["prior_accounted_put_calls_by_object"])
+            if (
+                any(
+                    object_id not in {spec.object_id for spec in self.plan.specs}
+                    or type(count) is not int
+                    or count < 0
+                    for object_id, count in self.prior_calls_by_object.items()
+                )
+                or sum(self.prior_calls_by_object.values()) != self.prior_calls
+            ):
+                raise ValueError("call journal prior calls")
+            seen: set[str] = set()
+            reservation_count = 0
+            for row in rows[1:]:
+                if row.get("event") == "call_observed":
+                    if set(row) != {
+                        "schema_version", "event", "manifest_sha256",
+                        "reservation_id", "observed_at",
+                    }:
+                        raise ValueError("call observation fields")
+                    reservation_id = str(row.get("reservation_id") or "")
+                    if (
+                        row.get("schema_version") != CALL_JOURNAL_SCHEMA
+                        or row.get("manifest_sha256") != self.plan.manifest.manifest_sha256
+                        or reservation_id not in seen
+                        or reservation_id in self._observed
+                    ):
+                        raise ValueError("call observation binding")
+                    datetime.fromisoformat(str(row.get("observed_at") or "").replace("Z", "+00:00"))
+                    self._observed.add(reservation_id)
+                    continue
+                if set(row) != {
+                    "schema_version", "event", "manifest_sha256", "reservation_id",
+                    "target_identity_sha256", "object_id", "remote_key_sha256",
+                    "call_kind", "call_seq", "attempt", "part_number",
+                    "upload_id_sha256", "reserved_at",
+                }:
+                    raise ValueError("call journal fields")
+                object_id = str(row.get("object_id") or "")
+                spec = next((item for item in self.plan.specs if item.object_id == object_id), None)
+                reservation_id = str(row.get("reservation_id") or "")
+                phase = str(row.get("call_kind") or "")
+                reservation_count += 1
+                expected_id = "call_" + hashlib.sha256(
+                    f"{self.plan.manifest.manifest_sha256}\x00{object_id}\x00{phase}\x00{reservation_count}".encode("ascii")
+                ).hexdigest()
+                if (
+                    row.get("schema_version") != CALL_JOURNAL_SCHEMA
+                    or row.get("event") != "call_reserved"
+                    or row.get("manifest_sha256") != self.plan.manifest.manifest_sha256
+                    or spec is None
+                    or phase not in self._PHASES
+                    or row.get("call_seq") != reservation_count
+                    or type(row.get("attempt")) is not int
+                    or int(row["attempt"]) < 1
+                    or (
+                        row.get("part_number") is not None
+                        and (type(row.get("part_number")) is not int or int(row["part_number"]) < 1)
+                    )
+                    or (
+                        row.get("upload_id_sha256") is not None
+                        and _SHA256_RE.fullmatch(str(row.get("upload_id_sha256"))) is None
+                    )
+                    or reservation_id != expected_id
+                    or reservation_id in seen
+                    or row.get("target_identity_sha256") != spec.target_identity_sha256
+                    or row.get("remote_key_sha256") != _sha256_document(spec.remote_key)
+                ):
+                    raise ValueError("call journal binding")
+                datetime.fromisoformat(str(row.get("reserved_at") or "").replace("Z", "+00:00"))
+                seen.add(reservation_id)
+                self._reservations.append(dict(row))
+        except Exception:
+            raise _fail("object_storage_preservation_control_invalid") from None
+
+    def reserve(
+        self,
+        spec: _PreservationSpec,
+        phase: str,
+        *,
+        attempt: int,
+        part_number: int | None,
+        upload_id: str | None,
+    ) -> str:
+        if phase not in self._PHASES:
+            raise _fail("object_storage_preservation_control_invalid")
+        sequence = len(self._reservations) + 1
+        reservation_id = "call_" + hashlib.sha256(
+            f"{self.plan.manifest.manifest_sha256}\x00{spec.object_id}\x00{phase}\x00{sequence}".encode("ascii")
+        ).hexdigest()
+        row = {
+            "schema_version": CALL_JOURNAL_SCHEMA,
+            "event": "call_reserved",
+            "manifest_sha256": self.plan.manifest.manifest_sha256,
+            "reservation_id": reservation_id,
+            "target_identity_sha256": spec.target_identity_sha256,
+            "object_id": spec.object_id,
+            "remote_key_sha256": _sha256_document(spec.remote_key),
+            "call_kind": phase,
+            "call_seq": sequence,
+            "attempt": attempt,
+            "part_number": part_number,
+            "upload_id_sha256": (
+                None if upload_id is None else _sha256_document(upload_id)
+            ),
+            "reserved_at": _now_iso(),
+        }
+        self._append_raw(row)
+        self._reservations.append(row)
+        return reservation_id
+
+    def observe(self, reservation_id: str) -> None:
+        if (
+            reservation_id in self._observed
+            or reservation_id not in {str(row["reservation_id"]) for row in self._reservations}
+        ):
+            raise _fail("object_storage_preservation_control_invalid")
+        row = {
+            "schema_version": CALL_JOURNAL_SCHEMA,
+            "event": "call_observed",
+            "manifest_sha256": self.plan.manifest.manifest_sha256,
+            "reservation_id": reservation_id,
+            "observed_at": _now_iso(),
+        }
+        self._append_raw(row)
+        self._observed.add(reservation_id)
+
+    def charged_calls(self) -> int:
+        return self.prior_calls + len(self._reservations)
+
+    def reserved_calls_for(self, spec: _PreservationSpec) -> int:
+        return sum(row["object_id"] == spec.object_id for row in self._reservations)
+
+    def charged_calls_for(self, spec: _PreservationSpec) -> int:
+        return self.prior_calls_by_object.get(spec.object_id, 0) + self.reserved_calls_for(spec)
+
+    def observed_calls_for(self, spec: _PreservationSpec) -> int:
+        prior = self.prior_calls_by_object.get(spec.object_id, 0)
+        return prior + sum(
+            row["object_id"] == spec.object_id
+            and row["reservation_id"] in self._observed
+            for row in self._reservations
+        )
+
+    def unresolved_phases_for(self, spec: _PreservationSpec) -> set[str]:
+        return {
+            str(row["call_kind"])
+            for row in self._reservations
+            if row["object_id"] == spec.object_id
+            and row["reservation_id"] not in self._observed
+        }
+
+
+class _ManifestBoundPreservationLedger(archive_services._ResumeLedger):
+    """Private append-only provider ledger bound to one exact manifest.
+
+    The common upload spine writes its successful upload row here before the
+    human-readable terminal receipt is created.  A restart can therefore
+    recreate the receipt without a second PUT while still rejecting a ledger
+    copied from another manifest, target, provider, or remote key.
+    """
+
+    _ROW_FIELDS = (
+        "schema_version",
+        "operation",
+        "manifest_sha256",
+        "target_identity_sha256",
+        "object_id",
+        "remote_key_sha256",
+        "result_status",
+        "preservation_status",
+        "remote_state",
+        "bytes",
+        "part_count",
+        "attempts",
+        "put_calls",
+        "backoff_ms_total",
+        "multipart_cleanup_state",
+        "completed_at",
+    )
+    _LEGACY_ROW_FIELDS = tuple(
+        field for field in _ROW_FIELDS if field != "multipart_cleanup_state"
+    )
+    _RESULT_STATUSES = frozenset(
+        {
+            "uploaded",
+            "skipped_remote_same",
+            "review_required",
+            "conditional_precondition_failed",
+            "conditional_conflict",
+            "failed_upload",
+            "failed_auth",
+            "failed_rate_limited",
+            "failed_cleanup_unverified",
+            "failed_provider_call_ceiling",
+        }
+    )
+    _CLEANUP_STATES = frozenset(
+        {
+            "not_applicable",
+            "not_required",
+            "not_started",
+            "in_flight",
+            "completed",
+            "confirmed_aborted",
+            "unconfirmed_budget_exhausted",
+            "unconfirmed_abort_error",
+            "unconfirmed_abort_response",
+        }
+    )
+
+    def __init__(self, plan: ObjectStorageBytesPreservationPlan) -> None:
+        if plan.manifest is None:
+            raise _fail("object_storage_preservation_no_writes")
+        relative = _ledger_relative(plan.manifest.manifest_sha256)
+        super().__init__(archive_services.archive_internal_path(plan.archive_root, relative))
+        self.plan = plan
+        self.by_object = {spec.object_id: spec for spec in plan.specs}
+        self._torn_trailing_prefix_bytes: int | None = None
+        self._rows_cache = self._read_validated_rows()
+        self._terminal_by_object: dict[str, dict[str, Any]] = {}
+        self._put_calls_by_object: dict[str, int] = {}
+        self._total_put_call_count = 0
+        for row in self._rows_cache:
+            self._index_row(row)
+        journal_path = archive_services.archive_internal_path(
+            plan.archive_root, _call_journal_relative(plan.manifest.manifest_sha256)
+        )
+        self.call_journal: _ManifestBoundProviderCallJournal | None = None
+        if journal_path.exists():
+            self.call_journal = _ManifestBoundProviderCallJournal(
+                plan,
+                prior_calls=self._total_put_call_count,
+                prior_calls_by_object=self._put_calls_by_object,
+            )
+
+    def _index_row(self, row: Mapping[str, Any]) -> None:
+        object_id = str(row["object_id"])
+        put_calls = int(row["put_calls"])
+        self._put_calls_by_object[object_id] = (
+            self._put_calls_by_object.get(object_id, 0) + put_calls
+        )
+        self._total_put_call_count += put_calls
+        if row["preservation_status"] in _TERMINAL_STATUSES:
+            if object_id in self._terminal_by_object:
+                raise _fail("object_storage_preservation_control_invalid")
+            self._terminal_by_object[object_id] = dict(row)
+
+    def _bound_row(
+        self,
+        values: Mapping[str, Any],
+        *,
+        preservation_status: str | None,
+        remote_state: str | None,
+    ) -> dict[str, Any]:
+        object_id = str(values.get("object_id") or "")
+        spec = self.by_object.get(object_id)
+        if spec is None or self.plan.manifest is None:
+            raise _fail("object_storage_preservation_control_invalid")
+        result_status = str(values.get("result_status") or "")
+        if result_status not in self._RESULT_STATUSES:
+            raise _fail("object_storage_preservation_control_invalid")
+        if preservation_status is not None and preservation_status not in _TERMINAL_STATUSES:
+            raise _fail("object_storage_preservation_control_invalid")
+        if remote_state is not None and remote_state not in {
+            "verified_match",
+            "size_mismatch",
+            "checksum_mismatch",
+        }:
+            raise _fail("object_storage_preservation_control_invalid")
+        if preservation_status is None:
+            if remote_state is not None or result_status in {
+                "uploaded",
+                "skipped_remote_same",
+                "review_required",
+            }:
+                raise _fail("object_storage_preservation_control_invalid")
+        elif preservation_status == "bytes_preserved":
+            if result_status != "uploaded" or remote_state != "verified_match":
+                raise _fail("object_storage_preservation_control_invalid")
+        elif preservation_status == "already_remote_verified":
+            if result_status != "skipped_remote_same" or remote_state != "verified_match":
+                raise _fail("object_storage_preservation_control_invalid")
+        elif (
+            preservation_status != "review_required"
+            or result_status != "review_required"
+            or remote_state not in {"size_mismatch", "checksum_mismatch"}
+        ):
+            raise _fail("object_storage_preservation_control_invalid")
+
+        def nonnegative_int(name: str) -> int:
+            value = values.get(name, 0)
+            if type(value) is not int or value < 0:
+                raise _fail("object_storage_preservation_control_invalid")
+            return value
+
+        completed_at = str(values.get("completed_at") or "")
+        try:
+            datetime.fromisoformat(completed_at.replace("Z", "+00:00"))
+        except (TypeError, ValueError):
+            raise _fail("object_storage_preservation_control_invalid") from None
+        cleanup_state = str(
+            values.get("multipart_cleanup_state") or "not_applicable"
+        )
+        if cleanup_state not in self._CLEANUP_STATES:
+            raise _fail("object_storage_preservation_control_invalid")
+        row = {
+            "schema_version": LEDGER_SCHEMA,
+            "operation": OPERATION,
+            "manifest_sha256": self.plan.manifest.manifest_sha256,
+            "target_identity_sha256": spec.target_identity_sha256,
+            "object_id": object_id,
+            "remote_key_sha256": _sha256_document(spec.remote_key),
+            "result_status": result_status,
+            "preservation_status": preservation_status,
+            "remote_state": remote_state,
+            "bytes": nonnegative_int("bytes"),
+            "part_count": nonnegative_int("part_count"),
+            "attempts": nonnegative_int("attempts"),
+            "put_calls": nonnegative_int("put_calls"),
+            "backoff_ms_total": nonnegative_int("backoff_ms_total"),
+            "multipart_cleanup_state": cleanup_state,
+            "completed_at": completed_at,
+        }
+        if result_status == "uploaded" and (
+            row["bytes"] != spec.size_bytes or row["put_calls"] < 1
+        ):
+            raise _fail("object_storage_preservation_control_invalid")
+        if result_status != "uploaded" and row["bytes"] != 0:
+            raise _fail("object_storage_preservation_control_invalid")
+        return row
+
+    def _append_bound(self, row: Mapping[str, Any]) -> None:
+        if (
+            row.get("preservation_status") in _TERMINAL_STATUSES
+            and str(row.get("object_id") or "") in self._terminal_by_object
+        ):
+            raise _fail("object_storage_preservation_control_invalid")
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            root = self.plan.archive_root.resolve(strict=True)
+            parent = self.path.parent.resolve(strict=True)
+            parent_info = os.lstat(parent)
+            if (
+                not parent.is_relative_to(root)
+                or not stat.S_ISDIR(parent_info.st_mode)
+                or stat.S_ISLNK(parent_info.st_mode)
+                or _path_is_reparse(parent_info)
+            ):
+                raise OSError("unsafe ledger parent")
+            if self.path.exists():
+                _plain_regular_file(self.path, max_bytes=_MAX_LEDGER_BYTES)
+            if self._torn_trailing_prefix_bytes is not None:
+                repair_flags = os.O_WRONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
+                repair_descriptor = os.open(self.path, repair_flags)
+                try:
+                    os.ftruncate(repair_descriptor, self._torn_trailing_prefix_bytes)
+                    os.fsync(repair_descriptor)
+                finally:
+                    os.close(repair_descriptor)
+                self._torn_trailing_prefix_bytes = None
+            raw = (
+                json.dumps(
+                    dict(row),
+                    ensure_ascii=True,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    allow_nan=False,
+                ).encode("ascii")
+                + b"\n"
+            )
+            if len(raw) > _MAX_MANIFEST_LINE_BYTES:
+                raise OSError("ledger row too large")
+            flags = (
+                os.O_WRONLY
+                | os.O_APPEND
+                | os.O_CREAT
+                | getattr(os, "O_BINARY", 0)
+                | getattr(os, "O_NOFOLLOW", 0)
+            )
+            descriptor = os.open(self.path, flags, 0o600)
+            try:
+                opened = os.fstat(descriptor)
+                if (
+                    not stat.S_ISREG(opened.st_mode)
+                    or stat.S_ISLNK(opened.st_mode)
+                    or _path_is_reparse(opened)
+                    or int(getattr(opened, "st_nlink", 1)) != 1
+                    or opened.st_size + len(raw) > _MAX_LEDGER_BYTES
+                ):
+                    raise OSError("unsafe ledger")
+                offset = 0
+                while offset < len(raw):
+                    written = os.write(descriptor, raw[offset:])
+                    if written <= 0:
+                        raise OSError("short ledger append")
+                    offset += written
+                os.fsync(descriptor)
+            finally:
+                os.close(descriptor)
+            _plain_regular_file(self.path, max_bytes=_MAX_LEDGER_BYTES)
+        except (OSError, TypeError, ValueError, UnicodeError, ObjectStoragePreservationError):
+            raise _fail("object_storage_preservation_control_invalid") from None
+        self._rows_cache.append(dict(row))
+        self._index_row(row)
+
+    def _read_validated_rows(self) -> list[dict[str, Any]]:
+        if not self.path.exists():
+            return []
+        try:
+            before = _plain_regular_file(self.path, max_bytes=_MAX_LEDGER_BYTES)
+            raw = self.path.read_bytes()
+            after = _plain_regular_file(self.path, max_bytes=_MAX_LEDGER_BYTES)
+            if (
+                len(raw) != before.st_size
+                or after.st_size != before.st_size
+                or after.st_mtime_ns != before.st_mtime_ns
+            ):
+                raise ValueError("ledger changed")
+            raw_lines = raw.splitlines(keepends=True)
+            rows: list[dict[str, Any]] = []
+            consumed = 0
+            for index, raw_line in enumerate(raw_lines):
+                if len(raw_line) > _MAX_MANIFEST_LINE_BYTES:
+                    raise ValueError("ledger row too large")
+                has_newline = raw_line.endswith(b"\n")
+                line = raw_line[:-1] if has_newline else raw_line
+                if line.endswith(b"\r"):
+                    line = line[:-1]
+                try:
+                    parsed = _strict_json(line)
+                except Exception:
+                    if index == len(raw_lines) - 1 and not has_newline:
+                        self._torn_trailing_prefix_bytes = consumed
+                        break
+                    raise
+                if not has_newline:
+                    # A valid JSON row without its terminating newline is also a
+                    # torn append; do not grant it durable authority.
+                    self._torn_trailing_prefix_bytes = consumed
+                    break
+                schema_version = parsed.get("schema_version")
+                if schema_version == LEDGER_SCHEMA:
+                    if set(parsed) != set(self._ROW_FIELDS):
+                        raise ValueError("ledger fields")
+                    normalized = dict(parsed)
+                elif schema_version == LEGACY_LEDGER_SCHEMA:
+                    if set(parsed) != set(self._LEGACY_ROW_FIELDS):
+                        raise ValueError("legacy ledger fields")
+                    normalized = {
+                        **parsed,
+                        "schema_version": LEDGER_SCHEMA,
+                        "multipart_cleanup_state": "not_applicable",
+                    }
+                else:
+                    raise ValueError("ledger schema")
+                rebuilt = self._bound_row(
+                    normalized,
+                    preservation_status=normalized.get("preservation_status"),
+                    remote_state=normalized.get("remote_state"),
+                )
+                if rebuilt != normalized:
+                    raise ValueError("ledger binding")
+                rows.append(rebuilt)
+                consumed += len(raw_line)
+            return rows
+        except Exception:
+            raise _fail("object_storage_preservation_control_invalid") from None
+
+    def append(self, row: dict[str, Any]) -> None:
+        result_status = str(row.get("result_status") or "")
+        preservation_status = (
+            "bytes_preserved"
+            if result_status == "uploaded"
+            else (
+                "already_remote_verified"
+                if result_status == "skipped_remote_same"
+                else None
+            )
+        )
+        remote_state = "verified_match" if preservation_status is not None else None
+        self._append_bound(
+            self._bound_row(
+                row,
+                preservation_status=preservation_status,
+                remote_state=remote_state,
+            )
+        )
+
+    def append_terminal(
+        self,
+        spec: _PreservationSpec,
+        *,
+        preservation_status: str,
+        remote_state: str,
+        put_calls: int = 0,
+        multipart_cleanup_state: str = "not_applicable",
+    ) -> dict[str, Any]:
+        result_status = (
+            "review_required"
+            if preservation_status == "review_required"
+            else "skipped_remote_same"
+        )
+        row = self._bound_row(
+            {
+                "object_id": spec.object_id,
+                "result_status": result_status,
+                "bytes": 0,
+                "part_count": 0,
+                "attempts": 1,
+                "put_calls": put_calls,
+                "backoff_ms_total": 0,
+                "multipart_cleanup_state": multipart_cleanup_state,
+                "completed_at": _now_iso(),
+            },
+            preservation_status=preservation_status,
+            remote_state=remote_state,
+        )
+        self._append_bound(row)
+        return row
+
+    def append_attempt(self, result: Mapping[str, Any]) -> None:
+        row = dict(result)
+        row["completed_at"] = _now_iso()
+        self._append_bound(
+            self._bound_row(row, preservation_status=None, remote_state=None)
+        )
+
+    def rows(self) -> list[dict[str, Any]]:
+        return [dict(row) for row in self._rows_cache]
+
+    def put_calls_for(self, spec: _PreservationSpec) -> int:
+        return self._put_calls_by_object.get(spec.object_id, 0)
+
+    def terminal_for(self, spec: _PreservationSpec) -> dict[str, Any] | None:
+        row = self._terminal_by_object.get(spec.object_id)
+        return None if row is None else dict(row)
+
+    def terminal_success_object_ids(self) -> set[str]:
+        return {
+            object_id
+            for object_id, row in self._terminal_by_object.items()
+            if row["preservation_status"]
+            in {"bytes_preserved", "already_remote_verified"}
+        }
+
+    def total_put_calls(self) -> int:
+        return (
+            self._total_put_call_count
+            if self.call_journal is None
+            else self.call_journal.charged_calls()
+        )
+
+    def reserve_provider_mutation(
+        self,
+        spec: _PreservationSpec,
+        phase: str,
+        *,
+        attempt: int,
+        part_number: int | None,
+        upload_id: str | None,
+    ) -> str:
+        if self.call_journal is None:
+            self.call_journal = _ManifestBoundProviderCallJournal(
+                self.plan,
+                prior_calls=self._total_put_call_count,
+                prior_calls_by_object=self._put_calls_by_object,
+            )
+        return self.call_journal.reserve(
+            spec,
+            phase,
+            attempt=attempt,
+            part_number=part_number,
+            upload_id=upload_id,
+        )
+
+    def observe_provider_mutation(self, reservation_id: str) -> None:
+        if self.call_journal is None:
+            raise _fail("object_storage_preservation_control_invalid")
+        self.call_journal.observe(reservation_id)
+
+    def charged_calls_for(self, spec: _PreservationSpec) -> int:
+        return (
+            self._put_calls_by_object.get(spec.object_id, 0)
+            if self.call_journal is None
+            else self.call_journal.charged_calls_for(spec)
+        )
+
+    def call_count_evidence_for(self, spec: _PreservationSpec) -> str:
+        return (
+            "conservative_reserved"
+            if self.charged_calls_for(spec) > self.observed_calls_for(spec)
+            else "exact_observed"
+        )
+
+    def observed_calls_for(self, spec: _PreservationSpec) -> int:
+        return (
+            self._put_calls_by_object.get(spec.object_id, 0)
+            if self.call_journal is None
+            else self.call_journal.observed_calls_for(spec)
+        )
+
+    def unresolved_provider_phases_for(self, spec: _PreservationSpec) -> set[str]:
+        return set() if self.call_journal is None else self.call_journal.unresolved_phases_for(spec)
+
+
+def _receipt_path(plan: ObjectStorageBytesPreservationPlan, spec: _PreservationSpec) -> Path:
+    return archive_services.archive_internal_path(plan.archive_root, spec.receipt_relative)
+
+
+def _read_terminal_receipt(
+    plan: ObjectStorageBytesPreservationPlan,
+    spec: _PreservationSpec,
+    ledger: _ManifestBoundPreservationLedger,
+) -> dict[str, Any] | None:
+    path = _receipt_path(plan, spec)
+    if not path.exists():
+        return None
+    terminal = ledger.terminal_for(spec)
+    if terminal is None or plan.manifest is None:
+        raise _fail("object_storage_preservation_receipt_conflict")
+    try:
+        before = _plain_regular_file(path, max_bytes=_MAX_RECEIPT_BYTES)
+        raw = path.read_bytes()
+        after = _plain_regular_file(path, max_bytes=_MAX_RECEIPT_BYTES)
+        if (
+            len(raw) != before.st_size
+            or after.st_size != before.st_size
+            or after.st_mtime_ns != before.st_mtime_ns
+        ):
+            raise ValueError("changed")
+        document = _strict_json(raw)
+    except Exception:
+        raise _fail("object_storage_preservation_receipt_conflict") from None
+    expected = _receipt_document(
+        manifest_sha256=plan.manifest.manifest_sha256,
+        receipt_token=spec.receipt_token,
+        object_id=spec.object_id,
+        size_bytes=spec.size_bytes,
+        provider_kind=plan.provider_kind,
+        store_ref=plan.store_ref,
+        inventory_sha256=plan.source_inventory_sha256,
+        preservation_status=str(terminal["preservation_status"]),
+        classified_at=str(terminal["completed_at"]),
+        provider_put_call_count=ledger.observed_calls_for(spec),
+        provider_put_call_charged_count=ledger.charged_calls_for(spec),
+        provider_put_call_count_evidence=ledger.call_count_evidence_for(spec),
+        remote_state=str(terminal["remote_state"]),
+    )
+    if "provider_put_call_charged_count" not in document:
+        expected["schema_version"] = PREVIOUS_RECEIPT_SCHEMA
+        expected.pop("provider_put_call_charged_count")
+        expected.pop("provider_put_call_count_evidence")
+        expected["provider_put_call_count"] = ledger.put_calls_for(spec)
+    if document != expected:
+        raise _fail("object_storage_preservation_receipt_conflict")
+    return document
+
+
+def _create_terminal_receipt(
+    plan: ObjectStorageBytesPreservationPlan,
+    spec: _PreservationSpec,
+    ledger: _ManifestBoundPreservationLedger,
+) -> dict[str, Any]:
+    existing = _read_terminal_receipt(plan, spec, ledger)
+    if existing is not None:
+        return existing
+    terminal = ledger.terminal_for(spec)
+    if terminal is None or plan.manifest is None:
+        raise _fail("object_storage_preservation_receipt_conflict")
+    document = _receipt_document(
+        manifest_sha256=plan.manifest.manifest_sha256,
+        receipt_token=spec.receipt_token,
+        object_id=spec.object_id,
+        size_bytes=spec.size_bytes,
+        provider_kind=plan.provider_kind,
+        store_ref=plan.store_ref,
+        inventory_sha256=plan.source_inventory_sha256,
+        preservation_status=str(terminal["preservation_status"]),
+        classified_at=str(terminal["completed_at"]),
+        provider_put_call_count=ledger.observed_calls_for(spec),
+        provider_put_call_charged_count=ledger.charged_calls_for(spec),
+        provider_put_call_count_evidence=ledger.call_count_evidence_for(spec),
+        remote_state=str(terminal["remote_state"]),
+    )
+    _create_or_match_receipt(
+        plan.archive_root,
+        spec.receipt_relative,
+        _canonical_receipt_bytes(document),
+    )
+    return document
+
+
 class _Payloads:
     def __init__(self, specs: Sequence[_PreservationSpec]) -> None:
         self.by_item = {
@@ -1222,12 +2319,12 @@ class _Payloads:
     ) -> bytes | None:
         heartbeat()
         spec = self.by_item.get(item_id)
-        if spec is None or field_ref != "receipt_bytes":
+        if spec is None or field_ref != "terminal_state_token":
             raise ValueError("payload boundary")
         if state == "pre":
             return None
         if state == "post":
-            return spec.receipt_bytes
+            return spec.receipt_token
         if state == "source":
             digest, size = _hash_plain_file(spec.local_path, heartbeat=heartbeat)
             if digest != spec.object_id.removeprefix("sha256:") or size != spec.size_bytes:
@@ -1242,10 +2339,14 @@ class _Verifier:
         root: Path,
         specs: Sequence[_PreservationSpec],
         query: ObjectStorageRemoteQueryAdapter,
+        plan: ObjectStorageBytesPreservationPlan,
+        ledger: _ManifestBoundPreservationLedger,
     ) -> None:
         self.root = root
         self.by_target = {spec.receipt_relative: spec for spec in specs}
         self.query = query
+        self.plan = plan
+        self.ledger = ledger
         self._verified: set[str] = set()
 
     def target_identity_sha256(
@@ -1257,7 +2358,7 @@ class _Verifier:
     ) -> str:
         heartbeat()
         spec = self.by_target.get(target_ref)
-        if target_kind != "object_storage_bytes_preserved_receipt" or spec is None:
+        if target_kind != "object_storage_preservation_terminal_receipt" or spec is None:
             raise ValueError("target boundary")
         return spec.target_identity_sha256
 
@@ -1271,14 +2372,13 @@ class _Verifier:
     ) -> bytes | None:
         spec = self.by_target.get(target_ref)
         if (
-            target_kind != "object_storage_bytes_preserved_receipt"
-            or field_ref != "receipt_bytes"
+            target_kind != "object_storage_preservation_terminal_receipt"
+            or field_ref != "terminal_state_token"
             or spec is None
         ):
             raise ValueError("field boundary")
-        path = archive_services.archive_internal_path(self.root, spec.receipt_relative)
-        raw = _read_exact_receipt(path, spec.receipt_bytes)
-        if raw is None:
+        receipt = _read_terminal_receipt(self.plan, spec, self.ledger)
+        if receipt is None:
             return None
         if target_ref not in self._verified:
             evidence = self.query.query(
@@ -1287,10 +2387,87 @@ class _Verifier:
                 expected_sha256=spec.object_id.removeprefix("sha256:"),
                 heartbeat=heartbeat,
             )
-            if evidence.state != "verified_match":
+            terminal = self.ledger.terminal_for(spec)
+            if terminal is None or evidence.state != terminal["remote_state"]:
                 raise ValueError("remote verification")
             self._verified.add(target_ref)
-        return raw
+        return spec.receipt_token
+
+
+class _JournaledPreservationTransport:
+    """Preservation-only write-ahead boundary around provider mutations."""
+
+    def __init__(
+        self,
+        transport: archive_services.ObjectStorageTransport,
+        ledger: _ManifestBoundPreservationLedger,
+        spec: _PreservationSpec,
+    ) -> None:
+        self.transport = transport
+        self.ledger = ledger
+        self.spec = spec
+        self.attempt = 0
+
+    def head_object(self, **kwargs: Any) -> Mapping[str, Any]:
+        return self.transport.head_object(**kwargs)
+
+    def _mutate(
+        self,
+        phase: str,
+        call: Callable[[], Any],
+        *,
+        part_number: int | None = None,
+        upload_id: str | None = None,
+    ) -> Any:
+        if phase in {"put_object", "create_multipart"}:
+            self.attempt += 1
+        reservation_id = self.ledger.reserve_provider_mutation(
+            self.spec,
+            phase,
+            attempt=max(1, self.attempt),
+            part_number=part_number,
+            upload_id=upload_id,
+        )
+        try:
+            result = call()
+        except Exception:
+            self.ledger.observe_provider_mutation(reservation_id)
+            raise
+        self.ledger.observe_provider_mutation(reservation_id)
+        return result
+
+    def put_object(self, **kwargs: Any) -> Mapping[str, Any]:
+        return self._mutate("put_object", lambda: self.transport.put_object(**kwargs))
+
+    def create_multipart(self, **kwargs: Any) -> str:
+        return self._mutate(
+            "create_multipart", lambda: self.transport.create_multipart(**kwargs)
+        )
+
+    def put_part(self, **kwargs: Any) -> Mapping[str, Any]:
+        return self._mutate(
+            "put_part",
+            lambda: self.transport.put_part(**kwargs),
+            part_number=kwargs.get("part_number"),
+            upload_id=kwargs.get("upload_id"),
+        )
+
+    def complete_multipart(self, **kwargs: Any) -> Mapping[str, Any]:
+        return self._mutate(
+            "complete_multipart",
+            lambda: self.transport.complete_multipart(**kwargs),
+            upload_id=kwargs.get("upload_id"),
+        )
+
+    def abort_multipart(self, **kwargs: Any) -> Mapping[str, Any]:
+        return self._mutate(
+            "abort_multipart",
+            lambda: self.transport.abort_multipart(**kwargs),
+            upload_id=kwargs.get("upload_id"),
+        )
+
+    def delete_object(self, **kwargs: Any) -> Mapping[str, Any]:
+        return self.transport.delete_object(**kwargs)
 
 
 class _Writer:
@@ -1303,10 +2480,7 @@ class _Writer:
         self.by_target = {spec.receipt_relative: spec for spec in plan.specs}
         self.transport = transport
         self.query = ObjectStorageRemoteQueryAdapter(transport)
-        self.total_put_calls = 0
-        self.uploaded_count = 0
-        self.already_remote_count = 0
-        self.bytes_uploaded = 0
+        self.ledger = _ManifestBoundPreservationLedger(plan)
         (
             self.expected_no_retry_put_calls,
             self.manifest_bound_put_call_ceiling,
@@ -1323,38 +2497,66 @@ class _Writer:
     ) -> None:
         spec = self.by_target.get(target_ref)
         if (
-            target_kind != "object_storage_bytes_preserved_receipt"
-            or field_ref != "receipt_bytes"
+            target_kind != "object_storage_preservation_terminal_receipt"
+            or field_ref != "terminal_state_token"
             or spec is None
-            or value != spec.receipt_bytes
+            or value != spec.receipt_token
         ):
             raise ValueError("write boundary")
         digest, size = _hash_plain_file(spec.local_path, heartbeat=heartbeat)
         if digest != spec.object_id.removeprefix("sha256:") or size != spec.size_bytes:
             raise _fail("object_storage_preservation_source_drifted")
+        terminal = self.ledger.terminal_for(spec)
+        if terminal is not None:
+            evidence = self.query.query(
+                remote_key=spec.remote_key,
+                expected_size=spec.size_bytes,
+                expected_sha256=digest,
+                heartbeat=heartbeat,
+            )
+            if evidence.state == "verification_unavailable":
+                raise _fail("object_storage_preservation_remote_unavailable")
+            if evidence.state != terminal["remote_state"]:
+                raise _fail("object_storage_preservation_remote_conflict")
+            _create_terminal_receipt(self.plan, spec, self.ledger)
+            return
+
         before = self.query.query(
             remote_key=spec.remote_key,
             expected_size=spec.size_bytes,
             expected_sha256=digest,
             heartbeat=heartbeat,
         )
+        unresolved_multipart = self.ledger.unresolved_provider_phases_for(spec) & {
+            "create_multipart",
+            "put_part",
+            "complete_multipart",
+            "abort_multipart",
+        }
+        if unresolved_multipart and before.state != "verified_match":
+            # An unknown multipart mutation may have allocated an upload id,
+            # published the object, or left cleanup incomplete.  Only exact
+            # remote bytes can close it automatically; every other state stays
+            # nonterminal for explicit cleanup/reconciliation.
+            raise _fail("object_storage_preservation_remote_unavailable")
         if before.state == "verified_match":
-            self.already_remote_count += 1
-        elif before.state == "absent":
-            if self.total_put_calls >= self.manifest_bound_put_call_ceiling:
-                raise _fail("object_storage_preservation_upload_failed")
-            ledger = archive_services._ResumeLedger(
-                archive_services.object_storage_resume_ledger_path(
-                    self.plan.archive_root,
-                    archive_id=self.plan.archive_id,
-                    digest=digest,
-                    provider_kind=self.plan.provider_kind,
-                    store_ref=self.plan.store_ref,
-                )
+            self.ledger.append_terminal(
+                spec,
+                preservation_status="already_remote_verified",
+                remote_state="verified_match",
             )
+        elif before.state == "absent":
+            used_provider_calls = self.ledger.total_put_calls()
+            remaining_provider_calls = (
+                self.manifest_bound_put_call_ceiling - used_provider_calls
+            )
+            if remaining_provider_calls <= 0:
+                raise _fail("object_storage_preservation_upload_failed")
             result = _call_with_heartbeat(
                 lambda: archive_services._object_storage_execute_one_upload(
-                    transport=self.transport,
+                    transport=_JournaledPreservationTransport(
+                        self.transport, self.ledger, spec
+                    ),
                     key=spec.remote_key,
                     data_path=spec.local_path,
                     size=spec.size_bytes,
@@ -1362,28 +2564,81 @@ class _Writer:
                     multipart_threshold_bytes=archive_services.OBJECT_STORAGE_MULTIPART_THRESHOLD_BYTES,
                     multipart_part_size_bytes=archive_services.OBJECT_STORAGE_MULTIPART_PART_SIZE_BYTES,
                     skip_uploaded=False,
-                    ledger=ledger,
+                    ledger=self.ledger,
                     force_upload=True,
+                    create_only=True,
+                    max_attempts=min(
+                        archive_services.OBJECT_STORAGE_MAX_ATTEMPTS_PER_OBJECT,
+                        remaining_provider_calls,
+                    ),
+                    max_provider_mutation_calls=remaining_provider_calls,
                 ),
                 heartbeat=heartbeat,
             )
-            put_calls = int(result.get("put_calls") or 0)
-            self.total_put_calls += put_calls
-            if self.total_put_calls > self.manifest_bound_put_call_ceiling:
+            if result.get("result_status") in {
+                "conditional_precondition_failed",
+                "conditional_conflict",
+            }:
+                after_conflict = self.query.query(
+                    remote_key=spec.remote_key,
+                    expected_size=spec.size_bytes,
+                    expected_sha256=digest,
+                    heartbeat=heartbeat,
+                )
+                if after_conflict.state == "verified_match":
+                    self.ledger.append_terminal(
+                        spec,
+                        preservation_status="already_remote_verified",
+                        remote_state="verified_match",
+                        put_calls=int(result.get("put_calls") or 0),
+                        multipart_cleanup_state=str(
+                            result.get("multipart_cleanup_state") or "not_applicable"
+                        ),
+                    )
+                elif after_conflict.state in {"size_mismatch", "checksum_mismatch"}:
+                    self.ledger.append_terminal(
+                        spec,
+                        preservation_status="review_required",
+                        remote_state=after_conflict.state,
+                        put_calls=int(result.get("put_calls") or 0),
+                        multipart_cleanup_state=str(
+                            result.get("multipart_cleanup_state") or "not_applicable"
+                        ),
+                    )
+                elif after_conflict.state == "verification_unavailable":
+                    self.ledger.append_attempt(result)
+                    raise _fail("object_storage_preservation_remote_unavailable")
+                else:
+                    # A 409/412 followed by absence remains safe to resume.  It
+                    # never falls through to an unconditional write.
+                    self.ledger.append_attempt(result)
+                    raise _fail("object_storage_preservation_upload_failed")
+            elif result.get("result_status") != "uploaded" or int(result.get("put_calls") or 0) < 1:
+                self.ledger.append_attempt(result)
+                if result.get("result_status") in {
+                    "failed_auth",
+                    "failed_rate_limited",
+                    "failed_upload",
+                    "failed_cleanup_unverified",
+                    "failed_provider_call_ceiling",
+                }:
+                    raise _fail("object_storage_preservation_remote_unavailable")
                 raise _fail("object_storage_preservation_upload_failed")
-            if result.get("result_status") != "uploaded" or put_calls < 1:
+            if self.ledger.total_put_calls() > self.manifest_bound_put_call_ceiling:
                 raise _fail("object_storage_preservation_upload_failed")
-            self.uploaded_count += 1
-            self.bytes_uploaded += spec.size_bytes
         elif before.state in {"size_mismatch", "checksum_mismatch"}:
-            raise _fail("object_storage_preservation_remote_conflict")
+            self.ledger.append_terminal(
+                spec,
+                preservation_status="review_required",
+                remote_state=before.state,
+            )
         else:
             raise _fail("object_storage_preservation_remote_unavailable")
-        # The upload spine verifies whole-object bytes before returning.  This
-        # immutable receipt records that writer-side result.  The separate
-        # ExactOperation verifier performs a second HEAD+GET-rehash before it
-        # accepts the field checkpoint.
-        _create_or_match_receipt(self.plan.archive_root, spec.receipt_relative, spec.receipt_bytes)
+        # The manifest binds a logical terminal-state token; the private ledger
+        # records which of the three allowed outcomes occurred.  Only after that
+        # fsync succeeds do we create the dynamic immutable receipt.  The exact
+        # verifier independently re-queries the remote before checkpointing.
+        _create_terminal_receipt(self.plan, spec, self.ledger)
 
 
 def _approval_binding(plan: ObjectStorageBytesPreservationPlan) -> ExactOperationApprovalBinding:
@@ -1453,8 +2708,10 @@ def _control_document(plan: ObjectStorageBytesPreservationPlan) -> dict[str, Any
         "inventory": plan.inventory,
         "selected_only": plan.selected_only,
         "already_recorded_count": plan.already_recorded_count,
+        "existing_review_required_count": plan.existing_review_required_count,
         "review_count": plan.review_count,
         "manifest": plan.manifest.document(),
+        "ledger_relative": _ledger_relative(plan.manifest.manifest_sha256),
         "specs": [
             {
                 "object_id": spec.object_id,
@@ -1462,7 +2719,7 @@ def _control_document(plan: ObjectStorageBytesPreservationPlan) -> dict[str, Any
                 "local_relative": spec.local_relative,
                 "remote_key": spec.remote_key,
                 "receipt_relative": spec.receipt_relative,
-                "receipt_sha256": _sha256_bytes(spec.receipt_bytes),
+                "receipt_token_sha256": _sha256_bytes(spec.receipt_token),
                 "source_token_sha256": _sha256_bytes(spec.source_token),
                 "target_identity_sha256": spec.target_identity_sha256,
             }
@@ -1473,10 +2730,40 @@ def _control_document(plan: ObjectStorageBytesPreservationPlan) -> dict[str, Any
     return {**basis, "control_sha256": _sha256_document(basis)}
 
 
+_CONTROL_FIELDS = frozenset(
+    {
+        "schema_version",
+        "archive_id",
+        "provider_kind",
+        "store_ref",
+        "source_inventory_sha256",
+        "inventory",
+        "selected_only",
+        "already_recorded_count",
+        "existing_review_required_count",
+        "review_count",
+        "manifest",
+        "ledger_relative",
+        "specs",
+        "private_control_document",
+    }
+)
+_LEGACY_CONTROL_FIELDS = _CONTROL_FIELDS - {"existing_review_required_count"}
+
+
 def _persist_control(plan: ObjectStorageBytesPreservationPlan) -> str:
     if plan.manifest is None:
         raise _fail("object_storage_preservation_no_writes")
     relative = _control_relative(plan.manifest.manifest_sha256)
+    path = archive_services.archive_internal_path(plan.archive_root, relative)
+    if path.exists():
+        existing = load_object_storage_bytes_preservation_plan(
+            plan.archive_root,
+            manifest_sha256=plan.manifest.manifest_sha256,
+        )
+        if not _same_control_plan(existing, plan):
+            raise _fail("object_storage_preservation_control_invalid")
+        return relative
     raw = _canonical_control_bytes(_control_document(plan))
     _create_or_match_receipt(
         plan.archive_root,
@@ -1486,6 +2773,29 @@ def _persist_control(plan: ObjectStorageBytesPreservationPlan) -> str:
         failure_code="object_storage_preservation_control_invalid",
     )
     return relative
+
+
+def _same_control_plan(
+    left: ObjectStorageBytesPreservationPlan,
+    right: ObjectStorageBytesPreservationPlan,
+) -> bool:
+    if left.manifest is None or right.manifest is None:
+        return False
+    return (
+        left.archive_root == right.archive_root
+        and left.archive_id == right.archive_id
+        and left.provider_kind == right.provider_kind
+        and left.store_ref == right.store_ref
+        and left.source_inventory_sha256 == right.source_inventory_sha256
+        and left.inventory == right.inventory
+        and left.manifest.document() == right.manifest.document()
+        and left.specs == right.specs
+        and left.already_recorded_count == right.already_recorded_count
+        and left.existing_review_required_count
+        == right.existing_review_required_count
+        and left.review_count == right.review_count
+        and left.selected_only == right.selected_only
+    )
 
 
 def load_object_storage_bytes_preservation_plan(
@@ -1511,8 +2821,15 @@ def load_object_storage_bytes_preservation_plan(
     except Exception:
         raise _fail("object_storage_preservation_control_invalid") from None
     supplied_control_sha = document.pop("control_sha256", None)
+    schema_version = document.get("schema_version")
+    valid_shape = (
+        schema_version == CONTROL_SCHEMA and set(document) == _CONTROL_FIELDS
+    ) or (
+        schema_version == LEGACY_CONTROL_SCHEMA
+        and set(document) == _LEGACY_CONTROL_FIELDS
+    )
     if (
-        document.get("schema_version") != CONTROL_SCHEMA
+        not valid_shape
         or document.get("private_control_document") is not True
         or type(supplied_control_sha) is not str
         or not hmac.compare_digest(supplied_control_sha, _sha256_document(document))
@@ -1539,6 +2856,7 @@ def load_object_storage_bytes_preservation_plan(
         or type(specs_raw) is not list
         or len(specs_raw) != len(manifest.items)
         or manifest.operation != OPERATION
+        or document.get("ledger_relative") != _ledger_relative(manifest.manifest_sha256)
         or manifest.archive_identity_sha256
         != exact_human_approval_archive_identity_sha256(current_archive_id)
     ):
@@ -1580,14 +2898,12 @@ def load_object_storage_bytes_preservation_plan(
         local_path = _safe_local_path(root, local_relative)
         inventory_sha = str(document.get("source_inventory_sha256") or "")
         receipt_relative = _receipt_relative(object_id, inventory_sha)
-        receipt_bytes = _canonical_receipt_bytes(
-            _receipt_document(
-                object_id=object_id,
-                size_bytes=size,
-                provider_kind=provider_kind,
-                store_ref=store_ref,
-                inventory_sha256=inventory_sha,
-            )
+        receipt_token = _receipt_token(
+            object_id=object_id,
+            size_bytes=size,
+            provider_kind=provider_kind,
+            store_ref=store_ref,
+            inventory_sha256=inventory_sha,
         )
         source_token = _canonical_bytes(
             {
@@ -1612,16 +2928,16 @@ def load_object_storage_bytes_preservation_plan(
             local_path=local_path,
             remote_key=object_storage_bytes_preserved_remote_key(object_id),
             receipt_relative=receipt_relative,
-            receipt_bytes=receipt_bytes,
+            receipt_token=receipt_token,
             source_token=source_token,
             target_identity_sha256=target_identity,
         )
         if (
             item.target_ref != receipt_relative
             or item.target_identity_sha256 != target_identity
-            or item.fields[0].post_sha256 != hash_field_value(receipt_bytes)
+            or item.fields[0].post_sha256 != hash_field_value(receipt_token)
             or item.fields[0].source_sha256 != hash_field_value(source_token)
-            or raw_spec.get("receipt_sha256") != _sha256_bytes(receipt_bytes)
+            or raw_spec.get("receipt_token_sha256") != _sha256_bytes(receipt_token)
             or raw_spec.get("source_token_sha256") != _sha256_bytes(source_token)
             or raw_spec.get("remote_key") != spec.remote_key
             or raw_spec.get("receipt_relative") != receipt_relative
@@ -1639,6 +2955,9 @@ def load_object_storage_bytes_preservation_plan(
         manifest=manifest,
         specs=tuple(specs),
         already_recorded_count=int(document.get("already_recorded_count") or 0),
+        existing_review_required_count=int(
+            document.get("existing_review_required_count") or 0
+        ),
         review_count=int(document.get("review_count") or 0),
         selected_only=document.get("selected_only"),
         loaded_from_control=True,
@@ -1714,11 +3033,54 @@ def _fresh_revalidated(
 def _execution_adapters(
     plan: ObjectStorageBytesPreservationPlan,
     transport: archive_services.ObjectStorageTransport,
-) -> tuple[_Payloads, _Writer, _Verifier]:
+) -> tuple[_Payloads, _Writer, _Verifier, _ManifestBoundPreservationLedger]:
     query = ObjectStorageRemoteQueryAdapter(transport)
     writer = _Writer(plan, transport)
-    verifier = _Verifier(plan.archive_root, plan.specs, query)
-    return _Payloads(plan.specs), writer, verifier
+    verifier = _Verifier(
+        plan.archive_root,
+        plan.specs,
+        query,
+        plan,
+        writer.ledger,
+    )
+    return _Payloads(plan.specs), writer, verifier, writer.ledger
+
+
+def _durable_result_counts(
+    plan: ObjectStorageBytesPreservationPlan,
+    ledger: _ManifestBoundPreservationLedger,
+) -> dict[str, Any]:
+    counts = {status: 0 for status in sorted(_TERMINAL_STATUSES)}
+    bytes_uploaded = 0
+    provider_put_calls = 0
+    provider_put_calls_charged = 0
+    conservative = False
+    for spec in plan.specs:
+        receipt = _read_terminal_receipt(plan, spec, ledger)
+        if receipt is None:
+            raise _fail("object_storage_preservation_receipt_conflict")
+        status = str(receipt.get("preservation_status") or "")
+        if status not in counts:
+            raise _fail("object_storage_preservation_receipt_conflict")
+        counts[status] += 1
+        bytes_uploaded += int(receipt.get("bytes_uploaded") or 0)
+        provider_put_calls += int(receipt.get("provider_put_call_count") or 0)
+        charged = int(
+            receipt.get("provider_put_call_charged_count", receipt.get("provider_put_call_count") or 0)
+        )
+        provider_put_calls_charged += charged
+        conservative = conservative or receipt.get("provider_put_call_count_evidence") == "conservative_reserved"
+    if sum(counts.values()) != len(plan.specs):
+        raise _fail("object_storage_preservation_receipt_conflict")
+    return {
+        "classification_counts": counts,
+        "bytes_uploaded": bytes_uploaded,
+        "provider_put_call_count": provider_put_calls,
+        "provider_put_call_charged_count": provider_put_calls_charged,
+        "provider_put_call_count_evidence": (
+            "conservative_reserved" if conservative else "exact_observed"
+        ),
+    }
 
 
 def _apply_with_store(
@@ -1732,7 +3094,7 @@ def _apply_with_store(
 ) -> dict[str, Any]:
     if plan.manifest is None:
         raise _fail("object_storage_preservation_no_writes")
-    payloads, writer, verifier = _execution_adapters(plan, transport)
+    payloads, writer, verifier, ledger = _execution_adapters(plan, transport)
     core = apply_exact_operation(
         plan.manifest,
         payloads=payloads,
@@ -1743,26 +3105,51 @@ def _apply_with_store(
         resume=resume,
         progress_hook=progress_hook,
     )
+    durable = _durable_result_counts(plan, ledger)
+    classifications = durable["classification_counts"]
+    review_count = int(classifications["review_required"])
+    existing_review_count = plan.existing_review_required_count
+    result_state = (
+        "completed_with_review"
+        if review_count
+        else (
+            "completed_with_existing_review"
+            if existing_review_count
+            else "bytes_preserved"
+        )
+    )
     return {
         "schema_version": RESULT_SCHEMA,
         "ok": core.get("status") == "completed",
-        "state": "bytes_preserved",
+        "state": result_state,
         "manifest_sha256": plan.manifest.manifest_sha256,
         "execution": core,
         "item_count": len(plan.specs),
-        "uploaded_count": writer.uploaded_count,
-        "already_remote_verified_count": writer.already_remote_count,
-        "bytes_uploaded": writer.bytes_uploaded,
-        "provider_put_call_count": writer.total_put_calls,
+        "uploaded_count": int(classifications["bytes_preserved"]),
+        "bytes_preserved_count": int(classifications["bytes_preserved"]),
+        "already_remote_verified_count": int(
+            classifications["already_remote_verified"]
+        ),
+        "review_required_count": review_count,
+        "preexisting_review_required_count": existing_review_count,
+        "attention_count": review_count + existing_review_count,
+        "classification_counts": classifications,
+        "classification_sum_matches_item_count": sum(classifications.values())
+        == len(plan.specs),
+        "bytes_uploaded": durable["bytes_uploaded"],
+        "provider_put_call_count": durable["provider_put_call_count"],
+        "provider_put_call_charged_count": durable["provider_put_call_charged_count"],
+        "provider_put_call_count_evidence": durable["provider_put_call_count_evidence"],
         "expected_no_retry_provider_put_call_count": writer.expected_no_retry_put_calls,
         "manifest_bound_provider_put_call_ceiling": writer.manifest_bound_put_call_ceiling,
         "independent_remote_verification": True,
-        "preservation_status": "bytes_preserved",
+        "preservation_status": result_state,
         "formal_adoption_status": "not_adopted",
         "manifest_location_updates": 0,
         "bytes_preserved_is_formal_adoption": False,
         "remote_delete_on_revert_supported": False,
         "common_exact_operation_manifest_used": True,
+        "manifest_bound_private_ledger_used": True,
         "private_values_echoed": False,
         "local_paths_echoed": False,
         "remote_keys_echoed": False,
@@ -1891,7 +3278,7 @@ def verify_object_storage_bytes_preservation(
         provider_kind=plan.provider_kind,
         store_ref=plan.store_ref,
     )
-    _payloads, _writer, verifier = _execution_adapters(plan, transport)
+    _payloads, _writer, verifier, _ledger = _execution_adapters(plan, transport)
     result = verify_exact_operation(
         plan.manifest,
         verifier=verifier,

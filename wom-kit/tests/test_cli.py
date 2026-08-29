@@ -157,6 +157,7 @@ class _FakeObjectStorageTransport:
 
     def abort_multipart(self, *, key, upload_id):
         self.abort_calls += 1
+        return {"status_class": "ok"}
 
     def delete_object(self, *, key):
         self.delete_calls += 1
@@ -9629,6 +9630,18 @@ class ArchiveCliTests(unittest.TestCase):
             self.assertFalse(hook_sentinel.exists())
             self.assertFalse(filter_sentinel.exists())
             self.assertIn("starting: start", stderr)
+            for stage in (
+                "project-runtime-candidate-prune-scripts",
+                "project-runtime-candidate-bytecode-cleanup",
+                "project-runtime-candidate-pyvenv-canonicalize",
+                "project-runtime-candidate-trusted-pip-discovery",
+                "project-runtime-candidate-record-canonicalize",
+                "project-runtime-candidate-installed-payload-verify",
+                "project-runtime-candidate-static-inventory",
+            ):
+                with self.subTest(progress_stage=stage):
+                    self.assertIn(f"{stage}: start", stderr)
+                    self.assertIn(f"{stage}: done", stderr)
             self.assertEqual(
                 self.git_fixture_command(fixture["mirror"], "rev-parse", "HEAD"),
                 fixture["target_commit"],
@@ -9726,6 +9739,169 @@ class ArchiveCliTests(unittest.TestCase):
                 result["write_boundary"][
                     "postapproval_git_transport_allowed"
                 ]
+            )
+
+    @unittest.skipUnless(
+        WINDOWS_PROJECT_RUNTIME,
+        "the production runtime supply is Windows CPython 3.12",
+    )
+    def test_project_version_update_partial_candidate_preserves_durable_lock(
+        self,
+    ) -> None:
+        """An incomplete private candidate is retained under its exact lock."""
+
+        self.assertIsNotNone(shutil.which("git"))
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_root = Path(tmp)
+            fixture = self.create_project_version_update_fixture(
+                tmp_root,
+                project_runtime_policy=True,
+            )
+            artifacts = self.project_runtime_candidate_artifact_fixture(
+                tmp_root,
+                fixture,
+            )
+            head_before = self.git_fixture_command(
+                fixture["mirror"],
+                "rev-parse",
+                "HEAD",
+            )
+            pin_path = fixture["metadata_root"] / "installed-version.txt"
+            pin_before = pin_path.read_bytes()
+
+            def leave_partial_candidate(
+                _project_root: Path,
+                transaction_root: Path,
+                **_kwargs: Any,
+            ) -> None:
+                candidate = (
+                    transaction_root
+                    / archive_services.project_runtime
+                    .PROJECT_RUNTIME_CANDIDATE_NAME
+                )
+                candidate.mkdir()
+                (candidate / "partial-owned-state").write_bytes(b"partial\n")
+                raise (
+                    archive_services.project_runtime
+                    .PreparedRuntimeCandidateIncompleteError()
+                )
+
+            with patch.object(
+                archive_services,
+                "wom_kit_project_update_runtime_policy",
+                return_value=artifacts["policy"],
+            ), patch.object(
+                archive_services,
+                "wom_kit_project_update_runtime_supply",
+                return_value=artifacts["supply"],
+            ), patch.object(
+                archive_services.project_runtime,
+                "bootstrap_wheel_for_target",
+                return_value=(
+                    artifacts["bootstrap"],
+                    artifacts["bootstrap_summary"],
+                ),
+            ), patch.object(
+                archive_services.project_runtime,
+                "prepare_runtime_candidate",
+                side_effect=leave_partial_candidate,
+            ):
+                code, stdout, stderr = self.run_cli_split(
+                    [
+                        "project-version-update",
+                        str(fixture["project_root"]),
+                        "--target",
+                        fixture["target_tag"],
+                        "--approve",
+                        "--affirm-external-writers-quiescent",
+                        "--reviewed-by",
+                        "person:partial-candidate-reviewer",
+                        "--format",
+                        "json",
+                    ]
+                )
+
+            self.assertEqual(code, 1, stdout + stderr)
+            result = json.loads(stdout)
+            self.assertEqual(result["status"], "failed_rollback_incomplete")
+            self.assertIn(
+                "project_runtime_candidate_preparation_incomplete",
+                result["blockers"],
+            )
+            self.assertFalse(
+                any(
+                    "lock was removed or replaced" in blocker
+                    for blocker in result["blockers"]
+                ),
+                result,
+            )
+            self.assertFalse(result["rollback"]["lock_removed"])
+            self.assertFalse(
+                result["rollback"]["prepared_runtime_bundle_removed"]
+            )
+            self.assertEqual(
+                self.git_fixture_command(
+                    fixture["mirror"],
+                    "rev-parse",
+                    "HEAD",
+                ),
+                head_before,
+            )
+            self.assertEqual(pin_path.read_bytes(), pin_before)
+            lock_path = fixture["metadata_root"] / "version-update.lock"
+            self.assertTrue(lock_path.is_file())
+            lock_bytes = lock_path.read_bytes()
+            self.assertNotEqual(
+                lock_bytes,
+                archive_services.WOM_KIT_PROJECT_UPDATE_LOCK_BYTES,
+            )
+            transaction_parent = (
+                fixture["project_root"]
+                / archive_services.project_update_transaction
+                .TRANSACTION_ROOT_LOGICAL
+            )
+            transactions = [
+                path
+                for path in transaction_parent.iterdir()
+                if path.is_dir()
+            ]
+            self.assertEqual(len(transactions), 1)
+            transaction = transactions[0]
+            backlink = json.loads(
+                (
+                    transaction
+                    / archive_services.project_update_transaction
+                    .RESERVATION_LOCK_BACKLINK_NAME
+                ).read_text(encoding="utf-8")
+            )
+            lock_stat = os.lstat(lock_path)
+            self.assertEqual(
+                backlink["lock_sha256"],
+                "sha256:" + hashlib.sha256(lock_bytes).hexdigest(),
+            )
+            self.assertEqual(
+                backlink["lock_identity"],
+                {
+                    "device": int(lock_stat.st_dev),
+                    "inode": int(lock_stat.st_ino),
+                    "modified_ns": int(lock_stat.st_mtime_ns),
+                    "size": int(lock_stat.st_size),
+                },
+            )
+            self.assertTrue(
+                (
+                    transaction
+                    / archive_services.project_runtime
+                    .PROJECT_RUNTIME_CANDIDATE_NAME
+                    / "partial-owned-state"
+                ).is_file()
+            )
+            self.assertFalse(
+                (
+                    transaction
+                    / archive_services.project_update_transaction
+                    .RESERVATION_ABORT_RECEIPT_NAME
+                ).exists()
             )
 
     def test_project_version_update_hard_exit_subprocess_worker(self) -> None:
@@ -12288,7 +12464,7 @@ class ArchiveCliTests(unittest.TestCase):
             ["project_runtime_mismatch"],
         )
         self.assertEqual(result["project_pin"], "v0.4.2")
-        self.assertEqual(result["running_version"], "v0.4.12")
+        self.assertEqual(result["running_version"], "v0.4.13")
         self.assertEqual(
             result["project_runtime_argv"],
             [r".\.zettel-kasten\bin\archive.cmd"],
@@ -14238,6 +14414,44 @@ class ArchiveCliTests(unittest.TestCase):
                 archive_services.WOM_KIT_PROJECT_UPDATE_LOCK_BYTES,
             )
             lock_path.unlink()
+
+            structured_lock = metadata_root / "structured-version-update.lock"
+            structured_bytes = b'{"schema":"synthetic-durable-lock"}\n'
+            structured_lock.write_bytes(structured_bytes)
+            structured_stat = os.lstat(structured_lock)
+            structured_identity = (
+                structured_stat.st_dev,
+                structured_stat.st_ino,
+            )
+            self.assertFalse(
+                archive_services.wom_kit_project_update_owned_lock_present(
+                    project_root,
+                    structured_lock,
+                    structured_identity,
+                )
+            )
+            self.assertTrue(
+                archive_services.wom_kit_project_update_owned_lock_present(
+                    project_root,
+                    structured_lock,
+                    structured_identity,
+                    expected_lock_bytes=structured_bytes,
+                )
+            )
+            structured_replacement = structured_lock.with_name(
+                "structured-version-update-replacement.lock"
+            )
+            structured_replacement.write_bytes(structured_bytes)
+            os.replace(structured_replacement, structured_lock)
+            self.assertFalse(
+                archive_services.wom_kit_project_update_owned_lock_present(
+                    project_root,
+                    structured_lock,
+                    structured_identity,
+                    expected_lock_bytes=structured_bytes,
+                )
+            )
+            structured_lock.unlink()
 
             external_lock = Path(tmp) / "external-lock"
             external_bytes = b"EXTERNAL_LOCK_MUST_NOT_BE_TOUCHED\n"
@@ -69579,7 +69793,10 @@ state:
             result = json.loads(output)
             self.assertFalse(result["ok"])
             self.assertEqual(result["status"], "blocked")
-            self.assertIn("Missing provider setup receipt", "\n".join(result["blockers"]))
+            self.assertIn(
+                "object_storage_setup_evidence_missing",
+                result["blockers"],
+            )
             managed = [item for item in result["providers"] if item["setup_managed"]]
             self.assertEqual(len(managed), 1)
             self.assertEqual(managed[0]["status"], "metadata_without_receipt")

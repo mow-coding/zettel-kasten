@@ -190,6 +190,37 @@ class LegacyCleanupBoundDeleteTests(unittest.TestCase):
                 self.assertEqual(inside.read_bytes(), b"inside")
 
     @unittest.skipUnless(os.name == "nt", "Windows retained-handle behavior")
+    def test_windows_open_failure_preserves_content_free_winerror_cause(
+        self,
+    ) -> None:
+        api = bound_delete._windows_api()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = self.make_root(temporary)
+            target = root / "approved.bin"
+            target.write_bytes(b"approved")
+            with patch.object(
+                api,
+                "create_file",
+                return_value=api.invalid_handle,
+            ), patch.object(
+                bound_delete.ctypes,
+                "get_last_error",
+                return_value=32,
+            ):
+                with self.assertRaises(LegacyCleanupBoundDeleteError) as captured:
+                    bound_delete._windows_open(target, directory=False)
+
+        self.assertEqual(
+            captured.exception.code,
+            "legacy_cleanup_bound_win32_open_uncertain",
+        )
+        self.assertEqual(
+            getattr(captured.exception.__cause__, "winerror", None),
+            32,
+        )
+        self.assertNotIn(str(target), str(captured.exception))
+
+    @unittest.skipUnless(os.name == "nt", "Windows retained-handle behavior")
     def test_windows_alternate_data_stream_blocks_file_and_directory(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = self.make_root(temporary)

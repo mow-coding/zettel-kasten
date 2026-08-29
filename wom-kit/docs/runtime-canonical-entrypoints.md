@@ -1,6 +1,8 @@
 # Runtime Canonical Entry Points
 
-Status: v0.4.12 live runtime binding, Deep Doctor evidence, and operator truth
+Status: v0.4.13 exact setup evidence and create-only object-storage preservation
+
+Previous checkpoint: Status: v0.4.12 generation-bound link authority and honest index lifecycle
 
 Previous checkpoint: Status: v0.4.11 live runtime binding, Deep Doctor evidence, and operator truth
 
@@ -34,7 +36,31 @@ The underlying raw context packet remains available through:
 archive runtime-context <archive-root> --format json
 ```
 
-## v0.4.12 Current Runtime Delta
+## v0.4.13 Current Runtime Delta
+
+Local object-storage readiness resolves canonical exact setup evidence before
+any legacy bridge. Malformed, orphaned, disabled, changing, case-colliding, or
+cross-namespace receipts cannot become false readiness and cannot expose
+private setup values in normal status output.
+
+The narrow `object-storage-adopt-existing --preserve-local-only` mode now uses
+conditional create-only publication for single PUT and multipart completion.
+New and already-present matching objects require HEAD plus a complete GET
+rehash. Proven conflicts become non-overwriting `review_required` evidence;
+unavailable evidence remains nonterminal and resumable. The exact private
+ledger is manifest-bound and durably reserves and charges one budget unit
+immediately before each provider mutation. A crash-ambiguous reservation stays
+charged even when transport cannot be observed. Resume queries the exact remote
+target first; only verified matching bytes allow no-PUT finalization. Absence,
+provider unavailability, or uncertain multipart cleanup remains nonterminal
+and grants no automatic retry authority. A preservation receipt is not formal
+adoption and does not add a central-manifest remote location.
+
+Installing this runtime does not inspect a client archive, access credentials,
+call a provider, or upload bytes. Those effects require a separate update of
+the intended project followed by that client's explicit exact approval.
+
+## v0.4.12 Historical Runtime Delta
 
 The current working tree makes the ordinary `zettel-objet-link` plan use one
 generation-bound archive projection instead of treating a repeated full-tree
@@ -139,7 +165,7 @@ archive capabilities --machine --format json
 
 Its `data.approval_status_inventory` distinguishes
 `approval_available`, `approval_fixed_closed`, and `approval_not_exposed` for
-every canonical executable command path and its aliases. The current v0.4.12
+every canonical executable command path and its aliases. The current v0.4.13
 working-tree parser reports 315 canonical executable paths, 259 alias paths,
 and 574 total invocation paths: 47 operation-specific approval routes, 67
 fixed-closed routes, and 201 routes without an approval mode. Nine paths have
@@ -177,11 +203,11 @@ documented plans, previews, and audits remain available; a closed approval still
 itself is separately reopened with an exact target/tag/source/rollback binding.
 
 When an older global CLI must be replaced and the exact public
-v0.4.11 GitHub Release wheel has been independently confirmed, use the public
+v0.4.13 GitHub Release wheel has been independently confirmed, use the public
 wheel directly:
 
 ```powershell
-uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.11/wom_kit-0.4.11-py3-none-any.whl"
+uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.13/wom_kit-0.4.13-py3-none-any.whl"
 archive --version
 ```
 

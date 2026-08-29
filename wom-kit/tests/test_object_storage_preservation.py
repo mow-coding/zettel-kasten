@@ -66,8 +66,18 @@ class _MemoryTransport:
             "verification_state": "complete",
         }
 
-    def put_object(self, *, key: str, data_path: Path, size: int, content_sha256: str):
+    def put_object(
+        self,
+        *,
+        key: str,
+        data_path: Path,
+        size: int,
+        content_sha256: str,
+        create_only: bool = False,
+    ):
         self.put_calls += 1
+        if create_only and key in self.objects:
+            return {"status_class": "precondition_failed"}
         raw = data_path.read_bytes()
         if len(raw) != size or hashlib.sha256(raw).hexdigest() != content_sha256:
             return {"status_class": "failed"}
@@ -89,7 +99,7 @@ class _MemoryTransport:
         raise AssertionError("small fixtures must not use multipart")
 
     def abort_multipart(self, **_kwargs):
-        return None
+        return {"status_class": "ok"}
 
     def delete_object(self, **_kwargs):
         raise AssertionError("preservation never deletes remote objects")
@@ -346,6 +356,309 @@ class ObjectStoragePreservationTests(unittest.TestCase):
         self.assertEqual(result.state, "absent")
         self.assertGreaterEqual(heartbeat_count, 3)
 
+    def test_create_only_put_is_signed_and_412_is_distinct(self):
+        calls = []
+
+        def fake_send(*, method, url, headers, data_path=None, data_bytes=None):
+            calls.append((method, url, dict(headers)))
+            return {
+                "status": 412,
+                "headers": {},
+                "body": b"<Error><Code>PreconditionFailed</Code></Error>",
+            }
+
+        transport = archive_services._object_storage_resolve_transport(
+            "cloudflare-r2",
+            send=fake_send,
+            credential={
+                "endpoint_host": "acct.r2.cloudflarestorage.com",
+                "bucket": "private-bucket",
+                "access_key_id": "AKIAEXAMPLE",
+                "secret_access_key": "s" * 40,
+                "region": "auto",
+            },
+        )
+        result = transport.put_object(
+            key="wom-bytes-preserved/v1/sha256/aa/" + "a" * 64,
+            data_path=None,
+            size=3,
+            content_sha256="a" * 64,
+            create_only=True,
+        )
+        self.assertEqual(result["status_class"], "precondition_failed")
+        headers = calls[0][2]
+        self.assertEqual(headers["if-none-match"], "*")
+        self.assertIn(";if-none-match;", headers["authorization"])
+
+    def test_create_only_multipart_complete_is_signed_and_409_is_distinct(self):
+        calls = []
+
+        def fake_send(*, method, url, headers, data_path=None, data_bytes=None):
+            calls.append((method, url, dict(headers)))
+            return {
+                "status": 409,
+                "headers": {},
+                "body": b"<Error><Code>ConditionalRequestConflict</Code></Error>",
+            }
+
+        transport = archive_services._object_storage_resolve_transport(
+            "cloudflare-r2",
+            send=fake_send,
+            credential={
+                "endpoint_host": "acct.r2.cloudflarestorage.com",
+                "bucket": "private-bucket",
+                "access_key_id": "AKIAEXAMPLE",
+                "secret_access_key": "s" * 40,
+                "region": "auto",
+            },
+        )
+        result = transport.complete_multipart(
+            key="wom-bytes-preserved/v1/sha256/bb/" + "b" * 64,
+            upload_id="upload-1",
+            parts=[{"part_number": 1, "etag_opaque": '"etag"'}],
+            content_sha256="b" * 64,
+            create_only=True,
+        )
+        self.assertEqual(result["status_class"], "conditional_conflict")
+        headers = calls[0][2]
+        self.assertEqual(headers["if-none-match"], "*")
+        self.assertIn(";if-none-match;", headers["authorization"])
+
+    def test_conditional_409_is_body_independent_and_all_transients_retry(self):
+        classifier = archive_services._object_storage_classify_http_status
+        self.assertEqual(classifier(409, None), "conditional_conflict")
+        self.assertEqual(classifier(409, "Unknown"), "conditional_conflict")
+        self.assertEqual(classifier(429, None), "rate_limited")
+        for status in (500, 501, 502, 503, 504, 599):
+            self.assertEqual(classifier(status, None), "rate_limited")
+        self.assertEqual(classifier(400, "ClientDisconnect"), "rate_limited")
+
+    def test_complete_200_embedded_errors_keep_exact_status_classes(self):
+        cases = {
+            "PreconditionFailed": "precondition_failed",
+            "ConditionalRequestConflict": "conditional_conflict",
+            "SlowDown": "rate_limited",
+            "ClientDisconnect": "rate_limited",
+        }
+        for error_code, expected in cases.items():
+            with self.subTest(error_code=error_code):
+                def fake_send(*, method, url, headers, data_path=None, data_bytes=None):
+                    return {
+                        "status": 200,
+                        "headers": {},
+                        "body": f"<Error><Code>{error_code}</Code></Error>".encode("ascii"),
+                    }
+
+                transport = archive_services._object_storage_resolve_transport(
+                    "cloudflare-r2",
+                    send=fake_send,
+                    credential={
+                        "endpoint_host": "acct.r2.cloudflarestorage.com",
+                        "bucket": "private-bucket",
+                        "access_key_id": "AKIAEXAMPLE",
+                        "secret_access_key": "s" * 40,
+                        "region": "auto",
+                    },
+                )
+                result = transport.complete_multipart(
+                    key="wom-bytes-preserved/v1/sha256/cc/" + "c" * 64,
+                    upload_id="upload-embedded-error",
+                    parts=[{"part_number": 1, "etag_opaque": '"etag"'}],
+                    content_sha256="c" * 64,
+                    create_only=True,
+                )
+                self.assertEqual(result["status_class"], expected)
+
+    def test_create_and_upload_part_transport_errors_are_retryable(self):
+        def fake_send(*, method, url, headers, data_path=None, data_bytes=None):
+            return {
+                "status": 0,
+                "headers": {},
+                "body": b"",
+                "transport_error": True,
+            }
+
+        transport = archive_services._object_storage_resolve_transport(
+            "cloudflare-r2",
+            send=fake_send,
+            credential={
+                "endpoint_host": "acct.r2.cloudflarestorage.com",
+                "bucket": "private-bucket",
+                "access_key_id": "AKIAEXAMPLE",
+                "secret_access_key": "s" * 40,
+                "region": "auto",
+            },
+        )
+        with self.assertRaises(archive_services._ObjectStorageProviderError) as created:
+            transport.create_multipart(key="sha256/create")
+        self.assertEqual(created.exception.status_class, "rate_limited")
+        with self.assertRaises(archive_services._ObjectStorageProviderError) as uploaded:
+            transport.put_part(
+                key="sha256/part",
+                upload_id="upload-1",
+                part_number=1,
+                data=b"part",
+            )
+        self.assertEqual(uploaded.exception.status_class, "rate_limited")
+
+    def test_abort_multipart_requires_confirmed_provider_success(self):
+        responses = iter(
+            [
+                {"status": 503, "headers": {}, "body": b""},
+                {"status": 204, "headers": {}, "body": b""},
+            ]
+        )
+
+        def fake_send(*, method, url, headers, data_path=None, data_bytes=None):
+            return next(responses)
+
+        transport = archive_services._object_storage_resolve_transport(
+            "cloudflare-r2",
+            send=fake_send,
+            credential={
+                "endpoint_host": "acct.r2.cloudflarestorage.com",
+                "bucket": "private-bucket",
+                "access_key_id": "AKIAEXAMPLE",
+                "secret_access_key": "s" * 40,
+                "region": "auto",
+            },
+        )
+        failed = transport.abort_multipart(
+            key="sha256/abort", upload_id="upload-failed-abort"
+        )
+        confirmed = transport.abort_multipart(
+            key="sha256/abort", upload_id="upload-confirmed-abort"
+        )
+        self.assertEqual(failed["status_class"], "rate_limited")
+        self.assertEqual(confirmed["status_class"], "ok")
+
+    def test_multipart_counts_real_calls_and_abort_uncertainty_is_resumable(self):
+        class _AbortUnconfirmedTransport:
+            def __init__(self):
+                self.calls = []
+
+            def create_multipart(self, *, key):
+                self.calls.append("create")
+                return "upload-1"
+
+            def put_part(self, **_kwargs):
+                self.calls.append("part")
+                raise archive_services._ObjectStorageProviderError("rate_limited")
+
+            def complete_multipart(self, **_kwargs):
+                raise AssertionError("complete must not run")
+
+            def abort_multipart(self, **_kwargs):
+                self.calls.append("abort")
+                return {"status_class": "rate_limited"}
+
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "multipart.bin"
+            path.write_bytes(b"multipart-data")
+            transport = _AbortUnconfirmedTransport()
+            result, part_count = archive_services._object_storage_multipart_put(
+                transport=transport,
+                key="sha256/multipart",
+                data_path=path,
+                content_sha256=hashlib.sha256(path.read_bytes()).hexdigest(),
+                part_size_bytes=4,
+                max_provider_mutation_calls=4,
+            )
+        self.assertEqual(transport.calls, ["create", "part", "abort"])
+        self.assertEqual(part_count, 1)
+        self.assertEqual(result["provider_mutation_calls"], 3)
+        self.assertEqual(result["status_class"], "cleanup_unverified")
+        self.assertEqual(
+            result["multipart_cleanup_state"], "unconfirmed_abort_response"
+        )
+
+    def test_executor_stops_each_provider_call_at_remaining_ceiling(self):
+        class _RateLimitedTransport(_MemoryTransport):
+            def put_object(self, **_kwargs):
+                self.put_calls += 1
+                return {"status_class": "rate_limited"}
+
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "one.bin"
+            path.write_bytes(b"one")
+            digest = hashlib.sha256(path.read_bytes()).hexdigest()
+            transport = _RateLimitedTransport()
+            result = archive_services._object_storage_execute_one_upload(
+                transport=transport,
+                key="sha256/one",
+                data_path=path,
+                size=path.stat().st_size,
+                content_sha256=digest,
+                multipart_threshold_bytes=1024,
+                skip_uploaded=False,
+                ledger=archive_services._ResumeLedger(
+                    Path(temporary) / "common-ledger.jsonl"
+                ),
+                max_attempts=10,
+                max_provider_mutation_calls=3,
+                force_upload=True,
+                sleep=lambda _seconds: None,
+                rng=lambda: 0.0,
+            )
+        self.assertEqual(transport.put_calls, 3)
+        self.assertEqual(result["put_calls"], 3)
+        self.assertEqual(result["result_status"], "failed_provider_call_ceiling")
+
+    def test_multipart_create_failures_are_durable_and_exhaust_manifest_ceiling(self):
+        class _CreateRateLimitedTransport(_MemoryTransport):
+            def __init__(self):
+                super().__init__()
+                self.create_calls = 0
+
+            def create_multipart(self, *, key):
+                self.create_calls += 1
+                raise archive_services._ObjectStorageProviderError("rate_limited")
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = self._root(Path(temporary))
+            self._write_rows(root, [self._local_row(root, b"multipart-create")])
+            plan = _plan_core(root, provider_kind="cloudflare-r2", store_ref="storage:account:test")
+            transport = _CreateRateLimitedTransport()
+            with (
+                mock.patch.object(
+                    archive_services, "OBJECT_STORAGE_MULTIPART_THRESHOLD_BYTES", 1
+                ),
+                mock.patch.object(
+                    archive_services, "OBJECT_STORAGE_MAX_ATTEMPTS_PER_OBJECT", 4
+                ),
+                mock.patch.object(
+                    preservation_module, "_provider_put_call_budget", return_value=(1, 4)
+                ),
+                mock.patch.object(
+                    archive_services, "_object_storage_backoff_ms", return_value=0
+                ),
+            ):
+                writer = preservation_module._Writer(plan, transport)
+                with self.assertRaises(ObjectStoragePreservationError):
+                    writer.write_field(
+                        target_kind="object_storage_preservation_terminal_receipt",
+                        target_ref=plan.specs[0].receipt_relative,
+                        field_ref="terminal_state_token",
+                        value=plan.specs[0].receipt_token,
+                        heartbeat=lambda: None,
+                    )
+                self.assertEqual(transport.create_calls, 4)
+                self.assertEqual(writer.ledger.total_put_calls(), 4)
+                self.assertIsNone(writer.ledger.terminal_for(plan.specs[0]))
+                self.assertFalse((root / plan.specs[0].receipt_relative).exists())
+
+                resumed = preservation_module._Writer(plan, transport)
+                with self.assertRaises(ObjectStoragePreservationError):
+                    resumed.write_field(
+                        target_kind="object_storage_preservation_terminal_receipt",
+                        target_ref=plan.specs[0].receipt_relative,
+                        field_ref="terminal_state_token",
+                        value=plan.specs[0].receipt_token,
+                        heartbeat=lambda: None,
+                    )
+                self.assertEqual(transport.create_calls, 4)
+                self.assertEqual(resumed.ledger.total_put_calls(), 4)
+
     def test_exact_writer_uploads_verifies_receipts_and_never_rewrites_manifest(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = self._root(Path(temporary))
@@ -383,6 +696,366 @@ class ObjectStoragePreservationTests(unittest.TestCase):
             verified = verify_object_storage_bytes_preservation(plan, transport=transport)
             self.assertTrue(verified["ok"])
 
+    def test_single_crash_after_provider_before_observation_charges_and_recovers_without_put(self):
+        class _HardCrash(BaseException):
+            pass
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = self._root(Path(temporary))
+            payload = b"published-before-observation"
+            self._write_rows(root, [self._local_row(root, payload)])
+            plan = _plan_core(root, provider_kind="cloudflare-r2", store_ref="storage:account:test")
+            transport = _MemoryTransport()
+            writer = preservation_module._Writer(plan, transport)
+            original_observe = writer.ledger.observe_provider_mutation
+
+            def crash_before_observation(_reservation_id):
+                raise _HardCrash()
+
+            writer.ledger.observe_provider_mutation = crash_before_observation
+            with mock.patch.object(
+                preservation_module,
+                "_call_with_heartbeat",
+                side_effect=lambda call, **_kwargs: call(),
+            ):
+                with self.assertRaises(_HardCrash):
+                    writer.write_field(
+                        target_kind="object_storage_preservation_terminal_receipt",
+                        target_ref=plan.specs[0].receipt_relative,
+                        field_ref="terminal_state_token",
+                        value=plan.specs[0].receipt_token,
+                        heartbeat=lambda: None,
+                    )
+            writer.ledger.observe_provider_mutation = original_observe
+            self.assertEqual(transport.put_calls, 1)
+            self.assertFalse((root / plan.specs[0].receipt_relative).exists())
+
+            resumed = preservation_module._Writer(plan, transport)
+            resumed.write_field(
+                target_kind="object_storage_preservation_terminal_receipt",
+                target_ref=plan.specs[0].receipt_relative,
+                field_ref="terminal_state_token",
+                value=plan.specs[0].receipt_token,
+                heartbeat=lambda: None,
+            )
+            self.assertEqual(transport.put_calls, 1)
+            receipt = json.loads(
+                (root / plan.specs[0].receipt_relative).read_text(encoding="ascii")
+            )
+            self.assertEqual(receipt["provider_put_call_count"], 0)
+            self.assertEqual(receipt["provider_put_call_charged_count"], 1)
+            self.assertEqual(
+                receipt["provider_put_call_count_evidence"], "conservative_reserved"
+            )
+
+    def test_reservation_fsync_failure_calls_provider_zero_times(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = self._root(Path(temporary))
+            self._write_rows(root, [self._local_row(root, b"fsync-before-provider")])
+            plan = _plan_core(root, provider_kind="cloudflare-r2", store_ref="storage:account:test")
+            transport = _MemoryTransport()
+            writer = preservation_module._Writer(plan, transport)
+            with (
+                mock.patch.object(preservation_module.os, "fsync", side_effect=OSError()),
+                mock.patch.object(
+                    preservation_module,
+                    "_call_with_heartbeat",
+                    side_effect=lambda call, **_kwargs: call(),
+                ),
+            ):
+                with self.assertRaises(ObjectStoragePreservationError):
+                    writer.write_field(
+                        target_kind="object_storage_preservation_terminal_receipt",
+                        target_ref=plan.specs[0].receipt_relative,
+                        field_ref="terminal_state_token",
+                        value=plan.specs[0].receipt_token,
+                        heartbeat=lambda: None,
+                    )
+            self.assertEqual(transport.put_calls, 0)
+
+    def test_single_crash_after_observation_before_terminal_keeps_exact_count(self):
+        class _HardCrash(BaseException):
+            pass
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = self._root(Path(temporary))
+            payload = b"observed-before-terminal"
+            self._write_rows(root, [self._local_row(root, payload)])
+            plan = _plan_core(root, provider_kind="cloudflare-r2", store_ref="storage:account:test")
+            transport = _MemoryTransport()
+            writer = preservation_module._Writer(plan, transport)
+            writer.ledger.append = mock.Mock(side_effect=_HardCrash())
+            with mock.patch.object(
+                preservation_module,
+                "_call_with_heartbeat",
+                side_effect=lambda call, **_kwargs: call(),
+            ):
+                with self.assertRaises(_HardCrash):
+                    writer.write_field(
+                        target_kind="object_storage_preservation_terminal_receipt",
+                        target_ref=plan.specs[0].receipt_relative,
+                        field_ref="terminal_state_token",
+                        value=plan.specs[0].receipt_token,
+                        heartbeat=lambda: None,
+                    )
+            resumed = preservation_module._Writer(plan, transport)
+            resumed.write_field(
+                target_kind="object_storage_preservation_terminal_receipt",
+                target_ref=plan.specs[0].receipt_relative,
+                field_ref="terminal_state_token",
+                value=plan.specs[0].receipt_token,
+                heartbeat=lambda: None,
+            )
+            receipt = json.loads(
+                (root / plan.specs[0].receipt_relative).read_text(encoding="ascii")
+            )
+            self.assertEqual(transport.put_calls, 1)
+            self.assertEqual(receipt["provider_put_call_count"], 1)
+            self.assertEqual(receipt["provider_put_call_charged_count"], 1)
+            self.assertEqual(receipt["provider_put_call_count_evidence"], "exact_observed")
+
+    def test_foreground_interrupt_discards_worker_result_but_resume_does_not_put_again(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = self._root(Path(temporary))
+            payload = b"foreground-interrupt"
+            self._write_rows(root, [self._local_row(root, payload)])
+            plan = _plan_core(root, provider_kind="cloudflare-r2", store_ref="storage:account:test")
+            transport = _MemoryTransport()
+            writer = preservation_module._Writer(plan, transport)
+            def interrupt_after_worker():
+                if writer.ledger.terminal_for(plan.specs[0]) is not None:
+                    raise KeyboardInterrupt()
+
+            with self.assertRaises(KeyboardInterrupt):
+                writer.write_field(
+                    target_kind="object_storage_preservation_terminal_receipt",
+                    target_ref=plan.specs[0].receipt_relative,
+                    field_ref="terminal_state_token",
+                    value=plan.specs[0].receipt_token,
+                    heartbeat=interrupt_after_worker,
+                )
+            self.assertEqual(transport.put_calls, 1)
+            resumed = preservation_module._Writer(plan, transport)
+            resumed.write_field(
+                target_kind="object_storage_preservation_terminal_receipt",
+                target_ref=plan.specs[0].receipt_relative,
+                field_ref="terminal_state_token",
+                value=plan.specs[0].receipt_token,
+                heartbeat=lambda: None,
+            )
+            receipt = json.loads(
+                (root / plan.specs[0].receipt_relative).read_text(encoding="ascii")
+            )
+            self.assertEqual(transport.put_calls, 1)
+            self.assertEqual(receipt["provider_put_call_count"], 1)
+            self.assertGreaterEqual(receipt["provider_put_call_charged_count"], 1)
+
+    def test_multipart_ambiguous_part_crash_blocks_new_upload_until_reconciled(self):
+        class _HardCrash(BaseException):
+            pass
+
+        class _MultipartTransport(_MemoryTransport):
+            def __init__(self):
+                super().__init__()
+                self.create_calls = 0
+
+            def create_multipart(self, *, key):
+                self.create_calls += 1
+                return "upload-1"
+
+            def put_part(self, **_kwargs):
+                return {"etag": "part-1"}
+
+            def complete_multipart(self, **_kwargs):
+                raise AssertionError("crash occurs before complete")
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = self._root(Path(temporary))
+            self._write_rows(root, [self._local_row(root, b"multipart-ambiguous")])
+            plan = _plan_core(root, provider_kind="cloudflare-r2", store_ref="storage:account:test")
+            transport = _MultipartTransport()
+            writer = preservation_module._Writer(plan, transport)
+            original_observe = writer.ledger.observe_provider_mutation
+
+            def crash_on_part(reservation_id):
+                phase = writer.ledger.call_journal._reservations[-1]["call_kind"]
+                if phase == "put_part":
+                    raise _HardCrash()
+                original_observe(reservation_id)
+
+            writer.ledger.observe_provider_mutation = crash_on_part
+            with (
+                mock.patch.object(archive_services, "OBJECT_STORAGE_MULTIPART_THRESHOLD_BYTES", 1),
+                mock.patch.object(archive_services, "OBJECT_STORAGE_MULTIPART_PART_SIZE_BYTES", 1024),
+                mock.patch.object(
+                    preservation_module,
+                    "_call_with_heartbeat",
+                    side_effect=lambda call, **_kwargs: call(),
+                ),
+            ):
+                with self.assertRaises(_HardCrash):
+                    writer.write_field(
+                        target_kind="object_storage_preservation_terminal_receipt",
+                        target_ref=plan.specs[0].receipt_relative,
+                        field_ref="terminal_state_token",
+                        value=plan.specs[0].receipt_token,
+                        heartbeat=lambda: None,
+                    )
+                resumed = preservation_module._Writer(plan, transport)
+                with self.assertRaises(ObjectStoragePreservationError):
+                    resumed.write_field(
+                        target_kind="object_storage_preservation_terminal_receipt",
+                        target_ref=plan.specs[0].receipt_relative,
+                        field_ref="terminal_state_token",
+                        value=plan.specs[0].receipt_token,
+                        heartbeat=lambda: None,
+                    )
+            self.assertEqual(transport.create_calls, 1)
+            self.assertFalse((root / plan.specs[0].receipt_relative).exists())
+
+    def test_multipart_ambiguous_complete_recovers_exact_remote_without_new_upload(self):
+        class _HardCrash(BaseException):
+            pass
+
+        class _PublishingMultipartTransport(_MemoryTransport):
+            def __init__(self):
+                super().__init__()
+                self.create_calls = 0
+                self.part = b""
+
+            def create_multipart(self, *, key):
+                self.create_calls += 1
+                return "private-upload-id"
+
+            def put_part(self, *, data, **_kwargs):
+                self.part += data
+                return {"etag": "part"}
+
+            def complete_multipart(self, *, key, **_kwargs):
+                self.objects[key] = self.part
+                return {"status_class": "ok"}
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = self._root(Path(temporary))
+            payload = b"multipart-complete-published"
+            self._write_rows(root, [self._local_row(root, payload)])
+            plan = _plan_core(root, provider_kind="cloudflare-r2", store_ref="storage:account:test")
+            transport = _PublishingMultipartTransport()
+            writer = preservation_module._Writer(plan, transport)
+            original_observe = writer.ledger.observe_provider_mutation
+
+            def crash_on_complete(reservation_id):
+                if writer.ledger.call_journal._reservations[-1]["call_kind"] == "complete_multipart":
+                    raise _HardCrash()
+                original_observe(reservation_id)
+
+            writer.ledger.observe_provider_mutation = crash_on_complete
+            with (
+                mock.patch.object(archive_services, "OBJECT_STORAGE_MULTIPART_THRESHOLD_BYTES", 1),
+                mock.patch.object(archive_services, "OBJECT_STORAGE_MULTIPART_PART_SIZE_BYTES", 1024),
+                mock.patch.object(
+                    preservation_module,
+                    "_call_with_heartbeat",
+                    side_effect=lambda call, **_kwargs: call(),
+                ),
+            ):
+                with self.assertRaises(_HardCrash):
+                    writer.write_field(
+                        target_kind="object_storage_preservation_terminal_receipt",
+                        target_ref=plan.specs[0].receipt_relative,
+                        field_ref="terminal_state_token",
+                        value=plan.specs[0].receipt_token,
+                        heartbeat=lambda: None,
+                    )
+                resumed = preservation_module._Writer(plan, transport)
+                resumed.write_field(
+                    target_kind="object_storage_preservation_terminal_receipt",
+                    target_ref=plan.specs[0].receipt_relative,
+                    field_ref="terminal_state_token",
+                    value=plan.specs[0].receipt_token,
+                    heartbeat=lambda: None,
+                )
+            self.assertEqual(transport.create_calls, 1)
+            receipt = json.loads(
+                (root / plan.specs[0].receipt_relative).read_text(encoding="ascii")
+            )
+            self.assertEqual(receipt["provider_put_call_count"], 2)
+            self.assertEqual(receipt["provider_put_call_charged_count"], 3)
+            self.assertEqual(receipt["provider_put_call_count_evidence"], "conservative_reserved")
+            journal = (
+                root
+                / preservation_module._call_journal_relative(
+                    plan.manifest.manifest_sha256
+                )
+            ).read_text(encoding="ascii")
+            self.assertNotIn("private-upload-id", journal)
+            self.assertNotIn(plan.specs[0].remote_key, journal)
+
+    def test_multipart_ambiguous_abort_never_claims_cleanup_or_restarts(self):
+        class _HardCrash(BaseException):
+            pass
+
+        class _AbortTransport(_MemoryTransport):
+            def __init__(self):
+                super().__init__()
+                self.create_calls = 0
+                self.abort_calls = 0
+
+            def create_multipart(self, *, key):
+                self.create_calls += 1
+                return "private-upload-id"
+
+            def put_part(self, **_kwargs):
+                raise archive_services._ObjectStorageProviderError("failed")
+
+            def abort_multipart(self, **_kwargs):
+                self.abort_calls += 1
+                return {"status_class": "ok"}
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = self._root(Path(temporary))
+            self._write_rows(root, [self._local_row(root, b"abort-ambiguous")])
+            plan = _plan_core(root, provider_kind="cloudflare-r2", store_ref="storage:account:test")
+            transport = _AbortTransport()
+            writer = preservation_module._Writer(plan, transport)
+            original_observe = writer.ledger.observe_provider_mutation
+
+            def crash_on_abort(reservation_id):
+                if writer.ledger.call_journal._reservations[-1]["call_kind"] == "abort_multipart":
+                    raise _HardCrash()
+                original_observe(reservation_id)
+
+            writer.ledger.observe_provider_mutation = crash_on_abort
+            with (
+                mock.patch.object(archive_services, "OBJECT_STORAGE_MULTIPART_THRESHOLD_BYTES", 1),
+                mock.patch.object(archive_services, "OBJECT_STORAGE_MULTIPART_PART_SIZE_BYTES", 1024),
+                mock.patch.object(
+                    preservation_module,
+                    "_call_with_heartbeat",
+                    side_effect=lambda call, **_kwargs: call(),
+                ),
+            ):
+                with self.assertRaises(_HardCrash):
+                    writer.write_field(
+                        target_kind="object_storage_preservation_terminal_receipt",
+                        target_ref=plan.specs[0].receipt_relative,
+                        field_ref="terminal_state_token",
+                        value=plan.specs[0].receipt_token,
+                        heartbeat=lambda: None,
+                    )
+                resumed = preservation_module._Writer(plan, transport)
+                with self.assertRaises(ObjectStoragePreservationError):
+                    resumed.write_field(
+                        target_kind="object_storage_preservation_terminal_receipt",
+                        target_ref=plan.specs[0].receipt_relative,
+                        field_ref="terminal_state_token",
+                        value=plan.specs[0].receipt_token,
+                        heartbeat=lambda: None,
+                    )
+            self.assertEqual(transport.create_calls, 1)
+            self.assertEqual(transport.abort_calls, 1)
+            self.assertFalse((root / plan.specs[0].receipt_relative).exists())
+
     def test_interrupted_after_receipt_resumes_same_execution_without_second_put(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = self._root(Path(temporary))
@@ -418,7 +1091,7 @@ class ObjectStoragePreservationTests(unittest.TestCase):
             self.assertEqual(resumed["execution"]["resumed_field_count"], 1)
             self.assertEqual(transport.put_calls, 1)
 
-    def test_remote_content_conflict_fails_closed_without_put_or_receipt(self):
+    def test_remote_content_conflict_becomes_durable_review_without_put(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = self._root(Path(temporary))
             self._write_rows(root, [self._local_row(root, b"correct")])
@@ -427,17 +1100,382 @@ class ObjectStoragePreservationTests(unittest.TestCase):
             transport.objects[plan.specs[0].remote_key] = b"wrong!!"
             with exact_operation_writer_lock(root) as lock:
                 checkpoints = FileExactOperationCheckpointStore(root, writer_lock=lock)
+                result = _apply_with_store(
+                    plan,
+                    _authority(),
+                    transport,
+                    checkpoints,
+                    resume=False,
+                    progress_hook=None,
+                )
+            self.assertEqual(transport.put_calls, 0)
+            self.assertEqual(result["state"], "completed_with_review")
+            self.assertEqual(result["review_required_count"], 1)
+            self.assertEqual(result["classification_counts"]["review_required"], 1)
+            receipt = json.loads(
+                (root / plan.specs[0].receipt_relative).read_text(encoding="ascii")
+            )
+            self.assertEqual(receipt["preservation_status"], "review_required")
+            self.assertEqual(receipt["provider_put_call_count"], 0)
+            self.assertEqual(receipt["review_reason"], "remote_checksum_mismatch")
+
+    def test_existing_review_receipt_stays_visible_while_safe_targets_continue(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = self._root(Path(temporary))
+            first = self._local_row(root, b"existing review")
+            second = self._local_row(root, b"safe continuation")
+            self._write_rows(root, [first, second])
+            review_plan = _plan_core(
+                root,
+                provider_kind="cloudflare-r2",
+                store_ref="storage:account:test",
+                only=first["object_id"],
+            )
+            review_transport = _MemoryTransport()
+            review_transport.objects[review_plan.specs[0].remote_key] = b"wrong bytes!!!!"
+            with exact_operation_writer_lock(root) as lock:
+                review_result = _apply_with_store(
+                    review_plan,
+                    _authority(),
+                    review_transport,
+                    FileExactOperationCheckpointStore(root, writer_lock=lock),
+                    resume=False,
+                    progress_hook=None,
+                )
+            self.assertEqual(review_result["review_required_count"], 1)
+
+            continued = _plan_core(
+                root,
+                provider_kind="cloudflare-r2",
+                store_ref="storage:account:test",
+            )
+            public = continued.public_document()
+            self.assertTrue(continued.approveable)
+            self.assertEqual(len(continued.specs), 1)
+            self.assertEqual(continued.existing_review_required_count, 1)
+            self.assertEqual(continued.already_recorded_count, 0)
+            self.assertEqual(
+                public["state"],
+                "ready_for_exact_human_approval_with_existing_review",
+            )
+            self.assertEqual(public["existing_review_required_count"], 1)
+            self.assertIn(
+                "object_storage_bytes_preservation_existing_review_required",
+                public["reason_codes"],
+            )
+
+            safe_transport = _MemoryTransport()
+            with exact_operation_writer_lock(root) as lock:
+                safe_result = _apply_with_store(
+                    continued,
+                    _authority(),
+                    safe_transport,
+                    FileExactOperationCheckpointStore(root, writer_lock=lock),
+                    resume=False,
+                    progress_hook=None,
+                )
+            self.assertEqual(safe_result["bytes_preserved_count"], 1)
+            self.assertEqual(
+                safe_result["state"], "completed_with_existing_review"
+            )
+            self.assertEqual(safe_result["preexisting_review_required_count"], 1)
+            final_plan = _plan_core(
+                root,
+                provider_kind="cloudflare-r2",
+                store_ref="storage:account:test",
+            )
+            final_public = final_plan.public_document()
+            self.assertFalse(final_plan.approveable)
+            self.assertEqual(final_plan.existing_review_required_count, 1)
+            self.assertEqual(final_plan.already_recorded_count, 1)
+            self.assertEqual(final_public["state"], "existing_review_required")
+            self.assertNotEqual(final_public["state"], "no_new_bytes_to_preserve")
+
+    def test_already_remote_match_is_durable_and_never_put(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = self._root(Path(temporary))
+            raw = b"already remote"
+            self._write_rows(root, [self._local_row(root, raw)])
+            plan = _plan_core(root, provider_kind="cloudflare-r2", store_ref="storage:account:test")
+            transport = _MemoryTransport()
+            transport.objects[plan.specs[0].remote_key] = raw
+            with exact_operation_writer_lock(root) as lock:
+                result = _apply_with_store(
+                    plan,
+                    _authority(),
+                    transport,
+                    FileExactOperationCheckpointStore(root, writer_lock=lock),
+                    resume=False,
+                    progress_hook=None,
+                )
+            self.assertEqual(transport.put_calls, 0)
+            self.assertEqual(result["already_remote_verified_count"], 1)
+            self.assertEqual(result["provider_put_call_count"], 0)
+            receipt = json.loads(
+                (root / plan.specs[0].receipt_relative).read_text(encoding="ascii")
+            )
+            self.assertEqual(receipt["preservation_status"], "already_remote_verified")
+
+    def test_create_only_race_requeries_and_never_falls_back_to_overwrite(self):
+        class _RaceTransport(_MemoryTransport):
+            def put_object(
+                self,
+                *,
+                key,
+                data_path,
+                size,
+                content_sha256,
+                create_only=False,
+            ):
+                self.put_calls += 1
+                self.objects[key] = data_path.read_bytes()
+                return {"status_class": "precondition_failed"}
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = self._root(Path(temporary))
+            self._write_rows(root, [self._local_row(root, b"won by another writer")])
+            plan = _plan_core(root, provider_kind="cloudflare-r2", store_ref="storage:account:test")
+            transport = _RaceTransport()
+            with exact_operation_writer_lock(root) as lock:
+                result = _apply_with_store(
+                    plan,
+                    _authority(),
+                    transport,
+                    FileExactOperationCheckpointStore(root, writer_lock=lock),
+                    resume=False,
+                    progress_hook=None,
+                )
+            self.assertEqual(transport.put_calls, 1)
+            self.assertEqual(result["bytes_preserved_count"], 0)
+            self.assertEqual(result["already_remote_verified_count"], 1)
+            self.assertEqual(result["provider_put_call_count"], 1)
+
+    def test_crash_after_manifest_bound_ledger_before_receipt_never_second_put(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = self._root(Path(temporary))
+            self._write_rows(root, [self._local_row(root, b"ledger first")])
+            plan = _plan_core(root, provider_kind="cloudflare-r2", store_ref="storage:account:test")
+            transport = _MemoryTransport()
+            authority = _authority()
+            with mock.patch.object(
+                preservation_module,
+                "_create_terminal_receipt",
+                side_effect=RuntimeError("crash after ledger fsync"),
+            ):
+                with exact_operation_writer_lock(root) as lock:
+                    with self.assertRaises(ExactOperationManifestError):
+                        _apply_with_store(
+                            plan,
+                            authority,
+                            transport,
+                            FileExactOperationCheckpointStore(root, writer_lock=lock),
+                            resume=False,
+                            progress_hook=None,
+                        )
+            self.assertEqual(transport.put_calls, 1)
+            self.assertFalse((root / plan.specs[0].receipt_relative).exists())
+
+            with exact_operation_writer_lock(root) as lock:
+                resumed = _apply_with_store(
+                    plan,
+                    authority,
+                    transport,
+                    FileExactOperationCheckpointStore(root, writer_lock=lock),
+                    resume=True,
+                    progress_hook=None,
+                )
+            self.assertTrue(resumed["ok"])
+            self.assertEqual(transport.put_calls, 1)
+            self.assertEqual(resumed["bytes_preserved_count"], 1)
+            self.assertEqual(resumed["provider_put_call_count"], 1)
+
+    def test_remote_unavailable_has_no_terminal_receipt_and_remains_resumable(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = self._root(Path(temporary))
+            self._write_rows(root, [self._local_row(root, b"unavailable")])
+            plan = _plan_core(root, provider_kind="cloudflare-r2", store_ref="storage:account:test")
+            transport = _MemoryTransport(unavailable_calls={1})
+            with exact_operation_writer_lock(root) as lock:
                 with self.assertRaises(ExactOperationManifestError):
                     _apply_with_store(
                         plan,
                         _authority(),
                         transport,
-                        checkpoints,
+                        FileExactOperationCheckpointStore(root, writer_lock=lock),
                         resume=False,
                         progress_hook=None,
                     )
             self.assertEqual(transport.put_calls, 0)
             self.assertFalse((root / plan.specs[0].receipt_relative).exists())
+            ledger = preservation_module._ManifestBoundPreservationLedger(plan)
+            self.assertIsNone(ledger.terminal_for(plan.specs[0]))
+
+    def test_present_without_proven_integer_size_is_unavailable_not_mismatch(self):
+        class _UnknownSizeTransport(_MemoryTransport):
+            def head_object(self, *, key, presence_only=False):
+                self.head_calls += 1
+                return {
+                    "present": True,
+                    "size": None,
+                    "checksum_sha256": None,
+                    "presence_state": "present",
+                    "verification_state": "unavailable",
+                }
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = self._root(Path(temporary))
+            self._write_rows(root, [self._local_row(root, b"unknown remote size")])
+            plan = _plan_core(
+                root,
+                provider_kind="cloudflare-r2",
+                store_ref="storage:account:test",
+            )
+            transport = _UnknownSizeTransport()
+            with exact_operation_writer_lock(root) as lock:
+                with self.assertRaises(ExactOperationManifestError):
+                    _apply_with_store(
+                        plan,
+                        _authority(),
+                        transport,
+                        FileExactOperationCheckpointStore(root, writer_lock=lock),
+                        resume=False,
+                        progress_hook=None,
+                    )
+            self.assertEqual(transport.put_calls, 0)
+            self.assertFalse((root / plan.specs[0].receipt_relative).exists())
+            self.assertIsNone(
+                preservation_module._ManifestBoundPreservationLedger(plan).terminal_for(
+                    plan.specs[0]
+                )
+            )
+
+    def test_writer_subtracts_durable_calls_before_invoking_executor(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = self._root(Path(temporary))
+            self._write_rows(root, [self._local_row(root, b"remaining budget")])
+            plan = _plan_core(
+                root,
+                provider_kind="cloudflare-r2",
+                store_ref="storage:account:test",
+            )
+            with mock.patch.object(
+                preservation_module,
+                "_provider_put_call_budget",
+                return_value=(1, 4),
+            ):
+                writer = preservation_module._Writer(plan, _MemoryTransport())
+            writer.ledger.append_attempt(
+                {
+                    "object_id": plan.specs[0].object_id,
+                    "result_status": "failed_rate_limited",
+                    "bytes": 0,
+                    "part_count": 0,
+                    "attempts": 1,
+                    "put_calls": 1,
+                    "backoff_ms_total": 0,
+                    "multipart_cleanup_state": "not_applicable",
+                }
+            )
+            captured = {}
+
+            def fake_execute(**kwargs):
+                captured.update(kwargs)
+                return {
+                    "object_id": plan.specs[0].object_id,
+                    "result_status": "failed_rate_limited",
+                    "bytes": 0,
+                    "part_count": 0,
+                    "attempts": 3,
+                    "put_calls": 3,
+                    "backoff_ms_total": 0,
+                    "multipart_cleanup_state": "not_applicable",
+                }
+
+            with mock.patch.object(
+                archive_services,
+                "_object_storage_execute_one_upload",
+                side_effect=fake_execute,
+            ):
+                with self.assertRaises(ObjectStoragePreservationError):
+                    writer.write_field(
+                        target_kind="object_storage_preservation_terminal_receipt",
+                        target_ref=plan.specs[0].receipt_relative,
+                        field_ref="terminal_state_token",
+                        value=plan.specs[0].receipt_token,
+                        heartbeat=lambda: None,
+                    )
+            self.assertEqual(captured["max_provider_mutation_calls"], 3)
+            self.assertEqual(captured["max_attempts"], 3)
+            self.assertEqual(writer.ledger.total_put_calls(), 4)
+
+    def test_post_put_verification_unavailable_resumes_without_second_put(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = self._root(Path(temporary))
+            self._write_rows(root, [self._local_row(root, b"post-put unavailable")])
+            plan = _plan_core(root, provider_kind="cloudflare-r2", store_ref="storage:account:test")
+            transport = _MemoryTransport(unavailable_calls={2})
+            authority = _authority()
+            with exact_operation_writer_lock(root) as lock:
+                with self.assertRaises(ExactOperationManifestError):
+                    _apply_with_store(
+                        plan,
+                        authority,
+                        transport,
+                        FileExactOperationCheckpointStore(root, writer_lock=lock),
+                        resume=False,
+                        progress_hook=None,
+                    )
+            self.assertEqual(transport.put_calls, 1)
+            self.assertFalse((root / plan.specs[0].receipt_relative).exists())
+            self.assertIsNone(
+                preservation_module._ManifestBoundPreservationLedger(plan).terminal_for(
+                    plan.specs[0]
+                )
+            )
+
+            transport.unavailable_calls.clear()
+            with exact_operation_writer_lock(root) as lock:
+                resumed = _apply_with_store(
+                    plan,
+                    authority,
+                    transport,
+                    FileExactOperationCheckpointStore(root, writer_lock=lock),
+                    resume=True,
+                    progress_hook=None,
+                )
+            self.assertTrue(resumed["ok"])
+            self.assertEqual(transport.put_calls, 1)
+            self.assertEqual(resumed["already_remote_verified_count"], 1)
+            self.assertEqual(resumed["provider_put_call_count"], 1)
+
+    def test_manifest_bound_ledger_rejects_copied_or_tampered_authority(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = self._root(Path(temporary))
+            self._write_rows(root, [self._local_row(root, b"ledger binding")])
+            plan = _plan_core(root, provider_kind="cloudflare-r2", store_ref="storage:account:test")
+            transport = _MemoryTransport()
+            with exact_operation_writer_lock(root) as lock:
+                _apply_with_store(
+                    plan,
+                    _authority(),
+                    transport,
+                    FileExactOperationCheckpointStore(root, writer_lock=lock),
+                    resume=False,
+                    progress_hook=None,
+                )
+            ledger_path = root / preservation_module._ledger_relative(
+                plan.manifest.manifest_sha256
+            )
+            row = json.loads(ledger_path.read_text(encoding="ascii"))
+            row["manifest_sha256"] = "sha256:" + ("0" * 64)
+            ledger_path.write_text(
+                json.dumps(row, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+                + "\n",
+                encoding="ascii",
+                newline="\n",
+            )
+            with self.assertRaises(ObjectStoragePreservationError):
+                preservation_module._ManifestBoundPreservationLedger(plan)
 
     def test_full_source_preflight_blocks_all_puts_when_later_source_drifted(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -548,6 +1586,132 @@ class ObjectStoragePreservationTests(unittest.TestCase):
             self.assertTrue(loaded.loaded_from_control)
             self.assertEqual(loaded.manifest.document(), plan.manifest.document())
             self.assertEqual(len(loaded.specs), 600)
+
+    def test_b7_control_and_ledger_resume_without_rewriting_or_second_put(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = self._root(Path(temporary))
+            payload = b"b7-ledger-before-receipt"
+            self._write_rows(root, [self._local_row(root, payload)])
+            plan = _plan_core(root, provider_kind="cloudflare-r2", store_ref="storage:account:test")
+            spec = plan.specs[0]
+
+            legacy_basis = preservation_module._control_document(plan)
+            legacy_basis.pop("control_sha256")
+            legacy_basis.pop("existing_review_required_count")
+            legacy_basis["schema_version"] = preservation_module.LEGACY_CONTROL_SCHEMA
+            legacy_control = {
+                **legacy_basis,
+                "control_sha256": preservation_module._sha256_document(legacy_basis),
+            }
+            control_path = root / preservation_module._control_relative(
+                plan.manifest.manifest_sha256
+            )
+            control_path.parent.mkdir(parents=True, exist_ok=True)
+            control_bytes = preservation_module._canonical_control_bytes(legacy_control)
+            control_path.write_bytes(control_bytes)
+
+            ledger_path = root / preservation_module._ledger_relative(
+                plan.manifest.manifest_sha256
+            )
+            ledger_path.parent.mkdir(parents=True, exist_ok=True)
+            legacy_row = {
+                "schema_version": preservation_module.LEGACY_LEDGER_SCHEMA,
+                "operation": preservation_module.OPERATION,
+                "manifest_sha256": plan.manifest.manifest_sha256,
+                "target_identity_sha256": spec.target_identity_sha256,
+                "object_id": spec.object_id,
+                "remote_key_sha256": preservation_module._sha256_document(spec.remote_key),
+                "result_status": "uploaded",
+                "preservation_status": "bytes_preserved",
+                "remote_state": "verified_match",
+                "bytes": spec.size_bytes,
+                "part_count": 1,
+                "attempts": 1,
+                "put_calls": 1,
+                "backoff_ms_total": 0,
+                "completed_at": "2026-08-28T00:00:00Z",
+            }
+            ledger_path.write_text(
+                json.dumps(legacy_row, sort_keys=True, separators=(",", ":")) + "\n",
+                encoding="ascii",
+            )
+
+            loaded = load_object_storage_bytes_preservation_plan(
+                root, manifest_sha256=plan.manifest.manifest_sha256
+            )
+            _persist_control(loaded)
+            self.assertEqual(control_path.read_bytes(), control_bytes)
+            transport = _MemoryTransport()
+            transport.objects[spec.remote_key] = payload
+            writer = preservation_module._Writer(loaded, transport)
+            writer.write_field(
+                target_kind="object_storage_preservation_terminal_receipt",
+                target_ref=spec.receipt_relative,
+                field_ref="terminal_state_token",
+                value=spec.receipt_token,
+                heartbeat=lambda: None,
+            )
+            self.assertEqual(transport.put_calls, 0)
+            self.assertTrue((root / spec.receipt_relative).is_file())
+            self.assertEqual(writer.ledger.total_put_calls(), 1)
+
+    def test_legacy_schema_shapes_are_exact_and_fail_closed(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = self._root(Path(temporary))
+            self._write_rows(root, [self._local_row(root, b"strict-legacy")])
+            plan = _plan_core(root, provider_kind="cloudflare-r2", store_ref="storage:account:test")
+            legacy = preservation_module._control_document(plan)
+            legacy.pop("control_sha256")
+            legacy["schema_version"] = preservation_module.LEGACY_CONTROL_SCHEMA
+            # A v0.2 document that claims a v0.3-only field is ambiguous even
+            # when its self-hash is recomputed.
+            legacy["control_sha256"] = preservation_module._sha256_document(legacy)
+            path = root / preservation_module._control_relative(plan.manifest.manifest_sha256)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(preservation_module._canonical_control_bytes(legacy))
+            with self.assertRaises(ObjectStoragePreservationError):
+                load_object_storage_bytes_preservation_plan(
+                    root, manifest_sha256=plan.manifest.manifest_sha256
+                )
+
+            spec = plan.specs[0]
+            row = {
+                "schema_version": preservation_module.LEGACY_LEDGER_SCHEMA,
+                "operation": preservation_module.OPERATION,
+                "manifest_sha256": plan.manifest.manifest_sha256,
+                "target_identity_sha256": spec.target_identity_sha256,
+                "object_id": spec.object_id,
+                "remote_key_sha256": preservation_module._sha256_document(spec.remote_key),
+                "result_status": "failed_upload",
+                "preservation_status": None,
+                "remote_state": None,
+                "bytes": 0,
+                "part_count": 0,
+                "attempts": 1,
+                "put_calls": 1,
+                "backoff_ms_total": 0,
+                "completed_at": "2026-08-28T00:00:00Z",
+            }
+            ledger_path = root / preservation_module._ledger_relative(
+                plan.manifest.manifest_sha256
+            )
+            ledger_path.parent.mkdir(parents=True, exist_ok=True)
+            ambiguous_rows = (
+                {**row, "multipart_cleanup_state": "not_required"},
+                {
+                    **row,
+                    "schema_version": preservation_module.LEDGER_SCHEMA,
+                },
+            )
+            for ambiguous in ambiguous_rows:
+                with self.subTest(schema=ambiguous["schema_version"]):
+                    ledger_path.write_text(
+                        json.dumps(ambiguous, sort_keys=True, separators=(",", ":"))
+                        + "\n",
+                        encoding="ascii",
+                    )
+                    with self.assertRaises(ObjectStoragePreservationError):
+                        preservation_module._ManifestBoundPreservationLedger(plan)
 
     def test_resume_control_rejects_non_target_inventory_drift(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -679,6 +1843,113 @@ class ObjectStoragePreservationTests(unittest.TestCase):
         source_path = (
             kit_root
             / "schemas"
+            / "object-storage-preservation-terminal-receipt-v0.3.schema.json"
+        )
+        packaged_path = (
+            kit_root
+            / "src"
+            / "wom_kit"
+            / "_resources"
+            / "schemas"
+            / "object-storage-preservation-terminal-receipt-v0.3.schema.json"
+        )
+        self.assertEqual(source_path.read_bytes(), packaged_path.read_bytes())
+        schema = json.loads(source_path.read_text(encoding="utf-8"))
+        with tempfile.TemporaryDirectory() as temporary:
+            root = self._root(Path(temporary))
+            self._write_rows(root, [self._local_row(root, b"schema receipt")])
+            plan = _plan_core(
+                root,
+                provider_kind="cloudflare-r2",
+                store_ref="storage:account:test",
+            )
+            transport = _MemoryTransport()
+            with exact_operation_writer_lock(root) as lock:
+                _apply_with_store(
+                    plan,
+                    _authority(),
+                    transport,
+                    FileExactOperationCheckpointStore(root, writer_lock=lock),
+                    resume=False,
+                    progress_hook=None,
+                )
+            receipt = json.loads(
+                (root / plan.specs[0].receipt_relative).read_text(encoding="ascii")
+            )
+        Draft202012Validator(schema).validate(receipt)
+
+    def test_existing_receipt_versions_require_exact_shapes(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = self._root(Path(temporary))
+            self._write_rows(root, [self._local_row(root, b"receipt-version-shape")])
+            plan = _plan_core(
+                root,
+                provider_kind="cloudflare-r2",
+                store_ref="storage:account:test",
+            )
+            spec = plan.specs[0]
+            common = {
+                "receipt_token": spec.receipt_token,
+                "object_id": spec.object_id,
+                "size_bytes": spec.size_bytes,
+                "provider_kind": plan.provider_kind,
+                "store_ref": plan.store_ref,
+                "inventory_sha256": plan.source_inventory_sha256,
+            }
+            legacy = preservation_module._legacy_receipt_document(
+                object_id=spec.object_id,
+                size_bytes=spec.size_bytes,
+                provider_kind=plan.provider_kind,
+                store_ref=plan.store_ref,
+                inventory_sha256=plan.source_inventory_sha256,
+            )
+            current = preservation_module._receipt_document(
+                manifest_sha256=plan.manifest.manifest_sha256,
+                receipt_token=spec.receipt_token,
+                object_id=spec.object_id,
+                size_bytes=spec.size_bytes,
+                provider_kind=plan.provider_kind,
+                store_ref=plan.store_ref,
+                inventory_sha256=plan.source_inventory_sha256,
+                preservation_status="bytes_preserved",
+                classified_at="2026-08-29T00:00:00Z",
+                provider_put_call_count=1,
+                provider_put_call_charged_count=1,
+                provider_put_call_count_evidence="exact_observed",
+                remote_state="verified_match",
+            )
+            previous = dict(current)
+            previous["schema_version"] = preservation_module.PREVIOUS_RECEIPT_SCHEMA
+            previous.pop("provider_put_call_charged_count")
+            previous.pop("provider_put_call_count_evidence")
+
+            for genuine in (legacy, previous, current):
+                with self.subTest(genuine=genuine["schema_version"]):
+                    self.assertTrue(
+                        preservation_module._existing_receipt_matches(
+                            genuine, **common
+                        )
+                    )
+
+            v3_shape_with_v2_label = dict(current)
+            v3_shape_with_v2_label["schema_version"] = (
+                preservation_module.PREVIOUS_RECEIPT_SCHEMA
+            )
+            v2_shape_with_v3_label = dict(previous)
+            v2_shape_with_v3_label["schema_version"] = preservation_module.RECEIPT_SCHEMA
+            for mixed in (v3_shape_with_v2_label, v2_shape_with_v3_label):
+                with self.subTest(mixed=mixed["schema_version"]):
+                    self.assertFalse(
+                        preservation_module._existing_receipt_matches(
+                            mixed, **common
+                        )
+                    )
+
+    def test_v01_receipt_contract_is_immutable_and_conservatively_reused(self):
+        kit_root = Path(__file__).resolve().parents[1]
+        source_path = (
+            kit_root
+            / "schemas"
             / "object-storage-bytes-preserved-receipt-v0.1.schema.json"
         )
         packaged_path = (
@@ -691,16 +1962,43 @@ class ObjectStoragePreservationTests(unittest.TestCase):
         )
         self.assertEqual(source_path.read_bytes(), packaged_path.read_bytes())
         schema = json.loads(source_path.read_text(encoding="utf-8"))
+        self.assertEqual(
+            schema["properties"]["preservation_status"],
+            {"const": "bytes_preserved"},
+        )
         with tempfile.TemporaryDirectory() as temporary:
             root = self._root(Path(temporary))
-            self._write_rows(root, [self._local_row(root, b"schema receipt")])
-            plan = _plan_core(
+            self._write_rows(root, [self._local_row(root, b"legacy receipt")])
+            original = _plan_core(
                 root,
                 provider_kind="cloudflare-r2",
                 store_ref="storage:account:test",
             )
-            receipt = json.loads(plan.specs[0].receipt_bytes.decode("ascii"))
-        Draft202012Validator(schema).validate(receipt)
+            spec = original.specs[0]
+            legacy = preservation_module._legacy_receipt_document(
+                object_id=spec.object_id,
+                size_bytes=spec.size_bytes,
+                provider_kind=original.provider_kind,
+                store_ref=original.store_ref,
+                inventory_sha256=original.source_inventory_sha256,
+            )
+            Draft202012Validator(schema).validate(legacy)
+            receipt_path = root / spec.receipt_relative
+            receipt_path.parent.mkdir(parents=True, exist_ok=True)
+            receipt_path.write_bytes(
+                preservation_module._canonical_receipt_bytes(legacy)
+            )
+            resumed_plan = _plan_core(
+                root,
+                provider_kind="cloudflare-r2",
+                store_ref="storage:account:test",
+            )
+            self.assertEqual(resumed_plan.already_recorded_count, 1)
+            self.assertEqual(resumed_plan.specs, ())
+            self.assertEqual(
+                json.loads(receipt_path.read_text(encoding="ascii")),
+                legacy,
+            )
 
 
 if __name__ == "__main__":

@@ -6,6 +6,33 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.4.13 - 2026-08-29
+
+- Made local object-storage setup evidence exact-first and content-free across
+  malformed, orphaned, changing, case-colliding, and cross-provider receipt
+  states. Legacy evidence is accepted only through the strict supported bridge.
+- Made emergency single and multipart preservation create-only at the remote
+  publish point. Conditional conflicts are re-queried and never retried as
+  unconditional overwrites.
+- Added three manifest-bound terminal states: newly uploaded and independently
+  rehashed `bytes_preserved`, pre-existing and independently rehashed
+  `already_remote_verified`, and durable non-overwriting `review_required`.
+- Kept unavailable or uncertain remote evidence nonterminal and resumable,
+  including incomplete responses and uncertain multipart cleanup.
+- Bound the private resume ledger and separate immutable terminal receipts to
+  the exact manifest. Before each provider mutation, the ledger durably
+  reserves and charges one manifest-bound budget unit. A crash may leave the
+  transport attempt unobserved, but the reservation stays charged rather than
+  becoming retry authority.
+- Made resume query the exact remote target first. Only verified matching bytes
+  allow no-PUT finalization; absence, provider unavailability, or uncertain
+  multipart cleanup remains nonterminal and grants no automatic retry
+  authority.
+- Preserved the human and client boundary: people decide only the plain exact
+  operation; WOM verifies technical evidence. Publishing or installing the
+  release neither calls a provider nor changes a client archive, and byte
+  preservation remains explicitly different from formal adoption.
+
 ## v0.4.12 - 2026-08-29
 
 - Replaced repeated full-tree/full-manifest `zettel-objet-link` discovery with

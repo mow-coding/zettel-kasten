@@ -12,6 +12,7 @@ import sys
 import tempfile
 import unittest
 import urllib.request
+from collections.abc import Callable
 from pathlib import Path
 from unittest.mock import patch
 
@@ -25,6 +26,7 @@ if str(TESTS_ROOT) not in sys.path:
     sys.path.append(str(TESTS_ROOT))
 
 from wom_kit import project_runtime
+from wom_kit.legacy_cleanup_bound_delete import LegacyCleanupBoundDeleteError
 
 from test_project_runtime import (
     _supply_for_dependency,
@@ -48,6 +50,9 @@ class CompleteRuntimeCandidateTests(unittest.TestCase):
         transaction_ref: str,
         *,
         created_at: str = "2026-08-23T12:34:56Z",
+        progress_callback: Callable[
+            [str, str, int | None, int | None], None
+        ] | None = None,
     ) -> tuple[
         project_runtime.PreparedRuntimeCandidate,
         project_runtime.BootstrapWheel,
@@ -102,8 +107,229 @@ class CompleteRuntimeCandidateTests(unittest.TestCase):
                 supply=supply,
                 running_version="0.4.3",
                 receipt_created_at=created_at,
+                progress_callback=progress_callback,
             )
         return candidate, bootstrap, supply
+
+    @unittest.skipUnless(
+        WINDOWS_RUNTIME,
+        "Complete project runtime candidates are CPython 3.12 Windows AMD64.",
+    )
+    def test_runtime_script_cleanup_retries_only_transient_windows_locks(
+        self,
+    ) -> None:
+        import ctypes
+
+        def make_runtime(root: Path) -> tuple[Path, Path]:
+            runtime = root / "runtime"
+            scripts = runtime / "Scripts"
+            scripts.mkdir(parents=True)
+            (scripts / "python.exe").write_bytes(b"python")
+            (scripts / "pythonw.exe").write_bytes(b"pythonw")
+            removable = scripts / "archive.exe"
+            removable.write_bytes(b"launcher")
+            return runtime, removable
+
+        def transient_open_error(winerror: int) -> LegacyCleanupBoundDeleteError:
+            error = LegacyCleanupBoundDeleteError(
+                "legacy_cleanup_bound_win32_open_uncertain"
+            )
+            error.__cause__ = ctypes.WinError(winerror)
+            return error
+
+        original_delete = project_runtime._delete_exact_owned_runtime_file
+
+        for winerror in sorted(
+            project_runtime.PROJECT_RUNTIME_TRANSIENT_WINDOWS_ERRORS
+        ):
+            with self.subTest(winerror=winerror), tempfile.TemporaryDirectory() as tmp:
+                runtime, removable = make_runtime(Path(tmp) / "transient")
+                attempts = 0
+
+                def transient_once(
+                    root: Path,
+                    path: Path,
+                    record: dict[str, object],
+                ) -> None:
+                    nonlocal attempts
+                    attempts += 1
+                    if attempts == 1:
+                        raise transient_open_error(winerror)
+                    original_delete(root, path, record)
+
+                with patch.object(
+                    project_runtime,
+                    "_delete_exact_owned_runtime_file",
+                    side_effect=transient_once,
+                ), patch.object(project_runtime.time, "sleep") as sleep:
+                    project_runtime._prune_runtime_scripts(runtime)
+                self.assertEqual(attempts, 2)
+                sleep.assert_called_once()
+                self.assertFalse(removable.exists())
+
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime, removable = make_runtime(Path(tmp) / "persistent")
+            attempts = 0
+
+            def always_locked(
+                root: Path,
+                path: Path,
+                record: dict[str, object],
+            ) -> None:
+                del root, path, record
+                nonlocal attempts
+                attempts += 1
+                raise transient_open_error(32)
+
+            with patch.object(
+                project_runtime,
+                "_delete_exact_owned_runtime_file",
+                side_effect=always_locked,
+            ), patch.object(project_runtime.time, "sleep") as sleep:
+                with self.assertRaisesRegex(
+                    project_runtime.ProjectRuntimeError,
+                    "project_runtime_scripts_cleanup_failed",
+                ):
+                    project_runtime._prune_runtime_scripts(runtime)
+            self.assertEqual(
+                attempts,
+                project_runtime.PROJECT_RUNTIME_TRANSIENT_UNLINK_ATTEMPTS,
+            )
+            self.assertEqual(
+                sleep.call_count,
+                project_runtime.PROJECT_RUNTIME_TRANSIENT_UNLINK_ATTEMPTS - 1,
+            )
+            self.assertTrue(removable.exists())
+
+        for semantic_code in (
+            "legacy_cleanup_bound_win32_disposition_uncertain",
+            "legacy_cleanup_bound_win32_close_uncertain",
+        ):
+            with self.subTest(code=semantic_code), tempfile.TemporaryDirectory() as tmp:
+                runtime, removable = make_runtime(Path(tmp) / "semantic")
+                attempts = 0
+
+                def semantic_failure(
+                    root: Path,
+                    path: Path,
+                    record: dict[str, object],
+                ) -> None:
+                    del root, path, record
+                    nonlocal attempts
+                    attempts += 1
+                    error = LegacyCleanupBoundDeleteError(semantic_code)
+                    error.__cause__ = ctypes.WinError(32)
+                    raise error
+
+                with patch.object(
+                    project_runtime,
+                    "_delete_exact_owned_runtime_file",
+                    side_effect=semantic_failure,
+                ), patch.object(project_runtime.time, "sleep") as sleep:
+                    with self.assertRaisesRegex(
+                        project_runtime.ProjectRuntimeError,
+                        "project_runtime_scripts_cleanup_failed",
+                    ):
+                        project_runtime._prune_runtime_scripts(runtime)
+                self.assertEqual(attempts, 1)
+                sleep.assert_not_called()
+                self.assertTrue(removable.exists())
+
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime, removable = make_runtime(Path(tmp) / "replacement")
+            attempts = 0
+
+            def replace_during_lock(
+                root: Path,
+                path: Path,
+                record: dict[str, object],
+            ) -> None:
+                nonlocal attempts
+                attempts += 1
+                if attempts == 1:
+                    path.unlink()
+                    path.write_bytes(b"foreign-replacement")
+                    raise transient_open_error(32)
+                original_delete(root, path, record)
+
+            with patch.object(
+                project_runtime,
+                "_delete_exact_owned_runtime_file",
+                side_effect=replace_during_lock,
+            ), patch.object(project_runtime.time, "sleep") as sleep:
+                with self.assertRaisesRegex(
+                    project_runtime.ProjectRuntimeError,
+                    "project_runtime_scripts_unsafe",
+                ):
+                    project_runtime._prune_runtime_scripts(runtime)
+            self.assertEqual(attempts, 2)
+            sleep.assert_called_once()
+            self.assertEqual(removable.read_bytes(), b"foreign-replacement")
+
+    @unittest.skipUnless(
+        WINDOWS_RUNTIME,
+        "Complete project runtime candidates are CPython 3.12 Windows AMD64.",
+    )
+    def test_complete_candidate_survives_one_transient_script_prune_open(
+        self,
+    ) -> None:
+        import ctypes
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = root / "project"
+            project.mkdir()
+            events: list[tuple[str, str]] = []
+            attempts = 0
+            injected = 0
+            original_delete = project_runtime._delete_exact_owned_runtime_file
+
+            def transient_once(
+                runtime_root: Path,
+                path: Path,
+                record: dict[str, object],
+            ) -> None:
+                nonlocal attempts, injected
+                attempts += 1
+                if injected == 0:
+                    injected += 1
+                    error = LegacyCleanupBoundDeleteError(
+                        "legacy_cleanup_bound_win32_open_uncertain"
+                    )
+                    error.__cause__ = ctypes.WinError(32)
+                    raise error
+                original_delete(runtime_root, path, record)
+
+            with patch.object(
+                project_runtime,
+                "_delete_exact_owned_runtime_file",
+                side_effect=transient_once,
+            ):
+                candidate, _bootstrap, _supply = self._prepare(
+                    root,
+                    project,
+                    "txn-transient-prune-001",
+                    progress_callback=lambda stage, phase, _current, _total: events.append(
+                        (stage, phase)
+                    ),
+                )
+
+            self.assertEqual(injected, 1)
+            self.assertGreaterEqual(attempts, 2)
+            self.assertTrue(candidate.public_summary()["complete_runtime_image"])
+            self.assertTrue(candidate.verification["pip_check"])
+            self.assertIn(
+                ("project-runtime-candidate-prune-scripts", "done"),
+                events,
+            )
+            self.assertIn(
+                ("project-runtime-candidate-static-inventory", "done"),
+                events,
+            )
+            self.assertIn(
+                ("project-runtime-candidate-pip-check", "done"),
+                events,
+            )
 
     @unittest.skipUnless(
         WINDOWS_RUNTIME,

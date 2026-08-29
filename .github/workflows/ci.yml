@@ -222,7 +222,7 @@ jobs:
           fi
 
   link_index_scale:
-    name: v0.4.12 link-index scale gate (Windows py3.12)
+    name: Link-index regression scale gate (Windows py3.12)
     if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
     runs-on: windows-latest
     timeout-minutes: 10
@@ -240,26 +240,26 @@ jobs:
           python -m pip install --disable-pip-version-check
           -r wom-kit/cli/requirements.txt
 
-      - name: Build exact v0.4.12 benchmark wheel outside the checkout
+      - name: Build exact current candidate wheel outside the checkout
         shell: pwsh
         run: |
-          $wheelDir = Join-Path $env:RUNNER_TEMP "wom-v0412-link-index-wheel"
+          $wheelDir = Join-Path $env:RUNNER_TEMP "wom-link-index-candidate-wheel"
           New-Item -ItemType Directory -Force -Path $wheelDir | Out-Null
           python -m pip wheel --disable-pip-version-check --no-deps --wheel-dir $wheelDir ./wom-kit
-          $wheels = @(Get-ChildItem -LiteralPath $wheelDir -Filter "wom_kit-0.4.12-*.whl" -File)
+          $wheels = @(Get-ChildItem -LiteralPath $wheelDir -Filter "wom_kit-*.whl" -File)
           if ($wheels.Count -ne 1) {
-            Write-Error "Expected exactly one v0.4.12 benchmark wheel."
+            Write-Error "Expected exactly one current candidate benchmark wheel."
             exit 1
           }
-          "V0412_BENCHMARK_WHEEL=$($wheels[0].FullName)" >> $env:GITHUB_ENV
+          "LINK_INDEX_BENCHMARK_WHEEL=$($wheels[0].FullName)" >> $env:GITHUB_ENV
 
-      - name: Run exact v0.4.12 link-index scale benchmark
+      - name: Run current candidate against the v0.4.12 regression workload
         shell: pwsh
         run: |
           python -B wom-kit/tools/benchmark_v0412_link_index.py `
             --profile full `
             --format json `
-            --wheel "$env:V0412_BENCHMARK_WHEEL"
+            --wheel "$env:LINK_INDEX_BENCHMARK_WHEEL"
 
       - name: Assert benchmark left the worktree clean
         shell: pwsh
