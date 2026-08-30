@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import json
+import os
 from pathlib import Path
+import stat
 import subprocess
 import sys
 import tempfile
@@ -19,6 +22,17 @@ PACKAGED_ROOT = KIT_ROOT / "src" / "wom_kit" / "_resources"
 
 
 class PackageResourceTests(unittest.TestCase):
+    def _load_sync_tool_module(self):
+        spec = importlib.util.spec_from_file_location(
+            "wom_kit_test_sync_package_resources",
+            SYNC_TOOL,
+        )
+        self.assertIsNotNone(spec)
+        self.assertIsNotNone(spec.loader)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
     def test_committed_package_resources_match_source_truth(self) -> None:
         completed = subprocess.run(
             [sys.executable, str(SYNC_TOOL), "--check"],
@@ -93,6 +107,121 @@ class PackageResourceTests(unittest.TestCase):
             ordered,
             ["README.md", "SKILL.md", "archive.yml", "references/operator-contract.md"],
         )
+
+    def test_manifest_writer_replaces_atomically_and_cleans_temporary_file(self) -> None:
+        sync_tool = self._load_sync_tool_module()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest_path = root / "resource-manifest.json"
+            manifest_path.write_bytes(b"old\n")
+            with (
+                patch.object(sync_tool, "DESTINATION_ROOT", root),
+                patch.object(sync_tool, "MANIFEST_PATH", manifest_path),
+            ):
+                sync_tool.write_manifest_atomic({"schema": "test/v1"})
+            self.assertEqual(
+                manifest_path.read_bytes(),
+                b'{\n  "schema": "test/v1"\n}\n',
+            )
+            self.assertEqual(
+                list(root.glob(".resource-manifest.*.tmp")),
+                [],
+            )
+            if os.name != "nt":
+                self.assertEqual(
+                    stat.S_IMODE(manifest_path.stat().st_mode),
+                    0o644,
+                )
+
+    def test_manifest_writer_retries_one_windows_sharing_failure(self) -> None:
+        sync_tool = self._load_sync_tool_module()
+        real_replace = os.replace
+        attempts = 0
+
+        def replace_after_one_failure(source, destination):
+            nonlocal attempts
+            attempts += 1
+            if attempts == 1:
+                raise PermissionError("synthetic sharing violation")
+            return real_replace(source, destination)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest_path = root / "resource-manifest.json"
+            manifest_path.write_bytes(b"old\n")
+            with (
+                patch.object(sync_tool, "DESTINATION_ROOT", root),
+                patch.object(sync_tool, "MANIFEST_PATH", manifest_path),
+                patch.object(sync_tool.os, "name", "nt"),
+                patch.object(
+                    sync_tool.os,
+                    "replace",
+                    side_effect=replace_after_one_failure,
+                ),
+                patch.object(sync_tool.time, "sleep"),
+            ):
+                sync_tool.write_manifest_atomic({"schema": "test/v1"})
+            self.assertEqual(attempts, 2)
+            self.assertEqual(
+                manifest_path.read_bytes(),
+                b'{\n  "schema": "test/v1"\n}\n',
+            )
+            self.assertEqual(list(root.glob("*.tmp")), [])
+
+    def test_manifest_writer_exhaustion_preserves_original_and_cleans_temp(self) -> None:
+        sync_tool = self._load_sync_tool_module()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest_path = root / "resource-manifest.json"
+            manifest_path.write_bytes(b"old\n")
+            with (
+                patch.object(sync_tool, "DESTINATION_ROOT", root),
+                patch.object(sync_tool, "MANIFEST_PATH", manifest_path),
+                patch.object(sync_tool.os, "name", "nt"),
+                patch.object(
+                    sync_tool.os,
+                    "replace",
+                    side_effect=PermissionError(
+                        "synthetic persistent sharing violation"
+                    ),
+                ) as replace_mock,
+                patch.object(sync_tool.time, "sleep"),
+            ):
+                with self.assertRaises(PermissionError):
+                    sync_tool.write_manifest_atomic({"schema": "test/v1"})
+            self.assertEqual(
+                replace_mock.call_count,
+                sync_tool.MANIFEST_REPLACE_ATTEMPTS,
+            )
+            self.assertEqual(manifest_path.read_bytes(), b"old\n")
+            self.assertEqual(list(root.glob("*.tmp")), [])
+
+    def test_manifest_writer_closes_descriptor_when_fdopen_fails(self) -> None:
+        sync_tool = self._load_sync_tool_module()
+        real_close = os.close
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest_path = root / "resource-manifest.json"
+            manifest_path.write_bytes(b"old\n")
+            with (
+                patch.object(sync_tool, "DESTINATION_ROOT", root),
+                patch.object(sync_tool, "MANIFEST_PATH", manifest_path),
+                patch.object(
+                    sync_tool.os,
+                    "fdopen",
+                    side_effect=OSError("synthetic fdopen failure"),
+                ),
+                patch.object(
+                    sync_tool.os,
+                    "close",
+                    wraps=real_close,
+                ) as close_mock,
+            ):
+                with self.assertRaises(OSError):
+                    sync_tool.write_manifest_atomic({"schema": "test/v1"})
+            self.assertEqual(close_mock.call_count, 1)
+            self.assertEqual(manifest_path.read_bytes(), b"old\n")
+            self.assertEqual(list(root.glob("*.tmp")), [])
 
     def test_resource_resolver_prefers_source_checkout(self) -> None:
         self.assertTrue(resource_paths.source_checkout_available())

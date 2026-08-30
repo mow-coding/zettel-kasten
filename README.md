@@ -34,10 +34,10 @@ not re-grow baseline ladders or tag lists here.
 Current public baseline:
 
 ```text
-v0.4.14
+v0.4.15
 ```
 
-Previous public baseline: v0.4.13.
+Previous public baseline: v0.4.14.
 
 Full release history: see [CHANGELOG.md](CHANGELOG.md) and [wom-kit/docs/releases/](wom-kit/docs/releases/).
 
@@ -57,14 +57,23 @@ matching GitHub Release exists and lists this wheel. The versioned URL alone is
 not proof that the asset is available.
 
 ```powershell
-uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.14/wom_kit-0.4.14-py3-none-any.whl"
-archive --version
+$womBootstrapNonce = [guid]::NewGuid().ToString("N")
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0415-$womBootstrapNonce"
+if (Test-Path -LiteralPath $womBootstrapRoot) {
+  throw "WOM bootstrap path must be new."
+}
+py -3.12 -m venv $womBootstrapRoot
+$womBootstrapPython = (Get-Item -LiteralPath (Join-Path $womBootstrapRoot "Scripts\python.exe")).FullName
+& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.15/wom_kit-0.4.15-py3-none-any.whl"
+& "$womBootstrapRoot\Scripts\archive.exe" --version
 ```
 
 WOM-kit is not published to PyPI yet, so bare `pip install wom-kit` is not an
-official install path. Plain `pip` is supported only in a dedicated virtual
-environment using the exact release wheel. Installing the Python tool does not
-open or change an archive and does not silently edit AI-host settings.
+official install path. The supported project-updater bootstrap uses the exact
+release wheel in a dedicated external CPython 3.12 virtual environment and its
+real `python.exe -m pip`. A user-scoped `uv tool` environment whose metadata
+omits the wheel hash is not updater supply evidence. Installing the Python tool
+does not open or change an archive and does not silently edit AI-host settings.
 
 The wheel includes the `wom-archive` Agent Skill. Preview activation for the
 current Codex user before approving any host-configuration write:
@@ -102,6 +111,7 @@ approval-gated write, or docs-only), see the
 - v0.4.6 adds exact, resumable R2 recovery inside the existing adoption family: local-only bytes can be content-addressed and independently rehashed without being mislabeled as adopted, while verified non-conflicting key-map entries can be recorded with one final manifest projection and conflicts remain explicit review debt; see the [v0.4.6 release notes](wom-kit/docs/releases/v0.4.6.md),
 - v0.4.13 makes local object-storage setup evidence exact-first and privacy-safe, then makes single and multipart emergency preservation create-only at the remote publish point. New or already-present matching bytes require HEAD plus a complete GET rehash, proven conflicts become non-overwriting review evidence, unavailable states remain resumable, and preservation still does not claim formal adoption. Publishing or installing the release performs no client or provider operation; see the [v0.4.13 release notes](wom-kit/docs/releases/v0.4.13.md),
 - v0.4.14 makes historical locator recovery reference-aware instead of restoring whole old bodies: exact reviewed replacements remain intact, partial evidence becomes explicit review debt, and one private classification ledger carries native approval, checkpoints, resume, verification, and revert. Hash-bound local decision clues identify the target without entering plans or receipts, while complete human-document reads protect literal range tildes and incomplete emphasis without changing canonical bytes. Installing the release changes no client archive; see the [v0.4.14 release notes](wom-kit/docs/releases/v0.4.14.md),
+- v0.4.15 makes a blocked project update recoverable without asking a person for target, transaction, reviewer, approval, or file identifiers while a live `version-update.lock` or the exact lockless unlock tail with its original transaction directory remains. WOM restores the exact context, accepts exactly one checkpoint-valid claim, and opens no second native decision. The first unsupported boundary is after `completed`, once the original transaction directory has been successfully renamed to a terminal cleanup tombstone. A tombstone or cleanup proof is not authenticated outcome or cleanup authority: WOM reports `terminal_cleanup_outcome_unknown` with a nonzero exit and does not infer success, failure, or cancellation, automatically retry, or delete that evidence. Full authenticated terminal handoff and terminal cleanup outcome reconstruction remain a v0.4.16 follow-up. While recovery remains required, only create-only operator feedback body preservation may append; revision, lifecycle metadata, delivery, and every ordinary archive writer stay blocked, and the update lock is unchanged. The updater bootstrap now requires an external CPython 3.12 environment installed through its exact `python.exe -m pip`; see the [v0.4.15 release notes](wom-kit/docs/releases/v0.4.15.md),
 - a Windows-native, spawned-child credential-intake and authenticated lifecycle plus historical v0.3.320 Notion-recovery evidence: the one-use capability, pre-secret-read authenticated claim, endpoint/scope/budget checks, and three-way content-free evidence remain auditable. In v0.4.0 Notion recovery approval is fixed fail-closed before credential read, provider call, or archive mutation with `compound_exact_human_approval_binding_required`; the read-only plan and verified local replay remain available. WOM never accepts a PAT through argv/stdin/environment, searches a workspace broadly, writes to Notion, or rewrites canonical zets; see [Letters 118 and 119](wom-kit/docs/letter118-119-credential-continuity-and-notion-page-recovery.md) and the [Credential Capability Contract](wom-kit/docs/credential-capability-contract.md),
 - one fail-closed current-index authority for protected search, structured `view-zets`, and mint planning; `mint-zet --progress` now emits content-free start and heartbeat evidence to stderr while reserving stdout for the final result, and the separate operator-feedback body companion uses an exact six-section private request plus digest-bound human approval and lifecycle checking without submitting externally or proving real-archive repair; see [Letters 120 and 123](wom-kit/docs/letter120-123-index-lifecycle-and-feedback-body.md),
 - a private source-fidelity gate for every new AI-assisted or AI-generated draft: one manifested content-addressed source, explicit `verbatim`, `faithful_summary`, or `sanitized_derivative` mode, dry-run hashes, and attributed human replay are required before a write; `private_self` verbatim preserves personal source data while credential secrets block, declared AI provenance cannot downgrade to the human route, mint re-verifies the private receipt, and audience metadata never shares or exports anything; see [Source Fidelity And Private Verbatim Preservation](wom-kit/docs/source-fidelity-and-private-verbatim.md),
@@ -113,7 +123,7 @@ approval-gated write, or docs-only), see the
   duplicate or unsafe ZIP members, malformed or duplicate-key manifests,
   undeclared resources, and any manifest, byte-count, SHA-256, or packaged
   mirror mismatch before a wheel is accepted,
-- a self-contained v0.3.242 Python wheel whose exact GitHub release artifact carries the runtime schemas, templates, base rules, and release identity needed for clean-environment onboarding and strict Doctor; isolated `uv tool install` is recommended, a dedicated `pip` virtual environment is supported, and PyPI publication remains explicitly future work,
+- a self-contained Python wheel whose exact GitHub release artifact carries the runtime schemas, templates, base rules, and release identity needed for clean-environment onboarding and strict Doctor; a dedicated external CPython 3.12 `pip` virtual environment is the current updater-capable bootstrap, while PyPI publication remains explicitly future work,
 - private archive lifecycle tools for doctor checks, draft creation (with forward-only draft-id hygiene so a titleless or Hangul-only title no longer yields a misleading `_draft` id, and draft-time `--kind` validation that warns and lists valid kinds), minting with dry-run checklist guidance and an attributed `--affirm` flag that satisfies the two human-review checklist items via an audited, reviewer-attributed CLI act instead of a raw YAML edit (recorded in the mint receipt, inert without `--reviewed-by`, never overriding machine-enforced items), verified minted-draft retirement, delegation, receipts, search, and metadata review,
 - read-only `archive remint-reconcile --dry-run` and `archive retire-draft-reconcile --dry-run` keep the strict `format_drift` / `content_change` classifier, full-field checks, content-free `body_diff_diagnostic`, `human_review_plan`, `review_plan_sha256`, `--strip-bom` preview parity, and redacted `--diagnostic-only` inspection. In v0.4.0 their approval branches fail before private target read or mutation with `compound_exact_human_approval_binding_required`; they rewrite no receipt or canonical byte and create no audit receipt. Historical v0.3.162-v0.3.230 reconcile evidence remains readable,
 - historical v0.3 reconcile receipts report `status: reconcile_applied` with doctor verification next-actions; v0.4.0 keeps that evidence readable but grants no reconcile approval authority,
@@ -523,7 +533,7 @@ WOM, `zettel-kasten`, `zet`, and `ZET` are managed as a versioned protocol famil
 Release tags are compatibility checkpoints:
 
 ```text
-v0.4.14 (current checkpoint)
+v0.4.15 (current checkpoint)
 ```
 
 Public releases from `v0.2.5` onward are tagged as compatibility checkpoints.

@@ -605,8 +605,8 @@ def project_runtime_policy_document(raw: bytes | None) -> dict[str, Any] | None:
         "runtime_root": ".zettel-kasten/runtimes/vX.Y.Z",
         "active_version_pin": ".zettel-kasten/installed-version.txt",
         "launcher": ".zettel-kasten/bin/archive.cmd",
-        "supply_lock": "wom-kit/project-runtime-supply-lock-v0.4.14.json",
-        "supply_lock_sha256": "sha256:f3a3e0f5f2b766974bc9b376c7ce6d767b199ecc9c57d05cb7d28e738777ce93",
+        "supply_lock": "wom-kit/project-runtime-supply-lock-v0.4.15.json",
+        "supply_lock_sha256": "sha256:8cc4597742bab8bb4f7c1f4e4c28d90d0b8cddd1293247e680c615531d31953d",
         "global_path_mutation": False,
     }
     if value != expected:
@@ -784,6 +784,7 @@ def bootstrap_wheel_for_target(target: str) -> tuple[BootstrapWheel | None, dict
         "wheel_file_name": None,
         "wheel_sha256": None,
         "download_url_echoed": False,
+        "next_safe_actions": [],
     }
     if target_version is None:
         return None, unavailable
@@ -824,6 +825,18 @@ def bootstrap_wheel_for_target(target: str) -> tuple[BootstrapWheel | None, dict
     sha256 = str(sha256 or "").lower()
     if SHA256_RE.fullmatch(sha256) is None:
         unavailable["reason_code"] = "running_distribution_wheel_hash_unavailable"
+        unavailable["next_safe_actions"] = [
+            (
+                "Install the exact public target wheel in a dedicated external "
+                "CPython 3.12 virtual environment with python.exe -m pip; "
+                "the updater requires pip's recorded wheel SHA-256."
+            ),
+            (
+                "Do not delete an update lock, bypass SHA-256 verification, "
+                "or use an installer whose installed metadata omits the "
+                "archive hash."
+            ),
+        ]
         return None, unavailable
     file_name = Path(parsed.path).name
     wheel = BootstrapWheel(

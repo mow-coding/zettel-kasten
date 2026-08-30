@@ -1,6 +1,6 @@
 # Agent Operator Capabilities Manifest
 
-Status: v0.4.14 working-tree parser, help, and reference-aware recovery truth
+Status: v0.4.15 working-tree parser, help, authenticated update recovery, and emergency feedback truth
 
 `archive capabilities --machine` lets an AI operator ask one practical question:
 
@@ -72,7 +72,7 @@ These are parser facts, not execution promises. `approval_available` does not
 mean that archive-specific prerequisites have passed. `approval_not_exposed`
 does not mean that the command is read-only.
 
-For the current v0.4.14 working-tree parser, the inventory snapshot is:
+For the current v0.4.15 working-tree parser, the inventory snapshot is:
 
 ```text
 canonical executable command paths: 315
@@ -111,6 +111,39 @@ fail-closed. The existing title-recovery mode accepts an exact
 paired `pages.index.jsonl` evidence is complete and unambiguous. These are
 archive-specific prerequisites behind existing conditional parser paths, not a
 claim that installing the release applied recovery to any archive.
+
+v0.4.15 changes no top-level command count or approval-status count. The
+existing `project-version-update` path now exposes authenticated `--resume`
+from the live lock and authenticated sealed plan. Normal resume requires no
+caller-supplied `--target`, `--transaction-ref`, `--approval-id`, or
+`--reviewed-by`. WOM derives the unchanged exact context and requires exactly
+one authenticated, checkpoint-valid existing claim for an approved update. A
+zero-claim transaction cancels its scaffold only when the durable state proves
+it is untouched preapproval, and the result requires one fresh approval. Zero
+claims for an approved or indeterminate transaction, multiple candidates,
+forged evidence, or drift fail before a project write. No second native
+decision is displayed.
+
+That v0.4.15 recovery guarantee is bounded to a live `version-update.lock` or
+the exact lockless unlock tail while the original transaction directory still
+exists. Its first unsupported boundary is after `completed`, once the original
+transaction directory has been successfully renamed to a terminal cleanup
+tombstone. A tombstone or cleanup proof is not authenticated outcome or cleanup
+authority: WOM reports `terminal_cleanup_outcome_unknown` with a nonzero exit
+and does not infer success, failure, or cancellation, automatically retry, or
+delete that evidence. A full authenticated terminal handoff and terminal
+cleanup outcome reconstruction remain a v0.4.16 follow-up.
+
+The global project-update recovery guard remains the default for writers. Its
+only new exception is the existing `operator-feedback-compose` path when all of
+these facts hold: approval is requested, `--intent create` is selected, and no
+revision or supersession binding is supplied. That path may append only the new
+body, body receipt, and its bounded coordination artifact. It cannot revise or
+supersede an existing body, change feedback metadata, mark feedback delivered
+or resolved, or change `version-update.lock` bytes, source, runtime, launcher,
+pin, or update receipt. Every other write remains
+`project_update_recovery_required`. This runtime exception does not change the
+parser-derived approval inventory.
 
 v0.4.3 made `migrate` conditional on the sole exact-supported target. The v0.2
 inventory records the allowed argument value and the fixed-close status/reason

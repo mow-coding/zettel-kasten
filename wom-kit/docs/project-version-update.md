@@ -1,6 +1,6 @@
 # Project Version Update
 
-Status: v0.4.3 exact-human project-mirror writer; collision and bytecode repair writers remain closed
+Status: v0.4.15 exact-human project update with authenticated interruption resume; collision and bytecode repair writers remain closed
 
 Current boundary: `project-version-update` is reopened only through the native
 exact-human approval broker. The CLI derives a content-free dry-run digest and
@@ -152,8 +152,95 @@ the command is started from an archive root, use a fresh
 `.wom-scratch/diagnostics/*.json` output instead. Stderr prints an opaque
 `operation_ref` before the long work. If the caller times out, do not start a
 duplicate updater; use `operation-control` status, bounded wait, or recovery
-guidance with the exact root and reference. Cancel and resume are unsupported,
-and completion still requires a fresh-process `archive version` check.
+guidance with the exact root and reference. Generic `operation-control` cancel
+and resume remain unsupported. The command-specific authenticated recovery path
+below is the only supported update resume, and completion still requires a
+fresh-process `archive version` check.
+
+## Interrupted Update Recovery
+
+The v0.4.15 recovery guarantee is bounded to a live `version-update.lock` or
+the exact lockless unlock tail while the original transaction directory still
+exists. Its first unsupported boundary is after `completed`, once the original
+transaction directory has been successfully renamed to a terminal cleanup
+tombstone. A tombstone or cleanup proof is not authenticated outcome or cleanup
+authority: v0.4.15 reports `terminal_cleanup_outcome_unknown` with a nonzero
+exit and does not infer success, failure, or cancellation, automatically retry,
+or delete that evidence. A full authenticated terminal handoff and terminal
+cleanup outcome reconstruction remain a v0.4.16 follow-up.
+
+If the process stops after approval, `version-update.lock` remains and ordinary
+project writers stay blocked. That is intentional: source, versioned runtime,
+launcher, active pin, and receipt may not yet describe one version. Never
+delete the lock or hand-edit the pin to make the block disappear.
+
+The ordinary recovery command contains no internal identifier:
+
+```powershell
+& <exact-target-bootstrap> project-version-update <project-or-archive-root> `
+  --resume `
+  --affirm-external-writers-quiescent `
+  --progress `
+  --format json
+```
+
+Equivalent compact form:
+
+```powershell
+& <exact-target-bootstrap> project-version-update <project-or-archive-root> --resume --affirm-external-writers-quiescent --format json
+```
+
+WOM first classifies the exact durable transaction. An interruption before
+native approval is handled by proving unchanged preimages and cancelling only
+the incomplete preparation scaffold; source, active runtime, launcher, pin,
+and update receipt remain unchanged, and a fresh approval is then required.
+For an already-approved update, WOM validates the exact live lock or the sole
+authenticated unlock-tail transaction, reopens the sealed plan, restores the
+original target, transaction, reviewer, and approval context, and inspects only
+its bound local claim store. Resume proceeds only when exactly one
+authenticated, checkpoint-valid `started` or `succeeded` claim matches that
+unchanged context. A zero-claim transaction cancels its scaffold only when
+durable state proves it is untouched preapproval, then requires a fresh
+approval. Zero claims for an approved or indeterminate transaction, more than
+one match, authentication failure, context drift, journal drift, or checkpoint
+drift fail closed before a domain write.
+
+Normal resume requires no caller-supplied `--target`, `--transaction-ref`,
+`--approval-id`, or `--reviewed-by` and opens no second native approval window.
+WOM derives every binding from authenticated durable state; the person never
+needs to inspect or supply an internal identifier.
+
+A `started` claim continues only the remaining idempotent checkpoints. A
+`succeeded` claim skips the writer and runs only the separately guarded
+finalizer. WOM removes the update lock only after the source, runtime, launcher,
+pin, and receipt converge and independent verification succeeds. This does not
+extend the supported recovery boundary past terminal cleanup rename. Then start
+a new process through the project launcher:
+
+```powershell
+.\.zettel-kasten\bin\archive.cmd version <project-or-archive-root> --format json
+```
+
+If recovery returns `preapproval_scaffold_cancelled`, the interrupted update
+was not applied and `fresh_approval_required` is true. Run a new preview and
+request one fresh exact approval instead of treating that result as an update.
+In that result, `files_written_scope: project_domain_only` means the empty
+`files_written` list covers source, runtime, launcher, pin, receipt, and other
+project-domain files only. It is not a claim that recovery had no control
+effects. The content-free `effect_summary` separately reports durable control
+evidence, cancellation checkpoints or reservation-abort evidence, candidate
+cleanup or verified absence, and lock release without returning their paths or
+identifiers. `preapproval_recovery` also distinguishes a live lock verified by
+this invocation from an exact prior lock binding followed by verified lock
+absence.
+
+While recovery is required, ordinary draft, mint, link, index, metadata, and
+provider writers remain blocked. The sole incident-reporting exception is an
+exact-approved `operator-feedback-compose --intent create`: it may append one
+new feedback body and body receipt without revising or superseding an existing
+body, changing feedback metadata, marking anything resolved or delivered, or
+changing `version-update.lock`, source, runtime, launcher, pin, or update
+receipt.
 
 ## Ignored-Entry Collision Inspection And Preservation
 

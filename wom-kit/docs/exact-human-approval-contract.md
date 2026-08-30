@@ -1,6 +1,6 @@
 # Exact Human Approval Contract
 
-Status: v0.4.14 optional local decision clues; v0.4.0 one-use authority baseline preserved
+Status: v0.4.15 authenticated project-update resume and create-only incident-report preservation; v0.4.0 one-use authority baseline preserved
 
 ## Purpose
 
@@ -91,6 +91,33 @@ operation. A required identity with one of those private shapes instead fails
 closed before the native dialog, so a secret is never exchanged for
 availability. Conversely, displaying a clue never repairs a stale plan or
 authorizes a different target.
+
+v0.4.15 adds two narrow interruption rules without turning a lock or old receipt
+into new authority. First, `project-version-update --resume` validates the live
+lock, reopens the authenticated sealed plan, reconstructs the unchanged exact
+update context, and accepts only one authenticated, checkpoint-valid existing
+`started` or `succeeded` claim. It requires no caller-supplied `--target`,
+`--transaction-ref`, `--approval-id`, or `--reviewed-by` and displays no second
+native decision. A zero-claim transaction cancels its scaffold only when the
+durable transaction is proven untouched preapproval, after which a fresh
+approval is required. Zero claims for an approved or indeterminate transaction,
+ambiguous candidates, forged evidence, context drift, journal drift, or
+checkpoint drift fail before another project write. Second,
+while that update remains locked, only exact-approved
+`operator-feedback-compose --intent create` may append a new feedback body and
+body receipt. Revision, supersession, feedback metadata, resolved or delivered
+state, and every other writer remain blocked; the exception does not change
+`version-update.lock` or any update target.
+
+The v0.4.15 recovery guarantee is bounded to a live `version-update.lock` or
+the exact lockless unlock tail while the original transaction directory still
+exists. Its first unsupported boundary is after `completed`, once the original
+transaction directory has been successfully renamed to a terminal cleanup
+tombstone. A tombstone or cleanup proof is not authenticated outcome or cleanup
+authority: WOM reports `terminal_cleanup_outcome_unknown` with a nonzero exit
+and does not infer success, failure, or cancellation, automatically retry, or
+delete that evidence. A full authenticated terminal handoff and terminal
+cleanup outcome reconstruction remain a v0.4.16 follow-up.
 
 The current parser-derived inventory is 47 approval-available, 67 fixed-closed,
 and 201 not-exposed paths. `zet-revision-restore-proposal-from-snapshot
@@ -204,6 +231,15 @@ If the initial revert stops as `duplicate_object_revert_state_unknown` or
 and text gives that same-reviewer resume instruction. The guidance echoes
 no approval id, private value, or path. An explicit resume failure remains
 fail-closed and does not recursively recommend another resume.
+
+The v0.4.15 project-update exception follows the same no-second-decision
+principle but remains operation-specific. WOM derives the target, transaction,
+reviewer, and approval context from authenticated durable state, searches the
+bound claim store, reauthenticates each bounded candidate, applies the
+operation's `started` or `succeeded` checkpoint guard, and proceeds only when
+one candidate remains. Candidate discovery returns no identifier or path.
+Ordinary recovery derives every identifier from authenticated durable state;
+the person never needs to inspect or supply one.
 
 Operation receipts that can safely carry the reference record the content-free
 approval envelope directly. Strict legacy source-fidelity receipts use a

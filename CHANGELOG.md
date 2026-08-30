@@ -6,6 +6,38 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.4.15 - 2026-08-30
+
+- Made interrupted `project-version-update` recovery usable without asking a
+  person to supply target, transaction, reviewer, approval, or file
+  identifiers. The same public command now safely cancels an exact preapproval
+  scaffold or resumes an authenticated postapproval transaction, including the
+  verified tail after its lock was already unlinked. Ambiguous, forged, or
+  drifted state fails closed and no second native decision is opened.
+- Bounded that recovery guarantee to a live `version-update.lock` or the exact
+  lockless unlock tail while the original transaction directory still exists.
+  The first unsupported boundary is after `completed`, once the original
+  transaction directory has been successfully renamed to a terminal cleanup
+  tombstone. A tombstone or cleanup proof is not authenticated outcome or
+  cleanup authority: v0.4.15 reports `terminal_cleanup_outcome_unknown` with a
+  nonzero exit and does not infer success, failure, or cancellation,
+  automatically retry, or delete that evidence. Full authenticated terminal
+  handoff and terminal cleanup outcome reconstruction remain a v0.4.16
+  follow-up.
+- Kept the project update lock as the archive-wide write boundary while
+  allowing one narrow append-only incident-reporting escape: create-only
+  `operator-feedback-compose` may preserve a new feedback body and receipt.
+  Revision, supersession, lifecycle metadata changes, delivery changes, and all
+  other writers remain blocked, and the update lock bytes stay unchanged.
+- Corrected the updater bootstrap contract. The supported Windows bootstrap is
+  an external CPython 3.12 virtual environment installed with the exact real
+  `python.exe -m pip` path so PEP 610 metadata retains the wheel SHA-256.
+  `uv tool` installations are not accepted as project-updater supply evidence
+  when that recorded archive hash is absent.
+- Added bounded, content-free recovery guidance and regression coverage for
+  hard interruption, authenticated resume, final project-runtime alignment,
+  and a subsequent approved draft write from the project launcher.
+
 ## v0.4.14 - 2026-08-29
 
 - Replaced whole-body historical omission restoration with exact replay of the

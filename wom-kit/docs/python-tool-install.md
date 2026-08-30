@@ -1,20 +1,20 @@
 # Install WOM-kit As A Python Tool
 
-Status: v0.4.14 conditional GitHub wheel contract; reference-aware local recovery and safe decision views verified from the release source and build
+Status: v0.4.15 conditional GitHub wheel contract; exact-pip project updater bootstrap and authenticated interruption recovery
 
 WOM-kit is a command-line tool. It should live in its own Python environment
 instead of being mixed into an application project's dependencies.
 
 ## One Windows account with multiple client folders
 
-An isolated `uv tool` environment isolates Python dependencies; it does **not**
-make the exposed `archive.exe` private to the folder from which it is called.
-Every process under the same Windows account that resolves the same executable
-on PATH can see a replacement immediately on its next invocation. Therefore
-`archive --version` reports the running shared tool version, not proof that one
-client project was updated.
+A user-scoped tool environment may isolate Python dependencies, but it does
+**not** make an exposed `archive.exe` private to the folder from which it is
+called. Every process under the same Windows account that resolves the same
+executable on PATH can see a replacement immediately on its next invocation.
+Therefore `archive --version` reports the running shared tool version, not
+proof that one project was updated.
 
-For same-computer beta clients, inspect both layers:
+For multiple projects under one Windows account, inspect both layers:
 
 ```powershell
 archive --version
@@ -22,7 +22,7 @@ archive version <project-or-archive-root> --format json
 ```
 
 Use the second result's project source, pin, and `project_runtime` evidence to
-decide whether that client project needs an update. During development and
+decide whether that project needs an update. During development and
 release verification, install the wheel in a dedicated temporary virtual
 environment and invoke its `Scripts\archive.exe` by explicit path; do not
 replace the user-shared PATH tool as a side effect of testing.
@@ -34,17 +34,15 @@ launcher. Other project folders and the user-shared PATH executable do not
 change. This is WOM's supported project runtime boundary; it does not isolate
 arbitrary non-WOM programs or separate Windows user permissions.
 
-The v0.4.14 URL below is a conditional contract, not proof that an artifact is
+The v0.4.15 URL below is a conditional contract, not proof that an artifact is
 public. Use it only after the matching GitHub Release exists and lists the
-verified wheel. See the [v0.4.14 release note](releases/v0.4.14.md) for the
+verified wheel. See the [v0.4.15 release note](releases/v0.4.15.md) for the
 separate source and release-evidence boundary.
 
-An installed older client may not contain v0.4.14's reference-aware locator
-classification, exact private classification ledger, safe target clues, or
-complete-document Markdown display contract.
-Updating repository files alone does not replace the isolated `uv tool` or
-virtual-environment wheel. After the verified v0.4.14 asset exists, install that
-exact wheel and start a new process.
+An installed older runtime may not contain v0.4.15's authenticated
+project-update resume or create-only emergency feedback preservation. Updating
+repository files alone does not replace an installed wheel. After the verified
+v0.4.15 asset exists, install that exact wheel and start a new process.
 
 ## Recommended Project Bootstrap
 
@@ -54,13 +52,18 @@ is available. Keep this temporary environment outside the inspected project or
 archive so it cannot become project input or an updater collision:
 
 ```powershell
-$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0414"
-py -m venv $womBootstrapRoot
-& "$womBootstrapRoot\Scripts\python.exe" -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.14/wom_kit-0.4.14-py3-none-any.whl"
+$womBootstrapNonce = [guid]::NewGuid().ToString("N")
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0415-$womBootstrapNonce"
+if (Test-Path -LiteralPath $womBootstrapRoot) {
+  throw "WOM bootstrap path must be new."
+}
+py -3.12 -m venv $womBootstrapRoot
+$womBootstrapPython = (Get-Item -LiteralPath (Join-Path $womBootstrapRoot "Scripts\python.exe")).FullName
+& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.15/wom_kit-0.4.15-py3-none-any.whl"
 & "$womBootstrapRoot\Scripts\archive.exe" --version
 ```
 
-After the new process reports exactly `archive 0.4.14`, use that explicit
+After the new process reports exactly `archive 0.4.15`, use that explicit
 bootstrap executable for `project-version-update`. After approval succeeds,
 verify the project runtime and use its launcher:
 
@@ -85,45 +88,35 @@ Its exact approval/resume path may commit and non-force push only the bound
 selection. See [Git Backup Plan And Reconciliation Plan](git-backup-plan.md)
 before interpreting or approving its result.
 
-`uv tool install` creates an isolated tool environment and exposes all commands
-provided by the package. WOM-kit installs `archive`, `wom`, `archive-mcp`, and
-`wom-mcp`. The environment is dependency-isolated but its exposed commands are
-user-shared PATH entrypoints, not project-folder-local commands.
-
 This release does not publish WOM-kit to PyPI. Therefore
 `pip install wom-kit` is not the official command yet. The exact GitHub release
 URL keeps the installed artifact tied to a reviewed repository tag.
 
-### Replace an installed older global CLI
+### Why a user-scoped tool install is not updater evidence
 
-After the v0.4.14 Release and wheel actually exist, replace the isolated
-`uv tool` environment and verify the result from a new process:
+An `uv tool`-managed environment may still be useful as an ordinary shared CLI,
+but its current installed `direct_url.json` may omit the wheel archive hash.
+The project updater deliberately fails closed as
+`running_distribution_wheel_hash_unavailable` in that state. It cannot treat a
+matching version string or versioned URL as supply evidence.
 
-```powershell
-uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.14/wom_kit-0.4.14-py3-none-any.whl"
-archive --version
-```
+For project updates, use the dedicated external CPython 3.12 environment above
+and invoke its real `Scripts\python.exe -m pip`. The release checker proves
+that real pip records the exact wheel SHA-256 in PEP 610 metadata, and the
+updater rechecks that evidence before approval. Do not bypass the check, delete
+an update lock, or hand-edit a version pin. See [Project Version
+Update](project-version-update.md) and the [Upgrade Guide](../../UPGRADE.md).
 
-The official `uv` contract says a repeated `uv tool install` generally replaces
-an existing `uv`-managed tool. Use `--force` only if `uv` explicitly reports an
-unmanaged executable collision and a human has reviewed that executable; the
-flag permits replacing executables that `uv` does not manage. See the
-[official `uv tool install` reference](https://docs.astral.sh/uv/reference/cli/#uv-tool-install).
+## Dedicated pip Tool Environment
 
-Require exactly `archive 0.4.14`. This is a global CLI-only bootstrap. It does
-not change a project-local `.zettel-kasten/source` mirror or version pin. The
-project updater is a separate exact-human workflow; collision mutation and
-bytecode repair remain fixed closed. Do not hand-edit the pin. See [Project
-Version Update](project-version-update.md) and the [Upgrade Guide](../../UPGRADE.md).
-
-## Standard pip Alternative
-
-Plain `pip` works when it is placed inside a dedicated virtual environment:
+For an ordinary explicit-path CLI that is not the short-lived updater
+bootstrap, use another external virtual environment:
 
 ```powershell
-py -m venv "$HOME\.wom-tools\wom-kit"
-& "$HOME\.wom-tools\wom-kit\Scripts\python.exe" -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.14/wom_kit-0.4.14-py3-none-any.whl"
-& "$HOME\.wom-tools\wom-kit\Scripts\archive.exe" --version
+$womToolRoot = Join-Path $env:LOCALAPPDATA "WOM\tool-v0415"
+py -3.12 -m venv $womToolRoot
+& "$womToolRoot\Scripts\python.exe" -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.15/wom_kit-0.4.15-py3-none-any.whl"
+& "$womToolRoot\Scripts\archive.exe" --version
 ```
 
 The environment is only for the tool. It is not a WOM archive and should not
@@ -204,9 +197,23 @@ From v0.3.314, the explicit output also prints an opaque `operation_ref` early.
 If the caller times out, retain that reference and use `operation-control`
 status or bounded wait against the exact starting root instead of launching a
 duplicate updater. Output-supervised archive-root updates use a fresh
-`.wom-scratch/diagnostics/*.json` path instead. Cancel and resume are not
-implemented, and status does not replace a fresh `archive version` check after
-the update finishes.
+`.wom-scratch/diagnostics/*.json` path instead. Generic operation-control cancel
+and resume remain unsupported. v0.4.15 adds only the command-specific
+`project-version-update --resume` path: WOM reauthenticates exactly one
+checkpoint-valid claim for the unchanged update context without requiring an
+approval id or displaying a second native decision. Status or resume still
+does not replace a fresh project-launcher `archive version` check after the
+update finishes.
+
+The v0.4.15 recovery guarantee is bounded to a live `version-update.lock` or
+the exact lockless unlock tail while the original transaction directory still
+exists. Its first unsupported boundary is after `completed`, once the original
+transaction directory has been successfully renamed to a terminal cleanup
+tombstone. A tombstone or cleanup proof is not authenticated outcome or cleanup
+authority: WOM reports `terminal_cleanup_outcome_unknown` with a nonzero exit
+and does not infer success, failure, or cancellation, automatically retry, or
+delete that evidence. A full authenticated terminal handoff and terminal
+cleanup outcome reconstruction remain a v0.4.16 follow-up.
 
 The result reports `external_writer_quiescence_required: true`,
 `external_writer_quiescence_affirmed: true`,

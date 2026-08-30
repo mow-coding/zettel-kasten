@@ -88,6 +88,7 @@ from .agent_instruction_policy import (
     inspect_agent_instruction_policies,
 )
 from .exact_human_approval import (
+    CLAIMS_RELATIVE_ROOT,
     _ClaimedExactHumanApproval,
     ExactHumanApprovalError,
     exact_human_approval_archive_identity_sha256,
@@ -115163,15 +115164,638 @@ def _wom_kit_project_version_update_live_approval_transaction(
     )
 
 
+def _project_update_preapproval_cancel_effect_summary(
+    *,
+    reservation_abort_evidence: bool,
+    cancellation_checkpoints: bool,
+    candidate_cleanup: bool,
+) -> dict[str, Any]:
+    """Describe preapproval control effects without exposing their locations.
+
+    ``files_written`` on the public result remains the project-domain file
+    list.  Cancellation also persists or re-verifies private transaction
+    control evidence, so callers need an explicit content-free account of
+    those effects instead of treating an empty domain list as a no-write
+    claim.
+    """
+
+    return {
+        "project_domain_writes_performed": False,
+        "project_domain_files_written": [],
+        "durable_control_evidence_written_or_verified": True,
+        "reservation_abort_evidence_written_or_verified": bool(
+            reservation_abort_evidence
+        ),
+        "cancellation_checkpoints_written_or_verified": bool(
+            cancellation_checkpoints
+        ),
+        "candidate_cleanup_performed_or_verified": bool(candidate_cleanup),
+        "candidate_absence_verified": True,
+        "lock_release_performed_or_verified": True,
+        "paths_or_identifiers_disclosed": False,
+    }
+
+
+def _project_update_resume_preapproval_transaction(
+    inspection_root: Path | str,
+    *,
+    target: str | None,
+    reviewed_by: str | None,
+    transaction_ref: str | None,
+    expected_approval_root: Path,
+    expected_archive_id: str,
+    approval_identifier_supplied: bool,
+) -> dict[str, Any] | None:
+    """Cancel one exact preapproval scaffold through the public resume path.
+
+    No approval key or claim is opened here.  Selection requires either a live
+    exact lock, or the exact prior lock binding plus durable lock absence for
+    the post-unlink reservation-abort tail.  Only states that provably precede
+    native approval are eligible: an empty reservation, or a complete sealed
+    intent whose final lock backlink/checkpoint was not yet durable.
+    """
+
+    inspection = Path(
+        os.path.abspath(str(Path(inspection_root).expanduser()))
+    )
+    project_root = (
+        inspection.parent
+        if (
+            wom_kit_real_path_kind(
+                inspection, inspection / ".zettel-kasten"
+            )
+            == "missing"
+            and wom_kit_real_path_kind(
+                inspection, inspection / "archive.yml"
+            )
+            == "file"
+            and wom_kit_real_path_kind(
+                inspection.parent,
+                inspection.parent / ".zettel-kasten",
+            )
+            == "directory"
+        )
+        else inspection
+    )
+    lock_path = (
+        project_root
+        / project_update_transaction.PROJECT_UPDATE_LOCK_LOGICAL
+    )
+    if not _wom_kit_project_version_update_approval_authority_matches(
+        inspection,
+        expected_root=expected_approval_root,
+        expected_archive_id=expected_archive_id,
+    ):
+        raise ArchiveServiceError(
+            "project_version_update_approval_archive_identity_changed"
+        )
+    discovered_ref = (
+        project_update_transaction.active_transaction_ref_from_lock_read_only(
+            project_root
+        )
+        if os.path.lexists(lock_path)
+        else project_update_transaction.active_transaction_ref_for_resume_read_only(
+            project_root
+        )
+    )
+    supplied_ref = str(transaction_ref or "").strip()
+    if supplied_ref and supplied_ref != discovered_ref:
+        raise ArchiveServiceError(
+            "project_version_update_resume_binding_mismatch"
+        )
+    matching = [
+        item
+        for item in project_update_transaction.inspect_prelock_orphans(
+            project_root
+        )
+        if item.transaction_ref == discovered_ref
+    ]
+    if len(matching) != 1:
+        raise ArchiveServiceError(
+            "project_version_update_resume_binding_mismatch"
+        )
+    classification = matching[0].classification
+    live_lock_present_at_resume = os.path.lexists(lock_path)
+    supplied_target = str(target or "").strip()
+    supplied_reviewer = str(reviewed_by or "").strip()
+    if approval_identifier_supplied and classification in {
+        "reserved_locked_unsealed",
+        "reserved_abort_receipt_pending",
+        "intent_sealed_lock_binding_incomplete",
+    }:
+        raise ArchiveServiceError(
+            "exact_human_approval_resume_claim_invalid"
+        )
+    recovery_kind: str
+
+    if classification in {
+        "reserved_locked_unsealed",
+        "reserved_abort_receipt_pending",
+    }:
+        reservation = (
+            project_update_transaction.ReservedProjectUpdateTransaction.open(
+                project_root,
+                discovered_ref,
+            )
+        )
+        if (
+            supplied_target
+            and supplied_target
+            != reservation.reservation.requested_target_tag
+        ) or supplied_reviewer:
+            raise ArchiveServiceError(
+                "project_version_update_resume_binding_mismatch"
+            )
+        if classification == "reserved_locked_unsealed":
+            expected_lock_bytes = reservation.existing_lock_bytes_read_only()
+            aborted = reservation.abort_before_intent_seal(
+                expected_lock_bytes=expected_lock_bytes,
+            )
+            recovery_kind = "empty_reservation_cancelled"
+        else:
+            aborted = reservation.resume_abort_after_lock_release()
+            recovery_kind = "empty_reservation_abort_receipt_completed"
+        if aborted.get("state") != "aborted_before_intent_seal":
+            raise ArchiveServiceError(
+                "project_version_update_preapproval_recovery_failed"
+            )
+    elif classification == "intent_sealed_lock_binding_incomplete":
+        reservation = (
+            project_update_transaction.ReservedProjectUpdateTransaction.open(
+                project_root,
+                discovered_ref,
+            )
+        )
+        expected_lock_bytes = reservation.existing_lock_bytes_read_only()
+        transaction = project_update_transaction.ProjectUpdateTransaction.open(
+            project_root,
+            discovered_ref,
+        )
+        transaction.bind_sealed_intent_to_lock(expected_lock_bytes)
+        state, lifetime = _project_update_reopen_durable_state(
+            inspection,
+            target=target,
+            reviewed_by=reviewed_by,
+            transaction_ref=discovered_ref,
+            expected_approval_root=expected_approval_root,
+            expected_archive_id=expected_archive_id,
+        )
+        try:
+            reopened = state.transaction.inspect()
+            if reopened.journal.verified_prefix:
+                raise ArchiveServiceError(
+                    "project_version_update_preapproval_recovery_failed"
+                )
+            state.transaction.append(
+                phase="lock_backlinked",
+                stage="verified",
+                live_component_sha256=(
+                    _project_update_live_component_sha256(state)
+                ),
+            )
+            _project_update_cancel_before_native(state)
+        finally:
+            state.directory_guard.close()
+            lifetime.close_after_service_transaction()
+        recovery_kind = "sealed_preapproval_scaffold_cancelled"
+    else:
+        return None
+
+    return {
+        "ok": True,
+        "status": "preapproval_scaffold_cancelled",
+        "update_completed": False,
+        "fresh_approval_required": True,
+        "native_approval_redisplayed": False,
+        "automatic_resume_discovery": True,
+        "operator_resume_identifiers_supplied": bool(
+            supplied_target
+            or supplied_ref
+            or supplied_reviewer
+            or approval_identifier_supplied
+        ),
+        "preapproval_recovery": {
+            "kind": recovery_kind,
+            "live_lock_verified": bool(live_lock_present_at_resume),
+            "prior_lock_binding_verified": (
+                recovery_kind
+                != "sealed_preapproval_scaffold_cancelled"
+            ),
+            "lock_binding_verified_during_recovery": (
+                recovery_kind
+                == "sealed_preapproval_scaffold_cancelled"
+            ),
+            "lock_absence_verified_after_recovery": True,
+            "approval_key_accessed": False,
+            "approval_claim_store_accessed": False,
+            "domain_writer_entered": False,
+            "project_domain_files_written": [],
+            "source_changed": False,
+            "active_runtime_changed": False,
+            "active_pin_changed": False,
+            "update_receipt_written": False,
+        },
+        "files_written_scope": "project_domain_only",
+        "effect_summary": _project_update_preapproval_cancel_effect_summary(
+            reservation_abort_evidence=recovery_kind in {
+                "empty_reservation_cancelled",
+                "empty_reservation_abort_receipt_completed",
+            },
+            cancellation_checkpoints=(
+                recovery_kind == "sealed_preapproval_scaffold_cancelled"
+            ),
+            candidate_cleanup=(
+                recovery_kind == "sealed_preapproval_scaffold_cancelled"
+            ),
+        ),
+        "next_safe_actions": [
+            "Run a fresh project-version-update preview, then request one new exact approval."
+        ],
+        "files_written": [],
+    }
+
+
+def _project_update_claim_store_absent_read_only(
+    state: _ProjectVersionUpdateDurableApprovalState,
+) -> bool:
+    """Re-prove an absent approval claim store without creating ancestors."""
+
+    try:
+        root = state.expected_approval_root
+        claims_root = root.joinpath(*Path(CLAIMS_RELATIVE_ROOT).parts)
+        return bool(
+            _wom_kit_project_version_update_approval_authority_matches(
+                state.inspection_root,
+                expected_root=root,
+                expected_archive_id=state.expected_archive_id,
+            )
+            and wom_kit_existing_path_components_are_real(
+                root,
+                claims_root,
+            )
+            and wom_kit_real_path_kind(root, claims_root) == "missing"
+        )
+    except (OSError, RuntimeError, TypeError, ValueError):
+        return False
+
+
+def _project_update_cancel_claimless_preapproval_state(
+    state: _ProjectVersionUpdateDurableApprovalState,
+    *,
+    confirm_claim_store_empty: Callable[[], bool],
+) -> None:
+    """Select and complete claimless cancellation on one already-open state."""
+
+    if not callable(confirm_claim_store_empty):
+        raise ArchiveServiceError(
+            "project_version_update_preapproval_recovery_failed"
+        )
+    inspection = state.transaction.inspect()
+    checkpoints = inspection.journal.verified_prefix
+    live = _project_update_live_component_sha256(state)
+    classification = state.transaction.classify_live_components(live)
+    phases = [item.phase for item in checkpoints]
+    valid_phase_prefixes = {
+        ("lock_backlinked",),
+        ("lock_backlinked", "preapproval_cancel_requested"),
+        (
+            "lock_backlinked",
+            "preapproval_cancel_requested",
+            "preapproval_cancelled",
+        ),
+        (
+            "lock_backlinked",
+            "preapproval_cancel_requested",
+            "preapproval_cancelled",
+            "ready_to_unlock",
+        ),
+        (
+            "lock_backlinked",
+            "preapproval_cancel_requested",
+            "preapproval_cancelled",
+            "ready_to_unlock",
+            "lock_released",
+        ),
+        (
+            "lock_backlinked",
+            "preapproval_cancel_requested",
+            "preapproval_cancelled",
+            "ready_to_unlock",
+            "lock_released",
+            "completed",
+        ),
+    }
+    if (
+        inspection.journal.state != "exact"
+        or not checkpoints
+        or tuple(phases) not in valid_phase_prefixes
+        or checkpoints[0].stage != "verified"
+        or classification.overall != "prewrite_exact"
+    ):
+        raise ArchiveServiceError(
+            "project_version_update_preapproval_recovery_failed"
+        )
+    if phases == ["lock_backlinked"]:
+        state.transaction.begin_claimless_cancel_before_approval(
+            expected_lock_bytes=state.expected_lock_bytes,
+            live_component_sha256=live,
+            confirm_claim_store_empty=confirm_claim_store_empty,
+        )
+    _project_update_cancel_before_native(state)
+
+
+def _project_update_claimless_preapproval_cancel_result(
+    *,
+    operator_resume_identifiers_supplied: bool,
+    live_lock_verified: bool,
+) -> dict[str, Any]:
+    return {
+        "ok": True,
+        "status": "preapproval_scaffold_cancelled",
+        "update_completed": False,
+        "fresh_approval_required": True,
+        "native_approval_redisplayed": False,
+        "automatic_resume_discovery": True,
+        "operator_resume_identifiers_supplied": bool(
+            operator_resume_identifiers_supplied
+        ),
+        "preapproval_recovery": {
+            "kind": "claimless_checkpointed_scaffold_cancelled",
+            "live_lock_verified": bool(live_lock_verified),
+            "prior_lock_binding_verified": True,
+            "lock_binding_verified_during_recovery": False,
+            "lock_absence_verified_after_recovery": True,
+            "authenticated_claim_candidates": 0,
+            "domain_writer_entered": False,
+            "project_domain_files_written": [],
+            "source_changed": False,
+            "active_runtime_changed": False,
+            "active_pin_changed": False,
+            "update_receipt_written": False,
+        },
+        "files_written_scope": "project_domain_only",
+        "effect_summary": _project_update_preapproval_cancel_effect_summary(
+            reservation_abort_evidence=False,
+            cancellation_checkpoints=True,
+            candidate_cleanup=True,
+        ),
+        "next_safe_actions": [
+            "Run a fresh project-version-update preview, then request one new exact approval."
+        ],
+        "files_written": [],
+    }
+
+
+def _project_update_candidate_missing_handler(
+    state: _ProjectVersionUpdateDurableApprovalState,
+    *,
+    operator_resume_identifiers_supplied: bool,
+) -> Callable[[str], Mapping[str, Any]]:
+    """Bind exact workflow absence reasons to one already-open transaction."""
+
+    def handle(reason: str) -> Mapping[str, Any]:
+        if type(reason) is not str:
+            raise ArchiveServiceError(
+                "project_version_update_preapproval_recovery_failed"
+            )
+        if reason == "authenticated_candidate_missing":
+            # The exact workflow invokes this branch only after authenticating
+            # zero candidates while its credential-key lock remains held.
+            def authenticated_zero_candidate_proof() -> bool:
+                return True
+
+            confirm_claim_store_empty = authenticated_zero_candidate_proof
+        elif reason == "claim_store_absent":
+            def confirm_absent_claim_store() -> bool:
+                return _project_update_claim_store_absent_read_only(state)
+
+            confirm_claim_store_empty = confirm_absent_claim_store
+        else:
+            raise ArchiveServiceError(
+                "project_version_update_preapproval_recovery_failed"
+            )
+        live_lock_present_at_resume = os.path.lexists(
+            state.transaction._lock_path
+        )
+        _project_update_cancel_claimless_preapproval_state(
+            state,
+            confirm_claim_store_empty=confirm_claim_store_empty,
+        )
+        return _project_update_claimless_preapproval_cancel_result(
+            operator_resume_identifiers_supplied=(
+                operator_resume_identifiers_supplied
+            ),
+            live_lock_verified=live_lock_present_at_resume,
+        )
+
+    return handle
+
+
+@contextmanager
+def _project_update_claim_publication_boundary(
+    state: _ProjectVersionUpdateDurableApprovalState,
+) -> Iterator[None]:
+    """Hold append authority only across exact approval claim publication."""
+
+    with state.transaction.append_guard_nonblocking():
+        live = _project_update_live_component_sha256(state)
+        state.transaction.validate_claim_publication_boundary_guard_held(
+            expected_lock_bytes=state.expected_lock_bytes,
+            live_component_sha256=live,
+        )
+        yield
+
+
+def _project_update_resume_project_root_read_only(
+    inspection_root: Path | str,
+) -> Path:
+    """Resolve the project side of resume without opening client archives."""
+
+    inspection = Path(
+        os.path.abspath(str(Path(inspection_root).expanduser()))
+    )
+    return (
+        inspection.parent
+        if (
+            wom_kit_real_path_kind(
+                inspection, inspection / ".zettel-kasten"
+            )
+            == "missing"
+            and wom_kit_real_path_kind(
+                inspection, inspection / "archive.yml"
+            )
+            == "file"
+            and wom_kit_real_path_kind(
+                inspection.parent,
+                inspection.parent / ".zettel-kasten",
+            )
+            == "directory"
+        )
+        else inspection
+    )
+
+
+def _project_update_terminal_cleanup_outcome_unknown_result(
+    *,
+    operator_resume_identifiers_supplied: bool,
+    archive_identity_metadata_read: bool,
+) -> dict[str, Any]:
+    """Report only that cleanup residue was seen or could not be ruled out."""
+
+    if type(archive_identity_metadata_read) is not bool:
+        raise ArchiveServiceError(
+            "project_version_update_resume_locator_changed"
+        )
+
+    return {
+        "ok": False,
+        "status": "terminal_cleanup_outcome_unknown",
+        "effects_state": "unknown",
+        "outcome_basis": (
+            "terminal_cleanup_residue_observed_or_could_not_be_ruled_out"
+        ),
+        "update_completed": None,
+        "observed_version_update_lock_present": False,
+        "automatic_resume_discovery": True,
+        "operator_resume_identifiers_supplied": bool(
+            operator_resume_identifiers_supplied
+        ),
+        "automatic_retry_authorized": False,
+        "cleanup_authorized": False,
+        "fresh_approval_authorized": False,
+        "native_approval_redisplayed": False,
+        "domain_writer_reentered": False,
+        "approval_key_accessed": False,
+        "approval_claim_store_accessed": False,
+        "native_approval_ui_entered": False,
+        "domain_writer_entered": False,
+        # The broad compatibility field is true only when a caller already
+        # crossed the archive-identity boundary before a race exposed cleanup
+        # residue. The two precise fields distinguish that metadata read from
+        # client archive domain-content access, which never occurs here.
+        "client_archive_accessed": archive_identity_metadata_read,
+        "archive_identity_metadata_read": archive_identity_metadata_read,
+        "client_archive_domain_content_accessed": False,
+        "project_domain_files_written": [],
+        "files_written": [],
+    }
+
+
+def _project_update_terminal_cleanup_unknown_gate_read_only(
+    inspection_root: Path | str,
+    *,
+    operator_resume_identifiers_supplied: bool,
+    archive_identity_metadata_read: bool = False,
+) -> dict[str, Any] | None:
+    """Separate ordinary not-found from untrusted cleanup-shaped residue."""
+
+    if type(archive_identity_metadata_read) is not bool:
+        raise ArchiveServiceError(
+            "project_version_update_resume_locator_changed"
+        )
+
+    project_root = _project_update_resume_project_root_read_only(
+        inspection_root
+    )
+    for attempt in range(2):
+        regular_scan_incomplete = False
+        try:
+            project_update_transaction.active_transaction_ref_for_resume_read_only(
+                project_root
+            )
+            return None
+        except project_update_transaction.ProjectUpdateTransactionError as failure:
+            if failure.code in {
+                "project_update_transaction_scan_incomplete",
+                "project_update_transaction_path_unsafe",
+            }:
+                regular_scan_incomplete = True
+            elif failure.code != "project_update_transaction_not_found":
+                raise
+        cleanup_state = (
+            project_update_transaction
+            .inspect_terminal_cleanup_artifacts_for_resume_read_only(
+                project_root
+            )
+        )
+        if cleanup_state == "observed_or_scan_incomplete":
+            return _project_update_terminal_cleanup_outcome_unknown_result(
+                operator_resume_identifiers_supplied=(
+                    operator_resume_identifiers_supplied
+                ),
+                archive_identity_metadata_read=(
+                    archive_identity_metadata_read
+                ),
+            )
+        if cleanup_state == "active_lock_changed" and attempt == 0:
+            continue
+        if cleanup_state == "active_lock_changed":
+            raise ArchiveServiceError(
+                "project_version_update_resume_locator_changed"
+            )
+        if regular_scan_incomplete:
+            return _project_update_terminal_cleanup_outcome_unknown_result(
+                operator_resume_identifiers_supplied=(
+                    operator_resume_identifiers_supplied
+                ),
+                archive_identity_metadata_read=(
+                    archive_identity_metadata_read
+                ),
+            )
+        raise project_update_transaction.ProjectUpdateTransactionError(
+            "project_update_transaction_not_found"
+        )
+    raise ArchiveServiceError(
+        "project_version_update_resume_locator_changed"
+    )
+
+
+def _project_update_terminal_cleanup_unknown_preflight_read_only(
+    inspection_root: Path | str,
+    *,
+    operator_resume_identifiers_supplied: bool,
+    approval_identifier_supplied: bool,
+) -> dict[str, Any] | None:
+    """Return cleanup-unknown before any archive identity boundary is opened.
+
+    This helper observes only project update metadata. It never opens an
+    archive marker, approval root, key, claim store, native decision, or cleanup
+    artifact content. A supplied approval id remains an assertion about one
+    authenticated claim and therefore cannot select this claimless outcome.
+    """
+
+    if (
+        type(operator_resume_identifiers_supplied) is not bool
+        or type(approval_identifier_supplied) is not bool
+    ):
+        raise ArchiveServiceError(
+            "project_version_update_resume_locator_changed"
+        )
+    result = _project_update_terminal_cleanup_unknown_gate_read_only(
+        inspection_root,
+        operator_resume_identifiers_supplied=(
+            operator_resume_identifiers_supplied
+        ),
+        archive_identity_metadata_read=False,
+    )
+    if result is not None and approval_identifier_supplied:
+        raise ArchiveServiceError(
+            "exact_human_approval_resume_claim_invalid"
+        )
+    return result
+
+
 def _wom_kit_project_version_update_resume_live_transaction(
     inspection_root: Path | str,
     *,
-    target: str,
-    reviewed_by: str,
-    transaction_ref: str,
+    target: str | None,
+    reviewed_by: str | None,
+    transaction_ref: str | None,
     approval_executor: Callable[..., Mapping[str, Any]],
     _expected_approval_root: Path,
     _expected_archive_id: str,
+    _approval_identifier_supplied: bool = False,
+    _archive_identity_metadata_read: bool = False,
 ) -> dict[str, Any]:
     """Resume an authenticated claim/transaction pair with zero new native UI."""
 
@@ -115179,14 +115803,95 @@ def _wom_kit_project_version_update_resume_live_transaction(
         raise ArchiveServiceError(
             "project_version_update_live_approval_executor_required"
         )
-    state, lifetime = _project_update_reopen_durable_state(
-        inspection_root,
-        target=target,
-        reviewed_by=reviewed_by,
-        transaction_ref=transaction_ref,
-        expected_approval_root=_expected_approval_root,
-        expected_archive_id=_expected_archive_id,
+    if (
+        type(_approval_identifier_supplied) is not bool
+        or type(_archive_identity_metadata_read) is not bool
+    ):
+        raise ArchiveServiceError(
+            "exact_human_approval_resume_claim_invalid"
+        )
+    operator_resume_identifiers_supplied = bool(
+        str(target or "").strip()
+        or str(transaction_ref or "").strip()
+        or str(reviewed_by or "").strip()
+        or _approval_identifier_supplied
     )
+    preapproval_recovery: dict[str, Any] | None = None
+    for attempt in range(2):
+        cleanup_unknown = (
+            _project_update_terminal_cleanup_unknown_gate_read_only(
+                inspection_root,
+                operator_resume_identifiers_supplied=(
+                    operator_resume_identifiers_supplied
+                ),
+                archive_identity_metadata_read=(
+                    _archive_identity_metadata_read
+                ),
+            )
+        )
+        if cleanup_unknown is not None:
+            if _approval_identifier_supplied:
+                raise ArchiveServiceError(
+                    "exact_human_approval_resume_claim_invalid"
+                )
+            return cleanup_unknown
+        try:
+            preapproval_recovery = (
+                _project_update_resume_preapproval_transaction(
+                    inspection_root,
+                    target=target,
+                    reviewed_by=reviewed_by,
+                    transaction_ref=transaction_ref,
+                    expected_approval_root=_expected_approval_root,
+                    expected_archive_id=_expected_archive_id,
+                    approval_identifier_supplied=(
+                        _approval_identifier_supplied
+                    ),
+                )
+            )
+            break
+        except project_update_transaction.ProjectUpdateTransactionError as failure:
+            if (
+                failure.code != "project_update_transaction_not_found"
+                or attempt != 0
+            ):
+                raise
+    else:
+        raise ArchiveServiceError(
+            "project_version_update_resume_locator_changed"
+        )
+    if preapproval_recovery is not None:
+        return preapproval_recovery
+    try:
+        state, lifetime = _project_update_reopen_durable_state(
+            inspection_root,
+            target=target,
+            reviewed_by=reviewed_by,
+            transaction_ref=transaction_ref,
+            expected_approval_root=_expected_approval_root,
+            expected_archive_id=_expected_archive_id,
+        )
+    except project_update_transaction.ProjectUpdateTransactionError as failure:
+        if failure.code != "project_update_transaction_not_found":
+            raise
+        cleanup_unknown = (
+            _project_update_terminal_cleanup_unknown_gate_read_only(
+                inspection_root,
+                operator_resume_identifiers_supplied=(
+                    operator_resume_identifiers_supplied
+                ),
+                archive_identity_metadata_read=(
+                    _archive_identity_metadata_read
+                ),
+            )
+        )
+        if cleanup_unknown is not None:
+            if _approval_identifier_supplied:
+                raise ArchiveServiceError(
+                    "exact_human_approval_resume_claim_invalid"
+                )
+            return cleanup_unknown
+        raise
 
     def continue_started_claim(
         claim: _ClaimedExactHumanApproval,
@@ -115242,6 +115947,15 @@ def _wom_kit_project_version_update_resume_live_transaction(
             succeeded=True,
         )
 
+    candidate_missing_handler = _project_update_candidate_missing_handler(
+        state,
+        operator_resume_identifiers_supplied=bool(
+            str(target or "").strip()
+            or str(transaction_ref or "").strip()
+            or str(reviewed_by or "").strip()
+            or _approval_identifier_supplied
+        ),
+    )
     try:
         result = approval_executor(
             copy.deepcopy(state.prepared_preview),
@@ -115249,6 +115963,8 @@ def _wom_kit_project_version_update_resume_live_transaction(
             finalize_succeeded_claim,
             started_guard,
             succeeded_guard,
+            state.reviewer,
+            candidate_missing_handler=candidate_missing_handler,
         )
         if not isinstance(result, Mapping):
             raise ArchiveServiceError(
@@ -115258,6 +115974,65 @@ def _wom_kit_project_version_update_resume_live_transaction(
     finally:
         state.directory_guard.close()
         lifetime.close_after_service_transaction()
+
+
+def _wom_kit_project_version_update_cancel_claimless_preapproval_transaction(
+    inspection_root: Path | str,
+    *,
+    target: str | None,
+    reviewed_by: str | None,
+    transaction_ref: str | None,
+    confirm_claim_store_empty: Callable[[], bool] | None = None,
+    _expected_approval_root: Path,
+    _expected_archive_id: str,
+    _approval_identifier_supplied: bool = False,
+) -> dict[str, Any]:
+    """Cancel or resume one exact claimless preapproval cancellation.
+
+    A fresh ``lock_backlinked`` tail requires the caller's zero-claim proof.
+    Once ``preapproval_cancel_requested`` is durable, later public retries use
+    that authenticated journal decision monotonically and never re-prove or
+    re-select cancellation.  Every live domain component must remain at its
+    exact preimage throughout.
+    """
+
+    if type(_approval_identifier_supplied) is not bool:
+        raise ArchiveServiceError(
+            "exact_human_approval_resume_claim_invalid"
+        )
+    if not callable(confirm_claim_store_empty):
+        raise ArchiveServiceError(
+            "project_version_update_preapproval_recovery_failed"
+        )
+
+    state, lifetime = _project_update_reopen_durable_state(
+        inspection_root,
+        target=target,
+        reviewed_by=reviewed_by,
+        transaction_ref=transaction_ref,
+        expected_approval_root=_expected_approval_root,
+        expected_archive_id=_expected_archive_id,
+    )
+    live_lock_present_at_resume = os.path.lexists(
+        state.transaction._lock_path
+    )
+    try:
+        _project_update_cancel_claimless_preapproval_state(
+            state,
+            confirm_claim_store_empty=confirm_claim_store_empty,
+        )
+    finally:
+        state.directory_guard.close()
+        lifetime.close_after_service_transaction()
+    return _project_update_claimless_preapproval_cancel_result(
+        operator_resume_identifiers_supplied=bool(
+            str(target or "").strip()
+            or str(transaction_ref or "").strip()
+            or str(reviewed_by or "").strip()
+            or _approval_identifier_supplied
+        ),
+        live_lock_verified=live_lock_present_at_resume,
+    )
 
 
 def wom_kit_project_version_update_approval_archive_root(
@@ -115940,6 +116715,11 @@ def _project_update_claim_checkpoint_guard(
         return False
     checkpoints = inspection.journal.verified_prefix
     if not checkpoints or checkpoints[0].phase != "lock_backlinked":
+        return False
+    if any(
+        item.phase.startswith("preapproval_cancel")
+        for item in checkpoints
+    ):
         return False
     approval = next(
         (item for item in checkpoints if item.phase == "approval_bound"),
@@ -116625,10 +117405,15 @@ def _project_update_cancel_before_native(
     """Use only core-derived deterministic cancellation evidence."""
 
     live = _project_update_live_component_sha256(state)
-    state.transaction.begin_cancel_before_approval(
-        expected_lock_bytes=state.expected_lock_bytes,
-        live_component_sha256=live,
-    )
+    checkpoints = state.transaction.inspect().journal.verified_prefix
+    if not any(
+        item.phase == "preapproval_cancel_requested"
+        for item in checkpoints
+    ):
+        state.transaction.begin_cancel_before_approval(
+            expected_lock_bytes=state.expected_lock_bytes,
+            live_component_sha256=live,
+        )
     if not project_runtime.cleanup_prepared_runtime_candidate(
         state.runtime_candidate
     ):
@@ -117294,9 +118079,9 @@ def _project_update_build_prepared_preview(
 def _project_update_reopen_durable_state(
     inspection_root: Path | str,
     *,
-    target: str,
-    reviewed_by: str,
-    transaction_ref: str,
+    target: str | None,
+    reviewed_by: str | None,
+    transaction_ref: str | None,
     expected_approval_root: Path,
     expected_archive_id: str,
 ) -> tuple[
@@ -117327,8 +118112,7 @@ def _project_update_reopen_durable_state(
         )
         else inspection
     )
-    reviewer = safe_foreign_quarantine_actor_id(reviewed_by)
-    if reviewer is None or not _wom_kit_project_version_update_approval_authority_matches(
+    if not _wom_kit_project_version_update_approval_authority_matches(
         inspection,
         expected_root=expected_approval_root,
         expected_archive_id=expected_archive_id,
@@ -117336,31 +118120,53 @@ def _project_update_reopen_durable_state(
         raise ArchiveServiceError(
             "project_version_update_approval_archive_identity_changed"
         )
+    supplied_transaction_ref = str(transaction_ref or "").strip()
+    discovered_transaction_ref = (
+        project_update_transaction.active_transaction_ref_for_resume_read_only(
+            project_root
+        )
+    )
+    if (
+        supplied_transaction_ref
+        and supplied_transaction_ref != discovered_transaction_ref
+    ):
+        raise ArchiveServiceError(
+            "project_version_update_resume_binding_mismatch"
+        )
+    transaction_ref = discovered_transaction_ref
     transaction = project_update_transaction.ProjectUpdateTransaction.open(
         project_root,
         transaction_ref,
     )
-    target_tag = str(target or "").strip()
-    if transaction.intent.requested_target_tag != target_tag:
+    target_tag = transaction.intent.requested_target_tag
+    supplied_target = str(target or "").strip()
+    if supplied_target and supplied_target != target_tag:
         raise ArchiveServiceError(
             "project_version_update_resume_target_mismatch"
         )
     private_plan = _project_update_parse_private_plan(
         transaction.private_binding_bytes("project-update-domain-plan")
     )
+    reviewer = safe_foreign_quarantine_actor_id(private_plan.get("reviewer"))
+    supplied_reviewer = str(reviewed_by or "").strip()
     if (
-        private_plan.get("transaction_ref") != transaction_ref
-        or private_plan.get("target_tag") != target_tag
-        or private_plan.get("reviewer") != reviewer
-        or private_plan.get("expected_archive_identity_sha256")
-        != exact_human_approval_archive_identity_sha256(
-            expected_archive_id
+        reviewer is None
+        or (supplied_reviewer and supplied_reviewer != reviewer)
+        or (
+            private_plan.get("transaction_ref") != transaction_ref
+            or private_plan.get("target_tag") != target_tag
+            or private_plan.get("reviewer") != reviewer
+            or private_plan.get("expected_archive_identity_sha256")
+            != exact_human_approval_archive_identity_sha256(
+                expected_archive_id
+            )
         )
     ):
         raise ArchiveServiceError(
             "project_version_update_resume_binding_mismatch"
         )
     lifetime = _ProjectVersionUpdateGitRunnerLifetime()
+    directory_guard: _WomKitProjectUpdateDirectoryGuard | None = None
     try:
         runner_binding = project_update_git_runner.load_private_binding_bytes(
             transaction.private_binding_bytes("git-runner-binding")
@@ -117410,6 +118216,10 @@ def _project_update_reopen_durable_state(
             transaction,
             private_plan.get("runtime_candidate_private"),
         )
+        cancellation_started = any(
+            item.phase == "preapproval_cancel_requested"
+            for item in transaction.inspect().journal.verified_prefix
+        )
         if os.path.lexists(candidate.candidate_root):
             live_candidate = project_runtime.load_prepared_runtime_candidate(
                 project_root,
@@ -117424,9 +118234,12 @@ def _project_update_reopen_durable_state(
                     "project_version_update_resume_binding_mismatch"
                 )
             candidate = live_candidate
-        elif not project_runtime._existing_runtime_matches_candidate(
-            project_root,
-            candidate,
+        elif (
+            not cancellation_started
+            and not project_runtime._existing_runtime_matches_candidate(
+                project_root,
+                candidate,
+            )
         ):
             raise ArchiveServiceError(
                 "project_version_update_runtime_candidate_resume_invalid"
@@ -117511,8 +118324,12 @@ def _project_update_reopen_durable_state(
         )
         # The reopened runner must match the final approval projection exactly.
         project_version_update_approval_binding(state.prepared_preview)
+        # ``state`` now owns the guard through the returned service lifetime.
+        directory_guard = None
         return state, lifetime
     except BaseException:
+        if directory_guard is not None:
+            directory_guard.close()
         lifetime.close_after_service_transaction()
         raise
 
@@ -120730,6 +121547,9 @@ def _wom_kit_project_version_update_legacy_core(
                 succeeded=True,
             )
 
+        def claim_publication_boundary() -> Any:
+            return _project_update_claim_publication_boundary(state)
+
         try:
             result = approval_executor(
                 copy.deepcopy(dict(prepared.preview)),
@@ -120737,6 +121557,7 @@ def _wom_kit_project_version_update_legacy_core(
                 durable_claim_succeeded_finalizer,
                 durable_started_guard,
                 durable_succeeded_guard,
+                claim_publication_boundary=claim_publication_boundary,
             )
             if not continuation_used:
                 raise ArchiveServiceError(

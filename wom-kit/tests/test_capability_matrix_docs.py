@@ -9,7 +9,7 @@ from wom_kit import __version__
 
 KIT_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = KIT_ROOT.parent
-EXPECTED_CURRENT_VERSION = "0.4.14"
+EXPECTED_CURRENT_VERSION = "0.4.15"
 EXPECTED_CURRENT_TAG = f"v{EXPECTED_CURRENT_VERSION}"
 CURRENT_VERSION = f"v{__version__}"
 CURRENT_RELEASE_NOTE = f"{EXPECTED_CURRENT_TAG}.md"
@@ -20,8 +20,8 @@ CURRENT_WHEEL_URL = (
     f"wom_kit-{EXPECTED_CURRENT_VERSION}-py3-none-any.whl"
 )
 CURRENT_RUNTIME_STATUS = (
-    f"Status: {CURRENT_VERSION} reference-aware local recovery and safe "
-    "decision views"
+    f"Status: {CURRENT_VERSION} authenticated project-update recovery and "
+    "create-only incident reporting"
 )
 CURRENT_MATRIX_VERSION = f"Version: {CURRENT_VERSION} implementation and release scope"
 MATRIX_PATH = KIT_ROOT / "docs" / "capability-matrix.md"
@@ -1679,7 +1679,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, current_release_text)
         for phrase in (
-            "Status: v0.4.3 exact-human project-mirror writer",
+            "Status: v0.4.15 exact-human project update with authenticated interruption resume",
             "compound_exact_human_approval_binding_required",
             "ready_to_fetch_on_approve",
             "requires the same plan",
@@ -7359,7 +7359,37 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
         )
         for text in (readme_text, readme_ko_text):
             with self.subTest(document="root-readme-on-ramp"):
-                self.assertIn("archive --version", text)
+                nonce_line = (
+                    '$womBootstrapNonce = [guid]::NewGuid().ToString("N")'
+                )
+                root_line = (
+                    '$womBootstrapRoot = Join-Path $env:LOCALAPPDATA '
+                    '"WOM\\bootstrap-v0415-$womBootstrapNonce"'
+                )
+                absent_guard = "if (Test-Path -LiteralPath $womBootstrapRoot)"
+                absent_failure = 'throw "WOM bootstrap path must be new."'
+                venv_line = "py -3.12 -m venv $womBootstrapRoot"
+                resolved_python_line = (
+                    '$womBootstrapPython = (Get-Item -LiteralPath '
+                    '(Join-Path $womBootstrapRoot '
+                    '"Scripts\\python.exe")).FullName'
+                )
+                exact_pip_line = "& $womBootstrapPython -m pip install"
+
+                for required in (
+                    nonce_line,
+                    root_line,
+                    absent_guard,
+                    absent_failure,
+                    venv_line,
+                    resolved_python_line,
+                    exact_pip_line,
+                ):
+                    self.assertIn(required, text)
+                self.assertIn(
+                    r'& "$womBootstrapRoot\Scripts\archive.exe" --version',
+                    text,
+                )
                 self.assertIn(
                     "archive runtime-skill-install --dry-run --format json",
                     text,
@@ -7367,6 +7397,35 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
                 self.assertIn("pip install wom-kit", text)
                 self.assertIn("wom-kit/docs/python-tool-install", text)
                 self.assertIn("wom-kit/docs/runtime-skill-install", text)
+                self.assertNotIn(
+                    '$womBootstrapRoot = Join-Path $env:LOCALAPPDATA '
+                    '"WOM\\bootstrap-v0415"',
+                    text,
+                )
+                self.assertNotIn(
+                    r'& "$womBootstrapRoot\Scripts\python.exe" -m pip install',
+                    text,
+                )
+                self.assertLess(text.index(nonce_line), text.index(root_line))
+                self.assertLess(text.index(root_line), text.index(absent_guard))
+                self.assertLess(text.index(absent_guard), text.index(venv_line))
+                self.assertLess(text.index(venv_line), text.index(resolved_python_line))
+                self.assertLess(
+                    text.index(resolved_python_line), text.index(exact_pip_line)
+                )
+
+        english_quick_start = readme_text[
+            readme_text.index("## Quick Start") : readme_text.index(
+                "## What Exists Today"
+            )
+        ]
+        korean_quick_start = readme_ko_text[
+            readme_ko_text.index("## 빠른 시작") : readme_ko_text.index(
+                "## 현재 포함된 것"
+            )
+        ]
+        for quick_start in (english_quick_start, korean_quick_start):
+            self.assertNotIn("uv tool install", quick_start)
 
     def test_v03265_abstract_transaction_journal_operator_docs_match(self) -> None:
         kit_readme_text = (KIT_ROOT / "README.md").read_text(encoding="utf-8")
