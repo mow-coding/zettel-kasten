@@ -6,10 +6,13 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
 import shutil
 import sys
+import tempfile
+import time
 from typing import Iterable
 
 
@@ -24,6 +27,10 @@ GROUP_SOURCES = {
 }
 MANIFEST_PATH = DESTINATION_ROOT / "resource-manifest.json"
 VERSION_RE = re.compile(r'^__version__\s*=\s*["\']([^"\']+)["\']', re.MULTILINE)
+MANIFEST_REPLACE_ATTEMPTS = 8
+MANIFEST_REPLACE_BACKOFF_SECONDS = 0.01
+_WINDOWS_TRANSIENT_REPLACE_ERRORS = {5, 32, 33, 1224}
+_IS_WINDOWS = os.name == "nt"
 
 
 def sha256_bytes(data: bytes) -> str:
@@ -95,6 +102,69 @@ def assert_safe_destination() -> None:
         raise RuntimeError("Package resource destination must not be a symlink.")
 
 
+def write_manifest_atomic(manifest: dict[str, object]) -> None:
+    """Replace the generated manifest without truncating the tracked file."""
+
+    payload = (
+        json.dumps(manifest, ensure_ascii=True, indent=2) + "\n"
+    ).encode("utf-8")
+    descriptor, temporary_name = tempfile.mkstemp(
+        dir=DESTINATION_ROOT,
+        prefix=".resource-manifest.",
+        suffix=".tmp",
+    )
+    temporary_path = Path(temporary_name)
+    descriptor_owned = True
+    try:
+        if not _IS_WINDOWS:
+            os.fchmod(descriptor, 0o644)
+        try:
+            handle = os.fdopen(descriptor, "wb")
+        except BaseException:
+            os.close(descriptor)
+            descriptor_owned = False
+            raise
+        descriptor_owned = False
+        with handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        for attempt in range(MANIFEST_REPLACE_ATTEMPTS):
+            try:
+                os.replace(temporary_path, MANIFEST_PATH)
+                break
+            except OSError as error:
+                transient_windows_error = bool(
+                    _IS_WINDOWS
+                    and (
+                        isinstance(error, PermissionError)
+                        or getattr(error, "winerror", None)
+                        in _WINDOWS_TRANSIENT_REPLACE_ERRORS
+                    )
+                )
+                if (
+                    not transient_windows_error
+                    or attempt == MANIFEST_REPLACE_ATTEMPTS - 1
+                ):
+                    raise
+                time.sleep(
+                    MANIFEST_REPLACE_BACKOFF_SECONDS * (attempt + 1)
+                )
+        else:  # pragma: no cover - structural guard for an invalid constant
+            raise OSError("resource_manifest_replace_attempted_zero_times")
+    except BaseException:
+        if descriptor_owned:
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+        try:
+            temporary_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise
+
+
 def sync_resources() -> dict[str, object]:
     assert_safe_destination()
     manifest, payloads = expected_manifest()
@@ -109,11 +179,7 @@ def sync_resources() -> dict[str, object]:
         destination = DESTINATION_ROOT / Path(packaged_relative)
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_bytes(data)
-    MANIFEST_PATH.write_text(
-        json.dumps(manifest, ensure_ascii=True, indent=2) + "\n",
-        encoding="utf-8",
-        newline="\n",
-    )
+    write_manifest_atomic(manifest)
     return manifest
 
 

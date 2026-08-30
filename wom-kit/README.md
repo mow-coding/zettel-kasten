@@ -10,21 +10,45 @@ It is not a website, SaaS app, dashboard, or visual note-taking product. The int
 
 ## Install The Command-Line Tool
 
-The exact v0.4.14 GitHub Release, when present, uses the self-contained wheel
+The exact v0.4.15 GitHub Release, when present, uses the self-contained wheel
 below. Confirm that the release exists and lists the wheel before installing
 it. The versioned URL alone is not proof that the asset is available.
 
 ```powershell
-uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.14/wom_kit-0.4.14-py3-none-any.whl"
-archive --version
+$womBootstrapNonce = [guid]::NewGuid().ToString("N")
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0415-$womBootstrapNonce"
+if (Test-Path -LiteralPath $womBootstrapRoot) {
+  throw "WOM bootstrap path must be new."
+}
+py -3.12 -m venv $womBootstrapRoot
+$womBootstrapPython = (Get-Item -LiteralPath (Join-Path $womBootstrapRoot "Scripts\python.exe")).FullName
+& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.15/wom_kit-0.4.15-py3-none-any.whl"
+& "$womBootstrapRoot\Scripts\archive.exe" --version
 ```
 
-Run the version check in a new process. The install replaces the existing
-`uv`-managed global tool, including a v0.4.3 installation. It does not silently
-update a project-local WOM-kit source mirror or its pin. v0.4.3 reopens the
-project updater only through its separately reviewed exact-human plan, so the
-global runtime and project-local source remain two distinct states until that
-workflow succeeds.
+Run the version check in a new process and require exactly `archive 0.4.15`.
+The dedicated external CPython 3.12 environment and exact real
+`python.exe -m pip` path retain the wheel SHA-256 required by the updater. A
+user-scoped `uv tool` environment whose installed metadata omits that archive
+hash is not project-updater supply evidence. Installing the bootstrap does not
+silently update a project-local WOM-kit source mirror or its pin.
+
+v0.4.15 makes a blocked project update resumable without caller-supplied target,
+transaction, reviewer, approval, or file identifiers while a live
+`version-update.lock` or the exact lockless unlock tail with its original
+transaction directory remains. WOM restores the exact context, requires one
+checkpoint-valid claim, and opens no second native decision. The first
+unsupported boundary is after `completed`, once the original transaction
+directory has been successfully renamed to a terminal cleanup tombstone. A
+tombstone or cleanup proof is not authenticated outcome or cleanup authority:
+WOM reports `terminal_cleanup_outcome_unknown` with a nonzero exit and does not
+infer success, failure, or cancellation, automatically retry, or delete that
+evidence. Full authenticated terminal handoff and terminal cleanup outcome
+reconstruction remain a v0.4.16 follow-up. The update lock continues to block
+ordinary draft and archive writers until all runtime parts converge. Its only
+incident-reporting exception is create-only operator feedback body preservation;
+revision, metadata and delivery changes, and every other writer remain blocked
+without changing the update lock.
 
 v0.4.3 adds `ExactOperationManifest v1` and uses it for bounded multi-item
 execution, same-claim resume, independent verification, and field-scoped

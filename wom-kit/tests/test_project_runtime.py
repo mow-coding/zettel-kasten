@@ -279,7 +279,7 @@ class ProjectRuntimeTests(unittest.TestCase):
             "wom-kit/project-runtime-supply-lock-v*.json text eol=lf",
             attributes.splitlines(),
         )
-        raw = (KIT_ROOT / "project-runtime-supply-lock-v0.4.14.json").read_bytes()
+        raw = (KIT_ROOT / "project-runtime-supply-lock-v0.4.15.json").read_bytes()
         policy = project_runtime.project_runtime_policy_document(
             (KIT_ROOT / "project-runtime-policy.json").read_bytes()
         )
@@ -287,21 +287,21 @@ class ProjectRuntimeTests(unittest.TestCase):
         assert policy is not None
         self.assertEqual(
             policy["supply_lock"],
-            "wom-kit/project-runtime-supply-lock-v0.4.14.json",
+            "wom-kit/project-runtime-supply-lock-v0.4.15.json",
         )
         self.assertEqual(
             policy["supply_lock_sha256"],
-            "sha256:f3a3e0f5f2b766974bc9b376c7ce6d767b199ecc9c57d05cb7d28e738777ce93",
+            "sha256:8cc4597742bab8bb4f7c1f4e4c28d90d0b8cddd1293247e680c615531d31953d",
         )
         supply = project_runtime.project_runtime_supply_lock(
             raw,
-            expected_target="v0.4.14",
+            expected_target="v0.4.15",
         )
         self.assertIsNotNone(supply)
         assert supply is not None
         self.assertEqual(
             supply.sha256,
-            "f3a3e0f5f2b766974bc9b376c7ce6d767b199ecc9c57d05cb7d28e738777ce93",
+            "8cc4597742bab8bb4f7c1f4e4c28d90d0b8cddd1293247e680c615531d31953d",
         )
         self.assertEqual(
             [(item.distribution, item.version, item.size_bytes, item.sha256) for item in supply.artifacts],
@@ -691,6 +691,86 @@ class ProjectRuntimeTests(unittest.TestCase):
         self.assertEqual(summary["wheel_sha256"], f"sha256:{digest}")
         self.assertFalse(summary["download_url_echoed"])
         self.assertNotIn("url", summary)
+
+    def test_public_bootstrap_rejects_installer_metadata_without_wheel_hash(self) -> None:
+        class Distribution:
+            version = "0.4.15"
+
+            @staticmethod
+            def read_text(name: str) -> str | None:
+                if name != "direct_url.json":
+                    return None
+                return json.dumps(
+                    {
+                        "url": (
+                            "https://github.com/mow-coding/zettel-kasten/"
+                            "releases/download/v0.4.15/"
+                            "wom_kit-0.4.15-py3-none-any.whl"
+                        ),
+                        "archive_info": {},
+                    }
+                )
+
+        with patch.object(
+            project_runtime.importlib.metadata,
+            "distribution",
+            return_value=Distribution(),
+        ):
+            wheel, summary = project_runtime.bootstrap_wheel_for_target(
+                "v0.4.15"
+            )
+
+        self.assertIsNone(wheel)
+        self.assertFalse(summary["available"])
+        self.assertEqual(
+            summary["reason_code"],
+            "running_distribution_wheel_hash_unavailable",
+        )
+        self.assertTrue(
+            any(
+                "python.exe -m pip" in action
+                and "SHA-256" in action
+                for action in summary["next_safe_actions"]
+            )
+        )
+        self.assertFalse(summary["download_url_echoed"])
+        self.assertNotIn("url", summary)
+
+    def test_public_bootstrap_rejects_malformed_recorded_wheel_hash(self) -> None:
+        class Distribution:
+            version = "0.4.15"
+
+            @staticmethod
+            def read_text(name: str) -> str | None:
+                if name != "direct_url.json":
+                    return None
+                return json.dumps(
+                    {
+                        "url": (
+                            "https://github.com/mow-coding/zettel-kasten/"
+                            "releases/download/v0.4.15/"
+                            "wom_kit-0.4.15-py3-none-any.whl"
+                        ),
+                        "archive_info": {
+                            "hashes": {"sha256": "not-a-sha256"}
+                        },
+                    }
+                )
+
+        with patch.object(
+            project_runtime.importlib.metadata,
+            "distribution",
+            return_value=Distribution(),
+        ):
+            wheel, summary = project_runtime.bootstrap_wheel_for_target(
+                "v0.4.15"
+            )
+
+        self.assertIsNone(wheel)
+        self.assertEqual(
+            summary["reason_code"],
+            "running_distribution_wheel_hash_unavailable",
+        )
 
     def test_write_guard_requires_version_and_current_project_runtime(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

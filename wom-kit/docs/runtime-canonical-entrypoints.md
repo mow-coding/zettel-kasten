@@ -1,6 +1,8 @@
 # Runtime Canonical Entry Points
 
-Status: v0.4.14 reference-aware local recovery and safe decision views
+Status: v0.4.15 authenticated project-update recovery and create-only incident reporting
+
+Previous checkpoint: Status: v0.4.14 reference-aware local recovery and safe decision views
 
 Previous checkpoint: Status: v0.4.13 exact setup evidence and create-only object-storage preservation
 
@@ -38,7 +40,42 @@ The underlying raw context packet remains available through:
 archive runtime-context <archive-root> --format json
 ```
 
-## v0.4.14 Current Runtime Delta
+## v0.4.15 Current Runtime Delta
+
+`project-version-update --resume` validates the live update lock and
+authenticated sealed plan, restores the exact target, transaction, reviewer,
+and approval context, and accepts exactly one checkpoint-valid existing claim.
+The ordinary command needs only the project root, `--resume`, and
+`--affirm-external-writers-quiescent`; it requires no caller identifiers and
+opens no second native decision. A zero-claim transaction cancels its scaffold
+only when durable state proves it is untouched preapproval, then requires a
+fresh approval. Zero claims for an approved or indeterminate transaction,
+multiple candidates, forged evidence, or drift fail before another project
+write.
+
+The v0.4.15 recovery guarantee is bounded to a live `version-update.lock` or
+the exact lockless unlock tail while the original transaction directory still
+exists. Its first unsupported boundary is after `completed`, once the original
+transaction directory has been successfully renamed to a terminal cleanup
+tombstone. A tombstone or cleanup proof is not authenticated outcome or cleanup
+authority: WOM reports `terminal_cleanup_outcome_unknown` with a nonzero exit
+and does not infer success, failure, or cancellation, automatically retry, or
+delete that evidence. A full authenticated terminal handoff and terminal
+cleanup outcome reconstruction remain a v0.4.16 follow-up.
+
+`version-update.lock` continues to block ordinary draft and archive writers
+until source, runtime, launcher, pin, and receipt converge. The only locked-state
+exception is exact-approved `operator-feedback-compose --intent create`, which
+may append a new body, body receipt, and bounded coordination artifact. It
+cannot revise or supersede an existing body, change feedback metadata, mark
+feedback resolved or delivered, or change the lock or any update target.
+
+The updater-capable bootstrap is an external CPython 3.12 environment installed
+through its exact real `python.exe -m pip`, with the wheel SHA-256 retained in
+PEP 610 metadata. A user-scoped tool installation without that hash is not
+project-update supply evidence.
+
+## v0.4.14 Historical Runtime Delta
 
 `external-locator-record --all-markup-receipts` discovers the fixed historical
 normalization receipt inventory without making the operator copy paths or count
@@ -189,7 +226,7 @@ archive capabilities --machine --format json
 
 Its `data.approval_status_inventory` distinguishes
 `approval_available`, `approval_fixed_closed`, and `approval_not_exposed` for
-every canonical executable command path and its aliases. The current v0.4.14
+every canonical executable command path and its aliases. The current v0.4.15
 working-tree parser reports 315 canonical executable paths, 259 alias paths,
 and 574 total invocation paths: 47 operation-specific approval routes, 67
 fixed-closed routes, and 201 routes without an approval mode. Nine paths have
@@ -226,19 +263,26 @@ documented plans, previews, and audits remain available; a closed approval still
 `compound_exact_human_approval_binding_required`. `project-version-update`
 itself is separately reopened with an exact target/tag/source/rollback binding.
 
-When an older global CLI must be replaced and the exact public
-v0.4.14 GitHub Release wheel has been independently confirmed, use the public
-wheel directly:
+When an updater bootstrap is needed and the exact public v0.4.15 GitHub Release
+wheel has been independently confirmed, use a dedicated external CPython 3.12
+environment:
 
 ```powershell
-uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.14/wom_kit-0.4.14-py3-none-any.whl"
-archive --version
+$womBootstrapNonce = [guid]::NewGuid().ToString("N")
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0415-$womBootstrapNonce"
+if (Test-Path -LiteralPath $womBootstrapRoot) {
+  throw "WOM bootstrap path must be new."
+}
+py -3.12 -m venv $womBootstrapRoot
+$womBootstrapPython = (Get-Item -LiteralPath (Join-Path $womBootstrapRoot "Scripts\python.exe")).FullName
+& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.15/wom_kit-0.4.15-py3-none-any.whl"
+& "$womBootstrapRoot\Scripts\archive.exe" --version
 ```
 
-Run `archive --version` in a new process. This replaces only the global `uv`
-tool installation. It does not update the project-local WOM-kit source mirror
-or change a project pin. Those effects require a separate reviewed
-`project-version-update` plan and native approval.
+Require exactly `archive 0.4.15` from a new process. This does not update the
+project-local WOM-kit source mirror or change a project pin. Those effects
+require the separate reviewed `project-version-update` plan and native
+approval, or its authenticated same-context resume after interruption.
 
 JSON usage and repaired high-risk command failures use
 `wom-kit/cli-error/v0.1`. Usage errors return exit code `2`; policy and

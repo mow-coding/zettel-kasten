@@ -17,30 +17,34 @@ LOCK_SHA256 = "f3a3e0f5f2b766974bc9b376c7ce6d767b199ecc9c57d05cb7d28e738777ce93"
 
 
 class V0414ReleaseDocsTests(unittest.TestCase):
-    def test_current_version_and_release_surfaces_are_exact(self) -> None:
-        self.assertEqual(__version__, "0.4.14")
+    def test_v0414_is_preserved_as_source_history(self) -> None:
+        self.assertEqual(__version__, "0.4.15")
+        self.assertTrue(RELEASE.is_file())
+        self.assertFalse(
+            (RESOURCE_ROOT / "release-notes" / "v0.4.14.md").exists()
+        )
         for path in (
             KIT / "src" / "wom_kit" / "__init__.py",
             ROOT / "wom_kit" / "__init__.py",
         ):
             with self.subTest(path=path):
                 self.assertIn(
-                    '__version__ = "0.4.14"',
+                    '__version__ = "0.4.15"',
                     path.read_text(encoding="utf-8"),
                 )
         self.assertIn(
-            'version = "0.4.14"',
+            'version = "0.4.15"',
             (KIT / "pyproject.toml").read_text(encoding="utf-8"),
         )
         self.assertIn(
-            'version: "0.4.14"',
+            'version: "0.4.15"',
             (ROOT / "CITATION.cff").read_text(encoding="utf-8"),
         )
         versioning = (ROOT / "VERSIONING.md").read_text(encoding="utf-8")
-        self.assertIn("Current public baseline:\n\n```text\nv0.4.14", versioning)
-        self.assertIn("Previous public baseline:\n\n```text\nv0.4.13", versioning)
+        self.assertIn("Current public baseline:\n\n```text\nv0.4.15", versioning)
+        self.assertIn("Previous public baseline:\n\n```text\nv0.4.14", versioning)
 
-    def test_supply_lock_changes_only_target_tag_and_current_policy_is_exact(self) -> None:
+    def test_v0414_supply_lock_is_historical_and_current_policy_is_v0415(self) -> None:
         current = LOCK.read_bytes()
         previous = (KIT / "project-runtime-supply-lock-v0.4.13.json").read_bytes()
         expected = previous.replace(b"\r\n", b"\n").replace(
@@ -57,9 +61,12 @@ class V0414ReleaseDocsTests(unittest.TestCase):
         )
         self.assertEqual(
             policy["supply_lock"],
-            "wom-kit/project-runtime-supply-lock-v0.4.14.json",
+            "wom-kit/project-runtime-supply-lock-v0.4.15.json",
         )
-        self.assertEqual(policy["supply_lock_sha256"], f"sha256:{LOCK_SHA256}")
+        self.assertEqual(
+            policy["supply_lock_sha256"],
+            "sha256:8cc4597742bab8bb4f7c1f4e4c28d90d0b8cddd1293247e680c615531d31953d",
+        )
 
     def test_release_contract_is_reference_aware_private_and_honest(self) -> None:
         text = RELEASE.read_text(encoding="utf-8")
@@ -80,20 +87,20 @@ class V0414ReleaseDocsTests(unittest.TestCase):
             with self.subTest(required=required):
                 self.assertIn(required.casefold(), flat.casefold())
 
-    def test_current_release_is_the_only_packaged_note(self) -> None:
+    def test_v0414_is_not_repackaged_as_the_current_release(self) -> None:
         packaged = RESOURCE_ROOT / "release-notes" / "v0.4.14.md"
-        self.assertEqual(RELEASE.read_bytes(), packaged.read_bytes())
+        self.assertFalse(packaged.exists())
         release_names = sorted(
             path.name for path in (RESOURCE_ROOT / "release-notes").glob("v*.md")
         )
-        self.assertEqual(release_names, ["v0.4.14.md"])
+        self.assertEqual(release_names, ["v0.4.15.md"])
         manifest = json.loads(
             (RESOURCE_ROOT / "resource-manifest.json").read_text(encoding="utf-8")
         )
-        self.assertEqual(manifest["version"], "0.4.14")
+        self.assertEqual(manifest["version"], "0.4.15")
         packaged_paths = {row["packaged"] for row in manifest["files"]}
-        self.assertIn("release-notes/v0.4.14.md", packaged_paths)
-        self.assertNotIn("release-notes/v0.4.13.md", packaged_paths)
+        self.assertIn("release-notes/v0.4.15.md", packaged_paths)
+        self.assertNotIn("release-notes/v0.4.14.md", packaged_paths)
 
     def test_public_v0414_surfaces_do_not_publish_client_evidence(self) -> None:
         documents = (

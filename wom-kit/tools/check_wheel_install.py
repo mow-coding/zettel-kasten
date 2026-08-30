@@ -3220,6 +3220,44 @@ def _check_installed_runtime_dependencies(python: Path, *, cwd: Path) -> None:
         )
 
 
+def _check_installed_wheel_direct_url_hash(
+    python: Path,
+    wheel: Path,
+    *,
+    cwd: Path,
+) -> None:
+    """Prove real pip retained the exact bootstrap wheel SHA in PEP 610."""
+
+    expected_sha256 = hashlib.sha256(wheel.read_bytes()).hexdigest()
+    evidence = run(
+        [
+            str(python),
+            "-I",
+            "-c",
+            (
+                "import importlib.metadata as m,json,sys;"
+                "d=m.distribution('wom-kit');"
+                "u=json.loads(d.read_text('direct_url.json') or 'null');"
+                "a=u.get('archive_info') if isinstance(u,dict) else None;"
+                "h=a.get('hashes') if isinstance(a,dict) else None;"
+                "s=h.get('sha256') if isinstance(h,dict) else None;"
+                "print(json.dumps({'hash_recorded':isinstance(s,str),"
+                "'hash_matches':isinstance(s,str) and s==sys.argv[1]},"
+                "sort_keys=True))"
+            ),
+            expected_sha256,
+        ],
+        cwd=cwd,
+        label="installed wheel direct-url hash attestation",
+        parse_json=True,
+    )
+    if evidence != {"hash_matches": True, "hash_recorded": True}:
+        raise WheelCheckError(
+            "Installed WOM wheel did not retain its exact SHA-256 in "
+            "direct_url.json; it cannot bootstrap a verified project update."
+        )
+
+
 def _package_resource_root() -> Path:
     """Return the committed package mirror, evaluated late for isolated tests."""
 
@@ -4969,6 +5007,11 @@ def check_wheel(output_dir: Path | None = None) -> dict[str, Any]:
             [str(python), "-m", "pip", "install", str(wheel)],
             cwd=temp_root,
             label="wheel install",
+        )
+        _check_installed_wheel_direct_url_hash(
+            python,
+            wheel,
+            cwd=temp_root,
         )
         _check_installed_runtime_dependencies(python, cwd=temp_root)
         package_version, entrypoints_checked, entrypoint_evidence = (

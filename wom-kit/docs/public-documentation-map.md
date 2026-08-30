@@ -2,11 +2,34 @@
 
 Status: public navigation baseline
 Date: 2026-06-02
-Updated: 2026-08-29
+Updated: 2026-08-30
 Philosophy clarified: 2026-07-15
 Harness compatibility clarified: 2026-07-16
 
-Current v0.4.14 delta: historical locator recovery replays exact normalization
+Current v0.4.15 delta: an interrupted project update is resumable from its live
+lock and authenticated sealed plan without caller-supplied target, transaction,
+reviewer, approval, or file identifiers and without a second native decision.
+A zero-claim transaction cancels its scaffold only when durable state proves it
+is untouched preapproval, then requires a fresh approval. Zero claims for an
+approved or indeterminate transaction, multiple candidates, forged evidence,
+or drift fail closed. While `version-update.lock` remains, only exact-approved create-only operator feedback
+body preservation may append; revision, supersession, feedback metadata,
+resolved/delivered state, and every ordinary writer remain blocked. The
+updater-capable bootstrap is an external CPython 3.12 environment installed by
+its exact real `python.exe -m pip`; a user-scoped tool environment without a
+recorded wheel hash is not supply evidence.
+
+The v0.4.15 recovery guarantee is bounded to a live `version-update.lock` or
+the exact lockless unlock tail while the original transaction directory still
+exists. Its first unsupported boundary is after `completed`, once the original
+transaction directory has been successfully renamed to a terminal cleanup
+tombstone. A tombstone or cleanup proof is not authenticated outcome or cleanup
+authority: WOM reports `terminal_cleanup_outcome_unknown` with a nonzero exit
+and does not infer success, failure, or cancellation, automatically retry, or
+delete that evidence. A full authenticated terminal handoff and terminal
+cleanup outcome reconstruction remain a v0.4.16 follow-up.
+
+Historical v0.4.14 delta: historical locator recovery replays exact normalization
 and reviewed binding evidence so current verified references remain intact.
 Partial evidence becomes explicit review debt and one private classification
 ledger carries native approval, checkpoints, resume, independent verification,
@@ -552,6 +575,7 @@ These documents record public-safe work already performed.
 - [v0.2.11 Delegate Capability Contract Work Log](../plans/work-log-2026-05-23-delegate-capability-contract.md)
 - [Changelog](../../CHANGELOG.md)
 - [Release Notes](releases/)
+- [v0.4.15 Release Note](releases/v0.4.15.md)
 - [v0.4.14 Release Note](releases/v0.4.14.md)
 - [v0.4.13 Release Note](releases/v0.4.13.md)
 - [v0.4.12 Release Note](releases/v0.4.12.md)

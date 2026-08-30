@@ -1,26 +1,26 @@
 # WOM-kit Python 도구 설치
 
-상태: v0.4.14 조건부 GitHub wheel 계약; 릴리스 소스·빌드에서 참조 보존 로컬 복구와 안전한 승인 보기 검증
+상태: v0.4.15 조건부 GitHub wheel 계약; 정확한 pip project updater 부트스트랩과 인증된 중단 복구
 
 WOM-kit은 명령줄 도구입니다. 일반 앱 프로젝트의 Python 의존성과 섞지 말고
 별도의 격리된 Python 환경에 설치하는 것이 좋습니다.
 
 ## 한 Windows 계정에서 여러 클라이언트 폴더를 쓸 때
 
-`uv tool`의 격리 환경은 Python 의존성을 다른 앱과 분리하지만, PATH에 노출한
-`archive.exe`를 현재 폴더 전용으로 만들지는 않습니다. 같은 Windows 계정에서
-같은 실행 파일을 찾는 모든 프로세스는 다음 명령 실행부터 교체된 버전을 볼 수
-있습니다. 따라서 `archive --version`은 현재 실행한 공용 도구 버전일 뿐, 특정
-클라이언트 프로젝트가 업데이트됐다는 증거가 아닙니다.
+사용자 범위 도구 환경은 Python 의존성을 다른 앱과 분리할 수 있지만, PATH에
+노출한 `archive.exe`를 현재 폴더 전용으로 만들지는 않습니다. 같은 Windows
+계정에서 같은 실행 파일을 찾는 모든 프로세스는 다음 명령 실행부터 교체된
+버전을 볼 수 있습니다. 따라서 `archive --version`은 현재 실행한 공용 도구
+버전일 뿐, 특정 프로젝트가 업데이트됐다는 증거가 아닙니다.
 
-같은 컴퓨터의 베타 클라이언트는 두 층을 함께 확인해야 합니다.
+같은 Windows 계정의 여러 프로젝트는 두 층을 함께 확인해야 합니다.
 
 ```powershell
 archive --version
 archive version <project-or-archive-root> --format json
 ```
 
-두 번째 결과의 project source, pin, `project_runtime`을 보고 그 클라이언트의
+두 번째 결과의 project source, pin, `project_runtime`을 보고 그 프로젝트의
 업데이트 필요 여부를 결정합니다. 개발·릴리스 검증 때는 별도 임시 가상환경에
 wheel을 설치하고 그 환경의 `Scripts\archive.exe`를 정확한 경로로 실행해야
 합니다. 테스트 과정에서 사용자 공용 PATH 도구를 교체하지 않습니다. 같은
@@ -31,16 +31,15 @@ wheel을 설치하고 그 환경의 `Scripts\archive.exe`를 정확한 경로로
 실행기는 바뀌지 않습니다. 이 경계는 WOM 명령의 프로젝트 런타임 격리이며,
 Windows 사용자 권한이나 WOM 밖의 프로그램까지 격리한다는 뜻은 아닙니다.
 
-아래 v0.4.14 URL은 조건부 계약이며 공개 자산이 실제로 존재한다는 증거가
+아래 v0.4.15 URL은 조건부 계약이며 공개 자산이 실제로 존재한다는 증거가
 아닙니다. 정확히 일치하는 GitHub Release가 존재하고 검증된 wheel을 자산으로
 나열한 뒤에만 사용하세요. 소스 상태와 릴리스 증거의 구분은
-[v0.4.14 릴리스 노트](releases/v0.4.14.md)를 보세요.
+[v0.4.15 릴리스 노트](releases/v0.4.15.md)를 보세요.
 
-설치된 이전 client에는 v0.4.14의 참조 보존 locator 분류, exact 비공개 분류
-원장, 안전한 대상 단서, 완전한 문서 단위 Markdown 표시 계약이 없을 수 있습니다.
-저장소 파일만 업데이트해도 분리된 `uv tool` 또는 가상환경 wheel은 바뀌지
-않습니다. 검증된 v0.4.14 자산이 실제로 생긴 뒤 그
-정확한 wheel을 설치하고 새 프로세스를 시작하세요.
+설치된 이전 runtime에는 v0.4.15의 인증된 project update resume와 create-only
+긴급 feedback 보존이 없을 수 있습니다. 저장소 파일만 업데이트해도 설치된
+wheel은 바뀌지 않습니다. 검증된 v0.4.15 자산이 실제로 생긴 뒤 그 정확한
+wheel을 설치하고 새 프로세스를 시작하세요.
 
 ## 권장 프로젝트 부트스트랩
 
@@ -50,13 +49,18 @@ Windows 사용자 권한이나 WOM 밖의 프로그램까지 격리한다는 뜻
 프로젝트 입력이나 updater 충돌 항목이 되지 않습니다.
 
 ```powershell
-$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0414"
-py -m venv $womBootstrapRoot
-& "$womBootstrapRoot\Scripts\python.exe" -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.14/wom_kit-0.4.14-py3-none-any.whl"
+$womBootstrapNonce = [guid]::NewGuid().ToString("N")
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0415-$womBootstrapNonce"
+if (Test-Path -LiteralPath $womBootstrapRoot) {
+  throw "WOM bootstrap path must be new."
+}
+py -3.12 -m venv $womBootstrapRoot
+$womBootstrapPython = (Get-Item -LiteralPath (Join-Path $womBootstrapRoot "Scripts\python.exe")).FullName
+& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.15/wom_kit-0.4.15-py3-none-any.whl"
 & "$womBootstrapRoot\Scripts\archive.exe" --version
 ```
 
-새 프로세스가 정확히 `archive 0.4.14`를 보고하면 그 명시적 부트스트랩으로
+새 프로세스가 정확히 `archive 0.4.15`를 보고하면 그 명시적 부트스트랩으로
 `project-version-update`를 실행합니다. 승인 성공 뒤 프로젝트 런타임을
 검증하고 해당 launcher를 사용합니다.
 
@@ -81,46 +85,35 @@ py -m venv $womBootstrapRoot
 있습니다. 결과를 해석하거나 승인하기 전에 [Git 백업 계획과 재조정
 계획](git-backup-plan.md)을 읽으세요.
 
-`uv tool install`은 도구 전용 환경을 만들고 패키지가 제공하는 명령을 꺼내
-줍니다. WOM-kit은 `archive`, `wom`, `archive-mcp`, `wom-mcp` 네 명령을
-설치합니다. 이 환경은 의존성 면에서는 격리되지만, 밖으로 꺼낸 명령은 사용자
-PATH가 공유하는 실행점이지 프로젝트 폴더 전용 명령이 아닙니다.
-
 이번 릴리스는 WOM-kit을 PyPI에 공개하지 않습니다. 따라서 아직은
 `pip install wom-kit`이 공식 명령이 아닙니다. 정확한 GitHub 릴리스 URL을
 사용하면 설치 파일을 검토된 저장소 태그에 묶을 수 있습니다.
 
-### 설치된 이전 전역 CLI 교체
+### 사용자 범위 도구 설치가 updater 근거가 아닌 이유
 
-v0.4.14 Release와 wheel이 실제로 공개된 뒤, 격리된 `uv tool` 환경을 교체하고
-새 프로세스에서 결과를 확인합니다.
+`uv tool`이 관리하는 환경은 일반적인 공용 CLI로 쓸 수 있지만, 현재 설치된
+`direct_url.json`에는 wheel archive hash가 없을 수 있습니다. 이 상태에서
+project updater는 `running_distribution_wheel_hash_unavailable`로 안전하게
+중단합니다. 같은 버전 문자열이나 버전이 들어간 URL만으로 공급 근거를
+인정하지 않습니다.
 
-```powershell
-uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.14/wom_kit-0.4.14-py3-none-any.whl"
-archive --version
-```
+프로젝트 업데이트에는 위의 외부 CPython 3.12 환경과 그 실제
+`Scripts\python.exe -m pip`를 사용합니다. 릴리스 검사는 실제 pip가 정확한
+wheel SHA-256을 PEP 610 metadata에 남기는지 증명하고, updater는 승인 전에 그
+근거를 다시 검사합니다. 이 검사를 우회하거나 update lock을 지우거나 version
+pin을 손으로 고치지 마세요. [Project Version Update](project-version-update.md)와
+[업그레이드 가이드](../../UPGRADE.ko.md)를 보세요.
 
-공식 `uv` 계약상 같은 `uv tool install`을 다시 실행하면 보통 `uv`가 관리하던
-기존 도구를 교체합니다. `uv`가 관리하지 않는 실행 파일 충돌을 명시적으로
-보고하고 사람이 그 실행 파일을 검토한 경우에만 `--force`를 사용하세요. 이
-옵션은 `uv`가 관리하지 않는 실행 파일도 교체할 수 있습니다. [공식 `uv tool
-install` 문서](https://docs.astral.sh/uv/reference/cli/#uv-tool-install)를 보세요.
+## 전용 pip 도구 환경
 
-결과는 정확히 `archive 0.4.14`이어야 합니다. 이것은 전역 CLI만 바꾸는
-부트스트랩입니다. project-local `.zettel-kasten/source` mirror와 version pin은
-바꾸지 않습니다. project updater는 별도의 exact-human workflow이고,
-collision 변경과 bytecode repair는 계속 고정 차단됩니다. pin을 손으로 고치지
-마세요. [Project Version Update](project-version-update.md)와 [업그레이드
-가이드](../../UPGRADE.ko.md)를 보세요.
-
-## 일반 pip 대안
-
-일반 `pip`도 전용 가상환경 안에서는 사용할 수 있습니다.
+짧게 쓰는 updater bootstrap과 별개로 명시적 경로의 일반 CLI가 필요하면 또
+다른 외부 가상환경을 사용합니다.
 
 ```powershell
-py -m venv "$HOME\.wom-tools\wom-kit"
-& "$HOME\.wom-tools\wom-kit\Scripts\python.exe" -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.14/wom_kit-0.4.14-py3-none-any.whl"
-& "$HOME\.wom-tools\wom-kit\Scripts\archive.exe" --version
+$womToolRoot = Join-Path $env:LOCALAPPDATA "WOM\tool-v0415"
+py -3.12 -m venv $womToolRoot
+& "$womToolRoot\Scripts\python.exe" -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.15/wom_kit-0.4.15-py3-none-any.whl"
+& "$womToolRoot\Scripts\archive.exe" --version
 ```
 
 이 환경은 도구 전용입니다. WOM 아카이브 폴더가 아니며 아카이브 안에 만들지
@@ -201,9 +194,21 @@ v0.3.314부터 명시한 output은 시작 직후 내용 없는 `operation_ref`�
 호출 화면이 timeout으로 먼저 끝나면 updater를 중복 실행하지 말고, 그 reference와
 정확한 시작 root로 `operation-control` status 또는 제한된 wait를 실행하세요.
 archive root에서 시작한 update의 output은 새
-`.wom-scratch/diagnostics/*.json` 경로를 사용합니다. cancel과 resume은 구현되지
-않았고, status는 update 완료 후 새 프로세스의 `archive version` 확인을 대신하지
-않습니다.
+`.wom-scratch/diagnostics/*.json` 경로를 사용합니다. 일반 operation-control의
+cancel과 resume은 계속 지원하지 않습니다. v0.4.15는 명령 전용
+`project-version-update --resume`만 추가합니다. WOM은 approval id를 요구하거나
+두 번째 native 결정을 열지 않고 변경되지 않은 update 문맥에 맞는 인증되고
+checkpoint-valid한 claim 하나만 다시 확인합니다. status나 resume도 update 완료
+뒤 새 project launcher 프로세스의 `archive version` 확인을 대신하지 않습니다.
+
+v0.4.15 복구 범위는 live `version-update.lock` 또는 원본 transaction
+directory가 남아 있는 exact lockless unlock tail까지입니다. 최초 미지원 경계는
+`completed` 뒤 원본 transaction directory의 terminal cleanup tombstone rename이
+성공한 시점입니다. tombstone이나 cleanup proof는 인증된 outcome 또는 cleanup
+authority가 아닙니다. WOM은 `terminal_cleanup_outcome_unknown`을 nonzero로
+보고할 뿐 success·failure·cancellation을 추론하거나 자동 retry·삭제하지
+않습니다. 완전한 authenticated terminal handoff와 terminal cleanup outcome
+reconstruction은 v0.4.16 후속 작업입니다.
 
 결과에는 `external_writer_quiescence_required: true`,
 `external_writer_quiescence_affirmed: true`,

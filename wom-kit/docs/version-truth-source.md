@@ -1,8 +1,10 @@
 # WOM-kit Version Truth Source
 
-Status: v0.4.14 reference-aware local recovery and safe decision views
+Status: v0.4.15 authenticated project-update recovery and exact-pip bootstrap
 
-Current checkpoint: Status: v0.4.14 current-reference and client-execution truth
+Current checkpoint: Status: v0.4.15 identifier-free update recovery and installed-wheel hash truth
+
+Previous checkpoint: Status: v0.4.14 current-reference and client-execution truth
 
 Previous checkpoint: Status: v0.4.13 exact setup and remote preservation truth
 
@@ -44,28 +46,44 @@ or runtime workflow. This page defines the safe order for checking them.
 
 ## Current Public Tool
 
-The v0.4.14 URL is a conditional release-artifact contract. Use it only after
+The v0.4.15 URL is a conditional release-artifact contract. Use it only after
 the matching public GitHub Release exists and lists the exact wheel:
 
 ```powershell
-py -m venv .wom-bootstrap-v0414
-& .\.wom-bootstrap-v0414\Scripts\python.exe -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.14/wom_kit-0.4.14-py3-none-any.whl"
-& .\.wom-bootstrap-v0414\Scripts\archive.exe --version
+$womBootstrapNonce = [guid]::NewGuid().ToString("N")
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0415-$womBootstrapNonce"
+if (Test-Path -LiteralPath $womBootstrapRoot) {
+  throw "WOM bootstrap path must be new."
+}
+py -3.12 -m venv $womBootstrapRoot
+$womBootstrapPython = (Get-Item -LiteralPath (Join-Path $womBootstrapRoot "Scripts\python.exe")).FullName
+& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.15/wom_kit-0.4.15-py3-none-any.whl"
+& "$womBootstrapRoot\Scripts\archive.exe" --version
 ```
 
-Require exactly `archive 0.4.14` from a new process. The installed runtime adds
-reference-aware local locator classification, exact private ledger execution,
-safe hash-bound decision clues, and a complete-document Markdown display view.
-A bootstrap install alone changes no archive, remote ref, project-local source
-mirror, pin, shared PATH tool, other project, or provider. Project update is a
-separate native exact-human workflow that creates and activates the
-project-local runtime with its own receipt. Private recovery requires another
-explicit client-authorized operation. WOM verifies counts, hashes, current zet
-and omission identity, receipt lineage, drift, checkpoints, and receipts; the
-person does not count or compare technical values. See
-[ExactOperationManifest v1](exact-operation-manifest-v1.md), the
-[locator-loss audit](notion-import-locator-loss-audit.md), and the
-[v0.4.14 release note](releases/v0.4.14.md).
+Require exactly `archive 0.4.15` from a new process. The external CPython 3.12
+environment and exact real `python.exe -m pip` retain the wheel SHA-256 in the
+installed PEP 610 metadata. A user-scoped tool environment without that archive
+hash is not project-updater supply evidence. A bootstrap install alone changes
+no archive, remote ref, project-local source mirror, pin, shared PATH tool,
+other project, or provider.
+
+If an approved update was interrupted, the live lock and authenticated sealed
+plan are canonical recovery evidence. Normal `project-version-update --resume`
+restores target, transaction, reviewer, and approval bindings without caller-
+supplied identifiers or a second native decision, and requires exactly one
+checkpoint-valid claim. See [Project Version Update](project-version-update.md)
+and the [v0.4.15 release note](releases/v0.4.15.md).
+
+The v0.4.15 recovery guarantee is bounded to a live `version-update.lock` or
+the exact lockless unlock tail while the original transaction directory still
+exists. Its first unsupported boundary is after `completed`, once the original
+transaction directory has been successfully renamed to a terminal cleanup
+tombstone. A tombstone or cleanup proof is not authenticated outcome or cleanup
+authority: WOM reports `terminal_cleanup_outcome_unknown` with a nonzero exit
+and does not infer success, failure, or cancellation, automatically retry, or
+delete that evidence. A full authenticated terminal handoff and terminal
+cleanup outcome reconstruction remain a v0.4.16 follow-up.
 
 ## Canonical Checks
 
@@ -86,7 +104,7 @@ form is for AI runtimes and scripts. `runtime-context` includes the same
 version summary under `wom_kit_version`, so an agent can confirm archive identity
 and kit version in one read-only request.
 
-For a v0.4.14 project, the `project_runtime` object is also canonical evidence.
+For a v0.4.15 project, the `project_runtime` object is also canonical evidence.
 It separately reports the versioned receipt, a freshly observed installed-
 payload tree hash, installed module inventory, stable launcher, current
 executable/module/prefix and isolated Python flags, project-relative
