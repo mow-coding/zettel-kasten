@@ -425,3 +425,31 @@ These results complete the local release-candidate gate. Pull-request CI,
 merge, exact merge-SHA tag, public wheel publication, anonymous download and
 hash/install verification, and client-run recovery remain required before the
 defect is reported as resolved.
+
+## Pull-request CI portability corrections
+
+The first PR CI run passed release readiness and both scale gates, then exposed
+two test-contract defects on Ubuntu rather than a project-update product
+failure.
+
+The package-resource retry tests had patched the imported `os` module's
+`name` to `nt`. On POSIX this also changed what Python 3.10 and 3.12 `Path`
+constructed, producing an unsupported `WindowsPath` or a backslash-converted
+temporary filename before the intended sharing-error assertion. The tool now
+captures an import-time `_IS_WINDOWS` platform seam for its chmod and bounded
+Windows replace-retry branches. Tests patch only that seam, leaving the host
+path implementation and real POSIX replace operation unchanged.
+
+The current-install documentation test still required the superseded fixed
+bootstrap directory and a direct path expression. The v0.4.15 supply contract
+intentionally requires a fresh nonce directory and resolves the exact external
+CPython executable before invoking `python.exe -m pip`. The corrected test now
+checks the nonce, fresh-path guard, resolved Python executable, exact wheel, and
+version command independently in both English and Korean documentation, and
+rejects the old fixed bootstrap assignment.
+
+The three exact failed cases passed locally after correction. Both affected
+test modules then passed 24 tests, package-resource synchronization remained
+exact at 167 files, and an independent diff review found no blocker. These
+corrections require a new commit and an entirely new PR CI run; the failed run
+is not release evidence.

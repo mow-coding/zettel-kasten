@@ -37,15 +37,28 @@ class V0408AndCurrentReleaseDocsTests(unittest.TestCase):
             encoding="utf-8"
         )
         combined = install + "\n" + install_ko
-        for required in (
-            '$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\\bootstrap-v0415"',
-            "py -3.12 -m venv $womBootstrapRoot",
-            r'& "$womBootstrapRoot\Scripts\python.exe"',
-            r'& "$womBootstrapRoot\Scripts\archive.exe" --version',
-            "wom_kit-0.4.15-py3-none-any.whl",
+        for surface_name, surface in (
+            ("english", install),
+            ("korean", install_ko),
         ):
-            with self.subTest(required=required):
-                self.assertIn(required, combined)
+            for required in (
+                '$womBootstrapNonce = [guid]::NewGuid().ToString("N")',
+                '$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\\bootstrap-v0415-$womBootstrapNonce"',
+                "if (Test-Path -LiteralPath $womBootstrapRoot)",
+                'throw "WOM bootstrap path must be new."',
+                "py -3.12 -m venv $womBootstrapRoot",
+                '$womBootstrapPython = (Get-Item -LiteralPath (Join-Path $womBootstrapRoot "Scripts\\python.exe")).FullName',
+                "& $womBootstrapPython -m pip install",
+                r'& "$womBootstrapRoot\Scripts\archive.exe" --version',
+                "wom_kit-0.4.15-py3-none-any.whl",
+            ):
+                with self.subTest(surface=surface_name, required=required):
+                    self.assertIn(required, surface)
+            with self.subTest(surface=surface_name, forbidden="fixed bootstrap"):
+                self.assertNotIn(
+                    '$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\\bootstrap-v0415"',
+                    surface,
+                )
         self.assertIn("exactly `archive 0.4.15`", install)
         self.assertIn("정확히 `archive 0.4.15`", install_ko)
         self.assertNotIn(".wom-bootstrap-v043", combined)
