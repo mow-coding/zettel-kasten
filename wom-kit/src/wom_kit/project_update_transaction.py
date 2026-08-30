@@ -19,7 +19,7 @@ import stat
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from typing import Any, Iterator, Literal, Mapping, Sequence
+from typing import Any, Callable, Iterator, Literal, Mapping, Sequence
 
 
 INTENT_SCHEMA = "wom-kit/project-update-transaction-intent/v0.4.3"
@@ -89,6 +89,13 @@ MAX_COMPONENTS = 256
 MAX_CLAIM_EVIDENCE_ITEMS = 16
 MAX_RUNTIME_CANDIDATE_ENTRIES = 500_000
 MAX_RUNTIME_CANDIDATE_FILE_BYTES = 2 * 1024 * 1024 * 1024
+MAX_TERMINAL_CLEANUP_SCAN_ENTRIES = 256
+MAX_TRANSACTION_DESCENDANT_SCAN_ENTRIES = (
+    MAX_RUNTIME_CANDIDATE_ENTRIES
+    + MAX_PRIVATE_BLOBS
+    + (MAX_COMPONENTS * 3)
+    + 1024
+)
 
 RUNTIME_CANDIDATE_NAME = "runtime-candidate"
 RUNTIME_CANDIDATE_SEAL_NAME = "runtime-candidate-seal.json"
@@ -146,6 +153,11 @@ ComponentOverallState = Literal[
     "prewrite_exact", "mixed_exact", "complete_exact", "unknown"
 ]
 JournalState = Literal["exact", "tail_torn", "corrupt"]
+TerminalCleanupArtifactState = Literal[
+    "absent",
+    "observed_or_scan_incomplete",
+    "active_lock_changed",
+]
 
 
 class ProjectUpdateTransactionError(RuntimeError):
@@ -167,6 +179,7 @@ class ProjectUpdateTransactionError(RuntimeError):
             "project_update_transaction_cleanup_refused",
             "project_update_transaction_not_sealed",
             "project_update_transaction_candidate_invalid",
+            "project_update_transaction_scan_incomplete",
         }
     )
 
@@ -1432,6 +1445,156 @@ def _parse_lock_bytes(
     )
 
 
+def active_transaction_ref_from_lock_read_only(
+    project_root: Path | str,
+) -> str:
+    """Read the sole live lock's opaque transaction ref without creating state.
+
+    This is only a locator for the subsequent fully authenticated transaction
+    reopen.  The lock schema, canonical bytes, real path chain, and bounded
+    regular-file read are all verified here; the pointed transaction then
+    revalidates its reservation, sealed intent, backlink, journal, and live
+    components before any resume authority exists.
+    """
+
+    project = _absolute(project_root)
+    _safe_existing_chain(project, directory=True)
+    lock_path = project / PurePosixPath(PROJECT_UPDATE_LOCK_LOGICAL)
+    _within(lock_path, project)
+    raw = _read_regular(
+        lock_path,
+        within=project,
+        maximum=MAX_DOCUMENT_BYTES + 1,
+    )
+    document = _parse_lock_bytes(raw)
+    return _transaction_ref(document["transaction_ref"])
+
+
+def active_transaction_ref_for_resume_read_only(
+    project_root: Path | str,
+) -> str:
+    """Locate the sole exact resumable transaction without operator input.
+
+    A present lock is always authoritative and is parsed by the stricter lock
+    reader above.  The fallback exists only for a process loss after the exact
+    lock unlink: it accepts one sealed, backlinked, exact-journal transaction
+    whose verified state has already reached the unlock tail.  It never
+    creates state and never guesses among multiple candidates.
+    """
+
+    project = _absolute(project_root)
+    _safe_existing_chain(project, directory=True)
+    lock_path = project / PurePosixPath(PROJECT_UPDATE_LOCK_LOGICAL)
+    _within(lock_path, project)
+    if os.path.lexists(lock_path):
+        return active_transaction_ref_from_lock_read_only(project)
+
+    candidates: list[str] = []
+    for orphan in inspect_prelock_orphans(project):
+        if orphan.classification == "reserved_abort_receipt_pending":
+            candidates.append(orphan.transaction_ref)
+            continue
+        if orphan.classification != "not_prelock_orphan":
+            continue
+        try:
+            transaction = ProjectUpdateTransaction.open(
+                project,
+                orphan.transaction_ref,
+                verify_candidate_content=False,
+            )
+            inspection = transaction.inspect(
+                verify_candidate_content=False
+            )
+        except ProjectUpdateTransactionError:
+            continue
+        prefix = inspection.journal.verified_prefix
+        last_phase = prefix[-1].phase if prefix else None
+        if (
+            inspection.lock_backlinked
+            and inspection.journal.state == "exact"
+            and last_phase in {"ready_to_unlock", "lock_released", "completed"}
+        ):
+            candidates.append(orphan.transaction_ref)
+
+    # The lock was absent at the scan's linearization start, but a new
+    # transaction may have acquired it while the bounded transaction-root
+    # inspection was in flight.  A live lock is always authoritative: parse it
+    # again after the scan instead of returning a now-stale lockless tail.
+    if os.path.lexists(lock_path):
+        return active_transaction_ref_from_lock_read_only(project)
+
+    if not candidates:
+        raise _fail("project_update_transaction_not_found")
+    if len(candidates) != 1:
+        raise _fail("project_update_transaction_invalid")
+    return candidates[0]
+
+
+def inspect_terminal_cleanup_artifacts_for_resume_read_only(
+    project_root: Path | str,
+) -> TerminalCleanupArtifactState:
+    """Detect untrusted terminal-cleanup residue without opening its content.
+
+    This is deliberately not an outcome or cleanup-authority inspector.  It
+    only distinguishes ordinary locator absence from a cleanup-shaped name,
+    an unsafe/incomplete bounded scan, or a live lock published while that
+    scan was in flight.  A caller may use ``observed_or_scan_incomplete`` only
+    to report that the terminal outcome is unknown; it authorizes no retry,
+    cleanup, approval, or domain write.
+
+    Every entry counts toward a fixed cap and is consumed with streaming
+    ``scandir`` iteration.  Any name beginning with either cleanup prefix is
+    enough to produce the conservative state, regardless of suffix, file
+    type, target, bytes, or cardinality.  Thus malformed names, symlinks,
+    reparse points, and other special entries are never trusted as evidence.
+    """
+
+    project = _absolute(project_root)
+    _safe_existing_chain(project, directory=True)
+    lock_path = project / PurePosixPath(PROJECT_UPDATE_LOCK_LOGICAL)
+    _within(lock_path, project)
+
+    def live_lock_changed() -> bool:
+        if not os.path.lexists(lock_path):
+            return False
+        # Parse the newly observed lock strictly, while deliberately
+        # discarding its private transaction reference.
+        active_transaction_ref_from_lock_read_only(project)
+        return True
+
+    if live_lock_changed():
+        return "active_lock_changed"
+
+    parent = project / PurePosixPath(TRANSACTION_ROOT_LOGICAL)
+    _within(parent, project)
+    state: TerminalCleanupArtifactState = "absent"
+    if os.path.lexists(parent):
+        try:
+            _safe_existing_chain(parent, directory=True)
+            seen = 0
+            with os.scandir(parent) as entries:
+                for entry in entries:
+                    seen += 1
+                    if seen > MAX_TERMINAL_CLEANUP_SCAN_ENTRIES:
+                        state = "observed_or_scan_incomplete"
+                        break
+                    name = entry.name
+                    if name.startswith(".cleanup_") or name.startswith(
+                        ".cleanup-proof_"
+                    ):
+                        state = "observed_or_scan_incomplete"
+                        break
+        except (OSError, ProjectUpdateTransactionError):
+            # Failure to finish a safe bounded scan cannot prove absence.
+            state = "observed_or_scan_incomplete"
+
+    # A lock published during the scan is authoritative.  Never return a
+    # stale cleanup-unknown or ordinary-absence classification for it.
+    if live_lock_changed():
+        return "active_lock_changed"
+    return state
+
+
 def _identity_document(info: os.stat_result) -> dict[str, int]:
     return {
         "device": int(info.st_dev),
@@ -2020,7 +2183,11 @@ def _next_events(
 
 @contextmanager
 def _exclusive_guard(path: Path, *, within: Path) -> Iterator[None]:
-    if _read_regular(path, within=within, maximum=1) != b"\x00":
+    try:
+        guard_bytes = _read_regular(path, within=within, maximum=1)
+    except (OSError, ProjectUpdateTransactionError):
+        raise _fail("project_update_transaction_checkpoint_write_failed") from None
+    if guard_bytes != b"\x00":
         raise _fail("project_update_transaction_checkpoint_write_failed")
     named = _safe_regular(path, within=within)
     try:
@@ -2052,6 +2219,16 @@ def _exclusive_guard(path: Path, *, within: Path) -> Iterator[None]:
             except OSError:
                 raise _fail("project_update_transaction_checkpoint_write_failed") from None
             locked = True
+        locked_info = os.fstat(descriptor)
+        named_after_lock = _safe_regular(path, within=within)
+        if (
+            locked_info.st_size != 1
+            or (locked_info.st_dev, locked_info.st_ino)
+            != (opened.st_dev, opened.st_ino)
+            or (named_after_lock.st_dev, named_after_lock.st_ino)
+            != (opened.st_dev, opened.st_ino)
+        ):
+            raise _fail("project_update_transaction_checkpoint_write_failed")
         yield
     finally:
         if locked:
@@ -2302,6 +2479,15 @@ class ReservedProjectUpdateTransaction:
         self._verify_reservation_backlink(expected)
         return actual
 
+    def existing_lock_bytes_read_only(self) -> bytes:
+        """Read the exact existing reservation lock without recreating it."""
+
+        _observed, actual, _identity = self._present_lock(
+            self.lock_bytes()
+        )
+        self._verify_reservation_backlink(actual)
+        return actual
+
     def _verify_reservation_backlink(
         self, expected_lock_bytes: bytes | None = None
     ) -> dict[str, Any]:
@@ -2397,6 +2583,142 @@ class ReservedProjectUpdateTransaction:
                 "transaction_ref": self.transaction_ref,
             }
         )
+
+    def _validated_abort_intent_after_lock_release(
+        self,
+    ) -> tuple[dict[str, Any], dict[str, Any], str, str, str]:
+        """Validate the sole receipt-pending empty-reservation abort state."""
+
+        if os.path.lexists(self._lock_path):
+            raise _fail("project_update_transaction_lock_invalid")
+        files, directories = ProjectUpdateTransaction._descendant_names(
+            self._transaction_root
+        )
+        expected_files = {
+            "append.guard",
+            "marker.json",
+            RESERVATION_LOCK_BACKLINK_NAME,
+            RESERVATION_ABORT_INTENT_NAME,
+        }
+        if directories or files != expected_files:
+            raise _fail("project_update_transaction_candidate_invalid")
+
+        backlink = self._read_reservation_backlink()
+        intent_path = self._transaction_root / RESERVATION_ABORT_INTENT_NAME
+        abort_intent = _parse_document(
+            _read_regular(intent_path, within=self._transaction_root),
+            code="project_update_transaction_state_transition_invalid",
+        )
+        expected_intent_keys = {
+            "candidate_absence_observation_sha256",
+            "candidate_cleanup_evidence_sha256",
+            "lock_sha256",
+            "reservation_lock_backlink_sha256",
+            "reservation_sha256",
+            "schema",
+            "transaction_logical_ref",
+            "transaction_ref",
+        }
+        cleanup_evidence = _digest(
+            abort_intent.get("candidate_cleanup_evidence_sha256"),
+            code="project_update_transaction_state_transition_invalid",
+        )
+        candidate_absence = _candidate_absence_observation(
+            self._transaction_root,
+            transaction_ref=self.transaction_ref,
+            reservation_sha256=self.reservation.sha256,
+            intent_sha256=None,
+            runtime_candidate_binding_sha256=None,
+        )
+        if (
+            set(abort_intent) != expected_intent_keys
+            or abort_intent.get("schema") != RESERVATION_ABORT_INTENT_SCHEMA
+            or abort_intent.get("transaction_ref") != self.transaction_ref
+            or abort_intent.get("transaction_logical_ref")
+            != self.transaction_logical_ref
+            or abort_intent.get("reservation_sha256")
+            != self.reservation.sha256
+            or abort_intent.get("reservation_lock_backlink_sha256")
+            != sha256_document(backlink)
+            or abort_intent.get("lock_sha256") != backlink["lock_sha256"]
+            or abort_intent.get("candidate_absence_observation_sha256")
+            != candidate_absence
+            or cleanup_evidence != self.reservation_abort_plan_sha256()
+        ):
+            raise _fail("project_update_transaction_state_transition_invalid")
+        lock_absence = self._absent_lock_observation(backlink)
+        return (
+            backlink,
+            abort_intent,
+            candidate_absence,
+            cleanup_evidence,
+            lock_absence,
+        )
+
+    def inspect_abort_receipt_pending_read_only(self) -> dict[str, Any] | None:
+        """Classify an exact post-unlink/pre-receipt abort without writing."""
+
+        intent_path = self._transaction_root / RESERVATION_ABORT_INTENT_NAME
+        receipt_path = self._transaction_root / RESERVATION_ABORT_RECEIPT_NAME
+        if not os.path.lexists(intent_path) and not os.path.lexists(receipt_path):
+            return None
+        if not os.path.lexists(intent_path) or os.path.lexists(receipt_path):
+            raise _fail("project_update_transaction_state_transition_invalid")
+        (
+            _backlink,
+            abort_intent,
+            _candidate_absence,
+            cleanup_evidence,
+            _lock_absence,
+        ) = self._validated_abort_intent_after_lock_release()
+        return {
+            "abort_intent_sha256": sha256_document(abort_intent),
+            "candidate_cleanup_evidence_sha256": cleanup_evidence,
+            "schema": RESERVATION_ABORT_INTENT_SCHEMA,
+            "state": "abort_receipt_pending_after_lock_release",
+            "transaction_logical_ref": self.transaction_logical_ref,
+            "transaction_ref": self.transaction_ref,
+        }
+
+    def resume_abort_after_lock_release(self) -> dict[str, Any]:
+        """Complete the exact receipt after process loss following lock unlink."""
+
+        (
+            backlink,
+            abort_intent,
+            candidate_absence,
+            cleanup_evidence,
+            _prior_lock_absence,
+        ) = self._validated_abort_intent_after_lock_release()
+        lock_parent_durability = _require_directory_durable(
+            self._lock_path.parent
+        )
+        # Recheck after the durability call so a newly acquired live lock is
+        # never covered by a stale absence observation.
+        lock_absence = self._absent_lock_observation(backlink)
+        receipt = {
+            "abort_intent_sha256": sha256_document(abort_intent),
+            "candidate_absence_observation_sha256": candidate_absence,
+            "candidate_cleanup_evidence_sha256": cleanup_evidence,
+            "lock_absence_observation_sha256": lock_absence,
+            "lock_parent_durability": lock_parent_durability.public_document(),
+            "reservation_sha256": self.reservation.sha256,
+            "schema": RESERVATION_ABORT_RECEIPT_SCHEMA,
+            "state": "aborted_before_intent_seal",
+            "transaction_logical_ref": self.transaction_logical_ref,
+            "transaction_ref": self.transaction_ref,
+        }
+        receipt_path = self._transaction_root / RESERVATION_ABORT_RECEIPT_NAME
+        _write_new(
+            receipt_path,
+            _document_bytes(receipt),
+            within=self._transaction_root,
+        )
+        _require_directory_durable(self._transaction_root)
+        terminal = self.inspect_abort_receipt()
+        if terminal is None:
+            raise _fail("project_update_transaction_state_transition_invalid")
+        return terminal
 
     def abort_before_intent_seal(
         self,
@@ -3244,7 +3566,15 @@ class ProjectUpdateTransaction:
         return sealed
 
     @classmethod
-    def open(cls, project_root: Path | str, transaction_ref: str) -> "ProjectUpdateTransaction":
+    def open(
+        cls,
+        project_root: Path | str,
+        transaction_ref: str,
+        *,
+        verify_candidate_content: bool = True,
+    ) -> "ProjectUpdateTransaction":
+        if type(verify_candidate_content) is not bool:
+            raise _fail("project_update_transaction_invalid")
         project = _absolute(project_root)
         _safe_existing_chain(project, directory=True)
         ref = _transaction_ref(transaction_ref)
@@ -3260,7 +3590,7 @@ class ProjectUpdateTransaction:
         reservation = ReservedProjectUpdateTransaction.open(project, ref).reservation
         temporary.reservation = reservation
         intent, _journal, _backlink, _cleanup = temporary._load_exact_state(
-            verify_candidate_content=True
+            verify_candidate_content=verify_candidate_content
         )
         temporary.intent = intent
         return temporary
@@ -3658,7 +3988,7 @@ class ProjectUpdateTransaction:
             raise _fail("project_update_transaction_state_transition_invalid")
         return active[0], active[1], None, None
 
-    def append(
+    def _append_guard_held(
         self,
         *,
         phase: str,
@@ -3677,8 +4007,8 @@ class ProjectUpdateTransaction:
     ) -> ProjectUpdateCheckpoint:
         if phase not in ALLOWED_CHECKPOINT_PHASES or stage not in {"intent", "verified"}:
             raise _fail("project_update_transaction_checkpoint_invalid")
-        guard = self._transaction_root / "append.guard"
-        with _exclusive_guard(guard, within=self._transaction_root):
+
+        def perform() -> ProjectUpdateCheckpoint:
             intent, journal, backlink, cleanup = self._load_exact_state(
                 guard_locked=True,
                 verify_candidate_content=(
@@ -3865,6 +4195,99 @@ class ProjectUpdateTransaction:
                 raise _fail("project_update_transaction_checkpoint_write_failed")
             return verified_journal.verified_prefix[-1]
 
+        return perform()
+
+    @contextmanager
+    def append_guard_nonblocking(self) -> Iterator[None]:
+        """Hold the transaction's identity-bound append guard without waiting."""
+
+        guard = self._transaction_root / "append.guard"
+        with _exclusive_guard(guard, within=self._transaction_root):
+            yield
+
+    def validate_claim_publication_boundary_guard_held(
+        self,
+        *,
+        expected_lock_bytes: bytes,
+        live_component_sha256: Mapping[str, str],
+    ) -> ProjectUpdateCheckpoint:
+        """Re-prove the exact prewrite state while ``append.guard`` is held.
+
+        The caller must already hold :meth:`append_guard_nonblocking`.  This
+        split lets the approval workflow publish only its claim inside the
+        same guard, while all domain writing remains outside it.
+        """
+
+        _parse_lock_bytes(expected_lock_bytes, intent=self.intent)
+        _intent, journal, backlink, cleanup = self._load_exact_state(
+            guard_locked=True,
+            verify_candidate_content=True,
+        )
+        checkpoints = journal.verified_prefix
+        if (
+            journal.state != "exact"
+            or cleanup is not None
+            or backlink is None
+            or len(checkpoints) != 1
+            or checkpoints[0].phase != "lock_backlinked"
+            or checkpoints[0].stage != "verified"
+            or checkpoints[-1].phase != "lock_backlinked"
+            or any(
+                item.phase.startswith("preapproval_cancel")
+                for item in checkpoints
+            )
+        ):
+            raise _fail("project_update_transaction_state_transition_invalid")
+        classification = self.classify_live_components(
+            live_component_sha256
+        )
+        if classification.overall != "prewrite_exact":
+            raise _fail("project_update_transaction_state_transition_invalid")
+        _observation, actual, _identity = self._present_lock_observation(
+            backlink
+        )
+        if not hmac.compare_digest(actual, expected_lock_bytes):
+            raise _fail("project_update_transaction_lock_invalid")
+        return checkpoints[-1]
+
+    def append(
+        self,
+        *,
+        phase: str,
+        stage: CheckpointStage,
+        live_component_sha256: Mapping[str, str],
+        component_ref: str | None = None,
+        approval_reference_sha256: str | None = None,
+        approval_mac_sha256: str | None = None,
+        claim_receipt_sha256: str | None = None,
+        claim_mac_sha256: str | None = None,
+        claim_evidence: Mapping[str, str] | None = None,
+        cancellation_plan_sha256: str | None = None,
+        candidate_cleanup_receipt_sha256: str | None = None,
+        candidate_absence_observation_sha256: str | None = None,
+        lock_release_result: LockReleaseResult | None = None,
+    ) -> ProjectUpdateCheckpoint:
+        with self.append_guard_nonblocking():
+            return self._append_guard_held(
+                phase=phase,
+                stage=stage,
+                live_component_sha256=live_component_sha256,
+                component_ref=component_ref,
+                approval_reference_sha256=approval_reference_sha256,
+                approval_mac_sha256=approval_mac_sha256,
+                claim_receipt_sha256=claim_receipt_sha256,
+                claim_mac_sha256=claim_mac_sha256,
+                claim_evidence=claim_evidence,
+                cancellation_plan_sha256=cancellation_plan_sha256,
+                candidate_cleanup_receipt_sha256=(
+                    candidate_cleanup_receipt_sha256
+                ),
+                candidate_absence_observation_sha256=(
+                    candidate_absence_observation_sha256
+                ),
+                lock_release_result=lock_release_result,
+            )
+
     append_checkpoint = append
 
     def begin_cancel_before_approval(
@@ -3939,6 +4362,79 @@ class ProjectUpdateTransaction:
             if prior is None:
                 raise
             return prior
+
+    def begin_claimless_cancel_before_approval(
+        self,
+        *,
+        expected_lock_bytes: bytes,
+        live_component_sha256: Mapping[str, str],
+        confirm_claim_store_empty: Callable[[], bool],
+        candidate_cleanup_plan_sha256: str | None = None,
+    ) -> ProjectUpdateCheckpoint:
+        """Atomically select claimless cancellation under ``append.guard``.
+
+        The callback performs the caller's final claim-store absence check.
+        It runs while the same nonblocking guard used by checkpoint append is
+        held, and the cancellation-intent row is durably appended before that
+        guard is released.  A false/non-boolean result or callback exception
+        leaves the checkpoint journal unchanged.
+        """
+
+        if not callable(confirm_claim_store_empty):
+            raise _fail("project_update_transaction_state_transition_invalid")
+        _parse_lock_bytes(expected_lock_bytes, intent=self.intent)
+        exact_plan = self.candidate_cleanup_plan_sha256()
+        if candidate_cleanup_plan_sha256 is None:
+            plan = exact_plan
+        else:
+            plan = _digest(
+                candidate_cleanup_plan_sha256,
+                code="project_update_transaction_state_transition_invalid",
+            )
+            if plan != exact_plan:
+                raise _fail("project_update_transaction_state_transition_invalid")
+
+        with self.append_guard_nonblocking():
+            intent, journal, backlink, cleanup = self._load_exact_state(
+                guard_locked=True,
+                verify_candidate_content=True,
+            )
+            if journal.state != "exact":
+                raise _fail("project_update_transaction_journal_degraded")
+            if cleanup is not None or backlink is None:
+                raise _fail("project_update_transaction_state_transition_invalid")
+            classification = self.classify_live_components(
+                live_component_sha256
+            )
+            if classification.overall != "prewrite_exact":
+                raise _fail("project_update_transaction_state_transition_invalid")
+            _observed, actual, _identity = self._present_lock_observation(
+                backlink
+            )
+            if not hmac.compare_digest(actual, expected_lock_bytes):
+                raise _fail("project_update_transaction_lock_invalid")
+            if not journal.verified_prefix:
+                raise _fail("project_update_transaction_state_transition_invalid")
+            tail = journal.verified_prefix[-1]
+            if (
+                tail.phase == "preapproval_cancel_requested"
+                and tail.cancellation_plan_sha256 == plan
+                and tail.runtime_candidate_binding_sha256
+                == _runtime_candidate_binding_sha256(intent)
+            ):
+                return tail
+            if tail.phase != "lock_backlinked":
+                raise _fail("project_update_transaction_state_transition_invalid")
+
+            confirmed = confirm_claim_store_empty()
+            if type(confirmed) is not bool or not confirmed:
+                raise _fail("project_update_transaction_state_transition_invalid")
+            return self._append_guard_held(
+                phase="preapproval_cancel_requested",
+                stage="intent",
+                live_component_sha256=live_component_sha256,
+                cancellation_plan_sha256=plan,
+            )
 
     def cancel_before_approval(
         self,
@@ -4231,9 +4727,15 @@ class ProjectUpdateTransaction:
         durability = _fsync_directory(self._lock_path.parent)
         return LockReleaseResult(True, absence, durability)
 
-    def inspect(self) -> ProjectUpdateInspection:
+    def inspect(
+        self,
+        *,
+        verify_candidate_content: bool = True,
+    ) -> ProjectUpdateInspection:
+        if type(verify_candidate_content) is not bool:
+            raise _fail("project_update_transaction_invalid")
         intent, journal, backlink, _cleanup = self._load_exact_state(
-            verify_candidate_content=True
+            verify_candidate_content=verify_candidate_content
         )
         terminal = (
             journal.state == "exact"
@@ -4561,32 +5063,47 @@ class ProjectUpdateTransaction:
     def _descendant_names(root: Path) -> tuple[set[str], set[str]]:
         files: set[str] = set()
         directories: set[str] = set()
-
-        def walk(directory: Path) -> None:
+        stack = [root]
+        seen = 0
+        while stack:
+            directory = stack.pop()
             _safe_directory(directory, within=root)
             try:
-                entries = list(os.scandir(directory))
+                scanner = os.scandir(directory)
             except OSError:
                 raise _fail("project_update_transaction_path_unsafe") from None
-            for entry in entries:
-                path = Path(entry.path)
-                _within(path, root)
-                try:
-                    info = path.lstat()
-                except OSError:
-                    raise _fail("project_update_transaction_path_unsafe") from None
-                if stat.S_ISLNK(info.st_mode) or _is_reparse(info):
-                    raise _fail("project_update_transaction_path_unsafe")
-                relative = path.relative_to(root).as_posix()
-                if stat.S_ISDIR(info.st_mode):
-                    directories.add(relative)
-                    walk(path)
-                elif stat.S_ISREG(info.st_mode) and info.st_nlink == 1:
-                    files.add(relative)
-                else:
-                    raise _fail("project_update_transaction_path_unsafe")
-
-        walk(root)
+            try:
+                with scanner:
+                    for entry in scanner:
+                        seen += 1
+                        if seen > MAX_TRANSACTION_DESCENDANT_SCAN_ENTRIES:
+                            raise _fail(
+                                "project_update_transaction_scan_incomplete"
+                            )
+                        path = Path(entry.path)
+                        _within(path, root)
+                        try:
+                            info = path.lstat()
+                        except OSError:
+                            raise _fail(
+                                "project_update_transaction_path_unsafe"
+                            ) from None
+                        if stat.S_ISLNK(info.st_mode) or _is_reparse(info):
+                            raise _fail(
+                                "project_update_transaction_path_unsafe"
+                            )
+                        relative = path.relative_to(root).as_posix()
+                        if stat.S_ISDIR(info.st_mode):
+                            directories.add(relative)
+                            stack.append(path)
+                        elif stat.S_ISREG(info.st_mode) and info.st_nlink == 1:
+                            files.add(relative)
+                        else:
+                            raise _fail(
+                                "project_update_transaction_path_unsafe"
+                            )
+            except OSError:
+                raise _fail("project_update_transaction_path_unsafe") from None
         return files, directories
 
     @staticmethod
@@ -5243,24 +5760,38 @@ def inspect_prelock_orphans(project_root: Path | str) -> tuple[OrphanInspection,
     _safe_existing_chain(parent, directory=True)
     result: list[OrphanInspection] = []
     try:
-        entries = sorted(os.scandir(parent), key=lambda item: item.name)
+        entries: list[tuple[str, str]] = []
+        seen = 0
+        with os.scandir(parent) as scanner:
+            for entry in scanner:
+                seen += 1
+                if seen > MAX_TERMINAL_CLEANUP_SCAN_ENTRIES:
+                    raise _fail(
+                        "project_update_transaction_scan_incomplete"
+                    )
+                if TRANSACTION_REF_RE.fullmatch(entry.name) is not None:
+                    entries.append((entry.name, entry.path))
     except OSError:
         raise _fail("project_update_transaction_path_unsafe") from None
-    for entry in entries:
-        if TRANSACTION_REF_RE.fullmatch(entry.name) is None:
-            continue
-        ref = entry.name
+    entries.sort(key=lambda item: item[0])
+    for ref, entry_path in entries:
         logical = _transaction_logical_ref(ref)
         try:
-            info = Path(entry.path).lstat()
+            info = Path(entry_path).lstat()
             if (
                 not stat.S_ISDIR(info.st_mode)
                 or stat.S_ISLNK(info.st_mode)
                 or _is_reparse(info)
             ):
                 raise _fail("project_update_transaction_path_unsafe")
-            transaction = ProjectUpdateTransaction.open(project, ref)
-            inspection = transaction.inspect()
+            transaction = ProjectUpdateTransaction.open(
+                project,
+                ref,
+                verify_candidate_content=False,
+            )
+            inspection = transaction.inspect(
+                verify_candidate_content=False
+            )
             if (
                 not inspection.lock_backlinked
                 and inspection.journal.state == "exact"
@@ -5272,11 +5803,16 @@ def inspect_prelock_orphans(project_root: Path | str) -> tuple[OrphanInspection,
             else:
                 classification = "not_prelock_orphan"
             evidence = inspection.intent_sha256
-        except ProjectUpdateTransactionError:
+        except ProjectUpdateTransactionError as transaction_failure:
+            if (
+                transaction_failure.code
+                == "project_update_transaction_scan_incomplete"
+            ):
+                raise
             try:
                 reserved = ReservedProjectUpdateTransaction.open(project, ref)
                 files, directories = ProjectUpdateTransaction._descendant_names(
-                    Path(entry.path)
+                    Path(entry_path)
                 )
                 candidate_present = RUNTIME_CANDIDATE_NAME in directories
                 candidate_seal_present = RUNTIME_CANDIDATE_SEAL_NAME in files
@@ -5336,6 +5872,7 @@ def inspect_prelock_orphans(project_root: Path | str) -> tuple[OrphanInspection,
                     for item in directories
                 )
                 abort_receipt = None
+                abort_receipt_pending = False
                 if (
                     RESERVATION_ABORT_INTENT_NAME in files
                     or RESERVATION_ABORT_RECEIPT_NAME in files
@@ -5344,9 +5881,24 @@ def inspect_prelock_orphans(project_root: Path | str) -> tuple[OrphanInspection,
                         abort_receipt = reserved.inspect_abort_receipt()
                     except ProjectUpdateTransactionError:
                         abort_receipt = None
-                        unexpected = True
+                        if (
+                            lock_state == "absent"
+                            and RESERVATION_ABORT_INTENT_NAME in files
+                            and RESERVATION_ABORT_RECEIPT_NAME not in files
+                        ):
+                            try:
+                                abort_receipt_pending = (
+                                    reserved.inspect_abort_receipt_pending_read_only()
+                                    is not None
+                                )
+                            except ProjectUpdateTransactionError:
+                                abort_receipt_pending = False
+                        if not abort_receipt_pending:
+                            unexpected = True
                 if abort_receipt is not None:
                     classification = "reserved_aborted_before_intent_seal"
+                elif abort_receipt_pending:
+                    classification = "reserved_abort_receipt_pending"
                 elif unexpected or lock_state == "conflict_or_unsafe":
                     classification = "manual_review_incomplete_or_unsafe"
                 elif intent_material_present:
@@ -5376,7 +5928,12 @@ def inspect_prelock_orphans(project_root: Path | str) -> tuple[OrphanInspection,
                     "schema": ORPHAN_SUMMARY_SCHEMA,
                     "transaction_ref": ref,
                 }
-            except ProjectUpdateTransactionError:
+            except ProjectUpdateTransactionError as reservation_failure:
+                if (
+                    reservation_failure.code
+                    == "project_update_transaction_scan_incomplete"
+                ):
+                    raise
                 classification = "manual_review_incomplete_or_unsafe"
                 evidence_basis = {
                     "classification": classification,
@@ -5407,6 +5964,7 @@ __all__ = [
     "JournalInspection",
     "LockObservation",
     "LockReleaseResult",
+    "MAX_TERMINAL_CLEANUP_SCAN_ENTRIES",
     "OrphanInspection",
     "PrivateBlobRecord",
     "ProjectUpdateBindings",
@@ -5420,11 +5978,15 @@ __all__ = [
     "ReservedProjectUpdateTransaction",
     "RuntimeCandidateBinding",
     "RuntimeCandidateTreeInventory",
+    "TerminalCleanupArtifactState",
     "build_lock_document",
+    "active_transaction_ref_for_resume_read_only",
+    "active_transaction_ref_from_lock_read_only",
     "canonical_json_bytes",
     "classify_components",
     "digest_component",
     "inspect_prelock_orphans",
+    "inspect_terminal_cleanup_artifacts_for_resume_read_only",
     "lock_document_bytes",
     "runtime_bundle_inventory_sha256",
     "sha256_bytes",

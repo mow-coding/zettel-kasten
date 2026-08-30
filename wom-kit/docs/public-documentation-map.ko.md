@@ -2,11 +2,32 @@
 
 상태: 공개 navigation baseline
 날짜: 2026-05-27
-갱신: 2026-08-29
+갱신: 2026-08-30
 철학 갱신: 2026-07-15
 하네스 호환 경계 갱신: 2026-07-16
 
-현재 v0.4.14 변경점: 과거 locator 복구는 정확한 정규화와 검토된 binding 근거를
+현재 v0.4.15 변경점: 중단된 project update는 live lock과 인증된 sealed plan에서
+target·transaction·reviewer·approval 문맥을 복원합니다. 호출자가 identifier를
+공급하거나 두 번째 native 결정을 할 필요가 없습니다. claim이 하나도 없는 경우는
+durable state가 정확히 untouched preapproval임을 증명할 때만 scaffold를 취소하고
+새 승인을 요구합니다. 이미 승인됐거나 판정할 수 없는 transaction의 zero claim,
+여러 후보, 위조 근거, drift는 안전하게 중단합니다. `version-update.lock`이 남은 동안에는
+exact-approved create-only operator feedback body만 추가할 수 있고, revise,
+supersede, feedback metadata, resolved/delivered 상태, 일반 writer는 계속
+차단됩니다. updater-capable bootstrap은 외부 CPython 3.12 환경과 그 실제
+`python.exe -m pip`를 사용하며 wheel hash를 기록하지 않은 사용자 범위 도구는
+공급 근거가 아닙니다.
+
+v0.4.15 복구 범위는 live `version-update.lock` 또는 원본 transaction
+directory가 남아 있는 exact lockless unlock tail까지입니다. 최초 미지원 경계는
+`completed` 뒤 원본 transaction directory의 terminal cleanup tombstone rename이
+성공한 시점입니다. tombstone이나 cleanup proof는 인증된 outcome 또는 cleanup
+authority가 아닙니다. WOM은 `terminal_cleanup_outcome_unknown`을 nonzero로
+보고할 뿐 success·failure·cancellation을 추론하거나 자동 retry·삭제하지
+않습니다. 완전한 authenticated terminal handoff와 terminal cleanup outcome
+reconstruction은 v0.4.16 후속 작업입니다.
+
+과거 v0.4.14 변경점: 과거 locator 복구는 정확한 정규화와 검토된 binding 근거를
 재생하여 검증된 현재 참조를 그대로 보존합니다. 일부만 증명된 근거는 명시적인
 검토 부채가 되고, 비공개 분류 원장 하나가 native 승인·checkpoint·resume·독립
 검증·revert에 결속됩니다. 해시에 결속된 로컬 대상 단서는 영속·공개 출력에
@@ -534,6 +555,7 @@ local archive
 - [v0.2.11 Delegate Capability Contract Work Log](../plans/work-log-2026-05-23-delegate-capability-contract.md)
 - [Changelog](../../CHANGELOG.md)
 - [Release Notes](releases/)
+- [v0.4.15 릴리스 노트](releases/v0.4.15.md)
 - [v0.4.14 릴리스 노트](releases/v0.4.14.md)
 - [v0.4.13 릴리스 노트](releases/v0.4.13.md)
 - [v0.4.12 릴리스 노트](releases/v0.4.12.md)

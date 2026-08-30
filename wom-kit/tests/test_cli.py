@@ -18,7 +18,13 @@ import time
 import unittest
 import unicodedata
 import uuid
-from contextlib import ExitStack, redirect_stderr, redirect_stdout
+from contextlib import (
+    ExitStack,
+    contextmanager,
+    nullcontext,
+    redirect_stderr,
+    redirect_stdout,
+)
 from pathlib import Path, PurePosixPath
 from typing import Any, Mapping
 from unittest.mock import patch
@@ -309,22 +315,29 @@ class ArchiveCliTests(unittest.TestCase):
         context,
         writer,
         *,
+        claim_publication_boundary=None,
         claim_succeeded_finalizer=None,
     ):
         """Exercise an internal transaction seam with a real claim, without UI."""
 
-        claim = claim_exact_human_approval(
-            root,
-            context,
-            ExactHumanApprovalDecision(
-                approved=True,
-                synthetic_acknowledged=False,
-                reason_code="exact_human_approval_approved",
-                plan_sha256=context.plan_sha256,
-                target_binding_sha256=context.target_binding_sha256,
-            ),
-            bytearray(b"c" * 32),
+        publication_context = (
+            claim_publication_boundary()
+            if claim_publication_boundary is not None
+            else nullcontext()
         )
+        with publication_context:
+            claim = claim_exact_human_approval(
+                root,
+                context,
+                ExactHumanApprovalDecision(
+                    approved=True,
+                    synthetic_acknowledged=False,
+                    reason_code="exact_human_approval_approved",
+                    plan_sha256=context.plan_sha256,
+                    target_binding_sha256=context.target_binding_sha256,
+                ),
+                bytearray(b"c" * 32),
+            )
         try:
             reference = claim.assert_ready_for_context(context)
             result = dict(writer(claim))
@@ -9914,6 +9927,7 @@ class ArchiveCliTests(unittest.TestCase):
         if boundary not in {
             "lock_acquired",
             "candidate_sealed",
+            "preapproval_checkpointed",
             "approval_bound",
             "component_intent",
             "domain_committed",
@@ -9979,6 +9993,10 @@ class ArchiveCliTests(unittest.TestCase):
             phase = kwargs.get("phase")
             stage = kwargs.get("stage")
             if (
+                boundary == "preapproval_checkpointed"
+                and phase == "lock_backlinked"
+                and stage == "verified"
+            ) or (
                 boundary == "approval_bound"
                 and phase == "approval_bound"
                 and stage == "verified"
@@ -10024,6 +10042,7 @@ class ArchiveCliTests(unittest.TestCase):
                 new=crash_after_seal,
             )
         elif boundary in {
+            "preapproval_checkpointed",
             "approval_bound",
             "component_intent",
             "domain_committed",
@@ -10099,12 +10118,13 @@ class ArchiveCliTests(unittest.TestCase):
     def test_project_version_update_hard_exit_matrix_resumes_exact_next_stage(
         self,
     ) -> None:
-        """Seven real process losses recover without a second native approval."""
+        """Eight real process losses recover through one public CLI path."""
 
         self.assertIsNotNone(shutil.which("git"))
         boundaries = (
             "lock_acquired",
             "candidate_sealed",
+            "preapproval_checkpointed",
             "approval_bound",
             "component_intent",
             "domain_committed",
@@ -10181,20 +10201,40 @@ class ArchiveCliTests(unittest.TestCase):
                     self.assertTrue(lock_path.is_file())
 
                 if boundary == "lock_acquired":
+                    code, output = self.run_cli(
+                        [
+                            "project-version-update",
+                            str(project_root),
+                            "--resume",
+                            "--affirm-external-writers-quiescent",
+                            "--format",
+                            "json",
+                        ]
+                    )
+                    self.assertEqual(code, 0, output)
+                    recovered = json.loads(output)
+                    self.assertEqual(
+                        recovered["status"],
+                        "preapproval_scaffold_cancelled",
+                    )
+                    self.assertFalse(recovered["update_completed"])
+                    self.assertTrue(recovered["fresh_approval_required"])
+                    self.assertFalse(
+                        recovered["native_approval_redisplayed"]
+                    )
+                    self.assertFalse(
+                        recovered["operator_resume_identifiers_supplied"]
+                    )
+                    self.assertEqual(
+                        recovered["preapproval_recovery"]["kind"],
+                        "empty_reservation_cancelled",
+                    )
                     reserved = (
                         archive_services.project_update_transaction
                         .ReservedProjectUpdateTransaction.open(
                             project_root,
                             transaction_ref,
                         )
-                    )
-                    expected_lock_bytes = reserved.acquire_lock()
-                    aborted = reserved.abort_before_intent_seal(
-                        expected_lock_bytes=expected_lock_bytes,
-                    )
-                    self.assertEqual(
-                        aborted["state"],
-                        "aborted_before_intent_seal",
                     )
                     self.assertIsNotNone(reserved.inspect_abort_receipt())
                     self.assertFalse(lock_path.exists())
@@ -10209,19 +10249,16 @@ class ArchiveCliTests(unittest.TestCase):
                         self.git_fixture_command(mirror, "rev-parse", "HEAD"),
                         control["old_commit"],
                     )
+                    self.assertFalse(
+                        (
+                            archive_root
+                            / exact_human_approval_module
+                            .CLAIMS_RELATIVE_ROOT
+                        ).exists()
+                    )
                     continue
 
                 if boundary == "candidate_sealed":
-                    transaction = (
-                        archive_services.project_update_transaction
-                        .ProjectUpdateTransaction.open(
-                            project_root,
-                            transaction_ref,
-                        )
-                    )
-                    transaction.bind_sealed_intent_to_lock(
-                        lock_path.read_bytes()
-                    )
                     with patch.object(
                         archive_services.project_runtime,
                         "_verify_retained_artifacts",
@@ -10229,38 +10266,34 @@ class ArchiveCliTests(unittest.TestCase):
                             self.verify_fast_retained_runtime_artifacts
                         ),
                     ):
-                        state, lifetime = (
-                            archive_services
-                            ._project_update_reopen_durable_state(
-                                project_root,
-                                target=control["target_tag"],
-                                reviewed_by="person:hard-exit-reviewer",
-                                transaction_ref=transaction_ref,
-                                expected_approval_root=archive_root,
-                                expected_archive_id=(
-                                    archive_services.read_archive_id(
-                                        archive_root
-                                    )
-                                ),
-                            )
+                        code, output = self.run_cli(
+                            [
+                                "project-version-update",
+                                str(project_root),
+                                "--resume",
+                                "--affirm-external-writers-quiescent",
+                                "--format",
+                                "json",
+                            ]
                         )
-                        try:
-                            state.transaction.append(
-                                phase="lock_backlinked",
-                                stage="verified",
-                                live_component_sha256=(
-                                    archive_services
-                                    ._project_update_live_component_sha256(
-                                        state
-                                    )
-                                ),
-                            )
-                            archive_services._project_update_cancel_before_native(
-                                state
-                            )
-                        finally:
-                            state.directory_guard.close()
-                            lifetime.close_after_service_transaction()
+                    self.assertEqual(code, 0, output)
+                    recovered = json.loads(output)
+                    self.assertEqual(
+                        recovered["status"],
+                        "preapproval_scaffold_cancelled",
+                    )
+                    self.assertFalse(recovered["update_completed"])
+                    self.assertTrue(recovered["fresh_approval_required"])
+                    self.assertFalse(
+                        recovered["native_approval_redisplayed"]
+                    )
+                    self.assertFalse(
+                        recovered["operator_resume_identifiers_supplied"]
+                    )
+                    self.assertEqual(
+                        recovered["preapproval_recovery"]["kind"],
+                        "sealed_preapproval_scaffold_cancelled",
+                    )
                     self.assertFalse(lock_path.exists())
                     self.assertFalse(transactions[0].exists())
                     self.assertTrue(
@@ -10276,6 +10309,130 @@ class ArchiveCliTests(unittest.TestCase):
                             .PROJECT_RUNTIME_RELATIVE_ROOT
                         ).exists()
                     )
+                    self.assertEqual(
+                        self.git_fixture_command(
+                            mirror,
+                            "rev-parse",
+                            "HEAD",
+                        ),
+                        control["old_commit"],
+                    )
+                    self.assertFalse(
+                        (
+                            archive_root
+                            / exact_human_approval_module
+                            .CLAIMS_RELATIVE_ROOT
+                        ).exists()
+                    )
+                    continue
+
+                if boundary == "preapproval_checkpointed":
+                    original_cleanup = (
+                        archive_services.project_runtime
+                        .cleanup_prepared_runtime_candidate
+                    )
+
+                    def interrupt_after_exact_candidate_cleanup(
+                        candidate: Any,
+                    ) -> bool:
+                        cleaned = original_cleanup(candidate)
+                        self.assertTrue(cleaned)
+                        raise RuntimeError(
+                            "synthetic recovery process loss"
+                        )
+
+                    with patch.object(
+                        archive_services.project_runtime,
+                        "_verify_retained_artifacts",
+                        side_effect=(
+                            self.verify_fast_retained_runtime_artifacts
+                        ),
+                    ), patch.object(
+                        archive_services.project_runtime,
+                        "cleanup_prepared_runtime_candidate",
+                        side_effect=(
+                            interrupt_after_exact_candidate_cleanup
+                        ),
+                    ):
+                        code, output = self.run_cli(
+                            [
+                                "project-version-update",
+                                str(project_root),
+                                "--resume",
+                                "--affirm-external-writers-quiescent",
+                                "--format",
+                                "json",
+                            ]
+                        )
+                    self.assertEqual(code, 1, output)
+                    self.assertEqual(
+                        output.strip(),
+                        "Project version update failed before a privacy-safe result could be produced.",
+                    )
+                    self.assertTrue(lock_path.is_file())
+                    with patch.object(
+                        archive_services.project_runtime,
+                        "_verify_retained_artifacts",
+                        side_effect=(
+                            self.verify_fast_retained_runtime_artifacts
+                        ),
+                    ):
+                        code, output = self.run_cli(
+                            [
+                                "project-version-update",
+                                str(project_root),
+                                "--resume",
+                                "--affirm-external-writers-quiescent",
+                                "--format",
+                                "json",
+                            ]
+                        )
+                    self.assertEqual(code, 0, output)
+                    recovered = json.loads(output)
+                    self.assertEqual(
+                        recovered["status"],
+                        "preapproval_scaffold_cancelled",
+                    )
+                    self.assertFalse(recovered["update_completed"])
+                    self.assertTrue(recovered["fresh_approval_required"])
+                    self.assertFalse(
+                        recovered["native_approval_redisplayed"]
+                    )
+                    self.assertFalse(
+                        recovered["operator_resume_identifiers_supplied"]
+                    )
+                    self.assertEqual(
+                        recovered["preapproval_recovery"]["kind"],
+                        "claimless_checkpointed_scaffold_cancelled",
+                    )
+                    self.assertFalse(lock_path.exists())
+                    self.assertFalse(transactions[0].exists())
+                    self.assertTrue(
+                        (
+                            transaction_parent
+                            / f".cleanup-proof_{transaction_ref}.json"
+                        ).is_file()
+                    )
+                    self.assertFalse(
+                        (
+                            project_root
+                            / archive_services.project_runtime
+                            .PROJECT_RUNTIME_RELATIVE_ROOT
+                        ).exists()
+                    )
+                    self.assertEqual(
+                        self.git_fixture_command(
+                            mirror,
+                            "rev-parse",
+                            "HEAD",
+                        ),
+                        control["old_commit"],
+                    )
+                    claims_root = (
+                        archive_root
+                        / exact_human_approval_module.CLAIMS_RELATIVE_ROOT
+                    )
+                    self.assertFalse(claims_root.exists())
                     continue
 
                 sealed_transaction = (
@@ -10309,11 +10466,16 @@ class ArchiveCliTests(unittest.TestCase):
                     archive_root
                     / exact_human_approval_module.CLAIMS_RELATIVE_ROOT
                 )
-                claims_before = list(claims_root.glob("approval_*.json"))
-                self.assertEqual(len(claims_before), 1)
-                approval_id = claims_before[0].stem
+                self.assertEqual(
+                    len(list(claims_root.glob("approval_*.json"))),
+                    1,
+                )
+                private_approval_id = next(
+                    claims_root.glob("approval_*.json")
+                ).stem
                 original_resume = (
-                    archive_cli._resume_exact_human_approved_transaction_core
+                    archive_cli
+                    ._resume_exact_human_approved_transaction_auto_core
                 )
                 original_perform = (
                     archive_services._project_update_perform_component
@@ -10333,7 +10495,7 @@ class ArchiveCliTests(unittest.TestCase):
 
                 with patch.object(
                     archive_cli,
-                    "_resume_exact_human_approved_transaction_core",
+                    "_resume_exact_human_approved_transaction_auto_core",
                     side_effect=resume_with_test_key,
                 ), patch.object(
                     archive_services,
@@ -10352,28 +10514,43 @@ class ArchiveCliTests(unittest.TestCase):
                     "_project_update_perform_component",
                     side_effect=observe_component,
                 ):
-                    code, output = self.run_cli(
+                    resume_args = [
+                        "project-version-update",
+                        str(project_root),
+                        "--resume",
+                    ]
+                    if boundary == "domain_committed":
+                        # The hidden id is an assertion only. Use the private
+                        # test oracle to prove that even an explicitly supplied
+                        # exact match never comes back in public JSON.
+                        resume_args.extend(
+                            ["--approval-id", private_approval_id]
+                        )
+                    resume_args.extend(
                         [
-                            "project-version-update",
-                            str(project_root),
-                            "--target",
-                            control["target_tag"],
-                            "--resume",
-                            "--transaction-ref",
-                            transaction_ref,
-                            "--approval-id",
-                            approval_id,
                             "--affirm-external-writers-quiescent",
-                            "--reviewed-by",
-                            "person:hard-exit-reviewer",
                             "--format",
                             "json",
                         ]
                     )
+                    code, output = self.run_cli(resume_args)
 
                 self.assertEqual(code, 0, output)
                 result = json.loads(output)
                 self.assertFalse(result["native_approval_redisplayed"])
+                self.assertTrue(result["automatic_resume_discovery"])
+                self.assertIs(
+                    result["operator_resume_identifiers_supplied"],
+                    boundary == "domain_committed",
+                )
+                self.assertFalse(result["approval_identifier_exposed"])
+                self.assertFalse(result["transaction_identifier_exposed"])
+                self.assertNotIn(private_approval_id, output)
+                self.assertNotIn(transaction_ref, output)
+                self.assertFalse(
+                    result["resume_discovery"]
+                    ["private_folder_inspection_required"]
+                )
                 if boundary in {"claim_succeeded", "lock_unlinked"}:
                     self.assertEqual(
                         result["exact_human_approval_resume_branch"],
@@ -10421,6 +10598,497 @@ class ArchiveCliTests(unittest.TestCase):
                 )
                 self.assertNotIn("operation_exact_human_approval", receipt)
                 self.assertNotIn("approval_id", receipt)
+
+    def test_project_version_update_supplied_approval_id_still_routes_through_discovery(
+        self,
+    ) -> None:
+        supplied_approval_id = "approval_" + "a" * 32
+
+        class TestBinding:
+            plan_sha256 = "sha256:" + "b" * 64
+            target_binding_sha256 = "sha256:" + "c" * 64
+
+            def context(
+                self,
+                *,
+                archive_id: str,
+                reviewer_claim: str,
+            ) -> object:
+                self.archive_id = archive_id
+                self.reviewer_claim = reviewer_claim
+                return object()
+
+        binding = TestBinding()
+        missing_handler = lambda _reason: {  # noqa: E731 - identity sentinel
+            "ok": True,
+            "status": "synthetic_claimless_recovery",
+        }
+
+        @contextmanager
+        def approval_boundary(_inspection_root: Path):
+            yield Path("C:/bounded-test-archive"), "archive:test"
+
+        def resume_live_transaction(
+            _inspection_root: Path,
+            **kwargs: Any,
+        ) -> Mapping[str, Any]:
+            return kwargs["approval_executor"](
+                {},
+                lambda _claim, _plan, _target: {"ok": True},
+                lambda _claim: None,
+                lambda _claim: True,
+                lambda _claim: True,
+                resume_reviewer="person:sealed-reviewer",
+                candidate_missing_handler=missing_handler,
+            )
+
+        safe_result = {
+            "ok": True,
+            "status": "synthetic_resume_succeeded",
+            "automatic_resume_discovery": True,
+            "operator_resume_identifiers_supplied": True,
+        }
+        with patch.object(
+            archive_services,
+            "_project_update_terminal_cleanup_unknown_preflight_read_only",
+            return_value=None,
+        ), patch.object(
+            archive_cli,
+            "_project_version_update_approval_read_boundary",
+            side_effect=approval_boundary,
+        ), patch.object(
+            archive_cli.operation_approval_binding,
+            "project_version_update_approval_binding",
+            return_value=binding,
+        ), patch.object(
+            archive_services,
+            "_wom_kit_project_version_update_resume_live_transaction",
+            side_effect=resume_live_transaction,
+        ), patch.object(
+            archive_cli,
+            "_resume_exact_human_approved_transaction_auto_core",
+            return_value=safe_result,
+        ) as discovery_resume, patch.object(
+            archive_cli,
+            "_resume_exact_human_approved_transaction_core",
+            side_effect=AssertionError("direct approval-id resume bypassed discovery"),
+        ) as direct_resume:
+            code, output = self.run_cli(
+                [
+                    "project-version-update",
+                    "C:/bounded-test-project",
+                    "--resume",
+                    "--approval-id",
+                    supplied_approval_id,
+                    "--affirm-external-writers-quiescent",
+                    "--format",
+                    "json",
+                ]
+            )
+
+        self.assertEqual(code, 0, output)
+        self.assertEqual(json.loads(output), safe_result)
+        self.assertEqual(discovery_resume.call_count, 1)
+        self.assertEqual(
+            discovery_resume.call_args.kwargs["supplied_approval_id"],
+            supplied_approval_id,
+        )
+        self.assertIs(
+            discovery_resume.call_args.kwargs["candidate_missing_handler"],
+            missing_handler,
+        )
+        direct_resume.assert_not_called()
+        self.assertEqual(binding.archive_id, "archive:test")
+        self.assertEqual(binding.reviewer_claim, "person:sealed-reviewer")
+
+    def test_project_version_update_resume_marks_each_operator_identifier_supplied(
+        self,
+    ) -> None:
+        class TestBinding:
+            plan_sha256 = "sha256:" + "d" * 64
+            target_binding_sha256 = "sha256:" + "e" * 64
+
+            def context(
+                self,
+                *,
+                archive_id: str,
+                reviewer_claim: str,
+            ) -> object:
+                return object()
+
+        @contextmanager
+        def approval_boundary(_inspection_root: Path):
+            yield Path("C:/bounded-test-archive"), "archive:test"
+
+        def resume_live_transaction(
+            _inspection_root: Path,
+            **kwargs: Any,
+        ) -> Mapping[str, Any]:
+            return kwargs["approval_executor"](
+                {},
+                lambda _claim, _plan, _target: {"ok": True},
+                lambda _claim: None,
+                lambda _claim: True,
+                lambda _claim: True,
+                resume_reviewer="person:sealed-reviewer",
+            )
+
+        identifier_cases = (
+            ("none", [], False),
+            ("target", ["--target", "v0.4.15"], True),
+            (
+                "transaction_ref",
+                ["--transaction-ref", "update_" + "a" * 32],
+                True,
+            ),
+            (
+                "reviewer",
+                ["--reviewed-by", "person:operator"],
+                True,
+            ),
+            (
+                "approval_id",
+                ["--approval-id", "approval_" + "b" * 32],
+                True,
+            ),
+        )
+        for label, identifier_args, expected_flag in identifier_cases:
+            with self.subTest(identifier=label), patch.object(
+                archive_services,
+                "_project_update_terminal_cleanup_unknown_preflight_read_only",
+                return_value=None,
+            ), patch.object(
+                archive_cli,
+                "_project_version_update_approval_read_boundary",
+                side_effect=approval_boundary,
+            ), patch.object(
+                archive_cli.operation_approval_binding,
+                "project_version_update_approval_binding",
+                return_value=TestBinding(),
+            ), patch.object(
+                archive_services,
+                "_wom_kit_project_version_update_resume_live_transaction",
+                side_effect=resume_live_transaction,
+            ), patch.object(
+                archive_cli,
+                "_resume_exact_human_approved_transaction_auto_core",
+                return_value={
+                    "ok": True,
+                    "status": "synthetic_resume_succeeded",
+                    "operator_resume_identifiers_supplied": False,
+                },
+            ) as discovery_resume:
+                code, output = self.run_cli(
+                    [
+                        "project-version-update",
+                        "C:/bounded-test-project",
+                        "--resume",
+                        *identifier_args,
+                        "--affirm-external-writers-quiescent",
+                        "--format",
+                        "json",
+                    ]
+                )
+
+            self.assertEqual(code, 0, output)
+            self.assertIs(
+                json.loads(output)[
+                    "operator_resume_identifiers_supplied"
+                ],
+                expected_flag,
+            )
+            self.assertEqual(discovery_resume.call_count, 1)
+
+    def test_project_version_update_resume_forwards_approval_id_assertion_to_early_service_path(
+        self,
+    ) -> None:
+        @contextmanager
+        def approval_boundary(_inspection_root: Path):
+            yield Path("C:/bounded-test-archive"), "archive:test"
+
+        identifier_cases = (
+            ("target", ["--target", "v0.4.15"], False),
+            (
+                "transaction_ref",
+                ["--transaction-ref", "update_" + "a" * 32],
+                False,
+            ),
+            (
+                "reviewer",
+                ["--reviewed-by", "person:operator"],
+                False,
+            ),
+            (
+                "approval_id",
+                ["--approval-id", "approval_" + "b" * 32],
+                True,
+            ),
+        )
+        early_result = {
+            "ok": True,
+            "status": "synthetic_early_empty_or_sealed_resume",
+        }
+
+        for label, identifier_args, expected_approval_flag in identifier_cases:
+            with self.subTest(identifier=label), patch.object(
+                archive_services,
+                "_project_update_terminal_cleanup_unknown_preflight_read_only",
+                return_value=None,
+            ), patch.object(
+                archive_cli,
+                "_project_version_update_approval_read_boundary",
+                side_effect=approval_boundary,
+            ), patch.object(
+                archive_services,
+                "_wom_kit_project_version_update_resume_live_transaction",
+                return_value=early_result,
+            ) as resume_service:
+                code, output = self.run_cli(
+                    [
+                        "project-version-update",
+                        "C:/bounded-test-project",
+                        "--resume",
+                        *identifier_args,
+                        "--affirm-external-writers-quiescent",
+                        "--format",
+                        "json",
+                    ]
+                )
+
+            self.assertEqual(code, 0, output)
+            self.assertEqual(json.loads(output), early_result)
+            self.assertEqual(resume_service.call_count, 1)
+            self.assertIs(
+                resume_service.call_args.kwargs[
+                    "_approval_identifier_supplied"
+                ],
+                expected_approval_flag,
+            )
+            self.assertIs(
+                resume_service.call_args.kwargs[
+                    "_archive_identity_metadata_read"
+                ],
+                True,
+            )
+
+    def test_project_version_update_cleanup_unknown_preflight_never_opens_archive_boundary(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project_root = Path(tmp) / "project"
+            transaction_parent = (
+                project_root
+                / ".zettel-kasten"
+                / "private"
+                / "version-updates"
+            )
+            transaction_parent.mkdir(parents=True)
+            (transaction_parent / ".cleanup_untrusted-terminal-residue").mkdir()
+            archive_root = project_root / "archive"
+            archive_root.mkdir()
+            archive_marker = archive_root / "archive.yml"
+            archive_marker.write_bytes(
+                b"archive_id: must-not-be-read-by-cleanup-preflight\n"
+            )
+            marker_before = archive_marker.read_bytes()
+            events: list[tuple[Any, ...]] = []
+            actual_preflight = (
+                archive_services
+                ._project_update_terminal_cleanup_unknown_preflight_read_only
+            )
+
+            def observe_progress(
+                _reporter: Any,
+                stage: str,
+                message: str,
+                current: int | None,
+                total: int | None,
+            ) -> None:
+                events.append(("progress", stage, message, current, total))
+
+            def observe_preflight(*args: Any, **kwargs: Any) -> Any:
+                events.append(("cleanup_preflight",))
+                return actual_preflight(*args, **kwargs)
+
+            with patch.object(
+                archive_cli.CommandProgressReporter,
+                "progress",
+                autospec=True,
+                side_effect=observe_progress,
+            ), patch.object(
+                archive_services,
+                "_project_update_terminal_cleanup_unknown_preflight_read_only",
+                side_effect=observe_preflight,
+            ), patch.object(
+                archive_cli,
+                "_project_version_update_approval_read_boundary",
+                side_effect=AssertionError(
+                    "cleanup preflight opened archive identity boundary"
+                ),
+            ) as approval_boundary, patch.object(
+                archive_services,
+                "_wom_kit_project_version_update_resume_live_transaction",
+                side_effect=AssertionError(
+                    "cleanup preflight entered authenticated service"
+                ),
+            ) as authenticated_service:
+                code, output = self.run_cli(
+                    [
+                        "project-version-update",
+                        str(project_root),
+                        "--resume",
+                        "--affirm-external-writers-quiescent",
+                        "--progress",
+                        "--format",
+                        "json",
+                    ]
+                )
+
+            self.assertEqual(code, 1, output)
+            result = json.loads(output)
+            self.assertEqual(
+                result["status"],
+                "terminal_cleanup_outcome_unknown",
+            )
+            self.assertFalse(result["client_archive_accessed"])
+            self.assertFalse(result["archive_identity_metadata_read"])
+            self.assertFalse(
+                result["client_archive_domain_content_accessed"]
+            )
+            self.assertFalse(
+                result["operator_resume_identifiers_supplied"]
+            )
+            self.assertEqual(
+                events,
+                [
+                    ("progress", "starting", "start", None, None),
+                    ("cleanup_preflight",),
+                ],
+            )
+            approval_boundary.assert_not_called()
+            authenticated_service.assert_not_called()
+            self.assertEqual(archive_marker.read_bytes(), marker_before)
+
+            with patch.object(
+                archive_cli,
+                "_project_version_update_approval_read_boundary",
+                side_effect=AssertionError(
+                    "approval-id cleanup preflight opened archive boundary"
+                ),
+            ) as approval_boundary, patch.object(
+                archive_services,
+                "_wom_kit_project_version_update_resume_live_transaction",
+                side_effect=AssertionError(
+                    "approval-id cleanup preflight entered service"
+                ),
+            ) as authenticated_service:
+                invalid_code, invalid_output = self.run_cli(
+                    [
+                        "project-version-update",
+                        str(project_root),
+                        "--resume",
+                        "--approval-id",
+                        "approval_" + "a" * 32,
+                        "--affirm-external-writers-quiescent",
+                        "--format",
+                        "json",
+                    ]
+                )
+
+            self.assertEqual(invalid_code, 1, invalid_output)
+            self.assertIn(
+                "failed before a privacy-safe result could be produced",
+                invalid_output,
+            )
+            approval_boundary.assert_not_called()
+            authenticated_service.assert_not_called()
+            self.assertEqual(archive_marker.read_bytes(), marker_before)
+
+    def test_project_version_update_approval_forwards_claim_publication_boundary(
+        self,
+    ) -> None:
+        class TestBinding:
+            plan_sha256 = "sha256:" + "d" * 64
+            target_binding_sha256 = "sha256:" + "e" * 64
+
+            def context(
+                self,
+                *,
+                archive_id: str,
+                reviewer_claim: str,
+            ) -> object:
+                self.archive_id = archive_id
+                self.reviewer_claim = reviewer_claim
+                return object()
+
+        binding = TestBinding()
+
+        @contextmanager
+        def approval_boundary(_inspection_root: Path):
+            yield Path("C:/bounded-test-archive"), "archive:test"
+
+        @contextmanager
+        def claim_publication_boundary():
+            yield
+
+        def live_approval_transaction(
+            _inspection_root: Path,
+            **kwargs: Any,
+        ) -> Mapping[str, Any]:
+            return kwargs["approval_executor"](
+                {},
+                lambda _claim, _plan, _target: {"ok": True},
+                lambda _claim: None,
+                lambda _claim: True,
+                lambda _claim: True,
+                claim_publication_boundary=claim_publication_boundary,
+            )
+
+        safe_result = {
+            "ok": True,
+            "status": "synthetic_approval_succeeded",
+        }
+        with patch.object(
+            archive_cli,
+            "_project_version_update_approval_read_boundary",
+            side_effect=approval_boundary,
+        ), patch.object(
+            archive_cli.operation_approval_binding,
+            "project_version_update_approval_binding",
+            return_value=binding,
+        ), patch.object(
+            archive_services,
+            "_wom_kit_project_version_update_live_approval_transaction",
+            side_effect=live_approval_transaction,
+        ), patch.object(
+            archive_cli,
+            "_execute_project_version_update_exact_human_approved_write",
+            return_value=safe_result,
+        ) as approved_write:
+            code, output = self.run_cli(
+                [
+                    "project-version-update",
+                    "C:/bounded-test-project",
+                    "--target",
+                    "v0.4.15",
+                    "--approve",
+                    "--reviewed-by",
+                    "person:test-reviewer",
+                    "--affirm-external-writers-quiescent",
+                    "--format",
+                    "json",
+                ]
+            )
+
+        self.assertEqual(code, 0, output)
+        self.assertEqual(json.loads(output), safe_result)
+        self.assertEqual(approved_write.call_count, 1)
+        self.assertIs(
+            approved_write.call_args.kwargs["claim_publication_boundary"],
+            claim_publication_boundary,
+        )
+        self.assertEqual(binding.archive_id, "archive:test")
+        self.assertEqual(binding.reviewer_claim, "person:test-reviewer")
 
     def test_project_version_update_progress_starts_before_preflight_and_heartbeats_under_ten_seconds(
         self,
@@ -10637,6 +11305,7 @@ class ArchiveCliTests(unittest.TestCase):
                 context: Any,
                 writer: Any,
                 *,
+                claim_publication_boundary: Any = None,
                 claim_succeeded_finalizer: Any = None,
             ) -> Any:
                 nonlocal approval_started
@@ -10651,6 +11320,9 @@ class ArchiveCliTests(unittest.TestCase):
                         root,
                         context,
                         writer,
+                        claim_publication_boundary=(
+                            claim_publication_boundary
+                        ),
                         claim_succeeded_finalizer=(
                             claim_succeeded_finalizer
                         ),
@@ -11208,6 +11880,7 @@ class ArchiveCliTests(unittest.TestCase):
                     context: Any,
                     writer: Any,
                     *,
+                    claim_publication_boundary: Any = None,
                     claim_succeeded_finalizer: Any = None,
                 ) -> Any:
                     nonlocal approval_started, policy_drifted
@@ -11232,6 +11905,9 @@ class ArchiveCliTests(unittest.TestCase):
                         root,
                         context,
                         writer,
+                        claim_publication_boundary=(
+                            claim_publication_boundary
+                        ),
                         claim_succeeded_finalizer=(
                             claim_succeeded_finalizer
                         ),
@@ -11746,9 +12422,10 @@ class ArchiveCliTests(unittest.TestCase):
                     _context: Any,
                     _writer: Any,
                     *,
+                    claim_publication_boundary: Any = None,
                     claim_succeeded_finalizer: Any = None,
                 ) -> Any:
-                    del claim_succeeded_finalizer
+                    del claim_publication_boundary, claim_succeeded_finalizer
                     nonlocal approval_reached
                     approval_reached = True
                     try:
@@ -11904,6 +12581,7 @@ class ArchiveCliTests(unittest.TestCase):
                 context: Any,
                 writer: Any,
                 *,
+                claim_publication_boundary: Any = None,
                 claim_succeeded_finalizer: Any = None,
             ) -> Any:
                 nonlocal approval_started
@@ -11912,6 +12590,9 @@ class ArchiveCliTests(unittest.TestCase):
                     root,
                     context,
                     writer,
+                    claim_publication_boundary=(
+                        claim_publication_boundary
+                    ),
                     claim_succeeded_finalizer=(
                         claim_succeeded_finalizer
                     ),
@@ -12177,12 +12858,16 @@ class ArchiveCliTests(unittest.TestCase):
                 context: Any,
                 writer: Any,
                 *,
+                claim_publication_boundary: Any = None,
                 claim_succeeded_finalizer: Any = None,
             ) -> Any:
                 return self.execute_test_exact_human_transaction(
                     root,
                     context,
                     writer,
+                    claim_publication_boundary=(
+                        claim_publication_boundary
+                    ),
                     claim_succeeded_finalizer=(
                         claim_succeeded_finalizer
                     ),
@@ -12464,7 +13149,7 @@ class ArchiveCliTests(unittest.TestCase):
             ["project_runtime_mismatch"],
         )
         self.assertEqual(result["project_pin"], "v0.4.2")
-        self.assertEqual(result["running_version"], "v0.4.14")
+        self.assertEqual(result["running_version"], "v0.4.15")
         self.assertEqual(
             result["project_runtime_argv"],
             [r".\.zettel-kasten\bin\archive.cmd"],
@@ -12596,6 +13281,226 @@ class ArchiveCliTests(unittest.TestCase):
         self.assertNotIn("mixed-state-lock-body", collision_output)
         self.assertEqual(read_code, 43)
         self.assertEqual(recovery_code, 44)
+
+    def test_incomplete_update_allows_only_append_only_new_feedback_body(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project_root = Path(tmp) / "project"
+            archive_root = self.copy_fake_archive(
+                project_root / "archive"
+            )
+            metadata_root = project_root / ".zettel-kasten"
+            launcher = metadata_root / "bin" / "archive.cmd"
+            source_marker = metadata_root / "src" / "HEAD"
+            launcher.parent.mkdir(parents=True)
+            source_marker.parent.mkdir(parents=True)
+            lock_path = metadata_root / "version-update.lock"
+            pin_path = metadata_root / "installed-version.txt"
+            lock_path.write_bytes(b'{"private":"preserve-this-lock"}\n')
+            pin_path.write_text("v0.4.9\n", encoding="utf-8")
+            launcher.write_bytes(b"preserve-launcher-bytes\r\n")
+            source_marker.write_bytes(b"preserve-source-head\n")
+            protected_before = {
+                path: path.read_bytes()
+                for path in (
+                    lock_path,
+                    pin_path,
+                    launcher,
+                    source_marker,
+                )
+            }
+
+            feedback_id = "synthetic_update_recovery_emergency_case"
+            request_relative = (
+                "profiles/local/operator-feedback/requests/"
+                "synthetic-update-recovery-emergency.json"
+            )
+            request_path = archive_root.joinpath(
+                *request_relative.split("/")
+            )
+            request_path.parent.mkdir(parents=True, exist_ok=True)
+            request_path.write_text(
+                json.dumps(
+                    {
+                        "schema": operator_feedback_body.REQUEST_SCHEMA,
+                        "feedback_id": feedback_id,
+                        "title": "Synthetic interrupted update report",
+                        "sections": {
+                            "environment": "Synthetic recovery fixture.",
+                            "task": "Preserve a new report while update recovery is required.",
+                            "observed_failure": "Ordinary project writes are safely blocked.",
+                            "suspected_cause": "A prior update stopped after approval.",
+                            "requested_resolution": "Preserve only this new report body.",
+                            "reproduction": "Preview and approve one create-only report.",
+                        },
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            archive_files_before = {
+                path.relative_to(archive_root).as_posix()
+                for path in archive_root.rglob("*")
+                if path.is_file()
+            }
+            compose_base = [
+                "operator-feedback-compose",
+                str(archive_root),
+                "--request",
+                request_relative,
+                "--intent",
+                "create",
+                "--format",
+                "json",
+            ]
+
+            preview_code, preview_output = self.run_cli(
+                [*compose_base, "--dry-run"]
+            )
+            self.assertEqual(preview_code, 0, preview_output)
+            preview = json.loads(preview_output)
+            approve_args = [
+                *compose_base,
+                "--approve",
+                "--expected-plan-sha256",
+                preview["plan_sha256"],
+                "--reviewed-by",
+                "person:synthetic-reviewer",
+            ]
+            create_code, create_output = self.run_cli(approve_args)
+            self.assertEqual(create_code, 0, create_output)
+            created = json.loads(create_output)
+            self.assertTrue(created["emergency_preservation"]["append_only"])
+            self.assertEqual(
+                created["emergency_preservation"]["scope"],
+                "new_feedback_body_and_body_receipt_domain_writes_only",
+            )
+            self.assertEqual(
+                created["emergency_preservation"]
+                ["bounded_coordination_artifact_scope"],
+                "feedback_writer_mutex_only",
+            )
+            self.assertFalse(
+                created["emergency_preservation"]
+                ["coordination_artifact_is_domain_record"]
+            )
+            self.assertTrue(
+                created["emergency_preservation"]
+                ["project_update_recovery_still_required"]
+            )
+            self.assertFalse(
+                created["emergency_preservation"]
+                ["feedback_metadata_registered"]
+            )
+            self.assertNotIn("preserve-this-lock", create_output)
+
+            for path, expected in protected_before.items():
+                self.assertEqual(path.read_bytes(), expected)
+            archive_files_after = {
+                path.relative_to(archive_root).as_posix()
+                for path in archive_root.rglob("*")
+                if path.is_file()
+            }
+            new_files = archive_files_after - archive_files_before
+            self.assertEqual(len(new_files), 3, new_files)
+            self.assertIn(
+                f"ops/feedback/letters/{feedback_id}.md",
+                new_files,
+            )
+            self.assertEqual(
+                len(
+                    [
+                        path
+                        for path in new_files
+                        if path.startswith(
+                            "receipts/operator-feedback/body/"
+                        )
+                    ]
+                ),
+                1,
+            )
+            self.assertEqual(
+                len(
+                    [
+                        path
+                        for path in new_files
+                        if path.startswith(
+                            "receipts/operator-feedback/.locks/"
+                        )
+                    ]
+                ),
+                1,
+            )
+            self.assertFalse(
+                (archive_root / "ops" / "feedback" / f"{feedback_id}.yml")
+                .exists()
+            )
+
+            rerun_code, rerun_output = self.run_cli(approve_args)
+            self.assertEqual(rerun_code, 0, rerun_output)
+            rerun = json.loads(rerun_output)
+            self.assertEqual(rerun["state"], "already_written")
+            self.assertEqual(rerun["files_written"], [])
+            self.assertEqual(
+                {
+                    path.relative_to(archive_root).as_posix()
+                    for path in archive_root.rglob("*")
+                    if path.is_file()
+                },
+                archive_files_after,
+            )
+
+            blocked_commands = (
+                [
+                    *compose_base,
+                    "--intent",
+                    "revise",
+                    "--expected-body-sha256",
+                    created["feedback_ref"].rsplit(":", 1)[-1],
+                    "--approve",
+                    "--expected-plan-sha256",
+                    preview["plan_sha256"],
+                    "--reviewed-by",
+                    "person:synthetic-reviewer",
+                ],
+                [
+                    "operator-feedback-record",
+                    str(archive_root),
+                    "--feedback-id",
+                    feedback_id,
+                    "--feedback-ref",
+                    created["feedback_ref"],
+                    "--status",
+                    "draft",
+                    "--approve",
+                    "--reviewed-by",
+                    "person:synthetic-reviewer",
+                    "--format",
+                    "json",
+                ],
+                [
+                    "create-draft",
+                    str(archive_root),
+                    "--title",
+                    "must remain blocked",
+                    "--approve",
+                    "--format",
+                    "json",
+                ],
+            )
+            for blocked_argv in blocked_commands:
+                with self.subTest(command=blocked_argv[0]):
+                    blocked_code, blocked_output = self.run_cli(
+                        blocked_argv
+                    )
+                    self.assertEqual(blocked_code, 3, blocked_output)
+                    self.assertEqual(
+                        json.loads(blocked_output)["reason_codes"],
+                        ["project_update_recovery_required"],
+                    )
+            for path, expected in protected_before.items():
+                self.assertEqual(path.read_bytes(), expected)
 
     def test_index_write_blocks_before_dispatch_on_project_runtime_mismatch(
         self,

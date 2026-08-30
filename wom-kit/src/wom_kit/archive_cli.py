@@ -388,7 +388,13 @@ import subprocess
 import sys
 import threading
 import time
-from contextlib import ExitStack, contextmanager, nullcontext, redirect_stderr
+from contextlib import (
+    AbstractContextManager,
+    ExitStack,
+    contextmanager,
+    nullcontext,
+    redirect_stderr,
+)
 from dataclasses import dataclass, field, replace
 from datetime import date, datetime, timezone
 from fnmatch import fnmatchcase
@@ -452,6 +458,7 @@ from .exact_human_approval_workflow import (
     ExactHumanApprovalWorkflowError,
     _execute_exact_human_approved_write,
     _execute_exact_human_approved_write_core,
+    _resume_exact_human_approved_transaction_auto_core,
     _resume_exact_human_approved_transaction_core,
 )
 from .exact_operation_manifest import ExactOperationManifestError, ExactOperationProgress
@@ -8190,11 +8197,34 @@ def _project_version_update_post_decision_boundary(root: Path):
         yield boundary
 
 
+@contextmanager
+def _project_version_update_resume_boundary(root: Path):
+    """Bind existing project-update claims without creating recovery state."""
+
+    canonical_root = archive_services.require_existing_archive_root(root)
+    claims_parent = (
+        canonical_root
+        / "profiles"
+        / "local"
+        / "exact-human-approvals"
+        / "claims"
+    )
+    with archive_services._activity_group_bound_directory_chain(
+        canonical_root,
+        claims_parent,
+        create=False,
+    ) as claims_binding:
+        yield canonical_root, claims_binding
+
+
 def _execute_project_version_update_exact_human_approved_write(
     approval_root: Path,
     context: ExactHumanApprovalContext,
     writer: Callable[[Any], Mapping[str, Any]],
     *,
+    claim_publication_boundary: (
+        Callable[[], AbstractContextManager[Any]] | None
+    ) = None,
     claim_succeeded_finalizer: Callable[[Any], None],
 ) -> dict[str, Any]:
     """Run project update through its non-injectable bound claim workflow."""
@@ -8208,8 +8238,19 @@ def _execute_project_version_update_exact_human_approved_write(
         post_decision_boundary=lambda: (
             _project_version_update_post_decision_boundary(approval_root)
         ),
+        claim_publication_boundary=claim_publication_boundary,
         claim_succeeded_finalizer=claim_succeeded_finalizer,
     )
+
+
+class _ProjectVersionUpdateCleanupUnknownPreflight(RuntimeError):
+    """Carry one project-metadata-only terminal result past archive setup."""
+
+    def __init__(self, result: Mapping[str, Any]) -> None:
+        if not isinstance(result, Mapping):
+            raise TypeError("project_update_cleanup_unknown_result_invalid")
+        self.result = dict(result)
+        super().__init__("project_update_terminal_cleanup_outcome_unknown")
 
 
 def command_project_version_update(args: argparse.Namespace) -> int:
@@ -8218,9 +8259,46 @@ def command_project_version_update(args: argparse.Namespace) -> int:
         label="project-version-update",
         heartbeat_interval_seconds=9.0,
     )
+    # Emit liveness before cleanup observation, output-root resolution, archive
+    # identity reads, Git setup, or any other potentially bounded-long work.
+    reporter.progress("starting", "start", None, None)
     capture: _CommandRunResultCapture | None = None
     operation_journal: operation_control.OperationRunJournal | None = None
     try:
+        inspection_root = Path(args.inspection_root)
+        if getattr(args, "resume", False):
+            if not bool(args.affirm_external_writers_quiescent):
+                raise ValueError("project_version_update_quiescence_required")
+            approval_identifier_supplied = bool(
+                str(getattr(args, "approval_id", "") or "").strip()
+            )
+            operator_resume_identifiers_supplied = any(
+                str(getattr(args, field, "") or "").strip()
+                for field in (
+                    "target",
+                    "transaction_ref",
+                    "reviewed_by",
+                    "approval_id",
+                )
+            )
+            cleanup_unknown = (
+                archive_services
+                ._project_update_terminal_cleanup_unknown_preflight_read_only(
+                    inspection_root,
+                    operator_resume_identifiers_supplied=(
+                        operator_resume_identifiers_supplied
+                    ),
+                    approval_identifier_supplied=(
+                        approval_identifier_supplied
+                    ),
+                )
+            )
+            if cleanup_unknown is not None:
+                # Leave before output-root resolution and, critically, before
+                # the archive identity/approval boundary reads archive.yml.
+                raise _ProjectVersionUpdateCleanupUnknownPreflight(
+                    cleanup_unknown
+                )
         if getattr(args, "output", None):
             control_root = operation_control.require_control_root(
                 Path(args.inspection_root)
@@ -8238,30 +8316,31 @@ def command_project_version_update(args: argparse.Namespace) -> int:
                 require_archive_root=archive_scoped,
             )
             operation_journal = prepare_operation_tracking(capture)
+            if operation_journal is not None:
+                # The reporter already emitted the public start before any
+                # archive access. Persist the same event directly so output
+                # tracking does not duplicate it on stderr.
+                operation_journal.progress(
+                    "starting",
+                    "start",
+                    None,
+                    None,
+                )
             best_effort_terminal_print(
                 f"[project-version-update] result pending: {capture.metadata['path']}",
                 file=sys.stderr,
             )
-        inspection_root = Path(args.inspection_root)
         progress_callback = operation_progress_callback(
             reporter,
             operation_journal,
         )
-        # Establish observable liveness before approval-root resolution, Git
-        # runner resolution, or any other potentially long preflight.
-        progress_callback("starting", "start", None, None)
         if args.approve or getattr(args, "resume", False):
-            if not str(args.reviewed_by or "").strip():
+            if args.approve and not str(args.target or "").strip():
+                raise ValueError("project_version_update_target_required")
+            if args.approve and not str(args.reviewed_by or "").strip():
                 raise ValueError("project_version_update_reviewer_required")
             if not bool(args.affirm_external_writers_quiescent):
                 raise ValueError("project_version_update_quiescence_required")
-            if getattr(args, "resume", False) and (
-                not str(getattr(args, "transaction_ref", "") or "").strip()
-                or not str(getattr(args, "approval_id", "") or "").strip()
-            ):
-                raise ValueError(
-                    "project_version_update_resume_reference_required"
-                )
             if args.approve and (
                 getattr(args, "transaction_ref", None) is not None
                 or getattr(args, "approval_id", None) is not None
@@ -8281,6 +8360,13 @@ def command_project_version_update(args: argparse.Namespace) -> int:
                     claim_succeeded_finalizer: Callable[[Any], None],
                     started_checkpoint_guard: Callable[[Any], bool],
                     succeeded_checkpoint_guard: Callable[[Any], bool],
+                    resume_reviewer: str | None = None,
+                    candidate_missing_handler: (
+                        Callable[[str], Mapping[str, Any]] | None
+                    ) = None,
+                    claim_publication_boundary: (
+                        Callable[[], AbstractContextManager[Any]] | None
+                    ) = None,
                 ) -> Mapping[str, Any]:
                     binding = (
                         operation_approval_binding
@@ -8290,7 +8376,11 @@ def command_project_version_update(args: argparse.Namespace) -> int:
                     )
                     context = binding.context(
                         archive_id=held_archive_id,
-                        reviewer_claim=str(args.reviewed_by).strip(),
+                        reviewer_claim=(
+                            str(resume_reviewer).strip()
+                            if str(resume_reviewer or "").strip()
+                            else str(args.reviewed_by).strip()
+                        ),
                     )
 
                     def _write_project_version_update(
@@ -8305,43 +8395,88 @@ def command_project_version_update(args: argparse.Namespace) -> int:
                         )
 
                     if getattr(args, "resume", False):
-                        return _resume_exact_human_approved_transaction_core(
-                            approval_root,
-                            context,
-                            str(args.approval_id).strip(),
-                            started_checkpoint_guard,
-                            _write_project_version_update,
-                            succeeded_checkpoint_guard,
-                            claim_succeeded_finalizer,
-                            key_provider=None,
-                            resume_boundary=lambda: (
-                                _project_version_update_post_decision_boundary(
-                                    approval_root
-                                )
-                            ),
+                        supplied_approval_id = str(
+                            getattr(args, "approval_id", "") or ""
+                        ).strip()
+                        resume_boundary = lambda: (
+                            _project_version_update_resume_boundary(
+                                approval_root
+                            )
                         )
+                        resume_result = (
+                            _resume_exact_human_approved_transaction_auto_core(
+                                approval_root,
+                                context,
+                                started_checkpoint_guard,
+                                _write_project_version_update,
+                                succeeded_checkpoint_guard,
+                                claim_succeeded_finalizer,
+                                supplied_approval_id=(
+                                    supplied_approval_id or None
+                                ),
+                                candidate_missing_handler=(
+                                    candidate_missing_handler
+                                ),
+                                key_provider=None,
+                                resume_boundary=resume_boundary,
+                            )
+                        )
+                        cli_identifier_supplied = any(
+                            str(getattr(args, field, "") or "").strip()
+                            for field in (
+                                "target",
+                                "transaction_ref",
+                                "reviewed_by",
+                                "approval_id",
+                            )
+                        )
+                        return {
+                            **dict(resume_result),
+                            "operator_resume_identifiers_supplied": (
+                                resume_result.get(
+                                    "operator_resume_identifiers_supplied"
+                                )
+                                is True
+                                or cli_identifier_supplied
+                            ),
+                        }
                     return _execute_project_version_update_exact_human_approved_write(
                         approval_root,
                         context,
                         _write_project_version_update,
+                        claim_publication_boundary=(
+                            claim_publication_boundary
+                        ),
                         claim_succeeded_finalizer=(
                             claim_succeeded_finalizer
                         ),
                     )
 
                 if getattr(args, "resume", False):
+                    resume_reviewer = (
+                        str(args.reviewed_by).strip()
+                        if str(args.reviewed_by or "").strip()
+                        else None
+                    )
+                    resume_transaction_ref = (
+                        str(args.transaction_ref).strip()
+                        if str(args.transaction_ref or "").strip()
+                        else None
+                    )
                     result = (
                         archive_services
                         ._wom_kit_project_version_update_resume_live_transaction(
                             inspection_root,
                             target=args.target,
-                            reviewed_by=str(args.reviewed_by).strip(),
-                            transaction_ref=str(
-                                args.transaction_ref
-                            ).strip(),
+                            reviewed_by=resume_reviewer,
+                            transaction_ref=resume_transaction_ref,
                             approval_executor=(
                                 _execute_project_version_update_approval
                             ),
+                            _approval_identifier_supplied=bool(
+                                str(args.approval_id or "").strip()
+                            ),
+                            _archive_identity_metadata_read=True,
                             _expected_approval_root=approval_root,
                             _expected_archive_id=held_archive_id,
                         )
@@ -8363,6 +8498,8 @@ def command_project_version_update(args: argparse.Namespace) -> int:
                         )
                     )
         else:
+            if not str(args.target or "").strip():
+                raise ValueError("project_version_update_target_required")
             result = archive_services.wom_kit_project_version_update(
                 inspection_root,
                 target=args.target,
@@ -8371,10 +8508,13 @@ def command_project_version_update(args: argparse.Namespace) -> int:
                 reviewed_by=args.reviewed_by,
                 progress_callback=progress_callback,
             )
+    except _ProjectVersionUpdateCleanupUnknownPreflight as completed_preflight:
+        result = completed_preflight.result
     except (
         operation_control.OperationControlError,
         operation_approval_binding.OperationApprovalBindingError,
         archive_services.ArchiveServiceError,
+        archive_services.project_update_transaction.ProjectUpdateTransactionError,
         archive_services.project_update_git_runner.ProjectUpdateGitRunnerError,
         ExactHumanApprovalError,
         ExactHumanApprovalWindowsError,
@@ -8872,6 +9012,33 @@ def command_operator_feedback_compose(args: argparse.Namespace) -> int:
             command="operator-feedback-compose",
             reason_code="feedback_compose_failed",
         )
+
+    if bool(
+        getattr(
+            args,
+            "_wom_project_update_recovery_emergency_lane",
+            False,
+        )
+    ):
+        result = {
+            **result,
+            "emergency_preservation": {
+                "scope": (
+                    "new_feedback_body_and_body_receipt_domain_writes_only"
+                ),
+                "bounded_coordination_artifact_scope": (
+                    "feedback_writer_mutex_only"
+                ),
+                "coordination_artifact_is_domain_record": False,
+                "append_only": True,
+                "project_update_recovery_still_required": True,
+                "feedback_metadata_registered": False,
+                "feedback_delivered": False,
+                "feedback_resolved": False,
+                "other_project_writes_allowed": False,
+                "private_values_echoed": False,
+            },
+        }
 
     if args.format == "json":
         print_json(result)
@@ -32645,8 +32812,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     project_version_update.add_argument(
         "--target",
-        required=True,
-        help="Exact stable release tag such as v0.3.215.",
+        help=(
+            "Exact stable release tag such as v0.3.215; required for preview "
+            "or a new approval and discovered from sealed state on resume."
+        ),
     )
     project_version_update_mode = project_version_update.add_mutually_exclusive_group(required=True)
     project_version_update_mode.add_argument(
@@ -32669,11 +32838,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     project_version_update.add_argument(
         "--transaction-ref",
-        help="Opaque durable project-update transaction ref; required with --resume.",
+        help=argparse.SUPPRESS,
     )
     project_version_update.add_argument(
         "--approval-id",
-        help="Opaque exact-human approval id; required with --resume.",
+        help=argparse.SUPPRESS,
     )
     project_version_update.add_argument(
         "--reviewed-by",
@@ -32683,8 +32852,9 @@ def build_parser() -> argparse.ArgumentParser:
         "--affirm-external-writers-quiescent",
         action="store_true",
         help=(
-            "Required with --approve: affirm that editors and sync, backup, "
-            "and other Git writers are paused for the complete transaction."
+            "Required with --approve or --resume: affirm that editors and "
+            "sync, backup, and other Git writers are paused for the complete "
+            "transaction."
         ),
     )
     project_version_update.add_argument(
@@ -32909,7 +33079,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     operator_feedback_compose.add_argument("--reviewed-by", help="Reviewer id required for approval.")
     operator_feedback_compose.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
-    operator_feedback_compose.set_defaults(func=command_operator_feedback_compose)
+    operator_feedback_compose.set_defaults(
+        func=command_operator_feedback_compose,
+        _wom_project_runtime_effect="append_only_emergency_feedback",
+    )
 
     operator_feedback_body_check = subcommands.add_parser(
         "operator-feedback-body-check",
@@ -43486,6 +43659,28 @@ def _project_write_runtime_guard(
                 result.get("reason_code")
                 == "project_update_recovery_required"
             )
+            emergency_feedback_create = bool(
+                recovery_required
+                and runtime_effect == "append_only_emergency_feedback"
+                and getattr(args, "func", None)
+                is command_operator_feedback_compose
+                and bool(getattr(args, "approve", False))
+                and not bool(getattr(args, "dry_run", False))
+                and getattr(args, "intent", None) == "create"
+                and not str(
+                    getattr(args, "expected_body_sha256", "") or ""
+                ).strip()
+                and not str(
+                    getattr(args, "supersedes_feedback_id", "") or ""
+                ).strip()
+            )
+            if emergency_feedback_create:
+                setattr(
+                    args,
+                    "_wom_project_update_recovery_emergency_lane",
+                    True,
+                )
+                return None
             return {
                 "schema": (
                     "wom-kit/project-update-recovery-required/v0.1"

@@ -24,6 +24,61 @@ Before upgrading a real archive:
 
 The archive should never silently rewrite memory.
 
+## v0.4.15 Authenticated Project Update Recovery
+
+Install the exact public wheel only after the matching release and asset exist.
+Use a dedicated external CPython 3.12 environment; a user-scoped `uv tool`
+installation whose metadata omits the wheel hash is not project-updater supply
+evidence.
+
+```powershell
+$womBootstrapNonce = [guid]::NewGuid().ToString("N")
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0415-$womBootstrapNonce"
+if (Test-Path -LiteralPath $womBootstrapRoot) {
+  throw "WOM bootstrap path must be new."
+}
+py -3.12 -m venv $womBootstrapRoot
+$womBootstrapPython = (Get-Item -LiteralPath (Join-Path $womBootstrapRoot "Scripts\python.exe")).FullName
+& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.15/wom_kit-0.4.15-py3-none-any.whl"
+& "$womBootstrapRoot\Scripts\archive.exe" --version
+```
+
+Require exactly `archive 0.4.15` from a new process. If a previous approved
+project update was hard-interrupted, keep all other project writers paused and
+resume from the exact bootstrap:
+
+```powershell
+& "$womBootstrapRoot\Scripts\archive.exe" project-version-update <project-or-archive-root> `
+  --resume `
+  --affirm-external-writers-quiescent `
+  --progress `
+  --format json
+```
+
+The normal resume requires no caller-supplied `--target`, `--transaction-ref`,
+`--approval-id`, or `--reviewed-by`. WOM restores those bindings from the live
+lock and authenticated sealed plan, requires exactly one checkpoint-valid
+claim, and opens no second native decision. Never delete the lock or hand-edit
+the pin. After success, start a new project-launcher process and verify
+alignment before approved zet draft or other ordinary write work.
+
+This v0.4.15 recovery guarantee is bounded to a live `version-update.lock` or
+the exact lockless unlock tail while the original transaction directory still
+exists. Its first unsupported boundary is after `completed`, once the original
+transaction directory has been successfully renamed to a terminal cleanup
+tombstone. A tombstone or cleanup proof is not authenticated outcome or cleanup
+authority: v0.4.15 reports `terminal_cleanup_outcome_unknown` with a nonzero
+exit and does not infer success, failure, or cancellation, automatically retry,
+or delete that evidence. A full authenticated terminal handoff and terminal
+cleanup outcome reconstruction remain a v0.4.16 follow-up.
+
+While recovery is required, only an exact-approved create-only operator
+feedback body may be appended. Existing feedback revision or supersession,
+metadata, resolved or delivered state, and every other writer remain blocked;
+the `version-update.lock` bytes remain unchanged. v0.4.15 requires no public
+archive-format migration. See the
+[v0.4.15 release note](wom-kit/docs/releases/v0.4.15.md).
+
 ## v0.4.14 Reference-Aware Local Recovery And Safer Decisions
 
 Install the exact public wheel only after the matching release and asset exist:

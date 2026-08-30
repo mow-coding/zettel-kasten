@@ -2,6 +2,58 @@
 
 [English Upgrade Guide](UPGRADE.md)
 
+## v0.4.15 인증된 프로젝트 업데이트 복구
+
+일치하는 공개 릴리스와 자산이 실제로 존재한 뒤에만 정확한 wheel을 설치합니다.
+외부 CPython 3.12 전용 환경을 사용하세요. 설치 metadata에 wheel hash가 없는
+사용자 범위 `uv tool` 환경은 project updater 공급 근거가 아닙니다.
+
+```powershell
+$womBootstrapNonce = [guid]::NewGuid().ToString("N")
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0415-$womBootstrapNonce"
+if (Test-Path -LiteralPath $womBootstrapRoot) {
+  throw "WOM bootstrap path must be new."
+}
+py -3.12 -m venv $womBootstrapRoot
+$womBootstrapPython = (Get-Item -LiteralPath (Join-Path $womBootstrapRoot "Scripts\python.exe")).FullName
+& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.15/wom_kit-0.4.15-py3-none-any.whl"
+& "$womBootstrapRoot\Scripts\archive.exe" --version
+```
+
+새 프로세스에서 정확히 `archive 0.4.15`인지 확인합니다. 이전에 승인한 project
+update가 강제 중단됐다면 다른 project writer를 계속 멈춘 채 정확한
+bootstrap에서 재개합니다.
+
+```powershell
+& "$womBootstrapRoot\Scripts\archive.exe" project-version-update <project-or-archive-root> `
+  --resume `
+  --affirm-external-writers-quiescent `
+  --progress `
+  --format json
+```
+
+일반 resume에는 호출자가 넣는 `--target`, `--transaction-ref`,
+`--approval-id`, `--reviewed-by`가 필요하지 않습니다. WOM이 live lock과 인증된
+sealed plan에서 그 결속을 복원하고 checkpoint-valid한 claim 하나만 인정하며,
+두 번째 native 결정을 열지 않습니다. lock을 지우거나 pin을 손으로 고치지
+마세요. 성공 뒤 새 project launcher 프로세스에서 정합을 확인한 다음에 승인된
+zet 초안이나 다른 일반 write를 실행합니다.
+
+v0.4.15 복구 범위는 live `version-update.lock` 또는 원본 transaction
+directory가 남아 있는 exact lockless unlock tail까지입니다. 최초 미지원 경계는
+`completed` 뒤 원본 transaction directory의 terminal cleanup tombstone rename이
+성공한 시점입니다. tombstone이나 cleanup proof는 인증된 outcome 또는 cleanup
+authority가 아닙니다. WOM은 `terminal_cleanup_outcome_unknown`을 nonzero로
+보고할 뿐 success·failure·cancellation을 추론하거나 자동 retry·삭제하지
+않습니다. 완전한 authenticated terminal handoff와 terminal cleanup outcome
+reconstruction은 v0.4.16 후속 작업입니다.
+
+복구가 필요한 동안에는 exact-approved create-only operator feedback body만
+추가할 수 있습니다. 기존 feedback의 revise·supersede, metadata, resolved 또는
+delivered 상태, 다른 모든 writer는 계속 차단되며 `version-update.lock` byte도
+바뀌지 않습니다. v0.4.15는 공개 archive format migration을 요구하지 않습니다.
+[v0.4.15 릴리스 노트](wom-kit/docs/releases/v0.4.15.md)를 보세요.
+
 ## v0.4.14 참조를 보존하는 로컬 복구와 이해하기 쉬운 승인
 
 일치하는 공개 릴리스와 자산이 실제로 존재한 뒤에만 정확한 wheel을 설치합니다.
