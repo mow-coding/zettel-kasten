@@ -595,14 +595,12 @@ def _read_bound_claim_bytes(
         close_handle(handle)
 
 
-def _read_claim(
+def _read_claim_bytes(
     path: Path,
     *,
-    archive_id: str,
-    key: bytes | bytearray,
     bound_archive_root: Path | None = None,
     claim_parent_binding: dict[str, Any] | None = None,
-) -> dict[str, Any]:
+) -> bytes:
     try:
         if (
             bound_archive_root is not None
@@ -632,6 +630,22 @@ def _read_claim(
         raise _fail("exact_human_approval_claim_document_invalid") from None
     if len(raw) > _MAX_CLAIM_BYTES:
         raise _fail("exact_human_approval_claim_document_invalid")
+    return raw
+
+
+def _read_claim(
+    path: Path,
+    *,
+    archive_id: str,
+    key: bytes | bytearray,
+    bound_archive_root: Path | None = None,
+    claim_parent_binding: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    raw = _read_claim_bytes(
+        path,
+        bound_archive_root=bound_archive_root,
+        claim_parent_binding=claim_parent_binding,
+    )
     try:
         parsed = json.loads(raw.decode("utf-8"))
     except (UnicodeError, json.JSONDecodeError):
@@ -640,6 +654,80 @@ def _read_claim(
     if not hmac.compare_digest(raw, _canonical_bytes(document)):
         raise _fail("exact_human_approval_claim_document_invalid")
     return document
+
+
+def _authenticated_claim_routing_core(
+    archive_root: Path | str,
+    approval_id: str,
+    receipt_authentication_key: bytes | bytearray | memoryview,
+    *,
+    bound_archive_root: Path | None = None,
+    claim_parent_binding: dict[str, Any] | None = None,
+) -> tuple[str, str]:
+    """Authenticate only the context digest and status used for routing."""
+
+    root, archive_id = _archive_identity(archive_root)
+    if (
+        type(approval_id) is not str
+        or _APPROVAL_ID_RE.fullmatch(approval_id) is None
+    ):
+        raise _fail("exact_human_approval_binding_mismatch")
+    key = _validated_key(receipt_authentication_key)
+    try:
+        if bound_archive_root is not None and claim_parent_binding is not None:
+            claims_root = root.joinpath(*Path(CLAIMS_RELATIVE_ROOT).parts)
+            if (
+                root != bound_archive_root
+                or claim_parent_binding.get("path") != claims_root
+            ):
+                raise _fail("exact_human_approval_claim_path_unsafe")
+        elif bound_archive_root is not None or claim_parent_binding is not None:
+            raise _fail("exact_human_approval_claim_path_unsafe")
+        else:
+            claims_root = _claims_root(root, create=False)
+        raw = _read_claim_bytes(
+            claims_root / f"{approval_id}.json",
+            bound_archive_root=bound_archive_root,
+            claim_parent_binding=claim_parent_binding,
+        )
+        try:
+            parsed = json.loads(raw.decode("utf-8"))
+        except (UnicodeError, json.JSONDecodeError):
+            raise _fail(
+                "exact_human_approval_claim_authentication_invalid"
+            ) from None
+        if not isinstance(parsed, Mapping) or not hmac.compare_digest(
+            raw,
+            _canonical_bytes(parsed),
+        ):
+            raise _fail("exact_human_approval_claim_authentication_invalid")
+        authentication = parsed.get("authentication")
+        if not isinstance(authentication, Mapping) or authentication != {
+            "schema_version": AUTHENTICATION_SCHEMA_VERSION,
+            "algorithm": "hmac-sha256",
+            "mac": authentication.get("mac"),
+        }:
+            raise _fail("exact_human_approval_claim_authentication_invalid")
+        mac = authentication.get("mac")
+        if type(mac) is not str or not hmac.compare_digest(
+            mac,
+            _claim_mac(parsed, key),
+        ):
+            raise _fail("exact_human_approval_claim_authentication_invalid")
+        context_sha256 = parsed.get("context_sha256")
+        status = parsed.get("status")
+        if (
+            parsed.get("approval_id") != approval_id
+            or parsed.get("archive_id") != archive_id
+            or type(context_sha256) is not str
+            or _SHA256_RE.fullmatch(context_sha256) is None
+            or status not in {"started", "succeeded", "failed"}
+        ):
+            raise _fail("exact_human_approval_claim_document_invalid")
+        return context_sha256, status
+    finally:
+        for index in range(len(key)):
+            key[index] = 0
 
 
 def _exact_public_reference_is_valid(reference: Any) -> bool:

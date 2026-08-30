@@ -105,7 +105,7 @@ def patch_zip_member_name_bytes(wheel: Path, old_name: str, new_name: str) -> No
 
 
 class InstalledEntrypointTests(unittest.TestCase):
-    PACKAGE_VERSION = "0.4.14"
+    PACKAGE_VERSION = "0.4.15"
     SERVER_NAME = "zettel-kasten-archive-mcp"
 
     def setUp(self) -> None:
@@ -201,6 +201,43 @@ class InstalledEntrypointTests(unittest.TestCase):
         isolated_command = run_mock.call_args_list[1].args[0]
         self.assertEqual(isolated_command[:3], [str(python), "-I", "-c"])
         self.assertTrue(run_mock.call_args_list[1].kwargs["parse_json"])
+
+    def test_installed_wheel_direct_url_retains_exact_pip_hash(self) -> None:
+        python = self.scripts / "python.exe"
+        wheel = self.temp_root / "wom_kit-0.4.15-py3-none-any.whl"
+        wheel.write_bytes(b"synthetic exact wheel bytes")
+        expected_sha256 = hashlib.sha256(wheel.read_bytes()).hexdigest()
+        with mock.patch.object(
+            check_wheel_install,
+            "run",
+            return_value={"hash_matches": True, "hash_recorded": True},
+        ) as run_mock:
+            check_wheel_install._check_installed_wheel_direct_url_hash(
+                python,
+                wheel,
+                cwd=self.temp_root,
+            )
+
+        command = run_mock.call_args.args[0]
+        self.assertEqual(command[:3], [str(python), "-I", "-c"])
+        self.assertEqual(command[-1], expected_sha256)
+        self.assertTrue(run_mock.call_args.kwargs["parse_json"])
+
+    def test_installed_wheel_direct_url_missing_hash_fails_closed(self) -> None:
+        python = self.scripts / "python.exe"
+        wheel = self.temp_root / "wom_kit-0.4.15-py3-none-any.whl"
+        wheel.write_bytes(b"synthetic exact wheel bytes")
+        with mock.patch.object(
+            check_wheel_install,
+            "run",
+            return_value={"hash_matches": False, "hash_recorded": False},
+        ):
+            with self.assertRaises(check_wheel_install.WheelCheckError):
+                check_wheel_install._check_installed_wheel_direct_url_hash(
+                    python,
+                    wheel,
+                    cwd=self.temp_root,
+                )
 
     def test_installed_unicode_runtime_mismatch_fails_closed(self) -> None:
         python = self.scripts / "python.exe"

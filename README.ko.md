@@ -32,10 +32,10 @@ wom-kit/docs/releases/에만 쌓고, baseline 사다리와 tag 목록을 여기�
 현재 공개 기준:
 
 ```text
-v0.4.14
+v0.4.15
 ```
 
-이전 공개 기준: v0.4.13.
+이전 공개 기준: v0.4.14.
 
 전체 릴리스 이력은 [CHANGELOG.md](CHANGELOG.md)와 [wom-kit/docs/releases/](wom-kit/docs/releases/)를 보세요.
 
@@ -54,14 +54,26 @@ Roadmap 요약: `v0.1.x`는 아이디어/프로토콜 언어 라인, `v0.2.x`는
 파일이 실제 공개되었다는 증거가 되지는 않습니다.
 
 ```powershell
-uv tool install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.14/wom_kit-0.4.14-py3-none-any.whl"
-archive --version
+$womBootstrapNonce = [guid]::NewGuid().ToString("N")
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0415-$womBootstrapNonce"
+if (Test-Path -LiteralPath $womBootstrapRoot) {
+  throw "WOM bootstrap path must be new."
+}
+py -3.12 -m venv $womBootstrapRoot
+$womBootstrapPython = (Get-Item -LiteralPath (Join-Path $womBootstrapRoot "Scripts\python.exe")).FullName
+& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.15/wom_kit-0.4.15-py3-none-any.whl"
+& "$womBootstrapRoot\Scripts\archive.exe" --version
 ```
 
 WOM-kit은 아직 PyPI에 공개하지 않았으므로 `pip install wom-kit`은 공식 설치
-명령이 아닙니다. 일반 `pip`는 전용 가상환경에서 정확한 릴리스 파일을 지정할
-때만 지원합니다. Python 도구 설치만으로 보관함을 열거나 바꾸지 않으며, AI
+명령이 아닙니다. 지원되는 project updater bootstrap은 외부 CPython 3.12 전용
+가상환경과 그 실제 `python.exe -m pip`로 exact release wheel을 설치합니다.
+wheel hash가 설치 metadata에 없는 사용자 범위 `uv tool` 환경은 updater 공급
+근거가 아닙니다. Python 도구 설치만으로 보관함을 열거나 바꾸지 않으며, AI
 호스트 설정도 조용히 수정하지 않습니다.
+
+공용 PATH에서 실행한 `archive --version`은 로컬 방향 확인에는 쓸 수 있지만,
+그 출력만으로 v0.4.15 project updater bootstrap의 공급 근거가 되지는 않습니다.
 
 릴리스 파일에는 `wom-archive` Agent Skill도 들어 있습니다. 현재 Codex
 사용자에게 활성화하기 전, 먼저 쓰기 없는 미리보기를 확인합니다.
@@ -91,6 +103,7 @@ archive runtime-skill-install --dry-run --format json
 - v0.4.6은 기존 채택 명령 계열 안에 exact·resume 가능한 R2 복구를 추가합니다. local-only 바이트는 정식 채택으로 속이지 않고 content-addressed 사본과 독립 재해시로 보존하며, 검증된 비충돌 key-map 항목은 중앙 manifest를 마지막에 한 번만 투영하고 충돌은 명시적 검토 부채로 남깁니다. [v0.4.6 릴리스 노트](wom-kit/docs/releases/v0.4.6.md)를 보세요.
 - v0.4.13은 local object-storage setup 근거를 exact-first·privacy-safe하게 검증하고, single·multipart 긴급 보존을 원격 발행 시점의 create-only 작업으로 만듭니다. 새 바이트와 이미 있던 일치 바이트는 HEAD와 전체 GET 재해시를 통과해야 하며, 확인된 충돌은 덮어쓰지 않는 검토 근거가 되고 불확실한 상태는 resume 대상으로 남습니다. 보존은 정식 채택을 뜻하지 않으며 공개나 설치만으로 client/provider 작업은 실행되지 않습니다. [v0.4.13 릴리스 노트](wom-kit/docs/releases/v0.4.13.md)를 보세요.
 - v0.4.14는 과거 본문 전체를 되돌리는 대신 검증된 현재 참조를 보존하면서 locator 손실을 분류합니다. 일부만 증명된 경우 남은 항목을 검토 부채로 남기고, 비공개 분류 원장 하나를 native 승인·checkpoint·resume·검증·revert에 결속합니다. 승인창의 대상 단서는 정확한 현재 바이트에서만 로컬로 표시되며 plan·receipt에는 들어가지 않습니다. 완전한 사람용 문서 보기는 정본을 바꾸지 않고 범위 물결표와 불완전 강조 표시를 보호합니다. 설치만으로 client archive는 바뀌지 않습니다. [v0.4.14 릴리스 노트](wom-kit/docs/releases/v0.4.14.md)를 보세요.
+- v0.4.15는 live `version-update.lock` 또는 원본 transaction directory가 남아 있는 exact lockless unlock tail에서 사람이 target·transaction·reviewer·approval·파일 identifier를 찾지 않아도 막힌 project update를 복구하게 합니다. WOM은 정확한 문맥을 복원하고 checkpoint-valid한 claim 하나만 인정하며 두 번째 native 결정을 열지 않습니다. 최초 미지원 경계는 `completed` 뒤 원본 transaction directory의 terminal cleanup tombstone rename이 성공한 시점입니다. tombstone이나 cleanup proof는 인증된 outcome 또는 cleanup authority가 아닙니다. WOM은 `terminal_cleanup_outcome_unknown`을 nonzero로 보고할 뿐 success·failure·cancellation을 추론하거나 자동 retry·삭제하지 않습니다. 완전한 authenticated terminal handoff와 terminal cleanup outcome reconstruction은 v0.4.16 후속 작업입니다. 복구가 필요한 동안에는 create-only operator feedback body만 추가할 수 있고, 개정·lifecycle metadata·delivery·일반 archive writer는 계속 차단되며 update lock도 바뀌지 않습니다. updater bootstrap은 외부 CPython 3.12 환경과 그 정확한 `python.exe -m pip`를 요구합니다. [v0.4.15 릴리스 노트](wom-kit/docs/releases/v0.4.15.md)를 보세요.
 - Letter 117까지의 통합 실사용 피드백 기능. archive-root 경로, source-intake/Objet capture 배치, 구조화된 zet-objet 연결, 빠짐없는 1-based occurrence 검토 권한, 정확한 synced/transclusion placeholder를 위한 검토된 정적 zettel/objet 연결, 엄격한 빈 database 쌍을 위한 검토된 zettel 탐색 연결, 보호된 literal 강화, graph edge를 추론하지 않는 탐색 전용 zettel reference, 정확한 generated-TOC placeholder 제거, paired file과 검토된 page/audio 연결을 포함한 ready-only 손실 없는 마크업 정규화, callout·unknown column·unsupported 구조를 그대로 차단하는 안전 경계를 제공합니다. transcluded child를 재구성하거나 live provider 동작을 보존한다고 주장하지 않습니다. [Letter 117 완료 가이드](wom-kit/docs/letter117-completion.md)를 보세요.
 - 격리된 spawned child의 native Windows credential intake와 과거 v0.3.320 Notion recovery 근거는 유지합니다. 1회 capability, 비밀값 read 전 인증 claim, endpoint·scope·budget 검사, 내용 없는 세 근거는 계속 감사할 수 있습니다. v0.4.0의 Notion recovery 승인은 credential read·provider call·archive 변경 전에 `compound_exact_human_approval_binding_required`로 닫히며, read-only plan과 검증된 local replay만 남습니다. PAT를 명령 인자·일반 stdin·환경 변수·합성 검증 도구로 받지 않습니다. [Letter 118·119 가이드](wom-kit/docs/letter118-119-credential-continuity-and-notion-page-recovery.md)와 [Credential Capability Contract](wom-kit/docs/credential-capability-contract.md)를 보세요.
 - 보호된 search, 구조화된 `view-zets`, mint 계획이 하나의 fail-closed current-index 권한을 공유합니다. `mint-zet --progress`는 stdout을 최종 결과 하나에만 쓰면서 내용 없는 시작·heartbeat 근거를 stderr로 보내고, 별도의 operator-feedback 본문 companion은 외부 제출이나 실제 보관함 복구를 주장하지 않은 채 정확한 6개 섹션 비공개 요청, digest-bound 사람 승인, lifecycle 검사를 제공합니다. [Letter 120·123 가이드](wom-kit/docs/letter120-123-index-lifecycle-and-feedback-body.md)를 보세요.
@@ -110,7 +123,7 @@ archive runtime-skill-install --dry-run --format json
   실패 경계는 호출자 값을 오류 `message`/`data`에 넣지 않고,
   유효한 JSON-RPC request id는 응답 연결을 위한 최상위 `id` 필드에만
   유지합니다.
-- 깨끗한 환경에서 온보딩과 엄격한 검진에 필요한 runtime 스키마·템플릿·기본 규칙·릴리스 신원 문서를 정확한 GitHub 릴리스 파일 하나에 담은 v0.3.242 자체 완결 Python wheel. 격리된 `uv tool install`을 권장하고 전용 `pip` 가상환경도 지원하지만 PyPI 공개는 아직 미래 작업으로 명시합니다.
+- 깨끗한 환경에서 온보딩과 엄격한 검진에 필요한 runtime 스키마·템플릿·기본 규칙·릴리스 신원 문서를 정확한 GitHub 릴리스 파일 하나에 담은 자체 완결 Python wheel. 현재 updater-capable bootstrap은 외부 CPython 3.12 전용 `pip` 가상환경을 사용하며, PyPI 공개는 아직 미래 작업으로 명시합니다.
 - doctor, draft, mint, delegate, receipt, search, metadata review 같은 private archive lifecycle 도구. draft 생성은 forward-only draft-id 위생을 갖춰 제목이 없거나 한글뿐인 제목이 더 이상 오해를 주는 `_draft` id로 떨어지지 않고, draft 시점에 `--kind`를 검증해 경고와 함께 유효한 kind 목록을 보여줍니다. mint는 attributed `--affirm` 플래그로 두 human-review 체크리스트 항목을 raw YAML 편집 대신 검토자 귀속(attributed)·감사 가능한 CLI 행위로 충족합니다(mint receipt에 기록, `--reviewed-by` 없으면 무효, machine-enforced 항목은 절대 덮어쓰지 않음).
 - read-only `archive remint-reconcile --dry-run`과 `archive retire-draft-reconcile --dry-run`은 엄격한 `format_drift` / `content_change` 분류, 전체 필드 검사, 내용 없는 `body_diff_diagnostic`, `human_review_plan`, `review_plan_sha256`, `--strip-bom` 미리보기, `--diagnostic-only` 점검을 유지합니다. v0.4.0의 승인 경로는 비공개 target을 읽거나 변경하기 전에 `compound_exact_human_approval_binding_required`로 닫히며 receipt·canonical byte·audit receipt를 쓰지 않습니다. 과거 v0.3.162-v0.3.230 근거는 계속 읽을 수 있습니다.
 - reconcile approve 결과는 이제 `status: reconcile_applied`와 doctor 재검증 next-action을 보여줍니다. 즉 승인 적용이 끝난 JSON/text 출력에 이전 dry-run의 "검토 필요" 상태가 그대로 남지 않습니다.
@@ -420,7 +433,7 @@ WOM, `zettel-kasten`, `zet`, `ZET`는 버전이 있는 protocol family로 관리
 Release tag는 compatibility checkpoint입니다.
 
 ```text
-v0.4.14 (현재 checkpoint)
+v0.4.15 (현재 checkpoint)
 ```
 
 `v0.2.5` 이후의 공개 릴리스에는 compatibility checkpoint tag가 붙습니다. 전체
