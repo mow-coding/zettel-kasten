@@ -30,6 +30,7 @@ VERSION_RE = re.compile(r'^__version__\s*=\s*["\']([^"\']+)["\']', re.MULTILINE)
 MANIFEST_REPLACE_ATTEMPTS = 8
 MANIFEST_REPLACE_BACKOFF_SECONDS = 0.01
 _WINDOWS_TRANSIENT_REPLACE_ERRORS = {5, 32, 33, 1224}
+_IS_WINDOWS = os.name == "nt"
 
 
 def sha256_bytes(data: bytes) -> str:
@@ -115,7 +116,7 @@ def write_manifest_atomic(manifest: dict[str, object]) -> None:
     temporary_path = Path(temporary_name)
     descriptor_owned = True
     try:
-        if os.name != "nt":
+        if not _IS_WINDOWS:
             os.fchmod(descriptor, 0o644)
         try:
             handle = os.fdopen(descriptor, "wb")
@@ -134,7 +135,7 @@ def write_manifest_atomic(manifest: dict[str, object]) -> None:
                 break
             except OSError as error:
                 transient_windows_error = bool(
-                    os.name == "nt"
+                    _IS_WINDOWS
                     and (
                         isinstance(error, PermissionError)
                         or getattr(error, "winerror", None)

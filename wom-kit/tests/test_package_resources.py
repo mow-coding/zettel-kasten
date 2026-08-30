@@ -152,7 +152,7 @@ class PackageResourceTests(unittest.TestCase):
             with (
                 patch.object(sync_tool, "DESTINATION_ROOT", root),
                 patch.object(sync_tool, "MANIFEST_PATH", manifest_path),
-                patch.object(sync_tool.os, "name", "nt"),
+                patch.object(sync_tool, "_IS_WINDOWS", True),
                 patch.object(
                     sync_tool.os,
                     "replace",
@@ -177,7 +177,7 @@ class PackageResourceTests(unittest.TestCase):
             with (
                 patch.object(sync_tool, "DESTINATION_ROOT", root),
                 patch.object(sync_tool, "MANIFEST_PATH", manifest_path),
-                patch.object(sync_tool.os, "name", "nt"),
+                patch.object(sync_tool, "_IS_WINDOWS", True),
                 patch.object(
                     sync_tool.os,
                     "replace",
