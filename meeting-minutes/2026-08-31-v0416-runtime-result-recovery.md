@@ -392,8 +392,12 @@ regression test proves that neither the candidate nor its tail is echoed. The
 credential-blocking test and focused privacy tests pass, while a staged-snapshot
 privacy scan reports zero findings.
 
-The PR branch history will be replaced from the clean `origin/main` base so the
-alerted commit is no longer reachable from the branch. The historical alert
-will be resolved as `used_in_tests` only after the replacement branch and its
-fresh public scans are independently verified. Full CI must then start again
-from that new history before release work may resume.
+The PR branch history was replaced from the clean `origin/main` base. The clean
+release commit `e78d14b4` has the exact corrected implementation tree, while
+the alerted commit is no longer reachable from the PR head. Local and remote
+release readiness passed on the replacement history, including the new privacy
+rule.
+Alert #1 was then resolved as `used_in_tests` with a content-free remediation
+comment; the repository has zero open secret-scanning alerts and no bypass
+record. Full CI restarted from the clean history, and merge remains blocked
+until that entire matrix succeeds.
