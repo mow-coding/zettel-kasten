@@ -42,6 +42,7 @@ class StagedCleanupOperationControlTests(unittest.TestCase):
                 "run_id": journal.run_id,
                 "command": journal.command,
                 "exit_code": exit_code,
+                "result_available": True,
             },
             "cli_output_artifact": {
                 "command": journal.command,

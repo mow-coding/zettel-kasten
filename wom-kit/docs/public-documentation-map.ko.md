@@ -2,30 +2,36 @@
 
 상태: 공개 navigation baseline
 날짜: 2026-05-27
-갱신: 2026-08-30
+갱신: 2026-08-31
 철학 갱신: 2026-07-15
 하네스 호환 경계 갱신: 2026-07-16
 
-현재 v0.4.15 변경점: 중단된 project update는 live lock과 인증된 sealed plan에서
-target·transaction·reviewer·approval 문맥을 복원합니다. 호출자가 identifier를
-공급하거나 두 번째 native 결정을 할 필요가 없습니다. claim이 하나도 없는 경우는
-durable state가 정확히 untouched preapproval임을 증명할 때만 scaffold를 취소하고
-새 승인을 요구합니다. 이미 승인됐거나 판정할 수 없는 transaction의 zero claim,
-여러 후보, 위조 근거, drift는 안전하게 중단합니다. `version-update.lock`이 남은 동안에는
-exact-approved create-only operator feedback body만 추가할 수 있고, revise,
-supersede, feedback metadata, resolved/delivered 상태, 일반 writer는 계속
-차단됩니다. updater-capable bootstrap은 외부 CPython 3.12 환경과 그 실제
-`python.exe -m pip`를 사용하며 wheel hash를 기록하지 않은 사용자 범위 도구는
-공급 근거가 아닙니다.
+현재 v0.4.16 변경점: 인증된 project-update 성공 결과를 cleanup 전에 비공개
+durable terminal handoff로 보존합니다. 결과는 claim·checkpoint·lock 검증과
+transaction cleanup·service-resource close·Git-runner close·durable output
+handoff·attention 상태를 각각 구분합니다. 불변 terminal journal이 정확한 output을
+결속하고 `active`는 `display-pending`, 표시 뒤에는 hash 이름의 `consumed` 이력이
+됩니다. identifier 없는 `--resume`은 domain writer를 다시 실행하지 않고 동일
+output을 재사용하며, 중단 위치에 따라 같은 결과를 다시 표시할 수 있습니다.
+acknowledgement는 사람이나 AI가 stdout을 실제로 봤다는 증거가 아닙니다. 완전한
+legacy cleanup tombstone만 exact 검증 뒤 복구하고 proof-only 상태는 과거 성공을
+주장하지 않으며 일부·malformed residue는 fail-closed합니다. 새 승인 또는 아직
+output이 결속되지 않은 resume update는 output 생략 시 비공개 project-scoped
+경로를 자동으로 만듭니다.
 
-v0.4.15 복구 범위는 live `version-update.lock` 또는 원본 transaction
-directory가 남아 있는 exact lockless unlock tail까지입니다. 최초 미지원 경계는
-`completed` 뒤 원본 transaction directory의 terminal cleanup tombstone rename이
-성공한 시점입니다. tombstone이나 cleanup proof는 인증된 outcome 또는 cleanup
-authority가 아닙니다. WOM은 `terminal_cleanup_outcome_unknown`을 nonzero로
-보고할 뿐 success·failure·cancellation을 추론하거나 자동 retry·삭제하지
-않습니다. 완전한 authenticated terminal handoff와 terminal cleanup outcome
-reconstruction은 v0.4.16 후속 작업입니다.
+표준 `python -m wom_kit.archive_cli` runtime binding은 `archive_cli`,
+`project_runtime`, `package_origin`을 예상 receipt byte와 대조하고,
+`core_module_bindings`는 절대 경로·해시를 내보내지 않습니다. exact-approved
+create-only feedback lane은 update recovery와 runtime mismatch를 모두 다루지만
+개정·lifecycle·delivery·resolution·runtime·pin·다른 writer 권한은 주지 않습니다.
+product 정의와 placeholder는 단어만으로 secret 오탐되지 않되 실제 credential
+shape는 계속 fail-closed이며 값은 echo하지 않습니다. `input_privacy_check`는 caller
+input·body safety read를 source first-read provenance와 따로 보고합니다. 공개·설치만으로
+client archive는 바뀌지 않으며 project update는 client가 별도로 선택합니다.
+
+과거 v0.4.15 변경점: live lock과 exact lockless tail에서 호출자 identifier나 두 번째
+native 결정 없이 인증된 승인 update를 복구했습니다. untouched preapproval zero claim은
+안전하게 취소하고 새 승인을 요구했으며 모호하거나 drift된 state는 닫혔습니다.
 
 과거 v0.4.14 변경점: 과거 locator 복구는 정확한 정규화와 검토된 binding 근거를
 재생하여 검증된 현재 참조를 그대로 보존합니다. 일부만 증명된 근거는 명시적인

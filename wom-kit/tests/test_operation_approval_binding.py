@@ -403,6 +403,9 @@ class OperationApprovalBindingTests(unittest.TestCase):
             "inventory_count": 4321,
             "inventory_bytes": 12_345_678,
             "receipt_sha256": "sha256:" + "b" * 64,
+            "runtime_receipt_schema": (
+                "wom-kit/project-runtime-receipt/v0.1"
+            ),
             "wheel_file_name": "wom_kit-0.4.3-py3-none-any.whl",
             "wheel_sha256": wheel_sha256,
             "supply_lock_sha256": supply_lock_sha256,
@@ -423,6 +426,12 @@ class OperationApprovalBindingTests(unittest.TestCase):
                 "live_process": True,
             },
             "existing_runtime_reusable": False,
+            "existing_runtime_repair_required": False,
+            "existing_runtime_preimage_sha256": None,
+            "existing_runtime_preimage_count": 0,
+            "existing_runtime_preimage_bytes": 0,
+            "repair_preimage_exactly_bound": False,
+            "will_preserve_during_active_transaction": False,
             "complete_runtime_image": True,
             "network_complete": True,
             "toolchain_complete": True,
@@ -623,6 +632,99 @@ class OperationApprovalBindingTests(unittest.TestCase):
             "project_runtime_prepared_bundle",
             first.review_binding_codes,
         )
+
+        empty_repair = copy.deepcopy(plan)
+        for runtime_candidate in (
+            empty_repair["approval_preparation"]["runtime_candidate"],
+            empty_repair["project_runtime"]["runtime_candidate"],
+        ):
+            runtime_candidate.update(
+                {
+                    "existing_runtime_reusable": False,
+                    "existing_runtime_repair_required": True,
+                    "existing_runtime_preimage_sha256": (
+                        "sha256:" + "e" * 64
+                    ),
+                    "existing_runtime_preimage_count": 0,
+                    "existing_runtime_preimage_bytes": 0,
+                    "runtime_receipt_schema": (
+                        "wom-kit/project-runtime-receipt/v0.2"
+                    ),
+                    "repair_preimage_exactly_bound": True,
+                    "will_preserve_during_active_transaction": True,
+                }
+            )
+        empty_repair["approval_preparation"]["static_receipt"][
+            "schema"
+        ] = "wom-kit/project-version-update-receipt/v0.4"
+        empty_repair_binding = project_version_update_approval_binding(
+            empty_repair
+        )
+        self.assertNotEqual(
+            first.plan_sha256,
+            empty_repair_binding.plan_sha256,
+        )
+
+        ordinary_with_repair_receipt = copy.deepcopy(plan)
+        ordinary_with_repair_receipt["approval_preparation"][
+            "static_receipt"
+        ]["schema"] = "wom-kit/project-version-update-receipt/v0.4"
+        with self.assertRaises(OperationApprovalBindingError):
+            project_version_update_approval_binding(
+                ordinary_with_repair_receipt
+            )
+
+        repair_with_ordinary_receipt = copy.deepcopy(empty_repair)
+        repair_with_ordinary_receipt["approval_preparation"][
+            "static_receipt"
+        ]["schema"] = "wom-kit/project-version-update-receipt/v0.3"
+        with self.assertRaises(OperationApprovalBindingError):
+            project_version_update_approval_binding(
+                repair_with_ordinary_receipt
+            )
+
+        repair_with_ordinary_runtime_receipt = copy.deepcopy(empty_repair)
+        for runtime_candidate in (
+            repair_with_ordinary_runtime_receipt["approval_preparation"][
+                "runtime_candidate"
+            ],
+            repair_with_ordinary_runtime_receipt["project_runtime"][
+                "runtime_candidate"
+            ],
+        ):
+            runtime_candidate["runtime_receipt_schema"] = (
+                "wom-kit/project-runtime-receipt/v0.1"
+            )
+        with self.assertRaises(OperationApprovalBindingError):
+            project_version_update_approval_binding(
+                repair_with_ordinary_runtime_receipt
+            )
+
+        ordinary_with_repair_runtime_receipt = copy.deepcopy(plan)
+        for runtime_candidate in (
+            ordinary_with_repair_runtime_receipt["approval_preparation"][
+                "runtime_candidate"
+            ],
+            ordinary_with_repair_runtime_receipt["project_runtime"][
+                "runtime_candidate"
+            ],
+        ):
+            runtime_candidate["runtime_receipt_schema"] = (
+                "wom-kit/project-runtime-receipt/v0.2"
+            )
+        with self.assertRaises(OperationApprovalBindingError):
+            project_version_update_approval_binding(
+                ordinary_with_repair_runtime_receipt
+            )
+
+        impossible_repair = copy.deepcopy(empty_repair)
+        for runtime_candidate in (
+            impossible_repair["approval_preparation"]["runtime_candidate"],
+            impossible_repair["project_runtime"]["runtime_candidate"],
+        ):
+            runtime_candidate["existing_runtime_reusable"] = True
+        with self.assertRaises(OperationApprovalBindingError):
+            project_version_update_approval_binding(impossible_repair)
 
         preparation = plan["approval_preparation"]
         for key in tuple(preparation):

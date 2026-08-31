@@ -24,6 +24,61 @@ Before upgrading a real archive:
 
 The archive should never silently rewrite memory.
 
+## v0.4.16 Durable Project Update Result Delivery
+
+Install the exact public wheel only after the matching release and asset exist.
+Use a new external CPython 3.12 environment so the real `python.exe -m pip`
+records the wheel hash in installed PEP 610 metadata.
+
+```powershell
+$womBootstrapNonce = [guid]::NewGuid().ToString("N")
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0416-$womBootstrapNonce"
+if (Test-Path -LiteralPath $womBootstrapRoot) {
+  throw "WOM bootstrap path must be new."
+}
+py -3.12 -m venv $womBootstrapRoot
+$womBootstrapPython = (Get-Item -LiteralPath (Join-Path $womBootstrapRoot "Scripts\python.exe")).FullName
+& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.16/wom_kit-0.4.16-py3-none-any.whl"
+& "$womBootstrapRoot\Scripts\archive.exe" --version
+```
+
+Require exactly `archive 0.4.16` from a new process. Publishing or installing
+the wheel changes no client archive, project runtime, or version pin. A client
+separately chooses and approves any project update.
+
+Approved project-update mutation, same-version repair, and mutation-bearing
+resume remain Windows-only. POSIX supports preview and read-only inspection;
+those mutation paths fail closed without writing.
+
+For an interrupted approved update, keep other project writers stopped and use
+the identifier-free resume path:
+
+```powershell
+& "$womBootstrapRoot\Scripts\archive.exe" project-version-update <project-or-archive-root> `
+  --resume `
+  --affirm-external-writers-quiescent `
+  --progress `
+  --format json
+```
+
+Approved and resumed updates create a private project-scoped output when
+`--output` is omitted before binding. Once terminal delivery is pending, do not
+supply another output: preserve the exact bound output and run identifier-free
+`--resume`. WOM verifies the immutable terminal journal and moves the same
+handoff through `active`, `display-pending`, and hash-named `consumed` states.
+It may print the identical result again after a crash, but never reruns the
+domain writer. A consumed capsule is history, not a replay candidate, and
+delivery acknowledgement does not prove that a person or model saw stdout.
+
+One complete legacy cleanup tombstone is recoverable only after exact
+validation. Proof-only state returns `no_resumable_project_update`, attributes
+no past success, and requires a fresh preview and approval for a new update.
+Partial, malformed, mixed, or unsafe residue remains
+`terminal_cleanup_outcome_unknown`; do not delete or hand-edit it. The returned
+`terminal_finalization` object distinguishes authenticated update truth from
+transaction cleanup, service close, Git-runner close, and durable-result
+handoff truth. See the [v0.4.16 release note](wom-kit/docs/releases/v0.4.16.md).
+
 ## v0.4.15 Authenticated Project Update Recovery
 
 Install the exact public wheel only after the matching release and asset exist.

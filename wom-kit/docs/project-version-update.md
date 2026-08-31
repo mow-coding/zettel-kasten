@@ -1,6 +1,6 @@
 # Project Version Update
 
-Status: v0.4.15 exact-human project update with authenticated interruption resume; collision and bytecode repair writers remain closed
+Status: v0.4.16 exact-human project update with authenticated terminal-result delivery; collision and bytecode repair writers remain closed
 
 Current boundary: `project-version-update` is reopened only through the native
 exact-human approval broker. The CLI derives a content-free dry-run digest and
@@ -9,6 +9,33 @@ the preview again and authenticates the one-use claim before the existing
 locked updater may fetch or write. Direct unbound service calls fail before a
 private project read. Collision preserve-relocate and `project-bytecode-repair`
 approval remain fixed closed.
+
+## v0.4.16 Terminal Result Boundary
+
+After the exact one-use claim succeeds and the complete postimage is verified,
+WOM writes a private authenticated terminal handoff before transaction cleanup.
+The public result keeps approval and transaction locators private and reports
+claim, completed checkpoint, lock absence, cleanup, service-resource close,
+Git-runner close, durable output delivery, and attention state as separate
+facts. Cleanup proof is never used as success or retry authority.
+
+Approved and resumed updates receive a project-scoped
+`.zettel-kasten/diagnostics/*.json` output automatically when `--output` is
+omitted before a result is bound. The output wrapper, one immutable terminal
+journal record, and handoff bind one terminal delivery proof. The private
+handoff moves through `active`, `display-pending`, and hash-named `consumed`
+states without a later journal append. Once pending delivery exists, resume
+rejects a replacement `--output`, reauthenticates the exact succeeded claim and
+postimage, and reuses the exact bound output. A crash can cause the identical
+result to be displayed again; this at-least-once display never regenerates the
+result or reruns the domain writer. Consumed state is history, not a replay
+candidate. `durable_result_delivery_acknowledged` means the authenticated
+durable output handoff was verified, not that a person or model saw stdout.
+`domain_writer_reentry_allowed` and `automatic_retry_allowed` remain false.
+
+Publishing or installing v0.4.16 changes no client archive, source mirror,
+runtime, launcher, or version pin. The client separately chooses whether and
+when to approve a project update.
 
 ## Plain-Language Purpose
 
@@ -83,14 +110,23 @@ source; no duplicate active pin is introduced. The active pin is written only
 after the runtime and launcher pass verification. The user PATH, shared
 `archive.exe`, and other project folders are never modified.
 
-The v0.3 receipt binds the release tag and commit, policy and supply-lock
-SHA-256, complete artifact inventory, installed-payload digest, WOM wheel
-SHA-256, Python version, previous and new pin values, runtime receipt SHA-256,
-launcher state, and new-process checks. Failure restores values changed by this
-transaction and removes only transaction-owned runtime paths. The runtime-root
-child snapshot must return exactly to its pre-install state; otherwise rollback
-is incomplete and the update lock remains for review. The updater never deletes
-a previous runtime as part of activation.
+An ordinary activation keeps the compatible v0.3 project-update receipt and
+binds a v0.1 project-runtime receipt. A same-version invalid-runtime repair
+uses the repair-aware v0.4 project-update receipt and exactly binds its v0.2
+project-runtime receipt schema and SHA-256. Both receipt pairs bind the release
+tag and commit, policy and supply-lock SHA-256, complete artifact inventory,
+installed-payload digest, WOM wheel SHA-256, Python version, previous and new
+pin values, launcher state, and new-process checks. Crossed schema pairs fail
+closed. Before the exact-human durable handoff,
+the historical preparation path restores transaction-owned changes on a handled
+failure. After that handoff, a component failure preserves the lock, sealed
+transaction, verified new runtime, and exact private recovery preimage so the
+identifier-free public `--resume` path can continue from the next checkpoint.
+It does not silently enter the legacy rollback path. A healthy previous runtime
+is never deleted merely because another version is activated. The narrow
+same-version repair exception removes the invalid old runtime's private
+recovery preimage only after authenticated terminal commit and exact transaction
+cleanup.
 
 After success, ordinary project commands should start with:
 
@@ -159,15 +195,37 @@ fresh-process `archive version` check.
 
 ## Interrupted Update Recovery
 
-The v0.4.15 recovery guarantee is bounded to a live `version-update.lock` or
+Historically, the v0.4.15 recovery guarantee was bounded to a live
+`version-update.lock` or
 the exact lockless unlock tail while the original transaction directory still
 exists. Its first unsupported boundary is after `completed`, once the original
 transaction directory has been successfully renamed to a terminal cleanup
 tombstone. A tombstone or cleanup proof is not authenticated outcome or cleanup
 authority: v0.4.15 reports `terminal_cleanup_outcome_unknown` with a nonzero
 exit and does not infer success, failure, or cancellation, automatically retry,
-or delete that evidence. A full authenticated terminal handoff and terminal
-cleanup outcome reconstruction remain a v0.4.16 follow-up.
+or delete that evidence.
+
+v0.4.16 closes that historical terminal boundary without treating residue as
+authority. A current v0.4.16 update publishes an authenticated privacy-safe
+ready handoff bound to the succeeded claim, completed checkpoint, exact
+postimage, and cleanup authority before cleanup. One complete legacy v0.4.15
+cleanup tombstone can also be restored only when its canonical cleanup plan,
+complete file and directory set, terminal checkpoint, succeeded claim, current
+postimage, and claim-derived legacy cleanup authority all validate. Resume then
+publishes the v0.4.16 handoff before continuing exact cleanup; it never infers
+success from the tombstone name or cleanup plan alone.
+
+A canonical cleanup-proof-shaped file without the transaction and private
+claim evidence returns `no_resumable_project_update`,
+`past_update_success_attributed: false`, and
+`current_project_state_independently_verified: false`. That file is inert
+history: it does not mint a handoff or authorize cleanup/retry, but it no longer
+traps a separately previewed and freshly approved update. Partial, malformed,
+mixed, changing, ambiguous, or unsafe cleanup state remains
+`terminal_cleanup_outcome_unknown` and blocks both automatic resume and a fresh
+approval. If current authenticated cleanup is still incomplete, the public
+result keeps the verified update outcome as durable attention and leaves the
+active handoff available for exact resume.
 
 If the process stops after approval, `version-update.lock` remains and ordinary
 project writers stay blocked. That is intentional: source, versioned runtime,
@@ -213,9 +271,11 @@ needs to inspect or supply an internal identifier.
 A `started` claim continues only the remaining idempotent checkpoints. A
 `succeeded` claim skips the writer and runs only the separately guarded
 finalizer. WOM removes the update lock only after the source, runtime, launcher,
-pin, and receipt converge and independent verification succeeds. This does not
-extend the supported recovery boundary past terminal cleanup rename. Then start
-a new process through the project launcher:
+pin, and receipt converge and independent verification succeeds. In v0.4.16,
+the authenticated ready handoff also carries this result across the original
+transaction-to-cleanup rename and any bounded cleanup interruption without
+reentering a domain writer. Then start a new process through the project
+launcher:
 
 ```powershell
 .\.zettel-kasten\bin\archive.cmd version <project-or-archive-root> --format json
@@ -535,8 +595,8 @@ After verification, WOM-kit:
 10. rechecks checkpoint snapshots, writes any recognized mirror or legacy pin,
    and writes the canonical project pin last as the activation checkpoint;
 11. creates and immediately holds a missing `receipts/` parent and
-   `version-updates/` root one level at a time, validates the applicable v0.2
-   historical or v0.3 project-runtime receipt
+   `version-updates/` root one level at a time, validates the applicable v0.1
+   ordinary or v0.2 same-version-repair project-runtime receipt
    document, and creates one new receipt under
    `.zettel-kasten/receipts/version-updates/` with `O_EXCL`, never replacing an
    existing path; the receipt writer refuses to run unless that root is
@@ -567,12 +627,15 @@ The receipt is written last. It records commits, target, reviewer, changed pin
 roles, source materialization attempt/success/target-integrity evidence,
 configured-origin evidence, restart requirement, privacy guards, and
 `external_writer_quiescence: {affirmed: true, scope:
-complete_project_version_update_transaction}`. Historical updates retain
-`wom-kit/project-version-update-receipt/v0.2`; a runtime-policy target writes
-v0.3 with exact policy, dependency supply lock, retained artifact inventory,
-installed-payload digest, WOM wheel, runtime, launcher, Python, transition, and
-new-process evidence. The existing v0.1 schema remains available and compatible
-for old receipts. The receipt contains no local
+complete_project_version_update_transaction}`. Existing v0.1 and v0.2 update
+receipts remain readable. An ordinary runtime-policy update writes
+`wom-kit/project-version-update-receipt/v0.3` and exactly binds a v0.1
+project-runtime receipt. A same-version invalid-runtime repair writes the v0.4
+project-update receipt and exactly binds a v0.2 project-runtime receipt. Both
+current pairs bind exact policy, dependency supply lock, retained artifact
+inventory, installed-payload digest, WOM wheel, runtime, launcher, Python,
+transition, and new-process evidence; crossed pairs fail closed. The receipt
+contains no local
 absolute path, remote URL, raw Git error, or credential value.
 
 Repository attributes require LF bytes for the wrapper and packaged runtime
@@ -589,10 +652,22 @@ be detached at the exact target commit, every recognized pin must match, and
 the complete worktree/index/flag and synchronized runtime-resource integrity
 gates must pass.
 
-## Failure And Rollback
+## Failure, Durable Resume, And Rollback
 
-If anything fails or is interrupted after mutation starts, WOM-kit attempts to
-restore:
+The exact-human durable writer is checkpoint-forward. After its ownership
+handoff, a handled component failure or interruption keeps the owned lock,
+sealed transaction, completed component checkpoints, and any exact private
+recovery preimage. Run the identifier-free public `project-version-update
+--resume` path after the blocking condition is removed. It reauthenticates the
+started claim, skips verified writers, and continues from the first unverified
+component without opening another native approval decision. Only authenticated
+terminal commit removes the exact private recovery preimage during transaction
+cleanup. Cleanup uncertainty becomes durable finalization attention and does
+not erase the proven update result.
+
+The following automatic restoration list applies to the historical/pre-handoff
+path and to a separately authorized rollback path, not to a durable component
+failure after exact-human ownership has transferred:
 
 - the complete original tracked commit tree, exact original branch or detached
   `HEAD`, stage-zero index, modes, and any verified original EOL bytes;

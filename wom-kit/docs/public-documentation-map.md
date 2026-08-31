@@ -2,32 +2,40 @@
 
 Status: public navigation baseline
 Date: 2026-06-02
-Updated: 2026-08-30
+Updated: 2026-08-31
 Philosophy clarified: 2026-07-15
 Harness compatibility clarified: 2026-07-16
 
-Current v0.4.15 delta: an interrupted project update is resumable from its live
-lock and authenticated sealed plan without caller-supplied target, transaction,
-reviewer, approval, or file identifiers and without a second native decision.
-A zero-claim transaction cancels its scaffold only when durable state proves it
-is untouched preapproval, then requires a fresh approval. Zero claims for an
-approved or indeterminate transaction, multiple candidates, forged evidence,
-or drift fail closed. While `version-update.lock` remains, only exact-approved create-only operator feedback
-body preservation may append; revision, supersession, feedback metadata,
-resolved/delivered state, and every ordinary writer remain blocked. The
-updater-capable bootstrap is an external CPython 3.12 environment installed by
-its exact real `python.exe -m pip`; a user-scoped tool environment without a
-recorded wheel hash is not supply evidence.
+Current v0.4.16 delta: authenticated project-update success is preserved in a
+private durable terminal handoff before cleanup. The result separately reports
+claim/checkpoint/lock verification, transaction cleanup, service-resource close,
+Git-runner close, durable output handoff, and attention state. One immutable
+terminal journal binds the exact output while `active` becomes
+`display-pending`, then hash-named `consumed` history after display.
+Identifier-free `--resume` reuses that exact output and may display the
+identical result again without rerunning the domain writer. Delivery
+acknowledgement does not prove that a person or model saw stdout. A complete
+legacy cleanup tombstone is recoverable only after exact validation;
+proof-only state attributes no past success and partial or malformed residue
+remains fail-closed. A new approved or unbound resume update receives a private
+project-scoped output automatically when omitted.
 
-The v0.4.15 recovery guarantee is bounded to a live `version-update.lock` or
-the exact lockless unlock tail while the original transaction directory still
-exists. Its first unsupported boundary is after `completed`, once the original
-transaction directory has been successfully renamed to a terminal cleanup
-tombstone. A tombstone or cleanup proof is not authenticated outcome or cleanup
-authority: WOM reports `terminal_cleanup_outcome_unknown` with a nonzero exit
-and does not infer success, failure, or cancellation, automatically retry, or
-delete that evidence. A full authenticated terminal handoff and terminal
-cleanup outcome reconstruction remain a v0.4.16 follow-up.
+Canonical `python -m wom_kit.archive_cli` runtime binding verifies
+`archive_cli`, `project_runtime`, and `package_origin` against expected receipt
+bytes, while `core_module_bindings` exposes no absolute paths or hashes. The
+exact-approved create-only feedback lane covers both update recovery and runtime
+mismatch without granting revision, lifecycle, delivery, resolution, runtime,
+pin, or other writer authority. Product definitions and placeholders no longer
+trip secret detection by vocabulary alone, but concrete credential shapes stay
+fail-closed and non-echoing. `input_privacy_check` reports caller-input/body
+safety reads separately from source first-read provenance. Publishing or
+installing the release changes no client archive; the client separately chooses
+any reviewed project update.
+
+Historical v0.4.15 delta: live-lock and exact lockless-tail recovery restored an
+authenticated approved update without caller-supplied identifiers or a second
+native decision. Untouched preapproval zero-claim state cancelled safely and
+required a fresh approval; ambiguous or drifted state failed closed.
 
 Historical v0.4.14 delta: historical locator recovery replays exact normalization
 and reviewed binding evidence so current verified references remain intact.
