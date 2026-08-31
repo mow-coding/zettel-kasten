@@ -1,12 +1,30 @@
 # Exact Human Approval Contract
 
-Status: v0.4.15 authenticated project-update resume and create-only incident-report preservation; v0.4.0 one-use authority baseline preserved
+Status: v0.4.16 authenticated terminal-result delivery and create-only runtime-mismatch reporting; v0.4.0 one-use authority baseline preserved
 
 ## Purpose
 
 A caller-supplied actor label or command-line affirmation does not prove that a
 human reviewed exact archive changes. v0.4.0 therefore separates ordinary
 operator intent from one-use exact human approval.
+
+v0.4.16 does not create a second approval or broaden the approved domain
+effect. For project update, the exact succeeded claim signs a private terminal
+record before cleanup; later resume reauthenticates that record and the exact
+postimage before reusing the exact bound privacy-safe output, without reentering
+the domain writer. The terminal journal stays immutable while the handoff moves
+through `active`, `display-pending`, and hash-named `consumed`; display is
+identical at-least-once, consumed state is history, and delivery
+acknowledgement does not prove that a person or model saw stdout. One complete
+legacy cleanup tombstone is recoverable only after exact structure,
+checkpoint, claim, postimage, and cleanup-authority validation. Cleanup proof
+alone grants neither past-success attribution nor cleanup, retry, or handoff
+authority; proof-only state requires a fresh approval for a new update, while
+partial or malformed residue fails closed.
+For incident preservation, the existing exact-approved
+`operator-feedback-compose --intent create` lane may also run when project
+runtime alignment is the blocker, but still cannot revise, register lifecycle
+metadata, deliver, resolve, change runtime/pin state, or unlock another writer.
 
 The contract applies to the v0.4.0 high-impact writers whose exact bindings are
 implemented: AI-assisted draft creation, source-fidelity session-evidence

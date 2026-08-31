@@ -223,6 +223,51 @@ class TrustedProjectUpdateGitRunnerTests(unittest.TestCase):
             lambda: TrustedProjectUpdateGitRunner.reopen_private(binding),
         )
 
+    def test_failed_windows_close_retains_handle_authority_for_retry(
+        self,
+    ) -> None:
+        runner = object.__new__(TrustedProjectUpdateGitRunner)
+        runner._closed = False
+        runner._handle = 123
+        runner._windows_handle = True
+
+        with mock.patch(
+            "wom_kit.project_update_git_runner._close_windows_handle",
+            side_effect=[False, True],
+        ) as close_handle:
+            self.assert_code(
+                "project_update_git_runner_close_unverified",
+                runner.close,
+            )
+            self.assertFalse(runner._closed)
+            self.assertEqual(runner._handle, 123)
+            runner.close()
+
+        self.assertTrue(runner._closed)
+        self.assertEqual(runner._handle, -1)
+        self.assertEqual(close_handle.call_args_list, [mock.call(123), mock.call(123)])
+
+    def test_failed_posix_close_consumes_authority_without_retry(self) -> None:
+        runner = object.__new__(TrustedProjectUpdateGitRunner)
+        runner._closed = False
+        runner._handle = 456
+        runner._windows_handle = False
+
+        with mock.patch(
+            "wom_kit.project_update_git_runner.os.close",
+            side_effect=OSError("synthetic close failure"),
+        ) as close_handle:
+            self.assert_code(
+                "project_update_git_runner_close_unverified",
+                runner.close,
+            )
+            self.assertTrue(runner._closed)
+            self.assertEqual(runner._handle, -1)
+            runner.close()
+            runner.__del__()
+
+        self.assertEqual(close_handle.call_args_list, [mock.call(456)])
+
     def test_duplicate_private_json_key_is_rejected(self) -> None:
         runner = TrustedProjectUpdateGitRunner.resolve_preapproval(
             self.actual_git()

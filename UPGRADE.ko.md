@@ -2,6 +2,60 @@
 
 [English Upgrade Guide](UPGRADE.md)
 
+## v0.4.16 durable project update 결과 전달
+
+일치하는 공개 릴리스와 자산이 실제로 존재한 뒤에만 정확한 wheel을 설치합니다.
+새 외부 CPython 3.12 환경의 실제 `python.exe -m pip`를 사용해 설치된 PEP 610
+metadata에 wheel hash가 남게 합니다.
+
+```powershell
+$womBootstrapNonce = [guid]::NewGuid().ToString("N")
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0416-$womBootstrapNonce"
+if (Test-Path -LiteralPath $womBootstrapRoot) {
+  throw "WOM bootstrap path must be new."
+}
+py -3.12 -m venv $womBootstrapRoot
+$womBootstrapPython = (Get-Item -LiteralPath (Join-Path $womBootstrapRoot "Scripts\python.exe")).FullName
+& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.16/wom_kit-0.4.16-py3-none-any.whl"
+& "$womBootstrapRoot\Scripts\archive.exe" --version
+```
+
+새 프로세스에서 정확히 `archive 0.4.16`인지 확인합니다. wheel 공개·설치만으로
+client archive·project runtime·version pin은 바뀌지 않습니다. project update는
+client가 별도로 선택하고 승인합니다.
+
+승인된 project update 쓰기, 동일 버전 repair, 쓰기를 포함한 resume은 계속
+Windows 전용입니다. POSIX는 preview와 읽기 전용 검사만 지원하며, 이 쓰기
+경로는 아무것도 변경하지 않고 fail-closed합니다.
+
+승인된 update가 중단됐다면 다른 project writer를 멈춘 채 identifier 없는
+resume 경로를 사용합니다.
+
+```powershell
+& "$womBootstrapRoot\Scripts\archive.exe" project-version-update <project-or-archive-root> `
+  --resume `
+  --affirm-external-writers-quiescent `
+  --progress `
+  --format json
+```
+
+승인·resume update는 결과 결속 전 `--output`을 생략하면 비공개 project-scoped
+output을 자동으로 만듭니다. terminal delivery가 이미 pending이면 새 output을
+지정하지 말고, 결속된 동일 output을 보존한 채 identifier 없는 `--resume`을
+실행합니다. WOM은 불변 terminal journal을 검증하고 같은 handoff를 `active` ->
+`display-pending` -> hash 이름의 `consumed` 상태로 옮깁니다. 중단 위치에 따라
+동일 결과를 한 번 더 표시할 수 있지만 domain writer는 다시 실행하지 않습니다.
+consumed capsule은 이력이지 replay 대상이 아니며 acknowledgement는 사람이나 AI가
+stdout을 실제로 봤다는 증거가 아닙니다.
+
+완전한 legacy cleanup tombstone 하나만 exact 검증 뒤 복구합니다. proof-only
+상태는 `no_resumable_project_update`로 끝나고 과거 성공을 주장하지 않으며, 새
+update에는 새 preview와 승인이 필요합니다. 일부·malformed·mixed·unsafe residue는
+`terminal_cleanup_outcome_unknown`으로 fail-closed하므로 삭제하거나 손으로
+고치지 않습니다. `terminal_finalization`은 인증된 update 결과와 transaction
+cleanup·service close·Git-runner close·durable-result handoff 사실을 구분합니다.
+[v0.4.16 릴리스 노트](wom-kit/docs/releases/v0.4.16.md)를 보세요.
+
 ## v0.4.15 인증된 프로젝트 업데이트 복구
 
 일치하는 공개 릴리스와 자산이 실제로 존재한 뒤에만 정확한 wheel을 설치합니다.

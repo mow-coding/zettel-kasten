@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import shutil
 import stat
 import subprocess
@@ -10,7 +11,7 @@ import sys
 import tempfile
 import threading
 import unittest
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -21,10 +22,15 @@ if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
 from wom_kit import archive_services
+from wom_kit import exact_human_approval
 from wom_kit import project_update_transaction as transaction_module
 from wom_kit.project_update_transaction import (
     ABSENT_COMPONENT_SHA256,
     CHECKPOINT_CHAIN_START_SHA256,
+    CLEANUP_PLAN_NAME,
+    CLEANUP_PLAN_SCHEMA,
+    LEGACY_CLEANUP_PLAN_NAME,
+    LEGACY_CLEANUP_PLAN_SCHEMA,
     ComponentExpectation,
     DirectoryDurability,
     LockObservation,
@@ -72,6 +78,36 @@ class ProjectUpdateTransactionTests(unittest.TestCase):
             "active-pin": b"v0.4.3\n",
         }
 
+    def run_hard_exit_worker(
+        self,
+        worker: str,
+        *arguments: str,
+        expected_returncode: int,
+    ) -> subprocess.CompletedProcess[str]:
+        environment = dict(os.environ)
+        environment.update(
+            {
+                "PYTHONDONTWRITEBYTECODE": "1",
+                "PYTHONPATH": str(SRC_ROOT),
+                "PYTHONUTF8": "1",
+            }
+        )
+        completed = subprocess.run(
+            [sys.executable, "-B", "-c", worker, *arguments],
+            cwd=KIT_ROOT,
+            env=environment,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+        self.assertEqual(
+            completed.returncode,
+            expected_returncode,
+            completed.stdout + completed.stderr,
+        )
+        return completed
+
     @staticmethod
     def bindings() -> ProjectUpdateBindings:
         return ProjectUpdateBindings(
@@ -96,6 +132,168 @@ class ProjectUpdateTransactionTests(unittest.TestCase):
                 "transaction_ref": transaction_ref,
             }
         ) + b"\n"
+
+    def prepare_terminal_delivery_fixture(
+        self,
+        label: str,
+        *,
+        result_domain_override: dict[str, object] | None = None,
+        proof_capability_override: str | None = None,
+        terminal_overrides: dict[str, bool] | None = None,
+    ) -> dict[str, object]:
+        private_root = self.project / ".zettel-kasten" / "private"
+        private_root.mkdir(parents=True, exist_ok=True)
+        diagnostics = self.project / ".zettel-kasten" / "diagnostics"
+        diagnostics.mkdir(parents=True, exist_ok=True)
+        domain_result: dict[str, object] = {
+            "ok": True,
+            "status": "updated_restart_required",
+            "warnings": [],
+            "next_safe_actions": ["restart"],
+        }
+        terminal = {
+            "schema": (
+                "wom-kit/project-version-update-terminal-finalization/v0.1"
+            ),
+            "update_result_verified_in_current_invocation": True,
+            "update_result_reauthenticated_from_durable_handoff": False,
+            "claim_succeeded_verified": True,
+            "transaction_completed_checkpoint_verified": True,
+            "lock_absence_verified": True,
+            "transaction_cleanup_completed": True,
+            "service_resource_close_verified": True,
+            "git_runner_close_verified": True,
+            "attention_required": True,
+            "domain_writer_reentry_allowed": False,
+            "automatic_retry_allowed": False,
+            "cleanup_proof_used_as_success_authority": False,
+            "durable_terminal_handoff_ready": True,
+            "durable_terminal_handoff_replayed": False,
+            "durable_result_delivery_acknowledged": False,
+            "private_paths_echoed": False,
+            "private_identifiers_echoed": False,
+        }
+        if terminal_overrides is not None:
+            terminal.update(terminal_overrides)
+        effective_domain = result_domain_override or domain_result
+        result = archive_services._project_update_terminal_result_from_domain(
+            effective_domain,
+            terminal,
+        )
+        self.assertIsNotNone(result)
+        preview = {"status": "prepared"}
+        basis = {"schema": "synthetic-recovery-basis"}
+        postimage: dict[str, str] = {}
+        attachments = {
+            "prepared_preview": preview,
+            "domain_result": domain_result,
+            "recovery_basis": basis,
+            "exact_postimage": postimage,
+        }
+        pending_payload = {
+            "prepared_preview_sha256": (
+                transaction_module.sha256_document(preview)
+            ),
+            "domain_result_sha256": (
+                transaction_module.sha256_document(domain_result)
+            ),
+            "domain_result_size_bytes": len(
+                transaction_module.canonical_json_bytes(domain_result)
+            ),
+            "recovery_basis_sha256": (
+                transaction_module.sha256_document(basis)
+            ),
+            "exact_postimage_sha256": (
+                transaction_module.sha256_document(postimage)
+            ),
+        }
+        pending = {
+            "payload": pending_payload,
+            "attachments": attachments,
+        }
+        capability = (
+            "hmac-sha256:"
+            + hashlib.sha256(("capability-" + label).encode("ascii")).hexdigest()
+        )
+        ready = {
+            "payload": {
+                "delivery_capability_sha256": (
+                    transaction_module.sha256_bytes(
+                        capability.encode("ascii")
+                    )
+                )
+            }
+        }
+        active = {
+            "schema": archive_services._PROJECT_UPDATE_TERMINAL_HANDOFF_SCHEMA,
+            "state": "terminal_ready",
+            "pending": pending,
+            "ready": ready,
+        }
+        handoff, guard = archive_services._project_update_terminal_handoff_paths(
+            self.project
+        )
+        scaffold = archive_services._project_update_terminal_control_scaffold(
+            self.project
+        )
+        self.assertTrue(os.path.samefile(scaffold, handoff.parent))
+        self.assertEqual(guard.read_bytes(), b"\x00")
+        handoff_raw = archive_services._project_update_canonical_bytes(active)
+        handoff.write_bytes(handoff_raw)
+        handoff_sha256 = transaction_module.sha256_bytes(handoff_raw)
+        archive_services._project_update_register_terminal_delivery_capability(
+            handoff_sha256,
+            capability,
+        )
+        operation_ref = "op:sha256:" + hashlib.sha256(
+            ("operation-" + label).encode("ascii")
+        ).hexdigest()
+        run_id = hashlib.sha256(
+            ("run-" + label).encode("ascii")
+        ).hexdigest()[:32]
+        output_relative = (
+            ".zettel-kasten/diagnostics/update-" + label + ".json"
+        )
+        proof = archive_services._project_update_terminal_delivery_output_proof(
+            proof_capability_override or capability,
+            result,
+            handoff_sha256=handoff_sha256,
+            output_relative=output_relative,
+            run_id=run_id,
+            operation_ref=operation_ref,
+        )
+        output_document = {
+            **result,
+            "cli_execution": {
+                "status": "completed",
+                "command": "project-version-update",
+                "result_available": True,
+                "exit_code": 0,
+                "run_id": run_id,
+                "terminal_delivery": proof,
+            },
+            "cli_output_artifact": {
+                "operation": {"operation_ref": operation_ref}
+            },
+        }
+        output_path = self.project.joinpath(
+            *output_relative.split("/")
+        )
+        output_path.write_text(
+            json.dumps(output_document, ensure_ascii=True, sort_keys=True)
+            + "\n",
+            encoding="utf-8",
+        )
+        return {
+            "result": result,
+            "handoff": handoff,
+            "handoff_raw": handoff_raw,
+            "handoff_sha256": handoff_sha256,
+            "capability": capability,
+            "output_relative": output_relative,
+            "run_id": run_id,
+            "operation_ref": operation_ref,
+        }
 
     def components(
         self, *, receipt_postimage: bytes | None = None
@@ -208,6 +406,10 @@ class ProjectUpdateTransactionTests(unittest.TestCase):
             "candidate_locator": reserved.reservation.runtime_candidate_logical_ref,
             "candidate_sha256": digest("candidate-binding"),
             "existing_runtime_reusable": False,
+            "existing_runtime_repair_required": False,
+            "existing_runtime_inventory_sha256": None,
+            "existing_runtime_inventory_count": 0,
+            "existing_runtime_inventory_bytes": 0,
             "inventory_bytes": tree.total_bytes,
             "inventory_count": tree.inventory_count,
             "inventory_sha256": tree.recursive_tree_sha256,
@@ -231,6 +433,7 @@ class ProjectUpdateTransactionTests(unittest.TestCase):
                     int(transaction_info.st_dev),
                     int(transaction_info.st_ino),
                 ],
+                "existing_runtime_root": None,
             },
             "post_approval_child_process_allowed": False,
             "post_approval_copy_allowed": False,
@@ -397,6 +600,7 @@ class ProjectUpdateTransactionTests(unittest.TestCase):
         guard_type: type[archive_services._WomKitProjectUpdateDirectoryGuard],
         *,
         minimum_held: int,
+        runner_close_fails: bool = False,
     ) -> None:
         metadata_root = self.project / ".zettel-kasten"
         mirror_path = metadata_root / "source"
@@ -405,12 +609,16 @@ class ProjectUpdateTransactionTests(unittest.TestCase):
         candidate_summary = {"candidate": "sealed"}
         candidate = SimpleNamespace(
             candidate_root=self.project / "missing-runtime-candidate",
+            legacy_resume_shape=False,
             public_summary=lambda: candidate_summary,
         )
         fake_transaction = SimpleNamespace(
             intent=SimpleNamespace(
                 requested_target_tag="v0.4.3",
                 components=(),
+                runtime_candidate=SimpleNamespace(
+                    legacy_document_shape=False,
+                ),
             ),
             transaction_root=(
                 metadata_root
@@ -445,15 +653,23 @@ class ProjectUpdateTransactionTests(unittest.TestCase):
                 "wheel_sha256": digest("wheel"),
             },
             "runtime_candidate_private": {},
+            "static_receipt_schema": (
+                "wom-kit/project-version-update-receipt/v0.3"
+            ),
             "target_commit": "a" * 40,
             "target_tag": "v0.4.3",
             "target_version": "0.4.3",
             "transaction_ref": transaction_ref,
         }
         closed: list[str] = []
+        def close_runner() -> None:
+            closed.append("runner")
+            if runner_close_fails:
+                raise KeyboardInterrupt("private runner close failure")
+
         runner = SimpleNamespace(
             close_transport_boundary=lambda: closed.append("transport"),
-            close=lambda: closed.append("runner"),
+            close=close_runner,
         )
 
         with (
@@ -627,6 +843,111 @@ class ProjectUpdateTransactionTests(unittest.TestCase):
             action()
         self.assertEqual(caught.exception.code, expected)
         self.assertEqual(str(caught.exception), expected)
+
+    def test_runtime_candidate_binding_accepts_only_exact_legacy_or_current_shape(
+        self,
+    ) -> None:
+        current = self.create_transaction().intent.runtime_candidate.document()
+        repair_fields = (
+            "existing_runtime_repair_required",
+            "existing_runtime_inventory_sha256",
+            "existing_runtime_inventory_count",
+            "existing_runtime_inventory_bytes",
+        )
+        self.assertTrue(all(field in current for field in repair_fields))
+        legacy = dict(current)
+        for field in repair_fields:
+            legacy.pop(field)
+        restored = transaction_module.RuntimeCandidateBinding.from_document(
+            legacy
+        )
+        self.assertTrue(restored.legacy_document_shape)
+        self.assertEqual(restored.document(), legacy)
+
+        for missing in repair_fields:
+            with self.subTest(missing=missing):
+                mixed = dict(current)
+                mixed.pop(missing)
+                self.assert_code(
+                    "project_update_transaction_candidate_invalid",
+                    lambda mixed=mixed: (
+                        transaction_module.RuntimeCandidateBinding.from_document(
+                            mixed
+                        )
+                    ),
+                )
+
+    def test_resume_serialization_family_rejects_crossed_shapes_and_plan_keys(
+        self,
+    ) -> None:
+        def transaction(legacy: bool) -> SimpleNamespace:
+            return SimpleNamespace(
+                intent=SimpleNamespace(
+                    runtime_candidate=SimpleNamespace(
+                        legacy_document_shape=legacy,
+                    )
+                )
+            )
+
+        def candidate(legacy: bool) -> SimpleNamespace:
+            return SimpleNamespace(legacy_resume_shape=legacy)
+
+        legacy_plan = {"schema": "private-plan"}
+        current_plan = {
+            "schema": "private-plan",
+            "static_receipt_schema": (
+                "wom-kit/project-version-update-receipt/v0.3"
+            ),
+        }
+        self.assertTrue(
+            archive_services._project_update_legacy_resume_serialization_family(
+                transaction(True),
+                candidate(True),
+                legacy_plan,
+            )
+        )
+        self.assertFalse(
+            archive_services._project_update_legacy_resume_serialization_family(
+                transaction(False),
+                candidate(False),
+                current_plan,
+            )
+        )
+        invalid_cases = (
+            (True, False, legacy_plan),
+            (False, True, current_plan),
+            (True, True, current_plan),
+            (False, False, legacy_plan),
+        )
+        for transaction_legacy, candidate_legacy, private_plan in invalid_cases:
+            with self.subTest(
+                transaction_legacy=transaction_legacy,
+                candidate_legacy=candidate_legacy,
+                schema_present="static_receipt_schema" in private_plan,
+            ):
+                with self.assertRaisesRegex(
+                    archive_services.ArchiveServiceError,
+                    "project_version_update_resume_binding_mismatch",
+                ):
+                    archive_services._project_update_legacy_resume_serialization_family(
+                        transaction(transaction_legacy),
+                        candidate(candidate_legacy),
+                        private_plan,
+                    )
+
+    def test_candidate_seal_rejects_partial_current_repair_shape(self) -> None:
+        reserved, _lock_bytes, tree = self.reserve_and_build_candidate()
+        seal = json.loads(
+            reserved.runtime_candidate_seal_path.read_text(encoding="ascii")
+        )
+        seal.pop("existing_runtime_inventory_bytes")
+        reserved.runtime_candidate_seal_path.write_bytes(
+            canonical_json_bytes(seal) + b"\n"
+        )
+        self.assert_code(
+            "project_update_transaction_candidate_invalid",
+            lambda: self.seal_reserved(reserved, tree),
+        )
 
     def test_active_transaction_ref_is_derived_from_exact_live_lock_read_only(self) -> None:
         transaction = self.create_transaction()
@@ -1534,6 +1855,7 @@ class ProjectUpdateTransactionTests(unittest.TestCase):
             transaction.classify_live_components(live).overall, "prewrite_exact"
         )
 
+    @unittest.skipUnless(os.name == "nt", "exact cleanup apply is Windows-only")
     def test_cleanup_refuses_nonterminal_then_terminal_cleanup_is_exact_and_idempotent(
         self,
     ) -> None:
@@ -1561,22 +1883,26 @@ class ProjectUpdateTransactionTests(unittest.TestCase):
             terminal.exact_cleanup(cleanup_authority_sha256=digest("cleanup-terminal"))
         )
 
+    @unittest.skipUnless(os.name == "nt", "exact cleanup apply is Windows-only")
     def test_partial_cleanup_hard_exit_is_resumable_from_exact_tombstone(self) -> None:
         transaction = self.create_transaction()
         self.finish_forward(transaction)
         root = self.transaction_root(transaction)
         authority = digest("cleanup-authority")
-        original_unlink = Path.unlink
+        original_delete = transaction_module._delete_exact_cleanup_file
         deleted = {"count": 0}
 
-        def fail_after_one(path: Path, *args, **kwargs):
-            if ".cleanup_update_" in str(path):
-                deleted["count"] += 1
-                if deleted["count"] == 2:
-                    raise OSError("simulated hard-exit boundary")
-            return original_unlink(path, *args, **kwargs)
+        def fail_after_one(project: Path, path: Path, snapshot) -> None:
+            deleted["count"] += 1
+            if deleted["count"] == 2:
+                raise OSError("simulated hard-exit boundary")
+            original_delete(project, path, snapshot)
 
-        with patch.object(Path, "unlink", new=fail_after_one):
+        with patch.object(
+            transaction_module,
+            "_delete_exact_cleanup_file",
+            side_effect=fail_after_one,
+        ):
             self.assertFalse(
                 transaction.exact_cleanup(cleanup_authority_sha256=authority)
             )
@@ -1612,6 +1938,1100 @@ class ProjectUpdateTransactionTests(unittest.TestCase):
                 self.project,
                 transaction.transaction_ref,
                 cleanup_authority_sha256=authority,
+            )
+        )
+
+    @unittest.skipUnless(os.name == "nt", "exact cleanup apply is Windows-only")
+    def test_process_exit_after_exact_child_delete_resumes(self) -> None:
+        transaction = self.create_transaction()
+        self.finish_forward(transaction)
+        authority = digest("cleanup-process-exit-child")
+        worker = "\n".join(
+            (
+                "import os, sys",
+                "from pathlib import Path",
+                "from wom_kit import project_update_transaction as module",
+                "transaction = module.ProjectUpdateTransaction.open(Path(sys.argv[1]), sys.argv[2])",
+                "real_delete = module._delete_exact_cleanup_file",
+                "def crash(project, path, snapshot):",
+                "    real_delete(project, path, snapshot)",
+                "    os._exit(81)",
+                "module._delete_exact_cleanup_file = crash",
+                "transaction.exact_cleanup(cleanup_authority_sha256=sys.argv[3])",
+                "raise SystemExit(99)",
+            )
+        )
+        self.run_hard_exit_worker(
+            worker,
+            str(self.project),
+            transaction.transaction_ref,
+            authority,
+            expected_returncode=81,
+        )
+        self.assertTrue(
+            ProjectUpdateTransaction.resume_cleanup(
+                self.project,
+                transaction.transaction_ref,
+                cleanup_authority_sha256=authority,
+            )
+        )
+
+    @unittest.skipUnless(os.name == "nt", "exact cleanup apply is Windows-only")
+    def test_process_exit_after_identity_plan_visibility_resumes(self) -> None:
+        transaction = self.create_transaction()
+        self.finish_forward(transaction)
+        authority = digest("cleanup-process-exit-plan-visible")
+        worker = "\n".join(
+            (
+                "import os, sys",
+                "from pathlib import Path",
+                "from wom_kit import project_update_transaction as module",
+                "transaction = module.ProjectUpdateTransaction.open(Path(sys.argv[1]), sys.argv[2])",
+                "real_durable = module._require_directory_durable",
+                "def crash(path):",
+                "    if path == transaction.transaction_root and (path / module.CLEANUP_PLAN_NAME).exists():",
+                "        os._exit(84)",
+                "    return real_durable(path)",
+                "module._require_directory_durable = crash",
+                "transaction.exact_cleanup(cleanup_authority_sha256=sys.argv[3])",
+                "raise SystemExit(99)",
+            )
+        )
+        self.run_hard_exit_worker(
+            worker,
+            str(self.project),
+            transaction.transaction_ref,
+            authority,
+            expected_returncode=84,
+        )
+        current_plan = transaction.transaction_root / CLEANUP_PLAN_NAME
+        self.assertTrue(current_plan.is_file())
+        reopened = ProjectUpdateTransaction.open(
+            self.project,
+            transaction.transaction_ref,
+        )
+        self.assertTrue(
+            reopened.exact_cleanup(cleanup_authority_sha256=authority)
+        )
+
+    @unittest.skipUnless(os.name == "nt", "exact cleanup apply is Windows-only")
+    def test_process_exit_after_plan_to_proof_move_resumes(self) -> None:
+        transaction = self.create_transaction()
+        self.finish_forward(transaction)
+        authority = digest("cleanup-process-exit-plan-proof")
+        with patch.object(
+            ProjectUpdateTransaction,
+            "_resume_cleanup_paths",
+            return_value=False,
+        ):
+            self.assertFalse(
+                transaction.exact_cleanup(cleanup_authority_sha256=authority)
+            )
+        worker = "\n".join(
+            (
+                "import os, sys",
+                "from pathlib import Path",
+                "from wom_kit import project_update_transaction as module",
+                "real_move = module._atomic_move_file_no_replace",
+                "def crash(source, destination):",
+                "    real_move(source, destination)",
+                "    os._exit(82)",
+                "module._atomic_move_file_no_replace = crash",
+                "module.ProjectUpdateTransaction.resume_cleanup(Path(sys.argv[1]), sys.argv[2], cleanup_authority_sha256=sys.argv[3])",
+                "raise SystemExit(99)",
+            )
+        )
+        self.run_hard_exit_worker(
+            worker,
+            str(self.project),
+            transaction.transaction_ref,
+            authority,
+            expected_returncode=82,
+        )
+        self.assertTrue(
+            ProjectUpdateTransaction.resume_cleanup(
+                self.project,
+                transaction.transaction_ref,
+                cleanup_authority_sha256=authority,
+            )
+        )
+
+    @unittest.skipUnless(os.name == "nt", "exact cleanup apply is Windows-only")
+    def test_process_exit_after_duplicate_link_reconciliation_resumes(self) -> None:
+        transaction = self.create_transaction()
+        self.finish_forward(transaction)
+        authority = digest("cleanup-process-exit-duplicate-link")
+        with patch.object(
+            ProjectUpdateTransaction,
+            "_resume_cleanup_paths",
+            return_value=False,
+        ):
+            self.assertFalse(
+                transaction.exact_cleanup(cleanup_authority_sha256=authority)
+            )
+        parent = self.transaction_root(transaction).parent
+        proof = parent / f".cleanup-proof_{transaction.transaction_ref}.json"
+        tombstone = parent / f".cleanup_{transaction.transaction_ref}"
+        real_move = transaction_module._atomic_move_file_no_replace
+
+        def leave_duplicate(source: Path, destination: Path) -> None:
+            real_move(source, destination)
+            os.link(destination, source)
+            raise RuntimeError("synthetic duplicate-link crash state")
+
+        with patch.object(
+            transaction_module,
+            "_atomic_move_file_no_replace",
+            side_effect=leave_duplicate,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "duplicate-link"):
+                ProjectUpdateTransaction.resume_cleanup(
+                    self.project,
+                    transaction.transaction_ref,
+                    cleanup_authority_sha256=authority,
+                )
+        self.assertEqual(proof.stat().st_nlink, 2)
+        self.assertEqual((tombstone / CLEANUP_PLAN_NAME).stat().st_nlink, 2)
+        worker = "\n".join(
+            (
+                "import os, sys",
+                "from pathlib import Path",
+                "from wom_kit import project_update_transaction as module",
+                "real_unlink = module._unlink_exact_cleanup_plan_duplicate_windows",
+                "def crash(*args, **kwargs):",
+                "    real_unlink(*args, **kwargs)",
+                "    os._exit(83)",
+                "module._unlink_exact_cleanup_plan_duplicate_windows = crash",
+                "module.ProjectUpdateTransaction.resume_cleanup(Path(sys.argv[1]), sys.argv[2], cleanup_authority_sha256=sys.argv[3])",
+                "raise SystemExit(99)",
+            )
+        )
+        self.run_hard_exit_worker(
+            worker,
+            str(self.project),
+            transaction.transaction_ref,
+            authority,
+            expected_returncode=83,
+        )
+        self.assertTrue(
+            ProjectUpdateTransaction.resume_cleanup(
+                self.project,
+                transaction.transaction_ref,
+                cleanup_authority_sha256=authority,
+            )
+        )
+
+    @unittest.skipUnless(os.name == "nt", "exact cleanup apply is Windows-only")
+    def test_cleanup_proof_destination_race_never_replaces_foreign_file(self) -> None:
+        transaction = self.create_transaction()
+        self.finish_forward(transaction)
+        root = self.transaction_root(transaction)
+        authority = digest("cleanup-authority-race")
+        tombstone = root.parent / f".cleanup_{transaction.transaction_ref}"
+        proof = root.parent / f".cleanup-proof_{transaction.transaction_ref}.json"
+        foreign = b"foreign proof race occupant\n"
+        real_move = transaction_module._atomic_move_file_no_replace
+
+        def inject_destination(source: Path, destination: Path) -> None:
+            self.assertEqual(destination, proof)
+            destination.write_bytes(foreign)
+            real_move(source, destination)
+
+        with patch.object(
+            transaction_module,
+            "_atomic_move_file_no_replace",
+            side_effect=inject_destination,
+        ):
+            self.assertFalse(
+                transaction.exact_cleanup(cleanup_authority_sha256=authority)
+            )
+
+        self.assertFalse(root.exists())
+        self.assertTrue(tombstone.is_dir())
+        self.assertTrue((tombstone / CLEANUP_PLAN_NAME).is_file())
+        self.assertEqual(proof.read_bytes(), foreign)
+        self.assertFalse(
+            ProjectUpdateTransaction.resume_cleanup(
+                self.project,
+                transaction.transaction_ref,
+                cleanup_authority_sha256=authority,
+            )
+        )
+        self.assertEqual(proof.read_bytes(), foreign)
+        self.assertTrue((tombstone / CLEANUP_PLAN_NAME).is_file())
+
+    @unittest.skipUnless(os.name == "nt", "exact cleanup apply is Windows-only")
+    def test_cleanup_proof_flushes_destination_before_source_directory(self) -> None:
+        transaction = self.create_transaction()
+        self.finish_forward(transaction)
+        root = self.transaction_root(transaction)
+        authority = digest("cleanup-authority-flush-order")
+        parent = root.parent
+        tombstone = parent / f".cleanup_{transaction.transaction_ref}"
+        real_move = transaction_module._atomic_move_file_no_replace
+        real_fsync = transaction_module._fsync_directory
+        proof_moved = False
+        post_move_flushes: list[Path] = []
+
+        def observe_move(source: Path, destination: Path) -> None:
+            nonlocal proof_moved
+            real_move(source, destination)
+            proof_moved = True
+
+        def observe_fsync(path: Path):
+            if proof_moved:
+                post_move_flushes.append(path)
+            return real_fsync(path)
+
+        with patch.object(
+            transaction_module,
+            "_atomic_move_file_no_replace",
+            side_effect=observe_move,
+        ), patch.object(
+            transaction_module,
+            "_fsync_directory",
+            side_effect=observe_fsync,
+        ):
+            self.assertTrue(
+                transaction.exact_cleanup(cleanup_authority_sha256=authority)
+            )
+
+        self.assertGreaterEqual(len(post_move_flushes), 3)
+        self.assertEqual(post_move_flushes[:3], [parent, tombstone, parent])
+
+    def test_atomic_move_refuses_parent_swap_without_moving_foreign_source(
+        self,
+    ) -> None:
+        parent = self.project / "move-parent"
+        parent.mkdir()
+        source = parent / "active.json"
+        destination = parent / "display-pending.json"
+        source.write_bytes(b"validated-source")
+        renamed_parent = self.project / "move-parent-original"
+        real_safe_directory = transaction_module._safe_directory
+        calls = {"count": 0}
+
+        def swap_after_validation(path: Path, *, within: Path):
+            result = real_safe_directory(path, within=within)
+            if path == parent:
+                calls["count"] += 1
+                if calls["count"] == 2:
+                    parent.rename(renamed_parent)
+                    parent.mkdir()
+                    (parent / source.name).write_bytes(b"foreign-source")
+            return result
+
+        with patch.object(
+            transaction_module,
+            "_safe_directory",
+            side_effect=swap_after_validation,
+        ):
+            with self.assertRaises(
+                (OSError, ProjectUpdateTransactionError)
+            ):
+                transaction_module._atomic_move_file_no_replace(
+                    source,
+                    destination,
+                )
+
+        self.assertEqual(
+            (renamed_parent / source.name).read_bytes(),
+            b"validated-source",
+        )
+        self.assertEqual(source.read_bytes(), b"foreign-source")
+        self.assertFalse(destination.exists())
+
+    def test_cleanup_refuses_byte_identical_transaction_directory_swap(
+        self,
+    ) -> None:
+        transaction = self.create_transaction()
+        self.finish_forward(transaction)
+        root = self.transaction_root(transaction)
+        parent = root.parent
+        tombstone = parent / f".cleanup_{transaction.transaction_ref}"
+        preserved = parent / ".validated-transaction-preserved"
+        real_move = transaction_module._atomic_move_directory_no_replace
+        identities: dict[str, tuple[int, int]] = {}
+
+        def swap_clone_then_move(source: Path, destination: Path) -> None:
+            before = source.stat()
+            identities["validated"] = (before.st_dev, before.st_ino)
+            source.rename(preserved)
+            shutil.copytree(preserved, source)
+            clone = source.stat()
+            identities["clone"] = (clone.st_dev, clone.st_ino)
+            real_move(source, destination)
+
+        with patch.object(
+            transaction_module,
+            "_atomic_move_directory_no_replace",
+            side_effect=swap_clone_then_move,
+        ):
+            self.assertFalse(
+                transaction.exact_cleanup(
+                    cleanup_authority_sha256=digest("cleanup-root-swap")
+                )
+            )
+
+        self.assertNotEqual(identities["validated"], identities["clone"])
+        self.assertEqual(
+            (preserved.stat().st_dev, preserved.stat().st_ino),
+            identities["validated"],
+        )
+        self.assertEqual(
+            (tombstone.stat().st_dev, tombstone.stat().st_ino),
+            identities["clone"],
+        )
+        self.assertTrue((preserved / "intent.json").is_file())
+        self.assertTrue((tombstone / CLEANUP_PLAN_NAME).is_file())
+        self.assertFalse(
+            (parent / f".cleanup-proof_{transaction.transaction_ref}.json")
+            .exists()
+        )
+
+    def test_cleanup_refuses_tombstone_clone_before_immediate_resume(
+        self,
+    ) -> None:
+        transaction = self.create_transaction()
+        self.finish_forward(transaction)
+        parent = self.transaction_root(transaction).parent
+        tombstone = parent / f".cleanup_{transaction.transaction_ref}"
+        preserved = parent / ".verified-tombstone-preserved"
+        real_resume = ProjectUpdateTransaction._resume_cleanup_paths
+        swapped = {"done": False}
+
+        def swap_then_resume(project: Path, ref: str, authority: str) -> bool:
+            tombstone.rename(preserved)
+            shutil.copytree(preserved, tombstone)
+            swapped["done"] = True
+            return real_resume(project, ref, authority)
+
+        with patch.object(
+            ProjectUpdateTransaction,
+            "_resume_cleanup_paths",
+            side_effect=swap_then_resume,
+        ):
+            self.assertFalse(
+                transaction.exact_cleanup(
+                    cleanup_authority_sha256=digest(
+                        "cleanup-tombstone-immediate-swap"
+                    )
+                )
+            )
+
+        self.assertTrue(swapped["done"])
+        self.assertTrue((preserved / CLEANUP_PLAN_NAME).is_file())
+        self.assertTrue((tombstone / CLEANUP_PLAN_NAME).is_file())
+        self.assertNotEqual(preserved.stat().st_ino, tombstone.stat().st_ino)
+
+    def test_cleanup_restart_refuses_byte_identical_tombstone_clone(
+        self,
+    ) -> None:
+        transaction = self.create_transaction()
+        self.finish_forward(transaction)
+        authority = digest("cleanup-tombstone-restart-swap")
+        with patch.object(
+            ProjectUpdateTransaction,
+            "_resume_cleanup_paths",
+            return_value=False,
+        ):
+            self.assertFalse(
+                transaction.exact_cleanup(cleanup_authority_sha256=authority)
+            )
+        parent = self.transaction_root(transaction).parent
+        tombstone = parent / f".cleanup_{transaction.transaction_ref}"
+        preserved = parent / ".restart-tombstone-preserved"
+        tombstone.rename(preserved)
+        shutil.copytree(preserved, tombstone)
+
+        self.assertFalse(
+            ProjectUpdateTransaction.resume_cleanup(
+                self.project,
+                transaction.transaction_ref,
+                cleanup_authority_sha256=authority,
+            )
+        )
+
+        self.assertTrue((preserved / CLEANUP_PLAN_NAME).is_file())
+        self.assertTrue((tombstone / CLEANUP_PLAN_NAME).is_file())
+        self.assertNotEqual(preserved.stat().st_ino, tombstone.stat().st_ino)
+        self.assertFalse(
+            (parent / f".cleanup-proof_{transaction.transaction_ref}.json")
+            .exists()
+        )
+
+    def test_current_cleanup_plan_requires_platform_birthtime_shape(self) -> None:
+        transaction = self.create_transaction()
+        self.finish_forward(transaction)
+        authority = digest("cleanup-platform-birthtime-shape")
+        with patch.object(
+            ProjectUpdateTransaction,
+            "_resume_cleanup_paths",
+            return_value=False,
+        ):
+            self.assertFalse(
+                transaction.exact_cleanup(cleanup_authority_sha256=authority)
+            )
+        parent = self.transaction_root(transaction).parent
+        tombstone = parent / f".cleanup_{transaction.transaction_ref}"
+        plan = json.loads(
+            (tombstone / CLEANUP_PLAN_NAME).read_text(encoding="ascii")
+        )
+        identity = plan["transaction_root_identity"]
+        self.assertEqual(
+            type(identity["birthtime_ns"]) is int,
+            os.name == "nt",
+        )
+        identity["birthtime_ns"] = None if os.name == "nt" else 1
+
+        with self.assertRaises(ProjectUpdateTransactionError) as captured:
+            ProjectUpdateTransaction._validate_cleanup_plan_document(
+                plan,
+                transaction.transaction_ref,
+                authority,
+            )
+
+        self.assertEqual(
+            captured.exception.code,
+            "project_update_transaction_cleanup_refused",
+        )
+
+    @unittest.skipUnless(os.name == "nt", "Windows directory generation binding")
+    def test_cleanup_proof_refuses_recreated_tombstone_with_reused_inode(
+        self,
+    ) -> None:
+        transaction = self.create_transaction()
+        self.finish_forward(transaction)
+        authority = digest("cleanup-tombstone-reused-inode")
+        self.assertTrue(
+            transaction.exact_cleanup(cleanup_authority_sha256=authority)
+        )
+        parent = self.transaction_root(transaction).parent
+        tombstone = parent / f".cleanup_{transaction.transaction_ref}"
+        proof = parent / f".cleanup-proof_{transaction.transaction_ref}.json"
+        proof_before = proof.read_bytes()
+        plan = json.loads(proof_before)
+        planned = plan["transaction_root_identity"]
+        self.assertGreater(planned["birthtime_ns"], 0)
+
+        # Model delayed inode reuse: the pathname now names a different empty
+        # directory whose device/inode happen to match the old plan. Windows
+        # creation time remains the stable generation discriminator.
+        tombstone.mkdir()
+        recreated = tombstone.stat()
+        real_identity = transaction_module._cleanup_directory_identity
+
+        def reused_inode_generation(info: os.stat_result):
+            if (
+                int(info.st_dev),
+                int(info.st_ino),
+            ) == (int(recreated.st_dev), int(recreated.st_ino)):
+                return (
+                    planned["device"],
+                    planned["inode"],
+                    planned["birthtime_ns"] + 1,
+                )
+            return real_identity(info)
+
+        with patch.object(
+            transaction_module,
+            "_cleanup_directory_identity",
+            side_effect=reused_inode_generation,
+        ), patch.object(
+            transaction_module,
+            "_delete_exact_cleanup_directory",
+            side_effect=AssertionError(
+                "generation-mismatched tombstone reached deletion"
+            ),
+        ) as exact_delete:
+            self.assertFalse(
+                ProjectUpdateTransaction.resume_cleanup(
+                    self.project,
+                    transaction.transaction_ref,
+                    cleanup_authority_sha256=authority,
+                )
+            )
+
+        exact_delete.assert_not_called()
+        self.assertTrue(tombstone.is_dir())
+        self.assertEqual(list(tombstone.iterdir()), [])
+        self.assertEqual(proof.read_bytes(), proof_before)
+
+    def test_cleanup_descendant_replacement_after_snapshot_survives(self) -> None:
+        transaction = self.create_transaction()
+        self.finish_forward(transaction)
+        root = self.transaction_root(transaction)
+        authority = digest("cleanup-descendant-race")
+        with patch.object(
+            ProjectUpdateTransaction,
+            "_resume_cleanup_paths",
+            return_value=False,
+        ):
+            self.assertFalse(
+                transaction.exact_cleanup(cleanup_authority_sha256=authority)
+            )
+        tombstone = root.parent / f".cleanup_{transaction.transaction_ref}"
+        real_snapshot = ProjectUpdateTransaction._cleanup_descendant_snapshot
+        injected: dict[str, Path | None] = {"path": None}
+        foreign = b"FOREIGN-BYTES-CREATED-AFTER-VALIDATION"
+
+        def replace_after_snapshot(path: Path, *, exclude: set[str]):
+            result = real_snapshot(path, exclude=exclude)
+            if injected["path"] is None and result[0]:
+                relative = next(iter(result[0]))
+                victim = path / PurePosixPath(relative)
+                victim.unlink()
+                victim.write_bytes(foreign)
+                injected["path"] = victim
+            return result
+
+        with patch.object(
+            ProjectUpdateTransaction,
+            "_cleanup_descendant_snapshot",
+            side_effect=replace_after_snapshot,
+        ):
+            self.assertFalse(
+                ProjectUpdateTransaction.resume_cleanup(
+                    self.project,
+                    transaction.transaction_ref,
+                    cleanup_authority_sha256=authority,
+                )
+            )
+
+        victim = injected["path"]
+        self.assertIsInstance(victim, Path)
+        assert isinstance(victim, Path)
+        self.assertEqual(victim.read_bytes(), foreign)
+        self.assertTrue(tombstone.is_dir())
+
+    @unittest.skipUnless(os.name == "nt", "Windows exact-link recovery")
+    def test_cleanup_proof_duplicate_hardlink_crash_state_is_reconciled(
+        self,
+    ) -> None:
+        transaction = self.create_transaction()
+        self.finish_forward(transaction)
+        authority = digest("cleanup-proof-duplicate")
+        with patch.object(
+            ProjectUpdateTransaction,
+            "_resume_cleanup_paths",
+            return_value=False,
+        ):
+            self.assertFalse(
+                transaction.exact_cleanup(cleanup_authority_sha256=authority)
+            )
+        parent = self.transaction_root(transaction).parent
+        tombstone = parent / f".cleanup_{transaction.transaction_ref}"
+        proof = parent / f".cleanup-proof_{transaction.transaction_ref}.json"
+        real_move = transaction_module._atomic_move_file_no_replace
+
+        def leave_duplicate(source: Path, destination: Path) -> None:
+            real_move(source, destination)
+            os.link(destination, source)
+            raise RuntimeError("synthetic duplicate-link crash state")
+
+        with patch.object(
+            transaction_module,
+            "_atomic_move_file_no_replace",
+            side_effect=leave_duplicate,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "duplicate-link"):
+                ProjectUpdateTransaction.resume_cleanup(
+                    self.project,
+                    transaction.transaction_ref,
+                    cleanup_authority_sha256=authority,
+                )
+        duplicate = tombstone / CLEANUP_PLAN_NAME
+        self.assertEqual(proof.stat().st_nlink, 2)
+
+        self.assertTrue(
+            ProjectUpdateTransaction.resume_cleanup(
+                self.project,
+                transaction.transaction_ref,
+                cleanup_authority_sha256=authority,
+            )
+        )
+
+        self.assertFalse(tombstone.exists())
+        self.assertTrue(proof.is_file())
+        self.assertEqual(proof.stat().st_nlink, 1)
+
+    @unittest.skipUnless(os.name == "nt", "exact cleanup apply is Windows-only")
+    def test_cleanup_proof_equal_but_distinct_duplicate_is_refused(self) -> None:
+        transaction = self.create_transaction()
+        self.finish_forward(transaction)
+        authority = digest("cleanup-proof-distinct-copy")
+        with patch.object(
+            ProjectUpdateTransaction,
+            "_resume_cleanup_paths",
+            return_value=False,
+        ):
+            self.assertFalse(
+                transaction.exact_cleanup(cleanup_authority_sha256=authority)
+            )
+        parent = self.transaction_root(transaction).parent
+        tombstone = parent / f".cleanup_{transaction.transaction_ref}"
+        proof = parent / f".cleanup-proof_{transaction.transaction_ref}.json"
+        duplicate = tombstone / CLEANUP_PLAN_NAME
+
+        def copy_without_moving(source: Path, destination: Path) -> None:
+            destination.write_bytes(source.read_bytes())
+
+        with patch.object(
+            transaction_module,
+            "_atomic_move_file_no_replace",
+            side_effect=copy_without_moving,
+        ):
+            self.assertFalse(
+                ProjectUpdateTransaction.resume_cleanup(
+                    self.project,
+                    transaction.transaction_ref,
+                    cleanup_authority_sha256=authority,
+                )
+            )
+
+        self.assertFalse(
+            ProjectUpdateTransaction.resume_cleanup(
+                self.project,
+                transaction.transaction_ref,
+                cleanup_authority_sha256=authority,
+            )
+        )
+        self.assertTrue(tombstone.is_dir())
+        self.assertEqual(duplicate.read_bytes(), proof.read_bytes())
+        self.assertNotEqual(duplicate.stat().st_ino, proof.stat().st_ino)
+
+    @unittest.skipUnless(os.name == "nt", "exact cleanup apply is Windows-only")
+    def test_cleanup_plan_source_replacement_is_not_attributed_as_proof(self) -> None:
+        transaction = self.create_transaction()
+        self.finish_forward(transaction)
+        root = self.transaction_root(transaction)
+        authority = digest("cleanup-plan-source-race")
+        with patch.object(
+            ProjectUpdateTransaction,
+            "_resume_cleanup_paths",
+            return_value=False,
+        ):
+            self.assertFalse(
+                transaction.exact_cleanup(cleanup_authority_sha256=authority)
+            )
+        parent = root.parent
+        tombstone = parent / f".cleanup_{transaction.transaction_ref}"
+        proof = parent / f".cleanup-proof_{transaction.transaction_ref}.json"
+        foreign = b"foreign plan source replacement\n"
+        real_move = transaction_module._atomic_move_file_no_replace
+
+        def replace_source_then_move(source: Path, destination: Path) -> None:
+            source.unlink()
+            source.write_bytes(foreign)
+            real_move(source, destination)
+
+        with patch.object(
+            transaction_module,
+            "_atomic_move_file_no_replace",
+            side_effect=replace_source_then_move,
+        ):
+            self.assertFalse(
+                ProjectUpdateTransaction.resume_cleanup(
+                    self.project,
+                    transaction.transaction_ref,
+                    cleanup_authority_sha256=authority,
+                )
+            )
+
+        self.assertEqual(proof.read_bytes(), foreign)
+        self.assertTrue(tombstone.is_dir())
+
+    @unittest.skipUnless(os.name == "nt", "exact cleanup apply is Windows-only")
+    def test_cleanup_existing_proof_replacement_never_returns_success(self) -> None:
+        transaction = self.create_transaction()
+        self.finish_forward(transaction)
+        authority = digest("cleanup-proof-replacement")
+        self.assertTrue(
+            transaction.exact_cleanup(cleanup_authority_sha256=authority)
+        )
+        parent = self.transaction_root(transaction).parent
+        proof = parent / f".cleanup-proof_{transaction.transaction_ref}.json"
+        foreign = b"foreign proof replacement\n"
+        real_read = transaction_module._read_cleanup_linked_regular
+        reads = {"count": 0}
+
+        def replace_after_first_read(project: Path, path: Path, *, maximum: int):
+            result = real_read(project, path, maximum=maximum)
+            reads["count"] += 1
+            if reads["count"] == 1:
+                path.unlink()
+                path.write_bytes(foreign)
+            return result
+
+        with patch.object(
+            transaction_module,
+            "_read_cleanup_linked_regular",
+            side_effect=replace_after_first_read,
+        ):
+            self.assertFalse(
+                ProjectUpdateTransaction.resume_cleanup(
+                    self.project,
+                    transaction.transaction_ref,
+                    cleanup_authority_sha256=authority,
+                )
+            )
+
+        self.assertEqual(proof.read_bytes(), foreign)
+
+    @unittest.skipUnless(os.name == "nt", "exact cleanup apply is Windows-only")
+    def test_cleanup_existing_proof_refuses_recreated_original(self) -> None:
+        transaction = self.create_transaction()
+        self.finish_forward(transaction)
+        authority = digest("cleanup-proof-original-race")
+        self.assertTrue(
+            transaction.exact_cleanup(cleanup_authority_sha256=authority)
+        )
+        original = self.transaction_root(transaction)
+        sentinel = original / "foreign.bin"
+        real_read = transaction_module._read_cleanup_linked_regular
+        reads = {"count": 0}
+
+        def recreate_after_final_read(
+            project: Path,
+            path: Path,
+            *,
+            maximum: int,
+        ):
+            result = real_read(project, path, maximum=maximum)
+            reads["count"] += 1
+            if reads["count"] == 2:
+                original.mkdir()
+                sentinel.write_bytes(b"foreign original race occupant")
+            return result
+
+        with patch.object(
+            transaction_module,
+            "_read_cleanup_linked_regular",
+            side_effect=recreate_after_final_read,
+        ):
+            self.assertFalse(
+                ProjectUpdateTransaction.resume_cleanup(
+                    self.project,
+                    transaction.transaction_ref,
+                    cleanup_authority_sha256=authority,
+                )
+            )
+
+        self.assertEqual(sentinel.read_bytes(), b"foreign original race occupant")
+
+    @unittest.skipUnless(os.name == "nt", "exact cleanup apply is Windows-only")
+    def test_cleanup_final_move_refuses_recreated_original(self) -> None:
+        transaction = self.create_transaction()
+        self.finish_forward(transaction)
+        authority = digest("cleanup-final-original-race")
+        with patch.object(
+            ProjectUpdateTransaction,
+            "_resume_cleanup_paths",
+            return_value=False,
+        ):
+            self.assertFalse(
+                transaction.exact_cleanup(cleanup_authority_sha256=authority)
+            )
+        original = self.transaction_root(transaction)
+        sentinel = original / "foreign.bin"
+        real_read = transaction_module._read_cleanup_linked_regular
+        reads = {"count": 0}
+
+        def recreate_after_final_read(
+            project: Path,
+            path: Path,
+            *,
+            maximum: int,
+        ):
+            result = real_read(project, path, maximum=maximum)
+            reads["count"] += 1
+            if reads["count"] == 2:
+                original.mkdir()
+                sentinel.write_bytes(b"foreign original race occupant")
+            return result
+
+        with patch.object(
+            transaction_module,
+            "_read_cleanup_linked_regular",
+            side_effect=recreate_after_final_read,
+        ):
+            self.assertFalse(
+                ProjectUpdateTransaction.resume_cleanup(
+                    self.project,
+                    transaction.transaction_ref,
+                    cleanup_authority_sha256=authority,
+                )
+            )
+
+        self.assertEqual(sentinel.read_bytes(), b"foreign original race occupant")
+
+    def test_complete_cleanup_tombstone_can_be_restored_for_legacy_resume(self) -> None:
+        transaction = self.create_transaction()
+        self.finish_forward(transaction)
+        root = self.transaction_root(transaction)
+        authority = digest("legacy-cleanup-authority")
+
+        with patch.object(
+            ProjectUpdateTransaction, "_resume_cleanup_paths", return_value=False
+        ):
+            self.assertFalse(
+                transaction.exact_cleanup(cleanup_authority_sha256=authority)
+            )
+        tombstone = root.parent / f".cleanup_{transaction.transaction_ref}"
+        self.assertFalse(root.exists())
+        self.assertTrue(tombstone.is_dir())
+        # Recreate the exact predecessor production shape: the v0.4.15 plan
+        # predates durable transaction-root identity binding.
+        current_plan_path = tombstone / CLEANUP_PLAN_NAME
+        legacy_plan_path = tombstone / LEGACY_CLEANUP_PLAN_NAME
+        legacy_plan = json.loads(current_plan_path.read_text(encoding="ascii"))
+        legacy_plan["schema"] = LEGACY_CLEANUP_PLAN_SCHEMA
+        legacy_plan.pop("transaction_root_identity")
+        legacy_plan_path.write_bytes(transaction_module._document_bytes(legacy_plan))
+        current_plan_path.unlink()
+
+        candidate = (
+            ProjectUpdateTransaction.discover_complete_cleanup_tombstone_for_resume_read_only(
+                self.project
+            )
+        )
+        self.assertIsNotNone(candidate)
+        assert candidate is not None
+        self.assertEqual(candidate.transaction_ref, transaction.transaction_ref)
+        self.assertEqual(candidate.cleanup_authority_sha256, authority)
+
+        reopened = ProjectUpdateTransaction.restore_complete_cleanup_tombstone_for_resume(
+            self.project, candidate
+        )
+        self.assertFalse(tombstone.exists())
+        self.assertTrue(root.is_dir())
+        self.assertTrue(reopened.inspect().terminal)
+        self.assertEqual(reopened.intent.sha256, candidate.intent_sha256)
+        self.assertEqual(
+            reopened.inspect().journal.head_sha256,
+            candidate.terminal_checkpoint_sha256,
+        )
+        self.assertEqual(reopened.cleanup_authority_sha256_read_only(), authority)
+        self.assertTrue((root / LEGACY_CLEANUP_PLAN_NAME).exists())
+        binding = reopened.private_binding_bytes("git-runner-binding")
+        binding_record = next(
+            item
+            for item in reopened.intent.private_bindings
+            if item.logical_key == "git-runner-binding"
+        )
+        self.assertEqual(sha256_bytes(binding), binding_record.sha256)
+        completed = reopened.exact_cleanup(cleanup_authority_sha256=authority)
+        self.assertFalse(root.exists())
+        discovered_after = (
+            ProjectUpdateTransaction
+            .discover_complete_cleanup_tombstone_for_resume_read_only(
+                self.project,
+            )
+        )
+        if os.name == "nt":
+            self.assertTrue(completed)
+            self.assertIsNone(discovered_after)
+            proof = (
+                root.parent
+                / f".cleanup-proof_{transaction.transaction_ref}.json"
+            )
+            proof_document = json.loads(proof.read_text(encoding="ascii"))
+            self.assertEqual(proof_document["schema"], CLEANUP_PLAN_SCHEMA)
+            self.assertEqual(
+                set(proof_document["transaction_root_identity"]),
+                {"birthtime_ns", "device", "inode"},
+            )
+            self.assertGreater(
+                proof_document["transaction_root_identity"]["birthtime_ns"],
+                0,
+            )
+        else:
+            # Approved project-update mutation is Windows-only. POSIX keeps
+            # the exact tombstone for explicit attention and deletes nothing.
+            self.assertFalse(completed)
+            self.assertIsNotNone(discovered_after)
+
+    def test_cleanup_tombstone_restore_refuses_partial_or_colliding_state(self) -> None:
+        transaction = self.create_transaction()
+        self.finish_forward(transaction)
+        root = self.transaction_root(transaction)
+        authority = digest("legacy-cleanup-authority")
+        with patch.object(
+            ProjectUpdateTransaction, "_resume_cleanup_paths", return_value=False
+        ):
+            self.assertFalse(
+                transaction.exact_cleanup(cleanup_authority_sha256=authority)
+            )
+        tombstone = root.parent / f".cleanup_{transaction.transaction_ref}"
+        candidate = (
+            ProjectUpdateTransaction.discover_complete_cleanup_tombstone_for_resume_read_only(
+                self.project
+            )
+        )
+        self.assertIsNotNone(candidate)
+        assert candidate is not None
+
+        # A destination published after discovery must never be replaced.
+        root.mkdir()
+        self.assert_code(
+            "project_update_transaction_cleanup_refused",
+            lambda: ProjectUpdateTransaction.restore_complete_cleanup_tombstone_for_resume(
+                self.project, candidate
+            ),
+        )
+        self.assertTrue(root.is_dir())
+        self.assertTrue(tombstone.is_dir())
+        root.rmdir()
+
+        # A missing original byte makes the tombstone incomplete; subset
+        # matching is deliberately insufficient for historical attribution.
+        victim = next(
+            path
+            for path in tombstone.rglob("*")
+            if path.is_file() and path.name != CLEANUP_PLAN_NAME
+        )
+        victim.unlink()
+        self.assert_code(
+            "project_update_transaction_cleanup_refused",
+            lambda: ProjectUpdateTransaction.discover_complete_cleanup_tombstone_for_resume_read_only(
+                self.project
+            ),
+        )
+
+    def test_cleanup_tombstone_restore_rechecks_foreign_lock_after_move(self) -> None:
+        transaction = self.create_transaction()
+        self.finish_forward(transaction)
+        root = self.transaction_root(transaction)
+        authority = digest("legacy-cleanup-authority")
+        with patch.object(
+            ProjectUpdateTransaction, "_resume_cleanup_paths", return_value=False
+        ):
+            self.assertFalse(
+                transaction.exact_cleanup(cleanup_authority_sha256=authority)
+            )
+        candidate = (
+            ProjectUpdateTransaction.discover_complete_cleanup_tombstone_for_resume_read_only(
+                self.project
+            )
+        )
+        self.assertIsNotNone(candidate)
+        assert candidate is not None
+        real_move = transaction_module._atomic_move_directory_no_replace
+        lock_path = self.project / ".zettel-kasten" / "version-update.lock"
+
+        def move_then_publish_foreign_lock(source: Path, destination: Path) -> None:
+            real_move(source, destination)
+            lock_path.write_bytes(b"foreign malformed lock")
+
+        with patch.object(
+            transaction_module,
+            "_atomic_move_directory_no_replace",
+            side_effect=move_then_publish_foreign_lock,
+        ):
+            self.assert_code(
+                "project_update_transaction_cleanup_refused",
+                lambda: ProjectUpdateTransaction.restore_complete_cleanup_tombstone_for_resume(
+                    self.project, candidate
+                ),
+            )
+        self.assertTrue(root.is_dir())
+        self.assertFalse(
+            (root.parent / f".cleanup_{transaction.transaction_ref}").exists()
+        )
+        self.assertTrue(lock_path.is_file())
+
+    def test_cleanup_tombstone_restore_rechecks_plan_bytes_after_move(self) -> None:
+        transaction = self.create_transaction()
+        self.finish_forward(transaction)
+        root = self.transaction_root(transaction)
+        authority = digest("legacy-cleanup-authority")
+        with patch.object(
+            ProjectUpdateTransaction, "_resume_cleanup_paths", return_value=False
+        ):
+            self.assertFalse(
+                transaction.exact_cleanup(cleanup_authority_sha256=authority)
+            )
+        candidate = (
+            ProjectUpdateTransaction.discover_complete_cleanup_tombstone_for_resume_read_only(
+                self.project
+            )
+        )
+        self.assertIsNotNone(candidate)
+        assert candidate is not None
+        real_move = transaction_module._atomic_move_directory_no_replace
+
+        def move_then_mutate_plan(source: Path, destination: Path) -> None:
+            real_move(source, destination)
+            plan_path = destination / CLEANUP_PLAN_NAME
+            plan = json.loads(plan_path.read_text(encoding="ascii"))
+            plan["directories"] = sorted(
+                [*plan["directories"], "zz-race-directory"]
+            )
+            plan_path.write_bytes(transaction_module._document_bytes(plan))
+
+        with patch.object(
+            transaction_module,
+            "_atomic_move_directory_no_replace",
+            side_effect=move_then_mutate_plan,
+        ):
+            self.assert_code(
+                "project_update_transaction_cleanup_refused",
+                lambda: ProjectUpdateTransaction.restore_complete_cleanup_tombstone_for_resume(
+                    self.project, candidate
+                ),
+            )
+        self.assertTrue(root.is_dir())
+
+    def test_cleanup_tombstone_restore_rechecks_closed_siblings_after_move(self) -> None:
+        transaction = self.create_transaction()
+        self.finish_forward(transaction)
+        root = self.transaction_root(transaction)
+        authority = digest("legacy-cleanup-authority")
+        with patch.object(
+            ProjectUpdateTransaction, "_resume_cleanup_paths", return_value=False
+        ):
+            self.assertFalse(
+                transaction.exact_cleanup(cleanup_authority_sha256=authority)
+            )
+        candidate = (
+            ProjectUpdateTransaction.discover_complete_cleanup_tombstone_for_resume_read_only(
+                self.project
+            )
+        )
+        self.assertIsNotNone(candidate)
+        assert candidate is not None
+        real_move = transaction_module._atomic_move_directory_no_replace
+
+        def move_then_publish_unknown_sibling(
+            source: Path, destination: Path
+        ) -> None:
+            real_move(source, destination)
+            (destination.parent / "unexpected-race-entry").write_bytes(b"unknown")
+
+        with patch.object(
+            transaction_module,
+            "_atomic_move_directory_no_replace",
+            side_effect=move_then_publish_unknown_sibling,
+        ):
+            self.assert_code(
+                "project_update_transaction_cleanup_refused",
+                lambda: ProjectUpdateTransaction.restore_complete_cleanup_tombstone_for_resume(
+                    self.project, candidate
+                ),
+            )
+        self.assertTrue(root.is_dir())
+
+    @unittest.skipUnless(os.name == "nt", "exact cleanup apply is Windows-only")
+    def test_cleanup_tombstone_discovery_treats_proof_only_as_inert_history(self) -> None:
+        transaction = self.create_transaction()
+        self.finish_forward(transaction)
+        authority = digest("legacy-cleanup-authority")
+        self.assertTrue(
+            transaction.exact_cleanup(cleanup_authority_sha256=authority)
+        )
+        self.assertIsNone(
+            ProjectUpdateTransaction.discover_complete_cleanup_tombstone_for_resume_read_only(
+                self.project
             )
         )
 
@@ -2171,11 +3591,24 @@ class ProjectUpdateTransactionTests(unittest.TestCase):
         )
         self.assertIn('"candidate_cleanup_receipt_sha256"', journal)
         self.assertNotIn('"approval_reference_sha256"', journal)
-        self.assertTrue(
-            reopened.exact_cleanup(
-                cleanup_authority_sha256=digest("cleanup-after-cancel")
-            )
+        cleanup_completed = reopened.exact_cleanup(
+            cleanup_authority_sha256=digest("cleanup-after-cancel")
         )
+        if os.name == "nt":
+            self.assertTrue(cleanup_completed)
+        else:
+            self.assertFalse(cleanup_completed)
+            tombstone = (
+                reopened.transaction_root.parent
+                / f".cleanup_{reopened.transaction_ref}"
+            )
+            self.assertTrue(tombstone.is_dir())
+            self.assertFalse(
+                (
+                    tombstone.parent
+                    / f".cleanup-proof_{reopened.transaction_ref}.json"
+                ).exists()
+            )
 
     def test_claimless_cancel_false_or_exception_appends_zero_checkpoints(
         self,
@@ -2410,6 +3843,7 @@ class ProjectUpdateTransactionTests(unittest.TestCase):
         )
         self.assertEqual(journal_path.read_bytes(), before)
 
+    @unittest.skipUnless(os.name == "nt", "terminal mutation is Windows-only")
     def test_resume_missing_handler_reuses_state_and_preserves_client_tree(
         self,
     ) -> None:
@@ -2455,6 +3889,7 @@ class ProjectUpdateTransactionTests(unittest.TestCase):
             directory_guard=SimpleNamespace(
                 close=lambda: closed.append("directory")
             ),
+            terminal_update_verified=False,
         )
         lifetime = SimpleNamespace(
             close_after_service_transaction=lambda: closed.append("runner")
@@ -2530,6 +3965,1761 @@ class ProjectUpdateTransactionTests(unittest.TestCase):
         self.assertEqual(closed, ["directory", "runner"])
         self.assertEqual(archive_tree(), client_before)
 
+    def test_resume_returns_verified_update_when_only_followup_cleanup_is_unverified(
+        self,
+    ) -> None:
+        cases = (
+            ("transaction_cleanup", False, False, False),
+            ("service_resource_close", True, True, False),
+            ("runner_close", True, False, True),
+            ("both_closes", True, True, True),
+            ("fully_clean", True, False, False),
+        )
+        for (
+            label,
+            cleanup_completed,
+            service_resource_close_fails,
+            runner_close_fails,
+        ) in cases:
+            with self.subTest(case=label):
+                closed: list[str] = []
+                progress: list[tuple[str, str]] = []
+
+                def close_service_resources() -> None:
+                    closed.append("directory")
+                    if service_resource_close_fails:
+                        raise OSError("synthetic service-resource close")
+
+                state = SimpleNamespace(
+                    prepared_preview={"status": "prepared"},
+                    reviewer="person:sealed-reviewer",
+                    directory_guard=SimpleNamespace(
+                        close=close_service_resources
+                    ),
+                    terminal_update_verified=False,
+                    transaction_cleanup_completed=None,
+                    terminal_domain_result=None,
+                    terminal_handoff_sha256=None,
+                )
+
+                def close_runner() -> None:
+                    closed.append("runner")
+                    if runner_close_fails:
+                        raise (
+                            archive_services.project_update_git_runner
+                            .ProjectUpdateGitRunnerError(
+                                "project_update_git_runner_close_unverified"
+                            )
+                        )
+
+                lifetime = SimpleNamespace(
+                    close_after_service_transaction=close_runner
+                )
+
+                def approval_executor(*_args, **_kwargs):
+                    domain_result = {
+                        "ok": True,
+                        "status": "updated_restart_required",
+                        "warnings": [],
+                        "next_safe_actions": ["restart"],
+                    }
+                    state.terminal_update_verified = True
+                    state.transaction_cleanup_completed = cleanup_completed
+                    state.terminal_domain_result = dict(domain_result)
+                    state.terminal_handoff_sha256 = "sha256:" + "a" * 64
+                    return domain_result
+
+                with (
+                    patch.object(
+                        archive_services,
+                        "_project_update_terminal_cleanup_unknown_gate_read_only",
+                        return_value=None,
+                    ),
+                    patch.object(
+                        archive_services,
+                        "_project_update_resume_preapproval_transaction",
+                        return_value=None,
+                    ),
+                    patch.object(
+                        archive_services,
+                        "_project_update_reopen_durable_state",
+                        return_value=(state, lifetime),
+                    ),
+                ):
+                    result = archive_services._wom_kit_project_version_update_resume_live_transaction(
+                        self.project,
+                        target=None,
+                        reviewed_by=None,
+                        transaction_ref=None,
+                        approval_executor=approval_executor,
+                        progress_callback=lambda stage, message, _current, _total: progress.append(
+                            (stage, message)
+                        ),
+                        _expected_approval_root=self.project,
+                        _expected_archive_id="archive-identity",
+                    )
+
+                terminal = result["terminal_finalization"]
+                self.assertTrue(result["ok"])
+                self.assertEqual(result["status"], "updated_restart_required")
+                self.assertTrue(
+                    terminal["update_result_verified_in_current_invocation"]
+                )
+                self.assertIs(
+                    terminal["transaction_cleanup_completed"],
+                    cleanup_completed,
+                )
+                self.assertIs(
+                    terminal["service_resource_close_verified"],
+                    not service_resource_close_fails,
+                )
+                self.assertIs(
+                    terminal["git_runner_close_verified"],
+                    not runner_close_fails,
+                )
+                self.assertTrue(terminal["attention_required"])
+                self.assertFalse(
+                    terminal["durable_result_delivery_acknowledged"]
+                )
+                self.assertFalse(
+                    terminal["cleanup_proof_used_as_success_authority"]
+                )
+                self.assertFalse(terminal["domain_writer_reentry_allowed"])
+                self.assertFalse(terminal["automatic_retry_allowed"])
+                self.assertEqual(closed, ["directory", "runner"])
+                self.assertEqual(
+                    progress,
+                    [
+                        ("project-preflight", "resume-start"),
+                        ("verify-release", "resume-authenticated-state"),
+                        ("write-receipt", "resume-terminal-result"),
+                    ],
+                )
+                rendered = json.dumps(result, ensure_ascii=False)
+                self.assertNotIn(str(self.project), rendered)
+                self.assertNotIn("transaction_ref", rendered)
+                self.assertNotIn("approval_id", rendered)
+                self.assertNotIn("exact_human_approval", rendered)
+
+    def test_resume_keeps_preterminal_domain_failure_when_both_closes_fail(
+        self,
+    ) -> None:
+        closed: list[str] = []
+
+        def close_service_resources() -> None:
+            closed.append("directory")
+            raise OSError("synthetic service-resource close")
+
+        state = SimpleNamespace(
+            prepared_preview={"status": "prepared"},
+            reviewer="person:sealed-reviewer",
+            directory_guard=SimpleNamespace(
+                close=close_service_resources
+            ),
+            terminal_update_verified=False,
+            transaction_cleanup_completed=None,
+        )
+
+        def close_runner() -> None:
+            closed.append("runner")
+            raise (
+                archive_services.project_update_git_runner
+                .ProjectUpdateGitRunnerError(
+                    "project_update_git_runner_close_unverified"
+                )
+            )
+
+        def approval_executor(*_args, **_kwargs):
+            raise archive_services.ArchiveServiceError(
+                "synthetic_domain_failure"
+            )
+
+        with (
+            patch.object(
+                archive_services,
+                "_project_update_terminal_cleanup_unknown_gate_read_only",
+                return_value=None,
+            ),
+            patch.object(
+                archive_services,
+                "_project_update_resume_preapproval_transaction",
+                return_value=None,
+            ),
+            patch.object(
+                archive_services,
+                "_project_update_reopen_durable_state",
+                return_value=(
+                    state,
+                    SimpleNamespace(
+                        close_after_service_transaction=close_runner
+                    ),
+                ),
+            ),
+        ):
+            with self.assertRaisesRegex(
+                archive_services.ArchiveServiceError,
+                "synthetic_domain_failure",
+            ):
+                archive_services._wom_kit_project_version_update_resume_live_transaction(
+                    self.project,
+                    target=None,
+                    reviewed_by=None,
+                    transaction_ref=None,
+                    approval_executor=approval_executor,
+                    _expected_approval_root=self.project,
+                    _expected_archive_id="archive-identity",
+                )
+
+        self.assertEqual(closed, ["directory", "runner"])
+
+    def test_fresh_next_failure_preserves_primary_when_both_closes_fail(
+        self,
+    ) -> None:
+        closed: list[str] = []
+        primary = archive_services.ArchiveServiceError(
+            "synthetic_primary_failure"
+        )
+
+        class FailingTransaction:
+            def __next__(self):
+                raise primary
+
+            def close(self) -> None:
+                closed.append("service")
+                raise SystemExit("private service close failure")
+
+        lifetime = SimpleNamespace(
+            close_after_service_transaction=lambda: (
+                closed.append("runner"),
+                (_ for _ in ()).throw(
+                    KeyboardInterrupt("private runner close failure")
+                ),
+            )[-1]
+        )
+        with (
+            patch.object(
+                archive_services,
+                "_ProjectVersionUpdateGitRunnerLifetime",
+                return_value=lifetime,
+            ),
+            patch.object(
+                archive_services,
+                "_wom_kit_project_version_update_legacy_core_generator",
+                return_value=FailingTransaction(),
+            ),
+        ):
+            with self.assertRaises(archive_services.ArchiveServiceError) as caught:
+                archive_services._wom_kit_project_version_update_legacy_core(
+                    self.project,
+                    target="v0.4.16",
+                )
+
+        self.assertIs(caught.exception, primary)
+        self.assertEqual(closed, ["service", "runner"])
+
+    def test_fresh_missing_executor_and_legacy_executor_failure_close_all(
+        self,
+    ) -> None:
+        for mode in ("missing_executor", "executor_failure"):
+            with self.subTest(mode=mode):
+                closed: list[str] = []
+                primary = archive_services.ArchiveServiceError(
+                    "synthetic_legacy_executor_failure"
+                )
+
+                class PreparedTransaction:
+                    def __next__(self):
+                        return {"status": "prepared"}
+
+                    def close(self) -> None:
+                        closed.append("service")
+                        raise SystemExit("private service close failure")
+
+                def close_runner() -> None:
+                    closed.append("runner")
+                    raise KeyboardInterrupt("private runner close failure")
+
+                lifetime = SimpleNamespace(
+                    close_after_service_transaction=close_runner
+                )
+                with (
+                    patch.object(
+                        archive_services,
+                        "_ProjectVersionUpdateGitRunnerLifetime",
+                        return_value=lifetime,
+                    ),
+                    patch.object(
+                        archive_services,
+                        "_wom_kit_project_version_update_legacy_core_generator",
+                        return_value=PreparedTransaction(),
+                    ),
+                ):
+                    if mode == "missing_executor":
+                        with self.assertRaisesRegex(
+                            archive_services.ArchiveServiceError,
+                            "project_version_update_live_approval_executor_required",
+                        ):
+                            archive_services._wom_kit_project_version_update_legacy_core(
+                                self.project,
+                                target="v0.4.16",
+                            )
+                    else:
+                        with self.assertRaises(
+                            archive_services.ArchiveServiceError
+                        ) as caught:
+                            archive_services._wom_kit_project_version_update_legacy_core(
+                                self.project,
+                                target="v0.4.16",
+                                approval_executor=(
+                                    lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                                        primary
+                                    )
+                                ),
+                            )
+                        self.assertIs(caught.exception, primary)
+
+                self.assertEqual(closed, ["service", "runner"])
+
+    def test_fresh_nonterminal_mapping_survives_both_close_failures(
+        self,
+    ) -> None:
+        closed: list[str] = []
+
+        class CompletedTransaction:
+            def __next__(self):
+                raise StopIteration(
+                    {"ok": False, "status": "blocked"}
+                )
+
+            def close(self) -> None:
+                closed.append("service")
+                raise SystemExit("private service close failure")
+
+        def close_runner() -> None:
+            closed.append("runner")
+            raise KeyboardInterrupt("private runner close failure")
+
+        with (
+            patch.object(
+                archive_services,
+                "_ProjectVersionUpdateGitRunnerLifetime",
+                return_value=SimpleNamespace(
+                    close_after_service_transaction=close_runner
+                ),
+            ),
+            patch.object(
+                archive_services,
+                "_wom_kit_project_version_update_legacy_core_generator",
+                return_value=CompletedTransaction(),
+            ),
+        ):
+            result = archive_services._wom_kit_project_version_update_legacy_core(
+                self.project,
+                target="v0.4.16",
+            )
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(closed, ["service", "runner"])
+        self.assertFalse(
+            result["service_finalization"][
+                "service_resource_close_verified"
+            ]
+        )
+        self.assertFalse(
+            result["service_finalization"]["git_runner_close_verified"]
+        )
+
+    def test_claimless_cancel_preserves_primary_when_both_closes_fail(
+        self,
+    ) -> None:
+        closed: list[str] = []
+        primary = archive_services.ArchiveServiceError(
+            "synthetic_claimless_primary_failure"
+        )
+
+        def close_service() -> None:
+            closed.append("service")
+            raise SystemExit("private service close failure")
+
+        def close_runner() -> None:
+            closed.append("runner")
+            raise KeyboardInterrupt("private runner close failure")
+
+        state = SimpleNamespace(
+            transaction=SimpleNamespace(
+                _lock_path=self.project / "missing-version-update.lock"
+            ),
+            directory_guard=SimpleNamespace(close=close_service),
+        )
+        with (
+            patch.object(
+                archive_services,
+                "_project_update_reopen_durable_state",
+                return_value=(
+                    state,
+                    SimpleNamespace(
+                        close_after_service_transaction=close_runner
+                    ),
+                ),
+            ),
+            patch.object(
+                archive_services,
+                "_project_update_cancel_claimless_preapproval_state",
+                side_effect=primary,
+            ),
+        ):
+            with self.assertRaises(archive_services.ArchiveServiceError) as caught:
+                archive_services._wom_kit_project_version_update_cancel_claimless_preapproval_transaction(
+                    self.project,
+                    target=None,
+                    reviewed_by=None,
+                    transaction_ref=None,
+                    confirm_claim_store_empty=lambda: True,
+                    _expected_approval_root=self.project,
+                    _expected_archive_id="archive-identity",
+                )
+
+        self.assertIs(caught.exception, primary)
+        self.assertEqual(closed, ["service", "runner"])
+
+    def test_sealed_preapproval_cancel_preserves_primary_when_both_closes_fail(
+        self,
+    ) -> None:
+        metadata_root = self.project / ".zettel-kasten"
+        metadata_root.mkdir()
+        lock_path = metadata_root / "version-update.lock"
+        lock_path.write_bytes(b"synthetic lock")
+        transaction_ref = self.DEFAULT_TRANSACTION_REF
+        closed: list[str] = []
+        primary = archive_services.ArchiveServiceError(
+            "synthetic_preapproval_primary_failure"
+        )
+
+        def close_service() -> None:
+            closed.append("service")
+            raise SystemExit("private service close failure")
+
+        def close_runner() -> None:
+            closed.append("runner")
+            raise KeyboardInterrupt("private runner close failure")
+
+        reopened_transaction = SimpleNamespace(
+            inspect=lambda: SimpleNamespace(
+                journal=SimpleNamespace(verified_prefix=())
+            ),
+            append=lambda **_kwargs: None,
+        )
+        state = SimpleNamespace(
+            transaction=reopened_transaction,
+            directory_guard=SimpleNamespace(close=close_service),
+        )
+        reservation = SimpleNamespace(
+            existing_lock_bytes_read_only=lambda: b"synthetic lock"
+        )
+        sealed_transaction = SimpleNamespace(
+            bind_sealed_intent_to_lock=lambda _lock: None
+        )
+        lifetime = SimpleNamespace(
+            close_after_service_transaction=close_runner
+        )
+        with (
+            patch.object(
+                archive_services,
+                "_wom_kit_project_version_update_approval_authority_matches",
+                return_value=True,
+            ),
+            patch.object(
+                archive_services.project_update_transaction,
+                "active_transaction_ref_from_lock_read_only",
+                return_value=transaction_ref,
+            ),
+            patch.object(
+                archive_services.project_update_transaction,
+                "inspect_prelock_orphans",
+                return_value=[
+                    SimpleNamespace(
+                        transaction_ref=transaction_ref,
+                        classification="intent_sealed_lock_binding_incomplete",
+                    )
+                ],
+            ),
+            patch.object(
+                archive_services.project_update_transaction.ReservedProjectUpdateTransaction,
+                "open",
+                return_value=reservation,
+            ),
+            patch.object(
+                archive_services.project_update_transaction.ProjectUpdateTransaction,
+                "open",
+                return_value=sealed_transaction,
+            ),
+            patch.object(
+                archive_services,
+                "_project_update_reopen_durable_state",
+                return_value=(state, lifetime),
+            ),
+            patch.object(
+                archive_services,
+                "_project_update_live_component_sha256",
+                return_value={},
+            ),
+            patch.object(
+                archive_services,
+                "_project_update_cancel_before_native",
+                side_effect=primary,
+            ),
+        ):
+            with self.assertRaises(archive_services.ArchiveServiceError) as caught:
+                archive_services._project_update_resume_preapproval_transaction(
+                    self.project,
+                    target=None,
+                    reviewed_by=None,
+                    transaction_ref=None,
+                    expected_approval_root=self.project,
+                    expected_archive_id="archive-identity",
+                    approval_identifier_supplied=False,
+                )
+
+        self.assertIs(caught.exception, primary)
+        self.assertEqual(closed, ["service", "runner"])
+
+    def test_claimless_cancel_mapping_survives_both_close_failures(
+        self,
+    ) -> None:
+        closed: list[str] = []
+
+        def close_service() -> None:
+            closed.append("service")
+            raise OSError("private service close failure")
+
+        def close_runner() -> None:
+            closed.append("runner")
+            raise OSError("private runner close failure")
+
+        state = SimpleNamespace(
+            transaction=SimpleNamespace(
+                _lock_path=self.project / "missing-version-update.lock"
+            ),
+            directory_guard=SimpleNamespace(close=close_service),
+        )
+        with (
+            patch.object(
+                archive_services,
+                "_project_update_reopen_durable_state",
+                return_value=(
+                    state,
+                    SimpleNamespace(
+                        close_after_service_transaction=close_runner
+                    ),
+                ),
+            ),
+            patch.object(
+                archive_services,
+                "_project_update_cancel_claimless_preapproval_state",
+                return_value=None,
+            ),
+        ):
+            result = archive_services._wom_kit_project_version_update_cancel_claimless_preapproval_transaction(
+                self.project,
+                target=None,
+                reviewed_by=None,
+                transaction_ref=None,
+                confirm_claim_store_empty=lambda: True,
+                _expected_approval_root=self.project,
+                _expected_archive_id="archive-identity",
+            )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["status"], "preapproval_scaffold_cancelled")
+        self.assertEqual(closed, ["service", "runner"])
+        self.assertEqual(
+            result["service_finalization"],
+            {
+                "schema": "wom-kit/project-version-update-service-finalization/v0.4.16",
+                "service_resource_close_verified": False,
+                "git_runner_close_verified": False,
+                "attention_required": True,
+                "private_paths_echoed": False,
+                "private_identifiers_echoed": False,
+                "raw_errors_echoed": False,
+            },
+        )
+        self.assertTrue(result["post_service_attention_required"])
+        rendered = json.dumps(result)
+        self.assertNotIn("private service close failure", rendered)
+        self.assertNotIn("private runner close failure", rendered)
+
+    def test_nonterminal_domain_mapping_survives_each_close_failure(
+        self,
+    ) -> None:
+        for service_fails, runner_fails in (
+            (True, False),
+            (False, True),
+            (True, True),
+        ):
+            with self.subTest(
+                service_fails=service_fails,
+                runner_fails=runner_fails,
+            ):
+                closed: list[str] = []
+
+                def close_service() -> None:
+                    closed.append("service")
+                    if service_fails:
+                        raise OSError("private service close failure")
+
+                def close_runner() -> None:
+                    closed.append("runner")
+                    if runner_fails:
+                        raise OSError("private runner close failure")
+
+                result = archive_services._project_update_finish_service_result(
+                    {"ok": False, "status": "domain_blocked"},
+                    SimpleNamespace(terminal_update_verified=False),
+                    SimpleNamespace(
+                        close_after_service_transaction=close_runner
+                    ),
+                    close_owned_resources=close_service,
+                )
+
+                self.assertFalse(result["ok"])
+                self.assertEqual(result["status"], "domain_blocked")
+                self.assertEqual(closed, ["service", "runner"])
+                finalization = result["service_finalization"]
+                self.assertIs(
+                    finalization["service_resource_close_verified"],
+                    not service_fails,
+                )
+                self.assertIs(
+                    finalization["git_runner_close_verified"],
+                    not runner_fails,
+                )
+                self.assertTrue(finalization["attention_required"])
+                rendered = json.dumps(result)
+                self.assertNotIn("private service close failure", rendered)
+                self.assertNotIn("private runner close failure", rendered)
+
+    def test_terminal_domain_projection_recursively_removes_private_locators(
+        self,
+    ) -> None:
+        transaction_ref = "update_" + "a" * 32
+        approval_id = "approval_" + "b" * 32
+        transaction_locator = (
+            ".zettel-kasten/private/version-updates/"
+            f"{transaction_ref}"
+        )
+        candidate_locator = f"{transaction_locator}/runtime-candidate"
+        result = {
+            "ok": True,
+            "status": "updated_restart_required",
+            "transaction": {
+                "transaction_ref": transaction_ref,
+                "transaction_logical_ref": transaction_locator,
+                "checkpoint_count": 8,
+            },
+            "project_runtime": {
+                "runtime_candidate": {
+                    "transaction_ref": transaction_ref,
+                    "candidate_locator": candidate_locator,
+                    "seal_locator": (
+                        ".zettel-kasten/private/version-updates/"
+                        f"{transaction_ref}/runtime-candidate-seal.json"
+                    ),
+                    "verified": True,
+                },
+            },
+            "receipt": {
+                "path": (
+                    ".zettel-kasten/receipts/version-updates/"
+                    f"{transaction_ref}.json"
+                ),
+                "written": True,
+                "sha256": digest("terminal receipt"),
+            },
+            "files_written": [
+                ".zettel-kasten/receipts/version-updates/"
+                f"{transaction_ref}.json",
+            ],
+            "nested": [
+                {
+                    "approval_id": approval_id,
+                    "summary": f"receipt for {transaction_ref}",
+                },
+                {"local_path": r"C:\private\project\receipt.json"},
+                {"scratch": ".wom-scratch/private/terminal/state.json"},
+                {"private_root": ".zettel-kasten/private"},
+                {"scratch_root": ".wom-scratch/private"},
+                {
+                    "file_uri": (
+                        "receipt at file:///" + "home/private/item.json"
+                    )
+                },
+                {"unc": r"receipt at \\server\share\item.json"},
+                {"posix": "receipt at /" + "home/private/item.json"},
+                {"windows_rooted": r"receipt at \Users\private\item.json"},
+                {"workspace": "receipt at /workspace/private/item.json"},
+                {"srv": "receipt at /srv/private/item.json"},
+                {"volumes": "receipt at /Volumes/private/item.json"},
+                {"work_rooted": r"receipt at \Work\private\item.json"},
+                {"embedded_drive": r"path:C:\private\item.json"},
+                {"colon_posix": "path:/workspace/private/item.json"},
+                {"colon_unc": r"path:\\server\share\item.json"},
+                {"api_like_local_path": "/api/private/client.db"},
+                {
+                    "protocol_relative_local_path": (
+                        "//private-server/share/client.db"
+                    )
+                },
+                {"backtick_posix": "saved at `/workspace/private/item.json`"},
+                {"bracket_unc": r"saved at [\\server\share\item.json]"},
+                {"locator_echo": candidate_locator},
+                {
+                    "unknown_private_tail": (
+                        f"{transaction_locator}/client-secret-name.json"
+                    )
+                },
+            ],
+            "dynamic_keys": {
+                transaction_ref: "redacted key",
+                approval_id: "redacted key",
+            },
+            "public_routes": {
+                "docs": "//docs.example.com/public",
+                "api": "/api/v1/status",
+                "local_path": "/api/private/client.db",
+                "DOCS": "//private-server/share/client.db",
+                "API": "/api/private/client.db",
+            },
+            "wrapper": {
+                "public_routes": {
+                    "docs": "//private-server/share/client.db",
+                    "api": "/api/private/client.db",
+                }
+            },
+            "dynamic_route_key": {
+                "//private-server/share/client.db": "value",
+            },
+            "operation_exact_human_approval": {
+                "approval_id": approval_id,
+            },
+        }
+
+        projected = archive_services._project_update_privacy_safe_domain_result(
+            result
+        )
+        rendered = json.dumps(projected, ensure_ascii=False)
+
+        self.assertNotIn(transaction_ref, rendered)
+        self.assertNotIn(approval_id, rendered)
+        self.assertNotIn(".zettel-kasten/private/", rendered)
+        self.assertNotIn(".wom-scratch/private/", rendered)
+        self.assertNotIn(r"C:\private\project", rendered)
+        self.assertIsNone(
+            re.search(r"(?i)(?:update|approval)_[0-9a-f]{32}", rendered)
+        )
+        self.assertNotIn("operation_exact_human_approval", projected)
+        self.assertEqual(
+            projected["transaction"],
+            {"checkpoint_count": 8},
+        )
+        self.assertEqual(
+            projected["project_runtime"]["runtime_candidate"],
+            {"verified": True},
+        )
+        self.assertEqual(
+            projected["receipt"],
+            {
+                "path": (
+                    ".zettel-kasten/receipts/version-updates/"
+                    "<private-transaction>.json"
+                ),
+                "written": True,
+                "sha256": digest("terminal receipt"),
+            },
+        )
+        self.assertEqual(
+            projected["files_written"],
+            [
+                ".zettel-kasten/receipts/version-updates/"
+                "<private-transaction>.json"
+            ],
+        )
+        self.assertEqual(
+            projected["nested"],
+            [
+                {"summary": "receipt for <private-transaction>"},
+                {"local_path": "<private-local-path>"},
+                {"scratch": "<private-project-metadata>"},
+                {"private_root": "<private-project-metadata>"},
+                {"scratch_root": "<private-project-metadata>"},
+                {"file_uri": "<private-local-path>"},
+                {"unc": "<private-local-path>"},
+                {"posix": "<private-local-path>"},
+                {"windows_rooted": "<private-local-path>"},
+                {"workspace": "<private-local-path>"},
+                {"srv": "<private-local-path>"},
+                {"volumes": "<private-local-path>"},
+                {"work_rooted": "<private-local-path>"},
+                {"embedded_drive": "<private-local-path>"},
+                {"colon_posix": "<private-local-path>"},
+                {"colon_unc": "<private-local-path>"},
+                {"api_like_local_path": "<private-local-path>"},
+                {"protocol_relative_local_path": "<private-local-path>"},
+                {"backtick_posix": "<private-local-path>"},
+                {"bracket_unc": "<private-local-path>"},
+                {"locator_echo": "<private-control-path>"},
+                {"unknown_private_tail": "<private-project-metadata>"},
+            ],
+        )
+        self.assertEqual(
+            projected["dynamic_keys"],
+            {
+                "<private-transaction>": "redacted key",
+                "<private-approval>": "redacted key",
+            },
+        )
+        self.assertEqual(
+            projected["public_routes"],
+            {
+                "docs": "//docs.example.com/public",
+                "api": "/api/v1/status",
+                "local_path": "<private-local-path>",
+                "DOCS": "<private-local-path>",
+                "API": "<private-local-path>",
+            },
+        )
+        self.assertEqual(
+            projected["wrapper"],
+            {
+                "public_routes": {
+                    "docs": "<private-local-path>",
+                    "api": "<private-local-path>",
+                }
+            },
+        )
+        self.assertEqual(
+            projected["dynamic_route_key"],
+            {"<private-local-path>": "value"},
+        )
+        self.assertEqual(
+            projected["approval_verification"],
+            {
+                "exact_human_approval_succeeded": True,
+                "one_use_claim_reauthenticated": True,
+                "approval_identifiers_echoed": False,
+                "private_paths_echoed": False,
+            },
+        )
+
+        malformed_results = (
+            {
+                "ok": True,
+                "status": "updated_restart_required",
+                "unbound_control_identifier": "UPDATE_" + "e" * 32,
+            },
+            {"ok": True, "status": "updated_restart_required", "transaction_ref": "a"},
+            {"ok": True, "status": "updated_restart_required", "approval_id": "e"},
+            {"ok": True, "status": "updated_restart_required", "candidate_locator": "a"},
+            {
+                "ok": True,
+                "status": "updated_restart_required",
+                "transaction_ref": transaction_ref,
+                "approval_id": approval_id,
+                "claim_path": transaction_locator,
+            },
+            {
+                "ok": True,
+                "status": "updated_restart_required",
+                "transaction_ref": transaction_ref,
+                "approval_id": approval_id,
+                "transaction_path": (
+                    "profiles/local/exact-human-approvals/claims/"
+                    f"{approval_id}.json"
+                ),
+            },
+        )
+        for malformed in malformed_results:
+            with self.subTest(malformed=malformed), self.assertRaises(
+                archive_services.ArchiveServiceError
+            ):
+                archive_services._project_update_privacy_safe_domain_result(
+                    malformed
+                )
+
+        sequence_projection = (
+            archive_services._project_update_privacy_safe_domain_result(
+                {
+                    "ok": True,
+                    "status": "updated_restart_required",
+                    "public_routes": {
+                        "docs": ["//private-server/share/client.db"],
+                        "api": ["/api/private/client.db"],
+                    },
+                }
+            )
+        )
+        self.assertEqual(
+            sequence_projection["public_routes"],
+            {
+                "docs": ["<private-local-path>"],
+                "api": ["<private-local-path>"],
+            },
+        )
+
+    def test_collision_mapping_and_primary_survive_runner_close_failure(
+        self,
+    ) -> None:
+        for mode in ("mapping", "primary"):
+            with self.subTest(mode=mode):
+                closed: list[str] = []
+                primary = archive_services.ArchiveServiceError(
+                    "synthetic_collision_primary_failure"
+                )
+
+                def close_runner() -> None:
+                    closed.append("runner")
+                    raise SystemExit("private runner close failure")
+
+                runner = SimpleNamespace(
+                    close_transport_boundary=lambda: closed.append(
+                        "transport"
+                    ),
+                    close=close_runner,
+                )
+                inner_result = {
+                    "ok": False,
+                    "status": "collision_state_recovery_required",
+                    "service_finalization": {
+                        "schema": "wom-kit/project-version-update-service-finalization/v0.4.16",
+                        "service_resource_close_verified": False,
+                        "git_runner_close_verified": True,
+                        "attention_required": True,
+                        "private_paths_echoed": False,
+                        "private_identifiers_echoed": False,
+                        "raw_errors_echoed": False,
+                    },
+                }
+                inner_effect = (
+                    primary if mode == "primary" else inner_result
+                )
+                with (
+                    patch.object(
+                        archive_services.project_update_git_runner.TrustedProjectUpdateGitRunner,
+                        "resolve_preapproval",
+                        return_value=runner,
+                    ),
+                    patch.object(
+                        archive_services,
+                        "_wom_kit_project_version_update_collision_legacy_core_with_runner",
+                        side_effect=(
+                            inner_effect
+                            if isinstance(inner_effect, BaseException)
+                            else None
+                        ),
+                        return_value=(
+                            inner_effect
+                            if not isinstance(inner_effect, BaseException)
+                            else None
+                        ),
+                    ),
+                ):
+                    if mode == "primary":
+                        with self.assertRaises(
+                            archive_services.ArchiveServiceError
+                        ) as caught:
+                            archive_services._wom_kit_project_version_update_collision_legacy_core(
+                                self.project,
+                                target="v0.4.16",
+                                entry_ref="entry",
+                                action="preserve_relocate",
+                            )
+                        self.assertIs(caught.exception, primary)
+                    else:
+                        result = archive_services._wom_kit_project_version_update_collision_legacy_core(
+                            self.project,
+                            target="v0.4.16",
+                            entry_ref="entry",
+                            action="preserve_relocate",
+                        )
+                        self.assertEqual(
+                            result["status"],
+                            "collision_state_recovery_required",
+                        )
+                        self.assertFalse(
+                            result["service_finalization"][
+                                "service_resource_close_verified"
+                            ]
+                        )
+                        self.assertFalse(
+                            result["service_finalization"][
+                                "git_runner_close_verified"
+                            ]
+                        )
+                self.assertEqual(closed, ["transport", "runner"])
+
+    def test_replayed_terminal_result_never_invents_close_proof(self) -> None:
+        terminal = (
+            archive_services
+            ._project_update_replayed_terminal_finalization(
+                cleanup_completed=True,
+            )
+        )
+        result = archive_services._project_update_terminal_result_from_domain(
+            {
+                "ok": True,
+                "status": "updated_restart_required",
+                "warnings": [],
+                "next_safe_actions": ["restart"],
+            },
+            terminal,
+        )
+
+        self.assertIsNotNone(result)
+        self.assertTrue(result["ok"])
+        replayed = result["terminal_finalization"]
+        self.assertTrue(
+            replayed["update_result_reauthenticated_from_durable_handoff"]
+        )
+        self.assertFalse(replayed["service_resource_close_verified"])
+        self.assertFalse(replayed["git_runner_close_verified"])
+        self.assertTrue(replayed["attention_required"])
+
+    def test_terminal_success_survives_both_hard_close_failures(self) -> None:
+        closed: list[str] = []
+        domain = {
+            "ok": True,
+            "status": "updated_restart_required",
+            "warnings": [],
+            "next_safe_actions": ["restart"],
+        }
+
+        def close_service() -> None:
+            closed.append("service")
+            raise SystemExit("private service close failure")
+
+        def close_runner() -> None:
+            closed.append("runner")
+            raise KeyboardInterrupt("private runner close failure")
+
+        result = archive_services._project_update_finish_service_result(
+            domain,
+            SimpleNamespace(
+                terminal_update_verified=True,
+                transaction_cleanup_completed=True,
+                terminal_domain_result=dict(domain),
+                terminal_handoff_sha256="sha256:" + "a" * 64,
+            ),
+            SimpleNamespace(
+                close_after_service_transaction=close_runner
+            ),
+            close_owned_resources=close_service,
+        )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["status"], "updated_restart_required")
+        self.assertEqual(closed, ["service", "runner"])
+        terminal = result["terminal_finalization"]
+        self.assertFalse(terminal["service_resource_close_verified"])
+        self.assertFalse(terminal["git_runner_close_verified"])
+        self.assertTrue(terminal["attention_required"])
+
+    def test_runner_lifetime_retains_authority_until_close_is_verified(
+        self,
+    ) -> None:
+        calls: list[str] = []
+
+        class RetryableRunner:
+            def close(self) -> None:
+                calls.append("close")
+                if len(calls) == 1:
+                    raise OSError("private runner close failure")
+
+        runner = RetryableRunner()
+        lifetime = archive_services._ProjectVersionUpdateGitRunnerLifetime()
+        lifetime._runner = runner
+
+        with self.assertRaisesRegex(
+            OSError,
+            "private runner close failure",
+        ):
+            lifetime.close_after_service_transaction()
+        self.assertIs(lifetime._runner, runner)
+        lifetime.close_after_service_transaction()
+        self.assertIsNone(lifetime._runner)
+        self.assertEqual(calls, ["close", "close"])
+
+    @unittest.skipUnless(os.name == "nt", "Windows handle authority")
+    def test_directory_guard_close_failure_keeps_handle_authority(
+        self,
+    ) -> None:
+        guard = archive_services._WomKitProjectUpdateDirectoryGuard(
+            self.project
+        )
+        guard._handles = {"first": 101, "second": 202}
+        guard._identities = {
+            "first": (1, 1),
+            "second": (2, 2),
+        }
+        with patch.object(
+            guard,
+            "_close_handle",
+            side_effect=[
+                OSError("synthetic close failure"),
+                None,
+            ],
+        ) as close_handle:
+            with self.assertRaisesRegex(
+                OSError,
+                "project_update_directory_guard_close_failed",
+            ):
+                guard.close()
+        self.assertEqual(close_handle.call_count, 2)
+        self.assertEqual(guard._handles, {"first": 101})
+        self.assertEqual(guard._identities, {"first": (1, 1)})
+        with patch.object(guard, "_close_handle", return_value=None):
+            guard.close()
+        self.assertEqual(guard._handles, {})
+        self.assertEqual(guard._identities, {})
+
+    def test_directory_guard_checks_windows_closehandle_result(self) -> None:
+        guard = object.__new__(
+            archive_services._WomKitProjectUpdateDirectoryGuard
+        )
+        guard._kernel32 = SimpleNamespace(CloseHandle=lambda _handle: 0)
+        with patch.object(archive_services.os, "name", "nt"):
+            with self.assertRaisesRegex(
+                OSError,
+                "project_update_directory_guard_close_failed",
+            ):
+                guard._close_handle(101)
+
+    def test_directory_guard_posix_close_error_is_never_retried(self) -> None:
+        guard = archive_services._WomKitProjectUpdateDirectoryGuard(
+            self.project
+        )
+        guard._handles = {"first": 303}
+        guard._identities = {"first": (3, 3)}
+        with (
+            patch.object(archive_services.os, "name", "posix"),
+            patch.object(
+                archive_services.os,
+                "close",
+                side_effect=OSError("synthetic close failure"),
+            ) as close_handle,
+        ):
+            with self.assertRaisesRegex(
+                OSError,
+                "project_update_directory_guard_close_failed",
+            ):
+                guard.close()
+            self.assertEqual(guard._handles, {})
+            self.assertEqual(guard._identities, {})
+            guard.close()
+
+        close_handle.assert_called_once_with(303)
+
+    @unittest.skipUnless(os.name == "nt", "terminal mutation is Windows-only")
+    def test_terminal_delivery_atomic_rename_supports_two_updates(self) -> None:
+        consumed_paths: list[Path] = []
+        for label in ("first", "second"):
+            fixture = self.prepare_terminal_delivery_fixture(label)
+            acknowledged = (
+                archive_services
+                ._project_update_acknowledge_terminal_result_delivery(
+                    self.project,
+                    fixture["result"],
+                    output_relative=str(fixture["output_relative"]),
+                    run_id=str(fixture["run_id"]),
+                    operation_ref=str(fixture["operation_ref"]),
+                )
+            )
+            self.assertTrue(acknowledged)
+            self.assertFalse(Path(fixture["handoff"]).exists())
+            display_pending = (
+                archive_services
+                ._project_update_terminal_display_pending_path(
+                    self.project
+                )
+            )
+            self.assertEqual(
+                display_pending.read_bytes(),
+                fixture["handoff_raw"],
+            )
+            consumed = archive_services._project_update_terminal_consumed_path(
+                self.project,
+                str(fixture["handoff_sha256"]),
+            )
+            self.assertFalse(consumed.exists())
+            finalized = (
+                archive_services
+                ._project_update_finalize_terminal_result_display(
+                    self.project,
+                    expected_handoff_sha256=str(
+                        fixture["handoff_sha256"]
+                    ),
+                    delivery_capability=str(fixture["capability"]),
+                )
+            )
+            self.assertTrue(finalized)
+            self.assertFalse(display_pending.exists())
+            self.assertEqual(
+                consumed.read_bytes(),
+                fixture["handoff_raw"],
+            )
+            consumed_before_retry = consumed.read_bytes()
+            self.assertTrue(
+                archive_services
+                ._project_update_finalize_terminal_result_display(
+                    self.project,
+                    expected_handoff_sha256=str(
+                        fixture["handoff_sha256"]
+                    ),
+                    delivery_capability=str(fixture["capability"]),
+                )
+            )
+            self.assertEqual(consumed.read_bytes(), consumed_before_retry)
+            consumed_paths.append(consumed)
+        self.assertNotEqual(consumed_paths[0], consumed_paths[1])
+        self.assertTrue(all(path.is_file() for path in consumed_paths))
+
+    @unittest.skipUnless(os.name == "nt", "terminal mutation is Windows-only")
+    def test_terminal_delivery_waits_for_transaction_cleanup_before_ack(
+        self,
+    ) -> None:
+        fixture = self.prepare_terminal_delivery_fixture(
+            "cleanup-attention",
+            terminal_overrides={
+                "transaction_cleanup_completed": False,
+                "service_resource_close_verified": False,
+                "git_runner_close_verified": False,
+            },
+        )
+
+        acknowledged = (
+            archive_services
+            ._project_update_acknowledge_terminal_result_delivery(
+                self.project,
+                fixture["result"],
+                output_relative=str(fixture["output_relative"]),
+                run_id=str(fixture["run_id"]),
+                operation_ref=str(fixture["operation_ref"]),
+            )
+        )
+
+        self.assertFalse(acknowledged)
+        self.assertTrue(Path(fixture["handoff"]).is_file())
+        self.assertFalse(
+            archive_services
+            ._project_update_terminal_display_pending_path(
+                self.project
+            )
+            .exists()
+        )
+        self.assertFalse(
+            archive_services._project_update_terminal_consumed_path(
+                self.project,
+                str(fixture["handoff_sha256"]),
+            ).exists()
+        )
+        self.assertTrue(fixture["result"]["post_update_attention_required"])
+
+    @unittest.skipUnless(os.name == "nt", "terminal mutation is Windows-only")
+    def test_terminal_delivery_is_independent_of_followup_close_attention(
+        self,
+    ) -> None:
+        fixture = self.prepare_terminal_delivery_fixture(
+            "followup-close-attention",
+            terminal_overrides={
+                "transaction_cleanup_completed": True,
+                "service_resource_close_verified": False,
+                "git_runner_close_verified": False,
+            },
+        )
+
+        acknowledged = (
+            archive_services
+            ._project_update_acknowledge_terminal_result_delivery(
+                self.project,
+                fixture["result"],
+                output_relative=str(fixture["output_relative"]),
+                run_id=str(fixture["run_id"]),
+                operation_ref=str(fixture["operation_ref"]),
+            )
+        )
+
+        self.assertTrue(acknowledged)
+        self.assertFalse(Path(fixture["handoff"]).exists())
+        display_pending = (
+            archive_services._project_update_terminal_display_pending_path(
+                self.project
+            )
+        )
+        self.assertEqual(
+            display_pending.read_bytes(),
+            fixture["handoff_raw"],
+        )
+        consumed = archive_services._project_update_terminal_consumed_path(
+            self.project,
+            str(fixture["handoff_sha256"]),
+        )
+        self.assertFalse(consumed.exists())
+        self.assertTrue(
+            archive_services
+            ._project_update_finalize_terminal_result_display(
+                self.project,
+                expected_handoff_sha256=str(
+                    fixture["handoff_sha256"]
+                ),
+                delivery_capability=str(fixture["capability"]),
+            )
+        )
+        self.assertFalse(display_pending.exists())
+        self.assertTrue(
+            consumed.is_file()
+        )
+        self.assertTrue(fixture["result"]["post_update_attention_required"])
+
+    def test_terminal_record_payload_uses_exact_human_canonical_bytes(
+        self,
+    ) -> None:
+        document = {
+            "schema": "wom-kit/test-terminal/v0.1",
+            "message": "복구 완료",
+        }
+        payload = (
+            archive_services._project_update_exact_terminal_payload_bytes(
+                document
+            )
+        )
+        self.assertEqual(
+            exact_human_approval._terminal_record_payload(payload),
+            payload,
+        )
+        self.assertTrue(payload.endswith(b"\n"))
+        self.assertIn("복구 완료".encode("utf-8"), payload)
+        with self.assertRaisesRegex(
+            exact_human_approval.ExactHumanApprovalError,
+            "exact_human_approval_terminal_record_payload_invalid",
+        ):
+            exact_human_approval._terminal_record_payload(
+                canonical_json_bytes(document)
+            )
+
+    @unittest.skipUnless(os.name == "nt", "terminal mutation is Windows-only")
+    def test_terminal_write_creates_durable_same_directory_guard(self) -> None:
+        handoff, guard = archive_services._project_update_terminal_handoff_paths(
+            self.project
+        )
+        self.assertFalse(handoff.parent.exists())
+        document = {
+            "schema": archive_services._PROJECT_UPDATE_TERMINAL_HANDOFF_SCHEMA,
+            "state": "terminal_pending",
+        }
+
+        written_sha256 = (
+            archive_services._project_update_write_terminal_document_exact(
+                self.project,
+                handoff,
+                document,
+                expected_previous_value=None,
+            )
+        )
+
+        self.assertEqual(guard.read_bytes(), b"\x00")
+        self.assertEqual(handoff.parent, guard.parent)
+        self.assertEqual(
+            written_sha256,
+            sha256_bytes(handoff.read_bytes()),
+        )
+
+    @unittest.skipUnless(os.name == "nt", "terminal mutation is Windows-only")
+    def test_terminal_initial_publication_race_never_replaces_foreign_file(
+        self,
+    ) -> None:
+        handoff, _guard = archive_services._project_update_terminal_handoff_paths(
+            self.project
+        )
+        document = {
+            "schema": archive_services._PROJECT_UPDATE_TERMINAL_HANDOFF_SCHEMA,
+            "state": "claim_succeeded_pre_unlock",
+        }
+        foreign_raw = archive_services._project_update_canonical_bytes(
+            {"foreign": "initial-publication-race"}
+        )
+        if os.name == "nt":
+            seam = "_project_update_terminal_windows_move_exact_no_replace"
+            real_publish = getattr(archive_services, seam)
+
+            def inject_destination(
+                source: Path,
+                destination: Path | None,
+                **kwargs,
+            ) -> bytes:
+                if destination is None:
+                    return real_publish(source, destination, **kwargs)
+                destination.write_bytes(foreign_raw)
+                return real_publish(source, destination, **kwargs)
+
+        else:
+            seam = "_project_update_terminal_posix_publish_unnamed_no_replace"
+            real_publish = getattr(archive_services, seam)
+
+            def inject_destination(
+                binding: dict[str, object],
+                destination: Path,
+                raw: bytes,
+                **kwargs,
+            ) -> None:
+                destination.write_bytes(foreign_raw)
+                real_publish(binding, destination, raw, **kwargs)
+
+        with patch.object(
+            archive_services,
+            seam,
+            side_effect=inject_destination,
+        ):
+            with self.assertRaisesRegex(
+                archive_services.ArchiveServiceError,
+                "project_version_update_terminal_handoff_conflict",
+            ):
+                archive_services._project_update_write_terminal_document_exact(
+                    self.project,
+                    handoff,
+                    document,
+                    expected_previous_value=None,
+                )
+
+        self.assertEqual(handoff.read_bytes(), foreign_raw)
+
+    @unittest.skipUnless(os.name == "nt", "terminal mutation is Windows-only")
+    def test_terminal_transition_race_never_replaces_changed_file(self) -> None:
+        handoff, _guard = archive_services._project_update_terminal_handoff_paths(
+            self.project
+        )
+        pending = {
+            "schema": archive_services._PROJECT_UPDATE_TERMINAL_HANDOFF_SCHEMA,
+            "state": "claim_succeeded_pre_unlock",
+            "pending": {"record": "pending"},
+        }
+        ready = {
+            "schema": archive_services._PROJECT_UPDATE_TERMINAL_HANDOFF_SCHEMA,
+            "state": "terminal_ready",
+            "pending": {"record": "pending"},
+            "ready": {"record": "ready"},
+        }
+        archive_services._project_update_write_terminal_document_exact(
+            self.project,
+            handoff,
+            pending,
+            expected_previous_value=None,
+        )
+        foreign_raw = archive_services._project_update_canonical_bytes(
+            {"foreign": "transition-race"}
+        )
+        real_cas = archive_services._replace_regular_file_bytes_compare_and_swap
+
+        def inject_mutation(*args, **kwargs):
+            handoff.write_bytes(foreign_raw)
+            return real_cas(*args, **kwargs)
+
+        with patch.object(
+            archive_services,
+            "_replace_regular_file_bytes_compare_and_swap",
+            side_effect=inject_mutation,
+        ):
+            with self.assertRaisesRegex(
+                archive_services.ArchiveServiceError,
+                "project_version_update_terminal_handoff_conflict",
+            ):
+                archive_services._project_update_write_terminal_document_exact(
+                    self.project,
+                    handoff,
+                    ready,
+                    expected_previous_value=pending,
+                )
+
+        self.assertEqual(handoff.read_bytes(), foreign_raw)
+
+    def test_terminal_handoff_access_error_is_not_treated_as_absence(
+        self,
+    ) -> None:
+        handoff, _guard = archive_services._project_update_terminal_handoff_paths(
+            self.project
+        )
+        with patch.object(
+            archive_services.os,
+            "lstat",
+            side_effect=PermissionError("synthetic private access failure"),
+        ):
+            with self.assertRaisesRegex(
+                archive_services.ArchiveServiceError,
+                "project_version_update_terminal_handoff_invalid",
+            ):
+                archive_services._project_update_read_terminal_document(
+                    self.project,
+                    handoff,
+                )
+
+    @unittest.skipUnless(os.name == "nt", "terminal mutation is Windows-only")
+    def test_terminal_delivery_rejects_mutated_result_and_capability_mismatch(
+        self,
+    ) -> None:
+        mutated = self.prepare_terminal_delivery_fixture(
+            "mutated-result",
+            result_domain_override={
+                "ok": True,
+                "status": "no_change",
+                "warnings": [],
+                "next_safe_actions": ["verify"],
+            },
+        )
+        self.assertFalse(
+            archive_services
+            ._project_update_acknowledge_terminal_result_delivery(
+                self.project,
+                mutated["result"],
+                output_relative=str(mutated["output_relative"]),
+                run_id=str(mutated["run_id"]),
+                operation_ref=str(mutated["operation_ref"]),
+            )
+        )
+        self.assertTrue(Path(mutated["handoff"]).is_file())
+        Path(mutated["handoff"]).unlink()
+
+        wrong_capability = "hmac-sha256:" + "f" * 64
+        mismatched = self.prepare_terminal_delivery_fixture(
+            "capability-mismatch",
+            proof_capability_override=wrong_capability,
+        )
+        self.assertFalse(
+            archive_services
+            ._project_update_acknowledge_terminal_result_delivery(
+                self.project,
+                mismatched["result"],
+                output_relative=str(mismatched["output_relative"]),
+                run_id=str(mismatched["run_id"]),
+                operation_ref=str(mismatched["operation_ref"]),
+            )
+        )
+        self.assertTrue(Path(mismatched["handoff"]).is_file())
+
+    @unittest.skipUnless(os.name == "nt", "terminal mutation is Windows-only")
+    def test_terminal_delivery_rename_failure_preserves_active_handoff(
+        self,
+    ) -> None:
+        fixture = self.prepare_terminal_delivery_fixture("rename-failure")
+        with patch.object(
+            archive_services.project_update_transaction,
+            "_atomic_move_file_no_replace",
+            side_effect=OSError("synthetic atomic rename failure"),
+        ):
+            acknowledged = (
+                archive_services
+                ._project_update_acknowledge_terminal_result_delivery(
+                    self.project,
+                    fixture["result"],
+                    output_relative=str(fixture["output_relative"]),
+                    run_id=str(fixture["run_id"]),
+                    operation_ref=str(fixture["operation_ref"]),
+                )
+            )
+        self.assertFalse(acknowledged)
+        self.assertEqual(
+            Path(fixture["handoff"]).read_bytes(),
+            fixture["handoff_raw"],
+        )
+        self.assertFalse(
+            archive_services
+            ._project_update_terminal_display_pending_path(
+                self.project
+            )
+            .exists()
+        )
+        self.assertFalse(
+            archive_services._project_update_terminal_consumed_path(
+                self.project,
+                str(fixture["handoff_sha256"]),
+            ).exists()
+        )
+
+    @unittest.skipUnless(os.name == "nt", "terminal mutation is Windows-only")
+    def test_terminal_delivery_destination_race_preserves_both_entries(self) -> None:
+        fixture = self.prepare_terminal_delivery_fixture("destination-race")
+        display_pending = (
+            archive_services._project_update_terminal_display_pending_path(
+                self.project
+            )
+        )
+        foreign = b"foreign display-pending race occupant\n"
+        real_move = (
+            archive_services.project_update_transaction
+            ._atomic_move_file_no_replace
+        )
+
+        def inject_destination(source: Path, destination: Path) -> None:
+            self.assertEqual(destination, display_pending)
+            destination.write_bytes(foreign)
+            real_move(source, destination)
+
+        with patch.object(
+            archive_services.project_update_transaction,
+            "_atomic_move_file_no_replace",
+            side_effect=inject_destination,
+        ):
+            acknowledged = (
+                archive_services
+                ._project_update_acknowledge_terminal_result_delivery(
+                    self.project,
+                    fixture["result"],
+                    output_relative=str(fixture["output_relative"]),
+                    run_id=str(fixture["run_id"]),
+                    operation_ref=str(fixture["operation_ref"]),
+                )
+            )
+
+        self.assertFalse(acknowledged)
+        self.assertEqual(
+            Path(fixture["handoff"]).read_bytes(),
+            fixture["handoff_raw"],
+        )
+        self.assertEqual(display_pending.read_bytes(), foreign)
+
+    @unittest.skipUnless(os.name == "nt", "terminal mutation is Windows-only")
+    def test_terminal_finalize_destination_race_preserves_both_entries(self) -> None:
+        fixture = self.prepare_terminal_delivery_fixture("finalize-race")
+        self.assertTrue(
+            archive_services._project_update_acknowledge_terminal_result_delivery(
+                self.project,
+                fixture["result"],
+                output_relative=str(fixture["output_relative"]),
+                run_id=str(fixture["run_id"]),
+                operation_ref=str(fixture["operation_ref"]),
+            )
+        )
+        display_pending = (
+            archive_services._project_update_terminal_display_pending_path(
+                self.project
+            )
+        )
+        consumed = archive_services._project_update_terminal_consumed_path(
+            self.project,
+            str(fixture["handoff_sha256"]),
+        )
+        foreign = b"foreign consumed race occupant\n"
+        real_move = (
+            archive_services.project_update_transaction
+            ._atomic_move_file_no_replace
+        )
+
+        def inject_destination(source: Path, destination: Path) -> None:
+            self.assertEqual(source, display_pending)
+            self.assertEqual(destination, consumed)
+            destination.write_bytes(foreign)
+            real_move(source, destination)
+
+        with patch.object(
+            archive_services.project_update_transaction,
+            "_atomic_move_file_no_replace",
+            side_effect=inject_destination,
+        ):
+            self.assertFalse(
+                archive_services._project_update_finalize_terminal_result_display(
+                    self.project,
+                    expected_handoff_sha256=str(
+                        fixture["handoff_sha256"]
+                    ),
+                    delivery_capability=str(fixture["capability"]),
+                )
+            )
+
+        self.assertEqual(display_pending.read_bytes(), fixture["handoff_raw"])
+        self.assertEqual(consumed.read_bytes(), foreign)
+
+    @unittest.skipUnless(os.name == "nt", "terminal mutation is Windows-only")
+    def test_terminal_delivery_post_rename_fsync_failure_stays_unacknowledged(
+        self,
+    ) -> None:
+        real_rename = (
+            archive_services.project_update_transaction
+            ._atomic_move_file_no_replace
+        )
+        real_require_directory_durable = (
+            archive_services.project_update_transaction
+            ._require_directory_durable
+        )
+        fixture = self.prepare_terminal_delivery_fixture(
+            "post-rename-fsync"
+        )
+        renamed = False
+        post_rename_paths: list[Path] = []
+
+        def observe_rename(source: Path, destination: Path) -> None:
+            nonlocal renamed
+            self.assertEqual(Path(source).parent, Path(destination).parent)
+            real_rename(source, destination)
+            renamed = True
+
+        def fail_after_rename(path: Path) -> object:
+            if renamed:
+                post_rename_paths.append(path)
+                raise (
+                    archive_services.project_update_transaction
+                    .ProjectUpdateTransactionError(
+                        "project_update_transaction_durability_unverified"
+                    )
+                )
+            return real_require_directory_durable(path)
+
+        with patch.object(
+            archive_services.project_update_transaction,
+            "_atomic_move_file_no_replace",
+            side_effect=observe_rename,
+        ), patch.object(
+            archive_services.project_update_transaction,
+            "_require_directory_durable",
+            side_effect=fail_after_rename,
+        ):
+            acknowledged = (
+                archive_services
+                ._project_update_acknowledge_terminal_result_delivery(
+                    self.project,
+                    fixture["result"],
+                    output_relative=str(fixture["output_relative"]),
+                    run_id=str(fixture["run_id"]),
+                    operation_ref=str(fixture["operation_ref"]),
+                )
+        )
+        self.assertFalse(acknowledged)
+        self.assertFalse(Path(fixture["handoff"]).exists())
+        display_pending = (
+            archive_services._project_update_terminal_display_pending_path(
+                self.project
+            )
+        )
+        self.assertEqual(
+            display_pending.read_bytes(),
+            fixture["handoff_raw"],
+        )
+        consumed = archive_services._project_update_terminal_consumed_path(
+            self.project,
+            str(fixture["handoff_sha256"]),
+        )
+        self.assertFalse(consumed.exists())
+        self.assertTrue(
+            archive_services
+            ._project_update_finalize_terminal_result_display(
+                self.project,
+                expected_handoff_sha256=str(
+                    fixture["handoff_sha256"]
+                ),
+                delivery_capability=str(fixture["capability"]),
+            )
+        )
+        self.assertFalse(display_pending.exists())
+        self.assertEqual(consumed.read_bytes(), fixture["handoff_raw"])
+        self.assertEqual(post_rename_paths, [consumed.parent])
+
     def test_reopen_closes_directory_guard_when_second_hold_fails(
         self,
     ) -> None:
@@ -2588,6 +5778,42 @@ class ProjectUpdateTransactionTests(unittest.TestCase):
             minimum_held=4,
         )
 
+    def test_reopen_preserves_primary_when_guard_and_runner_close_fail(
+        self,
+    ) -> None:
+        base = archive_services._WomKitProjectUpdateDirectoryGuard
+
+        class FailHoldAndCloseGuard(base):
+            instances = []
+
+            def __init__(self, project_root: Path) -> None:
+                super().__init__(project_root)
+                self.calls = 0
+                self.maximum_held = 0
+                self.__class__.instances.append(self)
+
+            def hold(self, path: Path) -> bool:
+                self.calls += 1
+                if self.calls == 2:
+                    return False
+                result = super().hold(path)
+                self.maximum_held = max(
+                    self.maximum_held,
+                    len(self._handles),
+                )
+                return result
+
+            def close(self) -> None:
+                super().close()
+                raise SystemExit("private directory close failure")
+
+        self.assert_reopen_guard_failure_closes_all_handles(
+            FailHoldAndCloseGuard,
+            minimum_held=1,
+            runner_close_fails=True,
+        )
+
+    @unittest.skipUnless(os.name == "nt", "terminal mutation is Windows-only")
     def test_public_claimless_cancel_resumes_all_durable_cancel_tails(
         self,
     ) -> None:
@@ -2894,6 +6120,7 @@ class ProjectUpdateTransactionTests(unittest.TestCase):
             expected_lock_bytes=lock_bytes,
             approved_plan_sha256=None,
             approved_target_binding_sha256=None,
+            terminal_update_verified=False,
         )
         prepared = archive_services._ProjectVersionUpdatePreparedApproval(
             preview={},
@@ -3391,7 +6618,11 @@ class ProjectUpdateTransactionTests(unittest.TestCase):
             b"private archive sentinel"
         )
         archive_before = self.tree_snapshot(approval_root)
-        cases = ("rename", "partial_tombstone", "proof_only")
+        cases = (
+            ("partial_tombstone", "proof_only")
+            if os.name == "nt"
+            else ("partial_tombstone",)
+        )
         try:
             for index, case in enumerate(cases, start=1):
                 with self.subTest(case=case):
@@ -3429,7 +6660,7 @@ class ProjectUpdateTransactionTests(unittest.TestCase):
                                 path
                                 for path in tombstone.rglob("*")
                                 if path.is_file()
-                                and path.name != "cleanup-plan.json"
+                                and path.name != CLEANUP_PLAN_NAME
                             )
                             victim.unlink()
 
@@ -3489,9 +6720,33 @@ class ProjectUpdateTransactionTests(unittest.TestCase):
                             ),
                         )
 
-                    self.assertEqual(
-                        result,
-                        {
+                    if case == "proof_only":
+                        self.assertEqual(
+                            result["status"],
+                            "no_resumable_project_update",
+                        )
+                        self.assertIsNone(result["update_completed"])
+                        self.assertEqual(
+                            result["effects_state"],
+                            "canonical_cleanup_proof_shaped_artifact_only",
+                        )
+                        self.assertEqual(
+                            result["cleanup_proof_artifacts_observed"],
+                            1,
+                        )
+                        self.assertFalse(
+                            result["past_update_success_attributed"]
+                        )
+                        self.assertFalse(
+                            result["historical_detailed_result_available"]
+                        )
+                        self.assertTrue(
+                            result["new_write_requires_fresh_approval"]
+                        )
+                    else:
+                        self.assertEqual(
+                            result,
+                            {
                             "ok": False,
                             "status": "terminal_cleanup_outcome_unknown",
                             "effects_state": "unknown",
@@ -3516,8 +6771,8 @@ class ProjectUpdateTransactionTests(unittest.TestCase):
                             "client_archive_domain_content_accessed": False,
                             "project_domain_files_written": [],
                             "files_written": [],
-                        },
-                    )
+                            },
+                        )
                     self.assertEqual(executor_calls, [])
                     self.assertEqual(authority_access.call_count, 0)
                     self.assertEqual(preapproval_access.call_count, 0)
@@ -3751,7 +7006,11 @@ class ProjectUpdateTransactionTests(unittest.TestCase):
             patch.object(
                 transaction_module,
                 "active_transaction_ref_for_resume_read_only",
-                side_effect=[not_found, self.DEFAULT_TRANSACTION_REF],
+                side_effect=[
+                    not_found,
+                    self.DEFAULT_TRANSACTION_REF,
+                    self.DEFAULT_TRANSACTION_REF,
+                ],
             ) as locator,
             patch.object(
                 transaction_module,
@@ -3781,7 +7040,7 @@ class ProjectUpdateTransactionTests(unittest.TestCase):
             result.get("status"),
             "terminal_cleanup_outcome_unknown",
         )
-        self.assertEqual(locator.call_count, 2)
+        self.assertEqual(locator.call_count, 3)
         self.assertEqual(cleanup_scan.call_count, 1)
         self.assertEqual(preapproval.call_count, 1)
 

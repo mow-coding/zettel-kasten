@@ -1,8 +1,8 @@
 {
   "schema": "wom-kit/package-resource-manifest/v0.1",
-  "version": "0.4.15",
+  "version": "0.4.16",
   "source_of_truth": "wom-kit source resource directories",
-  "file_count": 167,
+  "file_count": 169,
   "files": [
     {
       "source": "schemas/activity-group-membership-receipt.schema.json",
@@ -449,6 +449,12 @@
       "sha256": "917c013535b8b11000c543ae0b00b20fe93d4631bf805d9d93f812f2a5f66999"
     },
     {
+      "source": "schemas/project-runtime-receipt-v0.2.schema.json",
+      "packaged": "schemas/project-runtime-receipt-v0.2.schema.json",
+      "bytes": 4035,
+      "sha256": "ba429f395525bb2b54d4ef975d9392121821cdf7ea13eb6756bb26ca0bdf1af5"
+    },
+    {
       "source": "schemas/project-version-update-receipt-v0.2.schema.json",
       "packaged": "schemas/project-version-update-receipt-v0.2.schema.json",
       "bytes": 6368,
@@ -459,6 +465,12 @@
       "packaged": "schemas/project-version-update-receipt-v0.3.schema.json",
       "bytes": 10013,
       "sha256": "49655e44fdf32cdaf82e51a642a1e3a40f6d57344652c9f94abcf688fcb03cf4"
+    },
+    {
+      "source": "schemas/project-version-update-receipt-v0.4.schema.json",
+      "packaged": "schemas/project-version-update-receipt-v0.4.schema.json",
+      "bytes": 10387,
+      "sha256": "e1dab0363bc93307520dcf54dbdbb6be874186817b479267846be5bafa4d165d"
     },
     {
       "source": "schemas/project-version-update-receipt.schema.json",
@@ -709,8 +721,8 @@
     {
       "source": "templates/ai-runtime/wom-archive/SKILL.md",
       "packaged": "templates/ai-runtime/wom-archive/SKILL.md",
-      "bytes": 11072,
-      "sha256": "5f982afa878852969220e247c61a4d9cd0d945c606df2ccdb6be4a2b5509d054"
+      "bytes": 11360,
+      "sha256": "6a6f00ba3392a21d722e3fc19c1e7b4ecda9ff896bf12a1d614b309951039e75"
     },
     {
       "source": "templates/ai-runtime/wom-archive/references/capture-draft-and-publication.md",
@@ -745,14 +757,14 @@
     {
       "source": "templates/ai-runtime/wom-archive/references/startup-and-update.md",
       "packaged": "templates/ai-runtime/wom-archive/references/startup-and-update.md",
-      "bytes": 8473,
-      "sha256": "15b2b7d58ef87f5be83ad999dd8aa34a742e6bd43e6f42d05727ac65d1249c1c"
+      "bytes": 8698,
+      "sha256": "653299168e3f90e96a6a2065b0090e12f6283392253a8e8b271596148b632e6a"
     },
     {
       "source": "templates/company/AGENTS.md",
       "packaged": "templates/company/AGENTS.md",
-      "bytes": 11007,
-      "sha256": "5a18deba2602e6bf7952d750ae930334448acbc159a525e3ca57394b33bd73e5"
+      "bytes": 11450,
+      "sha256": "e0d6b1b720e4e752e62667790f993b3b5cec92e482eda617a8b7fbcad7c6a302"
     },
     {
       "source": "templates/company/archive-identity.yml",
@@ -823,8 +835,8 @@
     {
       "source": "templates/family/AGENTS.md",
       "packaged": "templates/family/AGENTS.md",
-      "bytes": 11147,
-      "sha256": "0c854bfefa2509c5d5d11686f340f4e021ca0b91342985bb46bbd6053fdea9ca"
+      "bytes": 11590,
+      "sha256": "3c90ab7617174f6f888d8ec15d14dc97eabfba30620bc4bf17d905d35fe36a59"
     },
     {
       "source": "templates/family/archive-identity.yml",
@@ -895,8 +907,8 @@
     {
       "source": "templates/personal/AGENTS.md",
       "packaged": "templates/personal/AGENTS.md",
-      "bytes": 12225,
-      "sha256": "7addde1653b9421bb18a0d2c382c8bda341cc499615fb6f0041aacf7842d3eb3"
+      "bytes": 12668,
+      "sha256": "148a860cf81e6b65538bb01be069151e4861d63e10e8b5aee765875a13a1cccb"
     },
     {
       "source": "templates/personal/archive-identity.yml",
@@ -1001,10 +1013,10 @@
       "sha256": "d619dc26af3216498c8392dfe838b0fe752d4bad9da998a58ca682d668fc510c"
     },
     {
-      "source": "docs/releases/v0.4.15.md",
-      "packaged": "release-notes/v0.4.15.md",
-      "bytes": 6888,
-      "sha256": "59d8d57c9f082cbc5d2a53102af01313b0c1114b27ef9bfdc79dd953b50020f5"
+      "source": "docs/releases/v0.4.16.md",
+      "packaged": "release-notes/v0.4.16.md",
+      "bytes": 10564,
+      "sha256": "a15adaccbb02cf7211db48e1e8bf3cc36a04f665b08fb38366664b6a588122ed"
     }
   ]
 }

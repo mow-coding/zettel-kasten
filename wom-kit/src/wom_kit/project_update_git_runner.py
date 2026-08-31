@@ -557,18 +557,26 @@ class TrustedProjectUpdateGitRunner:
     def close(self) -> None:
         if self._closed:
             return
-        ok = True
         if self._windows_handle:
-            ok = _close_windows_handle(self._handle)
+            if not _close_windows_handle(self._handle):
+                raise _fail("project_update_git_runner_close_unverified")
         else:
+            handle = self._handle
+            # POSIX close(2) may consume the descriptor even when it reports
+            # an error.  Drop local authority before the attempt so neither a
+            # retry nor __del__ can close a later, unrelated descriptor that
+            # reused the same integer.
+            self._closed = True
+            self._handle = -1
             try:
-                os.close(self._handle)
+                os.close(handle)
             except OSError:
-                ok = False
+                raise _fail(
+                    "project_update_git_runner_close_unverified"
+                ) from None
+            return
         self._closed = True
         self._handle = -1
-        if not ok:
-            raise _fail("project_update_git_runner_close_unverified")
 
     def __enter__(self) -> "TrustedProjectUpdateGitRunner":
         return self

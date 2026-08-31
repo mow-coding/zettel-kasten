@@ -638,7 +638,38 @@ class Letter129BoundRepairCanaryTests(unittest.TestCase):
                 ],
                 0,
             )
-            update_code, update_output = self.fixture_case.fixture_case.run_cli(
+
+            if os.name != "nt":
+                # The historical repair planner remains portable, but the
+                # approved project update is intentionally Windows-only in
+                # v0.4.16.  Exercise the real POSIX contract without the
+                # legacy test harness's approval-capability injection.
+                with patch.object(
+                    completion_workflows.archive_services,
+                    "WOM_KIT_PROJECT_UPDATE_APPROVAL_PLATFORM_SUPPORTED",
+                    False,
+                ):
+                    unsupported_preview = self.fixture_case.update_preview(
+                        fixture
+                    )
+                self.assertTrue(unsupported_preview["ok"], unsupported_preview)
+                self.assertEqual(
+                    unsupported_preview["status"],
+                    "preview_only_platform_unsupported",
+                )
+                self.assertFalse(
+                    unsupported_preview["write_boundary"][
+                        "approval_platform_supported"
+                    ]
+                )
+                self.assertEqual(unsupported_preview["files_written"], [])
+                return
+
+            (
+                update_code,
+                update_output,
+                _update_stderr,
+            ) = self.fixture_case.fixture_case.run_cli_split(
                 [
                     "project-version-update",
                     str(fixture["project_root"]),

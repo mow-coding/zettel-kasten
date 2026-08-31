@@ -1,34 +1,52 @@
 ﻿# WOM-kit Capability Matrix
 
-Status: v0.4.15 authenticated project-update recovery and create-only incident reporting
-Date: 2026-08-30
-Version: v0.4.15 implementation and release scope
+Status: v0.4.16 authenticated terminal-result delivery and runtime binding
+Date: 2026-08-31
+Version: v0.4.16 implementation and release scope
 
-The current v0.4.15 working tree restores an interrupted project's target,
-transaction, reviewer, and approval context from its live lock and authenticated
-sealed plan. Normal resume needs no caller-supplied identifier and displays no
-second native decision. A zero-claim transaction cancels its scaffold only when
-durable state proves it is untouched preapproval, then requires a fresh
-approval. Zero claims for an approved or indeterminate transaction, multiple
-candidates, forged evidence, or drift fail closed. While `version-update.lock`
-remains, only exact-approved create-only operator feedback body preservation may append. Revision,
-supersession, feedback metadata, resolved or delivered state, and every other
-writer remain blocked. It adds no top-level command.
+The current v0.4.16 working tree preserves one authenticated project-update
+domain result in a durable terminal handoff before cleanup. The public
+`terminal_finalization` separates claim/checkpoint/lock verification from
+transaction cleanup, service-resource close, Git-runner close, durable output
+handoff, and attention state. One immutable terminal journal binds the exact
+output while the private handoff advances through `active`, `display-pending`,
+and hash-named `consumed`. Resume reuses that exact output and provides
+identical at-least-once display without rerunning the domain writer. Consumed
+state is history rather than a replay candidate, and delivery acknowledgement
+does not prove that a person or model saw stdout. A complete legacy cleanup
+tombstone is recoverable only after exact validation; proof-only state
+attributes no past success, and partial or malformed residue fails closed.
 
-The v0.4.15 recovery guarantee is bounded to a live `version-update.lock` or
-the exact lockless unlock tail while the original transaction directory still
-exists. Its first unsupported boundary is after `completed`, once the original
-transaction directory has been successfully renamed to a terminal cleanup
-tombstone. A tombstone or cleanup proof is not authenticated outcome or cleanup
-authority: WOM reports `terminal_cleanup_outcome_unknown` with a nonzero exit
-and does not infer success, failure, or cancellation, automatically retry, or
-delete that evidence. A full authenticated terminal handoff and terminal
-cleanup outcome reconstruction remain a v0.4.16 follow-up.
+A same-version invalid project runtime is repaired through the ordinary exact
+approved updater, not through a separate rebind command. The repair-aware v0.4
+project-update receipt exactly binds the v0.2 runtime receipt and an exact
+private recovery preimage. A later component failure preserves the sealed
+transaction for authenticated checkpoint-forward resume; it does not trigger
+silent automatic rollback. Terminal cleanup removes the recovery preimage only
+after the ready handoff and completed postimage are authenticated.
+Cleanup-incomplete results retain that handoff and report unknown retention
+truth until a later resume completes cleanup.
 
-Current release note: [v0.4.15](releases/v0.4.15.md).
+The canonical `python -m wom_kit.archive_cli` `__main__` alias is accepted only
+under the exact import specification, then `archive_cli`, `project_runtime`, and
+`package_origin` must match expected receipt bytes. `core_module_bindings`
+reports only booleans and reason codes, with no absolute paths or hashes.
+
+When either update recovery or runtime alignment blocks ordinary writers, only
+the exact-approved `operator-feedback-compose --intent create` emergency lane
+may append a new feedback body and receipt. Revision, supersession, lifecycle
+metadata, resolved or delivered state, runtime/pin changes, and every other
+writer remain blocked. Product vocabulary and documented placeholders no
+longer fail merely because they contain secret-related words, while concrete
+credential assignments, authorization values, session cookies, provider token
+shapes, JWTs, and private-key markers remain fail-closed. `input_privacy_check`
+truthfully reports caller-input/body safety reads separately from
+`first_read_check.body_read_for_check`. It adds no top-level command.
+
+Current release note: [v0.4.16](releases/v0.4.16.md).
 
 Current conditional wheel URL:
-`https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.15/wom_kit-0.4.15-py3-none-any.whl`.
+`https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.16/wom_kit-0.4.16-py3-none-any.whl`.
 
 The v0.4.11 checkpoint recorded the following historical runtime context:
 
@@ -40,6 +58,8 @@ use canonical WOM language and local-only target previews, while fixed-closed
 read-only previews state that they grant no write authority. WOM derives and
 verifies technical evidence; the person decides only whether to run or cancel the
 plainly described effect.
+
+Previous checkpoint: Status: v0.4.15 authenticated project-update recovery and create-only incident reporting
 
 Previous checkpoint: Status: v0.4.14 reference-aware local recovery and safe decision views
 
@@ -915,7 +935,7 @@ v0.4.0 release note.
 | Duplicate object reconciliation | `exact-human strict-pair repair and whole-manifest revert` | dry-run classifies; approve removes exact duplicate rows and may collapse only a proven canonical-local plus external-prehashed pair while preserving both definitions in private evidence | Identity conflicts, manifest drift, byte mismatch, key failure, or ambiguous groups remain review-only. The strict pair is revalidated before the first write, the receipt binds the exact original manifest snapshot, and `--revert` restores those exact original whole-manifest bytes through a separate native decision. Revert discovery also accepts exactly one authenticated `interrupted_started_journal` or `interrupted_receipt_published` source. The public planner uses the production terminal auditor without creating missing approval state and validates source structure, snapshot/current/lock/optional-receipt state, and plan basis. Before any revert write, the approved writer HMAC- and claim-revalidates the original forward approval; tamper or mismatch fails with zero writes. Only then may it restore the original bytes, preserve the source journal, and write separate authenticated terminal-compensation evidence that blocks forward replay. `--revert --resume --reviewed-by <same-reviewer>` auto-discovers and reauthenticates the pending revert's existing claim without a second native dialog. A `started` claim resumes the writer idempotently, then reaches `succeeded` before terminal finalization; an already `succeeded` claim runs only the finalizer. Neither branch performs another manifest write. An initial `duplicate_object_revert_state_unknown` or `exact_human_approval_state_unknown` result returns only `next_safe_actions: [rerun_duplicate_revert_resume_with_same_reviewer]` plus the same content-free text guidance; an explicit failed resume does not recurse into that advice. CLI supports local approval; MCP exposes only `duplicate_object_reconciliation_plan`. |
 | Approval-integrity audit and overlay | `implemented authenticated audit/guard plus exact-human append-only overlay` | audit/guard are read-only; overlay approval appends only a new authenticated state | Old operation receipts and canonical artifacts are never rewritten. MCP exposes only audit, guard, and overlay plan; local CLI is required for repair approval. |
 | Private source-fidelity session evidence | `implemented exact-human create-only evidence` | dry-run hashes and plans; approve writes exact private bytes plus a digest-only receipt and authenticated approval link | The source is limited to the private session-evidence scratch boundary. Output returns no source text/path/raw session ref. Link verification requires the archive key and matching authenticated `succeeded` claim. |
-| Bounded long-operation observation | `implemented CLI-only opt-in observation plus operation-specific update resume` | status, wait, and recovery-plan write nothing; unsupported cancel writes nothing; start journals only when the tracked command has explicit `--output` | Since v0.3.314, `project-version-update`, `index`, and `index-health` with a fresh output publish an early opaque `operation_ref`. The alias-free `operation-control` command verifies the exact root, bounded hash-chained journal, and completed output binding before reporting `running_observed`, `completed_result_available`, or `recovery_required`. Since v0.3.315, allowlisted updater result statuses route dry-run review, deferred fetch, preview-only platform, restart-required, no-change, blocked collision, and unknown outcomes separately; a complete saved output is not rewritten as generic domain success. Wait is 1-60 seconds and its deadline is neutral. Cancel remains fixed nonzero `operation_cancel_not_supported`; generic operation-control resume, MCP, daemon, queue, background process ownership, force kill, lock deletion, and automatic rollback do not exist. v0.4.15 adds only command-specific `project-version-update --resume`: the live lock or an exact lockless unlock-tail transaction whose original directory remains restores the context, exactly one checkpoint-valid claim is reauthenticated, no caller identifier is required, and no second native decision opens. Terminal-cleanup evidence is reported only as nonzero `terminal_cleanup_outcome_unknown`; it grants no retry or deletion authority. |
+| Bounded long-operation observation | `implemented CLI-only opt-in observation plus operation-specific update resume` | status, wait, and recovery-plan write nothing; unsupported cancel writes nothing; start journals only when the tracked command has explicit `--output` | Since v0.3.314, `project-version-update`, `index`, and `index-health` with a fresh output publish an early opaque `operation_ref`. The alias-free `operation-control` command verifies the exact root, bounded hash-chained journal, and completed output binding before reporting `running_observed`, `completed_result_available`, or `recovery_required`. Since v0.3.315, allowlisted updater result statuses route dry-run review, deferred fetch, preview-only platform, restart-required, no-change, blocked collision, and unknown outcomes separately; a complete saved output is not rewritten as generic domain success. Wait is 1-60 seconds and its deadline is neutral. Cancel remains fixed nonzero `operation_cancel_not_supported`; generic operation-control resume, MCP, daemon, queue, background process ownership, force kill, lock deletion, and automatic rollback do not exist. v0.4.15 added command-specific `project-version-update --resume` for the live lock or exact lockless unlock tail: exactly one checkpoint-valid claim is reauthenticated, no caller identifier is required, and no second native decision opens. Its terminal-cleanup evidence remained historical non-authoritative state. v0.4.16 closes that boundary with an authenticated ready handoff and immutable operation journal. Pending display reuses the exact bound output through `active` -> `display-pending`; successful display moves the capsule to hash-named `consumed` history without appending another journal event. Complete legacy tombstones resume only after exact structure, checkpoint, claim, postimage, and authority validation. Canonical proof-only history returns `no_resumable_project_update` and attributes no past success; partial, malformed, mixed, or unsafe residue remains `terminal_cleanup_outcome_unknown`. |
 | Generated-index clean rollback snapshot | `implemented fail-closed read/write boundary` | explicit index rebuild and supported incremental writers change only disposable generated state; health writes nothing except an explicit private output artifact | Since v0.3.314, the generated database header must be valid rollback `DELETE` (`1/1`) and `-wal`, `-shm`, and `-journal` must all be absent before normal SQLite read open. Legacy WAL, invalid identity, and recovery residue return a fixed rebuild blocker without live-zettel enumeration or row-difference claims. One ordinary explicit rebuild performs the supported conversion and private projection repair; durable authority and schema do not migrate. External writers must be quiescent because the preflight is not an OS-wide lock. |
 | Bounded project target-tree Git materialization | `exact-human project updater in v0.4.3` | updater preview writes nothing; Windows CLI approval authenticates one exact preview/target binding before the locked updater may fetch, materialize, align pins, and receipt | The CLI binds the complete content-free preview, source HEAD, target release, recognized pins, materialization preflight, warnings, and effect set. The service recomputes that preview and authenticates the same one-use claim immediately before entering the existing updater. Direct unbound writers fail before private project read. Collision preserve-relocate and bytecode repair remain fixed closed. Historical updater receipts remain readable. |
 | Project-update collision inspection and remediation | `read-only inspection/plan in v0.4.0; still fixed closed in v0.4.6` | inspect and repair-plan write nothing; collision preservation and bytecode repair approval read no private target and write nothing | Single and `inspect-all` classification remain available with opaque entry refs. Preserve-relocate and `project-bytecode-repair` approval fail with `compound_exact_human_approval_binding_required` before private project read or mutation; no payload is moved, no cache is removed, and no evidence receipt is written. |

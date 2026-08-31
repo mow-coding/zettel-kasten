@@ -1,8 +1,10 @@
 # WOM-kit Version Truth Source
 
-Status: v0.4.15 authenticated project-update recovery and exact-pip bootstrap
+Status: v0.4.16 authenticated terminal-result delivery and exact-pip bootstrap
 
-Current checkpoint: Status: v0.4.15 identifier-free update recovery and installed-wheel hash truth
+Current checkpoint: Status: v0.4.16 terminal handoff, runtime receipt binding, and installed-wheel hash truth
+
+Previous checkpoint: Status: v0.4.15 identifier-free update recovery and installed-wheel hash truth
 
 Previous checkpoint: Status: v0.4.14 current-reference and client-execution truth
 
@@ -46,22 +48,22 @@ or runtime workflow. This page defines the safe order for checking them.
 
 ## Current Public Tool
 
-The v0.4.15 URL is a conditional release-artifact contract. Use it only after
+The v0.4.16 URL is a conditional release-artifact contract. Use it only after
 the matching public GitHub Release exists and lists the exact wheel:
 
 ```powershell
 $womBootstrapNonce = [guid]::NewGuid().ToString("N")
-$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0415-$womBootstrapNonce"
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0416-$womBootstrapNonce"
 if (Test-Path -LiteralPath $womBootstrapRoot) {
   throw "WOM bootstrap path must be new."
 }
 py -3.12 -m venv $womBootstrapRoot
 $womBootstrapPython = (Get-Item -LiteralPath (Join-Path $womBootstrapRoot "Scripts\python.exe")).FullName
-& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.15/wom_kit-0.4.15-py3-none-any.whl"
+& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.16/wom_kit-0.4.16-py3-none-any.whl"
 & "$womBootstrapRoot\Scripts\archive.exe" --version
 ```
 
-Require exactly `archive 0.4.15` from a new process. The external CPython 3.12
+Require exactly `archive 0.4.16` from a new process. The external CPython 3.12
 environment and exact real `python.exe -m pip` retain the wheel SHA-256 in the
 installed PEP 610 metadata. A user-scoped tool environment without that archive
 hash is not project-updater supply evidence. A bootstrap install alone changes
@@ -73,17 +75,21 @@ plan are canonical recovery evidence. Normal `project-version-update --resume`
 restores target, transaction, reviewer, and approval bindings without caller-
 supplied identifiers or a second native decision, and requires exactly one
 checkpoint-valid claim. See [Project Version Update](project-version-update.md)
-and the [v0.4.15 release note](releases/v0.4.15.md).
+and the [v0.4.16 release note](releases/v0.4.16.md).
 
-The v0.4.15 recovery guarantee is bounded to a live `version-update.lock` or
-the exact lockless unlock tail while the original transaction directory still
-exists. Its first unsupported boundary is after `completed`, once the original
-transaction directory has been successfully renamed to a terminal cleanup
-tombstone. A tombstone or cleanup proof is not authenticated outcome or cleanup
-authority: WOM reports `terminal_cleanup_outcome_unknown` with a nonzero exit
-and does not infer success, failure, or cancellation, automatically retry, or
-delete that evidence. A full authenticated terminal handoff and terminal
-cleanup outcome reconstruction remain a v0.4.16 follow-up.
+v0.4.16 writes authenticated update truth to a private terminal handoff before
+cleanup. Resume can reauthenticate the succeeded claim and exact postimage,
+then reuse the same bound privacy-safe output without rerunning the domain
+writer. The operation journal remains immutable while the handoff advances
+through `active`, `display-pending`, and hash-named `consumed`; display is
+identical at-least-once and consumed state is history. Delivery acknowledgement
+means the durable authenticated output handoff was verified, not that a person
+or model saw stdout. A complete legacy tombstone is recoverable only after
+exact validation. Proof-only state reports `no_resumable_project_update` and
+attributes no past success; partial or malformed residue remains fail-closed.
+New approved or unbound resume updates automatically choose a private
+project-scoped output when omitted. Publishing or installing the release alone
+changes no client archive or pin.
 
 ## Canonical Checks
 
@@ -104,7 +110,7 @@ form is for AI runtimes and scripts. `runtime-context` includes the same
 version summary under `wom_kit_version`, so an agent can confirm archive identity
 and kit version in one read-only request.
 
-For a v0.4.15 project, the `project_runtime` object is also canonical evidence.
+For a v0.4.16 project, the `project_runtime` object is also canonical evidence.
 It separately reports the versioned receipt, a freshly observed installed-
 payload tree hash, installed module inventory, stable launcher, current
 executable/module/prefix and isolated Python flags, project-relative

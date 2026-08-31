@@ -800,6 +800,238 @@ class CompleteRuntimeCandidateTests(unittest.TestCase):
             )
             self.assertTrue(final.is_dir())
 
+    @unittest.skipUnless(
+        WINDOWS_RUNTIME,
+        "Complete project runtime candidates are CPython 3.12 Windows AMD64.",
+    )
+    def test_same_version_corrupt_runtime_repair_is_crash_reopenable_and_reversible(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = root / "project"
+            project.mkdir()
+            baseline, bootstrap, supply = self._prepare(
+                root,
+                project,
+                "txn-repair-baseline",
+            )
+            baseline_runtime = project_runtime.promote_runtime_candidate(
+                project,
+                target="v0.4.3",
+                target_commit="b" * 40,
+                bootstrap=bootstrap,
+                supply=supply,
+                prepared_candidate=baseline,
+            )
+            self.assertTrue(baseline_runtime.created)
+            self.assertTrue(
+                project_runtime.cleanup_prepared_runtime_candidate(baseline)
+            )
+            final = project_runtime.runtime_path(project, "v0.4.3")
+            corrupt_path = (
+                final
+                / "Lib"
+                / "site-packages"
+                / "wom_kit"
+                / "archive_cli.py"
+            )
+            corrupt_path.write_bytes(corrupt_path.read_bytes() + b"\n# corrupt\n")
+            corrupt_bytes = corrupt_path.read_bytes()
+            self.assertEqual(
+                project_runtime.inspect_runtime(
+                    project,
+                    "v0.4.3",
+                    expected_commit="b" * 40,
+                    expected_wheel_sha256=bootstrap.sha256,
+                    expected_supply_lock_sha256=supply.sha256,
+                )["status"],
+                "invalid",
+            )
+            plan, blockers, warnings = project_runtime.plan_runtime(
+                project,
+                "v0.4.3",
+                policy_state="required",
+                target_commit="b" * 40,
+                bootstrap=bootstrap,
+                bootstrap_summary=bootstrap.public_summary(),
+                supply=supply,
+            )
+            self.assertTrue(plan["runtime_repair_required"])
+            self.assertFalse(plan["repair_preimage_exactly_bound"])
+            self.assertTrue(
+                plan["will_bind_repair_preimage_exactly_before_approval"]
+            )
+            self.assertTrue(
+                plan["will_preserve_during_active_transaction"]
+            )
+            self.assertEqual(
+                plan["old_invalid_runtime_deletion_stage"],
+                "terminal_cleanup_after_authenticated_success",
+            )
+            self.assertNotIn("project_runtime_target_directory_invalid", blockers)
+            self.assertTrue(any("private replacement" in item for item in warnings))
+
+            candidate, repair_bootstrap, repair_supply = self._prepare(
+                root,
+                project,
+                "txn-repair-exact",
+            )
+            self.assertTrue(candidate.existing_runtime_repair_required)
+            self.assertFalse(candidate.existing_runtime_reusable)
+            self.assertEqual(
+                project_runtime.runtime_repair_state(candidate),
+                "preimage_final",
+            )
+            summary_text = json.dumps(candidate.public_summary())
+            self.assertNotIn(str(project), summary_text)
+            self.assertNotIn(str(root), summary_text)
+
+            original_move = project_runtime._atomic_promote_directory_no_replace
+            move_count = 0
+
+            def fail_second_move(source: Path, destination: Path) -> None:
+                nonlocal move_count
+                move_count += 1
+                if move_count == 2:
+                    raise OSError("synthetic second rename failure")
+                original_move(source, destination)
+
+            tracker = project_runtime.RuntimeMutationTracker()
+            with patch.object(
+                project_runtime,
+                "_atomic_promote_directory_no_replace",
+                side_effect=fail_second_move,
+            ):
+                with self.assertRaisesRegex(
+                    project_runtime.ProjectRuntimeError,
+                    "project_runtime_repair_promotion_rolled_back",
+                ):
+                    project_runtime.promote_runtime_candidate(
+                        project,
+                        target="v0.4.3",
+                        target_commit="b" * 40,
+                        bootstrap=repair_bootstrap,
+                        supply=repair_supply,
+                        prepared_candidate=candidate,
+                        mutation_tracker=tracker,
+                    )
+            self.assertTrue(tracker.cleanup_verified)
+            self.assertEqual(corrupt_path.read_bytes(), corrupt_bytes)
+            self.assertEqual(
+                project_runtime.runtime_repair_state(candidate),
+                "preimage_final",
+            )
+
+            repair_backup = project_runtime._runtime_repair_backup_path(candidate)
+            original_move(final, repair_backup)
+            project_runtime._flush_directory_durable(
+                project / project_runtime.PROJECT_RUNTIME_RELATIVE_ROOT
+            )
+            project_runtime._flush_directory_durable(candidate.transaction_root)
+            self.assertEqual(
+                project_runtime.runtime_repair_state(candidate),
+                "backup_only",
+            )
+            reopened = project_runtime.load_prepared_runtime_candidate(
+                project,
+                candidate.transaction_root,
+                target="v0.4.3",
+                target_commit="b" * 40,
+                bootstrap=repair_bootstrap,
+                supply=repair_supply,
+            )
+            self.assertEqual(reopened.public_summary(), candidate.public_summary())
+            installed = project_runtime.promote_runtime_candidate(
+                project,
+                target="v0.4.3",
+                target_commit="b" * 40,
+                bootstrap=repair_bootstrap,
+                supply=repair_supply,
+                prepared_candidate=reopened,
+            )
+            self.assertTrue(installed.created)
+            self.assertTrue(installed.repaired)
+            self.assertEqual(
+                project_runtime.runtime_repair_state(reopened),
+                "candidate_final_plus_backup",
+            )
+            self.assertTrue(
+                project_runtime.inspect_runtime(
+                    project,
+                    "v0.4.3",
+                    expected_commit="b" * 40,
+                    expected_wheel_sha256=repair_bootstrap.sha256,
+                    expected_supply_lock_sha256=repair_supply.sha256,
+                )["receipt_candidate_valid"]
+            )
+            self.assertTrue(
+                project_runtime.remove_materialized_runtime(project, installed)
+            )
+            self.assertEqual(corrupt_path.read_bytes(), corrupt_bytes)
+            self.assertFalse(repair_backup.exists())
+            self.assertFalse(
+                (
+                    candidate.transaction_root
+                    / project_runtime.PROJECT_RUNTIME_ROLLBACK_CANDIDATE_NAME
+                ).exists()
+            )
+
+    @unittest.skipUnless(
+        WINDOWS_RUNTIME,
+        "Complete project runtime candidates are CPython 3.12 Windows AMD64.",
+    )
+    def test_same_version_empty_runtime_repair_rolls_back_to_exact_empty_preimage(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = root / "project"
+            project.mkdir()
+            final = project_runtime.runtime_path(project, "v0.4.3")
+            final.mkdir(parents=True)
+
+            candidate, bootstrap, supply = self._prepare(
+                root,
+                project,
+                "txn-repair-empty",
+            )
+            self.assertTrue(candidate.existing_runtime_repair_required)
+            self.assertEqual(candidate.existing_runtime_inventory, ())
+
+            installed = project_runtime.promote_runtime_candidate(
+                project,
+                target="v0.4.3",
+                target_commit="b" * 40,
+                bootstrap=bootstrap,
+                supply=supply,
+                prepared_candidate=candidate,
+            )
+            self.assertTrue(installed.repaired)
+            self.assertTrue(any(final.iterdir()))
+
+            self.assertTrue(
+                project_runtime.remove_materialized_runtime(project, installed)
+            )
+            self.assertTrue(final.is_dir())
+            self.assertEqual(tuple(final.iterdir()), ())
+            self.assertTrue(
+                project_runtime._runtime_inventory_matches(
+                    final,
+                    identity=candidate.existing_runtime_root_identity,
+                    inventory=(),
+                )
+            )
+            self.assertFalse(
+                project_runtime._runtime_repair_backup_path(candidate).exists()
+            )
+            self.assertFalse(
+                (
+                    candidate.transaction_root
+                    / project_runtime.PROJECT_RUNTIME_ROLLBACK_CANDIDATE_NAME
+                ).exists()
+            )
+
     def test_transaction_root_and_legacy_phase_boundary_fail_closed(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

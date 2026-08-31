@@ -7,9 +7,10 @@ cancel and resume unsupported until transaction-aware control points exist.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import hashlib
+import hmac
 import json
 import os
 from pathlib import Path, PurePosixPath
@@ -19,8 +20,11 @@ import threading
 import time
 from typing import Any, Callable
 
+from . import project_update_transaction
 
-OPERATION_JOURNAL_SCHEMA = "wom-kit/operation-journal/v0.1"
+
+OPERATION_JOURNAL_SCHEMA = "wom-kit/operation-journal/v0.2"
+LEGACY_OPERATION_JOURNAL_SCHEMA = "wom-kit/operation-journal/v0.1"
 OPERATION_CONTROL_SCHEMA = "wom-kit/operation-control/v0.1"
 OPERATION_REF_RE = re.compile(r"op:sha256:([0-9a-f]{64})")
 RUN_ID_RE = re.compile(r"[0-9a-f]{32}")
@@ -167,7 +171,13 @@ COMMAND_STAGES = {
     ),
 }
 JOURNAL_EVENTS = frozenset(
-    {"started", "checkpoint", "heartbeat", "completed", "result_unavailable"}
+    {
+        "started",
+        "checkpoint",
+        "heartbeat",
+        "completed",
+        "result_unavailable",
+    }
 )
 RECORD_KEYS = (
     "schema",
@@ -190,10 +200,34 @@ RECORD_KEYS = (
     "exit_code",
     "result_sha256",
     "result_bytes",
+    "terminal_delivery_acknowledged",
+    "terminal_handoff_sha256",
     "recovery_required",
     "previous_record_sha256",
     "record_sha256",
 )
+LEGACY_RECORD_KEYS = tuple(
+    key
+    for key in RECORD_KEYS
+    if key
+    not in {
+        "terminal_delivery_acknowledged",
+        "terminal_handoff_sha256",
+    }
+)
+PROJECT_UPDATE_TERMINAL_CONSUMED_PREFIX = (
+    ".zettel-kasten/private/version-update-terminal/"
+)
+PROJECT_UPDATE_TERMINAL_ACTIVE_RELATIVE = (
+    ".zettel-kasten/private/version-update-terminal/active.json"
+)
+PROJECT_UPDATE_TERMINAL_DISPLAY_PENDING_RELATIVE = (
+    ".zettel-kasten/private/version-update-terminal/display-pending.json"
+)
+PROJECT_UPDATE_TERMINAL_GUARD_RELATIVE = (
+    ".zettel-kasten/private/version-update-terminal/.handoff.guard"
+)
+PROJECT_UPDATE_TERMINAL_CAPSULE_MAX_BYTES = 4 * 1024 * 1024
 
 
 class OperationControlError(RuntimeError):
@@ -371,16 +405,6 @@ def _operation_hex(operation_ref: str) -> str:
 
 def _require_result_path(root: Path, path: Path) -> os.stat_result:
     absolute = Path(os.path.abspath(str(path)))
-    _validate_existing_chain(root, absolute)
-    try:
-        relative = absolute.relative_to(root).as_posix()
-    except ValueError:
-        raise OperationControlError("operation_result_path_unsafe") from None
-    if not (
-        relative.startswith(ARCHIVE_OUTPUT_PREFIX)
-        or relative.startswith(PROJECT_OUTPUT_PREFIX)
-    ) or "/.operations/" in f"/{relative}":
-        raise OperationControlError("operation_result_path_unsafe")
     try:
         observed = os.lstat(absolute)
     except OSError:
@@ -393,6 +417,41 @@ def _require_result_path(root: Path, path: Path) -> os.stat_result:
         or not 0 < observed.st_size <= MAX_RESULT_BYTES
     ):
         raise OperationControlError("operation_result_unavailable")
+
+    # Derive the descendant path from verified directory identities instead
+    # of lexical spelling.  On Windows the same root may arrive through an
+    # 8.3 alias while the output path is expanded to its long spelling.  Each
+    # traversed parent is still lstat-checked, so aliases are accepted without
+    # accepting a symlink/reparse escape.
+    root_observed = _require_real_directory(root)
+    root_identity = (
+        int(root_observed.st_dev),
+        int(root_observed.st_ino),
+    )
+    parts = [absolute.name]
+    current = absolute.parent
+    relative_path: PurePosixPath | None = None
+    for _depth in range(256):
+        current_observed = _require_real_directory(current)
+        if (
+            int(current_observed.st_dev),
+            int(current_observed.st_ino),
+        ) == root_identity:
+            relative_path = PurePosixPath(*reversed(parts))
+            break
+        parent = current.parent
+        if parent == current:
+            break
+        parts.append(current.name)
+        current = parent
+    if relative_path is None:
+        raise OperationControlError("operation_result_path_unsafe") from None
+    relative = relative_path.as_posix()
+    if not (
+        relative.startswith(ARCHIVE_OUTPUT_PREFIX)
+        or relative.startswith(PROJECT_OUTPUT_PREFIX)
+    ) or "/.operations/" in f"/{relative}":
+        raise OperationControlError("operation_result_path_unsafe")
     return observed
 
 
@@ -456,11 +515,16 @@ def _validated_result_payload(
     root_ref: str,
     output_ref: str,
     command: str,
-) -> tuple[int, bool] | None:
+) -> tuple[int, bool, bool] | None:
     execution = payload.get("cli_execution")
     artifact = payload.get("cli_output_artifact")
     operation = artifact.get("operation") if isinstance(artifact, dict) else None
     exit_code = execution.get("exit_code") if isinstance(execution, dict) else None
+    command_result_available = (
+        execution.get("result_available")
+        if isinstance(execution, dict)
+        else None
+    )
     inspection_ok = payload.get("ok")
     if command == "staged-cleanup-check":
         safe_to_cleanup = payload.get("safe_to_cleanup")
@@ -490,11 +554,12 @@ def _validated_result_payload(
         or not isinstance(exit_code, int)
         or isinstance(exit_code, bool)
         or not 0 <= exit_code <= 255
+        or type(command_result_available) is not bool
         or type(result_ok) is not bool
         or ((exit_code == 0) is not result_ok)
     ):
         return None
-    return exit_code, result_ok
+    return exit_code, result_ok, command_result_available
 
 
 def _safe_matching_values(
@@ -634,16 +699,97 @@ def _safe_domain_projection(
     result_ok = payload.get("ok")
     if type(result_ok) is not bool:
         return None
+    terminal = payload.get("terminal_finalization")
+    terminal_projection: dict[str, Any] | None = None
+    terminal_boolean_fields = (
+        "update_result_verified_in_current_invocation",
+        "update_result_reauthenticated_from_durable_handoff",
+        "claim_succeeded_verified",
+        "transaction_completed_checkpoint_verified",
+        "lock_absence_verified",
+        "transaction_cleanup_completed",
+        "service_resource_close_verified",
+        "git_runner_close_verified",
+        "attention_required",
+        "domain_writer_reentry_allowed",
+        "automatic_retry_allowed",
+        "cleanup_proof_used_as_success_authority",
+        "durable_terminal_handoff_ready",
+        "durable_terminal_handoff_replayed",
+        "durable_result_delivery_acknowledged",
+        "private_paths_echoed",
+        "private_identifiers_echoed",
+    )
+    terminal_keys = {"schema", *terminal_boolean_fields}
+    if (
+        type(terminal) is dict
+        and set(terminal) == terminal_keys
+        and terminal.get("schema")
+        == "wom-kit/project-version-update-terminal-finalization/v0.1"
+        and all(
+            type(terminal.get(field)) is bool
+            for field in terminal_boolean_fields
+        )
+        and terminal["claim_succeeded_verified"] is True
+        and terminal["transaction_completed_checkpoint_verified"] is True
+        and terminal["lock_absence_verified"] is True
+        and terminal["domain_writer_reentry_allowed"] is False
+        and terminal["automatic_retry_allowed"] is False
+        and terminal["cleanup_proof_used_as_success_authority"] is False
+        and terminal["durable_terminal_handoff_ready"] is True
+        # The immutable CLI artifact is published before the ready capsule is
+        # consumed.  It must therefore record delivery as pending.  Only the
+        # exact operation-bound consumed capsule projection below may turn
+        # this field true for status/readers.
+        and terminal["durable_result_delivery_acknowledged"] is False
+        and terminal["private_paths_echoed"] is False
+        and terminal["private_identifiers_echoed"] is False
+        and (
+            terminal["update_result_verified_in_current_invocation"]
+            is not terminal[
+                "update_result_reauthenticated_from_durable_handoff"
+            ]
+        )
+        and terminal["durable_terminal_handoff_replayed"]
+        is terminal["update_result_reauthenticated_from_durable_handoff"]
+        and terminal["attention_required"]
+        is not (
+            terminal["transaction_cleanup_completed"]
+            and terminal["service_resource_close_verified"]
+            and terminal["git_runner_close_verified"]
+            and terminal["durable_result_delivery_acknowledged"]
+        )
+        and result_ok is True
+    ):
+        terminal_projection = {
+            "schema": terminal["schema"],
+            **{
+                field: terminal[field]
+                for field in terminal_boolean_fields
+            },
+        }
     materialization_plan_sha256 = (
         materialization_plan_digests[0]
         if len(materialization_plan_digests) == 1
         else None
     )
+    terminal_finalization_invalid = bool(
+        terminal is not None and terminal_projection is None
+    )
     return {
         "command": "project-version-update",
         "status": status,
         "completion_ok": result_ok,
-        "attention_required": not result_ok,
+        "attention_required": bool(
+            not result_ok
+            or terminal_finalization_invalid
+            or (
+                terminal_projection is not None
+                and terminal_projection["attention_required"] is True
+            )
+        ),
+        "terminal_finalization": terminal_projection,
+        "terminal_finalization_invalid": terminal_finalization_invalid,
         "target_tag": target_tag,
         "blocker_codes": blocker_codes,
         "collision_refs": collision_refs,
@@ -652,6 +798,353 @@ def _safe_domain_projection(
         "private_values_echoed": False,
         "raw_blocker_messages_copied": False,
     }
+
+
+def _canonical_document_sha256(value: Any) -> str:
+    try:
+        raw = json.dumps(
+            value,
+            ensure_ascii=True,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode("ascii")
+    except (TypeError, ValueError, UnicodeError):
+        return ""
+    return "sha256:" + hashlib.sha256(raw).hexdigest()
+
+
+def _project_update_private_file_sha256(
+    root: Path,
+    path: Path,
+) -> str | None:
+    if not os.path.lexists(path):
+        try:
+            relative = path.relative_to(root)
+        except ValueError:
+            raise OperationControlError(
+                "operation_control_path_unsafe"
+            ) from None
+        current = root
+        _require_real_directory(current)
+        for part in relative.parts[:-1]:
+            current = current / part
+            try:
+                observed_parent = os.lstat(current)
+            except FileNotFoundError:
+                return None
+            except OSError:
+                raise OperationControlError(
+                    "operation_control_root_unavailable"
+                ) from None
+            if (
+                stat.S_ISLNK(observed_parent.st_mode)
+                or _is_reparse(observed_parent)
+                or not stat.S_ISDIR(observed_parent.st_mode)
+            ):
+                raise OperationControlError(
+                    "operation_control_root_unsafe"
+                )
+        if not os.path.lexists(path):
+            return None
+    _validate_existing_chain(root, path)
+    try:
+        observed = os.lstat(path)
+    except FileNotFoundError:
+        return None
+    if (
+        stat.S_ISLNK(observed.st_mode)
+        or _is_reparse(observed)
+        or not stat.S_ISREG(observed.st_mode)
+        or observed.st_nlink != 1
+        or not 0 < observed.st_size
+        <= PROJECT_UPDATE_TERMINAL_CAPSULE_MAX_BYTES
+    ):
+        raise OperationControlError("operation_control_path_unsafe")
+    descriptor = os.open(
+        str(path),
+        os.O_RDONLY
+        | getattr(os, "O_BINARY", 0)
+        | getattr(os, "O_NOFOLLOW", 0),
+    )
+    try:
+        current = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(current.st_mode)
+            or current.st_nlink != 1
+            or (int(current.st_dev), int(current.st_ino))
+            != (int(observed.st_dev), int(observed.st_ino))
+            or current.st_size != observed.st_size
+        ):
+            raise OperationControlError("operation_control_path_unsafe")
+        digest = hashlib.sha256()
+        total = 0
+        while True:
+            chunk = os.read(descriptor, 1024 * 1024)
+            if not chunk:
+                break
+            total += len(chunk)
+            if total > PROJECT_UPDATE_TERMINAL_CAPSULE_MAX_BYTES:
+                raise OperationControlError(
+                    "operation_control_path_unsafe"
+                )
+            digest.update(chunk)
+        final = os.fstat(descriptor)
+        if (
+            (int(final.st_dev), int(final.st_ino))
+            != (int(observed.st_dev), int(observed.st_ino))
+            or final.st_size != observed.st_size
+            or total != observed.st_size
+        ):
+            raise OperationControlError("operation_control_path_unsafe")
+    finally:
+        os.close(descriptor)
+    return "sha256:" + digest.hexdigest()
+
+
+def _project_update_private_file_bytes(
+    root: Path,
+    path: Path,
+    *,
+    expected_sha256: str,
+) -> bytes:
+    """Read one exact private capsule without exposing its locator."""
+
+    if re.fullmatch(r"sha256:[0-9a-f]{64}", expected_sha256) is None:
+        raise OperationControlError("operation_terminal_delivery_invalid")
+    _validate_existing_chain(root, path)
+    try:
+        observed = os.lstat(path)
+    except OSError:
+        raise OperationControlError("operation_terminal_delivery_invalid") from None
+    if (
+        stat.S_ISLNK(observed.st_mode)
+        or _is_reparse(observed)
+        or not stat.S_ISREG(observed.st_mode)
+        or observed.st_nlink != 1
+        or not 0 < observed.st_size
+        <= PROJECT_UPDATE_TERMINAL_CAPSULE_MAX_BYTES
+    ):
+        raise OperationControlError("operation_terminal_delivery_invalid")
+    try:
+        descriptor = os.open(
+            str(path),
+            os.O_RDONLY
+            | getattr(os, "O_BINARY", 0)
+            | getattr(os, "O_NOFOLLOW", 0),
+        )
+    except OSError:
+        raise OperationControlError("operation_terminal_delivery_invalid") from None
+    try:
+        current = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(current.st_mode)
+            or current.st_nlink != 1
+            or (int(current.st_dev), int(current.st_ino))
+            != (int(observed.st_dev), int(observed.st_ino))
+            or current.st_size != observed.st_size
+        ):
+            raise OperationControlError("operation_terminal_delivery_invalid")
+        chunks: list[bytes] = []
+        total = 0
+        while True:
+            chunk = os.read(descriptor, 1024 * 1024)
+            if not chunk:
+                break
+            total += len(chunk)
+            if total > PROJECT_UPDATE_TERMINAL_CAPSULE_MAX_BYTES:
+                raise OperationControlError("operation_terminal_delivery_invalid")
+            chunks.append(chunk)
+        final = os.fstat(descriptor)
+        if (
+            (int(final.st_dev), int(final.st_ino))
+            != (int(observed.st_dev), int(observed.st_ino))
+            or final.st_size != observed.st_size
+            or total != observed.st_size
+        ):
+            raise OperationControlError("operation_terminal_delivery_invalid")
+    finally:
+        os.close(descriptor)
+    raw = b"".join(chunks)
+    observed_sha256 = "sha256:" + hashlib.sha256(raw).hexdigest()
+    if not hmac.compare_digest(observed_sha256, expected_sha256):
+        raise OperationControlError("operation_terminal_delivery_invalid")
+    return raw
+
+
+def _project_update_consumed_capsule_matches(
+    root: Path,
+    handoff_sha256: object,
+) -> tuple[bool, bool, bool]:
+    durability_flush_attempted = False
+    durability_flush_verified = False
+    if not isinstance(handoff_sha256, str) or re.fullmatch(
+        r"sha256:[0-9a-f]{64}",
+        handoff_sha256,
+    ) is None:
+        return False, False, False
+    relative = PurePosixPath(
+        PROJECT_UPDATE_TERMINAL_CONSUMED_PREFIX
+        + handoff_sha256.removeprefix("sha256:")
+        + ".json"
+    )
+    try:
+        active = _path_below(
+            root,
+            PurePosixPath(PROJECT_UPDATE_TERMINAL_ACTIVE_RELATIVE),
+        )
+        active_sha256 = _project_update_private_file_sha256(root, active)
+        if active_sha256 is not None and hmac.compare_digest(
+            active_sha256,
+            handoff_sha256,
+        ):
+            return False, False, False
+        display_pending = _path_below(
+            root,
+            PurePosixPath(
+                PROJECT_UPDATE_TERMINAL_DISPLAY_PENDING_RELATIVE
+            ),
+        )
+        display_pending_sha256 = _project_update_private_file_sha256(
+            root,
+            display_pending,
+        )
+        consumed = _path_below(root, relative)
+        consumed_sha256 = _project_update_private_file_sha256(
+            root,
+            consumed,
+        )
+        pending_matches = bool(
+            display_pending_sha256 is not None
+            and hmac.compare_digest(
+                display_pending_sha256,
+                handoff_sha256,
+            )
+        )
+        consumed_matches = bool(
+            consumed_sha256 is not None
+            and hmac.compare_digest(consumed_sha256, handoff_sha256)
+        )
+        if pending_matches and consumed_matches:
+            return False, False, False
+        if pending_matches or consumed_matches:
+            # A rename may have become visible before the writer could prove
+            # both directory entries durable.  A read-only status retry may
+            # establish that durability, but it must not report delivery from
+            # the visible file alone.
+            durability_flush_attempted = True
+            project_update_transaction._require_directory_durable(
+                consumed.parent
+            )
+            durability_flush_verified = True
+    except (
+        OSError,
+        OperationControlError,
+        project_update_transaction.ProjectUpdateTransactionError,
+    ):
+        return False, durability_flush_attempted, False
+    return (
+        bool(
+            pending_matches or consumed_matches
+        ),
+        durability_flush_attempted,
+        durability_flush_verified,
+    )
+
+
+def _apply_project_update_delivery_projection(
+    artifact: dict[str, Any],
+    *,
+    control_root: Path,
+    journal_delivery_acknowledged: bool,
+    journal_handoff_sha256: str | None = None,
+) -> bool:
+    """Reconcile output with its operation-bound consumed ready capsule."""
+
+    domain = artifact.get("domain")
+    terminal = (
+        domain.get("terminal_finalization")
+        if type(domain) is dict
+        else None
+    )
+    delivery = artifact.get("terminal_delivery")
+    artifact["terminal_delivery_durability_flush_attempted"] = False
+    artifact["terminal_delivery_durability_flush_verified"] = False
+    if (
+        type(journal_delivery_acknowledged) is not bool
+        or type(domain) is not dict
+        or type(terminal) is not dict
+        or terminal.get("durable_result_delivery_acknowledged") is not False
+        or artifact.get("command_result_available") is not True
+        or artifact.get("result_ok") is not True
+        or artifact.get("exit_code") != 0
+        or type(delivery) is not dict
+        or set(delivery)
+        != {
+            "schema",
+            "terminal_handoff_sha256",
+            "result_payload_sha256",
+            "output_relative_sha256",
+            "run_id",
+            "operation_ref",
+            "proof",
+        }
+        or delivery.get("schema")
+        != "wom-kit/project-version-update-terminal-delivery-binding/v0.4.16"
+        or delivery.get("result_payload_sha256")
+        != artifact.get("result_payload_sha256")
+        or delivery.get("output_relative_sha256")
+        != artifact.get("output_relative_sha256")
+        or delivery.get("run_id") != artifact.get("run_id")
+        or delivery.get("operation_ref") != artifact.get("operation_ref")
+        or (
+            journal_handoff_sha256 is not None
+            and delivery.get("terminal_handoff_sha256")
+            != journal_handoff_sha256
+        )
+        or type(delivery.get("proof")) is not str
+        or re.fullmatch(
+            r"hmac-sha256:[0-9a-f]{64}",
+            delivery["proof"],
+        )
+        is None
+    ):
+        return False
+    (
+        capsule_matches,
+        durability_flush_attempted,
+        durability_flush_verified,
+    ) = _project_update_consumed_capsule_matches(
+        control_root,
+        delivery.get("terminal_handoff_sha256"),
+    )
+    artifact["terminal_delivery_durability_flush_attempted"] = (
+        durability_flush_attempted
+    )
+    artifact["terminal_delivery_durability_flush_verified"] = (
+        durability_flush_verified
+    )
+    if not capsule_matches:
+        return False
+    projected_terminal = dict(terminal)
+    projected_terminal["durable_result_delivery_acknowledged"] = True
+    projected_terminal["attention_required"] = not (
+        projected_terminal.get("transaction_cleanup_completed") is True
+        and projected_terminal.get("service_resource_close_verified")
+        is True
+        and projected_terminal.get("git_runner_close_verified") is True
+    )
+    projected_domain = dict(domain)
+    projected_domain["terminal_finalization"] = projected_terminal
+    projected_domain["post_update_attention_required"] = projected_terminal[
+        "attention_required"
+    ]
+    artifact["domain"] = projected_domain
+    artifact["terminal_delivery_consumed_verified"] = True
+    artifact["terminal_delivery_journal_pending"] = (
+        not journal_delivery_acknowledged
+    )
+    return True
 
 
 def _safe_staged_cleanup_domain_projection(
@@ -752,7 +1245,10 @@ def _find_result_artifact(
     expected_bytes: int | None = None,
     expected_exit_code: int | None = None,
     expected_result_ok: bool | None = None,
+    _include_private: bool = False,
 ) -> dict[str, Any] | None:
+    if type(_include_private) is not bool:
+        raise OperationControlError("operation_result_verification_unsafe")
     scanned_entries = 0
     scanned_bytes = 0
     matches: list[dict[str, Any]] = []
@@ -852,7 +1348,11 @@ def _find_result_artifact(
                     )
                     if validated is None:
                         continue
-                    exit_code, result_ok = validated
+                    (
+                        exit_code,
+                        result_ok,
+                        command_result_available,
+                    ) = validated
                     if (
                         expected_exit_code is not None
                         and exit_code != expected_exit_code
@@ -861,23 +1361,82 @@ def _find_result_artifact(
                         and result_ok is not expected_result_ok
                     ):
                         continue
-                    matches.append(
-                        {
+                    match: dict[str, Any] = {
                             "sha256": digest,
                             "bytes": size,
+                            "result_payload_sha256": (
+                                _canonical_document_sha256(
+                                    {
+                                        key: value
+                                        for key, value in payload.items()
+                                        if key
+                                        not in {
+                                            "cli_execution",
+                                            "cli_output_artifact",
+                                        }
+                                    }
+                                )
+                            ),
+                            "output_relative_sha256": (
+                                "sha256:"
+                                + hashlib.sha256(
+                                    candidate_relative.encode("utf-8")
+                                ).hexdigest()
+                            ),
+                            "run_id": run_id,
+                            "operation_ref": operation_ref,
                             "exit_code": exit_code,
                             "result_ok": result_ok,
-                            "domain": _safe_domain_projection(
-                                payload,
-                                command=command,
+                            "command_result_available": (
+                                command_result_available
+                            ),
+                            "terminal_delivery": (
+                                payload.get("cli_execution", {}).get(
+                                    "terminal_delivery"
+                                )
+                                if type(payload.get("cli_execution"))
+                                is dict
+                                else None
+                            ),
+                            "domain": (
+                                _safe_domain_projection(
+                                    payload,
+                                    command=command,
+                                )
+                                if command_result_available
+                                else None
                             ),
                         }
-                    )
+                    if _include_private:
+                        match["_private_output_path"] = candidate
+                        match["_private_payload"] = payload
+                    matches.append(match)
                     if len(matches) > 1:
                         raise OperationControlError(
                             "operation_result_artifact_ambiguous"
                         )
     return matches[0] if matches else None
+
+
+@dataclass(frozen=True, repr=False)
+class ProjectUpdatePendingTerminalDelivery:
+    """Private structural candidate; claim reauthentication is still required."""
+
+    control_root: Path = field(repr=False)
+    journal_path: Path = field(repr=False)
+    output_path: Path = field(repr=False)
+    consumed_path: Path = field(repr=False)
+    result_document: dict[str, Any] = field(repr=False)
+    capsule_bytes: bytes = field(repr=False)
+    operation_ref: str = field(repr=False)
+    run_id: str = field(repr=False)
+    root_ref: str = field(repr=False)
+    output_ref: str = field(repr=False)
+    result_sha256: str = field(repr=False)
+    result_bytes: int = field(repr=False)
+    terminal_handoff_sha256: str = field(repr=False)
+    active_handoff: bool = field(default=False, repr=False)
+    display_pending: bool = field(default=False, repr=False)
 
 
 @dataclass
@@ -1017,6 +1576,8 @@ class OperationRunJournal:
         exit_code: int | None = None,
         result_sha256: str | None = None,
         result_bytes: int | None = None,
+        terminal_delivery_acknowledged: bool | None = None,
+        terminal_handoff_sha256: str | None = None,
         recovery_required: bool = False,
     ) -> dict[str, Any]:
         record = {
@@ -1042,6 +1603,10 @@ class OperationRunJournal:
             "exit_code": exit_code,
             "result_sha256": result_sha256,
             "result_bytes": result_bytes,
+            "terminal_delivery_acknowledged": (
+                terminal_delivery_acknowledged
+            ),
+            "terminal_handoff_sha256": terminal_handoff_sha256,
             "recovery_required": recovery_required,
             "previous_record_sha256": self._previous_digest,
             "record_sha256": None,
@@ -1059,9 +1624,15 @@ class OperationRunJournal:
         exit_code: int | None = None,
         result_sha256: str | None = None,
         result_bytes: int | None = None,
+        terminal_delivery_acknowledged: bool | None = None,
+        terminal_handoff_sha256: str | None = None,
         recovery_required: bool = False,
     ) -> None:
-        if self._failed or self._terminal or event not in JOURNAL_EVENTS:
+        if (
+            self._failed
+            or event not in JOURNAL_EVENTS
+            or self._terminal
+        ):
             return
         record = self._record(
             event,
@@ -1071,6 +1642,10 @@ class OperationRunJournal:
             exit_code=exit_code,
             result_sha256=result_sha256,
             result_bytes=result_bytes,
+            terminal_delivery_acknowledged=(
+                terminal_delivery_acknowledged
+            ),
+            terminal_handoff_sha256=terminal_handoff_sha256,
             recovery_required=recovery_required,
         )
         encoded = (
@@ -1110,13 +1685,38 @@ class OperationRunJournal:
                     != self._identity
                 ):
                     raise OSError("operation_journal_identity_changed")
-                written = os.write(descriptor, encoded)
-                if written != len(encoded):
-                    raise OSError("operation_journal_append_incomplete")
-                os.fsync(descriptor)
+                written = 0
+                try:
+                    while written < len(encoded):
+                        count = os.write(descriptor, encoded[written:])
+                        if count <= 0:
+                            raise OSError(
+                                "operation_journal_append_incomplete"
+                            )
+                        written += count
+                    os.fsync(descriptor)
+                except OSError:
+                    # Restore the exact verified prefix before reporting a
+                    # failed append. This journal has one in-process writer;
+                    # leaving a torn JSON tail would make every future read
+                    # permanently ambiguous.
+                    try:
+                        os.ftruncate(descriptor, before.st_size)
+                        os.fsync(descriptor)
+                    except OSError:
+                        pass
+                    raise
             finally:
                 os.close(descriptor)
-        except (OSError, OperationControlError):
+            if terminal or event == "started":
+                project_update_transaction._require_directory_durable(
+                    self.journal_path.parent
+                )
+        except (
+            OSError,
+            OperationControlError,
+            project_update_transaction.ProjectUpdateTransactionError,
+        ):
             self._failed = True
             return
         self._previous_digest = str(record["record_sha256"])
@@ -1158,12 +1758,64 @@ class OperationRunJournal:
         result_available: bool,
         result_ok: bool | None,
         result_path: Path | None = None,
+        terminal_delivery_acknowledged: bool | None = None,
+        terminal_handoff_sha256: str | None = None,
     ) -> bool:
         self._stop.set()
         if self._thread is not None:
             self._thread.join(timeout=2.0)
         result_sha256: str | None = None
         result_bytes: int | None = None
+        if (
+            terminal_delivery_acknowledged is not None
+            and type(terminal_delivery_acknowledged) is not bool
+        ):
+            self._failed = True
+            return False
+        if (
+            terminal_handoff_sha256 is not None
+            and (
+                not isinstance(terminal_handoff_sha256, str)
+                or re.fullmatch(
+                    r"sha256:[0-9a-f]{64}", terminal_handoff_sha256
+                )
+                is None
+            )
+        ):
+            self._failed = True
+            return False
+        if (
+            self.command == "project-version-update"
+            and terminal_delivery_acknowledged is True
+        ):
+            # The terminal journal is committed before the ready capsule is
+            # moved. Delivery can only become true later by verifying that
+            # exact operation-bound consumed capsule.
+            self._failed = True
+            return False
+        terminal_delivery_state = (
+            terminal_delivery_acknowledged
+            if self.command == "project-version-update"
+            else None
+        )
+        terminal_handoff_state = (
+            terminal_handoff_sha256
+            if self.command == "project-version-update"
+            else None
+        )
+        if (
+            self.command != "project-version-update"
+            and terminal_handoff_sha256 is not None
+            or self.command == "project-version-update"
+            and (
+                terminal_delivery_state is False
+                and terminal_handoff_state is None
+                or terminal_delivery_state is None
+                and terminal_handoff_state is not None
+            )
+        ):
+            self._failed = True
+            return False
         if result_available:
             try:
                 if result_path is None:
@@ -1180,9 +1832,62 @@ class OperationRunJournal:
                     output_ref=self.output_ref,
                     command=self.command,
                 )
-                if validated != (int(exit_code), result_ok):
+                if (
+                    validated is None
+                    or validated[:2] != (int(exit_code), result_ok)
+                ):
                     raise OperationControlError("operation_result_binding_invalid")
+                if validated[2] is not True:
+                    # A CLI failure artifact can be durably bound to this run,
+                    # but it is not the command's domain result. Preserve the
+                    # terminal recovery record while returning an incomplete
+                    # completion signal to the caller.
+                    result_available = False
+                    result_ok = None
+                if self.command == "project-version-update":
+                    execution = payload.get("cli_execution")
+                    delivery = (
+                        execution.get("terminal_delivery")
+                        if type(execution) is dict
+                        else None
+                    )
+                    if terminal_delivery_state is False:
+                        if (
+                            type(delivery) is not dict
+                            or set(delivery)
+                            != {
+                                "schema",
+                                "terminal_handoff_sha256",
+                                "result_payload_sha256",
+                                "output_relative_sha256",
+                                "run_id",
+                                "operation_ref",
+                                "proof",
+                            }
+                            or delivery.get("schema")
+                            != "wom-kit/project-version-update-terminal-delivery-binding/v0.4.16"
+                            or delivery.get("terminal_handoff_sha256")
+                            != terminal_handoff_state
+                            or re.fullmatch(
+                                r"hmac-sha256:[0-9a-f]{64}",
+                                str(delivery.get("proof") or ""),
+                            )
+                            is None
+                        ):
+                            raise OperationControlError(
+                                "operation_result_binding_invalid"
+                            )
+                    elif delivery is not None:
+                        raise OperationControlError(
+                            "operation_result_binding_invalid"
+                        )
             except OperationControlError:
+                if (
+                    self.command == "project-version-update"
+                    and terminal_delivery_state is False
+                ):
+                    self._failed = True
+                    return False
                 result_available = False
                 result_ok = None
         if not self._lock.acquire(timeout=2.0):
@@ -1197,11 +1902,15 @@ class OperationRunJournal:
                 exit_code=int(exit_code) if result_available else None,
                 result_sha256=result_sha256 if result_available else None,
                 result_bytes=result_bytes if result_available else None,
+                terminal_delivery_acknowledged=(
+                    terminal_delivery_state
+                ),
+                terminal_handoff_sha256=terminal_handoff_state,
                 recovery_required=not result_available,
             )
         finally:
             self._lock.release()
-        return not self._failed and self._terminal
+        return bool(not self._failed and self._terminal and result_available)
 
     def close(self) -> None:
         self._stop.set()
@@ -1284,7 +1993,10 @@ def _read_journal(path: Path, root: Path) -> list[dict[str, Any]]:
     records: list[dict[str, Any]] = []
     previous_digest: str | None = None
     fixed: tuple[str, str, str, str, str, str, str] | None = None
+    journal_schema: str | None = None
+    journal_record_keys: tuple[str, ...] | None = None
     terminal_seen = False
+    previous_record: dict[str, Any] | None = None
     previous_elapsed = -1
     previous_timestamp: datetime | None = None
     for sequence, line in enumerate(lines):
@@ -1295,14 +2007,31 @@ def _read_journal(path: Path, root: Path) -> list[dict[str, Any]]:
             record = json.loads(decoded)
         except (UnicodeError, json.JSONDecodeError):
             raise OperationControlError("operation_journal_invalid") from None
-        if not isinstance(record, dict) or tuple(record) != tuple(
-            sorted(RECORD_KEYS)
-        ):
+        if not isinstance(record, dict):
+            raise OperationControlError("operation_journal_invalid")
+        record_schema = record.get("schema")
+        expected_record_keys = (
+            RECORD_KEYS
+            if record_schema == OPERATION_JOURNAL_SCHEMA
+            else LEGACY_RECORD_KEYS
+            if record_schema == LEGACY_OPERATION_JOURNAL_SCHEMA
+            else ()
+        )
+        if tuple(record) != tuple(sorted(expected_record_keys)):
             # Writers sort keys on disk; requiring that order also rejects an
             # unexpected field before any untrusted value is reflected.
             raise OperationControlError("operation_journal_invalid")
-        if set(record) != set(RECORD_KEYS):
+        if set(record) != set(expected_record_keys):
             raise OperationControlError("operation_journal_invalid")
+        digest_record = record
+        legacy_record = record_schema == LEGACY_OPERATION_JOURNAL_SCHEMA
+        handoff_bound_record = not legacy_record
+        if legacy_record:
+            record = {
+                **record,
+                "terminal_delivery_acknowledged": None,
+                "terminal_handoff_sha256": None,
+            }
         operation_ref = record.get("operation_ref")
         operation_kind = record.get("operation_kind")
         root_ref = record.get("root_ref")
@@ -1321,9 +2050,12 @@ def _read_journal(path: Path, root: Path) -> list[dict[str, Any]]:
         )
         if fixed is None:
             fixed = current_fixed
+            journal_schema = str(record_schema)
+            journal_record_keys = expected_record_keys
         if (
             current_fixed != fixed
-            or record.get("schema") != OPERATION_JOURNAL_SCHEMA
+            or record_schema != journal_schema
+            or expected_record_keys != journal_record_keys
             or OPERATION_REF_RE.fullmatch(str(operation_ref or "")) is None
             or operation_kind not in KIND_COMMANDS
             or not re.fullmatch(r"root:sha256:[0-9a-f]{64}", str(root_ref or ""))
@@ -1384,9 +2116,25 @@ def _read_journal(path: Path, root: Path) -> list[dict[str, Any]]:
                     or not 0 < record["result_bytes"] <= MAX_RESULT_BYTES
                 )
             )
+            or (
+                record.get("terminal_delivery_acknowledged") is not None
+                and type(
+                    record.get("terminal_delivery_acknowledged")
+                )
+                is not bool
+            )
+            or (
+                record.get("terminal_handoff_sha256") is not None
+                and re.fullmatch(
+                    r"sha256:[0-9a-f]{64}",
+                    str(record.get("terminal_handoff_sha256")),
+                )
+                is None
+            )
             or type(record.get("recovery_required")) is not bool
             or record.get("previous_record_sha256") != previous_digest
-            or record.get("record_sha256") != _record_digest(record)
+            or record.get("record_sha256")
+            != _record_digest(digest_record)
         ):
             raise OperationControlError("operation_journal_invalid")
         observed_at = _parse_timestamp(record.get("observed_at"))
@@ -1397,17 +2145,22 @@ def _read_journal(path: Path, root: Path) -> list[dict[str, Any]]:
             raise OperationControlError("operation_journal_invalid")
         previous_elapsed = record["elapsed_ms"]
         previous_timestamp = observed_at
+        event = record["event"]
         if terminal_seen:
             raise OperationControlError("operation_journal_invalid")
-        if record["event"] == "started" and sequence != 0:
+        if event == "started" and sequence != 0:
             raise OperationControlError("operation_journal_invalid")
-        if (record["event"] in {"completed", "result_unavailable"}) != bool(
-            record["terminal"]
-        ):
+        if (
+            event
+            in {
+                "completed",
+                "result_unavailable",
+            }
+        ) != bool(record["terminal"]):
             raise OperationControlError("operation_journal_invalid")
         if record["terminal"]:
             terminal_seen = True
-            if record["event"] not in {"completed", "result_unavailable"}:
+            if event not in {"completed", "result_unavailable"}:
                 raise OperationControlError("operation_journal_invalid")
         elif (
             record["result_available"]
@@ -1416,31 +2169,671 @@ def _read_journal(path: Path, root: Path) -> list[dict[str, Any]]:
             or record["recovery_required"]
             or record["result_sha256"] is not None
             or record["result_bytes"] is not None
+            or record["terminal_delivery_acknowledged"] is not None
+            or record["terminal_handoff_sha256"] is not None
         ):
             raise OperationControlError("operation_journal_invalid")
-        if record["event"] == "completed" and (
+        if event == "completed" and (
             not record["result_available"]
             or record["result_ok"] is None
             or record["exit_code"] is None
             or record["result_sha256"] is None
             or record["result_bytes"] is None
             or record["recovery_required"]
+            or (
+                operation_kind == "project_version_update"
+                and not (
+                    legacy_record
+                    and record["terminal_delivery_acknowledged"] is None
+                    or not legacy_record
+                    and record["terminal_delivery_acknowledged"]
+                    in {None, False}
+                )
+            )
+            or (
+                operation_kind != "project_version_update"
+                and record["terminal_delivery_acknowledged"] is not None
+            )
+            or (
+                operation_kind == "project_version_update"
+                and handoff_bound_record
+                and (
+                    record["terminal_delivery_acknowledged"] is False
+                )
+                != (record["terminal_handoff_sha256"] is not None)
+            )
+            or (
+                operation_kind != "project_version_update"
+                and record["terminal_handoff_sha256"] is not None
+            )
         ):
             raise OperationControlError("operation_journal_invalid")
-        if record["event"] == "result_unavailable" and (
+        if event == "result_unavailable" and (
             record["result_available"]
             or record["result_ok"] is not None
             or record["exit_code"] is not None
             or record["result_sha256"] is not None
             or record["result_bytes"] is not None
+            or record["terminal_handoff_sha256"] is not None
+            or (
+                operation_kind == "project_version_update"
+                and not (
+                    legacy_record
+                    and record["terminal_delivery_acknowledged"] is None
+                    or not legacy_record
+                    and record["terminal_delivery_acknowledged"]
+                    in {None, False}
+                )
+            )
+            or (
+                operation_kind != "project_version_update"
+                and record["terminal_delivery_acknowledged"] is not None
+            )
             or not record["recovery_required"]
         ):
             raise OperationControlError("operation_journal_invalid")
         previous_digest = str(record["record_sha256"])
+        previous_record = record
         records.append(record)
     if records[0]["event"] != "started":
         raise OperationControlError("operation_journal_invalid")
     return records
+
+
+def _bounded_operation_journal_paths(root: Path) -> list[Path]:
+    paths: list[Path] = []
+    observed_entries = 0
+    observed_bytes = 0
+    for relative in (ARCHIVE_JOURNAL_RELATIVE, PROJECT_JOURNAL_RELATIVE):
+        journal_root = _path_below(root, relative)
+        try:
+            observed_root = os.lstat(journal_root)
+        except FileNotFoundError:
+            continue
+        except OSError:
+            raise OperationControlError(
+                "operation_terminal_delivery_scan_unavailable"
+            ) from None
+        _validate_existing_chain(root, journal_root)
+        if (
+            stat.S_ISLNK(observed_root.st_mode)
+            or _is_reparse(observed_root)
+            or not stat.S_ISDIR(observed_root.st_mode)
+        ):
+            raise OperationControlError("operation_terminal_delivery_scan_unsafe")
+        try:
+            entries = os.scandir(journal_root)
+        except OSError:
+            raise OperationControlError(
+                "operation_terminal_delivery_scan_unavailable"
+            ) from None
+        with entries:
+            for entry in entries:
+                observed_entries += 1
+                if observed_entries > MAX_RESULT_SCAN_ENTRIES:
+                    raise OperationControlError(
+                        "operation_terminal_delivery_scan_bounded"
+                    )
+                try:
+                    observed = entry.stat(follow_symlinks=False)
+                except OSError:
+                    raise OperationControlError(
+                        "operation_terminal_delivery_scan_unavailable"
+                    ) from None
+                if (
+                    stat.S_ISLNK(observed.st_mode)
+                    or _is_reparse(observed)
+                    or not stat.S_ISREG(observed.st_mode)
+                    or re.fullmatch(r"[0-9a-f]{64}\.jsonl", entry.name)
+                    is None
+                ):
+                    raise OperationControlError(
+                        "operation_terminal_delivery_scan_unsafe"
+                    )
+                observed_bytes += int(observed.st_size)
+                if observed_bytes > MAX_RESULT_SCAN_BYTES:
+                    raise OperationControlError(
+                        "operation_terminal_delivery_scan_bounded"
+                    )
+                paths.append(Path(entry.path))
+    return paths
+
+
+def _pending_project_update_delivery_records(
+    root: Path,
+) -> list[tuple[Path, list[dict[str, Any]]]]:
+    pending: list[tuple[Path, list[dict[str, Any]]]] = []
+    expected_root_ref = _root_ref(root)
+    for journal_path in _bounded_operation_journal_paths(root):
+        records = _read_journal(journal_path, root)
+        first = records[0]
+        latest = records[-1]
+        if (
+            first["root_ref"] != expected_root_ref
+            or journal_path.name
+            != _operation_hex(str(first["operation_ref"])) + ".jsonl"
+            or (
+                _parse_timestamp(latest["observed_at"])
+                - datetime.now(timezone.utc)
+            ).total_seconds()
+            > MAX_FUTURE_SKEW_SECONDS
+        ):
+            raise OperationControlError("operation_terminal_delivery_invalid")
+        if first["operation_kind"] != "project_version_update":
+            continue
+        if (
+            latest["event"] == "completed"
+            and latest["terminal"] is True
+            and latest["result_available"] is True
+            and latest["result_ok"] is True
+            and latest["exit_code"] == 0
+            and latest["recovery_required"] is False
+            and latest["terminal_delivery_acknowledged"] is False
+        ):
+            pending.append((journal_path, records))
+    return pending
+
+
+def _project_update_delivery_candidate(
+    root: Path,
+    journal_path: Path,
+    records: list[dict[str, Any]],
+    *,
+    allow_active_handoff: bool = False,
+    allow_display_pending: bool = False,
+) -> ProjectUpdatePendingTerminalDelivery:
+    latest = records[-1]
+    try:
+        active = _path_below(
+            root,
+            PurePosixPath(PROJECT_UPDATE_TERMINAL_ACTIVE_RELATIVE),
+        )
+        display_pending_path = _path_below(
+            root,
+            PurePosixPath(
+                PROJECT_UPDATE_TERMINAL_DISPLAY_PENDING_RELATIVE
+            ),
+        )
+        active_sha256 = _project_update_private_file_sha256(root, active)
+        display_pending_sha256 = _project_update_private_file_sha256(
+            root,
+            display_pending_path,
+        )
+        if active_sha256 is not None and display_pending_sha256 is not None:
+            raise OperationControlError("operation_terminal_delivery_invalid")
+        artifact = _find_result_artifact(
+            root,
+            operation_ref=str(latest["operation_ref"]),
+            run_id=str(latest["run_id"]),
+            root_ref=str(latest["root_ref"]),
+            output_ref=str(latest["output_ref"]),
+            command="project-version-update",
+            expected_sha256=str(latest["result_sha256"]),
+            expected_bytes=int(latest["result_bytes"]),
+            expected_exit_code=0,
+            expected_result_ok=True,
+            _include_private=True,
+        )
+    except OperationControlError:
+        raise OperationControlError("operation_terminal_delivery_invalid") from None
+    if artifact is None:
+        raise OperationControlError("operation_terminal_delivery_invalid")
+    domain = artifact.get("domain")
+    terminal = (
+        domain.get("terminal_finalization")
+        if type(domain) is dict
+        else None
+    )
+    delivery = artifact.get("terminal_delivery")
+    if (
+        type(terminal) is not dict
+        or terminal.get("transaction_cleanup_completed") is not True
+        or terminal.get("durable_terminal_handoff_ready") is not True
+        or terminal.get("durable_result_delivery_acknowledged") is not False
+        or artifact.get("command_result_available") is not True
+        or type(delivery) is not dict
+    ):
+        raise OperationControlError("operation_terminal_delivery_invalid")
+    handoff_sha256 = delivery.get("terminal_handoff_sha256")
+    if not isinstance(handoff_sha256, str) or re.fullmatch(
+        r"sha256:[0-9a-f]{64}", handoff_sha256
+    ) is None:
+        raise OperationControlError("operation_terminal_delivery_invalid")
+    journal_handoff_sha256 = latest.get("terminal_handoff_sha256")
+    if (
+        journal_handoff_sha256 is not None
+        and not hmac.compare_digest(
+            str(journal_handoff_sha256), handoff_sha256
+        )
+    ):
+        raise OperationControlError("operation_terminal_delivery_invalid")
+    selected_active = bool(
+        active_sha256 is not None
+        and hmac.compare_digest(active_sha256, handoff_sha256)
+    )
+    selected_display_pending = bool(
+        display_pending_sha256 is not None
+        and hmac.compare_digest(display_pending_sha256, handoff_sha256)
+    )
+    if selected_active:
+        if not allow_active_handoff:
+            raise OperationControlError("operation_terminal_delivery_invalid")
+        capsule_path = active
+    elif selected_display_pending:
+        if not allow_display_pending:
+            raise OperationControlError("operation_terminal_delivery_invalid")
+        expected_consumed = _path_below(
+            root,
+            PurePosixPath(
+                PROJECT_UPDATE_TERMINAL_CONSUMED_PREFIX
+                + handoff_sha256.removeprefix("sha256:")
+                + ".json"
+            ),
+        )
+        if (
+            _project_update_private_file_sha256(
+                root,
+                expected_consumed,
+            )
+            is not None
+        ):
+            raise OperationControlError("operation_terminal_delivery_invalid")
+        try:
+            project_update_transaction._require_directory_durable(
+                display_pending_path.parent
+            )
+        except (
+            OSError,
+            project_update_transaction.ProjectUpdateTransactionError,
+        ):
+            raise OperationControlError(
+                "operation_terminal_delivery_durability_unverified"
+            ) from None
+        capsule_path = display_pending_path
+    else:
+        if not _apply_project_update_delivery_projection(
+            artifact,
+            control_root=root,
+            journal_delivery_acknowledged=False,
+            journal_handoff_sha256=journal_handoff_sha256,
+        ):
+            raise OperationControlError("operation_terminal_delivery_invalid")
+        capsule_path = _path_below(
+            root,
+            PurePosixPath(
+                PROJECT_UPDATE_TERMINAL_CONSUMED_PREFIX
+                + handoff_sha256.removeprefix("sha256:")
+                + ".json"
+            ),
+        )
+    capsule_bytes = _project_update_private_file_bytes(
+        root,
+        capsule_path,
+        expected_sha256=handoff_sha256,
+    )
+    output_path = artifact.get("_private_output_path")
+    result_document = artifact.get("_private_payload")
+    if not isinstance(output_path, Path) or type(result_document) is not dict:
+        raise OperationControlError("operation_terminal_delivery_invalid")
+    return ProjectUpdatePendingTerminalDelivery(
+        control_root=root,
+        journal_path=journal_path,
+        output_path=output_path,
+        consumed_path=capsule_path,
+        result_document=result_document,
+        capsule_bytes=capsule_bytes,
+        operation_ref=str(latest["operation_ref"]),
+        run_id=str(latest["run_id"]),
+        root_ref=str(latest["root_ref"]),
+        output_ref=str(latest["output_ref"]),
+        result_sha256=str(latest["result_sha256"]),
+        result_bytes=int(latest["result_bytes"]),
+        terminal_handoff_sha256=handoff_sha256,
+        active_handoff=selected_active,
+        display_pending=selected_display_pending,
+    )
+
+
+def discover_pending_project_update_terminal_delivery(
+    control_root: Path | str,
+    *,
+    allow_active_handoff: bool = False,
+) -> ProjectUpdatePendingTerminalDelivery | None:
+    """Return the sole exact pending terminal delivery without exposing IDs."""
+
+    root = require_control_root(control_root)
+    active = _path_below(
+        root,
+        PurePosixPath(PROJECT_UPDATE_TERMINAL_ACTIVE_RELATIVE),
+    )
+    display_pending = _path_below(
+        root,
+        PurePosixPath(PROJECT_UPDATE_TERMINAL_DISPLAY_PENDING_RELATIVE),
+    )
+    active_present = _project_update_private_file_sha256(root, active) is not None
+    display_pending_present = (
+        _project_update_private_file_sha256(root, display_pending) is not None
+    )
+    if active_present and display_pending_present:
+        raise OperationControlError("operation_terminal_delivery_ambiguous")
+    if not active_present and not display_pending_present:
+        try:
+            terminal_root_stat = os.lstat(active.parent)
+        except FileNotFoundError:
+            terminal_root_stat = None
+        except OSError:
+            raise OperationControlError(
+                "operation_terminal_delivery_scan_unavailable"
+            ) from None
+        if terminal_root_stat is not None:
+            if (
+                stat.S_ISLNK(terminal_root_stat.st_mode)
+                or _is_reparse(terminal_root_stat)
+                or not stat.S_ISDIR(terminal_root_stat.st_mode)
+            ):
+                raise OperationControlError(
+                    "operation_terminal_delivery_scan_unsafe"
+                )
+            try:
+                project_update_transaction._require_directory_durable(
+                    active.parent
+                )
+            except (
+                OSError,
+                project_update_transaction.ProjectUpdateTransactionError,
+            ):
+                raise OperationControlError(
+                    "operation_terminal_delivery_durability_unverified"
+                ) from None
+        # A final pending->consumed rename may be visible before its parent
+        # directory flush was verified. The namespace flush above closes that
+        # uncertainty. Hashed consumed capsules are history, not replay
+        # candidates, and disposable historical outputs are not required for a
+        # future update preflight.
+        return None
+    if active_present and not allow_active_handoff:
+        return None
+
+    def matching_candidates() -> list[ProjectUpdatePendingTerminalDelivery]:
+        matches: list[ProjectUpdatePendingTerminalDelivery] = []
+        current_handoff_sha256 = (
+            _project_update_private_file_sha256(root, active)
+            if active_present
+            else _project_update_private_file_sha256(root, display_pending)
+        )
+        if current_handoff_sha256 is None:
+            raise OperationControlError("operation_terminal_delivery_changed")
+        for journal_path, records in _pending_project_update_delivery_records(
+            root
+        ):
+            if not hmac.compare_digest(
+                str(records[-1].get("terminal_handoff_sha256") or ""),
+                current_handoff_sha256,
+            ):
+                # Old and completed consumed histories may lose their
+                # disposable result files. Their opaque terminal hash proves
+                # they are unrelated to the one fixed live capsule.
+                continue
+            _require_operation_journal_durable(root, journal_path)
+            candidate = _project_update_delivery_candidate(
+                root,
+                journal_path,
+                records,
+                allow_active_handoff=allow_active_handoff,
+                allow_display_pending=True,
+            )
+            if active_present and not candidate.active_handoff:
+                continue
+            if display_pending_present and not candidate.display_pending:
+                continue
+            matches.append(candidate)
+        return matches
+
+    observed_matches = matching_candidates()
+    if not observed_matches:
+        if display_pending_present:
+            raise OperationControlError("operation_terminal_delivery_invalid")
+        return None
+    if len(observed_matches) != 1:
+        raise OperationControlError("operation_terminal_delivery_ambiguous")
+    guard = _path_below(
+        root,
+        PurePosixPath(PROJECT_UPDATE_TERMINAL_GUARD_RELATIVE),
+    )
+    try:
+        with project_update_transaction._exclusive_guard(guard, within=root):
+            matches = matching_candidates()
+            if not matches:
+                raise OperationControlError(
+                    "operation_terminal_delivery_changed"
+                )
+            if len(matches) != 1:
+                raise OperationControlError(
+                    "operation_terminal_delivery_ambiguous"
+                )
+            return matches[0]
+    except project_update_transaction.ProjectUpdateTransactionError:
+        raise OperationControlError(
+            "operation_terminal_delivery_guard_unavailable"
+        ) from None
+
+
+def _terminal_delivery_candidate_still_exact(
+    candidate: ProjectUpdatePendingTerminalDelivery,
+) -> bool:
+    try:
+        active = _path_below(
+            candidate.control_root,
+            PurePosixPath(PROJECT_UPDATE_TERMINAL_ACTIVE_RELATIVE),
+        )
+        active_sha256 = _project_update_private_file_sha256(
+            candidate.control_root,
+            active,
+        )
+        if candidate.active_handoff:
+            if active_sha256 != candidate.terminal_handoff_sha256:
+                return False
+        elif active_sha256 is not None:
+            return False
+        digest, size, payload = _hash_result_artifact(
+            candidate.control_root,
+            candidate.output_path,
+        )
+        capsule_bytes = _project_update_private_file_bytes(
+            candidate.control_root,
+            candidate.consumed_path,
+            expected_sha256=candidate.terminal_handoff_sha256,
+        )
+    except OperationControlError:
+        return False
+    return bool(
+        digest == candidate.result_sha256
+        and size == candidate.result_bytes
+        and payload == candidate.result_document
+        and capsule_bytes == candidate.capsule_bytes
+    )
+
+
+def _require_operation_journal_durable(root: Path, journal_path: Path) -> None:
+    """Re-establish exact journal file durability before directory durability."""
+
+    _validate_existing_chain(root, journal_path)
+    try:
+        observed = os.lstat(journal_path)
+        if (
+            stat.S_ISLNK(observed.st_mode)
+            or _is_reparse(observed)
+            or not stat.S_ISREG(observed.st_mode)
+            or observed.st_nlink != 1
+            or not 0 < observed.st_size <= MAX_JOURNAL_BYTES
+        ):
+            raise OSError("operation_journal_identity_changed")
+        descriptor = os.open(
+            str(journal_path),
+            os.O_RDWR | getattr(os, "O_BINARY", 0),
+        )
+        try:
+            opened = os.fstat(descriptor)
+            identity = (int(observed.st_dev), int(observed.st_ino))
+            if (
+                not stat.S_ISREG(opened.st_mode)
+                or opened.st_nlink != 1
+                or (int(opened.st_dev), int(opened.st_ino)) != identity
+                or opened.st_size != observed.st_size
+            ):
+                raise OSError("operation_journal_identity_changed")
+            os.fsync(descriptor)
+            final = os.fstat(descriptor)
+            if (
+                (int(final.st_dev), int(final.st_ino)) != identity
+                or final.st_size != observed.st_size
+            ):
+                raise OSError("operation_journal_identity_changed")
+        finally:
+            os.close(descriptor)
+        project_update_transaction._require_directory_durable(
+            journal_path.parent
+        )
+    except (
+        OSError,
+        OperationControlError,
+        project_update_transaction.ProjectUpdateTransactionError,
+    ):
+        raise OperationControlError(
+            "operation_terminal_delivery_commit_unverified"
+        ) from None
+
+
+def _terminal_delivery_capability_matches(
+    candidate: ProjectUpdatePendingTerminalDelivery,
+    capability: str,
+) -> bool:
+    if re.fullmatch(r"hmac-sha256:[0-9a-f]{64}", capability) is None:
+        return False
+    execution = candidate.result_document.get("cli_execution")
+    delivery = (
+        execution.get("terminal_delivery")
+        if type(execution) is dict
+        else None
+    )
+    if type(delivery) is not dict or set(delivery) != {
+        "schema",
+        "terminal_handoff_sha256",
+        "result_payload_sha256",
+        "output_relative_sha256",
+        "run_id",
+        "operation_ref",
+        "proof",
+    }:
+        return False
+    try:
+        output_relative = candidate.output_path.relative_to(
+            candidate.control_root
+        ).as_posix()
+    except ValueError:
+        return False
+    expected_binding = {
+        "schema": (
+            "wom-kit/project-version-update-terminal-delivery-binding/v0.4.16"
+        ),
+        "terminal_handoff_sha256": candidate.terminal_handoff_sha256,
+        "result_payload_sha256": _canonical_document_sha256(
+            {
+                key: value
+                for key, value in candidate.result_document.items()
+                if key not in {"cli_execution", "cli_output_artifact"}
+            }
+        ),
+        "output_relative_sha256": (
+            "sha256:"
+            + hashlib.sha256(output_relative.encode("utf-8")).hexdigest()
+        ),
+        "run_id": candidate.run_id,
+        "operation_ref": candidate.operation_ref,
+    }
+    if any(
+        delivery.get(key) != value for key, value in expected_binding.items()
+    ):
+        return False
+    expected_proof = "hmac-sha256:" + hmac.new(
+        capability.encode("ascii"),
+        b"wom-kit/project-version-update-terminal-delivery-proof/v0.4.16\x00"
+        + project_update_transaction.canonical_json_bytes(expected_binding),
+        hashlib.sha256,
+    ).hexdigest()
+    return hmac.compare_digest(
+        str(delivery.get("proof") or ""),
+        expected_proof,
+    )
+
+
+def verify_pending_project_update_terminal_delivery(
+    candidate: ProjectUpdatePendingTerminalDelivery,
+    *,
+    delivery_capability: str,
+) -> ProjectUpdatePendingTerminalDelivery | None:
+    """Re-read one candidate under guard and bind it to a claim capability."""
+
+    if (
+        type(candidate) is not ProjectUpdatePendingTerminalDelivery
+        or not isinstance(delivery_capability, str)
+    ):
+        return None
+    try:
+        root = require_control_root(candidate.control_root)
+        guard = _path_below(
+            root,
+            PurePosixPath(PROJECT_UPDATE_TERMINAL_GUARD_RELATIVE),
+        )
+        with project_update_transaction._exclusive_guard(guard, within=root):
+            pending = _pending_project_update_delivery_records(root)
+            matches: list[ProjectUpdatePendingTerminalDelivery] = []
+            for journal_path, records in pending:
+                if not hmac.compare_digest(
+                    str(
+                        records[-1].get("terminal_handoff_sha256") or ""
+                    ),
+                    candidate.terminal_handoff_sha256,
+                ):
+                    continue
+                _require_operation_journal_durable(root, journal_path)
+                observed = _project_update_delivery_candidate(
+                    root,
+                    journal_path,
+                    records,
+                    allow_active_handoff=(
+                        candidate.active_handoff
+                    ),
+                    allow_display_pending=(
+                        candidate.display_pending
+                    ),
+                )
+                if (
+                    observed.active_handoff != candidate.active_handoff
+                    or observed.display_pending != candidate.display_pending
+                ):
+                    continue
+                matches.append(observed)
+            if len(matches) != 1:
+                return None
+            verified = matches[0]
+            if (
+                verified != candidate
+                or not _terminal_delivery_capability_matches(
+                    verified,
+                    delivery_capability,
+                )
+            ):
+                return None
+            return verified
+    except (
+        OSError,
+        OperationControlError,
+        project_update_transaction.ProjectUpdateTransactionError,
+    ):
+        return None
+
+
 
 
 def _control_base(operation_ref: str, action: str) -> dict[str, Any]:
@@ -1467,6 +2860,9 @@ def _control_base(operation_ref: str, action: str) -> dict[str, Any]:
         "checkpoint": {"sequence": None, "last_completed_stage": None},
         "result": {
             "available": False,
+            "artifact_available": False,
+            "command_result_available": False,
+            "failure_artifact_available": False,
             "available_at_completion": False,
             "reconciled_from_complete_output": False,
             "binding_verified": False,
@@ -1483,11 +2879,17 @@ def _control_base(operation_ref: str, action: str) -> dict[str, Any]:
             "recovery_required": False,
         },
         "wait": None,
+        "durability_flush": {
+            "attempted": False,
+            "verified": False,
+            "logical_namespace_or_content_changed": False,
+        },
         "next_safe_actions": [],
         "blockers": [],
         "warnings": [],
         "privacy_guards": {
             "writes": False,
+            "logical_namespace_or_content_writes": False,
             "locks_acquired": False,
             "process_ids_echoed": False,
             "local_paths_echoed": False,
@@ -1555,15 +2957,41 @@ def _project_update_completed_next_actions(
     ):
         return None
     if domain.get("completion_ok") is True:
+        if domain.get("terminal_finalization_invalid") is True:
+            return [
+                "Preserve the bound output and terminal evidence because terminal finalization could not be validated",
+                "Do not rerun the completed project update writer; inspect the bound output through a fresh operation-control status",
+            ]
         status = domain.get("status")
         status_actions = (
             _PROJECT_UPDATE_SUCCESS_STATUS_ACTIONS.get(status)
             if isinstance(status, str)
             else None
         )
-        return list(
+        actions = list(
             status_actions or _PROJECT_UPDATE_UNKNOWN_SUCCESS_ACTIONS
         )
+        terminal = domain.get("terminal_finalization")
+        if (
+            isinstance(terminal, dict)
+            and terminal.get("attention_required") is True
+        ):
+            if (
+                terminal.get("transaction_cleanup_completed") is True
+                and terminal.get("service_resource_close_verified") is True
+                and terminal.get("git_runner_close_verified") is True
+                and terminal.get("durable_result_delivery_acknowledged")
+                is False
+            ):
+                return [
+                    "Preserve the durable terminal handoff and use project-version-update --resume with a new project-scoped --output before another fresh update",
+                    *actions,
+                ]
+            return [
+                "Preserve terminal cleanup evidence and do not rerun the completed project update writer",
+                *actions,
+            ]
+        return actions
 
     target_tag = domain.get("target_tag")
     collision_refs = domain.get("collision_refs")
@@ -1717,14 +3145,59 @@ def inspect_operation(
             )
         except OperationControlError as exc:
             verification_blocker = exc.code
+    if (
+        artifact_match is not None
+        and KIND_COMMANDS[str(latest["operation_kind"])]
+        == "project-version-update"
+    ):
+        if terminal:
+            delivery_projection_verified = (
+                _apply_project_update_delivery_projection(
+                    artifact_match,
+                    control_root=root,
+                    journal_delivery_acknowledged=False,
+                    journal_handoff_sha256=(
+                        latest.get("terminal_handoff_sha256")
+                    ),
+                )
+            )
+        else:
+            # A complete-looking output cannot promote an unfinished journal.
+            # The authenticated resume path can republish from the active
+            # ready handoff; read-only control never invents that authority.
+            artifact_match = None
+            verification_blocker = (
+                "operation_terminal_publication_unverified"
+            )
     result_binding_verified = artifact_match is not None
+    durability_flush_attempted = bool(
+        artifact_match is not None
+        and artifact_match.get(
+            "terminal_delivery_durability_flush_attempted"
+        )
+        is True
+    )
+    durability_flush_verified = bool(
+        artifact_match is not None
+        and artifact_match.get(
+            "terminal_delivery_durability_flush_verified"
+        )
+        is True
+    )
     reconciled_from_output = result_binding_verified and not (
         terminal and latest["result_available"]
     )
     effective_terminal = terminal or reconciled_from_output
-    if result_binding_verified:
+    command_result_available = bool(
+        artifact_match is not None
+        and artifact_match.get("command_result_available") is True
+    )
+    if result_binding_verified and command_result_available:
         state = "completed_result_available"
         recovery_required = False
+    elif result_binding_verified:
+        state = "completed_failure_artifact_available"
+        recovery_required = True
     elif terminal and latest["result_available"]:
         state = "recovery_required"
         recovery_required = True
@@ -1768,7 +3241,16 @@ def inspect_operation(
                 "last_completed_stage": latest["last_completed_stage"],
             },
             "result": {
-                "available": result_binding_verified,
+                "available": bool(
+                    result_binding_verified
+                    and command_result_available
+                ),
+                "artifact_available": result_binding_verified,
+                "command_result_available": command_result_available,
+                "failure_artifact_available": bool(
+                    result_binding_verified
+                    and not command_result_available
+                ),
                 "available_at_completion": bool(latest["result_available"]),
                 "reconciled_from_complete_output": reconciled_from_output,
                 "binding_verified": result_binding_verified,
@@ -1796,9 +3278,17 @@ def inspect_operation(
                 "resume_supported": False,
                 "recovery_required": recovery_required,
             },
+            "durability_flush": {
+                "attempted": durability_flush_attempted,
+                "verified": durability_flush_verified,
+                "logical_namespace_or_content_changed": False,
+            },
             "blockers": [verification_blocker] if verification_blocker else [],
         }
     )
+    result["privacy_guards"]["writes"] = durability_flush_attempted
+    if durability_flush_attempted:
+        result["dry_run"] = False
     if state == "running_observed":
         result["next_safe_actions"] = [
             "Wait for the same operation; do not start a duplicate writer and do not treat a caller timeout as cancellation."
@@ -1810,6 +3300,11 @@ def inspect_operation(
                 "Use the complete output artifact and the command-specific verification step before claiming domain completion."
             ]
         )
+    elif state == "completed_failure_artifact_available":
+        result["next_safe_actions"] = [
+            "Use the bound failure artifact only as proof that the command ended; do not infer that no domain effects occurred or start a duplicate writer.",
+            "Use the command-specific read-only recovery path before any retry.",
+        ]
     else:
         result["next_safe_actions"] = [
             "Run operation-control recovery-plan; preserve journals, results, locks, and SQLite sidecars until command-specific authority is checked."
@@ -1949,7 +3444,6 @@ def unsupported_cancel(
     result["control"]["cancel_supported"] = False
     result["control"]["cancel_requested"] = False
     result["control"]["resume_supported"] = False
-    result["privacy_guards"]["writes"] = False
     result["next_safe_actions"] = [
         "No cancel request was written. Use status or bounded wait; if observation becomes stale, use recovery-plan without deleting locks or sidecars."
     ]

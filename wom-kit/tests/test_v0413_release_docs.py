@@ -29,7 +29,7 @@ BUDGET_CONTRACT_DOCUMENTS = (
 
 class V0413ReleaseDocsTests(unittest.TestCase):
     def test_v0413_is_preserved_as_source_history(self) -> None:
-        expected = "0.4.15"
+        expected = "0.4.16"
         package_init = (KIT / "src" / "wom_kit" / "__init__.py").read_text(
             encoding="utf-8"
         )
@@ -45,21 +45,21 @@ class V0413ReleaseDocsTests(unittest.TestCase):
             (ROOT / "CITATION.cff").read_text(encoding="utf-8"),
         )
         versioning = (ROOT / "VERSIONING.md").read_text(encoding="utf-8")
-        self.assertIn("Current public baseline:\n\n```text\nv0.4.15", versioning)
-        self.assertIn("current `wom-kit` package metadata is:\n\n```text\n0.4.15", versioning)
+        self.assertIn("Current public baseline:\n\n```text\nv0.4.16", versioning)
+        self.assertIn("current `wom-kit` package metadata is:\n\n```text\n0.4.16", versioning)
 
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
         readme_ko = (ROOT / "README.ko.md").read_text(encoding="utf-8")
         for document in (readme, readme_ko):
-            self.assertIn("releases/download/v0.4.15/wom_kit-0.4.15-py3-none-any.whl", document)
-        self.assertIn("Previous public baseline: v0.4.14.", readme)
-        self.assertIn("이전 공개 기준: v0.4.14.", readme_ko)
+            self.assertIn("releases/download/v0.4.16/wom_kit-0.4.16-py3-none-any.whl", document)
+        self.assertIn("Previous public baseline: v0.4.15.", readme)
+        self.assertIn("이전 공개 기준: v0.4.15.", readme_ko)
         self.assertTrue(RELEASE.is_file())
         self.assertFalse(
             (KIT / "src" / "wom_kit" / "_resources" / "release-notes" / "v0.4.13.md").exists()
         )
 
-    def test_v0413_supply_lock_is_historical_and_current_policy_is_v0415(self) -> None:
+    def test_v0413_supply_lock_is_historical_and_current_policy_is_v0416(self) -> None:
         current = LOCK.read_bytes()
         previous = (KIT / "project-runtime-supply-lock-v0.4.12.json").read_bytes()
         expected = previous.replace(b"\r\n", b"\n").replace(
@@ -74,11 +74,11 @@ class V0413ReleaseDocsTests(unittest.TestCase):
         policy = json.loads((KIT / "project-runtime-policy.json").read_text(encoding="utf-8"))
         self.assertEqual(
             policy["supply_lock"],
-            "wom-kit/project-runtime-supply-lock-v0.4.15.json",
+            "wom-kit/project-runtime-supply-lock-v0.4.16.json",
         )
         self.assertEqual(
             policy["supply_lock_sha256"],
-            "sha256:8cc4597742bab8bb4f7c1f4e4c28d90d0b8cddd1293247e680c615531d31953d",
+            "sha256:f924a3f714d5913dd2afe870d07e5619172b0e1fcb92f25b18f70a9cd4ad04d8",
         )
         source = (KIT / "src" / "wom_kit" / "project_runtime.py").read_text(
             encoding="utf-8"
@@ -152,7 +152,7 @@ class V0413ReleaseDocsTests(unittest.TestCase):
         self.assertNotRegex(combined, r"(?i)sha256:[0-9a-f]{64}")
         self.assertNotRegex(combined, r"(?i)https?://[^\s)>]+(?:r2\.cloudflarestorage|amazonaws)\.com")
 
-    def test_current_guides_point_to_v0415(self) -> None:
+    def test_current_guides_point_to_v0416(self) -> None:
         files = (
             ROOT / "UPGRADE.md",
             ROOT / "UPGRADE.ko.md",
@@ -167,7 +167,7 @@ class V0413ReleaseDocsTests(unittest.TestCase):
         for path in files:
             with self.subTest(path=path.name):
                 text = path.read_text(encoding="utf-8")
-                self.assertIn("v0.4.15", text)
+                self.assertIn("v0.4.16", text)
 
         upgrade = (ROOT / "UPGRADE.md").read_text(encoding="utf-8")
         flat_upgrade = " ".join(upgrade.split())
