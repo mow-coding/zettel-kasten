@@ -57,6 +57,7 @@ TOKEN_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("PRIV005", re.compile(r"\bsk-[A-Za-z0-9_-]{20,}\b")),
     ("PRIV006", re.compile(r"\b(?:AKIA|ASIA|A3T[A-Z0-9])[A-Z0-9]{16}\b")),
 )
+GOOGLE_API_KEY_RE = re.compile(r"(?<![A-Za-z0-9_-])AIza[A-Za-z0-9_-]{35}(?![A-Za-z0-9_-])")
 AWS_SECRET_ACCESS_KEY_RE = re.compile(
     r"\bAWS_SECRET_ACCESS_KEY\b\s*['\"]?\s*[:=]\s*['\"]?([A-Za-z0-9/+=]{40})(?=['\"\s,}\]]|$)",
     re.IGNORECASE,
@@ -99,6 +100,7 @@ PROBLEM_TYPES = {
     "PRIV018": "scan_total_size_limit_exceeded",
     "PRIV019": "index_blob_read_failed",
     "PRIV020": "index_snapshot_drift",
+    "PRIV021": "google_api_key",
 }
 
 REGULAR_GIT_MODES = {"100644", "100755"}
@@ -422,6 +424,7 @@ def safe_display_path(path: str) -> str:
         SEED_PHRASE_RE,
         PRIVATE_URL_RE,
         CREDENTIAL_URL_RE,
+        GOOGLE_API_KEY_RE,
         *(pattern for _, pattern in TOKEN_PATTERNS),
     )
     if any(pattern.search(path) for pattern in path_patterns):
@@ -453,6 +456,9 @@ def check_text_for_privacy(*, path: str, text: str) -> list[PrivacyProblem]:
             if code == "PRIV006" and is_obvious_synthetic_aws_access_key(match.group(0)):
                 continue
             _add_problem_count(counts, code)
+
+    for _match in GOOGLE_API_KEY_RE.finditer(text):
+        _add_problem_count(counts, "PRIV021")
 
     for match in AWS_SECRET_ACCESS_KEY_RE.finditer(text):
         if has_placeholder_marker(match.group(1)):

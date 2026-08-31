@@ -1,6 +1,23 @@
 # Agent Operator Capabilities Manifest
 
-Status: v0.4.15 working-tree parser, help, authenticated update recovery, and emergency feedback truth
+Status: v0.4.16 working-tree parser, durable update-result delivery, runtime binding, and emergency feedback truth
+
+v0.4.16 keeps the command inventory stable while making several result surfaces
+more truthful. Authenticated project-update success is preserved before cleanup
+and its terminal finalization reports cleanup, independent close, and durable
+output-handoff state separately. One immutable terminal journal binds the exact
+output while the handoff advances from `active` to `display-pending` and then to
+hash-named `consumed`. Resume reuses the exact bound output and may display the
+same result again after interruption; it never creates a replacement result or
+reenters the writer. Consumed state is history, and delivery acknowledgement
+does not prove that a person or model observed stdout. A complete legacy cleanup
+tombstone is recoverable only after exact validation. Proof-only state reports
+`no_resumable_project_update` without attributing past success, while partial,
+malformed, mixed, or unsafe residue remains fail-closed unknown state.
+Project-runtime diagnostics expose content-free
+`core_module_bindings`, and create-only emergency feedback distinguishes update
+recovery from runtime-alignment blockage. Draft safety results separately report
+caller-input/body safety reads without echoing private input.
 
 `archive capabilities --machine` lets an AI operator ask one practical question:
 
@@ -72,7 +89,7 @@ These are parser facts, not execution promises. `approval_available` does not
 mean that archive-specific prerequisites have passed. `approval_not_exposed`
 does not mean that the command is read-only.
 
-For the current v0.4.15 working-tree parser, the inventory snapshot is:
+For the current v0.4.16 working-tree parser, the inventory snapshot is:
 
 ```text
 canonical executable command paths: 315

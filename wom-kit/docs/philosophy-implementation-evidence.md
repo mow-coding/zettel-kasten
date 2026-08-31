@@ -1,7 +1,7 @@
 # WOM Philosophy Implementation Evidence
 
-Status: v0.4.15 review of the v0.3.252 public traceability checkpoint
-Date: 2026-08-30
+Status: v0.4.16 review of the v0.3.252 public traceability checkpoint
+Date: 2026-08-31
 
 ## Purpose
 
@@ -37,20 +37,20 @@ layers.
 | AI-generated documents and conversation-derived work must not evaporate. | `ai-artifact-inventory` classifies local AI artifacts, operational context records unfinished work, and `session-handoff-checkpoint` blocks a clean handoff when durable capture evidence is missing or stale. | AI artifact inventory and session-handoff CLI tests. | The tool does not ingest chat automatically or decide which generated artifact deserves preservation. Human/AI review remains necessary. |
 | AI operation should use progressive disclosure and plain human language. | The packaged Agent Skill has a compact root, goal-focused references, a machine-readable capabilities manifest, and a human-language response contract and terminology guide. Approval surfaces let WOM verify counts, hashes, and target state while the person decides only whether to perform the plainly described effect; safe local-only clues help identify the target without entering receipts or public output. | Runtime-skill package validation, capability tests, approval-preview privacy tests, and documentation contract tests. | Plain-language quality and good judgment are guidance-level behavior; WOM cannot deterministically validate every model response, and an omitted unsafe clue must never be replaced by leaked private context. |
 
-The v0.4.15 update-recovery evidence is intentionally bounded to a live
-`version-update.lock` or the exact lockless unlock tail while the original
-transaction directory still exists. Its first unsupported boundary is after
-`completed`, once the original transaction directory has been successfully
-renamed to a terminal cleanup tombstone. A tombstone or cleanup proof is not
-authenticated outcome or cleanup authority: WOM reports
-`terminal_cleanup_outcome_unknown` with a nonzero exit and does not infer
-success, failure, or cancellation, automatically retry, or delete that
-evidence. A full authenticated terminal handoff and terminal cleanup outcome
-reconstruction remain a v0.4.16 follow-up.
+v0.4.16 preserves authenticated update truth in a private durable terminal
+handoff before cleanup and reauthenticates the exact succeeded claim and
+postimage before reusing the exact bound output. The immutable journal and
+`active` -> `display-pending` -> `consumed` handoff keep cleanup, independent
+resource closes, and durable output truth separate; consumed state is history
+and acknowledgement does not prove human or model observation. Exact complete
+legacy residue may be recovered, but cleanup proof alone never attributes past
+success or grants cleanup, handoff, or automatic retry authority. This makes
+durable evidence survive a reporting failure without claiming that every
+follow-up control step succeeded.
 
 ## Current Engineering Conclusion
 
-The public v0.4.15 implementation contains concrete, regression-checked
+The public v0.4.16 implementation contains concrete, regression-checked
 mechanisms for the Memento Problem: first-read reconstruction, artifact-first
 reasoning, reviewed revision and recovery, durable session handoff, and honest
 local backup evidence. These mechanisms are not merely roadmap prose.

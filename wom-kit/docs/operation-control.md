@@ -1,19 +1,23 @@
 # Bounded operation control
 
 `operation-control` gives a later CLI process a small, content-free view of a
-long command. It is available only when one of these commands starts with an
-explicit `--output` file:
+long command. It is available when one of these commands has a bound `--output`
+file. The caller supplies that file for ordinary observation; a v0.4.16
+approved or resumed project update that has no earlier result binding may
+choose its private project-scoped output automatically:
 
 - `project-version-update`;
 - `index`; or
 - `index-health`; or
 - `staged-cleanup-check`.
 
-Without `--output`, those commands keep their existing behavior and create no
-operation journal. With `--output`, stderr prints an opaque
-`op:sha256:<digest>` reference early. The same reference and follow-up command
-templates are stored under `cli_output_artifact.operation` in the complete
-JSON result.
+Without a bound output, these commands create no operation journal. For
+`index`, `index-health`, `staged-cleanup-check`, and read-only updater previews,
+that means the caller must pass `--output`. A v0.4.16 approved or resumed
+updater with no prior result binding creates its private bound output first.
+Once bound, stderr prints an opaque `op:sha256:<digest>` reference early. The
+same reference and follow-up command templates are stored under
+`cli_output_artifact.operation` in the complete JSON result.
 
 For `staged-cleanup-check`, operation control keeps only the inspection state,
 the `safe_to_cleanup` boolean, four bounded counts, and fixed reason codes. It
@@ -50,7 +54,9 @@ archive project-version-update <project-root> `
 
 If the updater is started with an archive root instead, use an archive-local
 `.wom-scratch/diagnostics/*.json` output. Always use a new filename; output
-publication refuses overwrite and path traversal.
+publication refuses overwrite and path traversal. This rule applies when
+starting a new result binding. A pending terminal-delivery resume must omit
+`--output` and reuse its exact already-bound file.
 
 ## Inspect, wait, or recover
 
@@ -93,6 +99,20 @@ complete output agree, status may report
 `terminal_source: complete_output_reconciliation`. This proves only the saved
 CLI result. It does not prove fresh domain truth; follow the command-specific
 verification action.
+
+For a successful v0.4.16 project update, the terminal journal is immutable
+after its one terminal result record. WOM does not append a later
+delivery-committed or display-committed event. Instead, the exact output-bound
+handoff moves in one private directory from `active` to `display-pending`, then
+to hash-named `consumed` history after display. Status may project
+`durable_result_delivery_acknowledged: true` only from the exact output,
+journal, and matching handoff state. That field proves an authenticated durable
+output handoff, not that a person or model saw, read, or understood stdout.
+
+An interrupted `display-pending` result may be printed identically again by the
+separate identifier-free `project-version-update --resume` command. This is an
+at-least-once display guarantee, not writer replay. A hash-named consumed
+capsule is history and is never selected as a new replay candidate.
 
 `completed_result_available` also does not mean that the domain command
 succeeded. For example, a project updater can finish with a complete bound
@@ -167,8 +187,10 @@ archive operation-control <project-or-archive-root> `
 This always returns nonzero with `operation_cancel_not_supported`,
 `cancel_supported: false`, `cancel_requested: false`, and `writes: false`.
 There is no cooperative cancel request, force kill, lock deletion, or rollback
-trigger. `resume_supported` is also always false; recovery starts a fresh
-command only after command-specific authority checks say that is safe.
+trigger. Generic `operation-control` `resume_supported` is always false. The
+separate `project-version-update --resume` command is the only updater-specific
+exception: it reauthenticates exact update evidence and never turns this
+read-only view into write authority.
 
 There are no aliases, MCP method, daemon, queue, background launcher, or
 operation-owned process supervisor in this release.

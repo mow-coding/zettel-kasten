@@ -992,6 +992,72 @@ class SourceFidelityV03313Tests(unittest.TestCase):
     def test_high_confidence_credential_shapes_block_without_echo(self) -> None:
         secrets = [
             "AKIAABCDEFGHIJKLMNOP",
+            "Bearer abcdefghijklmnop",
+            "Authorization: Basic dXNlcjpwYXNzd29yZA==",
+            "Authorization: Basic dTpw",
+            "Authorization: Basic abcdefghij-_",
+            "Authorization: Token 0123456789abcdef",
+            "Authorization: ApiKey 0123456789abcdef",
+            "Authorization: Bearer abc",
+            "Authorization: Token x",
+            "Authorization: abc123",
+            "curl -H 'Authorization: Basic dXNlcjpwYXNzd29yZA==' https://example.invalid",
+            "curl --header='Cookie: sessionid=abcdefgh12345678' https://example.invalid",
+            "headers = {'Authorization': 'Basic dXNlcjpwYXNzd29yZA=='}",
+            "headers = {'Cookie': 'sessionid=abcdefgh12345678'}",
+            "Cookie: sessionid=private-session-value",
+            "Set-Cookie: sessionid=private-session-value; HttpOnly",
+            "Cookie: JSESSIONID=ABCDEF1234567890",
+            "Cookie: session=abc123",
+            "Cookie: sid=1234",
+            "Cookie: auth=a1b2c3",
+            "Cookie: connect.sid=s%3Aabc123456789.abcdef",
+            'Cookie: session="AbCdEf1234567890"',
+            "Cookie: csrftoken=AbCdEf1234567890",
+            "Cookie: theme=dark; sessionid=private-session-value",
+            "Cookie: theme=dark, JSESSIONID=ABCDEF1234567890",
+            '{"Authorization":"Basic dXNlcjpwYXNzd29yZA=="}',
+            '{"Cookie":"sessionid=private-session-value"}',
+            (
+                '{"Cookie":"session=AbCdEf1234567890",'
+                '"theme":"dark"}'
+            ),
+            (
+                '{"theme":"dark","Cookie":"session=AbCdEf1234567890",'
+                '"lang":"ko"}'
+            ),
+            (
+                '{"theme":"dark",'
+                '"Cookie":"session=AbCdEf1234567890"}'
+            ),
+            '{"Cookie":"session=\\"AbCdEf1234567890\\""}',
+            '{"Cookie":"theme=dark; JSESSIONID=ABCDEF1234567890"}',
+            '{"password":"abcdefghijklmnop"}',
+            '{"token":"abcdefghijklmnop"}',
+            '{"secret":"abcdefghijklmnop"}',
+            '{"credential":"abcdefghijklmnop"}',
+            '{"client_secret":"abcdefghijklmnop"}',
+            '{"access_token":"abcdefghijklmnop"}',
+            "password: P@ssw0rd!Abcdefgh",
+            '{"password":"P@ssw0rd!Abcdefgh"}',
+            "client_secret: aB3$xyz!987654321",
+            "DB_PASSWORD=P@ssw0rd!Abcdefgh",
+            "export DB_PASSWORD=P@ssw0rd!Abcdefgh",
+            "set DB_PASSWORD=P@ssw0rd!Abcdefgh",
+            "$env:DB_PASSWORD=P@ssw0rd!Abcdefgh",
+            "env GITHUB_TOKEN=abcdefghijklmnop command",
+            "The leaked DB_PASSWORD=P@ssw0rd!Abcdefgh",
+            '{"DB_PASSWORD":"P@ssw0rd!Abcdefgh"}',
+            "GITHUB_TOKEN=abcdefghijklmnop",
+            "MY_CLIENT_SECRET=aB3$xyz!987654321",
+            'password: "correct horse battery staple"',
+            '{"password":"correct horse battery staple"}',
+            "DB_PASSWORD: |\n  correct horse battery staple",
+            "password: correct horse battery staple",
+            "DB_PASSWORD=correct horse battery staple",
+            "eyJabcdefgh.ijklmnop.qrstuvwx",
+            "github_" + "pat_abcdefghijklmnopqrstuvwxyz",
+            "".join(("AI", "za", "A" * 35)),
             "sk-proj-exampleabcdefghijklmnopqrstuvwxyz",
             "_".join(("sk", "live")) + "_abcdefghijklmnopqrstuvwx",
             "_".join(("rk", "live")) + "_abcdefghijklmnopqrstuvwx",
@@ -1001,6 +1067,44 @@ class SourceFidelityV03313Tests(unittest.TestCase):
             "TOKEN=abcdefghijklmnopqrstuvwx12345678",
             "TOKEN=abcdefghijkl",
             "password: abcdefghijkl",
+            "DB_PASSWORD=x",
+            "export API_TOKEN=abc",
+            "client_secret: short",
+            "Password: the current value is abcdefghijklmnop.",
+            "Token: gh" + "p_abcdefghijklmnopqrstuvwxyz is used by automation.",
+            "Secret: abcdefghijkl is the key.",
+            'Credential: "short value should stay private."',
+            "password: this is my secret phrase.",
+            "password: my dog is very cute.",
+            "token: abc def ghi is secret.",
+            "client secret: this is super secret passphrase.",
+            "password: correct horse battery staple is valid.",
+            "password: hunter two can open the vault.",
+            "password: should be correct horse battery staple.",
+            "password: must be correct horse battery staple.",
+            "token: a unit hunter two three.",
+            "secret: proof of horse battery staple.",
+            "credential: information that opens my account.",
+            "client secret: should be abc def ghi.",
+            "token: example as "
+            + "abcdefghijklmnopqrstuvwxyz"
+            + "1234567890",
+            "secret: example as " + "A1b2C3d4E5f6G7h8I9j0K1l2",
+            "credential: EXAMPLE as "
+            + "vendorOpaqueCredential"
+            + "9876543210",
+            "token: example"
+            + "A1b2C3d4E5f6G7h8"
+            + "TOKEN",
+            "password: fake"
+            + "CorrectHorseBatteryStaple"
+            + "PASSWORD",
+            "credential: sample"
+            + "VendorOpaque987654321"
+            + "CREDENTIAL",
+            "token: YOUR"
+            + "stolenOpaqueValue123456789"
+            + "TOKEN",
         ]
         for index, secret in enumerate(secrets):
             with self.subTest(index=index):
@@ -1018,6 +1122,139 @@ class SourceFidelityV03313Tests(unittest.TestCase):
                 self.assertIn("credential_secret_present", result["blockers"])
                 self.assertNotIn(secret, serialized)
                 self.assertNotIn(object_id, serialized)
+
+    def test_product_vocabulary_is_not_a_credential_secret(self) -> None:
+        object_id = self.manifested_source(
+            b"Safe manifested source for ordinary product vocabulary."
+        )
+        phrases = (
+            "GCP Secret Manager",
+            "OAuth client",
+            "Basic authentication",
+            "cookie policy",
+            "token budget",
+            "Token: a unit of text processed by a language model.",
+            "Password: must be stored in a password manager.",
+            "Secret: information that should not be public.",
+            "Credential: proof of identity used for authentication.",
+            "Client secret: should be kept private.",
+            "password: REDACTED",
+            "token: <token>",
+            'password: "REDACTED"',
+            "token: |\n  REDACTED",
+            "password: not configured",
+            "token: null",
+            "Authorization: Bearer <token>",
+            "Authorization: Basic BASE64",
+            '{"Authorization":"Basic BASE64"}',
+            "Authorization: REDACTED",
+            "Authorization: none",
+            "curl -H 'Authorization: Basic BASE64' https://example.invalid",
+            "curl --header='Cookie: sessionid=YOUR_SESSION_TOKEN' https://example.invalid",
+            "headers = {'Authorization': 'Bearer <token>'}",
+            "headers = {'Cookie': 'theme=dark'}",
+            "Cookie: theme=dark",
+            "Cookie: sidebar=expanded",
+            "Cookie: consider=expanded",
+            "Cookie: sessionid=REDACTED",
+            "Cookie: sessionid=<SESSION_TOKEN>",
+            "Cookie: sessionid=YOUR_SESSION_TOKEN",
+            '{"Cookie":"lang=ko"}',
+            "design_token=#12345678",
+        )
+        plain_colon_definitions = {
+            "Token: a unit of text processed by a language model.",
+            "Password: must be stored in a password manager.",
+            "Secret: information that should not be public.",
+            "Credential: proof of identity used for authentication.",
+            "Client secret: should be kept private.",
+        }
+        exact_placeholder_assignments = {
+            "password: REDACTED",
+            "token: <token>",
+            'password: "REDACTED"',
+            "token: |\n  REDACTED",
+            "password: not configured",
+            "token: null",
+        }
+        for index, phrase in enumerate(phrases):
+            with self.subTest(phrase=phrase):
+                result = archive_services.create_draft_zettel(
+                    self.root,
+                    dry_run=True,
+                    **self.ai_kwargs(
+                        object_id,
+                        draft_id=(
+                            f"zet_20260810_121_product_vocabulary_{index}"
+                        ),
+                        title=f"Product vocabulary {index}",
+                        body=(
+                            f"{phrase}\nThe team reviewed the definition "
+                            "as a product term.\n"
+                            if phrase
+                            in (
+                                plain_colon_definitions
+                                | exact_placeholder_assignments
+                            )
+                            else (
+                                f"The team reviewed {phrase} as a product "
+                                "term.\n"
+                            )
+                        ),
+                    ),
+                )
+                self.assertTrue(result["ok"], result)
+                self.assertNotIn(
+                    "credential_secret_present", result["blockers"]
+                )
+        self.assertEqual(
+            archive_services._source_fidelity_request_metadata_blockers(
+                {
+                    "headers": {
+                        "Authorization": "Basic BASE64",
+                        "Cookie": (
+                            "theme=dark; lang=ko; sidebar=expanded; "
+                            "consider=expanded"
+                        ),
+                    }
+                }
+            ),
+            [],
+        )
+
+    def test_structured_header_collections_keep_header_context(self) -> None:
+        secret_cases = (
+            {"Authorization": ["Basic dTpw"]},
+            {"Authorization": ["Token 0123456789abcdef"]},
+            {
+                "Set-Cookie": [
+                    "theme=dark",
+                    "JSESSIONID=ABCDEF1234567890",
+                ]
+            },
+            [("Cookie", "JSESSIONID=ABCDEF1234567890")],
+            ("Cookie", "JSESSIONID=ABCDEF1234567890"),
+            ["Authorization", "Basic dTpw"],
+            {"headers": ("Cookie", "JSESSIONID=ABCDEF1234567890")},
+        )
+        for case in secret_cases:
+            with self.subTest(case_type=type(case).__name__):
+                self.assertEqual(
+                    archive_services._source_fidelity_request_metadata_blockers(
+                        case
+                    ),
+                    ["credential_secret_present"],
+                )
+
+        self.assertEqual(
+            archive_services._source_fidelity_request_metadata_blockers(
+                {
+                    "Authorization": ["Basic BASE64", "Bearer <token>"],
+                    "Cookie": ["theme=dark", "sessionid=YOUR_SESSION_TOKEN"],
+                }
+            ),
+            [],
+        )
 
     def test_credential_secrets_in_ai_frontmatter_block_without_echo(self) -> None:
         object_id = self.manifested_source(
@@ -1043,6 +1280,44 @@ class SourceFidelityV03313Tests(unittest.TestCase):
                 },
             },
             {
+                "facets": {
+                    "headers": {
+                        "Cookie": "sessionid=private-session-value"
+                    }
+                },
+            },
+            {
+                "facets": {
+                    "DB_PASSWORD": "P@ssw0rd!Abcdefgh"
+                },
+            },
+            {
+                "facets": {
+                    "MY_CLIENT_SECRET": "aB3$xyz!987654321"
+                },
+            },
+            {
+                "facets": {
+                    "GITHUB_TOKEN": "abcdefghijklmnop"
+                },
+            },
+            {
+                "facets": {
+                    "headers": {
+                        "Cookie": 'session="AbCdEf1234567890"'
+                    }
+                },
+            },
+            {
+                "facets": {
+                    "headers": {
+                        "Authorization": (
+                            "Basic dXNlcjpwYXNzd29yZA=="
+                        )
+                    }
+                },
+            },
+            {
                 "title": "AKIAABCDEFGHIJKLMNOP",
                 "draft_id": None,
             },
@@ -1065,6 +1340,11 @@ class SourceFidelityV03313Tests(unittest.TestCase):
                     "akiaabcdefghijklmnop",
                     "AWS_SECRET_ACCESS_KEY=abcdefghijklmnopqrstuvwx12345678",
                     "TOKEN=abcdefghijklmnopqrstuvwx12345678",
+                    "sessionid=private-session-value",
+                    'session="AbCdEf1234567890"',
+                    "P@ssw0rd!Abcdefgh",
+                    "aB3$xyz!987654321",
+                    "Basic dXNlcjpwYXNzd29yZA==",
                 ):
                     self.assertNotIn(secret, serialized)
                 self.assertEqual(result["frontmatter_preview"], {})
@@ -1135,6 +1415,21 @@ class SourceFidelityV03313Tests(unittest.TestCase):
                 self.assertIsNone(result["proposed_path"])
                 self.assertIsNone(result["approval_replay"]["draft_id"])
                 self.assertEqual(result["warnings"], [])
+                self.assertEqual(
+                    result["input_privacy_check"],
+                    {
+                        "scope": "pre_write_caller_input_safety",
+                        "performed": True,
+                        "caller_supplied_input_read_for_safety": True,
+                        "body_read_for_safety": True,
+                        "input_values_echoed": False,
+                        "blocked": True,
+                        "reason_codes": result["blockers"],
+                    },
+                )
+                self.assertFalse(
+                    result["first_read_check"]["body_read_for_check"]
+                )
                 for private_value in private_values:
                     self.assertNotIn(private_value, serialized)
 

@@ -6,6 +6,41 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.4.16 - 2026-08-31
+
+- Preserved authenticated project-update success in a private durable terminal
+  handoff before cleanup. Resume can reauthenticate and deliver that result
+  without rerunning the domain writer, while cleanup, service close, Git-runner
+  close, output delivery, and attention state remain separately truthful.
+- Bound the complete project-scoped output to one immutable terminal journal
+  record and moved the private handoff through `active`, `display-pending`, and
+  hash-named `consumed` states. Recovery reuses the exact bound output,
+  terminal display is identical at-least-once, and consumed capsules are
+  history rather than replay candidates. Delivery acknowledgement proves the
+  authenticated durable handoff, not that a person or model saw stdout.
+- Recovered a complete v0.4.15 cleanup tombstone only after exact structural,
+  checkpoint, claim, postimage, and legacy-authority validation. A canonical
+  proof-only state now reports `no_resumable_project_update` without attributing
+  past success and permits only a fresh separately approved update; partial,
+  malformed, mixed, or unsafe residue remains fail-closed unknown state.
+- Accepted the canonical `python -m wom_kit.archive_cli` `__main__` alias only
+  under its exact import specification, then bound `archive_cli`,
+  `project_runtime`, and `package_origin` to expected receipt bytes. Public
+  diagnostics expose booleans and reason codes without paths or hashes.
+- Extended the exact-approved create-only feedback lane to project-runtime
+  mismatch while leaving revision, lifecycle metadata, delivery, resolution,
+  runtime changes, pin changes, and every other writer blocked.
+- Reduced product-vocabulary secret false positives for definitions,
+  placeholders, and non-sensitive cookies while keeping credential assignments,
+  authorization values, session cookies, provider tokens, JWTs, and private-key
+  shapes fail-closed and non-echoing.
+- Split pre-write caller-input/body safety-read truth into
+  `input_privacy_check` so `first_read_check.body_read_for_check` continues to
+  describe only source first-read provenance.
+- Publishing or installing v0.4.16 performs no client archive, project update,
+  version-pin, provider, or remote-service mutation. The client separately
+  chooses whether to run an approved project update.
+
 ## v0.4.15 - 2026-08-30
 
 - Made interrupted `project-version-update` recovery usable without asking a

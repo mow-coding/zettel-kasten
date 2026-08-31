@@ -1,6 +1,6 @@
 # Install WOM-kit As A Python Tool
 
-Status: v0.4.15 conditional GitHub wheel contract; exact-pip project updater bootstrap and authenticated interruption recovery
+Status: v0.4.16 conditional GitHub wheel contract; exact-pip bootstrap and durable authenticated update-result delivery
 
 WOM-kit is a command-line tool. It should live in its own Python environment
 instead of being mixed into an application project's dependencies.
@@ -34,15 +34,15 @@ launcher. Other project folders and the user-shared PATH executable do not
 change. This is WOM's supported project runtime boundary; it does not isolate
 arbitrary non-WOM programs or separate Windows user permissions.
 
-The v0.4.15 URL below is a conditional contract, not proof that an artifact is
+The v0.4.16 URL below is a conditional contract, not proof that an artifact is
 public. Use it only after the matching GitHub Release exists and lists the
-verified wheel. See the [v0.4.15 release note](releases/v0.4.15.md) for the
+verified wheel. See the [v0.4.16 release note](releases/v0.4.16.md) for the
 separate source and release-evidence boundary.
 
-An installed older runtime may not contain v0.4.15's authenticated
-project-update resume or create-only emergency feedback preservation. Updating
+An installed older runtime may not contain v0.4.16's authenticated terminal
+result delivery, exact `python -m` binding, or runtime-mismatch feedback lane. Updating
 repository files alone does not replace an installed wheel. After the verified
-v0.4.15 asset exists, install that exact wheel and start a new process.
+v0.4.16 asset exists, install that exact wheel and start a new process.
 
 ## Recommended Project Bootstrap
 
@@ -53,17 +53,17 @@ archive so it cannot become project input or an updater collision:
 
 ```powershell
 $womBootstrapNonce = [guid]::NewGuid().ToString("N")
-$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0415-$womBootstrapNonce"
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0416-$womBootstrapNonce"
 if (Test-Path -LiteralPath $womBootstrapRoot) {
   throw "WOM bootstrap path must be new."
 }
 py -3.12 -m venv $womBootstrapRoot
 $womBootstrapPython = (Get-Item -LiteralPath (Join-Path $womBootstrapRoot "Scripts\python.exe")).FullName
-& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.15/wom_kit-0.4.15-py3-none-any.whl"
+& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.16/wom_kit-0.4.16-py3-none-any.whl"
 & "$womBootstrapRoot\Scripts\archive.exe" --version
 ```
 
-After the new process reports exactly `archive 0.4.15`, use that explicit
+After the new process reports exactly `archive 0.4.16`, use that explicit
 bootstrap executable for `project-version-update`. After approval succeeds,
 verify the project runtime and use its launcher:
 
@@ -113,9 +113,9 @@ For an ordinary explicit-path CLI that is not the short-lived updater
 bootstrap, use another external virtual environment:
 
 ```powershell
-$womToolRoot = Join-Path $env:LOCALAPPDATA "WOM\tool-v0415"
+$womToolRoot = Join-Path $env:LOCALAPPDATA "WOM\tool-v0416"
 py -3.12 -m venv $womToolRoot
-& "$womToolRoot\Scripts\python.exe" -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.15/wom_kit-0.4.15-py3-none-any.whl"
+& "$womToolRoot\Scripts\python.exe" -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.16/wom_kit-0.4.16-py3-none-any.whl"
 & "$womToolRoot\Scripts\archive.exe" --version
 ```
 
@@ -205,15 +205,23 @@ approval id or displaying a second native decision. Status or resume still
 does not replace a fresh project-launcher `archive version` check after the
 update finishes.
 
-The v0.4.15 recovery guarantee is bounded to a live `version-update.lock` or
-the exact lockless unlock tail while the original transaction directory still
-exists. Its first unsupported boundary is after `completed`, once the original
-transaction directory has been successfully renamed to a terminal cleanup
-tombstone. A tombstone or cleanup proof is not authenticated outcome or cleanup
-authority: WOM reports `terminal_cleanup_outcome_unknown` with a nonzero exit
-and does not infer success, failure, or cancellation, automatically retry, or
-delete that evidence. A full authenticated terminal handoff and terminal
-cleanup outcome reconstruction remain a v0.4.16 follow-up.
+v0.4.16 preserves the authenticated result before cleanup and binds it to one
+private project-scoped output plus one immutable terminal journal record. If a
+terminal handoff is already pending, preserve the bound output and run
+identifier-free `project-version-update --resume` without `--output`; a
+replacement output is refused. WOM advances the same handoff through `active`,
+`display-pending`, and hash-named `consumed`. Interruption may cause the exact
+same result to be displayed again, but neither display nor resume reruns the
+domain writer. Consumed state is history, and delivery acknowledgement does not
+prove that a person or model saw stdout.
+
+A complete legacy cleanup tombstone resumes only after exact validation of its
+full contents, terminal checkpoint, succeeded claim, current postimage, and
+legacy cleanup authority. Proof-only state returns
+`no_resumable_project_update`, attributes no past success, and requires a fresh
+preview and approval for a new update. Partial, malformed, mixed, changing, or
+unsafe residue remains `terminal_cleanup_outcome_unknown`. Cleanup proof never
+authorizes success, cleanup, handoff creation, or retry.
 
 The result reports `external_writer_quiescence_required: true`,
 `external_writer_quiescence_affirmed: true`,

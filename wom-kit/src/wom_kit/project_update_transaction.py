@@ -16,8 +16,8 @@ import os
 import re
 import secrets
 import stat
-from contextlib import contextmanager
-from dataclasses import dataclass
+from contextlib import ExitStack, contextmanager
+from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Iterator, Literal, Mapping, Sequence
 
@@ -45,7 +45,14 @@ RESERVATION_PUBLIC_SUMMARY_SCHEMA = (
     "wom-kit/project-update-reservation-public-summary/v0.4.3"
 )
 INSPECTION_SCHEMA = "wom-kit/project-update-transaction-inspection/v0.4.3"
-CLEANUP_PLAN_SCHEMA = "wom-kit/project-update-transaction-cleanup-plan/v0.4.3"
+LEGACY_CLEANUP_PLAN_SCHEMA = (
+    "wom-kit/project-update-transaction-cleanup-plan/v0.4.3"
+)
+CLEANUP_PLAN_SCHEMA = (
+    "wom-kit/project-update-transaction-cleanup-plan/v0.4.16"
+)
+LEGACY_CLEANUP_PLAN_NAME = "cleanup-plan.json"
+CLEANUP_PLAN_NAME = "cleanup-plan-v0416.json"
 ORPHAN_SUMMARY_SCHEMA = "wom-kit/project-update-orphan-summary/v0.4.3"
 RUNTIME_BUNDLE_INVENTORY_SCHEMA = "wom-kit/project-update-runtime-bundle-inventory/v0.4.3"
 RUNTIME_CANDIDATE_BINDING_SCHEMA = (
@@ -99,6 +106,7 @@ MAX_TRANSACTION_DESCENDANT_SCAN_ENTRIES = (
 
 RUNTIME_CANDIDATE_NAME = "runtime-candidate"
 RUNTIME_CANDIDATE_SEAL_NAME = "runtime-candidate-seal.json"
+RUNTIME_REPAIR_PREIMAGE_NAME = "runtime-repair-preimage"
 RUNTIME_CANDIDATE_RECEIPT_NAME = "runtime-receipt.json"
 RUNTIME_PARENT_LOGICAL = ".zettel-kasten/runtimes"
 PRIVATE_BINDINGS_NAME = "private-bindings"
@@ -991,6 +999,90 @@ def _runtime_candidate_tree_inventory(root: Path, *, transaction_root: Path) -> 
     )
 
 
+def _runtime_repair_preimage_inventory(
+    root: Path,
+    *,
+    transaction_root: Path,
+) -> tuple[str, int, int, set[str], set[str]]:
+    """Recompute the provider seal digest for one moved repair preimage."""
+
+    _safe_directory(root, within=transaction_root)
+    rows: list[dict[str, Any]] = []
+    files: set[str] = set()
+    directories: set[str] = {RUNTIME_REPAIR_PREIMAGE_NAME}
+    seen_folded: set[str] = set()
+    total_bytes = 0
+
+    def visit(directory: Path, prefix: PurePosixPath) -> None:
+        nonlocal total_bytes
+        _safe_directory(directory, within=transaction_root)
+        try:
+            entries = sorted(
+                os.scandir(directory),
+                key=lambda item: (item.name.casefold(), item.name),
+            )
+        except OSError:
+            raise _fail("project_update_transaction_candidate_invalid") from None
+        for entry in entries:
+            if len(rows) >= MAX_RUNTIME_CANDIDATE_ENTRIES:
+                raise _fail("project_update_transaction_candidate_invalid")
+            path = Path(entry.path)
+            _within(path, root)
+            try:
+                info = path.lstat()
+            except OSError:
+                raise _fail("project_update_transaction_candidate_invalid") from None
+            if stat.S_ISLNK(info.st_mode) or _is_reparse(info):
+                raise _fail("project_update_transaction_path_unsafe")
+            relative = (prefix / entry.name).as_posix()
+            _logical_path(relative)
+            folded = relative.casefold()
+            if folded in seen_folded:
+                raise _fail("project_update_transaction_candidate_invalid")
+            seen_folded.add(folded)
+            transaction_relative = f"{RUNTIME_REPAIR_PREIMAGE_NAME}/{relative}"
+            if stat.S_ISDIR(info.st_mode):
+                rows.append(
+                    {
+                        "nlink": int(info.st_nlink),
+                        "path": relative,
+                        "sha256": None,
+                        "size_bytes": 0,
+                        "type": "directory",
+                    }
+                )
+                directories.add(transaction_relative)
+                visit(path, prefix / entry.name)
+            elif stat.S_ISREG(info.st_mode) and info.st_nlink == 1:
+                digest, size, _after = _hash_regular_with_info(
+                    path,
+                    within=root,
+                    maximum=MAX_RUNTIME_CANDIDATE_FILE_BYTES,
+                )
+                rows.append(
+                    {
+                        "nlink": 1,
+                        "path": relative,
+                        "sha256": digest,
+                        "size_bytes": size,
+                        "type": "file",
+                    }
+                )
+                files.add(transaction_relative)
+                total_bytes += size
+            else:
+                raise _fail("project_update_transaction_path_unsafe")
+
+    visit(root, PurePosixPath())
+    return (
+        sha256_bytes(canonical_json_bytes(rows) + b"\n"),
+        len(rows),
+        total_bytes,
+        files,
+        directories,
+    )
+
+
 @dataclass(frozen=True)
 class RuntimeCandidateBinding:
     logical_ref: str
@@ -1007,10 +1099,22 @@ class RuntimeCandidateBinding:
     receipt_sha256: str
     postimage_sha256: str
     existing_runtime_reusable: bool
+    existing_runtime_repair_required: bool
+    existing_runtime_inventory_sha256: str | None
+    existing_runtime_inventory_count: int
+    existing_runtime_inventory_bytes: int
     runtime_parent_existed_before: bool
     recursive_directory_durability_verified: bool
     seal_parent_durability_required: bool
     marker_free_final_postimage: bool
+    # v0.4.15 sealed this same schema before repair-only fields existed.
+    # Preserve that exact document shape when reopening so its intent hash and
+    # authenticated approval binding remain byte-for-byte authoritative.
+    legacy_document_shape: bool = field(
+        default=False,
+        repr=False,
+        compare=False,
+    )
 
     def __post_init__(self) -> None:
         _logical_path(self.logical_ref)
@@ -1033,15 +1137,46 @@ class RuntimeCandidateBinding:
             or not 0 < self.file_count <= self.inventory_count <= MAX_RUNTIME_CANDIDATE_ENTRIES
             or self.inventory_bytes < 0
             or type(self.existing_runtime_reusable) is not bool
+            or type(self.existing_runtime_repair_required) is not bool
+            or type(self.legacy_document_shape) is not bool
+            or (
+                self.legacy_document_shape
+                and self.existing_runtime_repair_required
+            )
+            or (
+                self.existing_runtime_reusable
+                and self.existing_runtime_repair_required
+            )
+            or type(self.existing_runtime_inventory_count) is not int
+            or self.existing_runtime_inventory_count < 0
+            or type(self.existing_runtime_inventory_bytes) is not int
+            or self.existing_runtime_inventory_bytes < 0
+            or (
+                self.existing_runtime_repair_required
+                and self.existing_runtime_inventory_sha256 is None
+            )
+            or (
+                not self.existing_runtime_repair_required
+                and (
+                    self.existing_runtime_inventory_sha256 is not None
+                    or self.existing_runtime_inventory_count != 0
+                    or self.existing_runtime_inventory_bytes != 0
+                )
+            )
             or type(self.runtime_parent_existed_before) is not bool
             or self.recursive_directory_durability_verified is not True
             or self.seal_parent_durability_required is not True
             or self.marker_free_final_postimage is not True
         ):
             raise _fail("project_update_transaction_candidate_invalid")
+        if self.existing_runtime_inventory_sha256 is not None:
+            _digest(
+                self.existing_runtime_inventory_sha256,
+                code="project_update_transaction_candidate_invalid",
+            )
 
     def document(self) -> dict[str, Any]:
-        return {
+        document = {
             "existing_runtime_reusable": self.existing_runtime_reusable,
             "file_count": self.file_count,
             "inventory_bytes": self.inventory_bytes,
@@ -1064,10 +1199,28 @@ class RuntimeCandidateBinding:
             "seal_sha256": self.seal_sha256,
             "seal_parent_durability_required": self.seal_parent_durability_required,
         }
+        if not self.legacy_document_shape:
+            document.update(
+                {
+                    "existing_runtime_repair_required": (
+                        self.existing_runtime_repair_required
+                    ),
+                    "existing_runtime_inventory_sha256": (
+                        self.existing_runtime_inventory_sha256
+                    ),
+                    "existing_runtime_inventory_count": (
+                        self.existing_runtime_inventory_count
+                    ),
+                    "existing_runtime_inventory_bytes": (
+                        self.existing_runtime_inventory_bytes
+                    ),
+                }
+            )
+        return document
 
     @classmethod
     def from_document(cls, value: Any) -> "RuntimeCandidateBinding":
-        expected = {
+        legacy_expected = {
             "existing_runtime_reusable",
             "file_count",
             "inventory_bytes",
@@ -1088,14 +1241,31 @@ class RuntimeCandidateBinding:
             "seal_sha256",
             "seal_parent_durability_required",
         }
+        current_expected = legacy_expected | {
+            "existing_runtime_repair_required",
+            "existing_runtime_inventory_sha256",
+            "existing_runtime_inventory_count",
+            "existing_runtime_inventory_bytes",
+        }
         if (
             type(value) is not dict
-            or set(value) != expected
+            or set(value) not in {frozenset(legacy_expected), frozenset(current_expected)}
             or value.get("schema") != RUNTIME_CANDIDATE_BINDING_SCHEMA
         ):
             raise _fail("project_update_transaction_candidate_invalid")
         fields = dict(value)
         fields.pop("schema")
+        legacy = set(value) == legacy_expected
+        if legacy:
+            fields.update(
+                {
+                    "existing_runtime_repair_required": False,
+                    "existing_runtime_inventory_sha256": None,
+                    "existing_runtime_inventory_count": 0,
+                    "existing_runtime_inventory_bytes": 0,
+                    "legacy_document_shape": True,
+                }
+            )
         return cls(**fields)
 
 
@@ -1160,17 +1330,36 @@ class ProjectUpdateIntent:
             raise _fail("project_update_transaction_intent_invalid")
         preimage_by_key = {record.logical_key: record for record in self.preimages}
         expected_preimage_keys: set[str] = set()
+        runtime_tree_preimages = 0
         for component in self.components:
             if component.pre_sha256 == ABSENT_COMPONENT_SHA256:
                 if component.preimage_key is not None:
                     raise _fail("project_update_transaction_intent_invalid")
             else:
+                runtime_tree_preimage = (
+                    component.role == "runtime"
+                    and self.runtime_candidate.existing_runtime_repair_required
+                    and not self.runtime_candidate.existing_runtime_reusable
+                    and component.logical_target
+                    == f"{RUNTIME_PARENT_LOGICAL}/{self.requested_target_tag}"
+                    and component.pre_sha256
+                    == self.runtime_candidate.existing_runtime_inventory_sha256
+                    and component.preserve_old_value is True
+                    and component.preimage_key is None
+                )
+                if runtime_tree_preimage:
+                    runtime_tree_preimages += 1
+                    continue
                 if component.preimage_key is None:
                     raise _fail("project_update_transaction_intent_invalid")
                 expected_preimage_keys.add(component.preimage_key)
                 record = preimage_by_key.get(component.preimage_key)
                 if record is None or record.sha256 != component.pre_sha256:
                     raise _fail("project_update_transaction_intent_invalid")
+        if runtime_tree_preimages != int(
+            self.runtime_candidate.existing_runtime_repair_required
+        ):
+            raise _fail("project_update_transaction_intent_invalid")
         if set(preimage_by_key) != expected_preimage_keys:
             raise _fail("project_update_transaction_intent_invalid")
         private_keys = tuple(record.logical_key for record in self.private_bindings)
@@ -1602,6 +1791,612 @@ def _identity_document(info: os.stat_result) -> dict[str, int]:
         "modified_ns": int(info.st_mtime_ns),
         "size": int(info.st_size),
     }
+
+
+def _stable_path_identity(info: os.stat_result) -> tuple[int, int, int, int]:
+    """Return the bounded identity fields used across a read-only scan."""
+
+    return (
+        int(info.st_dev),
+        int(info.st_ino),
+        int(info.st_mtime_ns),
+        int(info.st_size),
+    )
+
+
+def _cleanup_directory_identity(
+    info: os.stat_result,
+) -> tuple[int, int, int | None]:
+    """Bind a directory generation, not only a potentially reusable inode."""
+
+    raw_birthtime = getattr(info, "st_birthtime_ns", None)
+    birthtime_ns = (
+        int(raw_birthtime)
+        if type(raw_birthtime) is int and raw_birthtime > 0
+        else None
+    )
+    return int(info.st_dev), int(info.st_ino), birthtime_ns
+
+
+@dataclass(frozen=True)
+class _BoundDirectoryForMove:
+    """One exact directory kept stable across a namespace mutation."""
+
+    path: Path
+    identity: tuple[int, int]
+    descriptor: int | None
+
+
+@dataclass(frozen=True)
+class _CleanupFileSnapshot:
+    size: int
+    sha256: str
+    device: int
+    inode: int
+    mtime_ns: int
+
+
+@dataclass(frozen=True)
+class _CleanupDirectorySnapshot:
+    device: int
+    inode: int
+    birthtime_ns: int | None
+
+
+def _cleanup_plan_name_for_document(value: Mapping[str, Any]) -> str:
+    """Return the sole canonical filename for one supported plan schema."""
+
+    schema = value.get("schema")
+    if schema == CLEANUP_PLAN_SCHEMA:
+        return CLEANUP_PLAN_NAME
+    if schema == LEGACY_CLEANUP_PLAN_SCHEMA:
+        return LEGACY_CLEANUP_PLAN_NAME
+    raise _fail("project_update_transaction_cleanup_refused")
+
+
+def _existing_cleanup_plan_path(root: Path) -> Path | None:
+    """Prefer the identity-bound v0.4.16 plan over a retained legacy plan."""
+
+    current = root / CLEANUP_PLAN_NAME
+    legacy = root / LEGACY_CLEANUP_PLAN_NAME
+    if os.path.lexists(current):
+        return current
+    if os.path.lexists(legacy):
+        return legacy
+    return None
+
+
+@contextmanager
+def _bound_directory_for_move(path: Path) -> Iterator[_BoundDirectoryForMove]:
+    """Bind a complete directory chain without following a racing replacement."""
+
+    absolute = _absolute(path)
+    expected = _safe_directory(absolute, within=absolute)
+    expected_identity = (int(expected.st_dev), int(expected.st_ino))
+    if os.name != "nt":
+        flags = os.O_RDONLY
+        flags |= getattr(os, "O_DIRECTORY", 0)
+        flags |= getattr(os, "O_NOFOLLOW", 0)
+        descriptors: list[int] = []
+        try:
+            anchor = Path(absolute.anchor)
+            descriptor = os.open(anchor, flags)
+            descriptors.append(descriptor)
+            opened = os.fstat(descriptor)
+            if not stat.S_ISDIR(opened.st_mode):
+                raise OSError("project update move parent unsafe")
+            current = anchor
+            for part in absolute.parts[1:]:
+                named = os.stat(
+                    part,
+                    dir_fd=descriptor,
+                    follow_symlinks=False,
+                )
+                if stat.S_ISLNK(named.st_mode) or not stat.S_ISDIR(named.st_mode):
+                    raise OSError("project update move parent unsafe")
+                child = os.open(part, flags, dir_fd=descriptor)
+                child_info = os.fstat(child)
+                if (
+                    not stat.S_ISDIR(child_info.st_mode)
+                    or (int(child_info.st_dev), int(child_info.st_ino))
+                    != (int(named.st_dev), int(named.st_ino))
+                ):
+                    os.close(child)
+                    raise OSError("project update move parent changed")
+                descriptors.append(child)
+                descriptor = child
+                current = current / part
+            final = os.fstat(descriptor)
+            if (
+                current != absolute
+                or (int(final.st_dev), int(final.st_ino))
+                != expected_identity
+            ):
+                raise OSError("project update move parent changed")
+            yield _BoundDirectoryForMove(
+                path=absolute,
+                identity=expected_identity,
+                descriptor=descriptor,
+            )
+            final_after = os.fstat(descriptor)
+            if (int(final_after.st_dev), int(final_after.st_ino)) != expected_identity:
+                raise OSError("project update move parent changed")
+        finally:
+            for descriptor in reversed(descriptors):
+                os.close(descriptor)
+        return
+
+    import ctypes
+    from ctypes import wintypes
+
+    class ByHandleFileInformation(ctypes.Structure):
+        _fields_ = [
+            ("dwFileAttributes", wintypes.DWORD),
+            ("ftCreationTime", wintypes.FILETIME),
+            ("ftLastAccessTime", wintypes.FILETIME),
+            ("ftLastWriteTime", wintypes.FILETIME),
+            ("dwVolumeSerialNumber", wintypes.DWORD),
+            ("nFileSizeHigh", wintypes.DWORD),
+            ("nFileSizeLow", wintypes.DWORD),
+            ("nNumberOfLinks", wintypes.DWORD),
+            ("nFileIndexHigh", wintypes.DWORD),
+            ("nFileIndexLow", wintypes.DWORD),
+        ]
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    create_file = kernel32.CreateFileW
+    create_file.argtypes = [
+        wintypes.LPCWSTR,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.LPVOID,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.HANDLE,
+    ]
+    create_file.restype = wintypes.HANDLE
+    get_information = kernel32.GetFileInformationByHandle
+    get_information.argtypes = [
+        wintypes.HANDLE,
+        ctypes.POINTER(ByHandleFileInformation),
+    ]
+    get_information.restype = wintypes.BOOL
+    close_handle = kernel32.CloseHandle
+    close_handle.argtypes = [wintypes.HANDLE]
+    close_handle.restype = wintypes.BOOL
+    file_list_directory = 0x00000001
+    file_share_read = 0x00000001
+    file_share_write = 0x00000002
+    open_existing = 3
+    file_flag_open_reparse_point = 0x00200000
+    file_flag_backup_semantics = 0x02000000
+    file_attribute_directory = 0x00000010
+    file_attribute_reparse_point = 0x00000400
+    invalid_handle = wintypes.HANDLE(-1).value
+    handles: list[Any] = []
+
+    def query(handle: Any) -> ByHandleFileInformation:
+        information = ByHandleFileInformation()
+        if not get_information(handle, ctypes.byref(information)):
+            raise ctypes.WinError(ctypes.get_last_error())
+        return information
+
+    try:
+        for member in _chain(absolute):
+            named = os.lstat(member)
+            if (
+                stat.S_ISLNK(named.st_mode)
+                or _is_reparse(named)
+                or not stat.S_ISDIR(named.st_mode)
+            ):
+                raise OSError("project update move parent unsafe")
+            handle = create_file(
+                str(member),
+                file_list_directory,
+                file_share_read | file_share_write,
+                None,
+                open_existing,
+                file_flag_open_reparse_point | file_flag_backup_semantics,
+                None,
+            )
+            if handle == invalid_handle:
+                raise ctypes.WinError(ctypes.get_last_error())
+            handles.append(handle)
+            information = query(handle)
+            file_index = (
+                int(information.nFileIndexHigh) << 32
+            ) | int(information.nFileIndexLow)
+            if (
+                not information.dwFileAttributes & file_attribute_directory
+                or information.dwFileAttributes & file_attribute_reparse_point
+                or (int(named.st_ino) and file_index != int(named.st_ino))
+            ):
+                raise OSError("project update move parent changed")
+        final_information = query(handles[-1])
+        final_index = (
+            int(final_information.nFileIndexHigh) << 32
+        ) | int(final_information.nFileIndexLow)
+        if int(expected.st_ino) and final_index != int(expected.st_ino):
+            raise OSError("project update move parent changed")
+        yield _BoundDirectoryForMove(
+            path=absolute,
+            identity=expected_identity,
+            descriptor=None,
+        )
+        after = query(handles[-1])
+        after_index = (int(after.nFileIndexHigh) << 32) | int(after.nFileIndexLow)
+        if int(expected.st_ino) and after_index != int(expected.st_ino):
+            raise OSError("project update move parent changed")
+    finally:
+        close_error: OSError | None = None
+        for handle in reversed(handles):
+            if not close_handle(handle) and close_error is None:
+                close_error = ctypes.WinError(ctypes.get_last_error())
+        if close_error is not None:
+            raise close_error
+
+
+def _atomic_move_entry_no_replace(source: Path, destination: Path) -> None:
+    """Move one entry no-replace while both complete parent chains stay bound."""
+
+    import ctypes
+
+    source = _absolute(source)
+    destination = _absolute(destination)
+    if (
+        source == source.parent
+        or destination == destination.parent
+        or source.name in {"", ".", ".."}
+        or destination.name in {"", ".", ".."}
+    ):
+        raise _fail("project_update_transaction_path_unsafe")
+    source_parent_before = _safe_directory(source.parent, within=source.parent)
+    destination_parent_before = _safe_directory(
+        destination.parent,
+        within=destination.parent,
+    )
+    same_parent = os.path.normcase(str(source.parent)) == os.path.normcase(
+        str(destination.parent)
+    )
+    with ExitStack() as stack:
+        source_binding = stack.enter_context(
+            _bound_directory_for_move(source.parent)
+        )
+        destination_binding = (
+            source_binding
+            if same_parent
+            else stack.enter_context(
+                _bound_directory_for_move(destination.parent)
+            )
+        )
+        if (
+            source_binding.identity
+            != (int(source_parent_before.st_dev), int(source_parent_before.st_ino))
+            or destination_binding.identity
+            != (
+                int(destination_parent_before.st_dev),
+                int(destination_parent_before.st_ino),
+            )
+            or source_binding.identity[0] != destination_binding.identity[0]
+        ):
+            raise _fail("project_update_transaction_path_unsafe")
+        if os.name == "nt":
+            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            move = kernel32.MoveFileExW
+            move.argtypes = [ctypes.c_wchar_p, ctypes.c_wchar_p, ctypes.c_uint32]
+            move.restype = ctypes.c_int
+            # MOVEFILE_WRITE_THROUGH only. REPLACE_EXISTING and COPY_ALLOWED
+            # are deliberately omitted: a concurrent destination is refusal.
+            if not move(str(source), str(destination), 0x00000008):
+                raise OSError(
+                    ctypes.get_last_error(),
+                    "atomic no-replace move failed",
+                )
+            if not _fsync_directory(destination.parent).durable:
+                raise OSError("atomic no-replace destination flush failed")
+            if (
+                not same_parent
+                and not _fsync_directory(source.parent).durable
+            ):
+                raise OSError("atomic no-replace source flush failed")
+            return
+        source_descriptor = source_binding.descriptor
+        destination_descriptor = destination_binding.descriptor
+        if not isinstance(source_descriptor, int) or not isinstance(
+            destination_descriptor, int
+        ):
+            raise OSError("atomic no-replace parent binding missing")
+        libc = ctypes.CDLL(None, use_errno=True)
+        renameat2 = getattr(libc, "renameat2", None)
+        if renameat2 is None:
+            raise OSError("atomic no-replace entry move unsupported")
+        renameat2.argtypes = [
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.c_uint,
+        ]
+        renameat2.restype = ctypes.c_int
+        if renameat2(
+            source_descriptor,
+            os.fsencode(source.name),
+            destination_descriptor,
+            os.fsencode(destination.name),
+            1,  # RENAME_NOREPLACE
+        ) != 0:
+            error_number = ctypes.get_errno()
+            raise OSError(
+                error_number,
+                "atomic no-replace move failed",
+            )
+        os.fsync(destination_descriptor)
+        if not same_parent:
+            os.fsync(source_descriptor)
+
+
+def _atomic_move_directory_no_replace(source: Path, destination: Path) -> None:
+    """Atomically move one directory while preserving the historical seam."""
+
+    if source.parent != destination.parent:
+        raise _fail("project_update_transaction_path_unsafe")
+    _atomic_move_entry_no_replace(source, destination)
+
+
+def _atomic_move_file_no_replace(source: Path, destination: Path) -> None:
+    """Atomically move one file only while the destination is absent."""
+
+    _atomic_move_entry_no_replace(source, destination)
+
+
+def _cleanup_bound_directory_context(project: Path, path: Path) -> Any:
+    """Load the existing full-chain binding lazily to avoid an import cycle."""
+
+    from .archive_services import _activity_group_bound_directory_chain
+
+    project = _absolute(project)
+    path = _absolute(path)
+    try:
+        relative = path.relative_to(project)
+    except ValueError:
+        raise _fail("project_update_transaction_path_unsafe") from None
+    canonical_project = project.resolve()
+    canonical_path = canonical_project.joinpath(*relative.parts)
+    return _activity_group_bound_directory_chain(
+        canonical_project,
+        canonical_path,
+    )
+
+
+def _read_cleanup_linked_regular(
+    project: Path,
+    path: Path,
+    *,
+    maximum: int,
+) -> tuple[bytes, os.stat_result]:
+    """Read one one-or-two-link cleanup file through a fully bound parent."""
+
+    from .archive_services import _hold_activity_group_evidence_file
+
+    project = _absolute(project)
+    path = _absolute(path)
+    try:
+        relative = path.relative_to(project)
+    except ValueError:
+        raise _fail("project_update_transaction_cleanup_refused") from None
+    canonical_project = project.resolve()
+    canonical_path = canonical_project.joinpath(*relative.parts)
+    with _hold_activity_group_evidence_file(
+        canonical_project,
+        canonical_path,
+        max_bytes=maximum,
+    ) as held:
+        raw = held.get("raw")
+        identity = held.get("identity")
+        if not isinstance(raw, bytes) or not isinstance(identity, tuple):
+            raise _fail("project_update_transaction_cleanup_refused")
+        try:
+            named = os.lstat(canonical_path)
+        except OSError:
+            raise _fail("project_update_transaction_cleanup_refused") from None
+        if (
+            stat.S_ISLNK(named.st_mode)
+            or _is_reparse(named)
+            or not stat.S_ISREG(named.st_mode)
+            or int(named.st_nlink) not in {1, 2}
+            or (int(named.st_dev), int(named.st_ino))
+            != (int(identity[0]), int(identity[1]))
+            or int(named.st_size) != len(raw)
+        ):
+            raise _fail("project_update_transaction_cleanup_refused")
+        return raw, named
+
+
+def _delete_exact_cleanup_file(
+    project: Path,
+    path: Path,
+    snapshot: _CleanupFileSnapshot,
+) -> None:
+    """Delete one transiently identity-bound file through the hardened primitive."""
+
+    from .legacy_cleanup_bound_delete import _delete_exact_approved_file
+
+    _delete_exact_approved_file(
+        project,
+        path,
+        {
+            "type": "file",
+            "identity": {
+                "device": snapshot.device,
+                "inode": snapshot.inode,
+            },
+            "size": snapshot.size,
+            "mtime_ns": snapshot.mtime_ns,
+            "sha256": snapshot.sha256.removeprefix("sha256:"),
+        },
+    )
+
+
+def _delete_exact_cleanup_directory(
+    project: Path,
+    path: Path,
+    snapshot: _CleanupDirectorySnapshot,
+) -> None:
+    """Delete one exact empty directory without a pathname-only rmdir race."""
+
+    current = _safe_directory(path, within=project)
+    if _cleanup_directory_identity(current) != (
+        snapshot.device,
+        snapshot.inode,
+        snapshot.birthtime_ns,
+    ):
+        raise _fail("project_update_transaction_cleanup_refused")
+
+    from .legacy_cleanup_bound_delete import (
+        _delete_exact_approved_empty_directory,
+    )
+
+    _delete_exact_approved_empty_directory(
+        project,
+        path,
+        {
+            "type": "directory",
+            "identity": {
+                "birthtime_ns": snapshot.birthtime_ns,
+                "device": snapshot.device,
+                "inode": snapshot.inode,
+            },
+        },
+    )
+
+
+def _unlink_exact_cleanup_plan_duplicate_windows(
+    project: Path,
+    source: Path,
+    proof: Path,
+    *,
+    expected_raw: bytes,
+    expected_identity: tuple[int, int],
+) -> None:
+    """Remove only the source hardlink from a proven rename-crash duplicate."""
+
+    if os.name != "nt":
+        raise OSError("exact cleanup duplicate unlink unsupported")
+    from .archive_services import _windows_mark_handle_posix_delete
+    from .legacy_cleanup_bound_delete import (
+        _ApprovedFile,
+        _reject_windows_alternate_streams,
+        _windows_close,
+        _windows_digest_handle,
+        _windows_open,
+    )
+
+    try:
+        source_info = os.lstat(source)
+        proof_info = os.lstat(proof)
+    except OSError:
+        raise OSError("exact cleanup duplicate changed") from None
+    expected_digest = hashlib.sha256(expected_raw).hexdigest()
+    if (
+        stat.S_ISLNK(source_info.st_mode)
+        or stat.S_ISLNK(proof_info.st_mode)
+        or _is_reparse(source_info)
+        or _is_reparse(proof_info)
+        or not stat.S_ISREG(source_info.st_mode)
+        or not stat.S_ISREG(proof_info.st_mode)
+        or int(source_info.st_nlink) != 2
+        or int(proof_info.st_nlink) != 2
+        or (int(source_info.st_dev), int(source_info.st_ino))
+        != expected_identity
+        or (int(proof_info.st_dev), int(proof_info.st_ino))
+        != expected_identity
+        or int(source_info.st_size) != len(expected_raw)
+        or int(proof_info.st_size) != len(expected_raw)
+    ):
+        raise OSError("exact cleanup duplicate changed")
+    approved = _ApprovedFile(
+        device=int(source_info.st_dev),
+        inode=int(source_info.st_ino),
+        size=len(expected_raw),
+        mtime_ns=int(source_info.st_mtime_ns),
+        sha256=expected_digest,
+    )
+    handle = _windows_open(source, directory=False)
+    failure: BaseException | None = None
+    committed = False
+    try:
+        _reject_windows_alternate_streams(handle, directory=False)
+        _windows_digest_handle(handle, approved, expected_link_count=2)
+        current_proof_raw, current_proof_info = _read_cleanup_linked_regular(
+            project,
+            proof,
+            maximum=MAX_DOCUMENT_BYTES + 1,
+        )
+        if (
+            not hmac.compare_digest(current_proof_raw, expected_raw)
+            or (int(current_proof_info.st_dev), int(current_proof_info.st_ino))
+            != expected_identity
+            or int(current_proof_info.st_nlink) != 2
+        ):
+            raise OSError("exact cleanup duplicate changed")
+        _windows_mark_handle_posix_delete(
+            handle,
+            error_prefix="project_update_cleanup",
+        )
+        _windows_digest_handle(handle, approved, expected_link_count=1)
+        _reject_windows_alternate_streams(handle, directory=False)
+        final_proof_raw, final_proof_info = _read_cleanup_linked_regular(
+            project,
+            proof,
+            maximum=MAX_DOCUMENT_BYTES + 1,
+        )
+        if (
+            not hmac.compare_digest(final_proof_raw, expected_raw)
+            or (int(final_proof_info.st_dev), int(final_proof_info.st_ino))
+            != expected_identity
+            or int(final_proof_info.st_nlink) != 1
+        ):
+            raise OSError("exact cleanup duplicate unlink unproved")
+        committed = True
+    except BaseException as error:
+        failure = error
+    try:
+        _windows_close(handle)
+    except BaseException as error:
+        failure = error
+    if failure is not None:
+        raise OSError("exact cleanup duplicate unlink failed") from failure
+    if not committed:
+        raise OSError("exact cleanup duplicate unlink unproved")
+    # FileDispositionInfoEx removes the namespace entry only after the held
+    # source handle closes on some supported Windows filesystems.  Attribute
+    # the reconciliation only after that close and one fresh exact proof read.
+    final_proof_raw, final_proof_info = _read_cleanup_linked_regular(
+        project,
+        proof,
+        maximum=MAX_DOCUMENT_BYTES + 1,
+    )
+    if (
+        os.path.lexists(source)
+        or not hmac.compare_digest(final_proof_raw, expected_raw)
+        or (int(final_proof_info.st_dev), int(final_proof_info.st_ino))
+        != expected_identity
+        or int(final_proof_info.st_nlink) != 1
+    ):
+        raise OSError("exact cleanup duplicate unlink unproved")
+
+
+@dataclass(frozen=True)
+class CleanupTombstoneInspection:
+    """Private capability for one exact, still-complete cleanup tombstone."""
+
+    transaction_ref: str
+    cleanup_authority_sha256: str
+    cleanup_plan_sha256: str
+    intent_sha256: str
+    terminal_checkpoint_sha256: str
+    transaction_parent_identity: tuple[int, int, int, int]
+    tombstone_identity: tuple[int, int, int, int]
 
 
 @dataclass(frozen=True)
@@ -2924,7 +3719,7 @@ class ReservedProjectUpdateTransaction:
         tree: RuntimeCandidateTreeInventory,
     ) -> dict[str, Any]:
         value = _parse_document(raw, code="project_update_transaction_candidate_invalid")
-        expected_keys = {
+        legacy_expected_keys = {
             "absolute_paths_echoed",
             "candidate_locator",
             "candidate_sha256",
@@ -2951,9 +3746,18 @@ class ReservedProjectUpdateTransaction:
             "wheel_file_name",
             "wheel_sha256",
         }
+        current_expected_keys = legacy_expected_keys | {
+            "existing_runtime_repair_required",
+            "existing_runtime_inventory_sha256",
+            "existing_runtime_inventory_count",
+            "existing_runtime_inventory_bytes",
+        }
+        legacy_shape = set(value) == legacy_expected_keys
         if (
-            set(value) != expected_keys
-            or value.get("schema") != PROJECT_RUNTIME_CANDIDATE_SCHEMA
+            not legacy_shape
+            and set(value) != current_expected_keys
+        ) or (
+            value.get("schema") != PROJECT_RUNTIME_CANDIDATE_SCHEMA
             or value.get("status") != "sealed"
             or value.get("target_tag") != reservation.requested_target_tag
             or value.get("transaction_ref") != reservation.transaction_ref
@@ -2964,6 +3768,19 @@ class ReservedProjectUpdateTransaction:
             or value.get("inventory_bytes") != tree.total_bytes
             or value.get("same_volume_verified") is not True
             or type(value.get("existing_runtime_reusable")) is not bool
+            or (
+                not legacy_shape
+                and (
+                    type(value.get("existing_runtime_repair_required"))
+                    is not bool
+                    or type(value.get("existing_runtime_inventory_count"))
+                    is not int
+                    or value.get("existing_runtime_inventory_count") < 0
+                    or type(value.get("existing_runtime_inventory_bytes"))
+                    is not int
+                    or value.get("existing_runtime_inventory_bytes") < 0
+                )
+            )
             or type(value.get("runtime_parent_existed_before")) is not bool
             or value.get("recursive_directory_durability_verified") is not True
             or value.get("seal_parent_durability_required") is not True
@@ -2987,14 +3804,43 @@ class ReservedProjectUpdateTransaction:
             "wheel_sha256",
         ):
             _digest(value.get(field), code="project_update_transaction_candidate_invalid")
+        repair_required = bool(
+            False
+            if legacy_shape
+            else value["existing_runtime_repair_required"]
+        )
+        repair_inventory_sha256 = value.get(
+            "existing_runtime_inventory_sha256"
+        )
+        if repair_required:
+            _digest(
+                repair_inventory_sha256,
+                code="project_update_transaction_candidate_invalid",
+            )
+        elif (
+            repair_inventory_sha256 is not None
+            or (
+                not legacy_shape
+                and (
+                    value["existing_runtime_inventory_count"] != 0
+                    or value["existing_runtime_inventory_bytes"] != 0
+                )
+            )
+        ):
+            raise _fail("project_update_transaction_candidate_invalid")
         identities = value.get("path_identities")
-        identity_keys = {
+        legacy_identity_keys = {
             "candidate_root",
             "project_root",
             "runtime_parent",
             "runtime_parent_created",
             "transaction_root",
         }
+        identity_keys = (
+            legacy_identity_keys
+            if legacy_shape
+            else legacy_identity_keys | {"existing_runtime_root"}
+        )
         if type(identities) is not dict or set(identities) != identity_keys:
             raise _fail("project_update_transaction_candidate_invalid")
 
@@ -3016,6 +3862,11 @@ class ReservedProjectUpdateTransaction:
             or identities["transaction_root"] is None
             or identities["candidate_root"] is None
             or identities["runtime_parent"] is None
+            or (
+                not legacy_shape
+                and repair_required
+                != (identities["existing_runtime_root"] is not None)
+            )
             or (
                 value["runtime_parent_existed_before"]
                 and identities["runtime_parent_created"] is not None
@@ -3203,6 +4054,18 @@ class ReservedProjectUpdateTransaction:
             receipt_sha256=receipt_digest,
             postimage_sha256=postimage,
             existing_runtime_reusable=seal["existing_runtime_reusable"],
+            existing_runtime_repair_required=seal[
+                "existing_runtime_repair_required"
+            ],
+            existing_runtime_inventory_sha256=seal[
+                "existing_runtime_inventory_sha256"
+            ],
+            existing_runtime_inventory_count=seal[
+                "existing_runtime_inventory_count"
+            ],
+            existing_runtime_inventory_bytes=seal[
+                "existing_runtime_inventory_bytes"
+            ],
             runtime_parent_existed_before=seal[
                 "runtime_parent_existed_before"
             ],
@@ -3499,6 +4362,10 @@ class ProjectUpdateTransaction:
             "candidate_locator": reserved.reservation.runtime_candidate_logical_ref,
             "candidate_sha256": candidate_sha256,
             "existing_runtime_reusable": False,
+            "existing_runtime_repair_required": False,
+            "existing_runtime_inventory_sha256": None,
+            "existing_runtime_inventory_count": 0,
+            "existing_runtime_inventory_bytes": 0,
             "inventory_bytes": tree.total_bytes,
             "inventory_count": tree.inventory_count,
             "inventory_sha256": provider_inventory,
@@ -3522,6 +4389,7 @@ class ProjectUpdateTransaction:
                     int(transaction_info.st_dev),
                     int(transaction_info.st_ino),
                 ],
+                "existing_runtime_root": None,
             },
             "post_approval_child_process_allowed": False,
             "post_approval_copy_allowed": False,
@@ -3620,7 +4488,16 @@ class ProjectUpdateTransaction:
 
         validated = _private_key(logical_key)
         intent, journal, _backlink, cleanup = self._load_exact_state()
-        if cleanup is not None or journal.state != "exact":
+        cleanup_is_exact_terminal = (
+            cleanup is not None
+            and journal.state == "exact"
+            and bool(journal.verified_prefix)
+            and journal.verified_prefix[-1].phase == "completed"
+            and not _next_events(journal.verified_prefix, intent)
+        )
+        if journal.state != "exact" or (
+            cleanup is not None and not cleanup_is_exact_terminal
+        ):
             raise _fail("project_update_transaction_intent_invalid")
         matches = [
             record
@@ -4804,7 +5681,10 @@ class ProjectUpdateTransaction:
                 code="project_update_transaction_cleanup_refused",
             )
             parent = self._transaction_root.parent
-            tombstone, proof = self._cleanup_paths(parent, self.intent.transaction_ref)
+            tombstone, proof = self._cleanup_paths(
+                parent,
+                self.intent.transaction_ref,
+            )
             if not os.path.lexists(self._transaction_root):
                 if os.path.lexists(tombstone) or os.path.lexists(proof):
                     completed = self._resume_cleanup_paths(
@@ -4815,6 +5695,13 @@ class ProjectUpdateTransaction:
                     self._cleanup_completed = completed
                     return completed
                 return self._cleanup_completed
+            transaction_root_before = _safe_directory(
+                self._transaction_root,
+                within=parent,
+            )
+            transaction_root_identity = _cleanup_directory_identity(
+                transaction_root_before
+            )
             intent, journal, backlink, existing_plan = self._load_exact_state(
                 verify_candidate_content=True
             )
@@ -4829,19 +5716,50 @@ class ProjectUpdateTransaction:
             self._absent_lock_observation(backlink)
             if os.path.lexists(tombstone) or os.path.lexists(proof):
                 return False
-            plan = self._build_cleanup_plan(intent, journal, authority)
+            plan = self._build_cleanup_plan(
+                intent,
+                journal,
+                authority,
+                transaction_root_identity=transaction_root_identity,
+            )
             plan_bytes = _document_bytes(plan)
-            plan_path = self._transaction_root / "cleanup-plan.json"
-            if existing_plan is None:
+            plan_path = self._transaction_root / CLEANUP_PLAN_NAME
+            if not os.path.lexists(plan_path):
                 _write_new(plan_path, plan_bytes, within=self._transaction_root)
                 _require_directory_durable(self._transaction_root)
-            elif not hmac.compare_digest(
-                _document_bytes(existing_plan), plan_bytes
+            elif (
+                existing_plan is None
+                or existing_plan.get("schema") != CLEANUP_PLAN_SCHEMA
+                or not hmac.compare_digest(
+                    _document_bytes(existing_plan),
+                    plan_bytes,
+                )
+            ):
+                return False
+            # Reflush even on resume: a process may have stopped after the
+            # complete sidecar became visible but before its directory entry
+            # was durably committed.
+            _require_directory_durable(self._transaction_root)
+            transaction_root_after = _safe_directory(
+                self._transaction_root,
+                within=parent,
+            )
+            if (
+                _cleanup_directory_identity(transaction_root_after)
+                != transaction_root_identity
             ):
                 return False
             try:
-                self._transaction_root.rename(tombstone)
+                _atomic_move_directory_no_replace(
+                    self._transaction_root, tombstone
+                )
             except OSError:
+                return False
+            moved_tombstone = _safe_directory(tombstone, within=parent)
+            if (
+                _cleanup_directory_identity(moved_tombstone)
+                != transaction_root_identity
+            ):
                 return False
             durability = _fsync_directory(parent)
             if not durability.durable:
@@ -4853,6 +5771,391 @@ class ProjectUpdateTransaction:
             return completed
         except (OSError, ProjectUpdateTransactionError, KeyError, TypeError):
             return False
+
+    @classmethod
+    def discover_complete_cleanup_tombstone_for_resume_read_only(
+        cls, project_root: Path | str
+    ) -> CleanupTombstoneInspection | None:
+        """Find one byte-complete legacy tombstone without trusting its claim.
+
+        Canonical cleanup-proof-shaped files are inert history. Any live
+        transaction, malformed name or artifact, unsafe entry, concurrent
+        directory drift, live global lock, or more than one tombstone refuses
+        discovery. A returned value authorizes only atomic restoration of these
+        exact private bytes so the ordinary transaction and claim validators can
+        run; it does not itself attribute past success.
+        """
+
+        project = _absolute(project_root)
+        _safe_existing_chain(project, directory=True)
+        lock_path = project / PurePosixPath(PROJECT_UPDATE_LOCK_LOGICAL)
+        _within(lock_path, project)
+        if os.path.lexists(lock_path):
+            raise _fail("project_update_transaction_cleanup_refused")
+
+        parent = project / PurePosixPath(TRANSACTION_ROOT_LOGICAL)
+        _within(parent, project)
+        if not os.path.lexists(parent):
+            return None
+        _safe_existing_chain(parent, directory=True)
+        parent_before = _stable_path_identity(
+            _safe_directory(parent, within=project)
+        )
+
+        tombstones: list[tuple[str, Path]] = []
+        proof_refs: set[str] = set()
+        seen = 0
+        try:
+            with os.scandir(parent) as entries:
+                for entry in entries:
+                    seen += 1
+                    if seen > MAX_TERMINAL_CLEANUP_SCAN_ENTRIES:
+                        raise _fail("project_update_transaction_scan_incomplete")
+                    path = Path(entry.path)
+                    _within(path, parent)
+                    info = path.lstat()
+                    if stat.S_ISLNK(info.st_mode) or _is_reparse(info):
+                        raise _fail("project_update_transaction_path_unsafe")
+                    name = entry.name
+                    tombstone_match = re.fullmatch(
+                        r"\.cleanup_(update_[0-9a-f]{32})", name
+                    )
+                    proof_match = re.fullmatch(
+                        r"\.cleanup-proof_(update_[0-9a-f]{32})\.json", name
+                    )
+                    if tombstone_match is not None:
+                        if not stat.S_ISDIR(info.st_mode):
+                            raise _fail("project_update_transaction_cleanup_refused")
+                        tombstones.append((tombstone_match.group(1), path))
+                        continue
+                    if proof_match is not None:
+                        if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+                            raise _fail("project_update_transaction_cleanup_refused")
+                        ref = proof_match.group(1)
+                        raw = _read_regular(
+                            path, within=parent, maximum=MAX_DOCUMENT_BYTES + 1
+                        )
+                        value = _parse_document(
+                            raw, code="project_update_transaction_cleanup_refused"
+                        )
+                        if not hmac.compare_digest(raw, _document_bytes(value)):
+                            raise _fail("project_update_transaction_cleanup_refused")
+                        authority = (
+                            value.get("cleanup_authority_sha256")
+                            if type(value) is dict
+                            else None
+                        )
+                        if type(authority) is not str:
+                            raise _fail("project_update_transaction_cleanup_refused")
+                        cls._validate_cleanup_plan_document(value, ref, authority)
+                        proof_refs.add(ref)
+                        continue
+                    # The recovery namespace is intentionally closed. An
+                    # ordinary update directory or any unknown entry must be
+                    # handled by the live/orphan classifier, never skipped.
+                    raise _fail("project_update_transaction_cleanup_refused")
+        except OSError:
+            raise _fail("project_update_transaction_path_unsafe") from None
+
+        parent_after_scan = _stable_path_identity(
+            _safe_directory(parent, within=project)
+        )
+        if parent_after_scan != parent_before or os.path.lexists(lock_path):
+            raise _fail("project_update_transaction_cleanup_refused")
+        if not tombstones:
+            return None
+        if len(tombstones) != 1:
+            raise _fail("project_update_transaction_cleanup_refused")
+
+        transaction_ref, tombstone = tombstones[0]
+        if transaction_ref in proof_refs:
+            raise _fail("project_update_transaction_cleanup_refused")
+        tombstone_before_info = _safe_directory(tombstone, within=parent)
+        tombstone_before = _stable_path_identity(tombstone_before_info)
+        tombstone_generation = _cleanup_directory_identity(
+            tombstone_before_info
+        )
+        plan_path = _existing_cleanup_plan_path(tombstone)
+        if plan_path is None:
+            raise _fail("project_update_transaction_cleanup_refused")
+        plan_raw = _read_regular(
+            plan_path, within=tombstone, maximum=MAX_DOCUMENT_BYTES + 1
+        )
+        plan_value = _parse_document(
+            plan_raw, code="project_update_transaction_cleanup_refused"
+        )
+        if not hmac.compare_digest(plan_raw, _document_bytes(plan_value)):
+            raise _fail("project_update_transaction_cleanup_refused")
+        authority = (
+            plan_value.get("cleanup_authority_sha256")
+            if type(plan_value) is dict
+            else None
+        )
+        if type(authority) is not str:
+            raise _fail("project_update_transaction_cleanup_refused")
+        plan = cls._validate_cleanup_plan_document(
+            plan_value, transaction_ref, authority
+        )
+        root_identity = plan.get("transaction_root_identity")
+        if (
+            plan.get("schema") == CLEANUP_PLAN_SCHEMA
+            and (
+                not isinstance(root_identity, dict)
+                or (
+                    int(root_identity["device"]),
+                    int(root_identity["inode"]),
+                    root_identity["birthtime_ns"],
+                )
+                != tombstone_generation
+            )
+        ):
+            raise _fail("project_update_transaction_cleanup_refused")
+        expected_files = {
+            item["relative_path"]: (item["size"], item["sha256"])
+            for item in plan["files"]
+        }
+        expected_directories = set(plan["directories"])
+        actual_files, actual_directories = cls._descendant_snapshot(
+            tombstone,
+            exclude={plan_path.name},
+        )
+        if actual_files != expected_files or actual_directories != expected_directories:
+            raise _fail("project_update_transaction_cleanup_refused")
+        tombstone_after_info = _safe_directory(tombstone, within=parent)
+        tombstone_after = _stable_path_identity(tombstone_after_info)
+        parent_after_content = _stable_path_identity(
+            _safe_directory(parent, within=project)
+        )
+        if (
+            tombstone_after != tombstone_before
+            or _cleanup_directory_identity(tombstone_after_info)
+            != tombstone_generation
+            or parent_after_content != parent_before
+            or os.path.lexists(lock_path)
+        ):
+            raise _fail("project_update_transaction_cleanup_refused")
+        return CleanupTombstoneInspection(
+            transaction_ref=transaction_ref,
+            cleanup_authority_sha256=authority,
+            cleanup_plan_sha256=sha256_bytes(plan_raw),
+            intent_sha256=plan["intent_sha256"],
+            terminal_checkpoint_sha256=plan["terminal_checkpoint_sha256"],
+            transaction_parent_identity=parent_before,
+            tombstone_identity=tombstone_before,
+        )
+
+    @classmethod
+    def restore_complete_cleanup_tombstone_for_resume(
+        cls,
+        project_root: Path | str,
+        inspection: CleanupTombstoneInspection,
+    ) -> "ProjectUpdateTransaction":
+        """Atomically restore one previously inspected complete tombstone."""
+
+        if not isinstance(inspection, CleanupTombstoneInspection):
+            raise _fail("project_update_transaction_cleanup_refused")
+        project = _absolute(project_root)
+        latest = cls.discover_complete_cleanup_tombstone_for_resume_read_only(
+            project
+        )
+        if latest is None or latest != inspection:
+            raise _fail("project_update_transaction_cleanup_refused")
+        parent = project / PurePosixPath(TRANSACTION_ROOT_LOGICAL)
+        original = parent / inspection.transaction_ref
+        tombstone, proof = cls._cleanup_paths(parent, inspection.transaction_ref)
+        lock_path = project / PurePosixPath(PROJECT_UPDATE_LOCK_LOGICAL)
+        if (
+            _stable_path_identity(_safe_directory(parent, within=project))
+            != inspection.transaction_parent_identity
+            or os.path.lexists(lock_path)
+            or os.path.lexists(original)
+            or os.path.lexists(proof)
+        ):
+            raise _fail("project_update_transaction_cleanup_refused")
+        if (
+            _stable_path_identity(_safe_directory(tombstone, within=parent))
+            != inspection.tombstone_identity
+        ):
+            raise _fail("project_update_transaction_cleanup_refused")
+        try:
+            _atomic_move_directory_no_replace(tombstone, original)
+        except OSError:
+            raise _fail("project_update_transaction_cleanup_refused") from None
+        if not _fsync_directory(parent).durable:
+            raise _fail("project_update_transaction_durability_unverified")
+        if os.path.lexists(tombstone) or not os.path.lexists(original):
+            raise _fail("project_update_transaction_cleanup_refused")
+        if os.path.lexists(lock_path):
+            raise _fail("project_update_transaction_cleanup_refused")
+        if (
+            _stable_path_identity(_safe_directory(original, within=parent))
+            != inspection.tombstone_identity
+        ):
+            raise _fail("project_update_transaction_cleanup_refused")
+
+        # From this point the ordinary sealed-transaction validators are
+        # authoritative. A failure leaves the original directory present so a
+        # fresh writer remains fail-closed; it is never silently moved back.
+        transaction = cls.open(
+            project, inspection.transaction_ref, verify_candidate_content=True
+        )
+        state = transaction.inspect(verify_candidate_content=True)
+        if (
+            os.path.lexists(lock_path)
+            or
+            not state.terminal
+            or state.intent_sha256 != inspection.intent_sha256
+            or state.journal.head_sha256 != inspection.terminal_checkpoint_sha256
+            or transaction.cleanup_authority_sha256_read_only()
+            != inspection.cleanup_authority_sha256
+        ):
+            raise _fail("project_update_transaction_cleanup_refused")
+        cls._validate_restored_cleanup_namespace_read_only(
+            project, inspection
+        )
+        return transaction
+
+    @classmethod
+    def _validate_restored_cleanup_namespace_read_only(
+        cls,
+        project: Path,
+        inspection: CleanupTombstoneInspection,
+    ) -> None:
+        """Recheck the closed namespace and exact plan after restoration."""
+
+        parent = project / PurePosixPath(TRANSACTION_ROOT_LOGICAL)
+        original = parent / inspection.transaction_ref
+        lock_path = project / PurePosixPath(PROJECT_UPDATE_LOCK_LOGICAL)
+        if os.path.lexists(lock_path):
+            raise _fail("project_update_transaction_cleanup_refused")
+        before = _stable_path_identity(_safe_directory(parent, within=project))
+        original_seen = False
+        seen = 0
+        try:
+            with os.scandir(parent) as entries:
+                for entry in entries:
+                    seen += 1
+                    if seen > MAX_TERMINAL_CLEANUP_SCAN_ENTRIES:
+                        raise _fail("project_update_transaction_scan_incomplete")
+                    path = Path(entry.path)
+                    _within(path, parent)
+                    info = path.lstat()
+                    if stat.S_ISLNK(info.st_mode) or _is_reparse(info):
+                        raise _fail("project_update_transaction_path_unsafe")
+                    if entry.name == inspection.transaction_ref:
+                        if (
+                            original_seen
+                            or not stat.S_ISDIR(info.st_mode)
+                            or _stable_path_identity(info)
+                            != inspection.tombstone_identity
+                        ):
+                            raise _fail(
+                                "project_update_transaction_cleanup_refused"
+                            )
+                        original_seen = True
+                        continue
+                    proof_match = re.fullmatch(
+                        r"\.cleanup-proof_(update_[0-9a-f]{32})\.json",
+                        entry.name,
+                    )
+                    if (
+                        proof_match is None
+                        or not stat.S_ISREG(info.st_mode)
+                        or info.st_nlink != 1
+                    ):
+                        raise _fail("project_update_transaction_cleanup_refused")
+                    proof_raw = _read_regular(
+                        path, within=parent, maximum=MAX_DOCUMENT_BYTES + 1
+                    )
+                    proof_value = _parse_document(
+                        proof_raw,
+                        code="project_update_transaction_cleanup_refused",
+                    )
+                    if not hmac.compare_digest(
+                        proof_raw, _document_bytes(proof_value)
+                    ):
+                        raise _fail("project_update_transaction_cleanup_refused")
+                    proof_authority = (
+                        proof_value.get("cleanup_authority_sha256")
+                        if type(proof_value) is dict
+                        else None
+                    )
+                    if type(proof_authority) is not str:
+                        raise _fail("project_update_transaction_cleanup_refused")
+                    cls._validate_cleanup_plan_document(
+                        proof_value,
+                        proof_match.group(1),
+                        proof_authority,
+                    )
+        except OSError:
+            raise _fail("project_update_transaction_path_unsafe") from None
+        if not original_seen:
+            raise _fail("project_update_transaction_cleanup_refused")
+
+        plan_path = _existing_cleanup_plan_path(original)
+        if plan_path is None:
+            raise _fail("project_update_transaction_cleanup_refused")
+        plan_raw = _read_regular(
+            plan_path, within=original, maximum=MAX_DOCUMENT_BYTES + 1
+        )
+        if not hmac.compare_digest(
+            sha256_bytes(plan_raw), inspection.cleanup_plan_sha256
+        ):
+            raise _fail("project_update_transaction_cleanup_refused")
+        plan_value = _parse_document(
+            plan_raw, code="project_update_transaction_cleanup_refused"
+        )
+        plan = cls._validate_cleanup_plan_document(
+            plan_value,
+            inspection.transaction_ref,
+            inspection.cleanup_authority_sha256,
+        )
+        original_identity = _safe_directory(original, within=parent)
+        root_identity = plan.get("transaction_root_identity")
+        if (
+            plan.get("schema") == CLEANUP_PLAN_SCHEMA
+            and (
+                not isinstance(root_identity, dict)
+                or (
+                    int(root_identity["device"]),
+                    int(root_identity["inode"]),
+                    root_identity["birthtime_ns"],
+                )
+                != _cleanup_directory_identity(original_identity)
+            )
+        ):
+            raise _fail("project_update_transaction_cleanup_refused")
+        actual_files, actual_directories = cls._descendant_snapshot(
+            original,
+            exclude={plan_path.name},
+        )
+        expected_files = {
+            item["relative_path"]: (item["size"], item["sha256"])
+            for item in plan["files"]
+        }
+        if (
+            actual_files != expected_files
+            or actual_directories != set(plan["directories"])
+            or _stable_path_identity(_safe_directory(parent, within=project))
+            != before
+            or os.path.lexists(lock_path)
+        ):
+            raise _fail("project_update_transaction_cleanup_refused")
+
+    def cleanup_authority_sha256_read_only(self) -> str | None:
+        """Return an exact existing cleanup-plan authority, never inferred."""
+
+        _intent, journal, _backlink, cleanup = self._load_exact_state(
+            verify_candidate_content=True
+        )
+        if cleanup is None:
+            return None
+        if journal.state != "exact":
+            raise _fail("project_update_transaction_cleanup_refused")
+        return _digest(
+            cleanup.get("cleanup_authority_sha256"),
+            code="project_update_transaction_cleanup_refused",
+        )
 
     @classmethod
     def resume_cleanup(
@@ -4887,9 +6190,12 @@ class ProjectUpdateTransaction:
         intent: ProjectUpdateIntent,
         journal: JournalInspection,
         authority: str,
+        *,
+        transaction_root_identity: tuple[int, int, int | None],
     ) -> dict[str, Any]:
         files, directories = self._descendant_snapshot(
-            self._transaction_root, exclude={"cleanup-plan.json"}
+            self._transaction_root,
+            exclude={CLEANUP_PLAN_NAME},
         )
         return {
             "cleanup_authority_sha256": authority,
@@ -4905,6 +6211,11 @@ class ProjectUpdateTransaction:
             "intent_sha256": intent.sha256,
             "schema": CLEANUP_PLAN_SCHEMA,
             "terminal_checkpoint_sha256": journal.head_sha256,
+            "transaction_root_identity": {
+                "birthtime_ns": transaction_root_identity[2],
+                "device": int(transaction_root_identity[0]),
+                "inode": int(transaction_root_identity[1]),
+            },
             "transaction_logical_ref": intent.transaction_logical_ref,
             "transaction_ref": intent.transaction_ref,
         }
@@ -4920,7 +6231,12 @@ class ProjectUpdateTransaction:
         if os.path.lexists(original):
             return False
         if os.path.lexists(proof):
-            proof_raw = _read_regular(proof, within=parent, maximum=MAX_DOCUMENT_BYTES + 1)
+            proof_raw, proof_info = _read_cleanup_linked_regular(
+                project,
+                proof,
+                maximum=MAX_DOCUMENT_BYTES + 1,
+            )
+            proof_identity = (int(proof_info.st_dev), int(proof_info.st_ino))
             plan = cls._validate_cleanup_plan_document(
                 _parse_document(
                     proof_raw, code="project_update_transaction_cleanup_refused"
@@ -4928,85 +6244,271 @@ class ProjectUpdateTransaction:
                 transaction_ref,
                 authority,
             )
+            plan_name = _cleanup_plan_name_for_document(plan)
             if os.path.lexists(tombstone):
-                _safe_existing_chain(tombstone, directory=True)
-                with os.scandir(tombstone) as entries:
-                    if any(entries):
+                if plan.get("schema") != CLEANUP_PLAN_SCHEMA:
+                    return False
+                tombstone_info = _safe_directory(tombstone, within=parent)
+                tombstone_generation = _cleanup_directory_identity(
+                    tombstone_info
+                )
+                tombstone_snapshot = _CleanupDirectorySnapshot(
+                    device=tombstone_generation[0],
+                    inode=tombstone_generation[1],
+                    birthtime_ns=tombstone_generation[2],
+                )
+                root_identity = plan["transaction_root_identity"]
+                if (
+                    int(root_identity["device"]),
+                    int(root_identity["inode"]),
+                    root_identity["birthtime_ns"],
+                ) != (
+                    tombstone_snapshot.device,
+                    tombstone_snapshot.inode,
+                    tombstone_snapshot.birthtime_ns,
+                ):
+                    return False
+                with _cleanup_bound_directory_context(
+                    project,
+                    tombstone,
+                ):
+                    bound_info = _safe_directory(tombstone, within=parent)
+                    if _cleanup_directory_identity(bound_info) != (
+                        tombstone_snapshot.device,
+                        tombstone_snapshot.inode,
+                        tombstone_snapshot.birthtime_ns,
+                    ):
                         return False
-                tombstone.rmdir()
+                    with os.scandir(tombstone) as entries:
+                        names = tuple(entry.name for entry in entries)
+                    if names:
+                        if names != (plan_name,):
+                            return False
+                        duplicate_path = tombstone / plan_name
+                        duplicate_raw, duplicate_info = (
+                            _read_cleanup_linked_regular(
+                                project,
+                                duplicate_path,
+                                maximum=MAX_DOCUMENT_BYTES + 1,
+                            )
+                        )
+                        expected_identity = (
+                            int(proof_info.st_dev),
+                            int(proof_info.st_ino),
+                        )
+                        if (
+                            not hmac.compare_digest(duplicate_raw, proof_raw)
+                            or int(proof_info.st_nlink) != 2
+                            or int(duplicate_info.st_nlink) != 2
+                            or (
+                                int(duplicate_info.st_dev),
+                                int(duplicate_info.st_ino),
+                            )
+                            != expected_identity
+                        ):
+                            return False
+                        _unlink_exact_cleanup_plan_duplicate_windows(
+                            project,
+                            duplicate_path,
+                            proof,
+                            expected_raw=proof_raw,
+                            expected_identity=expected_identity,
+                        )
+                        if not _fsync_directory(parent).durable:
+                            return False
+                        if not _fsync_directory(tombstone).durable:
+                            return False
+                    elif int(proof_info.st_nlink) != 1:
+                        return False
+                _delete_exact_cleanup_directory(
+                    project,
+                    tombstone,
+                    tombstone_snapshot,
+                )
                 if not _fsync_directory(parent).durable:
                     return False
+            elif int(proof_info.st_nlink) != 1:
+                return False
             # Keep the compact, content-free proof as the durable receipt that
             # distinguishes successful cleanup from unexplained disappearance.
             durability = _fsync_directory(parent)
+            final_proof_raw, final_proof_info = _read_cleanup_linked_regular(
+                project,
+                proof,
+                maximum=MAX_DOCUMENT_BYTES + 1,
+            )
             return (
                 durability.durable
+                and not os.path.lexists(original)
                 and not os.path.lexists(tombstone)
                 and os.path.lexists(proof)
+                and hmac.compare_digest(final_proof_raw, proof_raw)
+                and int(final_proof_info.st_nlink) == 1
+                and (
+                    int(final_proof_info.st_dev),
+                    int(final_proof_info.st_ino),
+                )
+                == proof_identity
             )
         if not os.path.lexists(tombstone):
             return False
-        _safe_existing_chain(tombstone, directory=True)
-        plan_path = tombstone / "cleanup-plan.json"
-        plan_raw = _read_regular(
-            plan_path, within=tombstone, maximum=MAX_DOCUMENT_BYTES + 1
+        tombstone_info = _safe_directory(tombstone, within=parent)
+        tombstone_generation = _cleanup_directory_identity(tombstone_info)
+        tombstone_snapshot = _CleanupDirectorySnapshot(
+            device=tombstone_generation[0],
+            inode=tombstone_generation[1],
+            birthtime_ns=tombstone_generation[2],
         )
-        plan = cls._validate_cleanup_plan_document(
-            _parse_document(
-                plan_raw, code="project_update_transaction_cleanup_refused"
-            ),
-            transaction_ref,
-            authority,
-        )
-        expected_files = {
-            item["relative_path"]: (item["size"], item["sha256"])
-            for item in plan["files"]
-        }
-        expected_directories = set(plan["directories"])
-        actual_files, actual_directories = cls._descendant_snapshot(
-            tombstone, exclude={"cleanup-plan.json"}
-        )
-        if not set(actual_files).issubset(expected_files) or not actual_directories.issubset(
-            expected_directories
-        ):
-            return False
-        for relative, (actual_size, actual_digest) in actual_files.items():
-            size, digest = expected_files[relative]
-            if actual_size != size or actual_digest != digest:
+        with _cleanup_bound_directory_context(project, tombstone):
+            bound_info = _safe_directory(tombstone, within=parent)
+            if _cleanup_directory_identity(bound_info) != (
+                tombstone_snapshot.device,
+                tombstone_snapshot.inode,
+                tombstone_snapshot.birthtime_ns,
+            ):
                 return False
-        for relative in sorted(
-            actual_files,
-            key=lambda item: len(PurePosixPath(item).parts),
-            reverse=True,
-        ):
-            (tombstone / PurePosixPath(relative)).unlink()
-        for relative in sorted(
-            actual_directories,
-            key=lambda item: len(PurePosixPath(item).parts),
-            reverse=True,
-        ):
-            (tombstone / PurePosixPath(relative)).rmdir()
-        try:
-            plan_path.rename(proof)
-        except OSError:
-            return False
-        if not _fsync_directory(parent).durable:
-            return False
-        try:
-            tombstone.rmdir()
-        except OSError:
-            return False
+            plan_path = _existing_cleanup_plan_path(tombstone)
+            if plan_path is None:
+                return False
+            plan_raw, plan_info = _read_regular_with_info(
+                plan_path, within=tombstone, maximum=MAX_DOCUMENT_BYTES + 1
+            )
+            plan_identity = (int(plan_info.st_dev), int(plan_info.st_ino))
+            plan = cls._validate_cleanup_plan_document(
+                _parse_document(
+                    plan_raw, code="project_update_transaction_cleanup_refused"
+                ),
+                transaction_ref,
+                authority,
+            )
+            if plan.get("schema") != CLEANUP_PLAN_SCHEMA:
+                # A v0.4.15 tombstone is recovery evidence only. Restore it to
+                # the original transaction name, then write the durable
+                # identity-bound v0.4.16 sidecar before any deletion.
+                return False
+            root_identity = plan["transaction_root_identity"]
+            if (
+                int(root_identity["device"]),
+                int(root_identity["inode"]),
+                root_identity["birthtime_ns"],
+            ) != (
+                tombstone_snapshot.device,
+                tombstone_snapshot.inode,
+                tombstone_snapshot.birthtime_ns,
+            ):
+                return False
+            expected_files = {
+                item["relative_path"]: (item["size"], item["sha256"])
+                for item in plan["files"]
+            }
+            expected_directories = set(plan["directories"])
+            actual_files, actual_directories = (
+                cls._cleanup_descendant_snapshot(
+                    tombstone,
+                    exclude={plan_path.name},
+                )
+            )
+            if not set(actual_files).issubset(expected_files) or not set(
+                actual_directories
+            ).issubset(expected_directories):
+                return False
+            for relative, actual in actual_files.items():
+                size, digest = expected_files[relative]
+                if actual.size != size or actual.sha256 != digest:
+                    return False
+            for relative in sorted(
+                actual_files,
+                key=lambda item: len(PurePosixPath(item).parts),
+                reverse=True,
+            ):
+                _delete_exact_cleanup_file(
+                    project,
+                    tombstone / PurePosixPath(relative),
+                    actual_files[relative],
+                )
+            for relative in sorted(
+                actual_directories,
+                key=lambda item: len(PurePosixPath(item).parts),
+                reverse=True,
+            ):
+                _delete_exact_cleanup_directory(
+                    project,
+                    tombstone / PurePosixPath(relative),
+                    actual_directories[relative],
+                )
+            remaining_files, remaining_directories = (
+                cls._cleanup_descendant_snapshot(
+                    tombstone,
+                    exclude={plan_path.name},
+                )
+            )
+            if remaining_files or remaining_directories:
+                return False
+            try:
+                _atomic_move_file_no_replace(plan_path, proof)
+            except OSError:
+                return False
+            moved_proof_raw, moved_proof_info = _read_cleanup_linked_regular(
+                project,
+                proof,
+                maximum=MAX_DOCUMENT_BYTES + 1,
+            )
+            if (
+                not hmac.compare_digest(moved_proof_raw, plan_raw)
+                or int(moved_proof_info.st_nlink) != 1
+                or (
+                    int(moved_proof_info.st_dev),
+                    int(moved_proof_info.st_ino),
+                )
+                != plan_identity
+            ):
+                return False
+            if not _fsync_directory(parent).durable:
+                return False
+            if not _fsync_directory(tombstone).durable:
+                return False
+            after_move = _safe_directory(tombstone, within=parent)
+            if _cleanup_directory_identity(after_move) != (
+                tombstone_snapshot.device,
+                tombstone_snapshot.inode,
+                tombstone_snapshot.birthtime_ns,
+            ):
+                return False
+            with os.scandir(tombstone) as entries:
+                if next(entries, None) is not None:
+                    return False
+        _delete_exact_cleanup_directory(
+            project,
+            tombstone,
+            tombstone_snapshot,
+        )
         if not _fsync_directory(parent).durable:
             return False
         # The proof is the plan itself and remains as a small durable receipt.
         # A hard exit at any earlier step is recoverable by the branches above.
-        return not os.path.lexists(tombstone) and os.path.lexists(proof)
+        final_proof_raw, final_proof_info = _read_cleanup_linked_regular(
+            project,
+            proof,
+            maximum=MAX_DOCUMENT_BYTES + 1,
+        )
+        return (
+            not os.path.lexists(original)
+            and not os.path.lexists(tombstone)
+            and os.path.lexists(proof)
+            and hmac.compare_digest(final_proof_raw, plan_raw)
+            and int(final_proof_info.st_nlink) == 1
+            and (
+                int(final_proof_info.st_dev),
+                int(final_proof_info.st_ino),
+            )
+            == plan_identity
+        )
 
     @staticmethod
     def _validate_cleanup_plan_document(
         value: Any, transaction_ref: str, authority: str
     ) -> dict[str, Any]:
-        expected = {
+        legacy_expected = {
             "cleanup_authority_sha256",
             "directories",
             "files",
@@ -5016,10 +6518,20 @@ class ProjectUpdateTransaction:
             "transaction_logical_ref",
             "transaction_ref",
         }
+        current_expected = legacy_expected | {"transaction_root_identity"}
+        is_legacy = bool(
+            type(value) is dict
+            and value.get("schema") == LEGACY_CLEANUP_PLAN_SCHEMA
+            and set(value) == legacy_expected
+        )
+        is_current = bool(
+            type(value) is dict
+            and value.get("schema") == CLEANUP_PLAN_SCHEMA
+            and set(value) == current_expected
+        )
         if (
             type(value) is not dict
-            or set(value) != expected
-            or value.get("schema") != CLEANUP_PLAN_SCHEMA
+            or not (is_legacy or is_current)
             or value.get("transaction_ref") != transaction_ref
             or value.get("transaction_logical_ref")
             != _transaction_logical_ref(transaction_ref)
@@ -5028,6 +6540,31 @@ class ProjectUpdateTransaction:
             or type(value.get("directories")) is not list
         ):
             raise _fail("project_update_transaction_cleanup_refused")
+        if is_current:
+            root_identity = value.get("transaction_root_identity")
+            birthtime_ns = (
+                root_identity.get("birthtime_ns")
+                if type(root_identity) is dict
+                else None
+            )
+            if (
+                type(root_identity) is not dict
+                or set(root_identity)
+                != {"birthtime_ns", "device", "inode"}
+                or type(root_identity.get("device")) is not int
+                or root_identity["device"] < 0
+                or type(root_identity.get("inode")) is not int
+                or root_identity["inode"] <= 0
+                or (
+                    os.name == "nt"
+                    and (
+                        type(birthtime_ns) is not int
+                        or birthtime_ns <= 0
+                    )
+                )
+                or (os.name != "nt" and birthtime_ns is not None)
+            ):
+                raise _fail("project_update_transaction_cleanup_refused")
         _digest(value.get("intent_sha256"), code="project_update_transaction_cleanup_refused")
         _digest(
             value.get("terminal_checkpoint_sha256"),
@@ -5045,7 +6582,10 @@ class ProjectUpdateTransaction:
             ):
                 raise _fail("project_update_transaction_cleanup_refused")
             relative = _logical_path(item["relative_path"])
-            if relative in seen or relative == "cleanup-plan.json":
+            self_name = (
+                CLEANUP_PLAN_NAME if is_current else LEGACY_CLEANUP_PLAN_NAME
+            )
+            if relative in seen or relative == self_name:
                 raise _fail("project_update_transaction_cleanup_refused")
             seen.add(relative)
             ordered_paths.append(relative)
@@ -5112,14 +6652,19 @@ class ProjectUpdateTransaction:
     ) -> tuple[dict[str, tuple[int, str]], set[str]]:
         files: dict[str, tuple[int, str]] = {}
         directories: set[str] = set()
+        seen = 0
 
         def walk(directory: Path) -> None:
+            nonlocal seen
             _safe_directory(directory, within=root)
             try:
                 entries = list(os.scandir(directory))
             except OSError:
                 raise _fail("project_update_transaction_path_unsafe") from None
             for entry in entries:
+                seen += 1
+                if seen > MAX_TRANSACTION_DESCENDANT_SCAN_ENTRIES:
+                    raise _fail("project_update_transaction_scan_incomplete")
                 path = Path(entry.path)
                 _within(path, root)
                 try:
@@ -5142,6 +6687,84 @@ class ProjectUpdateTransaction:
                         files[relative] = (size, digest)
                 else:
                     raise _fail("project_update_transaction_path_unsafe")
+
+        walk(root)
+        return files, directories
+
+    @staticmethod
+    def _cleanup_descendant_snapshot(
+        root: Path,
+        *,
+        exclude: set[str],
+    ) -> tuple[
+        dict[str, _CleanupFileSnapshot],
+        dict[str, _CleanupDirectorySnapshot],
+    ]:
+        """Capture the transient identities later bound to exact deletion."""
+
+        files: dict[str, _CleanupFileSnapshot] = {}
+        directories: dict[str, _CleanupDirectorySnapshot] = {}
+        seen = 0
+
+        def walk(directory: Path) -> None:
+            nonlocal seen
+            directory_before = _safe_directory(directory, within=root)
+            directory_identity = _cleanup_directory_identity(
+                directory_before
+            )
+            try:
+                entries = list(os.scandir(directory))
+            except OSError:
+                raise _fail("project_update_transaction_path_unsafe") from None
+            for entry in entries:
+                seen += 1
+                if seen > MAX_TRANSACTION_DESCENDANT_SCAN_ENTRIES:
+                    raise _fail("project_update_transaction_scan_incomplete")
+                path = Path(entry.path)
+                _within(path, root)
+                try:
+                    info = path.lstat()
+                except OSError:
+                    raise _fail("project_update_transaction_path_unsafe") from None
+                if stat.S_ISLNK(info.st_mode) or _is_reparse(info):
+                    raise _fail("project_update_transaction_path_unsafe")
+                relative = path.relative_to(root).as_posix()
+                if stat.S_ISDIR(info.st_mode):
+                    child_generation = _cleanup_directory_identity(info)
+                    directories[relative] = _CleanupDirectorySnapshot(
+                        device=child_generation[0],
+                        inode=child_generation[1],
+                        birthtime_ns=child_generation[2],
+                    )
+                    walk(path)
+                    after = _safe_directory(path, within=root)
+                    if (
+                        _cleanup_directory_identity(after)
+                        != child_generation
+                    ):
+                        raise _fail("project_update_transaction_path_unsafe")
+                elif stat.S_ISREG(info.st_mode) and info.st_nlink == 1:
+                    if relative not in exclude:
+                        digest, size, after = _hash_regular_with_info(
+                            path,
+                            within=root,
+                            maximum=MAX_RUNTIME_CANDIDATE_FILE_BYTES,
+                        )
+                        files[relative] = _CleanupFileSnapshot(
+                            size=size,
+                            sha256=digest,
+                            device=int(after.st_dev),
+                            inode=int(after.st_ino),
+                            mtime_ns=int(after.st_mtime_ns),
+                        )
+                else:
+                    raise _fail("project_update_transaction_path_unsafe")
+            directory_after = _safe_directory(directory, within=root)
+            if (
+                _cleanup_directory_identity(directory_after)
+                != directory_identity
+            ):
+                raise _fail("project_update_transaction_path_unsafe")
 
         walk(root)
         return files, directories
@@ -5399,11 +7022,53 @@ class ProjectUpdateTransaction:
                 != exact_candidate_absence
             ):
                 raise _fail("project_update_transaction_candidate_invalid")
+        repair_preimage_path = (
+            self._transaction_root / RUNTIME_REPAIR_PREIMAGE_NAME
+        )
+        repair_preimage_present = os.path.lexists(repair_preimage_path)
+        repair_files: set[str] = set()
+        repair_directories: set[str] = set()
+        repair_binding = intent.runtime_candidate
+        if repair_preimage_present:
+            if (
+                not runtime_intent_recorded
+                or not repair_binding.existing_runtime_repair_required
+                or repair_binding.existing_runtime_inventory_sha256 is None
+            ):
+                raise _fail("project_update_transaction_candidate_invalid")
+            (
+                repair_sha256,
+                repair_count,
+                repair_bytes,
+                repair_files,
+                repair_directories,
+            ) = _runtime_repair_preimage_inventory(
+                repair_preimage_path,
+                transaction_root=self._transaction_root,
+            )
+            if (
+                repair_sha256
+                != repair_binding.existing_runtime_inventory_sha256
+                or repair_count
+                != repair_binding.existing_runtime_inventory_count
+                or repair_bytes
+                != repair_binding.existing_runtime_inventory_bytes
+            ):
+                raise _fail("project_update_transaction_candidate_invalid")
+        elif (
+            repair_binding.existing_runtime_repair_required
+            and runtime_intent_recorded
+            and not candidate_present
+        ):
+            # Once the candidate has left the transaction, the exact old
+            # runtime must remain here until authenticated terminal cleanup.
+            raise _fail("project_update_transaction_candidate_invalid")
         reservation_backlink = self._read_reservation_backlink(intent)
         backlink = self._read_backlink(intent)
         cleanup = self._read_cleanup_plan(intent, journal)
         expected_directories = {"preimages", PRIVATE_BINDINGS_NAME}
         expected_directories.update(candidate_directories)
+        expected_directories.update(repair_directories)
         expected_files = {
             "marker.json",
             "intent.json",
@@ -5414,6 +7079,7 @@ class ProjectUpdateTransaction:
         expected_files.update(record.relative_path for record in intent.preimages)
         expected_files.update(record.relative_path for record in intent.private_bindings)
         expected_files.update(candidate_files)
+        expected_files.update(repair_files)
         if candidate_seal_present:
             expected_files.add(RUNTIME_CANDIDATE_SEAL_NAME)
         if journal_exists:
@@ -5421,7 +7087,14 @@ class ProjectUpdateTransaction:
         if backlink is not None:
             expected_files.add(SEALED_LOCK_BACKLINK_NAME)
         if cleanup is not None:
-            expected_files.add("cleanup-plan.json")
+            expected_files.add(_cleanup_plan_name_for_document(cleanup))
+            if (
+                cleanup.get("schema") == CLEANUP_PLAN_SCHEMA
+                and os.path.lexists(
+                    self._transaction_root / LEGACY_CLEANUP_PLAN_NAME
+                )
+            ):
+                expected_files.add(LEGACY_CLEANUP_PLAN_NAME)
         actual_files, actual_directories = self._descendant_names(
             self._transaction_root
         )
@@ -5543,8 +7216,8 @@ class ProjectUpdateTransaction:
     def _read_cleanup_plan(
         self, intent: ProjectUpdateIntent, journal: JournalInspection
     ) -> dict[str, Any] | None:
-        path = self._transaction_root / "cleanup-plan.json"
-        if not os.path.lexists(path):
+        path = _existing_cleanup_plan_path(self._transaction_root)
+        if path is None:
             return None
         value = _parse_document(
             _read_regular(path, within=self._transaction_root, maximum=MAX_DOCUMENT_BYTES + 1),
@@ -5958,6 +7631,7 @@ __all__ = [
     "ABSENT_COMPONENT_SHA256",
     "ALLOWED_CHECKPOINT_PHASES",
     "CHECKPOINT_CHAIN_START_SHA256",
+    "CleanupTombstoneInspection",
     "ComponentClassification",
     "ComponentExpectation",
     "DirectoryDurability",

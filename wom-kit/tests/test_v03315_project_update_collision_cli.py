@@ -1579,6 +1579,7 @@ class ProjectUpdateOperationControlProjectionTests(unittest.TestCase):
                 "run_id": journal.run_id,
                 "command": "project-version-update",
                 "exit_code": 1,
+                "result_available": True,
             },
             "cli_output_artifact": {
                 "command": "project-version-update",
