@@ -57,6 +57,7 @@ class _ApprovedFile:
 class _ApprovedDirectory:
     device: int
     inode: int
+    birthtime_ns: int | None
 
 
 def _fail(code: str) -> LegacyCleanupBoundDeleteError:
@@ -129,7 +130,25 @@ def _approved_directory(expected: Mapping[str, Any]) -> _ApprovedDirectory:
     if not isinstance(expected, Mapping) or expected.get("type") != "directory":
         raise _fail("legacy_cleanup_expected_directory_invalid")
     device, inode = _approved_identity(expected)
-    return _ApprovedDirectory(device=device, inode=inode)
+    identity = expected.get("identity")
+    if not isinstance(identity, Mapping):
+        raise _fail("legacy_cleanup_expected_identity_invalid")
+    raw_birthtime_ns = identity.get("birthtime_ns")
+    if raw_birthtime_ns is None:
+        birthtime_ns = None
+    elif (
+        isinstance(raw_birthtime_ns, bool)
+        or not isinstance(raw_birthtime_ns, int)
+        or raw_birthtime_ns <= 0
+    ):
+        raise _fail("legacy_cleanup_expected_directory_birthtime_invalid")
+    else:
+        birthtime_ns = int(raw_birthtime_ns)
+    return _ApprovedDirectory(
+        device=device,
+        inode=inode,
+        birthtime_ns=birthtime_ns,
+    )
 
 
 def _validated_paths(
@@ -208,6 +227,12 @@ def _windows_extended_path(path: Path) -> str:
     return "\\\\?\\" + value
 
 
+def _windows_volume_serial_from_stat_device(device: int) -> int:
+    """Return the Win32 DWORD volume serial encoded in CPython ``st_dev``."""
+
+    return int(device) & 0xFFFF_FFFF
+
+
 @dataclass(frozen=True)
 class _WindowsInformation:
     attributes: int
@@ -216,6 +241,7 @@ class _WindowsInformation:
     link_count: int
     size: int
     mtime_ns: int
+    birthtime_ns: int
 
 
 class _Win32Api:
@@ -321,16 +347,20 @@ class _Win32Api:
         raw = self.ByHandleFileInformation()
         if not self.get_information(handle, ctypes.byref(raw)):
             raise _fail("legacy_cleanup_bound_win32_information_uncertain")
-        ticks = (
+        modified_ticks = (
             int(raw.ftLastWriteTime.dwHighDateTime) << 32
         ) | int(raw.ftLastWriteTime.dwLowDateTime)
+        creation_ticks = (
+            int(raw.ftCreationTime.dwHighDateTime) << 32
+        ) | int(raw.ftCreationTime.dwLowDateTime)
         return _WindowsInformation(
             attributes=int(raw.dwFileAttributes),
             volume_serial=int(raw.dwVolumeSerialNumber),
             file_index=(int(raw.nFileIndexHigh) << 32) | int(raw.nFileIndexLow),
             link_count=int(raw.nNumberOfLinks),
             size=(int(raw.nFileSizeHigh) << 32) | int(raw.nFileSizeLow),
-            mtime_ns=(ticks - self.WINDOWS_EPOCH_TICKS) * 100,
+            mtime_ns=(modified_ticks - self.WINDOWS_EPOCH_TICKS) * 100,
+            birthtime_ns=(creation_ticks - self.WINDOWS_EPOCH_TICKS) * 100,
         )
 
     def set_disposition(self, handle: int, delete: bool) -> None:
@@ -466,6 +496,8 @@ def _validate_windows_file_information(
     if (
         information.attributes
         & (api.FILE_ATTRIBUTE_DIRECTORY | api.FILE_ATTRIBUTE_REPARSE_POINT)
+        or information.volume_serial
+        != _windows_volume_serial_from_stat_device(approved.device)
         or information.file_index != approved.inode
         or information.file_index == 0
         or information.link_count != expected_link_count
@@ -620,8 +652,14 @@ def _validate_windows_directory_information(
     if (
         not information.attributes & api.FILE_ATTRIBUTE_DIRECTORY
         or information.attributes & api.FILE_ATTRIBUTE_REPARSE_POINT
+        or information.volume_serial
+        != _windows_volume_serial_from_stat_device(approved.device)
         or information.file_index != approved.inode
         or information.file_index == 0
+        or (
+            approved.birthtime_ns is not None
+            and information.birthtime_ns != approved.birthtime_ns
+        )
         or (
             expected_link_count is not None
             and information.link_count != expected_link_count
@@ -642,6 +680,11 @@ def _validate_windows_named_directory(
         _is_reparse(named)
         or not stat.S_ISDIR(named.st_mode)
         or _identity(named) != (approved.device, approved.inode)
+        or (
+            approved.birthtime_ns is not None
+            and getattr(named, "st_birthtime_ns", None)
+            != approved.birthtime_ns
+        )
     ):
         raise _fail("legacy_cleanup_bound_win32_directory_name_drift")
 

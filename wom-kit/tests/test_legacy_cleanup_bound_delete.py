@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import os
 import tempfile
+import types
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -37,9 +39,16 @@ class LegacyCleanupBoundDeleteTests(unittest.TestCase):
 
     def directory_record(self, path: Path) -> dict[str, object]:
         information = os.lstat(path)
+        raw_birthtime_ns = getattr(information, "st_birthtime_ns", None)
+        birthtime_ns = (
+            int(raw_birthtime_ns)
+            if type(raw_birthtime_ns) is int and raw_birthtime_ns > 0
+            else None
+        )
         return {
             "type": "directory",
             "identity": {
+                "birthtime_ns": birthtime_ns,
                 "device": int(information.st_dev),
                 "inode": int(information.st_ino),
             },
@@ -221,6 +230,33 @@ class LegacyCleanupBoundDeleteTests(unittest.TestCase):
         self.assertNotIn(str(target), str(captured.exception))
 
     @unittest.skipUnless(os.name == "nt", "Windows retained-handle behavior")
+    def test_windows_handle_identity_matches_name_volume_and_birthtime(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = self.make_root(temporary)
+            target = root / "approved-empty"
+            target.mkdir()
+            named = os.lstat(target)
+            handle = bound_delete._windows_open(target, directory=True)
+            try:
+                held = bound_delete._windows_api().query(handle)
+            finally:
+                bound_delete._windows_close(handle)
+
+            self.assertEqual(held.file_index, int(named.st_ino))
+            self.assertEqual(
+                held.volume_serial,
+                bound_delete._windows_volume_serial_from_stat_device(
+                    int(named.st_dev)
+                ),
+            )
+            self.assertEqual(
+                held.birthtime_ns,
+                int(named.st_birthtime_ns),
+            )
+
+    @unittest.skipUnless(os.name == "nt", "Windows retained-handle behavior")
     def test_windows_alternate_data_stream_blocks_file_and_directory(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = self.make_root(temporary)
@@ -332,6 +368,102 @@ class LegacyCleanupBoundDeleteTests(unittest.TestCase):
                 "injected_post_disposition_failure",
             )
             self.assertEqual(target.read_bytes(), b"approved")
+
+    @unittest.skipUnless(os.name == "nt", "Windows retained-handle behavior")
+    def test_windows_directory_handle_binds_creation_time_before_delete(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = self.make_root(temporary)
+            target = root / "approved-empty"
+            target.mkdir()
+            record = self.directory_record(target)
+            identity = record["identity"]
+            assert isinstance(identity, dict)
+            approved_birthtime_ns = identity["birthtime_ns"]
+            self.assertIs(type(approved_birthtime_ns), int)
+            assert isinstance(approved_birthtime_ns, int)
+
+            replacement = root / "foreign-empty"
+            replacement.mkdir()
+            replacement_inode = int(replacement.stat().st_ino)
+            preserved = root / "approved-preserved"
+            api = bound_delete._windows_api()
+            real_open = bound_delete._windows_open
+            real_lstat = os.lstat
+            real_query = api.query
+            swapped = False
+
+            def swap_before_handle_open(path: Path, *, directory: bool) -> int:
+                nonlocal swapped
+                if (
+                    directory
+                    and not swapped
+                    and os.path.samefile(path, target)
+                ):
+                    target.rename(preserved)
+                    replacement.rename(target)
+                    swapped = True
+                return real_open(path, directory=directory)
+
+            def reused_identity_named_stat(path: object):
+                information = real_lstat(path)
+                if swapped and os.path.samefile(path, target):
+                    return types.SimpleNamespace(
+                        st_mode=information.st_mode,
+                        st_dev=identity["device"],
+                        st_ino=identity["inode"],
+                        st_birthtime_ns=approved_birthtime_ns,
+                        st_file_attributes=getattr(
+                            information, "st_file_attributes", 0
+                        ),
+                    )
+                return information
+
+            def reused_inode_handle_information(handle: int):
+                information = real_query(handle)
+                if swapped and information.file_index == replacement_inode:
+                    return dataclasses.replace(
+                        information,
+                        file_index=identity["inode"],
+                        birthtime_ns=approved_birthtime_ns + 100,
+                    )
+                return information
+
+            with patch.object(
+                bound_delete,
+                "_windows_open",
+                side_effect=swap_before_handle_open,
+            ), patch.object(
+                bound_delete.os,
+                "lstat",
+                side_effect=reused_identity_named_stat,
+            ), patch.object(
+                api,
+                "query",
+                side_effect=reused_inode_handle_information,
+            ), patch.object(
+                api,
+                "set_disposition",
+                side_effect=AssertionError(
+                    "generation-mismatched handle reached delete disposition"
+                ),
+            ) as disposition, self.assertRaises(
+                LegacyCleanupBoundDeleteError
+            ) as captured:
+                delete_exact_approved_empty_directory(root, target, record)
+
+            self.assertTrue(
+                swapped,
+                f"{captured.exception.code}: {captured.exception.__cause__!r}",
+            )
+            self.assertEqual(
+                captured.exception.code,
+                "legacy_cleanup_bound_win32_directory_state_drift",
+            )
+            disposition.assert_not_called()
+            self.assertTrue(target.is_dir())
+            self.assertTrue(preserved.is_dir())
 
     @unittest.skipIf(os.name == "nt", "POSIX apply refusal")
     def test_posix_file_apply_refuses_before_any_unlink(self) -> None:

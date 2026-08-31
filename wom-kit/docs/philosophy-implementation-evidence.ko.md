@@ -1,7 +1,7 @@
 # WOM 설계 철학 구현 근거
 
-상태: v0.4.15에서 다시 검토한 v0.3.252 공개 추적성 점검
-날짜: 2026-08-30
+상태: v0.4.16에서 다시 검토한 v0.3.252 공개 추적성 점검
+날짜: 2026-08-31
 
 ## 목적
 
@@ -36,19 +36,19 @@ WOM이 아직 정직하게 증명할 수 없는 경계를 연결합니다.
 | AI 생성 문서와 대화에서 나온 작업은 증발하면 안 됩니다. | `ai-artifact-inventory`가 로컬 AI 산출물을 분류하고, 작업기록이 미완료 작업을 남기며, `session-handoff-checkpoint`는 지속 기록 근거가 없거나 낡으면 깨끗한 인수인계를 막습니다. | AI 산출물 목록과 세션 인수인계 CLI 테스트. | 도구는 채팅을 자동 수집하거나 어떤 생성 문서를 보존해야 하는지 대신 결정하지 않습니다. 사람과 AI의 검토가 계속 필요합니다. |
 | AI 운영은 필요한 것부터 단계적으로 읽고 사람에게 쉬운 말로 설명해야 합니다. | 배포되는 Agent Skill은 짧은 시작 문서, 목표별 참고문서, 기계 판독형 기능 목록, 사람말 응답 계약과 용어 안내를 제공합니다. 승인 화면에서는 개수·해시·대상 상태를 WOM이 검증하고, 사람은 쉽게 설명된 작업을 지금 할지만 결정합니다. 안전한 로컬 전용 단서는 영수증이나 공개 출력에 남기지 않으면서 대상을 알아보게 돕습니다. | runtime skill 패키지 검사, 기능표 테스트, 승인 미리보기 개인정보 테스트, 문서 계약 테스트. | 쉬운 설명과 좋은 판단은 AI 지침 수준의 동작입니다. WOM은 모든 모델 답변의 품질을 결정론적으로 검사할 수 없으며, 안전하지 않아 생략한 단서를 비공개 맥락 노출로 대신해서는 안 됩니다. |
 
-v0.4.15 update 복구 근거의 범위는 live `version-update.lock` 또는 원본
-transaction directory가 남아 있는 exact lockless unlock tail까지입니다. 최초
-미지원 경계는 `completed` 뒤 원본 transaction directory의 terminal cleanup
-tombstone rename이 성공한 시점입니다. tombstone이나 cleanup proof는 인증된
-outcome 또는 cleanup authority가 아닙니다. WOM은
-`terminal_cleanup_outcome_unknown`을 nonzero로 보고할 뿐
-success·failure·cancellation을 추론하거나 자동 retry·삭제하지 않습니다. 완전한
-authenticated terminal handoff와 terminal cleanup outcome reconstruction은
-v0.4.16 후속 작업입니다.
+v0.4.16은 cleanup 전에 인증된 update 사실을 비공개 durable terminal handoff로
+보존하고, 나중에 결속된 동일 output을 재사용하기 전 정확한 succeeded claim과
+postimage를 다시 인증합니다. 불변 journal과 `active` -> `display-pending` ->
+`consumed` handoff는 cleanup·독립 resource close·durable output 사실을 구분합니다.
+consumed는 이력이고 acknowledgement는 사람이나 AI가 실제로 봤다는 증거가
+아닙니다. exact하고 완전한 legacy residue는 복구할 수 있지만 cleanup proof만으로
+과거 success를 주장하거나 cleanup·handoff·automatic retry 권한을 만들 수 없습니다.
+따라서 보고 단계가 실패해도 durable 근거를 잃지 않으면서 모든 후속 control
+단계가 성공했다고 과장하지 않습니다.
 
 ## 현재 공학적 결론
 
-공개 v0.4.15 구현에는 메멘토 문제를 다루는 구체적이고 회귀 테스트된 장치가
+공개 v0.4.16 구현에는 메멘토 문제를 다루는 구체적이고 회귀 테스트된 장치가
 있습니다. 첫 읽기 재구성, 아티팩트 우선 추론, 검토된 수정과 복구, 지속되는
 세션 인수인계, 정직한 로컬 백업 근거는 단순한 로드맵 문구가 아닙니다.
 

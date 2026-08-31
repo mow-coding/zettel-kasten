@@ -92,6 +92,7 @@ _RUNTIME_CANDIDATE_KEYS = frozenset(
         "inventory_count",
         "inventory_bytes",
         "receipt_sha256",
+        "runtime_receipt_schema",
         "wheel_file_name",
         "wheel_sha256",
         "supply_lock_sha256",
@@ -100,6 +101,12 @@ _RUNTIME_CANDIDATE_KEYS = frozenset(
         "python_version",
         "verification",
         "existing_runtime_reusable",
+        "existing_runtime_repair_required",
+        "existing_runtime_preimage_sha256",
+        "existing_runtime_preimage_count",
+        "existing_runtime_preimage_bytes",
+        "repair_preimage_exactly_bound",
+        "will_preserve_during_active_transaction",
         "complete_runtime_image",
         "network_complete",
         "toolchain_complete",
@@ -117,6 +124,15 @@ _RUNTIME_CANDIDATE_KEYS = frozenset(
         "absolute_paths_echoed",
     }
 )
+_LEGACY_RUNTIME_CANDIDATE_KEYS = _RUNTIME_CANDIDATE_KEYS - {
+    "runtime_receipt_schema",
+    "existing_runtime_repair_required",
+    "existing_runtime_preimage_sha256",
+    "existing_runtime_preimage_count",
+    "existing_runtime_preimage_bytes",
+    "repair_preimage_exactly_bound",
+    "will_preserve_during_active_transaction",
+}
 _RUNTIME_CANDIDATE_VERIFICATION_KEYS = frozenset(
     {
         "wheel_sha256",
@@ -1295,6 +1311,12 @@ def project_version_update_approval_binding(
     runtime_candidate = _plain_mapping(
         preparation.get("runtime_candidate")
     )
+    legacy_runtime_candidate = (
+        set(runtime_candidate) == _LEGACY_RUNTIME_CANDIDATE_KEYS
+    )
+    current_runtime_candidate = (
+        set(runtime_candidate) == _RUNTIME_CANDIDATE_KEYS
+    )
     static_receipt = _plain_mapping(preparation.get("static_receipt"))
     write_boundary = _plain_mapping(plan.get("write_boundary"))
     target_tag = target_plan.get("tag")
@@ -1410,7 +1432,12 @@ def project_version_update_approval_binding(
         or transaction.get("directory_fsync_required") is not True
         or set(static_receipt) != _PROJECT_UPDATE_STATIC_RECEIPT_KEYS
         or static_receipt.get("schema")
-        != "wom-kit/project-version-update-receipt/v0.3"
+        != (
+            "wom-kit/project-version-update-receipt/v0.4"
+            if runtime_candidate.get("existing_runtime_repair_required")
+            is True
+            else "wom-kit/project-version-update-receipt/v0.3"
+        )
         or static_receipt.get("logical_path")
         != (
             ".zettel-kasten/receipts/version-updates/"
@@ -1589,10 +1616,23 @@ def project_version_update_approval_binding(
             is not True
             or project_runtime_supply.get("index_resolution") is not False
             or project_runtime_supply.get("download_urls_echoed") is not False
-            or set(runtime_candidate) != _RUNTIME_CANDIDATE_KEYS
+            or not (
+                legacy_runtime_candidate or current_runtime_candidate
+            )
             or runtime_candidate.get("schema")
             != "wom-kit/project-runtime-candidate/v0.1"
             or runtime_candidate.get("status") != "sealed"
+            or (
+                current_runtime_candidate
+                and runtime_candidate.get("runtime_receipt_schema")
+                != (
+                    "wom-kit/project-runtime-receipt/v0.2"
+                    if runtime_candidate.get(
+                        "existing_runtime_repair_required"
+                    ) is True
+                    else "wom-kit/project-runtime-receipt/v0.1"
+                )
+            )
             or runtime_candidate.get("target_tag") != target_tag
             or runtime_candidate.get("target_version") != target_version
             or runtime_candidate.get("target_commit") != head_before
@@ -1651,6 +1691,87 @@ def project_version_update_approval_binding(
             != _RUNTIME_CANDIDATE_VERIFICATION_KEYS
             or any(value is not True for value in candidate_verification.values())
             or type(runtime_candidate.get("existing_runtime_reusable")) is not bool
+            or (
+                current_runtime_candidate
+                and (
+                    type(
+                        runtime_candidate.get(
+                            "existing_runtime_repair_required"
+                        )
+                    ) is not bool
+                    or type(
+                        runtime_candidate.get(
+                            "existing_runtime_preimage_count"
+                        )
+                    ) is not int
+                    or runtime_candidate["existing_runtime_preimage_count"] < 0
+                    or type(
+                        runtime_candidate.get(
+                            "existing_runtime_preimage_bytes"
+                        )
+                    ) is not int
+                    or runtime_candidate["existing_runtime_preimage_bytes"] < 0
+                    or type(
+                        runtime_candidate.get(
+                            "repair_preimage_exactly_bound"
+                        )
+                    ) is not bool
+                    or type(
+                        runtime_candidate.get(
+                            "will_preserve_during_active_transaction"
+                        )
+                    ) is not bool
+                    or (
+                        runtime_candidate[
+                            "existing_runtime_repair_required"
+                        ]
+                        and (
+                            runtime_candidate["existing_runtime_reusable"]
+                            or re.fullmatch(
+                                r"sha256:[0-9a-f]{64}",
+                                str(
+                                    runtime_candidate.get(
+                                        "existing_runtime_preimage_sha256"
+                                    )
+                                    or ""
+                                ),
+                            )
+                            is None
+                            or runtime_candidate[
+                                "repair_preimage_exactly_bound"
+                            ] is not True
+                            or runtime_candidate[
+                                "will_preserve_during_active_transaction"
+                            ] is not True
+                        )
+                    )
+                    or (
+                        not runtime_candidate[
+                            "existing_runtime_repair_required"
+                        ]
+                        and (
+                            runtime_candidate.get(
+                                "existing_runtime_preimage_sha256"
+                            )
+                            is not None
+                            or runtime_candidate[
+                                "existing_runtime_preimage_count"
+                            ]
+                            != 0
+                            or runtime_candidate[
+                                "existing_runtime_preimage_bytes"
+                            ]
+                            != 0
+                            or runtime_candidate[
+                                "repair_preimage_exactly_bound"
+                            ] is not False
+                            or runtime_candidate[
+                                "will_preserve_during_active_transaction"
+                            ] is not False
+                        )
+                    )
+                )
+            )
             or runtime_candidate.get("complete_runtime_image") is not True
             or runtime_candidate.get("network_complete") is not True
             or runtime_candidate.get("toolchain_complete") is not True

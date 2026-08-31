@@ -10,45 +10,50 @@ It is not a website, SaaS app, dashboard, or visual note-taking product. The int
 
 ## Install The Command-Line Tool
 
-The exact v0.4.15 GitHub Release, when present, uses the self-contained wheel
+The exact v0.4.16 GitHub Release, when present, uses the self-contained wheel
 below. Confirm that the release exists and lists the wheel before installing
 it. The versioned URL alone is not proof that the asset is available.
 
 ```powershell
 $womBootstrapNonce = [guid]::NewGuid().ToString("N")
-$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0415-$womBootstrapNonce"
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0416-$womBootstrapNonce"
 if (Test-Path -LiteralPath $womBootstrapRoot) {
   throw "WOM bootstrap path must be new."
 }
 py -3.12 -m venv $womBootstrapRoot
 $womBootstrapPython = (Get-Item -LiteralPath (Join-Path $womBootstrapRoot "Scripts\python.exe")).FullName
-& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.15/wom_kit-0.4.15-py3-none-any.whl"
+& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.16/wom_kit-0.4.16-py3-none-any.whl"
 & "$womBootstrapRoot\Scripts\archive.exe" --version
 ```
 
-Run the version check in a new process and require exactly `archive 0.4.15`.
+Run the version check in a new process and require exactly `archive 0.4.16`.
 The dedicated external CPython 3.12 environment and exact real
 `python.exe -m pip` path retain the wheel SHA-256 required by the updater. A
 user-scoped `uv tool` environment whose installed metadata omits that archive
 hash is not project-updater supply evidence. Installing the bootstrap does not
 silently update a project-local WOM-kit source mirror or its pin.
 
-v0.4.15 makes a blocked project update resumable without caller-supplied target,
+v0.4.16 preserves authenticated update success in a private durable terminal
+handoff before cleanup, then reports cleanup, service close, Git-runner close,
+durable output handoff, and attention state separately. One immutable terminal
+journal and the `active` -> `display-pending` -> `consumed` transition reuse the
+exact bound output for identical at-least-once display without rerunning the
+writer. Consumed state is history, and acknowledgement does not prove a person
+or model saw stdout. A complete legacy cleanup tombstone is recoverable only
+after exact validation; proof-only state attributes no past success, while
+partial or malformed residue remains fail-closed. New approved or unbound
+resume work receives a project-scoped output automatically when one is omitted.
+Canonical `python -m wom_kit.archive_cli` execution now binds
+all core modules to receipt bytes with content-free diagnostics. The exact
+create-only feedback lane also covers runtime mismatch, product vocabulary no
+longer trips secret detection by wording alone, and pre-write caller-input/body
+safety reads are explicit. Publishing or installing the wheel changes no client
+archive or project pin; a client separately chooses a reviewed project update.
+
+v0.4.15 made a blocked project update resumable without caller-supplied target,
 transaction, reviewer, approval, or file identifiers while a live
-`version-update.lock` or the exact lockless unlock tail with its original
-transaction directory remains. WOM restores the exact context, requires one
-checkpoint-valid claim, and opens no second native decision. The first
-unsupported boundary is after `completed`, once the original transaction
-directory has been successfully renamed to a terminal cleanup tombstone. A
-tombstone or cleanup proof is not authenticated outcome or cleanup authority:
-WOM reports `terminal_cleanup_outcome_unknown` with a nonzero exit and does not
-infer success, failure, or cancellation, automatically retry, or delete that
-evidence. Full authenticated terminal handoff and terminal cleanup outcome
-reconstruction remain a v0.4.16 follow-up. The update lock continues to block
-ordinary draft and archive writers until all runtime parts converge. Its only
-incident-reporting exception is create-only operator feedback body preservation;
-revision, metadata and delivery changes, and every other writer remain blocked
-without changing the update lock.
+`version-update.lock` or exact lockless unlock tail remained. Its terminal
+cleanup and delivery boundary is completed by v0.4.16.
 
 v0.4.3 adds `ExactOperationManifest v1` and uses it for bounded multi-item
 execution, same-claim resume, independent verification, and field-scoped
@@ -519,9 +524,12 @@ sidecars, and invalid headers before SQLite opens. With a fresh `--output`,
 `project-version-update`, `index`, and `index-health` print an opaque
 `operation_ref`; a later CLI process can use read-only status, a bounded wait,
 or recovery guidance. Result completion requires the bound output digest and
-embedded operation evidence. Cancel and resume are explicitly unsupported;
-there is no daemon, queue, background launcher, MCP control, force kill, or
-lock deletion. See [`docs/operation-control.md`](docs/operation-control.md) and
+embedded operation evidence. Generic `operation-control` cancel and resume are
+explicitly unsupported; the later authenticated
+`project-version-update --resume` route is a command-specific exception, not a
+generic retry surface. There is no daemon, queue, background launcher, MCP
+control, force kill, or lock deletion. See
+[`docs/operation-control.md`](docs/operation-control.md) and
 [`docs/releases/v0.3.314.md`](docs/releases/v0.3.314.md). Local benchmarks and
 tests do not prove merge, tag, Release, wheel, fresh install, real-archive use,
 or human acceptance.

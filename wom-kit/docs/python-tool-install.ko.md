@@ -1,6 +1,6 @@
 # WOM-kit Python 도구 설치
 
-상태: v0.4.15 조건부 GitHub wheel 계약; 정확한 pip project updater 부트스트랩과 인증된 중단 복구
+상태: v0.4.16 조건부 GitHub wheel 계약; 정확한 pip 부트스트랩과 durable 인증 update 결과 전달
 
 WOM-kit은 명령줄 도구입니다. 일반 앱 프로젝트의 Python 의존성과 섞지 말고
 별도의 격리된 Python 환경에 설치하는 것이 좋습니다.
@@ -31,14 +31,14 @@ wheel을 설치하고 그 환경의 `Scripts\archive.exe`를 정확한 경로로
 실행기는 바뀌지 않습니다. 이 경계는 WOM 명령의 프로젝트 런타임 격리이며,
 Windows 사용자 권한이나 WOM 밖의 프로그램까지 격리한다는 뜻은 아닙니다.
 
-아래 v0.4.15 URL은 조건부 계약이며 공개 자산이 실제로 존재한다는 증거가
+아래 v0.4.16 URL은 조건부 계약이며 공개 자산이 실제로 존재한다는 증거가
 아닙니다. 정확히 일치하는 GitHub Release가 존재하고 검증된 wheel을 자산으로
 나열한 뒤에만 사용하세요. 소스 상태와 릴리스 증거의 구분은
-[v0.4.15 릴리스 노트](releases/v0.4.15.md)를 보세요.
+[v0.4.16 릴리스 노트](releases/v0.4.16.md)를 보세요.
 
-설치된 이전 runtime에는 v0.4.15의 인증된 project update resume와 create-only
-긴급 feedback 보존이 없을 수 있습니다. 저장소 파일만 업데이트해도 설치된
-wheel은 바뀌지 않습니다. 검증된 v0.4.15 자산이 실제로 생긴 뒤 그 정확한
+설치된 이전 runtime에는 v0.4.16의 인증된 terminal result delivery, 정확한
+`python -m` binding, runtime-mismatch feedback lane이 없을 수 있습니다. 저장소
+파일만 업데이트해도 설치된 wheel은 바뀌지 않습니다. 검증된 v0.4.16 자산이 실제로 생긴 뒤 그 정확한
 wheel을 설치하고 새 프로세스를 시작하세요.
 
 ## 권장 프로젝트 부트스트랩
@@ -50,17 +50,17 @@ wheel을 설치하고 새 프로세스를 시작하세요.
 
 ```powershell
 $womBootstrapNonce = [guid]::NewGuid().ToString("N")
-$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0415-$womBootstrapNonce"
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0416-$womBootstrapNonce"
 if (Test-Path -LiteralPath $womBootstrapRoot) {
   throw "WOM bootstrap path must be new."
 }
 py -3.12 -m venv $womBootstrapRoot
 $womBootstrapPython = (Get-Item -LiteralPath (Join-Path $womBootstrapRoot "Scripts\python.exe")).FullName
-& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.15/wom_kit-0.4.15-py3-none-any.whl"
+& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.16/wom_kit-0.4.16-py3-none-any.whl"
 & "$womBootstrapRoot\Scripts\archive.exe" --version
 ```
 
-새 프로세스가 정확히 `archive 0.4.15`를 보고하면 그 명시적 부트스트랩으로
+새 프로세스가 정확히 `archive 0.4.16`을 보고하면 그 명시적 부트스트랩으로
 `project-version-update`를 실행합니다. 승인 성공 뒤 프로젝트 런타임을
 검증하고 해당 launcher를 사용합니다.
 
@@ -110,9 +110,9 @@ pin을 손으로 고치지 마세요. [Project Version Update](project-version-u
 다른 외부 가상환경을 사용합니다.
 
 ```powershell
-$womToolRoot = Join-Path $env:LOCALAPPDATA "WOM\tool-v0415"
+$womToolRoot = Join-Path $env:LOCALAPPDATA "WOM\tool-v0416"
 py -3.12 -m venv $womToolRoot
-& "$womToolRoot\Scripts\python.exe" -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.15/wom_kit-0.4.15-py3-none-any.whl"
+& "$womToolRoot\Scripts\python.exe" -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.16/wom_kit-0.4.16-py3-none-any.whl"
 & "$womToolRoot\Scripts\archive.exe" --version
 ```
 
@@ -201,14 +201,21 @@ cancel과 resume은 계속 지원하지 않습니다. v0.4.15는 명령 전용
 checkpoint-valid한 claim 하나만 다시 확인합니다. status나 resume도 update 완료
 뒤 새 project launcher 프로세스의 `archive version` 확인을 대신하지 않습니다.
 
-v0.4.15 복구 범위는 live `version-update.lock` 또는 원본 transaction
-directory가 남아 있는 exact lockless unlock tail까지입니다. 최초 미지원 경계는
-`completed` 뒤 원본 transaction directory의 terminal cleanup tombstone rename이
-성공한 시점입니다. tombstone이나 cleanup proof는 인증된 outcome 또는 cleanup
-authority가 아닙니다. WOM은 `terminal_cleanup_outcome_unknown`을 nonzero로
-보고할 뿐 success·failure·cancellation을 추론하거나 자동 retry·삭제하지
-않습니다. 완전한 authenticated terminal handoff와 terminal cleanup outcome
-reconstruction은 v0.4.16 후속 작업입니다.
+v0.4.16은 cleanup 전에 인증된 결과를 보존하고 비공개 project-scoped output 하나와
+불변 terminal journal 기록 하나에 결속합니다. terminal handoff가 이미 pending이면
+결속된 output을 보존하고 새 `--output` 없이 identifier 없는
+`project-version-update --resume`을 실행합니다. 대체 output은 거부됩니다. WOM은
+같은 handoff를 `active`, `display-pending`, hash 이름의 `consumed` 순서로 옮깁니다.
+중단 위치에 따라 동일 결과가 다시 표시될 수 있지만 display나 resume이 domain
+writer를 다시 실행하지 않습니다. consumed는 이력이며 acknowledgement는 사람이나
+AI가 stdout을 실제로 봤다는 증거가 아닙니다.
+
+완전한 legacy cleanup tombstone은 전체 내용·terminal checkpoint·succeeded claim·
+현재 postimage·legacy cleanup authority를 exact 검증한 뒤에만 resume합니다.
+proof-only 상태는 `no_resumable_project_update`로 끝나고 과거 성공을 주장하지
+않으며, 새 update에는 새 preview와 승인이 필요합니다. 일부·malformed·mixed·변경
+중·unsafe residue는 `terminal_cleanup_outcome_unknown`으로 남습니다. cleanup proof
+만으로 success·cleanup·handoff 생성·retry 권한을 얻지 못합니다.
 
 결과에는 `external_writer_quiescence_required: true`,
 `external_writer_quiescence_affirmed: true`,

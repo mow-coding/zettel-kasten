@@ -113,11 +113,38 @@ class PublicPrivacyHygieneTests(unittest.TestCase):
             ("AK" + "IA" + "D7F2H9J4L6N8P3R5", "PRIV006"),
             ("AWS_SECRET_ACCESS_KEY=" + ("E" * 40), "PRIV007"),
             ('{"aws_' + 'secret_access_key":"' + ("F" * 40) + '"}', "PRIV007"),
+            ("".join(("AI", "za", "G" * 35)), "PRIV021"),
+            ("".join(("AI", "za", "G" * 34, "-")), "PRIV021"),
+            ("".join(("AI", "za", "G" * 34, "_")), "PRIV021"),
         ]
         for text, code in examples:
             with self.subTest(code=code):
                 problems = check_public_privacy.check_text_for_privacy(path="docs/example.md", text=text)
                 self.assert_problem_code(problems, code)
+
+    def test_google_api_key_shape_in_test_source_fails_without_echoing_value(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repo_root = Path(temp_dir)
+            self.init_repo(repo_root)
+            tests = repo_root / "tests"
+            tests.mkdir()
+            candidate = "".join(("AI", "za", "H" * 35))
+            fixture = tests / "test_example.py"
+            fixture.write_text('API_KEY = "' + candidate + '"\n', encoding="utf-8")
+            subprocess.run(
+                ["git", "add", fixture.relative_to(repo_root).as_posix()],
+                cwd=repo_root,
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+
+            problems = check_public_privacy.check_public_privacy(repo_root)
+
+            self.assert_problem_code(problems, "PRIV021")
+            formatted = "\n".join(problem.format() for problem in problems)
+            self.assertNotIn(candidate, formatted)
+            self.assertNotIn(candidate[-12:], formatted)
 
     def test_placeholder_token_examples_are_allowed(self) -> None:
         examples = [

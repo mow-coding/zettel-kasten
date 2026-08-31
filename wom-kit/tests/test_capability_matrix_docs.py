@@ -9,7 +9,7 @@ from wom_kit import __version__
 
 KIT_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = KIT_ROOT.parent
-EXPECTED_CURRENT_VERSION = "0.4.15"
+EXPECTED_CURRENT_VERSION = "0.4.16"
 EXPECTED_CURRENT_TAG = f"v{EXPECTED_CURRENT_VERSION}"
 CURRENT_VERSION = f"v{__version__}"
 CURRENT_RELEASE_NOTE = f"{EXPECTED_CURRENT_TAG}.md"
@@ -20,8 +20,8 @@ CURRENT_WHEEL_URL = (
     f"wom_kit-{EXPECTED_CURRENT_VERSION}-py3-none-any.whl"
 )
 CURRENT_RUNTIME_STATUS = (
-    f"Status: {CURRENT_VERSION} authenticated project-update recovery and "
-    "create-only incident reporting"
+    f"Status: {CURRENT_VERSION} authenticated terminal-result delivery and "
+    "runtime binding"
 )
 CURRENT_MATRIX_VERSION = f"Version: {CURRENT_VERSION} implementation and release scope"
 MATRIX_PATH = KIT_ROOT / "docs" / "capability-matrix.md"
@@ -1679,7 +1679,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, current_release_text)
         for phrase in (
-            "Status: v0.4.15 exact-human project update with authenticated interruption resume",
+            "Status: v0.4.16 exact-human project update with authenticated terminal-result delivery",
             "compound_exact_human_approval_binding_required",
             "ready_to_fetch_on_approve",
             "requires the same plan",
@@ -7364,7 +7364,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
                 )
                 root_line = (
                     '$womBootstrapRoot = Join-Path $env:LOCALAPPDATA '
-                    '"WOM\\bootstrap-v0415-$womBootstrapNonce"'
+                    '"WOM\\bootstrap-v0416-$womBootstrapNonce"'
                 )
                 absent_guard = "if (Test-Path -LiteralPath $womBootstrapRoot)"
                 absent_failure = 'throw "WOM bootstrap path must be new."'
@@ -7399,7 +7399,7 @@ class CapabilityMatrixDocsTests(unittest.TestCase):
                 self.assertIn("wom-kit/docs/runtime-skill-install", text)
                 self.assertNotIn(
                     '$womBootstrapRoot = Join-Path $env:LOCALAPPDATA '
-                    '"WOM\\bootstrap-v0415"',
+                    '"WOM\\bootstrap-v0416"',
                     text,
                 )
                 self.assertNotIn(

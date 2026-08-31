@@ -5,7 +5,7 @@ description: Operate, inspect, explain, and safely update a local WOM archive. U
 
 # WOM Archive
 
-The archive is durable memory; chat is temporary working memory.
+The archive is durable memory; chat is temporary.
 
 ## Start Every Session
 
@@ -33,7 +33,7 @@ prompt, fallback, progress, version-update, and long-operation recovery details.
   [foreign-sharing-and-trust.md](references/foreign-sharing-and-trust.md);
 - result interpretation:
   [safety-results-and-human-language.md](references/safety-results-and-human-language.md);
-- advanced/historical detail:
+- advanced detail:
   [operator-contract.md](references/operator-contract.md).
 
 Do not preload every reference.
@@ -57,10 +57,10 @@ Do not preload every reference.
   <archive-root> <query> --dry-run --count-total --format json`. Index zero is
   not archive-wide absence.
 - Use `python -B -m wom_kit.archive_cli source-reference-coverage-audit ...`
-  only for its stated observed population; it performs no live byte or remote
+  only for its observed population; it performs no live byte or remote
   check.
 - Treat archive-relative capture/staging paths as archive-root coordinates.
-  Use reviewed batch intake/capture for many items. Per-item convergence is not
+  Use reviewed batch intake/capture. Per-item convergence is not
   batch atomicity. Paired batch results must separately close original and derived
   requested/written-or-ready/skipped/blocked partitions. `partial`,
   `evidence_incomplete`, or `recovery_required` stops automatic continuation.
@@ -96,12 +96,12 @@ Do not preload every reference.
   Claim completion only after canonical and receipt evidence. Report blockers
   or remaining approval immediately.
 - For large mint work, `--progress` is content-free stderr liveness; stdout is
-  the final result. Never parse heartbeat as approval or completion.
+  final output. Never parse heartbeat as approval or completion.
 - Substantive repeatable tool failures use the reviewed
   `operator-feedback-compose` and `operator-feedback-body-check` route before
   lifecycle binding. Metadata alone does not prove body completeness.
 - Never expose secret values, credential-store responses, private paths, or excerpts.
-  A read-only result never authorizes calls, writes, or deletes.
+  Read-only results never authorize calls, writes, or deletes.
 - Never ask for a provider secret in chat. Use `credential-adopt` only for first
   enrollment or reviewed replacement. Check authenticated state; supply only
   public-safe task/reason sentences; WOM owns every security notice. Production
@@ -148,18 +148,25 @@ Do not preload every reference.
 
 ## Long Operations And Updates
 
-- For `project-version-update`, `index`, and `index-health`, use a fresh
-  `--output`. Preserve the early opaque `operation_ref`.
-- After caller timeout, do not start a duplicate writer. Use the exact starting
-  root and reference with `operation-control --action status --dry-run`, bounded
-  `wait`, or read-only `recovery-plan`. A wait deadline is neutral.
-- Cancel and resume are unsupported. There is no MCP control, daemon, queue,
-  background launcher, force kill, lock deletion, or automatic rollback.
-- Preview project updates first. During Windows approval, pause editors,
-  sync/backup clients, and other Git writers; require reviewer and
-  `--affirm-external-writers-quiescent`. After completion, start a new process
-  and require `archive version` import/source/pin/tag agreement. A local version
-  check does not prove remote release freshness.
+- Use fresh `--output` for `index` and `index-health`; new updater work may
+  choose one automatically. Preserve `operation_ref`.
+- After timeout, do not start a duplicate writer. Use exact-root
+  `operation-control --action status --dry-run`, bounded `wait`, or
+  `recovery-plan`; deadlines are neutral.
+- Cancel and resume are unsupported in generic `operation-control`.
+  Identifier-free `project-version-update --resume` alone reuses pending bound
+  output without `--output`; redisplay may repeat and consumed is history.
+  Exact complete tombstones may resume; proof-only needs fresh approval and
+  partial or malformed state stops.
+- Approved project-update mutation, same-version repair, and mutation-bearing
+  resume are Windows-only. On POSIX use preview or read-only inspection; every
+  mutation path must fail closed without writing.
+- No MCP control, daemon, queue, background launcher, force kill, lock deletion,
+  or automatic rollback exists.
+- Preview updates. During Windows approval, pause other Git writers and require
+  reviewer plus `--affirm-external-writers-quiescent`. After completion, a new
+  process must prove `archive version` agreement; this does not prove remote
+  release freshness.
 - If an updater returns bound collisions, keep the exact target and plan
   digest. Use CLI-only `project-version-update-collision --action inspect-all`
   once for the complete opaque set. Only an exact all-supported cache set may
@@ -171,12 +178,12 @@ Do not preload every reference.
 
 ## Finish
 
-Finish the approved goal, explain the verified state, and name only a genuinely
+Finish the approved goal, explain the verified state, and name only a
 needed next step. Separate engineering completion, human review, and real-use
 validation. Record substantial decisions, corrections, implementation, and
 design shifts. Before reset/handoff, use the receipt-backed close procedure in
 [reading-memory-and-revision.md](references/reading-memory-and-revision.md).
 
-Use plain human language first: “published note,” “source file,” “change
+Use plain language first: “published note,” “source file,” “change
 record,” “health check,” and “preview.” Use `zettel` for the general zettel-kasten concept,
 `zet` for one WOM document, and `ZET` for the shareable protocol layer.

@@ -8,6 +8,7 @@ import copy
 import base64
 import binascii
 import ctypes
+import errno
 import hashlib
 import hmac
 import fnmatch
@@ -1742,7 +1743,7 @@ FOREIGN_BLOCK_QUARANTINE_CASE_ALLOWED_KEYS = {
     "trust_state",
 }
 DRAFT_SECRET_VALUE_RE = re.compile(
-    r"(?i)(?:api[_-]?key|secret|token|password|credential|aws_secret_access_key)\s*[:=]\s*['\"]?[A-Za-z0-9_./+=:-]{12,}"
+    r"(?i)(?:api[_-]?key|secret|token|password|credential|aws_secret_access_key)['\"]?\s*[:=]\s*['\"]?[A-Za-z0-9_./+=:-]{12,}"
     r"|-----BEGIN (?:RSA |DSA |EC |OPENSSH )?PRIVATE KEY-----"
     r"|\bAKIA[0-9A-Z]{16}\b"
     r"|\bghp_[A-Za-z0-9_]{20,}\b"
@@ -1761,8 +1762,65 @@ SOURCE_FIDELITY_CREDENTIAL_SECRET_RE = re.compile(
     r"|(?:\bsk-(?:proj-)?[A-Za-z0-9_-]{20,}\b)"
     r"|(?:\b(?:sk|rk)_live_[A-Za-z0-9]{16,}\b)"
     r"|(?:-----BEGIN (?:RSA |DSA |EC |OPENSSH )?PRIVATE KEY-----)"
-    r"|(?:(?:api[_-]?key|aws[_-]?secret[_-]?access[_-]?key|secret[_-]?access[_-]?key|access[_-]?token|client[_-]?secret|password|credential|secret|token)"
-    r"\s*[:=]\s*['\"]?[A-Za-z0-9_./+=:-]{16,})"
+)
+SOURCE_FIDELITY_SENSITIVE_ASSIGNMENT_RE = re.compile(
+    r"(?i)(?:^|[^A-Za-z0-9])(?:[A-Za-z0-9]+[_-])*"
+    r"(?:api[_-]?key|aws[_-]?secret[_-]?access[_-]?key|"
+    r"secret[_-]?access[_-]?key|access[_-]?token|client[_-]?secret|"
+    r"password|credential|secret|token)['\"]?\s*[:=]\s*['\"]?"
+    r"([^\s'\"{},\]\r\n]{1,512})"
+)
+SOURCE_FIDELITY_SENSITIVE_QUOTED_ASSIGNMENT_RE = re.compile(
+    r"(?i)(?:^|[^A-Za-z0-9])(?:[A-Za-z0-9]+[_-])*"
+    r"(?:api[_-]?key|aws[_-]?secret[_-]?access[_-]?key|"
+    r"secret[_-]?access[_-]?key|access[_-]?token|client[_-]?secret|"
+    r"password|credential|secret|token)['\"]?\s*[:=]\s*"
+    r"(['\"])([^\r\n]{1,512}?)\1"
+)
+SOURCE_FIDELITY_SENSITIVE_BLOCK_ASSIGNMENT_RE = re.compile(
+    r"(?i)(?:^|[^A-Za-z0-9])(?:[A-Za-z0-9]+[_-])*"
+    r"(?:api[_-]?key|aws[_-]?secret[_-]?access[_-]?key|"
+    r"secret[_-]?access[_-]?key|access[_-]?token|client[_-]?secret|"
+    r"password|credential|secret|token)['\"]?\s*:\s*"
+    r"[|>][-+]?[ \t]*\r?\n[ \t]+([^\r\n]{1,512})"
+)
+SOURCE_FIDELITY_SENSITIVE_LINE_ASSIGNMENT_RE = re.compile(
+    r"(?i)(?:^|[^A-Za-z0-9])(?:[A-Za-z0-9]+[_-])*"
+    r"(?:api[_-]?key|aws[_-]?secret[_-]?access[_-]?key|"
+    r"secret[_-]?access[_-]?key|access[_-]?token|client[_-]?secret|"
+    r"password|credential|secret|token)['\"]?\s*[:=]\s*"
+    r"([^\r\n]{1,512})"
+)
+SOURCE_FIDELITY_AUTHORIZATION_HEADER_RE = re.compile(
+    r"(?im)^[ \t]*(?:Proxy-)?Authorization['\"]?\s*:\s*['\"]?"
+    r"([^\r\n]{1,4096})"
+)
+SOURCE_FIDELITY_JSON_AUTHORIZATION_HEADER_RE = re.compile(
+    r'(?i)"(?:Authorization|Proxy-Authorization)"\s*:\s*"'
+    r'((?:\\.|[^"\\]){1,4096})"'
+)
+SOURCE_FIDELITY_SINGLE_QUOTED_AUTHORIZATION_HEADER_RE = re.compile(
+    r"(?i)'(?:Authorization|Proxy-Authorization)'\s*:\s*'"
+    r"([^'\r\n]{1,4096})'"
+)
+SOURCE_FIDELITY_COOKIE_HEADER_RE = re.compile(
+    r"(?im)^[ \t]*(?:Cookie|Set-Cookie)['\"]?\s*:\s*['\"]?"
+    r"([^\r\n]{1,4096})"
+)
+SOURCE_FIDELITY_JSON_COOKIE_HEADER_RE = re.compile(
+    r'(?i)"(?:Cookie|Set-Cookie)"\s*:\s*"'
+    r'((?:\\.|[^"\\]){1,4096})"'
+)
+SOURCE_FIDELITY_SINGLE_QUOTED_COOKIE_HEADER_RE = re.compile(
+    r"(?i)'(?:Cookie|Set-Cookie)'\s*:\s*'([^'\r\n]{1,4096})'"
+)
+SOURCE_FIDELITY_CURL_QUOTED_HEADER_RE = re.compile(
+    r"(?i)(?:^|\s)(?:-H|--header)(?:\s+|=)(['\"])"
+    r"((?:Proxy-)?Authorization|Cookie|Set-Cookie)\s*:\s*"
+    r"([^'\"\r\n]{1,4096})\1"
+)
+SOURCE_FIDELITY_COOKIE_OCTETS_RE = re.compile(
+    r"^[A-Za-z0-9!#$%&()*+\-./:<=>?@\[\]^_`{|}~]+$"
 )
 PROMPT_BOUNDARY_TEXT_EXTENSIONS = {".md", ".markdown", ".txt"}
 PROMPT_BOUNDARY_SOFT_TEXT_LIMIT_CHARS = 1_000_000
@@ -35266,19 +35324,439 @@ def source_fidelity_ai_provenance_declared(
     )
 
 
+def _source_fidelity_placeholder_value(value: str) -> bool:
+    normalized = re.sub(r"[^A-Za-z0-9]+", "", value).upper()
+    if normalized in {
+        "APIKEY",
+        "AUTHCOOKIE",
+        "AUTHORIZATIONVALUE",
+        "BASE64",
+        "COOKIEVALUE",
+        "CREDENTIAL",
+        "DISABLED",
+        "EXAMPLE",
+        "NONE",
+        "NOTCONFIGURED",
+        "NOTSET",
+        "NULL",
+        "PASSWORD",
+        "PLACEHOLDER",
+        "REDACTED",
+        "SECRET",
+        "SESSIONTOKEN",
+        "TOKEN",
+    }:
+        return True
+    # Keep this vocabulary closed.  A startswith/endswith rule would allow a
+    # real opaque credential to hide in the unexamined middle, for example
+    # ``EXAMPLE<real value>TOKEN``.
+    placeholder_prefixes = (
+        "DUMMY",
+        "EXAMPLE",
+        "FAKE",
+        "PLACEHOLDER",
+        "REDACTED",
+        "SAMPLE",
+        "YOUR",
+    )
+    placeholder_types = (
+        "APIKEY",
+        "APITOKEN",
+        "AUTHCOOKIE",
+        "AUTHORIZATIONVALUE",
+        "CLIENTSECRET",
+        "COOKIE",
+        "COOKIEVALUE",
+        "CREDENTIAL",
+        "PASSWORD",
+        "SECRET",
+        "SESSIONTOKEN",
+        "TOKEN",
+        "VALUE",
+    )
+    return normalized in {
+        prefix + placeholder_type
+        for prefix in placeholder_prefixes
+        for placeholder_type in placeholder_types
+    }
+
+
+def _source_fidelity_plain_colon_prose(
+    match: re.Match[str],
+    candidate: str,
+) -> bool:
+    """Allow only reviewed plain-colon explanatory collocations.
+
+    Arbitrary grammatical prose cannot be distinguished safely from a
+    multiword passphrase.  Keep the fail-closed assignment rule and exempt only
+    the fixed, non-value-bearing definitions used by public product language.
+    """
+
+    raw_match = match.group(0)
+    candidate_offset = match.start(1) - match.start(0)
+    assignment_prefix = raw_match[:candidate_offset]
+    separators = list(re.finditer(r"[:=]", assignment_prefix))
+    if not separators or separators[-1].group(0) != ":":
+        return False
+    key_segment = assignment_prefix[: separators[-1].start()]
+    if "_" in key_segment or "-" in key_segment or any(
+        marker in key_segment for marker in ("'", '"', "{")
+    ):
+        return False
+    key_words = re.findall(r"[A-Za-z]+", key_segment.casefold())
+    if not key_words or key_words[-1] not in {
+        "credential",
+        "password",
+        "secret",
+        "token",
+    }:
+        return False
+    prose = " ".join(candidate.strip().casefold().split())
+    return (key_words[-1], prose) in {
+        (
+            "token",
+            "a unit of text processed by a language model.",
+        ),
+        (
+            "password",
+            "must be stored in a password manager.",
+        ),
+        (
+            "secret",
+            "information that should not be public.",
+        ),
+        (
+            "credential",
+            "proof of identity used for authentication.",
+        ),
+        (
+            "secret",
+            "should be kept private.",
+        ),
+    }
+
+
+def _source_fidelity_sensitive_assignment_contains_secret(text: str) -> bool:
+    matches: list[tuple[re.Match[str], str, bool]] = [
+        (match, match.group(2), False)
+        for match in SOURCE_FIDELITY_SENSITIVE_QUOTED_ASSIGNMENT_RE.finditer(
+            text
+        )
+    ]
+    matches.extend(
+        (match, match.group(1), False)
+        for match in SOURCE_FIDELITY_SENSITIVE_BLOCK_ASSIGNMENT_RE.finditer(
+            text
+        )
+    )
+    matches.extend(
+        (match, match.group(1), True)
+        for match in SOURCE_FIDELITY_SENSITIVE_LINE_ASSIGNMENT_RE.finditer(
+            text
+        )
+    )
+    for match, candidate, line_assignment in matches:
+        key_text = re.split(r"[:=]", match.group(0), maxsplit=1)[0]
+        key_compact = re.sub(r"[^A-Za-z0-9]+", "", key_text).upper()
+        if key_compact.endswith(
+            (
+                "COLORTOKEN",
+                "DESIGNSYSTEMTOKEN",
+                "DESIGNTOKEN",
+                "SPACINGTOKEN",
+                "TYPOGRAPHYTOKEN",
+            )
+        ):
+            continue
+        candidate = candidate.strip()
+        if line_assignment and re.fullmatch(r"[|>][-+]?", candidate):
+            # A YAML block marker is syntax; the block-value matcher above
+            # evaluates the indented value itself.
+            continue
+        if line_assignment and _source_fidelity_plain_colon_prose(
+            match,
+            candidate,
+        ):
+            continue
+        # A placeholder exemption is safe only when the complete assigned
+        # value is itself the placeholder.  Prefix-only matching such as
+        # ``example as <opaque value>`` would let an actual credential hide
+        # behind a harmless-looking first word.
+        if _source_fidelity_placeholder_value(candidate):
+            continue
+        return True
+    return False
+
+
 def _source_fidelity_request_metadata_blockers(value: Any) -> list[str]:
     """Classify unsafe caller metadata without ever reflecting its values."""
 
     blockers: list[str] = []
 
+    def authorization_value_contains_secret(raw_value: str) -> bool:
+        candidate = raw_value.strip().rstrip("'}],\"").strip()
+        if (
+            len(candidate) >= 2
+            and candidate[0] in {'\"', "'"}
+            and candidate[-1] == candidate[0]
+        ):
+            candidate = candidate[1:-1].strip()
+        else:
+            candidate = candidate.lstrip("'\"")
+        if not candidate or _source_fidelity_placeholder_value(candidate):
+            return False
+        scheme, separator, credential = candidate.partition(" ")
+        if scheme.casefold() in {
+            "apikey",
+            "basic",
+            "bearer",
+            "digest",
+            "negotiate",
+            "token",
+        }:
+            if not separator:
+                return False
+            credential = credential.strip()
+            return bool(
+                credential
+                and not _source_fidelity_placeholder_value(credential)
+            )
+        # An exact Authorization header has no ordinary descriptive payload.
+        # Keep short status/placeholder words usable, but reject a bounded
+        # non-placeholder value even when a vendor uses a custom scheme.
+        return True
+
+    def authorization_header_contains_secret(text: str) -> bool:
+        raw_only = text
+        for header in SOURCE_FIDELITY_JSON_AUTHORIZATION_HEADER_RE.finditer(
+            text
+        ):
+            try:
+                authorization_value = json.loads(f'"{header.group(1)}"')
+            except (TypeError, ValueError):
+                continue
+            if isinstance(
+                authorization_value, str
+            ) and authorization_value_contains_secret(authorization_value):
+                return True
+        for header in (
+            SOURCE_FIDELITY_SINGLE_QUOTED_AUTHORIZATION_HEADER_RE.finditer(
+                text
+            )
+        ):
+            if authorization_value_contains_secret(header.group(1)):
+                return True
+        for header in SOURCE_FIDELITY_CURL_QUOTED_HEADER_RE.finditer(text):
+            if header.group(2).casefold() in {
+                "authorization",
+                "proxy-authorization",
+            } and authorization_value_contains_secret(header.group(3)):
+                return True
+        # Do not let the generic raw-header expression reparse JSON closing
+        # syntax as if it were part of a placeholder credential.
+        raw_only = SOURCE_FIDELITY_JSON_AUTHORIZATION_HEADER_RE.sub(
+            '"Authorization":"REDACTED"', raw_only
+        )
+        for header in SOURCE_FIDELITY_AUTHORIZATION_HEADER_RE.finditer(
+            raw_only
+        ):
+            if authorization_value_contains_secret(header.group(1)):
+                return True
+        return False
+
+    def cookie_name_is_sensitive(name: str) -> bool:
+        normalized = name.strip().casefold()
+        while normalized.startswith(("__host-", "__secure-")):
+            normalized = normalized.split("-", 1)[1]
+        compact = re.sub(r"[^a-z0-9]+", "", normalized)
+        if compact in {
+            "auth",
+            "authorization",
+            "credential",
+            "csrftoken",
+            "jsessionid",
+            "jwt",
+            "phpsessid",
+            "rememberme",
+            "secret",
+            "session",
+            "sessionid",
+            "sid",
+            "token",
+            "xsrftoken",
+        }:
+            return True
+        tokens = {
+            token
+            for token in re.split(r"[^a-z0-9]+", normalized)
+            if token
+        }
+        if tokens.intersection(
+            {
+                "auth",
+                "credential",
+                "jwt",
+                "secret",
+                "session",
+                "sessionid",
+                "sid",
+                "token",
+            }
+        ):
+            return True
+        return compact.endswith(
+            (
+                "accesstoken",
+                "authtoken",
+                "csrftoken",
+                "refreshtoken",
+                "sessionid",
+                "sessid",
+                "xsrftoken",
+            )
+        )
+
+    def cookie_line_contains_secret(cookie_line: str) -> bool:
+        for raw_pair in re.split(r"[;,]", cookie_line):
+            if "=" not in raw_pair:
+                continue
+            raw_name, raw_value = raw_pair.split("=", 1)
+            name = raw_name.strip()
+            candidate = raw_value.strip().rstrip("'}],\"").strip()
+            if (
+                len(candidate) >= 2
+                and candidate[0] in {'\"', "'"}
+                and candidate[-1] == candidate[0]
+            ):
+                candidate = candidate[1:-1].strip()
+            else:
+                candidate = candidate.lstrip("'\"")
+            if not name or not candidate:
+                continue
+            if _source_fidelity_placeholder_value(candidate):
+                continue
+            if not SOURCE_FIDELITY_COOKIE_OCTETS_RE.fullmatch(candidate):
+                continue
+            sensitive_name = cookie_name_is_sensitive(name)
+            if sensitive_name:
+                return True
+            has_letter = any(char.isalpha() for char in candidate)
+            has_digit = any(char.isdigit() for char in candidate)
+            if (
+                len(candidate) >= 24
+                and has_letter
+                and has_digit
+                and (
+                    re.fullmatch(r"[A-Fa-f0-9]+", candidate)
+                    or len(candidate) >= 32
+                )
+            ):
+                return True
+        return False
+
+    def cookie_header_contains_secret(text: str) -> bool:
+        for header in SOURCE_FIDELITY_JSON_COOKIE_HEADER_RE.finditer(text):
+            try:
+                cookie_line = json.loads(f'"{header.group(1)}"')
+            except (TypeError, ValueError):
+                continue
+            if (
+                isinstance(cookie_line, str)
+                and cookie_line_contains_secret(cookie_line)
+            ):
+                return True
+        for header in SOURCE_FIDELITY_SINGLE_QUOTED_COOKIE_HEADER_RE.finditer(
+            text
+        ):
+            if cookie_line_contains_secret(header.group(1)):
+                return True
+        for header in SOURCE_FIDELITY_CURL_QUOTED_HEADER_RE.finditer(text):
+            if header.group(2).casefold() in {
+                "cookie",
+                "set-cookie",
+            } and cookie_line_contains_secret(header.group(3)):
+                return True
+        for header in SOURCE_FIDELITY_COOKIE_HEADER_RE.finditer(text):
+            if cookie_line_contains_secret(header.group(1)):
+                return True
+        return False
+
+    def header_name_kind(item: Any) -> str | None:
+        normalized = str(item).strip().casefold().replace("_", "-")
+        if normalized in {"authorization", "proxy-authorization"}:
+            return "authorization"
+        if normalized in {"cookie", "set-cookie"}:
+            return "cookie"
+        return None
+
+    def sensitive_assignment_key(item: Any) -> bool:
+        compact = re.sub(r"[^A-Za-z0-9]+", "", str(item)).upper()
+        if compact.endswith(
+            (
+                "COLORTOKEN",
+                "DESIGNSYSTEMTOKEN",
+                "DESIGNTOKEN",
+                "SPACINGTOKEN",
+                "TYPOGRAPHYTOKEN",
+            )
+        ):
+            return False
+        return compact.endswith(
+            (
+                "APIKEY",
+                "AWSSECRETACCESSKEY",
+                "SECRETACCESSKEY",
+                "ACCESSTOKEN",
+                "CLIENTSECRET",
+                "PASSWORD",
+                "CREDENTIAL",
+                "SECRET",
+                "TOKEN",
+            )
+        )
+
+    def inspect_header_binding(key: Any, child: Any) -> None:
+        if header_name_kind(key) is None:
+            return
+        if isinstance(child, (str, Path)):
+            inspect(
+                json.dumps({str(key): str(child)}, ensure_ascii=False)
+            )
+            return
+        if isinstance(child, (list, tuple, set)):
+            for nested in child:
+                inspect_header_binding(key, nested)
+
     def inspect(item: Any) -> None:
         if isinstance(item, dict):
             for key, child in item.items():
+                inspect_header_binding(key, child)
+                if isinstance(child, (str, Path)) and sensitive_assignment_key(
+                    key
+                ):
+                    inspect(
+                        json.dumps(
+                            {str(key): str(child)},
+                            ensure_ascii=False,
+                        )
+                    )
                 inspect(key)
                 inspect(child)
             return
         if isinstance(item, (list, tuple, set)):
+            if (
+                isinstance(item, (list, tuple))
+                and len(item) == 2
+                and header_name_kind(item[0]) is not None
+            ):
+                inspect_header_binding(item[0], item[1])
             for child in item:
+                if (
+                    isinstance(child, (list, tuple))
+                    and len(child) == 2
+                    and header_name_kind(child[0]) is not None
+                ):
+                    inspect_header_binding(child[0], child[1])
                 inspect(child)
             return
         if item is None or isinstance(item, (bool, int, float)):
@@ -35286,8 +35764,9 @@ def _source_fidelity_request_metadata_blockers(value: Any) -> list[str]:
         text = str(item)
         if (
             SOURCE_FIDELITY_CREDENTIAL_SECRET_RE.search(text)
-            or DRAFT_SECRET_VALUE_RE.search(text)
-            or source_intake_secret_like(text)
+            or _source_fidelity_sensitive_assignment_contains_secret(text)
+            or authorization_header_contains_secret(text)
+            or cookie_header_contains_secret(text)
         ):
             blockers.append("credential_secret_present")
         if (
@@ -35647,6 +36126,15 @@ def _source_fidelity_content_free_blocked_preview(
         "source_fidelity": None,
         "source_fidelity_plan_sha256": None,
         "source_fidelity_draft_receipt_path": None,
+        "input_privacy_check": {
+            "scope": "pre_write_caller_input_safety",
+            "performed": True,
+            "caller_supplied_input_read_for_safety": True,
+            "body_read_for_safety": True,
+            "input_values_echoed": False,
+            "blocked": True,
+            "reason_codes": unique_preserve_order(reason_codes),
+        },
         "first_read_check": {
             "contract": "wom-kit/explicit-abstract-publication/v0.1",
             "status": "blocked_private_metadata",
@@ -36485,7 +36973,10 @@ def create_draft_zettel(
 
     if zettel_body_has_forbidden_location_reference(body):
         blockers.append("Draft body appears to contain a private provider locator or local absolute path.")
-    if DRAFT_SECRET_VALUE_RE.search(body):
+    if (
+        DRAFT_SECRET_VALUE_RE.search(body)
+        or _source_fidelity_sensitive_assignment_contains_secret(body)
+    ):
         blockers.append("Draft body appears to contain a secret-like value.")
 
     if creation_mode:
@@ -36696,8 +37187,13 @@ def create_draft_zettel(
     )
     frontmatter_credential_secret_present = bool(
         is_ai_draft
-        and SOURCE_FIDELITY_CREDENTIAL_SECRET_RE.search(
-            frontmatter_serialized
+        and (
+            SOURCE_FIDELITY_CREDENTIAL_SECRET_RE.search(
+                frontmatter_serialized
+            )
+            or _source_fidelity_sensitive_assignment_contains_secret(
+                frontmatter_serialized
+            )
         )
     )
     frontmatter_private_authority_exposed = bool(
@@ -38195,8 +38691,12 @@ def _source_fidelity_verify_for_mint(
                 )
             ):
                 blockers.append("circular_self_source")
-    if SOURCE_FIDELITY_CREDENTIAL_SECRET_RE.search(
-        body_bytes.decode("utf-8", errors="ignore")
+    decoded_body = body_bytes.decode("utf-8", errors="ignore")
+    if (
+        SOURCE_FIDELITY_CREDENTIAL_SECRET_RE.search(decoded_body)
+        or _source_fidelity_sensitive_assignment_contains_secret(
+            decoded_body
+        )
     ):
         blockers.append("credential_secret_present")
     if mode == "verbatim" and normalized_source is not None:
@@ -42704,6 +43204,7 @@ def _replace_regular_file_bytes_compare_and_swap(
     max_bytes: int,
     error_prefix: str,
     allow_already_replacement: bool = False,
+    parent_binding: dict[str, Any] | None = None,
 ) -> bool:
     """Atomically compare-and-swap one regular file without hiding unknown data."""
 
@@ -42725,10 +43226,14 @@ def _replace_regular_file_bytes_compare_and_swap(
         )
     except ValueError:
         raise OSError(f"{error_prefix}_canonical_swap_binding_invalid") from None
-    with _activity_group_bound_directory_chain(
-        root,
-        path.parent,
-    ) as binding:
+    if parent_binding is not None and parent_binding.get("path") != path.parent:
+        raise OSError("activity_group_bound_parent_mismatch")
+    binding_context = (
+        nullcontext(parent_binding)
+        if parent_binding is not None
+        else _activity_group_bound_directory_chain(root, path.parent)
+    )
+    with binding_context as binding:
         try:
             current_bytes: bytes | None = (
                 _read_activity_group_regular_bytes_bound(
@@ -105250,7 +105755,7 @@ def wom_kit_runtime_mirror_integrity(
     )
     try:
         runner.close_transport_boundary()
-        return _wom_kit_runtime_mirror_integrity_with_runner(
+        result = _wom_kit_runtime_mirror_integrity_with_runner(
             project_root,
             mirror_path,
             project_pin_path,
@@ -105258,8 +105763,15 @@ def wom_kit_runtime_mirror_integrity(
             source_version=source_version,
             runner=runner,
         )
-    finally:
+    except BaseException:
+        try:
+            runner.close()
+        except BaseException:
+            pass
+        raise
+    else:
         runner.close()
+        return result
 
 
 WOM_KIT_PROJECT_BRIDGE_BOOTSTRAP = r'''
@@ -106326,6 +106838,7 @@ def wom_kit_version_info(
                 project_scope_root,
                 pinned_version,
                 running_module_path=running_module_path or service_path,
+                running_archive_cli_module_path=running_module_path,
                 runtime_inspection=installed_runtime,
             )
             project_runtime_summary["installed"] = installed_runtime
@@ -108117,19 +108630,30 @@ class _WomKitProjectUpdateDirectoryGuard:
 
     def _close_handle(self, handle: int) -> None:
         if os.name == "nt":
-            self._kernel32.CloseHandle(handle)
+            if not self._kernel32.CloseHandle(handle):
+                raise OSError("project_update_directory_guard_close_failed")
         else:
             os.close(handle)
 
-    def _drop(self, key: str) -> None:
-        handle = self._handles.pop(key, None)
-        self._identities.pop(key, None)
+    def _drop(self, key: str, *, strict: bool = False) -> bool:
+        handle = self._handles.get(key)
         if handle is None:
-            return
+            self._identities.pop(key, None)
+            return True
         try:
             self._close_handle(handle)
         except OSError:
-            pass
+            if os.name != "nt":
+                # A failed POSIX close may still have consumed the descriptor.
+                # Never retain and retry an integer that the OS can reassign.
+                self._handles.pop(key, None)
+                self._identities.pop(key, None)
+            if strict:
+                raise
+            return False
+        self._handles.pop(key, None)
+        self._identities.pop(key, None)
+        return True
 
     def _windows_handle_information(
         self,
@@ -108170,14 +108694,14 @@ class _WomKitProjectUpdateDirectoryGuard:
             return None
         opened = self._windows_handle_information(int(handle_value))
         if opened is None:
-            self._kernel32.CloseHandle(handle)
+            self._close_handle(int(handle_value))
             return None
         attributes, identity = opened
         if (
             attributes & 0x00000400  # FILE_ATTRIBUTE_REPARSE_POINT
             or not attributes & 0x00000010  # FILE_ATTRIBUTE_DIRECTORY
         ):
-            self._kernel32.CloseHandle(handle)
+            self._close_handle(int(handle_value))
             return None
         return int(handle_value), identity
 
@@ -108328,11 +108852,17 @@ class _WomKitProjectUpdateDirectoryGuard:
         return True
 
     def release(self, path: Path) -> None:
-        self._drop(self._key(path))
+        self._drop(self._key(path), strict=True)
 
     def close(self) -> None:
+        failures = 0
         for key in list(self._handles):
-            self._drop(key)
+            try:
+                self._drop(key, strict=True)
+            except OSError:
+                failures += 1
+        if failures:
+            raise OSError("project_update_directory_guard_close_failed")
 
     def hold_existing_tree(self, root: Path) -> bool:
         if not self.hold(root):
@@ -108707,7 +109237,7 @@ def _wom_kit_project_update_git_legacy_read_only(
     )
     try:
         runner.close_transport_boundary()
-        return _wom_kit_project_update_git(
+        result = _wom_kit_project_update_git(
             mirror_path,
             args,
             timeout_seconds=timeout_seconds,
@@ -108717,8 +109247,15 @@ def _wom_kit_project_update_git_legacy_read_only(
             runner=runner,
             transport=False,
         )
-    finally:
+    except BaseException:
+        try:
+            runner.close()
+        except BaseException:
+            pass
+        raise
+    else:
         runner.close()
+        return result
 
 
 def wom_kit_project_update_git_metadata_is_local_real(
@@ -108867,13 +109404,20 @@ def wom_kit_project_update_git_metadata_is_local_real_legacy_read_only(
     )
     try:
         runner.close_transport_boundary()
-        return wom_kit_project_update_git_metadata_is_local_real(
+        result = wom_kit_project_update_git_metadata_is_local_real(
             project_root,
             mirror_path,
             runner=runner,
         )
-    finally:
+    except BaseException:
+        try:
+            runner.close()
+        except BaseException:
+            pass
+        raise
+    else:
         runner.close()
+        return result
 
 
 def _wom_kit_project_update_git_blob(
@@ -110886,13 +111430,20 @@ def wom_kit_project_update_target_ref_snapshot_legacy_read_only(
     )
     try:
         runner.close_transport_boundary()
-        return wom_kit_project_update_target_ref_snapshot(
+        result = wom_kit_project_update_target_ref_snapshot(
             mirror_path,
             target_tag,
             runner=runner,
         )
-    finally:
+    except BaseException:
+        try:
+            runner.close()
+        except BaseException:
+            pass
+        raise
+    else:
         runner.close()
+        return result
 
 
 def write_bytes_atomic(path: Path, value: bytes) -> None:
@@ -113792,7 +114343,7 @@ def _wom_kit_project_version_update_collision_inspect_batch_legacy_read_only(
     )
     try:
         runner.close_transport_boundary()
-        return _wom_kit_project_version_update_collision_inspect_batch_core(
+        result = _wom_kit_project_version_update_collision_inspect_batch_core(
             inspection_root,
             target=target,
             entry_refs=entry_refs,
@@ -113800,8 +114351,15 @@ def _wom_kit_project_version_update_collision_inspect_batch_legacy_read_only(
             owned_lock_identity=owned_lock_identity,
             runner=runner,
         )
-    finally:
+    except BaseException:
+        try:
+            runner.close()
+        except BaseException:
+            pass
+        raise
+    else:
         runner.close()
+        return result
 
 
 def wom_kit_project_version_update_collision_inspect_batch(
@@ -113828,9 +114386,15 @@ def wom_kit_project_version_update_collision_inspect_batch(
                 runner=runner,
             )
         )
-        return result
-    finally:
+    except BaseException:
+        try:
+            runner.close()
+        except BaseException:
+            pass
+        raise
+    else:
         runner.close()
+        return result
 
 
 def wom_kit_project_version_update_collision(
@@ -114527,6 +115091,7 @@ def _wom_kit_project_version_update_collision_legacy_core_with_runner(
     approval_failure = False
     case_directory_created = False
     private_source_binding: dict[str, int | str] | None = None
+    directory_guard_close_failure: BaseException | None = None
     try:
         if not (
             directory_guard.hold(project_root)
@@ -114894,8 +115459,15 @@ def _wom_kit_project_version_update_collision_legacy_core_with_runner(
             if not lock_absent_verified:
                 add_blocker("project_update_collision_recovery_required")
                 status = "collision_state_recovery_required"
-        directory_guard.close()
-    return build_result()
+        try:
+            directory_guard.close()
+        except BaseException as failure:
+            directory_guard_close_failure = failure
+    return _project_update_attach_nonterminal_close_truth(
+        build_result(),
+        service_resource_close_failure=directory_guard_close_failure,
+        runner_close_failure=None,
+    )
 
 
 def _wom_kit_project_version_update_collision_legacy_core(
@@ -114919,7 +115491,7 @@ def _wom_kit_project_version_update_collision_legacy_core(
     )
     try:
         runner.close_transport_boundary()
-        return _wom_kit_project_version_update_collision_legacy_core_with_runner(
+        result = _wom_kit_project_version_update_collision_legacy_core_with_runner(
             inspection_root,
             target=target,
             entry_ref=entry_ref,
@@ -114934,8 +115506,27 @@ def _wom_kit_project_version_update_collision_legacy_core(
             reveal_target_relative_path=reveal_target_relative_path,
             runner=runner,
         )
-    finally:
+        if not isinstance(result, Mapping):
+            raise ArchiveServiceError(
+                "project_version_update_result_invalid"
+            )
+        completed_result = dict(result)
+    except BaseException:
+        try:
+            runner.close()
+        except BaseException:
+            pass
+        raise
+    runner_close_failure: BaseException | None = None
+    try:
         runner.close()
+    except BaseException as failure:
+        runner_close_failure = failure
+    return _project_update_attach_nonterminal_close_truth(
+        completed_result,
+        service_resource_close_failure=None,
+        runner_close_failure=runner_close_failure,
+    )
 
 
 def wom_kit_project_update_runtime_policy(
@@ -115150,6 +115741,21 @@ def _wom_kit_project_version_update_live_approval_transaction(
         raise ArchiveServiceError(
             "project_version_update_approval_archive_identity_changed"
         )
+    if _project_update_terminal_handoff_state_read_only(
+        inspection_root
+    ) in {"claim_succeeded_pre_unlock", "terminal_ready"}:
+        raise ArchiveServiceError(
+            "project_version_update_terminal_handoff_recovery_required"
+        )
+    cleanup_classification, _history_count = (
+        _project_update_terminal_cleanup_artifact_classification_read_only(
+            _project_update_resume_project_root_read_only(inspection_root)
+        )
+    )
+    if cleanup_classification not in {"absent", "history_only_exact"}:
+        raise ArchiveServiceError(
+            "project_version_update_terminal_cleanup_recovery_required"
+        )
     return _wom_kit_project_version_update_legacy_core(
         inspection_root,
         target=target,
@@ -115287,6 +115893,10 @@ def _project_update_resume_preapproval_transaction(
             "exact_human_approval_resume_claim_invalid"
         )
     recovery_kind: str
+    result_close: tuple[
+        Callable[[], None],
+        _ProjectVersionUpdateGitRunnerLifetime,
+    ] | None = None
 
     if classification in {
         "reserved_locked_unsealed",
@@ -115354,14 +115964,18 @@ def _project_update_resume_preapproval_transaction(
                 ),
             )
             _project_update_cancel_before_native(state)
-        finally:
-            state.directory_guard.close()
-            lifetime.close_after_service_transaction()
+        except BaseException:
+            _project_update_close_after_service_failure(
+                state.directory_guard.close,
+                lifetime,
+            )
+            raise
+        result_close = (state.directory_guard.close, lifetime)
         recovery_kind = "sealed_preapproval_scaffold_cancelled"
     else:
         return None
 
-    return {
+    result = {
         "ok": True,
         "status": "preapproval_scaffold_cancelled",
         "update_completed": False,
@@ -115413,6 +116027,14 @@ def _project_update_resume_preapproval_transaction(
         ],
         "files_written": [],
     }
+    if result_close is not None:
+        close_owned_resources, close_lifetime = result_close
+        return _project_update_finish_nonterminal_service_result(
+            result,
+            close_lifetime,
+            close_owned_resources=close_owned_resources,
+        )
+    return result
 
 
 def _project_update_claim_store_absent_read_only(
@@ -115681,6 +116303,331 @@ def _project_update_terminal_cleanup_outcome_unknown_result(
     }
 
 
+def _project_update_history_only_cleanup_result(
+    *,
+    operator_resume_identifiers_supplied: bool,
+    proof_count: int,
+) -> dict[str, Any]:
+    """Report canonical proof-only history without attributing past success."""
+
+    if (
+        type(operator_resume_identifiers_supplied) is not bool
+        or type(proof_count) is not int
+        or proof_count < 1
+        or proof_count
+        > project_update_transaction.MAX_TERMINAL_CLEANUP_SCAN_ENTRIES
+    ):
+        raise ArchiveServiceError(
+            "project_version_update_resume_locator_changed"
+        )
+    return {
+        "ok": False,
+        "status": "no_resumable_project_update",
+        "effects_state": "canonical_cleanup_proof_shaped_artifact_only",
+        "outcome_basis": "canonical_inert_cleanup_proof_shape_only",
+        "update_completed": None,
+        "cleanup_proof_artifacts_observed": proof_count,
+        "historical_detailed_result_available": False,
+        "past_update_success_attributed": False,
+        "current_project_state_independently_verified": False,
+        "new_write_requires_fresh_approval": True,
+        "automatic_resume_discovery": True,
+        "operator_resume_identifiers_supplied": bool(
+            operator_resume_identifiers_supplied
+        ),
+        "automatic_retry_authorized": False,
+        "cleanup_authorized": False,
+        "native_approval_redisplayed": False,
+        "domain_writer_reentered": False,
+        "approval_key_accessed": False,
+        "approval_claim_store_accessed": False,
+        "native_approval_ui_entered": False,
+        "domain_writer_entered": False,
+        "client_archive_accessed": False,
+        "archive_identity_metadata_read": False,
+        "client_archive_domain_content_accessed": False,
+        "project_domain_files_written": [],
+        "files_written": [],
+        "next_safe_actions": [
+            "Run a fresh project-version-update preview, then request one new exact approval."
+        ],
+    }
+
+
+def _project_update_terminal_cleanup_namespace_classification_read_only(
+    project_root: Path,
+    *,
+    allowed_reservation: (
+        project_update_transaction.ReservedProjectUpdateTransaction | None
+    ) = None,
+    allowed_lock_bytes: bytes | None = None,
+) -> tuple[str, int] | None:
+    """Classify one exact bounded transaction namespace allowlist.
+
+    Proof bytes are not authenticated success authority. This strict read-only
+    classifier proves that every namespace entry is either one canonical
+    cleanup-plan document or, when explicitly supplied by the current call,
+    that call's exact just-created reservation.  Other original transactions,
+    tombstones, arbitrary names, unsafe types, mixed state, scan races, and
+    partial cleanup all return ``None``.  This keeps a fresh approval from
+    treating an ignored namespace entry as ordinary absence.
+    """
+
+    if (
+        allowed_reservation is None
+        and allowed_lock_bytes is not None
+    ):
+        return None
+    lock_path = project_root.joinpath(
+        *PurePosixPath(
+            project_update_transaction.PROJECT_UPDATE_LOCK_LOGICAL
+        ).parts
+    )
+    try:
+        if allowed_lock_bytes is None:
+            if os.path.lexists(lock_path):
+                return None
+        else:
+            if not os.path.lexists(lock_path) or not hmac.compare_digest(
+                project_update_transaction._read_regular(
+                    lock_path,
+                    within=project_root,
+                    maximum=(
+                        project_update_transaction.MAX_DOCUMENT_BYTES + 1
+                    ),
+                ),
+                allowed_lock_bytes,
+            ):
+                return None
+    except (
+        OSError,
+        project_update_transaction.ProjectUpdateTransactionError,
+    ):
+        return None
+    transaction_root = project_root.joinpath(
+        *PurePosixPath(
+            project_update_transaction.TRANSACTION_ROOT_LOGICAL
+        ).parts
+    )
+    try:
+        if not os.path.lexists(transaction_root):
+            return (
+                ("absent", 0)
+                if allowed_reservation is None
+                else None
+            )
+        project_update_transaction._safe_existing_chain(
+            transaction_root,
+            directory=True,
+        )
+        before = os.lstat(transaction_root)
+        expected_reservation_ref = (
+            allowed_reservation.transaction_ref
+            if allowed_reservation is not None
+            else None
+        )
+        expected_reservation_sha256 = (
+            allowed_reservation.reservation.sha256
+            if allowed_reservation is not None
+            else None
+        )
+        allowed_reservation_seen = False
+        recoverable_tombstone_ref: str | None = None
+        seen = 0
+        proof_count = 0
+        with os.scandir(transaction_root) as entries:
+            for entry in entries:
+                seen += 1
+                if (
+                    seen
+                    > project_update_transaction
+                    .MAX_TERMINAL_CLEANUP_SCAN_ENTRIES
+                ):
+                    return None
+                name = entry.name
+                original_match = re.fullmatch(
+                    r"update_[0-9a-f]{32}",
+                    name,
+                )
+                tombstone_match = re.fullmatch(
+                    r"\.cleanup_(update_[0-9a-f]{32})",
+                    name,
+                )
+                proof_match = re.fullmatch(
+                    r"\.cleanup-proof_(update_[0-9a-f]{32})\.json",
+                    name,
+                )
+                if original_match is not None:
+                    if (
+                        expected_reservation_ref is None
+                        or name != expected_reservation_ref
+                        or allowed_reservation_seen
+                        or not entry.is_dir(follow_symlinks=False)
+                    ):
+                        return None
+                    reservation_root = Path(entry.path)
+                    reservation_before = os.lstat(reservation_root)
+                    reopened = (
+                        project_update_transaction
+                        .ReservedProjectUpdateTransaction.open(
+                            project_root,
+                            expected_reservation_ref,
+                        )
+                    )
+                    if (
+                        expected_reservation_sha256 is None
+                        or reopened.reservation.sha256
+                        != expected_reservation_sha256
+                    ):
+                        return None
+                    files, directories = (
+                        project_update_transaction.ProjectUpdateTransaction
+                        ._descendant_names(reservation_root)
+                    )
+                    expected_files = {
+                        "append.guard",
+                        "marker.json",
+                    }
+                    if allowed_lock_bytes is not None:
+                        expected_files.add(
+                            project_update_transaction
+                            .RESERVATION_LOCK_BACKLINK_NAME
+                        )
+                        if not hmac.compare_digest(
+                            reopened.existing_lock_bytes_read_only(),
+                            allowed_lock_bytes,
+                        ):
+                            return None
+                    if directories or files != expected_files:
+                        return None
+                    reservation_after = os.lstat(reservation_root)
+                    if (
+                        (
+                            int(reservation_before.st_dev),
+                            int(reservation_before.st_ino),
+                            int(reservation_before.st_mtime_ns),
+                        )
+                        != (
+                            int(reservation_after.st_dev),
+                            int(reservation_after.st_ino),
+                            int(reservation_after.st_mtime_ns),
+                        )
+                    ):
+                        return None
+                    allowed_reservation_seen = True
+                    continue
+                if tombstone_match is not None:
+                    if (
+                        allowed_reservation is not None
+                        or recoverable_tombstone_ref is not None
+                        or not entry.is_dir(follow_symlinks=False)
+                    ):
+                        return None
+                    recoverable_tombstone_ref = tombstone_match.group(1)
+                    continue
+                if proof_match is None:
+                    return None
+                transaction_ref = proof_match.group(1)
+                proof_path = Path(entry.path)
+                proof_raw = project_update_transaction._read_regular(
+                    proof_path,
+                    within=transaction_root,
+                    maximum=(
+                        project_update_transaction.MAX_DOCUMENT_BYTES
+                    ),
+                )
+                proof = project_update_transaction._parse_document(
+                    proof_raw,
+                    code="project_update_transaction_cleanup_refused",
+                )
+                authority = (
+                    proof.get("cleanup_authority_sha256")
+                    if type(proof) is dict
+                    else None
+                )
+                if (
+                    not isinstance(authority, str)
+                    or re.fullmatch(r"sha256:[0-9a-f]{64}", authority)
+                    is None
+                    or project_update_transaction._document_bytes(proof)
+                    != proof_raw
+                ):
+                    return None
+                project_update_transaction.ProjectUpdateTransaction._validate_cleanup_plan_document(
+                    proof,
+                    transaction_ref,
+                    authority,
+                )
+                if os.path.lexists(
+                    transaction_root / transaction_ref
+                ) or os.path.lexists(
+                    transaction_root / f".cleanup_{transaction_ref}"
+                ):
+                    return None
+                proof_count += 1
+        if (
+            expected_reservation_ref is not None
+            and not allowed_reservation_seen
+        ):
+            return None
+        after = os.lstat(transaction_root)
+        if (
+            (int(before.st_dev), int(before.st_ino))
+            != (int(after.st_dev), int(after.st_ino))
+            or int(before.st_mtime_ns) != int(after.st_mtime_ns)
+        ):
+            return None
+        if recoverable_tombstone_ref is not None:
+            tombstone = (
+                project_update_transaction.ProjectUpdateTransaction
+                .discover_complete_cleanup_tombstone_for_resume_read_only(
+                    project_root
+                )
+            )
+            if (
+                tombstone is None
+                or tombstone.transaction_ref
+                != recoverable_tombstone_ref
+            ):
+                return None
+            return "recoverable_exact", proof_count
+        if allowed_reservation is not None:
+            return "reservation_exact", proof_count
+        if proof_count:
+            return "history_only_exact", proof_count
+        return "absent", 0
+    except (
+        OSError,
+        KeyError,
+        TypeError,
+        ValueError,
+        project_update_transaction.ProjectUpdateTransactionError,
+    ):
+        return None
+
+
+def _project_update_terminal_cleanup_artifact_classification_read_only(
+    project_root: Path,
+    *,
+    allowed_reservation: (
+        project_update_transaction.ReservedProjectUpdateTransaction | None
+    ) = None,
+    allowed_lock_bytes: bytes | None = None,
+) -> tuple[str, int]:
+    """Classify cleanup namespace without granting cleanup or write authority."""
+
+    classification = (
+        _project_update_terminal_cleanup_namespace_classification_read_only(
+        project_root,
+        allowed_reservation=allowed_reservation,
+        allowed_lock_bytes=allowed_lock_bytes,
+        )
+    )
+    if classification is None:
+        return "unresolved", 0
+    return classification
+
+
 def _project_update_terminal_cleanup_unknown_gate_read_only(
     inspection_root: Path | str,
     *,
@@ -115697,6 +116644,14 @@ def _project_update_terminal_cleanup_unknown_gate_read_only(
     project_root = _project_update_resume_project_root_read_only(
         inspection_root
     )
+    handoff_state = _project_update_terminal_handoff_state_read_only(
+        inspection_root
+    )
+    if handoff_state in {
+        "claim_succeeded_pre_unlock",
+        "terminal_ready",
+    }:
+        return None
     for attempt in range(2):
         regular_scan_incomplete = False
         try:
@@ -115719,6 +116674,26 @@ def _project_update_terminal_cleanup_unknown_gate_read_only(
             )
         )
         if cleanup_state == "observed_or_scan_incomplete":
+            cleanup_classification, history_only_count = (
+                _project_update_terminal_cleanup_artifact_classification_read_only(
+                    project_root
+                )
+                if not regular_scan_incomplete
+                else ("unresolved", 0)
+            )
+            if cleanup_classification == "history_only_exact":
+                return _project_update_history_only_cleanup_result(
+                    operator_resume_identifiers_supplied=(
+                        operator_resume_identifiers_supplied
+                    ),
+                    proof_count=history_only_count,
+                )
+            if cleanup_classification == "recoverable_exact":
+                # Restoration is allowed only after the archive identity and
+                # succeeded-claim boundary opens in the live resume service.
+                # This metadata-only gate merely permits that authenticated
+                # path; it grants no cleanup or success authority itself.
+                return None
             return _project_update_terminal_cleanup_outcome_unknown_result(
                 operator_resume_identifiers_supplied=(
                     operator_resume_identifiers_supplied
@@ -115748,6 +116723,1080 @@ def _project_update_terminal_cleanup_unknown_gate_read_only(
     raise ArchiveServiceError(
         "project_version_update_resume_locator_changed"
     )
+
+
+def _project_update_terminal_handoff_state_read_only(
+    inspection_root: Path | str,
+) -> str | None:
+    project_root = _project_update_resume_project_root_read_only(
+        inspection_root
+    )
+    handoff, _guard = _project_update_terminal_handoff_paths(
+        project_root
+    )
+    observed = _project_update_read_terminal_document(project_root, handoff)
+    if observed is None:
+        return None
+    value, _raw = observed
+    state = value.get("state")
+    expected_keys = (
+        {"schema", "state", "pending"}
+        if state == "claim_succeeded_pre_unlock"
+        else {"schema", "state", "pending", "ready"}
+        if state == "terminal_ready"
+        else set()
+    )
+    if (
+        value.get("schema") != _PROJECT_UPDATE_TERMINAL_HANDOFF_SCHEMA
+        or set(value) != expected_keys
+    ):
+        raise ArchiveServiceError(
+            "project_version_update_terminal_handoff_invalid"
+        )
+    return str(state)
+
+
+def _project_update_terminal_handoff_attachments(
+    pending_record: Mapping[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any], dict[str, str]]:
+    payload = pending_record.get("payload")
+    attachments = pending_record.get("attachments")
+    if type(payload) is not dict or type(attachments) is not dict:
+        raise ArchiveServiceError(
+            "project_version_update_terminal_handoff_invalid"
+        )
+    preview = attachments.get("prepared_preview")
+    result = attachments.get("domain_result")
+    basis = attachments.get("recovery_basis")
+    postimage = attachments.get("exact_postimage")
+    if (
+        type(preview) is not dict
+        or type(result) is not dict
+        or type(basis) is not dict
+        or type(postimage) is not dict
+        or any(type(key) is not str or type(value) is not str for key, value in postimage.items())
+        or project_update_transaction.sha256_document(preview)
+        != payload.get("prepared_preview_sha256")
+        or project_update_transaction.sha256_document(result)
+        != payload.get("domain_result_sha256")
+        or len(project_update_transaction.canonical_json_bytes(result))
+        != payload.get("domain_result_size_bytes")
+        or project_update_transaction.sha256_document(basis)
+        != payload.get("recovery_basis_sha256")
+        or project_update_transaction.sha256_document(postimage)
+        != payload.get("exact_postimage_sha256")
+    ):
+        raise ArchiveServiceError(
+            "project_version_update_terminal_handoff_invalid"
+        )
+    return preview, result, basis, postimage
+
+
+def _project_update_terminal_postimage_matches(
+    project_root: Path,
+    basis: Mapping[str, Any],
+    expected_postimage: Mapping[str, str],
+) -> bool:
+    if (
+        basis.get("schema")
+        != "wom-kit/project-version-update-terminal-recovery-basis/v0.4.16"
+        or type(basis.get("components")) is not list
+        or type(basis.get("runtime")) is not dict
+    ):
+        return False
+    components = basis["components"]
+    expected_components: dict[str, str] = {}
+    regular_components: list[dict[str, Any]] = []
+    for component in components:
+        if (
+            type(component) is not dict
+            or set(component)
+            != {"component_ref", "role", "logical_target", "post_sha256"}
+            or type(component.get("component_ref")) is not str
+            or type(component.get("role")) is not str
+            or type(component.get("logical_target")) is not str
+            or type(component.get("post_sha256")) is not str
+            or component["component_ref"] in expected_components
+        ):
+            return False
+        expected_components[component["component_ref"]] = component["post_sha256"]
+        if component["role"] not in {"source", "runtime"}:
+            regular_components.append(component)
+    if expected_components != dict(expected_postimage):
+        return False
+    lock_path = project_root.joinpath(
+        *PurePosixPath(
+            project_update_transaction.PROJECT_UPDATE_LOCK_LOGICAL
+        ).parts
+    )
+    if os.path.lexists(lock_path):
+        return False
+    mirror_logical = PurePosixPath(str(basis.get("mirror_logical") or ""))
+    if mirror_logical.is_absolute() or ".." in mirror_logical.parts:
+        return False
+    mirror_path = project_root.joinpath(*mirror_logical.parts)
+    runner: project_update_git_runner.TrustedProjectUpdateGitRunner | None = None
+    verified = False
+    try:
+        runner_bytes = _project_update_private_json_restore(
+            basis.get("git_runner_binding")
+        )
+        if not isinstance(runner_bytes, bytes):
+            return False
+        runner_binding = project_update_git_runner.load_private_binding_bytes(
+            runner_bytes
+        )
+        runner = (
+            project_update_git_runner.TrustedProjectUpdateGitRunner
+            .reopen_private(runner_binding)
+        )
+        runner.close_transport_boundary()
+        snapshot = _wom_kit_project_update_git_snapshot(
+            mirror_path,
+            runner=runner,
+        )
+        target_commit = str(basis.get("target_commit") or "")
+        target_tag = str(basis.get("target_tag") or "")
+        target_version = str(basis.get("target_version") or "")
+        source_exact = bool(
+            wom_kit_project_update_snapshot_is_clean(
+                snapshot,
+                expected_head=target_commit,
+                expected_branch=None,
+            )
+            and all(
+                normalize_version_label(value) == target_version
+                for value in wom_kit_project_update_source_versions(
+                    mirror_path
+                ).values()
+            )
+            and wom_kit_project_update_target_ref_snapshot(
+                mirror_path,
+                target_tag,
+                runner=runner,
+            )
+            == basis.get("target_ref_snapshot")
+            and wom_kit_runtime_tracked_python_integrity(
+                project_root,
+                mirror_path,
+                runner=runner,
+            ).get("tracked_python_sources_verified")
+            is True
+            and wom_kit_runtime_resource_integrity(
+                project_root,
+                mirror_path,
+                ref=target_commit,
+                runner=runner,
+            ).get("runtime_resources_verified")
+            is True
+        )
+        runtime_expected = basis["runtime"]
+        runtime_observed = project_runtime.inspect_runtime(
+            project_root,
+            target_version,
+            expected_commit=target_commit,
+            expected_wheel_sha256=runtime_expected.get("wheel_sha256"),
+            expected_supply_lock_sha256=runtime_expected.get(
+                "supply_lock_sha256"
+            ),
+        )
+        runtime_exact = bool(
+            runtime_observed.get("receipt_candidate_valid") is True
+            and runtime_observed.get("live_payload_aligned") is True
+            and runtime_observed.get("installed_payload_sha256")
+            == runtime_expected.get("installed_payload_sha256")
+            and runtime_observed.get("receipt_sha256")
+            == runtime_expected.get("receipt_sha256")
+        )
+        if not source_exact or not runtime_exact:
+            return False
+        for component in regular_components:
+            logical = PurePosixPath(component["logical_target"])
+            if logical.is_absolute() or ".." in logical.parts:
+                return False
+            path = project_root.joinpath(*logical.parts)
+            maximum = (
+                _PROJECT_UPDATE_RECEIPT_MAX_BYTES
+                if component["role"] == "receipt"
+                else 64 * 1024
+            )
+            observed = _project_update_safe_read_component(
+                project_root,
+                path,
+                maximum=maximum,
+            )
+            if (
+                observed is _PROJECT_UPDATE_UNSAFE_LIVE_COMPONENT
+                or _project_update_raw_component_sha256(observed)
+                != component["post_sha256"]
+            ):
+                return False
+        verified = True
+    except (
+        ArchiveServiceError,
+        OSError,
+        RuntimeError,
+        TypeError,
+        ValueError,
+        project_runtime.ProjectRuntimeError,
+        project_update_git_runner.ProjectUpdateGitRunnerError,
+    ):
+        return False
+    finally:
+        if runner is not None:
+            try:
+                runner.close()
+            except project_update_git_runner.ProjectUpdateGitRunnerError:
+                verified = False
+    return verified
+
+
+def _project_update_replayed_terminal_finalization(
+    *,
+    cleanup_completed: bool,
+) -> dict[str, Any]:
+    """Project replay truth without inventing pre-crash close evidence."""
+
+    return {
+        "schema": "wom-kit/project-version-update-terminal-finalization/v0.1",
+        "update_result_verified_in_current_invocation": False,
+        "update_result_reauthenticated_from_durable_handoff": True,
+        "claim_succeeded_verified": True,
+        "transaction_completed_checkpoint_verified": True,
+        "lock_absence_verified": True,
+        "transaction_cleanup_completed": bool(cleanup_completed),
+        "service_resource_close_verified": False,
+        "git_runner_close_verified": False,
+        "attention_required": True,
+        "domain_writer_reentry_allowed": False,
+        "automatic_retry_allowed": False,
+        "cleanup_proof_used_as_success_authority": False,
+        "durable_terminal_handoff_ready": True,
+        "durable_terminal_handoff_replayed": True,
+        "durable_result_delivery_acknowledged": False,
+        "private_paths_echoed": False,
+        "private_identifiers_echoed": False,
+    }
+
+
+def _project_update_replay_ready_terminal_handoff(
+    inspection_root: Path | str,
+    *,
+    target: str | None,
+    reviewed_by: str | None,
+    transaction_ref: str | None,
+    approval_executor: Callable[..., Mapping[str, Any]],
+    expected_approval_root: Path,
+    expected_archive_id: str,
+) -> dict[str, Any] | None:
+    project_root = _project_update_resume_project_root_read_only(
+        inspection_root
+    )
+    handoff, _guard = _project_update_terminal_handoff_paths(
+        project_root
+    )
+    observed = _project_update_read_terminal_document(project_root, handoff)
+    if observed is None:
+        return None
+    active, active_bytes = observed
+    if (
+        active.get("schema") != _PROJECT_UPDATE_TERMINAL_HANDOFF_SCHEMA
+        or active.get("state") != "terminal_ready"
+        or set(active) != {"schema", "state", "pending", "ready"}
+    ):
+        raise ArchiveServiceError(
+            "project_version_update_terminal_handoff_invalid"
+        )
+    pending_record = active["pending"]
+    ready_record = active["ready"]
+    preview, domain_result, basis, postimage = (
+        _project_update_terminal_handoff_attachments(pending_record)
+    )
+    pending_payload = pending_record.get("payload")
+    ready_payload = (
+        ready_record.get("payload")
+        if isinstance(ready_record, dict)
+        else None
+    )
+    if type(pending_payload) is not dict or type(ready_payload) is not dict:
+        raise ArchiveServiceError(
+            "project_version_update_terminal_handoff_invalid"
+        )
+    binding = project_version_update_approval_binding(preview)
+    supplied_target = str(target or "").strip()
+    supplied_reviewer = str(reviewed_by or "").strip()
+    supplied_transaction = str(transaction_ref or "").strip()
+    legacy_cleanup_authority = pending_payload.get(
+        "legacy_cleanup_authority_sha256"
+    )
+    if (
+        pending_payload.get("plan_sha256") != binding.plan_sha256
+        or pending_payload.get("target_binding_sha256")
+        != binding.target_binding_sha256
+        or ready_payload.get("plan_sha256") != binding.plan_sha256
+        or ready_payload.get("target_binding_sha256")
+        != binding.target_binding_sha256
+        or ready_payload.get("pending_record_sha256")
+        != project_update_transaction.sha256_document(pending_record)
+        or ready_payload.get("claim_succeeded_checkpoint_sha256")
+        != pending_payload.get("claim_succeeded_checkpoint_sha256")
+        or ready_payload.get("exact_postimage_sha256")
+        != pending_payload.get("exact_postimage_sha256")
+        or ready_payload.get("legacy_cleanup_authority_sha256")
+        != legacy_cleanup_authority
+        or (
+            legacy_cleanup_authority is not None
+            and re.fullmatch(
+                r"sha256:[0-9a-f]{64}",
+                str(legacy_cleanup_authority),
+            )
+            is None
+        )
+        or supplied_target
+        and supplied_target != basis.get("target_tag")
+        or supplied_reviewer
+        and supplied_reviewer != pending_payload.get("reviewer")
+        or supplied_transaction
+        and supplied_transaction != pending_payload.get("transaction_ref")
+        or not _wom_kit_project_version_update_approval_authority_matches(
+            inspection_root,
+            expected_root=expected_approval_root,
+            expected_archive_id=expected_archive_id,
+        )
+    ):
+        raise ArchiveServiceError(
+            "project_version_update_terminal_handoff_invalid"
+        )
+    verified = False
+    replay_delivery_capability: str | None = None
+
+    def started_guard(_claim: _ClaimedExactHumanApproval) -> bool:
+        return False
+
+    def succeeded_guard(claim: _ClaimedExactHumanApproval) -> bool:
+        nonlocal verified, replay_delivery_capability
+        candidate_capability = _project_update_terminal_delivery_capability(
+            claim,
+            pending_record,
+        )
+        claim_reference_sha256 = project_update_transaction.sha256_bytes(
+            _project_update_canonical_bytes(claim.public_reference())
+        )
+        verified = bool(
+            _project_update_terminal_record_matches_claim(
+                pending_record,
+                claim,
+                expected_plan_sha256=binding.plan_sha256,
+                expected_target_binding_sha256=(
+                    binding.target_binding_sha256
+                ),
+            )
+            and _project_update_terminal_record_matches_claim(
+                ready_record,
+                claim,
+                expected_plan_sha256=binding.plan_sha256,
+                expected_target_binding_sha256=(
+                    binding.target_binding_sha256
+                ),
+            )
+            and _project_update_terminal_postimage_matches(
+                project_root,
+                basis,
+                postimage,
+            )
+            and hmac.compare_digest(
+                project_update_transaction.sha256_bytes(
+                    candidate_capability.encode("ascii")
+                ),
+                str(
+                    ready_payload.get("delivery_capability_sha256") or ""
+                ),
+            )
+            and (
+                legacy_cleanup_authority is None
+                or hmac.compare_digest(
+                    legacy_cleanup_authority,
+                    claim_reference_sha256,
+                )
+            )
+        )
+        if verified:
+            replay_delivery_capability = candidate_capability
+        return verified
+
+    def started_writer(_claim: _ClaimedExactHumanApproval) -> Mapping[str, Any]:
+        raise ArchiveServiceError(
+            "project_version_update_terminal_handoff_invalid"
+        )
+
+    def finalizer(_claim: _ClaimedExactHumanApproval) -> None:
+        if verified is not True:
+            raise ArchiveServiceError(
+                "project_version_update_terminal_handoff_invalid"
+            )
+
+    approval_executor(
+        copy.deepcopy(preview),
+        started_writer,
+        finalizer,
+        started_guard,
+        succeeded_guard,
+        str(pending_payload["reviewer"]),
+        candidate_missing_handler=None,
+    )
+    if verified is not True:
+        raise ArchiveServiceError(
+            "project_version_update_terminal_handoff_invalid"
+        )
+    if replay_delivery_capability is None:
+        raise ArchiveServiceError(
+            "project_version_update_terminal_handoff_invalid"
+        )
+    _project_update_register_terminal_delivery_capability(
+        project_update_transaction.sha256_bytes(active_bytes),
+        replay_delivery_capability,
+    )
+    handoff_sha256 = project_update_transaction.sha256_bytes(active_bytes)
+    cleanup_authority_sha256 = (
+        legacy_cleanup_authority or handoff_sha256
+    )
+    try:
+        cleanup_completed = _project_update_resume_authenticated_terminal_cleanup(
+            project_root,
+            str(pending_payload["transaction_ref"]),
+            cleanup_authority_sha256=cleanup_authority_sha256,
+        )
+    except project_update_transaction.ProjectUpdateTransactionError:
+        cleanup_completed = False
+    projected_domain = _project_update_privacy_safe_domain_result(
+        domain_result
+    )
+    terminal = _project_update_replayed_terminal_finalization(
+        cleanup_completed=bool(cleanup_completed),
+    )
+    projected = _project_update_terminal_result_from_domain(
+        projected_domain,
+        terminal,
+    )
+    if projected is None:
+        raise ArchiveServiceError(
+            "project_version_update_terminal_result_unverified"
+        )
+    return projected
+
+
+def _project_update_reauthenticate_consumed_terminal_delivery(
+    inspection_root: Path | str,
+    *,
+    capsule_bytes: bytes,
+    expected_handoff_sha256: str,
+    expected_result: Mapping[str, Any],
+    target: str | None,
+    reviewed_by: str | None,
+    transaction_ref: str | None,
+    approval_executor: Callable[..., Mapping[str, Any]],
+    expected_approval_root: Path,
+    expected_archive_id: str,
+) -> str:
+    """Recover the claim-derived capability for one exact consumed capsule."""
+
+    if (
+        not isinstance(capsule_bytes, bytes)
+        or not capsule_bytes
+        or re.fullmatch(
+            r"sha256:[0-9a-f]{64}",
+            str(expected_handoff_sha256 or ""),
+        )
+        is None
+        or not isinstance(expected_result, Mapping)
+        or expected_result.get("ok") is not True
+        or not callable(approval_executor)
+        or not hmac.compare_digest(
+            project_update_transaction.sha256_bytes(capsule_bytes),
+            expected_handoff_sha256,
+        )
+    ):
+        raise ArchiveServiceError(
+            "project_version_update_terminal_handoff_invalid"
+        )
+    try:
+        consumed = project_update_transaction._parse_document(
+            capsule_bytes,
+            code="project_update_transaction_invalid",
+        )
+    except project_update_transaction.ProjectUpdateTransactionError:
+        raise ArchiveServiceError(
+            "project_version_update_terminal_handoff_invalid"
+        ) from None
+    if (
+        type(consumed) is not dict
+        or _project_update_canonical_bytes(consumed) != capsule_bytes
+        or consumed.get("schema") != _PROJECT_UPDATE_TERMINAL_HANDOFF_SCHEMA
+        or consumed.get("state") != "terminal_ready"
+        or set(consumed) != {"schema", "state", "pending", "ready"}
+    ):
+        raise ArchiveServiceError(
+            "project_version_update_terminal_handoff_invalid"
+        )
+    project_root = _project_update_resume_project_root_read_only(
+        inspection_root
+    )
+    pending_record = consumed["pending"]
+    ready_record = consumed["ready"]
+    preview, domain_result, basis, postimage = (
+        _project_update_terminal_handoff_attachments(pending_record)
+    )
+    pending_payload = pending_record.get("payload")
+    ready_payload = (
+        ready_record.get("payload")
+        if isinstance(ready_record, dict)
+        else None
+    )
+    if type(pending_payload) is not dict or type(ready_payload) is not dict:
+        raise ArchiveServiceError(
+            "project_version_update_terminal_handoff_invalid"
+        )
+    binding = project_version_update_approval_binding(preview)
+    supplied_target = str(target or "").strip()
+    supplied_reviewer = str(reviewed_by or "").strip()
+    supplied_transaction = str(transaction_ref or "").strip()
+    legacy_cleanup_authority = pending_payload.get(
+        "legacy_cleanup_authority_sha256"
+    )
+    if (
+        pending_payload.get("plan_sha256") != binding.plan_sha256
+        or pending_payload.get("target_binding_sha256")
+        != binding.target_binding_sha256
+        or ready_payload.get("plan_sha256") != binding.plan_sha256
+        or ready_payload.get("target_binding_sha256")
+        != binding.target_binding_sha256
+        or ready_payload.get("pending_record_sha256")
+        != project_update_transaction.sha256_document(pending_record)
+        or ready_payload.get("claim_succeeded_checkpoint_sha256")
+        != pending_payload.get("claim_succeeded_checkpoint_sha256")
+        or ready_payload.get("exact_postimage_sha256")
+        != pending_payload.get("exact_postimage_sha256")
+        or ready_payload.get("legacy_cleanup_authority_sha256")
+        != legacy_cleanup_authority
+        or (
+            legacy_cleanup_authority is not None
+            and re.fullmatch(
+                r"sha256:[0-9a-f]{64}",
+                str(legacy_cleanup_authority),
+            )
+            is None
+        )
+        or supplied_target
+        and supplied_target != basis.get("target_tag")
+        or supplied_reviewer
+        and supplied_reviewer != pending_payload.get("reviewer")
+        or supplied_transaction
+        and supplied_transaction != pending_payload.get("transaction_ref")
+        or not _wom_kit_project_version_update_approval_authority_matches(
+            inspection_root,
+            expected_root=expected_approval_root,
+            expected_archive_id=expected_archive_id,
+        )
+        or not _project_update_terminal_result_matches_pending(
+            expected_result,
+            pending_record,
+        )
+    ):
+        raise ArchiveServiceError(
+            "project_version_update_terminal_handoff_invalid"
+        )
+    verified = False
+    delivery_capability: str | None = None
+
+    def started_guard(_claim: _ClaimedExactHumanApproval) -> bool:
+        return False
+
+    def succeeded_guard(claim: _ClaimedExactHumanApproval) -> bool:
+        nonlocal verified, delivery_capability
+        candidate_capability = _project_update_terminal_delivery_capability(
+            claim,
+            pending_record,
+        )
+        claim_reference_sha256 = project_update_transaction.sha256_bytes(
+            _project_update_canonical_bytes(claim.public_reference())
+        )
+        verified = bool(
+            _project_update_terminal_record_matches_claim(
+                pending_record,
+                claim,
+                expected_plan_sha256=binding.plan_sha256,
+                expected_target_binding_sha256=(
+                    binding.target_binding_sha256
+                ),
+            )
+            and _project_update_terminal_record_matches_claim(
+                ready_record,
+                claim,
+                expected_plan_sha256=binding.plan_sha256,
+                expected_target_binding_sha256=(
+                    binding.target_binding_sha256
+                ),
+            )
+            and _project_update_terminal_postimage_matches(
+                project_root,
+                basis,
+                postimage,
+            )
+            and hmac.compare_digest(
+                project_update_transaction.sha256_bytes(
+                    candidate_capability.encode("ascii")
+                ),
+                str(
+                    ready_payload.get("delivery_capability_sha256") or ""
+                ),
+            )
+            and (
+                legacy_cleanup_authority is None
+                or hmac.compare_digest(
+                    legacy_cleanup_authority,
+                    claim_reference_sha256,
+                )
+            )
+        )
+        if verified:
+            delivery_capability = candidate_capability
+        return verified
+
+    def started_writer(_claim: _ClaimedExactHumanApproval) -> Mapping[str, Any]:
+        raise ArchiveServiceError(
+            "project_version_update_terminal_handoff_invalid"
+        )
+
+    def finalizer(_claim: _ClaimedExactHumanApproval) -> None:
+        if verified is not True:
+            raise ArchiveServiceError(
+                "project_version_update_terminal_handoff_invalid"
+            )
+
+    approval_executor(
+        copy.deepcopy(preview),
+        started_writer,
+        finalizer,
+        started_guard,
+        succeeded_guard,
+        str(pending_payload["reviewer"]),
+        candidate_missing_handler=None,
+    )
+    if verified is not True or delivery_capability is None:
+        raise ArchiveServiceError(
+            "project_version_update_terminal_handoff_invalid"
+        )
+    return delivery_capability
+
+
+def _project_update_resume_authenticated_terminal_cleanup(
+    project_root: Path,
+    transaction_ref: str,
+    *,
+    cleanup_authority_sha256: str,
+) -> bool:
+    """Continue exact cleanup from either the live terminal tree or tombstone.
+
+    A process can stop after publishing the authenticated ready handoff but
+    before ``exact_cleanup`` moves the completed transaction to its tombstone.
+    The handoff is the cleanup authority in both states.  Reopen the original
+    exact completed transaction when it still exists; use the tombstone/proof
+    resume path only after that original name is absent.
+    """
+
+    transaction_parent = project_root.joinpath(
+        *PurePosixPath(
+            project_update_transaction.TRANSACTION_ROOT_LOGICAL
+        ).parts
+    )
+    original = transaction_parent / transaction_ref
+    if os.path.lexists(original):
+        transaction = (
+            project_update_transaction.ProjectUpdateTransaction.open(
+                project_root,
+                transaction_ref,
+            )
+        )
+        return transaction.exact_cleanup(
+            cleanup_authority_sha256=cleanup_authority_sha256
+        )
+    return project_update_transaction.ProjectUpdateTransaction.resume_cleanup(
+        project_root,
+        transaction_ref,
+        cleanup_authority_sha256=cleanup_authority_sha256,
+    )
+
+
+def _project_update_acknowledge_terminal_result_delivery(
+    inspection_root: Path | str,
+    result: Mapping[str, Any],
+    *,
+    output_relative: str,
+    run_id: str,
+    operation_ref: str | None,
+) -> bool:
+    """Move one exact ready handoff to durable display-pending state."""
+
+    terminal = result.get("terminal_finalization")
+    if (
+        not isinstance(terminal, Mapping)
+        or terminal.get("durable_terminal_handoff_ready") is not True
+        or terminal.get("transaction_cleanup_completed") is not True
+        or result.get("ok") is not True
+        or type(output_relative) is not str
+        or not output_relative.startswith(
+            _PROJECT_UPDATE_OUTPUT_LOGICAL_PREFIX
+        )
+        or type(run_id) is not str
+        or re.fullmatch(r"[0-9a-f]{32}", run_id) is None
+        or type(operation_ref) is not str
+        or re.fullmatch(r"op:sha256:[0-9a-f]{64}", operation_ref) is None
+    ):
+        return False
+    project_root = _project_update_resume_project_root_read_only(
+        inspection_root
+    )
+    logical = PurePosixPath(output_relative)
+    if logical.is_absolute() or ".." in logical.parts:
+        return False
+    output_path = project_root.joinpath(*logical.parts)
+    output_raw = _wom_kit_read_bounded_real_bytes(
+        project_root,
+        output_path,
+        max_bytes=_PROJECT_UPDATE_TERMINAL_HANDOFF_MAX_BYTES,
+    )
+    if not isinstance(output_raw, bytes):
+        return False
+    def unique_output_object(
+        pairs: list[tuple[str, Any]],
+    ) -> dict[str, Any]:
+        value: dict[str, Any] = {}
+        for key, item in pairs:
+            if key in value:
+                raise ValueError("duplicate_json_member")
+            value[key] = item
+        return value
+
+    try:
+        output_document = json.loads(
+            output_raw.decode("utf-8"),
+            object_pairs_hook=unique_output_object,
+        )
+    except (UnicodeError, json.JSONDecodeError, ValueError):
+        return False
+    cli_execution = (
+        output_document.get("cli_execution")
+        if isinstance(output_document, dict)
+        else None
+    )
+    if (
+        type(output_document) is not dict
+        or type(cli_execution) is not dict
+        or cli_execution.get("status") != "completed"
+        or cli_execution.get("command") != "project-version-update"
+        or cli_execution.get("result_available") is not True
+        or cli_execution.get("exit_code") != 0
+        or cli_execution.get("run_id") != run_id
+        or output_document.get("ok") is not True
+        or output_document.get("status") != result.get("status")
+    ):
+        return False
+    output_result_payload = dict(output_document)
+    output_result_payload.pop("cli_execution", None)
+    output_result_payload.pop("cli_output_artifact", None)
+    result_payload_sha256 = project_update_transaction.sha256_document(
+        dict(result)
+    )
+    if not hmac.compare_digest(
+        project_update_transaction.sha256_document(output_result_payload),
+        result_payload_sha256,
+    ):
+        return False
+    handoff, guard = _project_update_terminal_handoff_paths(
+        project_root
+    )
+    observed = _project_update_read_terminal_document(project_root, handoff)
+    if observed is None or observed[0].get("state") != "terminal_ready":
+        return False
+    handoff_sha256 = project_update_transaction.sha256_bytes(observed[1])
+    pending = observed[0].get("pending")
+    ready = observed[0].get("ready")
+    ready_payload = ready.get("payload") if type(ready) is dict else None
+    delivery = cli_execution.get("terminal_delivery")
+    artifact = output_document.get("cli_output_artifact")
+    operation = artifact.get("operation") if type(artifact) is dict else None
+    with _PROJECT_UPDATE_TERMINAL_DELIVERY_CAPABILITIES_LOCK:
+        capability = _PROJECT_UPDATE_TERMINAL_DELIVERY_CAPABILITIES.get(
+            handoff_sha256
+        )
+    if (
+        type(ready_payload) is not dict
+        or type(pending) is not dict
+        or not _project_update_terminal_result_matches_pending(
+            result,
+            pending,
+        )
+        or type(capability) is not str
+        or re.fullmatch(r"hmac-sha256:[0-9a-f]{64}", capability) is None
+        or not hmac.compare_digest(
+            project_update_transaction.sha256_bytes(
+                capability.encode("ascii")
+            ),
+            str(
+                ready_payload.get("delivery_capability_sha256") or ""
+            ),
+        )
+        or type(operation) is not dict
+        or operation.get("operation_ref") != operation_ref
+        or type(delivery) is not dict
+        or delivery.get("terminal_handoff_sha256") != handoff_sha256
+        or not hmac.compare_digest(
+            project_update_transaction.canonical_json_bytes(delivery),
+            project_update_transaction.canonical_json_bytes(
+                _project_update_terminal_delivery_output_proof(
+                    capability,
+                    result,
+                    handoff_sha256=handoff_sha256,
+                    output_relative=output_relative,
+                    run_id=run_id,
+                    operation_ref=operation_ref,
+                )
+            ),
+        )
+    ):
+        return False
+    display_pending_path = _project_update_terminal_display_pending_path(
+        project_root
+    )
+    display_pending_verified = False
+    try:
+        with project_update_transaction._exclusive_guard(
+            guard,
+            within=project_root,
+        ):
+            current = _project_update_read_terminal_document(
+                project_root,
+                handoff,
+            )
+            if (
+                current is None
+                or not hmac.compare_digest(
+                    project_update_transaction.sha256_bytes(current[1]),
+                    handoff_sha256,
+                )
+                or current[0].get("state") != "terminal_ready"
+                or not hmac.compare_digest(
+                    project_update_transaction.sha256_bytes(
+                        capability.encode("ascii")
+                    ),
+                    str(
+                        (
+                            current[0].get("ready", {}).get("payload", {})
+                            if type(current[0].get("ready")) is dict
+                            else {}
+                        ).get("delivery_capability_sha256")
+                        or ""
+                    ),
+                )
+            ):
+                return False
+            consumed_root = project_update_transaction._mkdirs(
+                project_root,
+                _PROJECT_UPDATE_TERMINAL_CONSUMED_ROOT_LOGICAL,
+            )
+            if display_pending_path.parent != consumed_root:
+                return False
+            if os.path.lexists(display_pending_path):
+                return False
+            project_update_transaction._atomic_move_file_no_replace(
+                handoff,
+                display_pending_path,
+            )
+            # Both names share one directory, so this single flush commits
+            # both sides of the atomic rename.
+            project_update_transaction._require_directory_durable(
+                consumed_root
+            )
+            display_pending = _project_update_read_terminal_document(
+                project_root,
+                display_pending_path,
+            )
+            if (
+                display_pending is None
+                or not hmac.compare_digest(
+                    display_pending[1],
+                    current[1],
+                )
+                or not hmac.compare_digest(
+                    project_update_transaction.sha256_bytes(
+                        display_pending[1]
+                    ),
+                    handoff_sha256,
+                )
+                or os.path.lexists(handoff)
+            ):
+                return False
+            display_pending_verified = True
+    except (
+        ArchiveServiceError,
+        OSError,
+        project_update_transaction.ProjectUpdateTransactionError,
+    ):
+        return False
+    return display_pending_verified
+
+
+def _project_update_finalize_terminal_result_display(
+    inspection_root: Path | str,
+    *,
+    expected_handoff_sha256: str,
+    delivery_capability: str,
+) -> bool:
+    """Atomically finalize one displayed capsule without writer re-entry."""
+
+    if (
+        re.fullmatch(
+            r"sha256:[0-9a-f]{64}",
+            str(expected_handoff_sha256 or ""),
+        )
+        is None
+        or re.fullmatch(
+            r"hmac-sha256:[0-9a-f]{64}",
+            str(delivery_capability or ""),
+        )
+        is None
+    ):
+        return False
+    project_root = _project_update_resume_project_root_read_only(
+        inspection_root
+    )
+    active, guard = _project_update_terminal_handoff_paths(project_root)
+    display_pending = _project_update_terminal_display_pending_path(
+        project_root
+    )
+    consumed = _project_update_terminal_consumed_path(
+        project_root,
+        expected_handoff_sha256,
+    )
+    try:
+        with project_update_transaction._exclusive_guard(
+            guard,
+            within=project_root,
+        ):
+            if os.path.lexists(active):
+                return False
+            if os.path.lexists(consumed):
+                if os.path.lexists(display_pending):
+                    return False
+                existing = _project_update_read_terminal_document(
+                    project_root,
+                    consumed,
+                )
+                if (
+                    existing is None
+                    or not hmac.compare_digest(
+                        project_update_transaction.sha256_bytes(
+                            existing[1]
+                        ),
+                        expected_handoff_sha256,
+                    )
+                ):
+                    return False
+                existing_ready = existing[0].get("ready")
+                existing_ready_payload = (
+                    existing_ready.get("payload")
+                    if type(existing_ready) is dict
+                    else None
+                )
+                if (
+                    type(existing_ready_payload) is not dict
+                    or not hmac.compare_digest(
+                        project_update_transaction.sha256_bytes(
+                            delivery_capability.encode("ascii")
+                        ),
+                        str(
+                            existing_ready_payload.get(
+                                "delivery_capability_sha256"
+                            )
+                            or ""
+                        ),
+                    )
+                ):
+                    return False
+                project_update_transaction._require_directory_durable(
+                    consumed.parent
+                )
+                return True
+            observed = _project_update_read_terminal_document(
+                project_root,
+                display_pending,
+            )
+            if (
+                observed is None
+                or not hmac.compare_digest(
+                    project_update_transaction.sha256_bytes(observed[1]),
+                    expected_handoff_sha256,
+                )
+            ):
+                return False
+            ready = observed[0].get("ready")
+            ready_payload = (
+                ready.get("payload") if type(ready) is dict else None
+            )
+            if (
+                type(ready_payload) is not dict
+                or not hmac.compare_digest(
+                    project_update_transaction.sha256_bytes(
+                        delivery_capability.encode("ascii")
+                    ),
+                    str(
+                        ready_payload.get(
+                            "delivery_capability_sha256"
+                        )
+                        or ""
+                    ),
+                )
+            ):
+                return False
+            terminal_root = project_update_transaction._mkdirs(
+                project_root,
+                _PROJECT_UPDATE_TERMINAL_CONSUMED_ROOT_LOGICAL,
+            )
+            if (
+                display_pending.parent != terminal_root
+                or consumed.parent != terminal_root
+            ):
+                return False
+            project_update_transaction._atomic_move_file_no_replace(
+                display_pending,
+                consumed,
+            )
+            project_update_transaction._require_directory_durable(
+                terminal_root
+            )
+            final = _project_update_read_terminal_document(
+                project_root,
+                consumed,
+            )
+            if (
+                final is None
+                or not hmac.compare_digest(final[1], observed[1])
+                or os.path.lexists(active)
+                or os.path.lexists(display_pending)
+            ):
+                return False
+    except (
+        ArchiveServiceError,
+        OSError,
+        project_update_transaction.ProjectUpdateTransactionError,
+    ):
+        return False
+    with _PROJECT_UPDATE_TERMINAL_DELIVERY_CAPABILITIES_LOCK:
+        _PROJECT_UPDATE_TERMINAL_DELIVERY_CAPABILITIES.pop(
+            expected_handoff_sha256,
+            None,
+        )
+    return True
 
 
 def _project_update_terminal_cleanup_unknown_preflight_read_only(
@@ -115792,12 +117841,25 @@ def _wom_kit_project_version_update_resume_live_transaction(
     reviewed_by: str | None,
     transaction_ref: str | None,
     approval_executor: Callable[..., Mapping[str, Any]],
+    progress_callback: (
+        Callable[[str, str, int | None, int | None], None] | None
+    ) = None,
     _expected_approval_root: Path,
     _expected_archive_id: str,
     _approval_identifier_supplied: bool = False,
     _archive_identity_metadata_read: bool = False,
 ) -> dict[str, Any]:
     """Resume an authenticated claim/transaction pair with zero new native UI."""
+
+    def report_progress(stage: str, event: str) -> None:
+        if progress_callback is None:
+            return
+        try:
+            progress_callback(stage, event, None, None)
+        except Exception:
+            # Progress is observational. A terminal result must never be
+            # rewritten by a console, log, or operation-journal callback.
+            return
 
     if not callable(approval_executor):
         raise ArchiveServiceError(
@@ -115810,31 +117872,145 @@ def _wom_kit_project_version_update_resume_live_transaction(
         raise ArchiveServiceError(
             "exact_human_approval_resume_claim_invalid"
         )
+    report_progress("project-preflight", "resume-start")
     operator_resume_identifiers_supplied = bool(
         str(target or "").strip()
         or str(transaction_ref or "").strip()
         or str(reviewed_by or "").strip()
         or _approval_identifier_supplied
     )
-    preapproval_recovery: dict[str, Any] | None = None
-    for attempt in range(2):
-        cleanup_unknown = (
-            _project_update_terminal_cleanup_unknown_gate_read_only(
-                inspection_root,
-                operator_resume_identifiers_supplied=(
-                    operator_resume_identifiers_supplied
-                ),
-                archive_identity_metadata_read=(
-                    _archive_identity_metadata_read
-                ),
+    cleanup_unknown = (
+        _project_update_terminal_cleanup_unknown_gate_read_only(
+            inspection_root,
+            operator_resume_identifiers_supplied=(
+                operator_resume_identifiers_supplied
+            ),
+            archive_identity_metadata_read=(
+                _archive_identity_metadata_read
+            ),
+        )
+    )
+    if cleanup_unknown is not None:
+        if _approval_identifier_supplied:
+            raise ArchiveServiceError(
+                "exact_human_approval_resume_claim_invalid"
+            )
+        return cleanup_unknown
+    project_root = _project_update_resume_project_root_read_only(
+        inspection_root
+    )
+    try:
+        project_update_transaction.active_transaction_ref_for_resume_read_only(
+            project_root
+        )
+        active_transaction_observed = True
+    except project_update_transaction.ProjectUpdateTransactionError as failure:
+        if failure.code != "project_update_transaction_not_found":
+            raise
+        active_transaction_observed = False
+    cleanup_classification, _history_count = (
+        _project_update_terminal_cleanup_artifact_classification_read_only(
+            project_root
+        )
+    )
+    if (
+        not active_transaction_observed
+        and cleanup_classification == "recoverable_exact"
+    ):
+        if not _wom_kit_project_version_update_approval_authority_matches(
+            inspection_root,
+            expected_root=_expected_approval_root,
+            expected_archive_id=_expected_archive_id,
+        ):
+            raise ArchiveServiceError(
+                "project_version_update_approval_archive_identity_changed"
+            )
+        tombstone = (
+            project_update_transaction.ProjectUpdateTransaction
+            .discover_complete_cleanup_tombstone_for_resume_read_only(
+                project_root
             )
         )
-        if cleanup_unknown is not None:
-            if _approval_identifier_supplied:
-                raise ArchiveServiceError(
-                    "exact_human_approval_resume_claim_invalid"
+        supplied_transaction_ref = str(transaction_ref or "").strip()
+        if (
+            tombstone is None
+            or (
+                supplied_transaction_ref
+                and supplied_transaction_ref
+                != tombstone.transaction_ref
+            )
+        ):
+            raise ArchiveServiceError(
+                "project_version_update_resume_binding_mismatch"
+            )
+        restored = (
+            project_update_transaction.ProjectUpdateTransaction
+            .restore_complete_cleanup_tombstone_for_resume(
+                project_root,
+                tombstone,
+            )
+        )
+        if (
+            restored.transaction_ref != tombstone.transaction_ref
+            or restored.cleanup_authority_sha256_read_only()
+            != tombstone.cleanup_authority_sha256
+        ):
+            raise ArchiveServiceError(
+                "project_version_update_terminal_cleanup_authority_invalid"
+            )
+        report_progress(
+            "project-preflight",
+            "resume-complete-cleanup-tombstone-restored",
+        )
+    elif (
+        not active_transaction_observed
+        and cleanup_classification not in {
+        "absent",
+        "history_only_exact",
+        }
+    ):
+        raise ArchiveServiceError(
+            "project_version_update_terminal_cleanup_recovery_required"
+        )
+    terminal_handoff_state = (
+        _project_update_terminal_handoff_state_read_only(inspection_root)
+    )
+    if terminal_handoff_state == "terminal_ready":
+        replayed = _project_update_replay_ready_terminal_handoff(
+            inspection_root,
+            target=target,
+            reviewed_by=reviewed_by,
+            transaction_ref=transaction_ref,
+            approval_executor=approval_executor,
+            expected_approval_root=_expected_approval_root,
+            expected_archive_id=_expected_archive_id,
+        )
+        if replayed is None:
+            raise ArchiveServiceError(
+                "project_version_update_terminal_handoff_invalid"
+            )
+        report_progress("write-receipt", "resume-terminal-result-replayed")
+        return replayed
+    preapproval_recovery: dict[str, Any] | None = None
+    for attempt in range(2):
+        if attempt:
+            cleanup_unknown = (
+                _project_update_terminal_cleanup_unknown_gate_read_only(
+                    inspection_root,
+                    operator_resume_identifiers_supplied=(
+                        operator_resume_identifiers_supplied
+                    ),
+                    archive_identity_metadata_read=(
+                        _archive_identity_metadata_read
+                    ),
                 )
-            return cleanup_unknown
+            )
+            if cleanup_unknown is not None:
+                if _approval_identifier_supplied:
+                    raise ArchiveServiceError(
+                        "exact_human_approval_resume_claim_invalid"
+                    )
+                return cleanup_unknown
         try:
             preapproval_recovery = (
                 _project_update_resume_preapproval_transaction(
@@ -115892,6 +118068,8 @@ def _wom_kit_project_version_update_resume_live_transaction(
                 )
             return cleanup_unknown
         raise
+
+    report_progress("verify-release", "resume-authenticated-state")
 
     def continue_started_claim(
         claim: _ClaimedExactHumanApproval,
@@ -115970,10 +118148,20 @@ def _wom_kit_project_version_update_resume_live_transaction(
             raise ArchiveServiceError(
                 "project_version_update_result_invalid"
             )
-        return dict(result)
-    finally:
-        state.directory_guard.close()
-        lifetime.close_after_service_transaction()
+        completed_result = dict(result)
+        report_progress("write-receipt", "resume-terminal-result")
+    except BaseException:
+        _project_update_close_after_service_failure(
+            state.directory_guard.close,
+            lifetime,
+        )
+        raise
+    return _project_update_finish_service_result(
+        completed_result,
+        state,
+        lifetime,
+        close_owned_resources=state.directory_guard.close,
+    )
 
 
 def _wom_kit_project_version_update_cancel_claimless_preapproval_transaction(
@@ -116021,10 +118209,13 @@ def _wom_kit_project_version_update_cancel_claimless_preapproval_transaction(
             state,
             confirm_claim_store_empty=confirm_claim_store_empty,
         )
-    finally:
-        state.directory_guard.close()
-        lifetime.close_after_service_transaction()
-    return _project_update_claimless_preapproval_cancel_result(
+    except BaseException:
+        _project_update_close_after_service_failure(
+            state.directory_guard.close,
+            lifetime,
+        )
+        raise
+    result = _project_update_claimless_preapproval_cancel_result(
         operator_resume_identifiers_supplied=bool(
             str(target or "").strip()
             or str(transaction_ref or "").strip()
@@ -116032,6 +118223,11 @@ def _wom_kit_project_version_update_cancel_claimless_preapproval_transaction(
             or _approval_identifier_supplied
         ),
         live_lock_verified=live_lock_present_at_resume,
+    )
+    return _project_update_finish_nonterminal_service_result(
+        result,
+        lifetime,
+        close_owned_resources=state.directory_guard.close,
     )
 
 
@@ -116137,8 +118333,8 @@ class _ProjectVersionUpdateGitRunnerLifetime:
         if self._runner is None or self._handed_to_claim_finalizer:
             return
         runner = self._runner
-        self._runner = None
         runner.close()
+        self._runner = None
 
 
 _PROJECT_UPDATE_PRIVATE_PLAN_SCHEMA = (
@@ -116151,12 +118347,82 @@ _PROJECT_UPDATE_STATIC_APPROVAL_CONTRACT = {
     "domain_writer_reentry_on_succeeded_tail_allowed": False,
 }
 _PROJECT_UPDATE_RECEIPT_MAX_BYTES = 2 * 1024 * 1024
+_PROJECT_UPDATE_TERMINAL_HANDOFF_SCHEMA = (
+    "wom-kit/project-version-update-terminal-handoff/v0.4.16"
+)
+_PROJECT_UPDATE_TERMINAL_RECORD_SCHEMA = (
+    "wom-kit/project-version-update-terminal-record/v0.4.16"
+)
+_PROJECT_UPDATE_TERMINAL_HANDOFF_LOGICAL = (
+    ".zettel-kasten/private/version-update-terminal/active.json"
+)
+_PROJECT_UPDATE_TERMINAL_DISPLAY_PENDING_LOGICAL = (
+    ".zettel-kasten/private/version-update-terminal/display-pending.json"
+)
+_PROJECT_UPDATE_TERMINAL_HANDOFF_GUARD_LOGICAL = (
+    ".zettel-kasten/private/version-update-terminal/.handoff.guard"
+)
+_PROJECT_UPDATE_TERMINAL_CONSUMED_ROOT_LOGICAL = (
+    ".zettel-kasten/private/version-update-terminal"
+)
+_PROJECT_UPDATE_TERMINAL_HANDOFF_MAX_BYTES = 4 * 1024 * 1024
+_PROJECT_UPDATE_TERMINAL_CREATE_STAGE_NAME = (
+    ".initial-create.project-update-terminal-v0416.stage"
+)
+_PROJECT_UPDATE_TERMINAL_CREATE_RESIDUE_NAME = (
+    ".initial-create.project-update-terminal-v0416.residue"
+)
+_PROJECT_UPDATE_OUTPUT_LOGICAL_PREFIX = ".zettel-kasten/diagnostics/"
+_PROJECT_UPDATE_TERMINAL_DELIVERY_CAPABILITIES: dict[str, str] = {}
+_PROJECT_UPDATE_TERMINAL_DELIVERY_CAPABILITIES_LOCK = threading.Lock()
+_PROJECT_UPDATE_TERMINAL_CLEANUP_WARNING = (
+    "The project update reached its authenticated terminal state, but "
+    "follow-up control cleanup was not fully verified; do not rerun the "
+    "domain writer or delete terminal evidence."
+)
+_PROJECT_UPDATE_TERMINAL_DELIVERY_WARNING = (
+    "The project update reached its authenticated terminal state, but "
+    "durable result delivery has not yet been acknowledged; preserve the "
+    "terminal handoff until a project-scoped output artifact is verified."
+)
+_PROJECT_UPDATE_TERMINAL_CLEANUP_ACTION = (
+    "Preserve terminal cleanup evidence and use read-only version "
+    "verification; do not infer cleanup authority from a cleanup proof or "
+    "rerun the approved update writer."
+)
+_PROJECT_UPDATE_TERMINAL_DELIVERY_ACTION = (
+    "Run project-version-update --resume without private identifiers; WOM "
+    "will reuse the exact bound output when present or create a "
+    "project-scoped output when needed."
+)
 
 
 def _project_update_canonical_bytes(value: Any) -> bytes:
     """Canonical private transaction bytes; never used as a public echo."""
 
     return project_update_transaction.canonical_json_bytes(value) + b"\n"
+
+
+def _project_update_exact_terminal_payload_bytes(
+    value: Mapping[str, Any],
+) -> bytes:
+    """Use the exact-human terminal-MAC canonical byte contract.
+
+    This is intentionally separate from the transaction serializer: exact
+    human approval authenticates UTF-8 JSON with non-ASCII text preserved and
+    one trailing newline.  A byte mismatch here invalidates the authenticated
+    terminal handoff even when the decoded JSON document is equivalent.
+    """
+
+    return (
+        json.dumps(
+            dict(value),
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        + b"\n"
+    )
 
 
 def _project_update_private_json_value(value: Any) -> Any:
@@ -116296,6 +118562,36 @@ def _project_update_runtime_candidate_private_document(
         "installed_distributions": [dict(item) for item in candidate.installed_distributions],
         "verification": dict(candidate.verification),
         "existing_runtime_reusable": candidate.existing_runtime_reusable,
+        "existing_runtime_repair_required": (
+            candidate.existing_runtime_repair_required
+        ),
+        "existing_runtime_root_identity": (
+            None
+            if candidate.existing_runtime_root_identity is None
+            else list(candidate.existing_runtime_root_identity)
+        ),
+        "existing_runtime_inventory": [
+            {
+                "relative_path": item.relative_path,
+                "entry_type": item.entry_type,
+                "device": item.device,
+                "inode": item.inode,
+                "nlink": item.nlink,
+                "size_bytes": item.size_bytes,
+                "mtime_ns": item.mtime_ns,
+                "sha256": item.sha256,
+            }
+            for item in candidate.existing_runtime_inventory
+        ],
+        "existing_runtime_inventory_sha256": (
+            candidate.existing_runtime_inventory_sha256
+        ),
+        "existing_runtime_inventory_count": (
+            candidate.existing_runtime_inventory_count
+        ),
+        "existing_runtime_inventory_bytes": (
+            candidate.existing_runtime_inventory_bytes
+        ),
     }
 
 
@@ -116306,7 +118602,7 @@ def _project_update_restore_runtime_candidate(
 ) -> project_runtime.PreparedRuntimeCandidate:
     """Rehydrate one sealed private candidate without PATH or child lookup."""
 
-    expected_keys = {
+    legacy_expected_keys = {
         "schema", "target_tag", "target_version", "target_commit",
         "transaction_ref", "logical_candidate_path", "logical_seal_path",
         "project_root_identity", "transaction_root_identity",
@@ -116321,9 +118617,20 @@ def _project_update_restore_runtime_candidate(
         "python_version", "installed_distributions", "verification",
         "existing_runtime_reusable",
     }
+    current_expected_keys = legacy_expected_keys | {
+        "existing_runtime_repair_required", "existing_runtime_root_identity",
+        "existing_runtime_inventory", "existing_runtime_inventory_sha256",
+        "existing_runtime_inventory_count", "existing_runtime_inventory_bytes",
+    }
+    legacy_resume_shape = (
+        type(value) is dict and set(value) == legacy_expected_keys
+    )
     if (
         type(value) is not dict
-        or set(value) != expected_keys
+        or (
+            not legacy_resume_shape
+            and set(value) != current_expected_keys
+        )
         or value.get("schema")
         != "wom-kit/project-runtime-candidate-private-resume/v0.4.3"
         or value.get("transaction_ref") != transaction.transaction_ref
@@ -116356,6 +118663,15 @@ def _project_update_restore_runtime_candidate(
             for item in value["inventory"]
             if type(item) is dict
         )
+        existing_runtime_inventory = (
+            ()
+            if legacy_resume_shape
+            else tuple(
+                project_runtime.RuntimeCandidateInventoryEntry(**dict(item))
+                for item in value["existing_runtime_inventory"]
+                if type(item) is dict
+            )
+        )
         normalized_payload_inventory = tuple(
             (str(item[0]), int(item[1]), str(item[2]))
             for item in value["normalized_payload_inventory"]
@@ -116363,6 +118679,11 @@ def _project_update_restore_runtime_candidate(
         )
         if (
             len(inventory) != len(value["inventory"])
+            or (
+                not legacy_resume_shape
+                and len(existing_runtime_inventory)
+                != len(value["existing_runtime_inventory"])
+            )
             or len(normalized_payload_inventory)
             != len(value["normalized_payload_inventory"])
         ):
@@ -116414,6 +118735,35 @@ def _project_update_restore_runtime_candidate(
             ),
             verification=dict(value["verification"]),
             existing_runtime_reusable=value["existing_runtime_reusable"],
+            existing_runtime_repair_required=(
+                False
+                if legacy_resume_shape
+                else value["existing_runtime_repair_required"]
+            ),
+            existing_runtime_root_identity=(
+                None
+                if legacy_resume_shape
+                else identity(
+                    "existing_runtime_root_identity", optional=True
+                )
+            ),
+            existing_runtime_inventory=existing_runtime_inventory,
+            existing_runtime_inventory_sha256=(
+                None
+                if legacy_resume_shape
+                else value["existing_runtime_inventory_sha256"]
+            ),
+            existing_runtime_inventory_count=(
+                0
+                if legacy_resume_shape
+                else value["existing_runtime_inventory_count"]
+            ),
+            existing_runtime_inventory_bytes=(
+                0
+                if legacy_resume_shape
+                else value["existing_runtime_inventory_bytes"]
+            ),
+            legacy_resume_shape=legacy_resume_shape,
         )
     except (KeyError, TypeError, ValueError, AttributeError):
         raise ArchiveServiceError(
@@ -116433,6 +118783,36 @@ def _project_update_restore_runtime_candidate(
             "project_version_update_runtime_candidate_resume_invalid"
         )
     return candidate
+
+
+def _project_update_legacy_resume_serialization_family(
+    transaction: project_update_transaction.ProjectUpdateTransaction,
+    candidate: project_runtime.PreparedRuntimeCandidate,
+    private_plan: Mapping[str, Any],
+) -> bool:
+    """Require one exact predecessor/current serialization family.
+
+    The v0.4.15 transaction binding, private candidate, and private plan all
+    omitted the v0.4.16 repair fields together.  Compatibility is valid only
+    for that complete historical shape; a partial or cross-family artifact is
+    corruption, not a legacy defaulting opportunity.
+    """
+
+    transaction_legacy = (
+        transaction.intent.runtime_candidate.legacy_document_shape
+    )
+    candidate_legacy = candidate.legacy_resume_shape
+    if (
+        type(transaction_legacy) is not bool
+        or type(candidate_legacy) is not bool
+        or type(private_plan) is not dict
+        or candidate_legacy != transaction_legacy
+        or ("static_receipt_schema" in private_plan) == transaction_legacy
+    ):
+        raise ArchiveServiceError(
+            "project_version_update_resume_binding_mismatch"
+        )
+    return transaction_legacy
 
 
 def _project_update_unknown_component_sha256(component_ref: str) -> str:
@@ -116511,6 +118891,11 @@ class _ProjectVersionUpdateDurableApprovalState:
     runtime_materialization: project_runtime.RuntimeMaterialization | None = None
     approved_plan_sha256: str | None = None
     approved_target_binding_sha256: str | None = None
+    terminal_update_verified: bool = False
+    transaction_cleanup_completed: bool | None = None
+    terminal_domain_result: dict[str, Any] | None = None
+    terminal_handoff_sha256: str | None = None
+    existing_cleanup_authority_sha256: str | None = None
 
     def checkpoint_head(self) -> project_update_transaction.ProjectUpdateCheckpoint:
         journal = self.transaction.inspect().journal
@@ -116525,6 +118910,2229 @@ class _ProjectVersionUpdateDurableApprovalState:
 class _ProjectVersionUpdatePreparedApproval:
     preview: Mapping[str, Any]
     state: _ProjectVersionUpdateDurableApprovalState
+
+
+def _project_update_terminal_handoff_paths(
+    project_root: Path,
+) -> tuple[Path, Path]:
+    root = Path(os.path.abspath(str(project_root)))
+    handoff = root.joinpath(
+        *PurePosixPath(_PROJECT_UPDATE_TERMINAL_HANDOFF_LOGICAL).parts
+    )
+    guard = root.joinpath(
+        *PurePosixPath(_PROJECT_UPDATE_TERMINAL_HANDOFF_GUARD_LOGICAL).parts
+    )
+    return handoff, guard
+
+
+def _project_update_terminal_display_pending_path(
+    project_root: Path,
+) -> Path:
+    root = Path(os.path.abspath(str(project_root)))
+    return root.joinpath(
+        *PurePosixPath(
+            _PROJECT_UPDATE_TERMINAL_DISPLAY_PENDING_LOGICAL
+        ).parts
+    )
+
+
+@dataclass(frozen=True)
+class _ProjectUpdateTerminalControlScaffold:
+    project_root: Path
+    terminal_root: Path
+    terminal_root_identity: tuple[int, int]
+    guard: Path
+    guard_identity: tuple[int, int]
+
+
+def _project_update_terminal_control_scaffold_state(
+    project_root: Path,
+) -> _ProjectUpdateTerminalControlScaffold:
+    """Compatibility snapshot created inside the held control boundary."""
+
+    with _project_update_terminal_control_boundary(project_root) as value:
+        return value[0]
+
+
+def _project_update_terminal_control_scaffold(project_root: Path) -> Path:
+    """Compatibility wrapper returning the verified terminal root."""
+
+    return _project_update_terminal_control_scaffold_state(
+        project_root
+    ).terminal_root
+
+
+def _project_update_terminal_identity(
+    path: Path,
+    *,
+    regular: bool,
+) -> tuple[int, int]:
+    observed = os.lstat(path)
+    reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+    if (
+        stat.S_ISLNK(observed.st_mode)
+        or bool(
+            reparse_flag
+            and getattr(observed, "st_file_attributes", 0) & reparse_flag
+        )
+        or (regular and (not stat.S_ISREG(observed.st_mode) or observed.st_nlink != 1))
+        or (not regular and not stat.S_ISDIR(observed.st_mode))
+    ):
+        raise OSError("project_update_terminal_control_boundary_unsafe")
+    return int(observed.st_dev), int(observed.st_ino)
+
+
+@contextmanager
+def _project_update_terminal_bound_guard(
+    project_root: Path,
+    terminal_root: Path,
+    binding: dict[str, Any],
+) -> Iterable[tuple[Path, tuple[int, int]]]:
+    """Create, lock, and verify the guard through the held parent boundary."""
+
+    guard = terminal_root / Path(
+        _PROJECT_UPDATE_TERMINAL_HANDOFF_GUARD_LOGICAL
+    ).name
+    parent_descriptor = binding.get("descriptor")
+    if isinstance(parent_descriptor, int):
+        flags = os.O_RDWR | getattr(os, "O_BINARY", 0)
+        flags |= getattr(os, "O_NOFOLLOW", 0)
+        descriptor: int | None = None
+        locked = False
+        created = False
+        try:
+            try:
+                descriptor = os.open(
+                    guard.name,
+                    flags,
+                    dir_fd=parent_descriptor,
+                )
+            except FileNotFoundError:
+                try:
+                    descriptor = os.open(
+                        guard.name,
+                        flags | os.O_CREAT | os.O_EXCL,
+                        0o600,
+                        dir_fd=parent_descriptor,
+                    )
+                    created = True
+                    if os.write(descriptor, b"\x00") != 1:
+                        raise OSError(
+                            "project_update_terminal_guard_write_incomplete"
+                        )
+                    os.fsync(descriptor)
+                    os.fsync(parent_descriptor)
+                except FileExistsError:
+                    descriptor = os.open(
+                        guard.name,
+                        flags,
+                        dir_fd=parent_descriptor,
+                    )
+            opened = os.fstat(descriptor)
+            named = os.stat(
+                guard.name,
+                dir_fd=parent_descriptor,
+                follow_symlinks=False,
+            )
+            if (
+                not stat.S_ISREG(opened.st_mode)
+                or int(opened.st_nlink) != 1
+                or int(opened.st_size) != 1
+                or (opened.st_dev, opened.st_ino)
+                != (named.st_dev, named.st_ino)
+                or stat.S_IMODE(opened.st_mode) & 0o077
+                or int(opened.st_uid) != int(os.geteuid())
+            ):
+                raise OSError("project_update_terminal_guard_unsafe")
+            os.lseek(descriptor, 0, os.SEEK_SET)
+            if os.read(descriptor, 2) != b"\x00":
+                raise OSError("project_update_terminal_guard_invalid")
+            import fcntl
+
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            locked = True
+            after_lock = os.fstat(descriptor)
+            named_after_lock = os.stat(
+                guard.name,
+                dir_fd=parent_descriptor,
+                follow_symlinks=False,
+            )
+            identity = (int(opened.st_dev), int(opened.st_ino))
+            if (
+                (after_lock.st_dev, after_lock.st_ino) != identity
+                or (named_after_lock.st_dev, named_after_lock.st_ino)
+                != identity
+                or int(after_lock.st_size) != 1
+            ):
+                raise OSError("project_update_terminal_guard_changed")
+            yield guard, identity
+            named_after = os.stat(
+                guard.name,
+                dir_fd=parent_descriptor,
+                follow_symlinks=False,
+            )
+            if (
+                (named_after.st_dev, named_after.st_ino) != identity
+                or os.fstat(descriptor).st_size != 1
+            ):
+                raise OSError("project_update_terminal_guard_changed")
+        finally:
+            if descriptor is not None:
+                if locked:
+                    try:
+                        fcntl.flock(descriptor, fcntl.LOCK_UN)
+                    except OSError:
+                        pass
+                os.close(descriptor)
+        return
+
+    # The held Windows directory chain denies deletion/replacement of the
+    # terminal parent.  Create or recover only the one fixed guard name through
+    # an exact no-delete-share handle.  A hard exit may leave exactly zero
+    # bytes after CreateFileW(CREATE_NEW); only that regular, single-link,
+    # default-stream file may be completed to the canonical one byte.  The
+    # returned named identity must then be the same file acquired by the
+    # advisory lock, closing the create/lock substitution gap.
+    if not binding.get("windows_handles"):
+        raise OSError("project_update_terminal_guard_parent_unbound")
+    try:
+        guard_identity: list[tuple[int, int]] = []
+        try:
+            guard_raw = _project_update_terminal_windows_move_exact_no_replace(
+                guard,
+                None,
+                expected_raw=None,
+                create_raw=b"\x00",
+                _named_identity_out=guard_identity,
+            )
+        except OSError:
+            guard_identity.clear()
+            guard_raw = _project_update_terminal_windows_move_exact_no_replace(
+                guard,
+                None,
+                expected_raw=b"\x00",
+                complete_empty_with=b"\x00",
+                _named_identity_out=guard_identity,
+            )
+        if guard_raw != b"\x00" or len(guard_identity) != 1:
+            raise OSError("project_update_terminal_guard_invalid")
+        identity = guard_identity[0]
+        if _project_update_terminal_identity(guard, regular=True) != identity:
+            raise OSError("project_update_terminal_guard_changed")
+        project_update_transaction._require_directory_durable(terminal_root)
+        with project_update_transaction._exclusive_guard(
+            guard,
+            within=project_root,
+        ):
+            if (
+                _project_update_terminal_identity(guard, regular=True)
+                != identity
+            ):
+                raise OSError("project_update_terminal_guard_changed")
+            yield guard, identity
+            if (
+                _project_update_terminal_identity(guard, regular=True)
+                != identity
+            ):
+                raise OSError("project_update_terminal_guard_changed")
+    except project_update_transaction.ProjectUpdateTransactionError as failure:
+        raise OSError(failure.code) from None
+
+
+@contextmanager
+def _project_update_terminal_control_boundary(
+    project_root: Path,
+) -> Iterable[tuple[_ProjectUpdateTerminalControlScaffold, dict[str, Any]]]:
+    """Create and hold the terminal parent before guard or document access."""
+
+    # Approved project-update mutation is a Windows-only contract.  Refuse the
+    # terminal writer before ``create=True`` can create even the first private
+    # control directory on platforms where the canonical namespace cannot be
+    # retained against a whole-directory rename.
+    if os.name != "nt":
+        raise OSError("project_update_terminal_control_platform_unsupported")
+    canonical_project_root = Path(project_root).resolve(strict=True)
+    if not os.path.samefile(project_root, canonical_project_root):
+        raise OSError("project_update_terminal_control_boundary_changed")
+    terminal_root = canonical_project_root.joinpath(
+        *PurePosixPath(
+            _PROJECT_UPDATE_TERMINAL_CONSUMED_ROOT_LOGICAL
+        ).parts
+    )
+    with _activity_group_bound_directory_chain(
+        canonical_project_root,
+        terminal_root,
+        create=True,
+    ) as binding:
+        if binding.get("path") != terminal_root:
+            raise OSError("project_update_terminal_control_boundary_changed")
+        parent_descriptor = binding.get("descriptor")
+        if isinstance(parent_descriptor, int):
+            terminal_info = os.fstat(parent_descriptor)
+            if not stat.S_ISDIR(terminal_info.st_mode):
+                raise OSError("project_update_terminal_control_boundary_unsafe")
+            os.fsync(parent_descriptor)
+        else:
+            terminal_info = os.lstat(terminal_root)
+            if (
+                not stat.S_ISDIR(terminal_info.st_mode)
+                or stat.S_ISLNK(terminal_info.st_mode)
+            ):
+                raise OSError("project_update_terminal_control_boundary_unsafe")
+            durable_directory = canonical_project_root
+            project_update_transaction._require_directory_durable(
+                durable_directory
+            )
+            for part in PurePosixPath(
+                _PROJECT_UPDATE_TERMINAL_CONSUMED_ROOT_LOGICAL
+            ).parts:
+                durable_directory = durable_directory / part
+                project_update_transaction._require_directory_durable(
+                    durable_directory
+                )
+        terminal_identity = (
+            int(terminal_info.st_dev),
+            int(terminal_info.st_ino),
+        )
+        expected_parent_identity: tuple[int, int] | None = None
+        if isinstance(parent_descriptor, int):
+            flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+            flags |= getattr(os, "O_NOFOLLOW", 0)
+            expected_parent_descriptor = os.open(
+                "..",
+                flags,
+                dir_fd=parent_descriptor,
+            )
+            try:
+                expected_parent = os.fstat(expected_parent_descriptor)
+                expected_parent_identity = (
+                    int(expected_parent.st_dev),
+                    int(expected_parent.st_ino),
+                )
+            finally:
+                os.close(expected_parent_descriptor)
+            # The bound-chain creator may have created more than the final
+            # directory. Flush every ancestor through held relative handles so
+            # each new child name is durable before the guard or handoff is
+            # published.
+            durable_descriptor = os.dup(parent_descriptor)
+            try:
+                for _part in PurePosixPath(
+                    _PROJECT_UPDATE_TERMINAL_CONSUMED_ROOT_LOGICAL
+                ).parts:
+                    ancestor_descriptor = os.open(
+                        "..",
+                        flags,
+                        dir_fd=durable_descriptor,
+                    )
+                    os.fsync(ancestor_descriptor)
+                    os.close(durable_descriptor)
+                    durable_descriptor = ancestor_descriptor
+            finally:
+                os.close(durable_descriptor)
+
+        def terminal_namespace_matches() -> bool:
+            if isinstance(parent_descriptor, int):
+                flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+                flags |= getattr(os, "O_NOFOLLOW", 0)
+                ancestor_descriptor = os.open(
+                    "..",
+                    flags,
+                    dir_fd=parent_descriptor,
+                )
+                try:
+                    observed_parent = os.fstat(ancestor_descriptor)
+                    if (
+                        int(observed_parent.st_dev),
+                        int(observed_parent.st_ino),
+                    ) != expected_parent_identity:
+                        return False
+                    named = os.stat(
+                        terminal_root.name,
+                        dir_fd=ancestor_descriptor,
+                        follow_symlinks=False,
+                    )
+                except FileNotFoundError:
+                    return False
+                finally:
+                    os.close(ancestor_descriptor)
+                return (
+                    stat.S_ISDIR(named.st_mode)
+                    and (int(named.st_dev), int(named.st_ino))
+                    == terminal_identity
+                )
+            return (
+                _project_update_terminal_identity(
+                    terminal_root,
+                    regular=False,
+                )
+                == terminal_identity
+            )
+
+        if not terminal_namespace_matches():
+            raise OSError("project_update_terminal_control_boundary_changed")
+        with _project_update_terminal_bound_guard(
+            canonical_project_root,
+            terminal_root,
+            binding,
+        ) as (guard, guard_identity):
+            if isinstance(parent_descriptor, int):
+                if (
+                    int(os.fstat(parent_descriptor).st_dev),
+                    int(os.fstat(parent_descriptor).st_ino),
+                ) != terminal_identity:
+                    raise OSError(
+                        "project_update_terminal_control_boundary_changed"
+                    )
+            elif (
+                _project_update_terminal_identity(
+                    terminal_root,
+                    regular=False,
+                )
+                != terminal_identity
+            ):
+                raise OSError(
+                    "project_update_terminal_control_boundary_changed"
+                )
+            yield (
+                _ProjectUpdateTerminalControlScaffold(
+                    project_root=canonical_project_root,
+                    terminal_root=terminal_root,
+                    terminal_root_identity=terminal_identity,
+                    guard=guard,
+                    guard_identity=guard_identity,
+                ),
+                binding,
+            )
+            if not terminal_namespace_matches():
+                raise OSError(
+                    "project_update_terminal_control_boundary_changed"
+                )
+
+
+def _project_update_terminal_consumed_path(
+    project_root: Path,
+    handoff_sha256: str,
+) -> Path:
+    if re.fullmatch(r"sha256:[0-9a-f]{64}", handoff_sha256) is None:
+        raise ArchiveServiceError(
+            "project_version_update_terminal_delivery_binding_invalid"
+        )
+    root = Path(os.path.abspath(str(project_root)))
+    consumed_root = root.joinpath(
+        *PurePosixPath(
+            _PROJECT_UPDATE_TERMINAL_CONSUMED_ROOT_LOGICAL
+        ).parts
+    )
+    return consumed_root / (handoff_sha256.removeprefix("sha256:") + ".json")
+
+
+def _project_update_read_terminal_document(
+    project_root: Path,
+    path: Path,
+) -> tuple[dict[str, Any], bytes] | None:
+    try:
+        observed = os.lstat(path)
+    except FileNotFoundError:
+        return None
+    except OSError:
+        raise ArchiveServiceError(
+            "project_version_update_terminal_handoff_invalid"
+        ) from None
+    if (
+        stat.S_ISLNK(observed.st_mode)
+        or bool(
+            getattr(observed, "st_file_attributes", 0)
+            & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+        )
+        or not stat.S_ISREG(observed.st_mode)
+        or not wom_kit_existing_path_components_are_real(project_root, path)
+    ):
+        raise ArchiveServiceError(
+            "project_version_update_terminal_handoff_invalid"
+        )
+    raw = _wom_kit_read_bounded_real_bytes(
+        project_root,
+        path,
+        max_bytes=_PROJECT_UPDATE_TERMINAL_HANDOFF_MAX_BYTES,
+    )
+    if not isinstance(raw, bytes):
+        raise ArchiveServiceError(
+            "project_version_update_terminal_handoff_invalid"
+        )
+    try:
+        value = project_update_transaction._parse_document(
+            raw,
+            code="project_update_transaction_invalid",
+        )
+    except project_update_transaction.ProjectUpdateTransactionError:
+        raise ArchiveServiceError(
+            "project_version_update_terminal_handoff_invalid"
+        ) from None
+    if (
+        type(value) is not dict
+        or _project_update_canonical_bytes(value) != raw
+    ):
+        raise ArchiveServiceError(
+            "project_version_update_terminal_handoff_invalid"
+        )
+    return value, raw
+
+
+def _project_update_read_terminal_document_bound(
+    project_root: Path,
+    binding: dict[str, Any],
+    path: Path,
+) -> tuple[dict[str, Any], bytes] | None:
+    """Read one terminal document only through its already-held parent."""
+
+    if binding.get("path") != path.parent:
+        raise ArchiveServiceError(
+            "project_version_update_terminal_handoff_invalid"
+        )
+    try:
+        if os.name == "nt":
+            # Re-open the exact named file with delete sharing denied, flush
+            # that same handle, and require one link plus the default data
+            # stream only.  Initial publication and idempotent re-use therefore
+            # enforce the same terminal-file invariants.
+            raw = _project_update_terminal_windows_move_exact_no_replace(
+                path,
+                None,
+                expected_raw=None,
+            )
+        else:
+            raw = _read_activity_group_regular_bytes_bound(
+                project_root,
+                binding,
+                path,
+                max_bytes=_PROJECT_UPDATE_TERMINAL_HANDOFF_MAX_BYTES,
+            )
+    except FileNotFoundError:
+        return None
+    except OSError:
+        raise ArchiveServiceError(
+            "project_version_update_terminal_handoff_invalid"
+        ) from None
+    try:
+        value = project_update_transaction._parse_document(
+            raw,
+            code="project_update_transaction_invalid",
+        )
+    except project_update_transaction.ProjectUpdateTransactionError:
+        raise ArchiveServiceError(
+            "project_version_update_terminal_handoff_invalid"
+        ) from None
+    if type(value) is not dict or _project_update_canonical_bytes(value) != raw:
+        raise ArchiveServiceError(
+            "project_version_update_terminal_handoff_invalid"
+        )
+    return value, raw
+
+
+def _project_update_terminal_create_stage_path(
+    path: Path,
+    raw: bytes,
+) -> Path:
+    """Return the one fixed, bounded initial-publication evidence name."""
+
+    if not isinstance(raw, bytes):
+        raise OSError("project_update_terminal_handoff_bytes_invalid")
+    return path.with_name(_PROJECT_UPDATE_TERMINAL_CREATE_STAGE_NAME)
+
+
+def _project_update_terminal_bound_snapshot(
+    project_root: Path,
+    binding: dict[str, Any],
+    path: Path,
+) -> tuple[bytes, tuple[int, int]]:
+    """Read one sibling while retaining and rechecking its exact identity."""
+
+    if binding.get("path") != path.parent:
+        raise OSError("project_update_terminal_handoff_parent_mismatch")
+    with _hold_activity_group_evidence_file(
+        project_root,
+        path,
+        max_bytes=_PROJECT_UPDATE_TERMINAL_HANDOFF_MAX_BYTES,
+    ) as held:
+        raw = held.get("raw")
+        identity = held.get("identity")
+        if (
+            not isinstance(raw, bytes)
+            or not isinstance(identity, tuple)
+            or len(identity) != 2
+        ):
+            raise OSError("project_update_terminal_handoff_stage_unsafe")
+        descriptor = binding.get("descriptor")
+        if isinstance(descriptor, int):
+            observed = os.stat(
+                path.name,
+                dir_fd=descriptor,
+                follow_symlinks=False,
+            )
+        else:
+            observed = os.lstat(path)
+        exact_identity = (int(identity[0]), int(identity[1]))
+        if (
+            not stat.S_ISREG(observed.st_mode)
+            or int(observed.st_nlink) != 1
+            or int(observed.st_size) != len(raw)
+            or (int(observed.st_dev), int(observed.st_ino))
+            != exact_identity
+            or (
+                os.name != "nt"
+                and (
+                    stat.S_IMODE(observed.st_mode) & 0o077
+                    or int(observed.st_uid) != int(os.geteuid())
+                )
+            )
+        ):
+            raise OSError("project_update_terminal_handoff_stage_changed")
+        return raw, exact_identity
+
+
+def _project_update_terminal_create_residue_path(
+    stage: Path,
+) -> Path:
+    """Return the single bounded evidence slot for one exact initial result."""
+
+    return stage.with_name(_PROJECT_UPDATE_TERMINAL_CREATE_RESIDUE_NAME)
+
+
+def _project_update_terminal_windows_move_exact_no_replace(
+    source: Path,
+    destination: Path | None,
+    *,
+    expected_raw: bytes | None,
+    create_raw: bytes | None = None,
+    complete_empty_with: bytes | None = None,
+    _named_identity_out: list[tuple[int, int]] | None = None,
+    _failpoint: Callable[[str], None] | None = None,
+) -> bytes:
+    """Flush one exact Windows file and optionally rename that held handle."""
+
+    if os.name != "nt":
+        raise OSError("project_update_terminal_windows_wrong_platform")
+    if destination is not None and (
+        source.parent != destination.parent or source == destination
+    ):
+        raise OSError("project_update_terminal_handoff_parent_mismatch")
+    if (
+        create_raw is not None and expected_raw is not None
+        or create_raw is not None and complete_empty_with is not None
+        or complete_empty_with is not None and expected_raw is None
+        or _named_identity_out is not None and _named_identity_out
+    ):
+        raise OSError("project_update_terminal_handoff_bytes_invalid")
+    for candidate_raw in (create_raw, complete_empty_with, expected_raw):
+        if candidate_raw is not None and (
+            not isinstance(candidate_raw, bytes)
+            or len(candidate_raw)
+            > _PROJECT_UPDATE_TERMINAL_HANDOFF_MAX_BYTES
+        ):
+            raise OSError("project_update_terminal_handoff_bytes_invalid")
+
+    from ctypes import wintypes
+
+    class ByHandleFileInformation(ctypes.Structure):
+        _fields_ = [
+            ("dwFileAttributes", wintypes.DWORD),
+            ("ftCreationTime", wintypes.FILETIME),
+            ("ftLastAccessTime", wintypes.FILETIME),
+            ("ftLastWriteTime", wintypes.FILETIME),
+            ("dwVolumeSerialNumber", wintypes.DWORD),
+            ("nFileSizeHigh", wintypes.DWORD),
+            ("nFileSizeLow", wintypes.DWORD),
+            ("nNumberOfLinks", wintypes.DWORD),
+            ("nFileIndexHigh", wintypes.DWORD),
+            ("nFileIndexLow", wintypes.DWORD),
+        ]
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    create_file = kernel32.CreateFileW
+    create_file.argtypes = [
+        wintypes.LPCWSTR,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.LPVOID,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.HANDLE,
+    ]
+    create_file.restype = wintypes.HANDLE
+    get_information = kernel32.GetFileInformationByHandle
+    get_information.argtypes = [
+        wintypes.HANDLE,
+        ctypes.POINTER(ByHandleFileInformation),
+    ]
+    get_information.restype = wintypes.BOOL
+    read_file = kernel32.ReadFile
+    read_file.argtypes = [
+        wintypes.HANDLE,
+        wintypes.LPVOID,
+        wintypes.DWORD,
+        ctypes.POINTER(wintypes.DWORD),
+        wintypes.LPVOID,
+    ]
+    read_file.restype = wintypes.BOOL
+    write_file = kernel32.WriteFile
+    write_file.argtypes = [
+        wintypes.HANDLE,
+        wintypes.LPCVOID,
+        wintypes.DWORD,
+        ctypes.POINTER(wintypes.DWORD),
+        wintypes.LPVOID,
+    ]
+    write_file.restype = wintypes.BOOL
+    set_file_pointer = kernel32.SetFilePointerEx
+    set_file_pointer.argtypes = [
+        wintypes.HANDLE,
+        ctypes.c_longlong,
+        ctypes.POINTER(ctypes.c_longlong),
+        wintypes.DWORD,
+    ]
+    set_file_pointer.restype = wintypes.BOOL
+    flush_file = kernel32.FlushFileBuffers
+    flush_file.argtypes = [wintypes.HANDLE]
+    flush_file.restype = wintypes.BOOL
+    set_information = kernel32.SetFileInformationByHandle
+    set_information.argtypes = [
+        wintypes.HANDLE,
+        ctypes.c_int,
+        wintypes.LPVOID,
+        wintypes.DWORD,
+    ]
+    set_information.restype = wintypes.BOOL
+    close_handle = kernel32.CloseHandle
+    close_handle.argtypes = [wintypes.HANDLE]
+    close_handle.restype = wintypes.BOOL
+
+    generic_read = 0x80000000
+    generic_write = 0x40000000
+    delete_access = 0x00010000
+    file_read_attributes = 0x00000080
+    file_share_read = 0x00000001
+    create_new = 1
+    open_existing = 3
+    file_flag_open_reparse_point = 0x00200000
+    file_flag_sequential_scan = 0x08000000
+    invalid_handle = wintypes.HANDLE(-1).value
+    file_attribute_directory = 0x00000010
+    file_attribute_reparse_point = 0x00000400
+
+    def handle_value(handle: Any) -> int | None:
+        value = handle if isinstance(handle, int) else getattr(handle, "value", None)
+        return None if value in {None, invalid_handle} else int(value)
+
+    def query(handle: Any) -> ByHandleFileInformation:
+        information = ByHandleFileInformation()
+        if not get_information(handle, ctypes.byref(information)):
+            raise ctypes.WinError(ctypes.get_last_error())
+        return information
+
+    def identity(information: ByHandleFileInformation) -> tuple[int, int]:
+        return (
+            int(information.dwVolumeSerialNumber),
+            (int(information.nFileIndexHigh) << 32)
+            | int(information.nFileIndexLow),
+        )
+
+    def size(information: ByHandleFileInformation) -> int:
+        return (int(information.nFileSizeHigh) << 32) | int(
+            information.nFileSizeLow
+        )
+
+    def named_identity(path: Path) -> tuple[int, int] | None:
+        try:
+            observed = os.lstat(path)
+        except FileNotFoundError:
+            return None
+        reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+        if (
+            not stat.S_ISREG(observed.st_mode)
+            or stat.S_ISLNK(observed.st_mode)
+            or int(observed.st_nlink) != 1
+            or bool(
+                reparse_flag
+                and getattr(observed, "st_file_attributes", 0) & reparse_flag
+            )
+        ):
+            raise OSError("project_update_terminal_handoff_file_unsafe")
+        return int(observed.st_dev), int(observed.st_ino)
+
+    def read_exact(handle: Any, byte_count: int) -> bytes:
+        if not set_file_pointer(handle, 0, None, 0):
+            raise ctypes.WinError(ctypes.get_last_error())
+        chunks: list[bytes] = []
+        remaining = byte_count
+        while remaining:
+            requested = min(1024 * 1024, remaining)
+            buffer = ctypes.create_string_buffer(requested)
+            observed_count = wintypes.DWORD()
+            if not read_file(
+                handle,
+                buffer,
+                requested,
+                ctypes.byref(observed_count),
+                None,
+            ):
+                raise ctypes.WinError(ctypes.get_last_error())
+            if observed_count.value <= 0 or observed_count.value > requested:
+                raise OSError("project_update_terminal_handoff_read_incomplete")
+            chunks.append(buffer.raw[: observed_count.value])
+            remaining -= observed_count.value
+        trailing = ctypes.create_string_buffer(1)
+        trailing_count = wintypes.DWORD()
+        if not read_file(
+            handle,
+            trailing,
+            1,
+            ctypes.byref(trailing_count),
+            None,
+        ) or int(trailing_count.value) != 0:
+            raise OSError("project_update_terminal_handoff_read_incomplete")
+        return b"".join(chunks)
+
+    handle: Any = create_file(
+        str(source),
+        generic_read | generic_write | delete_access | file_read_attributes,
+        file_share_read,
+        None,
+        create_new if create_raw is not None else open_existing,
+        file_flag_open_reparse_point | file_flag_sequential_scan,
+        None,
+    )
+    if handle_value(handle) is None:
+        raise ctypes.WinError(ctypes.get_last_error())
+    close_error: OSError | None = None
+    try:
+        before = query(handle)
+        source_identity = identity(before)
+        if (
+            source_identity[1] <= 0
+            or int(before.nNumberOfLinks) != 1
+            or before.dwFileAttributes
+            & (file_attribute_directory | file_attribute_reparse_point)
+        ):
+            raise OSError("project_update_terminal_handoff_file_unsafe")
+        bytes_to_write = create_raw
+        if (
+            bytes_to_write is None
+            and complete_empty_with is not None
+            and size(before) == 0
+        ):
+            bytes_to_write = complete_empty_with
+        if bytes_to_write is not None:
+            if _failpoint is not None and create_raw is not None:
+                _failpoint("windows_file_created_before_write")
+            if not set_file_pointer(handle, 0, None, 0):
+                raise ctypes.WinError(ctypes.get_last_error())
+            offset = 0
+            while offset < len(bytes_to_write):
+                chunk = bytes_to_write[offset : offset + 64 * 1024]
+                buffer = ctypes.create_string_buffer(chunk)
+                written = wintypes.DWORD()
+                if not write_file(
+                    handle,
+                    buffer,
+                    len(chunk),
+                    ctypes.byref(written),
+                    None,
+                ):
+                    raise ctypes.WinError(ctypes.get_last_error())
+                if int(written.value) != len(chunk):
+                    raise OSError(
+                        "project_update_terminal_handoff_write_incomplete"
+                    )
+                offset += int(written.value)
+            if _failpoint is not None:
+                _failpoint("windows_stage_fully_written_before_flush")
+        if not flush_file(handle):
+            raise ctypes.WinError(ctypes.get_last_error())
+        after_flush = query(handle)
+        raw = read_exact(handle, size(after_flush))
+        expected = bytes_to_write if bytes_to_write is not None else expected_raw
+        if (
+            identity(after_flush) != source_identity
+            or int(after_flush.nNumberOfLinks) != 1
+            or size(after_flush) > _PROJECT_UPDATE_TERMINAL_HANDOFF_MAX_BYTES
+            or size(after_flush) != len(raw)
+            or (expected is not None and not hmac.compare_digest(raw, expected))
+        ):
+            raise OSError("project_update_terminal_handoff_stage_changed")
+        _windows_assert_default_backup_stream_only(
+            handle,
+            expected_size=len(raw),
+            error_prefix="project_update_terminal_handoff",
+        )
+        named_source = named_identity(source)
+        if (
+            named_source is None
+            or (
+                int(named_source[0]) & 0xFFFFFFFF,
+                int(named_source[1]),
+            )
+            != source_identity
+        ):
+            raise OSError("project_update_terminal_handoff_stage_changed")
+        if _named_identity_out is not None:
+            _named_identity_out.append(named_source)
+        if _failpoint is not None:
+            _failpoint("windows_exact_handle_verified_before_rename")
+
+        if destination is None:
+            project_update_transaction._require_directory_durable(
+                source.parent
+            )
+            return raw
+
+        from . import private_metadata_win32
+
+        rename_information = private_metadata_win32.file_rename_info_buffer(
+            destination,
+            replace_if_exists=False,
+        )
+        api_ok = bool(
+            set_information(
+                handle,
+                3,  # FileRenameInfo
+                rename_information.backing,
+                rename_information.api_buffer_size,
+            )
+        )
+        named_source_after = named_identity(source)
+        named_destination = named_identity(destination)
+        source_matches = bool(
+            named_source_after is not None
+            and (
+                int(named_source_after[0]) & 0xFFFFFFFF,
+                int(named_source_after[1]),
+            )
+            == source_identity
+        )
+        destination_matches = bool(
+            named_destination is not None
+            and (
+                int(named_destination[0]) & 0xFFFFFFFF,
+                int(named_destination[1]),
+            )
+            == source_identity
+        )
+        if not destination_matches or source_matches:
+            if not api_ok:
+                raise ctypes.WinError(ctypes.get_last_error())
+            raise OSError("project_update_terminal_handoff_state_uncertain")
+        if _failpoint is not None:
+            _failpoint("windows_exact_handle_renamed_before_parent_flush")
+        after_move = query(handle)
+        if (
+            identity(after_move) != source_identity
+            or int(after_move.nNumberOfLinks) != 1
+            or size(after_move) != len(raw)
+            or not hmac.compare_digest(read_exact(handle, len(raw)), raw)
+        ):
+            raise OSError("project_update_terminal_handoff_state_uncertain")
+        project_update_transaction._require_directory_durable(source.parent)
+        return raw
+    finally:
+        try:
+            if not close_handle(handle):
+                close_error = ctypes.WinError(ctypes.get_last_error())
+        except OSError as failure:
+            close_error = failure
+        if close_error is not None and sys.exc_info()[0] is None:
+            raise close_error
+
+
+def _project_update_terminal_posix_publish_unnamed_no_replace(
+    binding: dict[str, Any],
+    path: Path,
+    raw: bytes,
+    *,
+    _failpoint: Callable[[str], None] | None = None,
+) -> None:
+    """Refuse the retired POSIX terminal-mutation primitive."""
+
+    raise OSError("project_update_terminal_control_platform_unsupported")
+
+def _project_update_publish_terminal_bytes_no_replace(
+    project_root: Path,
+    parent: Path,
+    path: Path,
+    raw: bytes,
+    *,
+    binding: dict[str, Any],
+    _failpoint: Callable[[str], None] | None = None,
+) -> None:
+    """Publish complete terminal bytes inside the already-held boundary."""
+
+    if (
+        path.parent != parent
+        or binding.get("path") != parent
+        or len(raw) > _PROJECT_UPDATE_TERMINAL_HANDOFF_MAX_BYTES
+    ):
+        raise OSError("project_update_terminal_handoff_parent_mismatch")
+    if os.name != "nt":
+        raise OSError("project_update_terminal_control_platform_unsupported")
+
+    stage = _project_update_terminal_create_stage_path(path, raw)
+    residue = _project_update_terminal_create_residue_path(stage)
+    try:
+        residue_raw, _residue_identity = (
+            _project_update_terminal_bound_snapshot(
+                project_root,
+                binding,
+                residue,
+            )
+        )
+    except FileNotFoundError:
+        residue_raw = None
+    try:
+        staged_raw, _staged_identity = (
+            _project_update_terminal_bound_snapshot(
+                project_root,
+                binding,
+                stage,
+            )
+        )
+    except FileNotFoundError:
+        staged_raw = None
+
+    if staged_raw is not None and not hmac.compare_digest(staged_raw, raw):
+        if residue_raw is not None:
+            raise OSError("project_update_terminal_handoff_residue_exists")
+        moved_partial = _project_update_terminal_windows_move_exact_no_replace(
+            stage,
+            residue,
+            expected_raw=None,
+            _failpoint=_failpoint,
+        )
+        if not hmac.compare_digest(moved_partial, staged_raw):
+            raise OSError("project_update_terminal_handoff_stage_changed")
+        staged_raw = None
+
+    if staged_raw is None:
+        published_raw = _project_update_terminal_windows_move_exact_no_replace(
+            stage,
+            path,
+            expected_raw=None,
+            create_raw=raw,
+            _failpoint=_failpoint,
+        )
+    else:
+        published_raw = _project_update_terminal_windows_move_exact_no_replace(
+            stage,
+            path,
+            expected_raw=raw,
+            _failpoint=_failpoint,
+        )
+    if not hmac.compare_digest(published_raw, raw):
+        raise OSError(
+            "project_update_terminal_handoff_publication_changed"
+        )
+
+
+def _project_update_write_terminal_document_exact(
+    project_root: Path,
+    path: Path,
+    value: Mapping[str, Any],
+    *,
+    expected_previous_value: Mapping[str, Any] | None,
+) -> str:
+    if os.name != "nt":
+        # This check intentionally precedes canonical-root resolution and the
+        # held control boundary.  A mutation-bearing call on POSIX therefore
+        # has a zero-write failure contract.
+        raise ArchiveServiceError(
+            "project_version_update_terminal_handoff_platform_unsupported"
+        )
+    raw = _project_update_canonical_bytes(dict(value))
+    if len(raw) > _PROJECT_UPDATE_TERMINAL_HANDOFF_MAX_BYTES:
+        raise ArchiveServiceError(
+            "project_version_update_terminal_handoff_invalid"
+        )
+    expected_name = Path(_PROJECT_UPDATE_TERMINAL_HANDOFF_LOGICAL).name
+    try:
+        with _project_update_terminal_control_boundary(
+            Path(project_root)
+        ) as (scaffold, binding):
+            parent = scaffold.terminal_root
+            try:
+                if (
+                    path.name != expected_name
+                    or not os.path.samefile(path.parent, parent)
+                ):
+                    raise OSError(
+                        "project_update_terminal_handoff_path_changed"
+                    )
+            except OSError:
+                raise ArchiveServiceError(
+                    "project_version_update_terminal_handoff_invalid"
+                ) from None
+            canonical_path = parent / path.name
+            existing = _project_update_read_terminal_document_bound(
+                scaffold.project_root,
+                binding,
+                canonical_path,
+            )
+            if expected_previous_value is None:
+                if existing is not None:
+                    if hmac.compare_digest(existing[1], raw):
+                        parent_descriptor = binding.get("descriptor")
+                        if isinstance(parent_descriptor, int):
+                            os.fsync(parent_descriptor)
+                        else:
+                            project_update_transaction._require_directory_durable(
+                                parent
+                            )
+                        return project_update_transaction.sha256_bytes(raw)
+                    raise ArchiveServiceError(
+                        "project_version_update_terminal_handoff_conflict"
+                    )
+                _project_update_publish_terminal_bytes_no_replace(
+                    scaffold.project_root,
+                    parent,
+                    canonical_path,
+                    raw,
+                    binding=binding,
+                )
+            else:
+                expected_raw = _project_update_canonical_bytes(
+                    dict(expected_previous_value)
+                )
+                if (
+                    len(expected_raw)
+                    > _PROJECT_UPDATE_TERMINAL_HANDOFF_MAX_BYTES
+                    or hmac.compare_digest(expected_raw, raw)
+                ):
+                    raise ArchiveServiceError(
+                        "project_version_update_terminal_handoff_conflict"
+                    )
+                transition_sha256 = project_update_transaction.sha256_document(
+                    {
+                        "expected_previous_sha256": (
+                            project_update_transaction.sha256_bytes(
+                                expected_raw
+                            )
+                        ),
+                        "replacement_sha256": (
+                            project_update_transaction.sha256_bytes(raw)
+                        ),
+                        "schema": (
+                            "wom-kit/project-version-update-terminal-cas/v0.1"
+                        ),
+                    }
+                )
+                swap_path, previous_path = regular_file_canonical_swap_paths(
+                    canonical_path,
+                    transition_sha256,
+                    swap_suffix=".project-update-terminal-v0416",
+                )
+                if existing is not None and hmac.compare_digest(
+                    existing[1],
+                    raw,
+                ):
+                    swap_bytes = _activity_group_swap_residue_bytes(
+                        scaffold.project_root,
+                        binding,
+                        swap_path,
+                        max_bytes=_PROJECT_UPDATE_TERMINAL_HANDOFF_MAX_BYTES,
+                    )
+                    previous_bytes = _activity_group_swap_residue_bytes(
+                        scaffold.project_root,
+                        binding,
+                        previous_path,
+                        max_bytes=_PROJECT_UPDATE_TERMINAL_HANDOFF_MAX_BYTES,
+                    )
+                    residues = tuple(
+                        item
+                        for item in (swap_bytes, previous_bytes)
+                        if item is not None
+                    )
+                    if len(residues) > 1 or (
+                        residues and residues[0] != expected_raw
+                    ):
+                        raise ArchiveServiceError(
+                            "project_version_update_terminal_handoff_conflict"
+                        )
+                    parent_descriptor = binding.get("descriptor")
+                    if isinstance(parent_descriptor, int):
+                        os.fsync(parent_descriptor)
+                    else:
+                        project_update_transaction._require_directory_durable(
+                            parent
+                        )
+                    written = _project_update_read_terminal_document_bound(
+                        scaffold.project_root,
+                        binding,
+                        canonical_path,
+                    )
+                    if written is None or not hmac.compare_digest(
+                        written[1],
+                        raw,
+                    ):
+                        raise ArchiveServiceError(
+                            "project_version_update_terminal_handoff_invalid"
+                        )
+                    return project_update_transaction.sha256_bytes(raw)
+                _replace_regular_file_bytes_compare_and_swap(
+                    scaffold.project_root,
+                    canonical_path,
+                    expected_bytes=expected_raw,
+                    replacement_bytes=raw,
+                    transaction_sha256=transition_sha256,
+                    swap_suffix=".project-update-terminal-v0416",
+                    max_bytes=_PROJECT_UPDATE_TERMINAL_HANDOFF_MAX_BYTES,
+                    error_prefix="project_update_terminal_handoff",
+                    allow_already_replacement=True,
+                    parent_binding=binding,
+                )
+            parent_descriptor = binding.get("descriptor")
+            if isinstance(parent_descriptor, int):
+                os.fsync(parent_descriptor)
+            else:
+                project_update_transaction._require_directory_durable(parent)
+            written = _project_update_read_terminal_document_bound(
+                scaffold.project_root,
+                binding,
+                canonical_path,
+            )
+            if written is None or not hmac.compare_digest(written[1], raw):
+                raise ArchiveServiceError(
+                    "project_version_update_terminal_handoff_invalid"
+                )
+    except OSError:
+        raise ArchiveServiceError(
+            "project_version_update_terminal_handoff_conflict"
+        ) from None
+    except project_update_transaction.ProjectUpdateTransactionError as failure:
+        raise ArchiveServiceError(failure.code) from None
+    return project_update_transaction.sha256_bytes(raw)
+
+
+def _project_update_signed_terminal_record(
+    state: _ProjectVersionUpdateDurableApprovalState,
+    claim: _ClaimedExactHumanApproval,
+    payload: Mapping[str, Any],
+    *,
+    attachments: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    binding = project_version_update_approval_binding(
+        state.prepared_preview
+    )
+    context = binding.context(
+        archive_id=state.expected_archive_id,
+        reviewer_claim=state.reviewer,
+    )
+    raw_payload = _project_update_exact_terminal_payload_bytes(payload)
+    record = {
+        "schema": _PROJECT_UPDATE_TERMINAL_RECORD_SCHEMA,
+        "payload": dict(payload),
+        "payload_sha256": project_update_transaction.sha256_bytes(
+            raw_payload
+        ),
+        "exact_human_approval_reference": claim.public_reference(),
+        "succeeded_evidence_digests": (
+            claim.succeeded_evidence_digests(context)
+        ),
+        "terminal_record_mac": claim.exact_terminal_record_mac(
+            raw_payload
+        ),
+        "attachments": dict(attachments or {}),
+    }
+    return record
+
+
+def _project_update_terminal_record_matches_claim(
+    record: Mapping[str, Any],
+    claim: _ClaimedExactHumanApproval,
+    *,
+    expected_plan_sha256: str,
+    expected_target_binding_sha256: str,
+) -> bool:
+    if (
+        type(record) is not dict
+        or set(record)
+        != {
+            "schema",
+            "payload",
+            "payload_sha256",
+            "exact_human_approval_reference",
+            "succeeded_evidence_digests",
+            "terminal_record_mac",
+            "attachments",
+        }
+        or record.get("schema") != _PROJECT_UPDATE_TERMINAL_RECORD_SCHEMA
+        or type(record.get("payload")) is not dict
+        or type(record.get("attachments")) is not dict
+        or type(record.get("succeeded_evidence_digests")) is not dict
+    ):
+        return False
+    raw_payload = _project_update_exact_terminal_payload_bytes(
+        record["payload"]
+    )
+    if not hmac.compare_digest(
+        project_update_transaction.sha256_bytes(raw_payload),
+        str(record.get("payload_sha256") or ""),
+    ):
+        return False
+    try:
+        return bool(
+            claim.status == "succeeded"
+            and claim.exact_terminal_record_matches(
+                record.get("exact_human_approval_reference"),
+                ExactHumanApprovalOperation.project_version_update,
+                expected_plan_sha256,
+                expected_target_binding_sha256,
+                {"succeeded"},
+                record.get("succeeded_evidence_digests"),
+                raw_payload,
+                str(record.get("terminal_record_mac") or ""),
+            )
+        )
+    except (ExactHumanApprovalError, TypeError, ValueError):
+        return False
+
+
+def _project_update_terminal_delivery_capability(
+    claim: _ClaimedExactHumanApproval,
+    pending_record: Mapping[str, Any],
+) -> str:
+    payload = _project_update_exact_terminal_payload_bytes(
+        {
+            "schema": (
+                "wom-kit/project-version-update-terminal-delivery-capability/v0.4.16"
+            ),
+            "pending_record_sha256": (
+                project_update_transaction.sha256_document(
+                    dict(pending_record)
+                )
+            ),
+        }
+    )
+    capability = claim.exact_terminal_record_mac(payload)
+    if re.fullmatch(r"hmac-sha256:[0-9a-f]{64}", capability) is None:
+        raise ArchiveServiceError(
+            "project_version_update_terminal_handoff_invalid"
+        )
+    return capability
+
+
+def _project_update_register_terminal_delivery_capability(
+    handoff_sha256: str,
+    capability: str,
+) -> None:
+    if (
+        re.fullmatch(r"sha256:[0-9a-f]{64}", handoff_sha256) is None
+        or re.fullmatch(r"hmac-sha256:[0-9a-f]{64}", capability) is None
+    ):
+        raise ArchiveServiceError(
+            "project_version_update_terminal_handoff_invalid"
+        )
+    with _PROJECT_UPDATE_TERMINAL_DELIVERY_CAPABILITIES_LOCK:
+        _PROJECT_UPDATE_TERMINAL_DELIVERY_CAPABILITIES[
+            handoff_sha256
+        ] = capability
+
+
+def _project_update_terminal_result_from_domain(
+    domain_result: Mapping[str, Any],
+    terminal: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    """Rebuild the only public result one signed domain result may become."""
+
+    expected_terminal_keys = {
+        "schema",
+        "update_result_verified_in_current_invocation",
+        "update_result_reauthenticated_from_durable_handoff",
+        "claim_succeeded_verified",
+        "transaction_completed_checkpoint_verified",
+        "lock_absence_verified",
+        "transaction_cleanup_completed",
+        "service_resource_close_verified",
+        "git_runner_close_verified",
+        "attention_required",
+        "domain_writer_reentry_allowed",
+        "automatic_retry_allowed",
+        "cleanup_proof_used_as_success_authority",
+        "durable_terminal_handoff_ready",
+        "durable_terminal_handoff_replayed",
+        "durable_result_delivery_acknowledged",
+        "private_paths_echoed",
+        "private_identifiers_echoed",
+    }
+    current_verified = terminal.get(
+        "update_result_verified_in_current_invocation"
+    )
+    replay_verified = terminal.get(
+        "update_result_reauthenticated_from_durable_handoff"
+    )
+    cleanup_completed = terminal.get("transaction_cleanup_completed")
+    service_resource_close_verified = terminal.get(
+        "service_resource_close_verified"
+    )
+    runner_close_verified = terminal.get("git_runner_close_verified")
+    delivery_acknowledged = terminal.get(
+        "durable_result_delivery_acknowledged"
+    )
+    expected_attention = not (
+        cleanup_completed is True
+        and service_resource_close_verified is True
+        and runner_close_verified is True
+        and delivery_acknowledged is True
+    )
+    if (
+        not isinstance(domain_result, Mapping)
+        or domain_result.get("ok") is not True
+        or type(terminal) is not dict
+        or set(terminal) != expected_terminal_keys
+        or terminal.get("schema")
+        != "wom-kit/project-version-update-terminal-finalization/v0.1"
+        or type(current_verified) is not bool
+        or type(replay_verified) is not bool
+        or current_verified is replay_verified
+        or terminal.get("claim_succeeded_verified") is not True
+        or terminal.get("transaction_completed_checkpoint_verified")
+        is not True
+        or terminal.get("lock_absence_verified") is not True
+        or type(cleanup_completed) is not bool
+        or type(service_resource_close_verified) is not bool
+        or type(runner_close_verified) is not bool
+        or terminal.get("attention_required") is not expected_attention
+        or terminal.get("domain_writer_reentry_allowed") is not False
+        or terminal.get("automatic_retry_allowed") is not False
+        or terminal.get("cleanup_proof_used_as_success_authority")
+        is not False
+        or terminal.get("durable_terminal_handoff_ready") is not True
+        or terminal.get("durable_terminal_handoff_replayed")
+        is not replay_verified
+        or type(delivery_acknowledged) is not bool
+        or terminal.get("private_paths_echoed") is not False
+        or terminal.get("private_identifiers_echoed") is not False
+    ):
+        return None
+    projected = copy.deepcopy(dict(domain_result))
+    project_runtime_result = projected.get("project_runtime")
+    materialized = (
+        project_runtime_result.get("materialized")
+        if isinstance(project_runtime_result, dict)
+        else None
+    )
+    if isinstance(materialized, dict) and materialized.get("repaired") is True:
+        # The signed domain result is created while the private rollback
+        # preimage still exists.  Public terminal truth must describe the
+        # post-cleanup filesystem, not repeat that earlier active-stage fact.
+        materialized["rollback_preimage_present"] = (
+            False if cleanup_completed else None
+        )
+        materialized["rollback_preimage_presence_verified"] = cleanup_completed
+        materialized["old_invalid_runtime_retained_after_success"] = (
+            False if cleanup_completed else None
+        )
+        materialized["repair_preimage_retention_state"] = (
+            "removed_by_terminal_cleanup"
+            if cleanup_completed
+            else "unknown_cleanup_incomplete"
+        )
+    projected["terminal_finalization"] = copy.deepcopy(dict(terminal))
+    projected["post_update_attention_required"] = expected_attention
+    if expected_attention:
+        cleanup_attention = not (
+            cleanup_completed is True
+            and service_resource_close_verified is True
+            and runner_close_verified is True
+        )
+        warning = (
+            _PROJECT_UPDATE_TERMINAL_CLEANUP_WARNING
+            if cleanup_attention
+            else _PROJECT_UPDATE_TERMINAL_DELIVERY_WARNING
+        )
+        action = (
+            _PROJECT_UPDATE_TERMINAL_CLEANUP_ACTION
+            if cleanup_attention
+            else _PROJECT_UPDATE_TERMINAL_DELIVERY_ACTION
+        )
+        warnings = projected.get("warnings")
+        if isinstance(warnings, list) and warning not in warnings:
+            projected["warnings"] = [*warnings, warning]
+        next_actions = projected.get("next_safe_actions")
+        if isinstance(next_actions, list) and action not in next_actions:
+            projected["next_safe_actions"] = [action, *next_actions]
+    return projected
+
+
+def _project_update_terminal_result_matches_pending(
+    result: Mapping[str, Any],
+    pending_record: Mapping[str, Any],
+) -> bool:
+    try:
+        _preview, domain_result, _basis, _postimage = (
+            _project_update_terminal_handoff_attachments(pending_record)
+        )
+    except ArchiveServiceError:
+        return False
+    terminal = result.get("terminal_finalization")
+    if type(terminal) is not dict:
+        return False
+    expected = _project_update_terminal_result_from_domain(
+        domain_result,
+        terminal,
+    )
+    return bool(
+        expected is not None
+        and hmac.compare_digest(
+            project_update_transaction.canonical_json_bytes(expected),
+            project_update_transaction.canonical_json_bytes(dict(result)),
+        )
+    )
+
+
+def _project_update_terminal_delivery_capability_for_result(
+    inspection_root: Path | str,
+    result: Mapping[str, Any],
+) -> tuple[str, str] | None:
+    terminal = result.get("terminal_finalization")
+    if (
+        not isinstance(terminal, Mapping)
+        or terminal.get("durable_terminal_handoff_ready") is not True
+        or result.get("ok") is not True
+    ):
+        return None
+    project_root = _project_update_resume_project_root_read_only(
+        inspection_root
+    )
+    handoff, _guard = _project_update_terminal_handoff_paths(
+        project_root
+    )
+    observed = _project_update_read_terminal_document(project_root, handoff)
+    if observed is None or observed[0].get("state") != "terminal_ready":
+        return None
+    handoff_sha256 = project_update_transaction.sha256_bytes(observed[1])
+    pending = observed[0].get("pending")
+    ready = observed[0].get("ready")
+    ready_payload = ready.get("payload") if type(ready) is dict else None
+    with _PROJECT_UPDATE_TERMINAL_DELIVERY_CAPABILITIES_LOCK:
+        capability = _PROJECT_UPDATE_TERMINAL_DELIVERY_CAPABILITIES.get(
+            handoff_sha256
+        )
+    if (
+        type(ready_payload) is not dict
+        or type(pending) is not dict
+        or not _project_update_terminal_result_matches_pending(
+            result,
+            pending,
+        )
+        or type(capability) is not str
+        or not hmac.compare_digest(
+            project_update_transaction.sha256_bytes(
+                capability.encode("ascii")
+            ),
+            str(
+                ready_payload.get("delivery_capability_sha256") or ""
+            ),
+        )
+    ):
+        return None
+    return capability, handoff_sha256
+
+
+def _project_update_terminal_delivery_output_proof(
+    capability: str,
+    result: Mapping[str, Any],
+    *,
+    handoff_sha256: str,
+    output_relative: str,
+    run_id: str,
+    operation_ref: str,
+) -> dict[str, str]:
+    """Bind one private capability to the exact immutable output wrapper."""
+
+    if (
+        re.fullmatch(r"hmac-sha256:[0-9a-f]{64}", capability) is None
+        or re.fullmatch(r"sha256:[0-9a-f]{64}", handoff_sha256) is None
+        or not isinstance(result, Mapping)
+        or result.get("ok") is not True
+        or type(output_relative) is not str
+        or not output_relative.startswith(
+            _PROJECT_UPDATE_OUTPUT_LOGICAL_PREFIX
+        )
+        or PurePosixPath(output_relative).is_absolute()
+        or ".." in PurePosixPath(output_relative).parts
+        or re.fullmatch(r"[0-9a-f]{32}", run_id) is None
+        or re.fullmatch(r"op:sha256:[0-9a-f]{64}", operation_ref) is None
+    ):
+        raise ArchiveServiceError(
+            "project_version_update_terminal_delivery_binding_invalid"
+        )
+    binding = {
+        "schema": (
+            "wom-kit/project-version-update-terminal-delivery-binding/v0.4.16"
+        ),
+        "terminal_handoff_sha256": handoff_sha256,
+        "result_payload_sha256": (
+            project_update_transaction.sha256_document(dict(result))
+        ),
+        "output_relative_sha256": (
+            project_update_transaction.sha256_bytes(
+                output_relative.encode("utf-8")
+            )
+        ),
+        "run_id": run_id,
+        "operation_ref": operation_ref,
+    }
+    proof = "hmac-sha256:" + hmac.new(
+        capability.encode("ascii"),
+        b"wom-kit/project-version-update-terminal-delivery-proof/v0.4.16\x00"
+        + project_update_transaction.canonical_json_bytes(binding),
+        hashlib.sha256,
+    ).hexdigest()
+    return {**binding, "proof": proof}
+
+
+def _project_update_privacy_safe_domain_result(
+    result: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Remove private approval/transaction locators from a replayable result."""
+
+    if not isinstance(result, Mapping) or result.get("ok") is not True:
+        raise ArchiveServiceError(
+            "project_version_update_terminal_result_unverified"
+        )
+    private_container_keys = {
+        "operation_exact_human_approval",
+        "exact_human_approval",
+        "exact_human_approval_reference",
+        "exact_human_approval_resume_branch",
+    }
+    private_binding_keys = {
+        "transaction_ref",
+        "transaction_logical_ref",
+        "candidate_locator",
+        "seal_locator",
+        "approval_id",
+        "approval_ref",
+        "claim_locator",
+        "claim_path",
+        "transaction_path",
+    }
+    private_key_suffixes = (
+        "_transaction_ref",
+        "_transaction_logical_ref",
+        "_candidate_locator",
+        "_seal_locator",
+        "_approval_id",
+        "_approval_ref",
+        "_claim_locator",
+        "_claim_path",
+        "_transaction_path",
+    )
+    private_path_markers = (
+        ".zettel-kasten/private",
+        ".wom-scratch/private",
+        "profiles/local/exact-human-approvals/claims",
+    )
+
+    def is_private_key(key: str) -> bool:
+        lowered = key.casefold()
+        return bool(
+            lowered in private_container_keys
+            or lowered in private_binding_keys
+            or lowered.endswith(private_key_suffixes)
+        )
+
+    def is_private_binding_key(key: str) -> bool:
+        lowered = key.casefold()
+        return bool(
+            lowered in private_binding_keys
+            or lowered.endswith(private_key_suffixes)
+        )
+
+    private_bindings: dict[str, str] = {}
+    private_transaction_refs: set[str] = set()
+    private_approval_ids: set[str] = set()
+    pending_private_locators: list[tuple[str, str]] = []
+
+    def collect_private_binding(key: str, value: Any) -> None:
+        if type(value) is not str or not value:
+            raise ArchiveServiceError(
+                "project_version_update_terminal_result_unverified"
+            )
+        lowered = key.casefold()
+        if lowered.endswith("_transaction_ref") or lowered == "transaction_ref":
+            if re.fullmatch(r"update_[0-9a-f]{32}", value) is None:
+                raise ArchiveServiceError(
+                    "project_version_update_terminal_result_unverified"
+                )
+            private_transaction_refs.add(value)
+            private_bindings[value] = "<private-transaction>"
+            return
+        if (
+            lowered.endswith("_approval_id")
+            or lowered.endswith("_approval_ref")
+            or lowered in {"approval_id", "approval_ref"}
+        ):
+            if re.fullmatch(r"approval_[0-9a-f]{32}", value) is None:
+                raise ArchiveServiceError(
+                    "project_version_update_terminal_result_unverified"
+                )
+            private_approval_ids.add(value)
+            private_bindings[value] = "<private-approval>"
+            return
+        pending_private_locators.append((lowered, value))
+
+    def collect_private_bindings(value: Any) -> None:
+        if isinstance(value, Mapping):
+            for key, child in value.items():
+                if type(key) is not str:
+                    raise ArchiveServiceError(
+                        "project_version_update_terminal_result_unverified"
+                    )
+                if is_private_binding_key(key):
+                    collect_private_binding(key, child)
+                collect_private_bindings(child)
+            return
+        if isinstance(value, (list, tuple)):
+            for child in value:
+                collect_private_bindings(child)
+            return
+        if value is None or type(value) in {str, bool, int, float}:
+            return
+        raise ArchiveServiceError(
+            "project_version_update_terminal_result_unverified"
+        )
+
+    collect_private_bindings(result)
+    if len(private_transaction_refs) > 1 or len(private_approval_ids) > 1:
+        raise ArchiveServiceError(
+            "project_version_update_terminal_result_unverified"
+        )
+
+    transaction_root = project_update_transaction.TRANSACTION_ROOT_LOGICAL
+    claims_root = CLAIMS_RELATIVE_ROOT
+
+    def safe_private_locator(
+        key: str,
+        value: str,
+    ) -> tuple[str, str] | None:
+        if len(value.encode("utf-8", errors="strict")) > 1024 or "\\" in value:
+            return None
+        candidate = PurePosixPath(value)
+        if (
+            candidate.is_absolute()
+            or candidate.as_posix() != value
+            or any(part in {"", ".", ".."} for part in candidate.parts)
+            or "://" in value.casefold()
+        ):
+            return None
+        parts = candidate.parts
+        transaction_prefix = PurePosixPath(transaction_root).parts
+        claims_prefix = PurePosixPath(claims_root).parts
+        transaction_key_family = bool(
+            key.endswith("transaction_logical_ref")
+            or key.endswith("candidate_locator")
+            or key.endswith("seal_locator")
+            or key == "transaction_path"
+        )
+        claim_key_family = key in {"claim_locator", "claim_path"}
+        if parts[: len(transaction_prefix)] == transaction_prefix:
+            if not transaction_key_family:
+                return None
+            tail = parts[len(transaction_prefix) :]
+            if (
+                not tail
+                or re.fullmatch(r"update_[0-9a-f]{32}", tail[0]) is None
+                or tail[0] not in private_transaction_refs
+            ):
+                return None
+            if key.endswith("transaction_logical_ref") or key == "transaction_path":
+                if len(tail) != 1:
+                    return None
+            elif key.endswith("candidate_locator"):
+                if tail != (
+                    tail[0],
+                    project_update_transaction.RUNTIME_CANDIDATE_NAME,
+                ):
+                    return None
+            elif key.endswith("seal_locator"):
+                if tail != (
+                    tail[0],
+                    project_update_transaction.RUNTIME_CANDIDATE_SEAL_NAME,
+                ):
+                    return None
+            elif len(tail) < 1:
+                return None
+            return value, "<private-control-path>"
+        if parts[: len(claims_prefix)] == claims_prefix:
+            if not claim_key_family:
+                return None
+            tail = parts[len(claims_prefix) :]
+            if len(tail) != 1:
+                return None
+            approval_name = tail[0]
+            if approval_name.endswith(".json"):
+                approval_name = approval_name[:-5]
+            if (
+                approval_name not in private_approval_ids
+                or re.fullmatch(r"approval_[0-9a-f]{32}", approval_name)
+                is None
+            ):
+                return None
+            return value, "<private-control-path>"
+        return None
+
+    for locator_key, locator_value in pending_private_locators:
+        try:
+            validated = safe_private_locator(locator_key, locator_value)
+        except UnicodeError:
+            validated = None
+        if validated is None:
+            raise ArchiveServiceError(
+                "project_version_update_terminal_result_unverified"
+            )
+        private_bindings[validated[0]] = validated[1]
+
+    def has_private_project_marker(value: str) -> bool:
+        normalized = value.replace("\\", "/").casefold()
+        for marker in private_path_markers:
+            start = 0
+            while True:
+                index = normalized.find(marker, start)
+                if index < 0:
+                    break
+                end = index + len(marker)
+                if end == len(normalized) or normalized[end] == "/":
+                    return True
+                start = index + 1
+        return False
+
+    local_path_patterns = (
+        r"(?i)(?<![A-Za-z0-9])[A-Z]:[\\/]",
+        r"(?i)file:(?:/{2,3}|\\\\)",
+        (
+            r"(?<![A-Za-z0-9\\])\\\\"
+            r"[^\\/\s]+[\\/][^\\/\s]+"
+        ),
+        (
+            r"(?<![A-Za-z0-9\\])\\(?!\\)(?:$|[^\\\s])"
+        ),
+        (
+            r"(?<![A-Za-z0-9/])//(?=[^/\s])"
+        ),
+        (
+            r"(?i)(?<![A-Za-z0-9/])/(?!/)"
+            r"(?:$|[^/\s])"
+        ),
+    )
+
+    def sanitize_text(
+        value: str,
+        *,
+        public_route_allowed: bool,
+    ) -> str:
+        if has_private_project_marker(value) and value not in private_bindings:
+            return "<private-project-metadata>"
+        safe_text = value
+        for private_value in sorted(
+            private_bindings,
+            key=len,
+            reverse=True,
+        ):
+            if private_value:
+                safe_text = safe_text.replace(
+                    private_value,
+                    private_bindings[private_value],
+                )
+        if re.search(
+            r"(?i)(?:update|approval)_[0-9a-f]{32}",
+            safe_text,
+        ):
+            raise ArchiveServiceError(
+                "project_version_update_terminal_result_unverified"
+            )
+        if has_private_project_marker(safe_text):
+            return "<private-project-metadata>"
+        if public_route_allowed and (
+            re.fullmatch(r"//[^\s]+", safe_text) is not None
+            or re.fullmatch(r"(?i)/api(?:/[^\s]*)?", safe_text) is not None
+        ):
+            return safe_text
+        if any(re.search(pattern, safe_text) for pattern in local_path_patterns):
+            return "<private-local-path>"
+        return safe_text
+
+    def sanitize(value: Any, key_path: tuple[str, ...] = ()) -> Any:
+        if isinstance(value, Mapping):
+            safe: dict[str, Any] = {}
+            for key, child in value.items():
+                if type(key) is not str:
+                    raise ArchiveServiceError(
+                        "project_version_update_terminal_result_unverified"
+                    )
+                if is_private_key(key):
+                    continue
+                safe_key = sanitize_text(
+                    key,
+                    public_route_allowed=False,
+                )
+                if safe_key in safe:
+                    raise ArchiveServiceError(
+                        "project_version_update_terminal_result_unverified"
+                    )
+                safe[safe_key] = sanitize(child, (*key_path, key))
+            return safe
+        if isinstance(value, (list, tuple)):
+            return [
+                sanitize(child, (*key_path, "<sequence-item>"))
+                for child in value
+            ]
+        if type(value) is str:
+            return sanitize_text(
+                value,
+                public_route_allowed=key_path
+                in {
+                    ("public_routes", "docs"),
+                    ("public_routes", "api"),
+                },
+            )
+        if value is None or type(value) in {bool, int, float}:
+            return value
+        raise ArchiveServiceError(
+            "project_version_update_terminal_result_unverified"
+        )
+
+    projected = sanitize(result)
+    if not isinstance(projected, dict):
+        raise ArchiveServiceError(
+            "project_version_update_terminal_result_unverified"
+        )
+    projected["approval_verification"] = {
+        "exact_human_approval_succeeded": True,
+        "one_use_claim_reauthenticated": True,
+        "approval_identifiers_echoed": False,
+        "private_paths_echoed": False,
+    }
+    return projected
+
+
+def _project_update_terminal_recovery_basis(
+    state: _ProjectVersionUpdateDurableApprovalState,
+) -> dict[str, Any]:
+    components = [
+        {
+            "component_ref": component.component_ref,
+            "role": component.role,
+            "logical_target": component.logical_target,
+            "post_sha256": component.post_sha256,
+        }
+        for component in state.transaction.intent.components
+    ]
+    return {
+        "schema": (
+            "wom-kit/project-version-update-terminal-recovery-basis/v0.4.16"
+        ),
+        "mirror_logical": state.private_plan["mirror_logical"],
+        "target_tag": state.target_tag,
+        "target_version": state.target_version,
+        "target_commit": state.target_commit,
+        "target_ref_snapshot": copy.deepcopy(
+            state.private_plan["target_ref_snapshot"]
+        ),
+        "git_runner_binding": _project_update_private_json_value(
+            state.runner.private_binding_bytes()
+        ),
+        "runtime": {
+            "target_version": state.target_version,
+            "target_commit": state.target_commit,
+            "wheel_sha256": "sha256:" + state.runtime_candidate.wheel_sha256,
+            "supply_lock_sha256": (
+                "sha256:" + state.runtime_candidate.supply_lock_sha256
+            ),
+            "installed_payload_sha256": (
+                "sha256:" + state.runtime_candidate.installed_payload_sha256
+            ),
+            "receipt_sha256": (
+                "sha256:" + state.runtime_candidate.receipt_sha256
+            ),
+        },
+        "components": components,
+    }
+
+
+def _project_update_publish_preunlock_terminal_handoff(
+    state: _ProjectVersionUpdateDurableApprovalState,
+    claim: _ClaimedExactHumanApproval,
+    domain_result: Mapping[str, Any],
+) -> tuple[dict[str, Any], str]:
+    inspection = state.transaction.inspect()
+    claim_checkpoints = [
+        item
+        for item in inspection.journal.verified_prefix
+        if item.phase == "claim_succeeded"
+    ]
+    if (
+        inspection.journal.state != "exact"
+        or len(claim_checkpoints) != 1
+        or inspection.journal.verified_prefix[-1].phase
+        not in {
+            "claim_succeeded",
+            "ready_to_unlock",
+            "lock_released",
+            "completed",
+        }
+    ):
+        raise ArchiveServiceError(
+            "project_version_update_terminal_handoff_invalid"
+        )
+    binding = project_version_update_approval_binding(
+        state.prepared_preview
+    )
+    handoff, _guard = _project_update_terminal_handoff_paths(
+        state.project_root
+    )
+    existing = _project_update_read_terminal_document(
+        state.project_root,
+        handoff,
+    )
+    if existing is not None:
+        active, active_bytes = existing
+        pending_record = active.get("pending")
+        pending_payload = (
+            pending_record.get("payload")
+            if isinstance(pending_record, dict)
+            else None
+        )
+        attachments = (
+            pending_record.get("attachments")
+            if isinstance(pending_record, dict)
+            else None
+        )
+        if (
+            active.get("schema") != _PROJECT_UPDATE_TERMINAL_HANDOFF_SCHEMA
+            or active.get("state")
+            not in {"claim_succeeded_pre_unlock", "terminal_ready"}
+            or not _project_update_terminal_record_matches_claim(
+                pending_record,
+                claim,
+                expected_plan_sha256=binding.plan_sha256,
+                expected_target_binding_sha256=(
+                    binding.target_binding_sha256
+                ),
+            )
+            or type(pending_payload) is not dict
+            or pending_payload.get("transaction_ref")
+            != state.transaction.transaction_ref
+            or pending_payload.get("intent_sha256")
+            != state.transaction.intent.sha256
+            or pending_payload.get(
+                "legacy_cleanup_authority_sha256"
+            )
+            != state.existing_cleanup_authority_sha256
+            or type(attachments) is not dict
+            or project_update_transaction.sha256_document(
+                attachments.get("prepared_preview")
+            )
+            != pending_payload.get("prepared_preview_sha256")
+            or project_update_transaction.sha256_document(
+                attachments.get("domain_result")
+            )
+            != pending_payload.get("domain_result_sha256")
+            or len(
+                project_update_transaction.canonical_json_bytes(
+                    attachments.get("domain_result")
+                )
+            )
+            != pending_payload.get("domain_result_size_bytes")
+            or project_update_transaction.sha256_document(
+                attachments.get("recovery_basis")
+            )
+            != pending_payload.get("recovery_basis_sha256")
+            or project_update_transaction.sha256_document(
+                attachments.get("exact_postimage")
+            )
+            != pending_payload.get("exact_postimage_sha256")
+        ):
+            raise ArchiveServiceError(
+                "project_version_update_terminal_handoff_invalid"
+            )
+        state.terminal_domain_result = copy.deepcopy(
+            attachments["domain_result"]
+        )
+        return (
+            dict(pending_record),
+            project_update_transaction.sha256_bytes(active_bytes),
+        )
+    recovery_basis = _project_update_terminal_recovery_basis(state)
+    live = _project_update_live_component_sha256(state)
+    safe_result = _project_update_privacy_safe_domain_result(domain_result)
+    domain_result_bytes = project_update_transaction.canonical_json_bytes(
+        safe_result
+    )
+    state.terminal_domain_result = copy.deepcopy(safe_result)
+    payload = {
+        "schema": (
+            "wom-kit/project-version-update-preunlock-handoff-payload/v0.4.16"
+        ),
+        "state": "claim_succeeded_pre_unlock",
+        "transaction_ref": state.transaction.transaction_ref,
+        "intent_sha256": state.transaction.intent.sha256,
+        "project_identity_sha256": (
+            state.transaction.intent.project_identity_sha256
+        ),
+        "plan_sha256": binding.plan_sha256,
+        "target_binding_sha256": binding.target_binding_sha256,
+        "reviewer": state.reviewer,
+        "claim_succeeded_checkpoint_sha256": (
+            claim_checkpoints[0].checkpoint_sha256
+        ),
+        "prepared_preview_sha256": (
+            project_update_transaction.sha256_document(
+                state.prepared_preview
+            )
+        ),
+        "domain_result_sha256": (
+            project_update_transaction.sha256_bytes(domain_result_bytes)
+        ),
+        "domain_result_size_bytes": len(domain_result_bytes),
+        "recovery_basis_sha256": (
+            project_update_transaction.sha256_document(recovery_basis)
+        ),
+        "exact_postimage_sha256": (
+            project_update_transaction.sha256_document(live)
+        ),
+        "legacy_cleanup_authority_sha256": (
+            state.existing_cleanup_authority_sha256
+        ),
+    }
+    pending_record = _project_update_signed_terminal_record(
+        state,
+        claim,
+        payload,
+        attachments={
+            "prepared_preview": copy.deepcopy(state.prepared_preview),
+            "domain_result": safe_result,
+            "recovery_basis": recovery_basis,
+            "exact_postimage": live,
+        },
+    )
+    active = {
+        "schema": _PROJECT_UPDATE_TERMINAL_HANDOFF_SCHEMA,
+        "state": "claim_succeeded_pre_unlock",
+        "pending": pending_record,
+    }
+    handoff_sha256 = _project_update_write_terminal_document_exact(
+        state.project_root,
+        handoff,
+        active,
+        expected_previous_value=None,
+    )
+    return pending_record, handoff_sha256
+
+
+def _project_update_publish_ready_terminal_handoff(
+    state: _ProjectVersionUpdateDurableApprovalState,
+    claim: _ClaimedExactHumanApproval,
+    pending_record: Mapping[str, Any],
+    pending_handoff_sha256: str,
+    live: Mapping[str, str],
+) -> str:
+    inspection = state.transaction.inspect()
+    if (
+        not inspection.terminal
+        or inspection.journal.state != "exact"
+        or not inspection.journal.verified_prefix
+        or inspection.journal.verified_prefix[-1].phase != "completed"
+    ):
+        raise ArchiveServiceError(
+            "project_version_update_terminal_handoff_invalid"
+        )
+    binding = project_version_update_approval_binding(
+        state.prepared_preview
+    )
+    pending_sha256 = project_update_transaction.sha256_document(
+        dict(pending_record)
+    )
+    delivery_capability = _project_update_terminal_delivery_capability(
+        claim,
+        pending_record,
+    )
+    ready_payload = {
+        "schema": (
+            "wom-kit/project-version-update-ready-handoff-payload/v0.4.16"
+        ),
+        "state": "terminal_ready",
+        "transaction_ref": state.transaction.transaction_ref,
+        "intent_sha256": state.transaction.intent.sha256,
+        "plan_sha256": binding.plan_sha256,
+        "target_binding_sha256": binding.target_binding_sha256,
+        "pending_record_sha256": pending_sha256,
+        "claim_succeeded_checkpoint_sha256": (
+            pending_record["payload"][
+                "claim_succeeded_checkpoint_sha256"
+            ]
+        ),
+        "completed_checkpoint_sha256": (
+            inspection.journal.verified_prefix[-1].checkpoint_sha256
+        ),
+        "completed_checkpoint_count": len(
+            inspection.journal.verified_prefix
+        ),
+        "lock_absence_observation_sha256": (
+            inspection.journal.verified_prefix[-1]
+            .live_lock_observation_sha256
+        ),
+        "exact_postimage_sha256": (
+            project_update_transaction.sha256_document(dict(live))
+        ),
+        "delivery_capability_sha256": (
+            project_update_transaction.sha256_bytes(
+                delivery_capability.encode("ascii")
+            )
+        ),
+        "legacy_cleanup_authority_sha256": (
+            pending_record["payload"].get(
+                "legacy_cleanup_authority_sha256"
+            )
+        ),
+    }
+    ready_record = _project_update_signed_terminal_record(
+        state,
+        claim,
+        ready_payload,
+    )
+    active = {
+        "schema": _PROJECT_UPDATE_TERMINAL_HANDOFF_SCHEMA,
+        "state": "terminal_ready",
+        "pending": dict(pending_record),
+        "ready": ready_record,
+    }
+    handoff, _guard = _project_update_terminal_handoff_paths(
+        state.project_root
+    )
+    expected_pending_active = {
+        "schema": _PROJECT_UPDATE_TERMINAL_HANDOFF_SCHEMA,
+        "state": "claim_succeeded_pre_unlock",
+        "pending": dict(pending_record),
+    }
+    if not hmac.compare_digest(
+        project_update_transaction.sha256_bytes(
+            _project_update_canonical_bytes(expected_pending_active)
+        ),
+        pending_handoff_sha256,
+    ):
+        raise ArchiveServiceError(
+            "project_version_update_terminal_handoff_invalid"
+        )
+    handoff_sha256 = _project_update_write_terminal_document_exact(
+        state.project_root,
+        handoff,
+        active,
+        expected_previous_value=expected_pending_active,
+    )
+    _project_update_register_terminal_delivery_capability(
+        handoff_sha256,
+        delivery_capability,
+    )
+    return handoff_sha256
 
 
 def _project_update_claim_authority(
@@ -116645,6 +121253,14 @@ def _project_update_live_component_sha256(
     runtime_matches = _project_update_runtime_matches_candidate(state)
     if runtime_matches:
         live["runtime"] = state.runtime_post_sha256
+    elif (
+        state.runtime_candidate.existing_runtime_repair_required
+        and project_runtime.runtime_repair_state(
+            state.runtime_candidate
+        )
+        in {"preimage_final", "backup_only"}
+    ):
+        live["runtime"] = state.runtime_pre_sha256
     elif (
         state.runtime_pre_sha256
         == project_update_transaction.ABSENT_COMPONENT_SHA256
@@ -116877,6 +121493,11 @@ def _project_update_perform_component(
         return
     if component.role == "runtime":
         if _project_update_runtime_matches_candidate(state):
+            state.runtime_materialization = (
+                project_runtime.reopen_promoted_runtime_materialization(
+                    state.runtime_candidate
+                )
+            )
             if os.path.lexists(state.runtime_candidate.candidate_root) or os.path.lexists(
                 state.runtime_candidate.seal_path
             ):
@@ -117067,6 +121688,136 @@ def _project_update_assert_approved_snapshot_unchanged(
         raise ArchiveServiceError(failure_code)
 
 
+def _project_update_build_domain_result(
+    state: _ProjectVersionUpdateDurableApprovalState,
+    *,
+    operation_exact_human_approval: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """Build the verified domain result without entering any writer."""
+
+    runtime_summary = (
+        state.runtime_materialization.public_summary()
+        if state.runtime_materialization is not None
+        else {
+            **state.runtime_candidate.public_summary(),
+            "status": "verified",
+            "path": project_runtime.runtime_logical_path(
+                state.target_version
+            ),
+            "created": not state.runtime_candidate.existing_runtime_reusable,
+            "absolute_paths_echoed": False,
+        }
+    )
+    source_changed = state.source_pre_sha256 != state.source_post_sha256
+    source_summary = copy.deepcopy(
+        state.prepared_preview.get("source_mirror", {})
+    )
+    source_summary.update(
+        {
+            "head_commit_after": state.target_commit,
+            "source_checkout_change_attempted": source_changed,
+            "source_checkout_is_verified_target": True,
+            "runtime_source_rematerialization_attempted": source_changed,
+            "runtime_source_rematerialization_succeeded": (
+                True if source_changed else None
+            ),
+            "target_runtime_source_integrity_verified": True,
+            "checkout_mode_after_result": "detached_exact_tag",
+        }
+    )
+    target_pin_bytes = (state.target_tag + "\n").encode("utf-8")
+    written_pin_paths = [
+        str(spec["logical"])
+        for spec in state.private_plan["pin_specs"]
+        if spec.get("previous_bytes") != target_pin_bytes
+    ]
+    pins_summary = copy.deepcopy(state.prepared_preview.get("pins", {}))
+    pins_summary["written_paths"] = list(written_pin_paths)
+    pins_summary["write_attempted_paths"] = list(written_pin_paths)
+    for item in pins_summary.get("planned", []):
+        if type(item) is not dict:
+            continue
+        changed = item.get("path") in written_pin_paths
+        item["written"] = changed
+        item["write_attempted"] = changed
+    launcher_snapshot = state.private_plan["launcher_snapshot"]
+    launcher_changed = (
+        launcher_snapshot.get("previous_bytes")
+        != launcher_snapshot.get("target_bytes")
+    )
+    project_runtime_summary = copy.deepcopy(
+        state.prepared_preview.get("project_runtime", {})
+    )
+    project_runtime_summary.update(
+        {
+            "launcher_write_attempted": launcher_changed,
+            "launcher_written": launcher_changed,
+            "materialized": runtime_summary,
+        }
+    )
+    return {
+        "ok": True,
+        "schema": "wom-kit/project-version-update/v0.1",
+        "lifecycle_action": "project_version_update",
+        "status": "updated_restart_required",
+        "mode": "approved",
+        "operation_exact_human_approval": (
+            copy.deepcopy(dict(operation_exact_human_approval))
+            if isinstance(operation_exact_human_approval, Mapping)
+            else None
+        ),
+        "fetch": copy.deepcopy(
+            state.prepared_preview.get("fetch", {})
+        ),
+        "target": copy.deepcopy(state.prepared_preview.get("target", {})),
+        "source_mirror": source_summary,
+        "pins": pins_summary,
+        "project_runtime": project_runtime_summary,
+        "runtime": copy.deepcopy(
+            state.prepared_preview.get("runtime", {})
+        ),
+        "receipt": {
+            "schema": state.private_plan["static_receipt_schema"],
+            "path": state.private_plan["static_receipt_relative"],
+            "sha256": project_update_transaction.sha256_bytes(
+                state.static_receipt_bytes
+            ),
+            "written": True,
+        },
+        "transaction": state.transaction.public_summary(),
+        "write_boundary": {
+            **copy.deepcopy(
+                state.prepared_preview.get("write_boundary", {})
+            ),
+            "runtime_postapproval_child_process_allowed": False,
+            "project_update_postapproval_local_git_allowed": True,
+            "postapproval_git_transport_allowed": False,
+            "project_update_lock_released_by_succeeded_claim_finalizer": True,
+        },
+        "files_written": [
+            component.logical_target
+            for component in state.transaction.intent.components
+            if component.pre_sha256 != component.post_sha256
+        ],
+        "blockers": [],
+        "warnings": copy.deepcopy(
+            state.prepared_preview.get("warnings", [])
+        ),
+        "rollback": {
+            "attempted": False,
+            "succeeded": None,
+            "fetched_refs_may_remain": True,
+        },
+        "privacy_guards": {
+            "local_absolute_paths_echoed": False,
+            "remote_urls_echoed": False,
+            "credential_values_echoed": False,
+            "archive_body_text_read": False,
+            "objet_bytes_read": False,
+        },
+    }
+
+
 def _project_update_durable_writer(
     state: _ProjectVersionUpdateDurableApprovalState,
     claim: _ClaimedExactHumanApproval,
@@ -117181,128 +121932,16 @@ def _project_update_durable_writer(
                 state
             ),
         )
-    runtime_summary = (
-        state.runtime_materialization.public_summary()
-        if state.runtime_materialization is not None
-        else {
-            **state.runtime_candidate.public_summary(),
-            "status": "verified",
-            "path": project_runtime.runtime_logical_path(
-                state.target_version
-            ),
-            "created": not state.runtime_candidate.existing_runtime_reusable,
-            "absolute_paths_echoed": False,
-        }
-    )
-    source_changed = state.source_pre_sha256 != state.source_post_sha256
-    source_summary = copy.deepcopy(
-        state.prepared_preview.get("source_mirror", {})
-    )
-    source_summary.update(
-        {
-            "head_commit_after": state.target_commit,
-            "source_checkout_change_attempted": source_changed,
-            "source_checkout_is_verified_target": True,
-            "runtime_source_rematerialization_attempted": source_changed,
-            "runtime_source_rematerialization_succeeded": (
-                True if source_changed else None
-            ),
-            "target_runtime_source_integrity_verified": True,
-            "checkout_mode_after_result": "detached_exact_tag",
-        }
-    )
-    target_pin_bytes = (state.target_tag + "\n").encode("utf-8")
-    written_pin_paths = [
-        str(spec["logical"])
-        for spec in state.private_plan["pin_specs"]
-        if spec.get("previous_bytes") != target_pin_bytes
-    ]
-    pins_summary = copy.deepcopy(state.prepared_preview.get("pins", {}))
-    pins_summary["written_paths"] = list(written_pin_paths)
-    pins_summary["write_attempted_paths"] = list(written_pin_paths)
-    for item in pins_summary.get("planned", []):
-        if type(item) is not dict:
-            continue
-        changed = item.get("path") in written_pin_paths
-        item["written"] = changed
-        item["write_attempted"] = changed
-    launcher_snapshot = state.private_plan["launcher_snapshot"]
-    launcher_changed = (
-        launcher_snapshot.get("previous_bytes")
-        != launcher_snapshot.get("target_bytes")
-    )
-    project_runtime_summary = copy.deepcopy(
-        state.prepared_preview.get("project_runtime", {})
-    )
-    project_runtime_summary.update(
-        {
-            "launcher_write_attempted": launcher_changed,
-            "launcher_written": launcher_changed,
-            "materialized": runtime_summary,
-        }
-    )
-    return {
-        "ok": True,
-        "schema": "wom-kit/project-version-update/v0.1",
-        "lifecycle_action": "project_version_update",
-        "status": "updated_restart_required",
-        "mode": "approved",
-        # Dynamic approval authority is intentionally returned to the caller
-        # only.  The deterministic transaction-owned disk receipt contains no
-        # claim identifier or post-native timestamp.
-        "operation_exact_human_approval": (
+    result = _project_update_build_domain_result(
+        state,
+        operation_exact_human_approval=(
             operation_exact_human_approval
         ),
-        "fetch": copy.deepcopy(
-            state.prepared_preview.get("fetch", {})
-        ),
-        "target": copy.deepcopy(state.prepared_preview.get("target", {})),
-        "source_mirror": source_summary,
-        "pins": pins_summary,
-        "project_runtime": project_runtime_summary,
-        "runtime": copy.deepcopy(
-            state.prepared_preview.get("runtime", {})
-        ),
-        "receipt": {
-            "schema": "wom-kit/project-version-update-receipt/v0.3",
-            "path": state.private_plan["static_receipt_relative"],
-            "sha256": project_update_transaction.sha256_bytes(
-                state.static_receipt_bytes
-            ),
-            "written": True,
-        },
-        "transaction": state.transaction.public_summary(),
-        "write_boundary": {
-            **copy.deepcopy(
-                state.prepared_preview.get("write_boundary", {})
-            ),
-            "runtime_postapproval_child_process_allowed": False,
-            "project_update_postapproval_local_git_allowed": True,
-            "postapproval_git_transport_allowed": False,
-            "project_update_lock_released_by_succeeded_claim_finalizer": True,
-        },
-        "files_written": [
-            component.logical_target
-            for component in state.transaction.intent.components
-            if component.pre_sha256 != component.post_sha256
-        ],
-        "blockers": [],
-        "warnings": copy.deepcopy(
-            state.prepared_preview.get("warnings", [])
-        ),
-        "rollback": {
-            "attempted": False,
-            "succeeded": None,
-            "fetched_refs_may_remain": True,
-        },
-        "privacy_guards": {
-            "local_absolute_paths_echoed": False,
-            "remote_urls_echoed": False,
-            "credential_values_echoed": False,
-            "archive_body_text_read": False,
-            "objet_bytes_read": False,
-        },
-    }
+    )
+    state.terminal_domain_result = _project_update_privacy_safe_domain_result(
+        result
+    )
+    return result
 
 
 def _project_update_succeeded_claim_finalizer(
@@ -117324,6 +121963,27 @@ def _project_update_succeeded_claim_finalizer(
             state.static_receipt_bytes
         )
     )
+    legacy_cleanup_authority = (
+        state.existing_cleanup_authority_sha256
+    )
+    if legacy_cleanup_authority is not None:
+        claim_reference_sha256 = project_update_transaction.sha256_bytes(
+            _project_update_canonical_bytes(claim.public_reference())
+        )
+        if (
+            re.fullmatch(
+                r"sha256:[0-9a-f]{64}",
+                legacy_cleanup_authority,
+            )
+            is None
+            or not hmac.compare_digest(
+                legacy_cleanup_authority,
+                claim_reference_sha256,
+            )
+        ):
+            raise ArchiveServiceError(
+                "project_version_update_terminal_cleanup_authority_invalid"
+            )
     inspection = state.transaction.inspect()
     if inspection.journal.state != "exact" or not inspection.journal.verified_prefix:
         raise ArchiveServiceError(
@@ -117342,6 +122002,21 @@ def _project_update_succeeded_claim_finalizer(
         )
     inspection = state.transaction.inspect()
     head = inspection.journal.verified_prefix[-1]
+    domain_result = state.terminal_domain_result
+    if domain_result is None:
+        domain_result = _project_update_privacy_safe_domain_result(
+            _project_update_build_domain_result(
+                state,
+                operation_exact_human_approval=None,
+            )
+        )
+    pending_record, pending_handoff_sha256 = (
+        _project_update_publish_preunlock_terminal_handoff(
+            state,
+            claim,
+            domain_result,
+        )
+    )
     if head.phase == "claim_succeeded":
         state.transaction.append(
             phase="ready_to_unlock",
@@ -117389,14 +122064,314 @@ def _project_update_succeeded_claim_finalizer(
                 state
             ),
         )
-    if not state.transaction.exact_cleanup(
-        cleanup_authority_sha256=evidence[
-            "approval_reference_sha256"
-        ]
+    inspection = state.transaction.inspect()
+    live = _project_update_live_component_sha256(state)
+    classification = state.transaction.classify_live_components(live)
+    lock_path = state.project_root.joinpath(
+        *PurePosixPath(
+            project_update_transaction.PROJECT_UPDATE_LOCK_LOGICAL
+        ).parts
+    )
+    if (
+        not inspection.terminal
+        or inspection.journal.state != "exact"
+        or not inspection.journal.verified_prefix
+        or inspection.journal.verified_prefix[-1].phase != "completed"
+        or classification.overall != "complete_exact"
+        or os.path.lexists(lock_path)
     ):
         raise ArchiveServiceError(
-            "project_version_update_transaction_cleanup_incomplete"
+            "project_version_update_terminal_result_unverified"
         )
+    state.terminal_handoff_sha256 = (
+        _project_update_publish_ready_terminal_handoff(
+            state,
+            claim,
+            pending_record,
+            pending_handoff_sha256,
+            live,
+        )
+    )
+    # This in-memory authority is established while the authenticated
+    # succeeded claim and exact transaction are still open. It is never
+    # reconstructed from a cleanup tombstone or proof in a later process.
+    state.terminal_update_verified = True
+    state.transaction_cleanup_completed = state.transaction.exact_cleanup(
+        cleanup_authority_sha256=(
+            legacy_cleanup_authority
+            or state.terminal_handoff_sha256
+        )
+    )
+
+
+def _project_update_attach_terminal_finalization(
+    result: Mapping[str, Any],
+    state: _ProjectVersionUpdateDurableApprovalState,
+    *,
+    service_resource_close_verified: bool,
+    runner_close_verified: bool,
+) -> dict[str, Any]:
+    """Keep authenticated update truth separate from follow-up cleanup truth."""
+
+    if (
+        not isinstance(result, Mapping)
+        or result.get("ok") is not True
+        or state.terminal_update_verified is not True
+        or type(state.transaction_cleanup_completed) is not bool
+        or type(service_resource_close_verified) is not bool
+        or type(runner_close_verified) is not bool
+        or type(state.terminal_handoff_sha256) is not str
+        or not state.terminal_handoff_sha256.startswith("sha256:")
+    ):
+        raise ArchiveServiceError(
+            "project_version_update_terminal_result_unverified"
+        )
+    cleanup_completed = bool(state.transaction_cleanup_completed)
+    delivery_acknowledged = False
+    attention_required = not (
+        cleanup_completed
+        and service_resource_close_verified
+        and runner_close_verified
+        and delivery_acknowledged
+    )
+    domain_result = copy.deepcopy(
+        state.terminal_domain_result
+        if isinstance(state.terminal_domain_result, dict)
+        else _project_update_privacy_safe_domain_result(result)
+    )
+    terminal = {
+        "schema": (
+            "wom-kit/project-version-update-terminal-finalization/v0.1"
+        ),
+        "update_result_verified_in_current_invocation": True,
+        "update_result_reauthenticated_from_durable_handoff": False,
+        "claim_succeeded_verified": True,
+        "transaction_completed_checkpoint_verified": True,
+        "lock_absence_verified": True,
+        "transaction_cleanup_completed": cleanup_completed,
+        "service_resource_close_verified": (
+            service_resource_close_verified
+        ),
+        "git_runner_close_verified": runner_close_verified,
+        "attention_required": attention_required,
+        "domain_writer_reentry_allowed": False,
+        "automatic_retry_allowed": False,
+        "cleanup_proof_used_as_success_authority": False,
+        "durable_terminal_handoff_ready": True,
+        "durable_terminal_handoff_replayed": False,
+        "durable_result_delivery_acknowledged": delivery_acknowledged,
+        "private_paths_echoed": False,
+        "private_identifiers_echoed": False,
+    }
+    projected = _project_update_terminal_result_from_domain(
+        domain_result,
+        terminal,
+    )
+    if projected is None:
+        raise ArchiveServiceError(
+            "project_version_update_terminal_result_unverified"
+        )
+    return projected
+
+
+def _project_update_attempt_all_service_closes(
+    close_owned_resources: Callable[[], None],
+    lifetime: _ProjectVersionUpdateGitRunnerLifetime,
+) -> tuple[BaseException | None, BaseException | None]:
+    """Attempt both independent closes and retain only content-free truth."""
+
+    service_resource_close_failure: BaseException | None = None
+    try:
+        close_owned_resources()
+    except BaseException as failure:
+        service_resource_close_failure = failure
+    runner_close_failure: BaseException | None = None
+    try:
+        lifetime.close_after_service_transaction()
+    except BaseException as failure:
+        runner_close_failure = failure
+    return service_resource_close_failure, runner_close_failure
+
+
+def _project_update_close_after_service_failure(
+    close_owned_resources: Callable[[], None],
+    lifetime: _ProjectVersionUpdateGitRunnerLifetime,
+) -> None:
+    """Close after a primary failure without letting close hide that failure."""
+
+    _project_update_attempt_all_service_closes(
+        close_owned_resources,
+        lifetime,
+    )
+
+
+def _project_update_attach_nonterminal_close_truth(
+    result: dict[str, Any],
+    *,
+    service_resource_close_failure: BaseException | None,
+    runner_close_failure: BaseException | None,
+) -> dict[str, Any]:
+    """Keep one domain/control result while exposing content-free close truth."""
+
+    existing = result.get("service_finalization")
+    existing_service_verified = True
+    existing_runner_verified = True
+    if (
+        isinstance(existing, Mapping)
+        and existing.get("schema")
+        == "wom-kit/project-version-update-service-finalization/v0.4.16"
+        and type(existing.get("service_resource_close_verified")) is bool
+        and type(existing.get("git_runner_close_verified")) is bool
+    ):
+        existing_service_verified = bool(
+            existing["service_resource_close_verified"]
+        )
+        existing_runner_verified = bool(
+            existing["git_runner_close_verified"]
+        )
+    service_resource_close_verified = bool(
+        existing_service_verified
+        and service_resource_close_failure is None
+    )
+    runner_close_verified = bool(
+        existing_runner_verified and runner_close_failure is None
+    )
+    if service_resource_close_verified and runner_close_verified:
+        return result
+    result["service_finalization"] = {
+        "schema": (
+            "wom-kit/project-version-update-service-finalization/v0.4.16"
+        ),
+        "service_resource_close_verified": (
+            service_resource_close_verified
+        ),
+        "git_runner_close_verified": runner_close_verified,
+        "attention_required": True,
+        "private_paths_echoed": False,
+        "private_identifiers_echoed": False,
+        "raw_errors_echoed": False,
+    }
+    result["post_service_attention_required"] = True
+    return result
+
+
+def _project_update_finish_nonterminal_service_result(
+    result: Mapping[str, Any],
+    lifetime: _ProjectVersionUpdateGitRunnerLifetime,
+    *,
+    close_owned_resources: Callable[[], None],
+) -> dict[str, Any]:
+    """Close a nonterminal service result without replacing its domain truth."""
+
+    try:
+        if not isinstance(result, Mapping):
+            raise ArchiveServiceError(
+                "project_version_update_result_invalid"
+            )
+        completed_result = dict(result)
+    except BaseException:
+        _project_update_close_after_service_failure(
+            close_owned_resources,
+            lifetime,
+        )
+        raise
+    (
+        service_resource_close_failure,
+        runner_close_failure,
+    ) = _project_update_attempt_all_service_closes(
+        close_owned_resources,
+        lifetime,
+    )
+    return _project_update_attach_nonterminal_close_truth(
+        completed_result,
+        service_resource_close_failure=service_resource_close_failure,
+        runner_close_failure=runner_close_failure,
+    )
+
+
+def _project_update_finish_resource_only_result(
+    result: Mapping[str, Any],
+    *,
+    close_owned_resources: Callable[[], None],
+) -> dict[str, Any]:
+    """Preserve one mapping while truthfully closing its only resource owner."""
+
+    try:
+        if not isinstance(result, Mapping):
+            raise ArchiveServiceError(
+                "project_version_update_result_invalid"
+            )
+        completed_result = dict(result)
+    except BaseException:
+        try:
+            close_owned_resources()
+        except BaseException:
+            pass
+        raise
+    close_failure: BaseException | None = None
+    try:
+        close_owned_resources()
+    except BaseException as failure:
+        close_failure = failure
+    return _project_update_attach_nonterminal_close_truth(
+        completed_result,
+        service_resource_close_failure=close_failure,
+        runner_close_failure=None,
+    )
+
+
+def _project_update_finish_service_result(
+    result: Mapping[str, Any],
+    state: _ProjectVersionUpdateDurableApprovalState,
+    lifetime: _ProjectVersionUpdateGitRunnerLifetime,
+    *,
+    close_owned_resources: Callable[[], None],
+) -> dict[str, Any]:
+    """Use one terminal close/result rule for fresh and resumed updates."""
+
+    try:
+        if not isinstance(result, Mapping):
+            raise ArchiveServiceError(
+                "project_version_update_result_invalid"
+            )
+        completed_result = dict(result)
+    except BaseException:
+        _project_update_close_after_service_failure(
+            close_owned_resources,
+            lifetime,
+        )
+        raise
+    (
+        service_resource_close_failure,
+        runner_close_failure,
+    ) = _project_update_attempt_all_service_closes(
+        close_owned_resources,
+        lifetime,
+    )
+    service_resource_close_verified = service_resource_close_failure is None
+    runner_close_verified = runner_close_failure is None
+    terminal_success = bool(
+        state.terminal_update_verified is True
+        and completed_result.get("ok") is True
+    )
+    if not terminal_success:
+        return _project_update_attach_nonterminal_close_truth(
+            completed_result,
+            service_resource_close_failure=(
+                service_resource_close_failure
+            ),
+            runner_close_failure=runner_close_failure,
+        )
+    if state.terminal_update_verified is not True:
+        return completed_result
+    return _project_update_attach_terminal_finalization(
+        completed_result,
+        state,
+        service_resource_close_verified=(
+            service_resource_close_verified
+        ),
+        runner_close_verified=runner_close_verified,
+    )
 
 
 def _project_update_cancel_before_native(
@@ -117544,7 +122519,13 @@ def _project_update_prepare_durable_state(
     runtime_pre_sha256 = (
         runtime_post_sha256
         if runtime_candidate.existing_runtime_reusable
-        else project_update_transaction.ABSENT_COMPONENT_SHA256
+        else (
+            "sha256:"
+            + str(runtime_candidate.existing_runtime_inventory_sha256)
+            if runtime_candidate.existing_runtime_repair_required
+            and runtime_candidate.existing_runtime_inventory_sha256 is not None
+            else project_update_transaction.ABSENT_COMPONENT_SHA256
+        )
     )
 
     target_pin_bytes = (target_tag + "\n").encode("utf-8")
@@ -117689,9 +122670,14 @@ def _project_update_prepare_durable_state(
         if spec.get("previous_bytes") != target_pin_bytes
     ]
     runtime_created = not runtime_candidate.existing_runtime_reusable
+    runtime_repair = runtime_candidate.existing_runtime_repair_required
     launcher_written = launcher_previous != launcher_target
     receipt = {
-        "schema": "wom-kit/project-version-update-receipt/v0.3",
+        "schema": (
+            "wom-kit/project-version-update-receipt/v0.4"
+            if runtime_repair
+            else "wom-kit/project-version-update-receipt/v0.3"
+        ),
         "action": "project_version_update",
         "status": "updated_restart_required",
         "timestamp": reservation.created_at,
@@ -117755,7 +122741,19 @@ def _project_update_prepare_durable_state(
             "verification": dict(runtime_candidate.verification),
             "new_process_verified": True,
             "global_path_mutation": False,
-            "previous_runtime_deleted": False,
+            **(
+                {
+                    "runtime_receipt_schema": (
+                        runtime_candidate.public_summary()[
+                            "runtime_receipt_schema"
+                        ]
+                    ),
+                    "previous_runtime_deleted_during_materialization": False,
+                    "terminal_cleanup_required_to_remove_private_repair_preimage": True,
+                }
+                if runtime_repair
+                else {"previous_runtime_deleted": False}
+            ),
         },
         "runtime": {
             "running_version_before": WOM_KIT_VERSION,
@@ -117780,7 +122778,11 @@ def _project_update_prepare_durable_state(
     }
     if validate_schema(
         receipt,
-        "project-version-update-receipt-v0.3.schema.json",
+        (
+            "project-version-update-receipt-v0.4.schema.json"
+            if runtime_repair
+            else "project-version-update-receipt-v0.3.schema.json"
+        ),
     ):
         raise ArchiveServiceError(
             "project_version_update_static_receipt_schema_invalid"
@@ -117865,6 +122867,7 @@ def _project_update_prepare_durable_state(
             },
         },
         "static_receipt_relative": static_receipt_relative,
+        "static_receipt_schema": receipt["schema"],
         "domain_plan": domain_plan,
         "domain_plan_sha256": domain_plan_sha256,
         "domain_target_sha256": domain_target_sha256,
@@ -117994,6 +122997,14 @@ def _project_update_build_prepared_preview(
         )
     prepared = copy.deepcopy(base)
     prepared["mode"] = "approval_prepared"
+    prepared_receipt = prepared.get("receipt")
+    if not isinstance(prepared_receipt, dict):
+        raise ArchiveServiceError(
+            "project_version_update_private_plan_invalid"
+        )
+    prepared_receipt["schema"] = state.private_plan[
+        "static_receipt_schema"
+    ]
     runner_summary = dict(state.runner.public_summary())
     candidate_summary = dict(state.runtime_candidate.public_summary())
     transaction = state.transaction
@@ -118037,7 +123048,7 @@ def _project_update_build_prepared_preview(
         },
         "runtime_candidate": candidate_summary,
         "static_receipt": {
-            "schema": "wom-kit/project-version-update-receipt/v0.3",
+            "schema": state.private_plan["static_receipt_schema"],
             "logical_path": state.private_plan[
                 "static_receipt_relative"
             ],
@@ -118138,6 +123149,25 @@ def _project_update_reopen_durable_state(
         project_root,
         transaction_ref,
     )
+    existing_cleanup_authority_sha256 = (
+        transaction.cleanup_authority_sha256_read_only()
+        if isinstance(
+            transaction,
+            project_update_transaction.ProjectUpdateTransaction,
+        )
+        else None
+    )
+    if (
+        existing_cleanup_authority_sha256 is not None
+        and re.fullmatch(
+            r"sha256:[0-9a-f]{64}",
+            str(existing_cleanup_authority_sha256),
+        )
+        is None
+    ):
+        raise ArchiveServiceError(
+            "project_version_update_terminal_cleanup_authority_invalid"
+        )
     target_tag = transaction.intent.requested_target_tag
     supplied_target = str(target or "").strip()
     if supplied_target and supplied_target != target_tag:
@@ -118216,6 +123246,13 @@ def _project_update_reopen_durable_state(
             transaction,
             private_plan.get("runtime_candidate_private"),
         )
+        transaction_uses_legacy_runtime_shape = (
+            _project_update_legacy_resume_serialization_family(
+                transaction,
+                candidate,
+                private_plan,
+            )
+        )
         cancellation_started = any(
             item.phase == "preapproval_cancel_requested"
             for item in transaction.inspect().journal.verified_prefix
@@ -118292,6 +123329,53 @@ def _project_update_reopen_durable_state(
         static_receipt_bytes = transaction.private_binding_bytes(
             "static-receipt-postimage"
         )
+        try:
+            static_receipt = project_update_transaction._parse_document(
+                static_receipt_bytes,
+                code="project_update_transaction_invalid",
+            )
+        except project_update_transaction.ProjectUpdateTransactionError:
+            raise ArchiveServiceError(
+                "project_version_update_static_receipt_schema_invalid"
+            ) from None
+        expected_static_receipt_schema = (
+            "wom-kit/project-version-update-receipt/v0.3"
+            if transaction_uses_legacy_runtime_shape
+            else private_plan.get("static_receipt_schema")
+        )
+        expected_schema_file = {
+            "wom-kit/project-version-update-receipt/v0.3": (
+                "project-version-update-receipt-v0.3.schema.json"
+            ),
+            "wom-kit/project-version-update-receipt/v0.4": (
+                "project-version-update-receipt-v0.4.schema.json"
+            ),
+        }.get(expected_static_receipt_schema)
+        expected_schema_for_runtime_shape = (
+            "wom-kit/project-version-update-receipt/v0.4"
+            if candidate.existing_runtime_repair_required
+            else "wom-kit/project-version-update-receipt/v0.3"
+        )
+        if (
+            expected_schema_file is None
+            or expected_static_receipt_schema
+            != expected_schema_for_runtime_shape
+            or static_receipt.get("schema")
+            != expected_static_receipt_schema
+            or validate_schema(static_receipt, expected_schema_file)
+        ):
+            raise ArchiveServiceError(
+                "project_version_update_static_receipt_schema_invalid"
+            )
+        if transaction_uses_legacy_runtime_shape:
+            # v0.4.15 sealed the exact receipt bytes but did not duplicate its
+            # schema in the private domain plan.  Derive that historical fact
+            # from the already-bound bytes in memory only; never rewrite the
+            # private plan or change its authenticated digest.
+            private_plan = dict(private_plan)
+            private_plan["static_receipt_schema"] = (
+                "wom-kit/project-version-update-receipt/v0.3"
+            )
         state = _ProjectVersionUpdateDurableApprovalState(
             inspection_root=inspection,
             project_root=project_root,
@@ -118318,7 +123402,32 @@ def _project_update_reopen_durable_state(
             runtime_pre_sha256=by_role["runtime"].pre_sha256,
             runtime_post_sha256=by_role["runtime"].post_sha256,
             component_paths=component_paths,
+            existing_cleanup_authority_sha256=(
+                existing_cleanup_authority_sha256
+            ),
         )
+        reopened_checkpoints = tuple(
+            transaction.inspect().journal.verified_prefix
+        )
+        runtime_verified = any(
+            item.phase == "runtime"
+            and item.stage == "verified"
+            and item.component_ref == by_role["runtime"].component_ref
+            for item in reopened_checkpoints
+        )
+        if (
+            runtime_verified
+            and candidate.existing_runtime_repair_required
+        ):
+            # A later component may fail after the repaired runtime checkpoint
+            # is durable.  The next public --resume skips that already-verified
+            # component, so reconstruct its exact live rollback authority here
+            # instead of losing the repaired result truth in the new process.
+            state.runtime_materialization = (
+                project_runtime.reopen_promoted_runtime_materialization(
+                    candidate
+                )
+            )
         state.prepared_preview = _project_update_build_prepared_preview(
             state
         )
@@ -118328,9 +123437,14 @@ def _project_update_reopen_durable_state(
         directory_guard = None
         return state, lifetime
     except BaseException:
-        if directory_guard is not None:
-            directory_guard.close()
-        lifetime.close_after_service_transaction()
+        _project_update_close_after_service_failure(
+            (
+                directory_guard.close
+                if directory_guard is not None
+                else (lambda: None)
+            ),
+            lifetime,
+        )
         raise
 
 
@@ -118779,10 +123893,15 @@ def _wom_kit_project_version_update_legacy_core_generator(
         "installed": {"status": "not_checked", "verified": False},
         "bootstrap": dict(project_runtime_bootstrap_summary),
         "materialization_required": False,
+        "runtime_creation_required": False,
+        "runtime_repair_required": False,
+        "repair_preimage_exactly_bound": False,
+        "will_bind_repair_preimage_exactly_before_approval": False,
+        "will_preserve_during_active_transaction": False,
         "activation_required": False,
         "active_version_pin": ".zettel-kasten/installed-version.txt",
         "global_path_mutation": False,
-        "previous_runtime_deletion": False,
+        "old_invalid_runtime_deletion_stage": "not_applicable",
     }
     project_runtime_plan_blockers: list[str] = []
     project_runtime_plan_warnings: list[str] = []
@@ -118887,6 +124006,7 @@ def _wom_kit_project_version_update_legacy_core_generator(
     durable_approval_state: (
         _ProjectVersionUpdateDurableApprovalState | None
     ) = None
+    durable_handoff_complete = False
     target_git_snapshot: dict[str, Any] | None = None
     trusted_target_ref_snapshot: dict[str, str] | None = None
     source_materialization_completed = False
@@ -118954,7 +124074,10 @@ def _wom_kit_project_version_update_legacy_core_generator(
                 WOM_KIT_PROJECT_UPDATE_MATERIALIZATION_BLOCKER
             )
 
+    last_result_payload: dict[str, Any] | None = None
+
     def result_payload(status: str) -> dict[str, Any]:
+        nonlocal last_result_payload
         target_commit = target_evidence.get("target_commit")
         rolled_back = (
             status in {"failed_rolled_back", "interrupted_rolled_back"}
@@ -119053,7 +124176,7 @@ def _wom_kit_project_version_update_legacy_core_generator(
                 "Pass that affirmation only after editors and sync, backup, and other Git processes are paused for the complete transaction.",
                 "Approval will fetch and verify the exact tag before changing the source mirror or pins.",
             ]
-        return {
+        payload = {
             "ok": not blockers
             and status
             not in {
@@ -119260,6 +124383,8 @@ def _wom_kit_project_version_update_legacy_core_generator(
                 "objet_bytes_read": False,
             },
         }
+        last_result_payload = payload
+        return payload
 
     if blockers:
         if progress_callback is not None:
@@ -119293,11 +124418,13 @@ def _wom_kit_project_version_update_legacy_core_generator(
     ):
         guard_ready = directory_guard.hold_existing_tree(receipts_parent)
     if not guard_ready:
-        directory_guard.close()
         blockers.append(
             "The project update could not hold every existing write-path directory stable against rename or reparse replacement."
         )
-        return result_payload("blocked")
+        return _project_update_finish_resource_only_result(
+            result_payload("blocked"),
+            close_owned_resources=directory_guard.close,
+        )
 
     def register_lock_reservation(identity: tuple[int, int]) -> None:
         nonlocal lock_reservation
@@ -119341,6 +124468,22 @@ def _wom_kit_project_version_update_legacy_core_generator(
                     }
                 )
             )
+            cleanup_classification, _history_count = (
+                _project_update_terminal_cleanup_artifact_classification_read_only(
+                    project_root
+                )
+            )
+            if cleanup_classification not in {
+                "absent",
+                "history_only_exact",
+            }:
+                blockers.append(
+                    "A prior project update has unresolved terminal cleanup evidence; no new update lock or writer was entered."
+                )
+                return _project_update_finish_resource_only_result(
+                    result_payload("blocked"),
+                    close_owned_resources=directory_guard.close,
+                )
             durable_reservation = (
                 project_update_transaction.ProjectUpdateTransaction.reserve(
                     project_root,
@@ -119349,11 +124492,60 @@ def _wom_kit_project_version_update_legacy_core_generator(
                     created_at=reservation_created_at,
                 )
             )
+            post_reservation_classification, _history_count = (
+                _project_update_terminal_cleanup_artifact_classification_read_only(
+                    project_root,
+                    allowed_reservation=durable_reservation,
+                )
+            )
             durable_lock_bytes = durable_reservation.acquire_lock()
+            lock_acquired = True
+            lock_release_state = "held"
             lock_stat = os.lstat(lock_path)
             register_lock_reservation(
                 (int(lock_stat.st_dev), int(lock_stat.st_ino))
             )
+            post_lock_classification, _history_count = (
+                _project_update_terminal_cleanup_artifact_classification_read_only(
+                    project_root,
+                    allowed_reservation=durable_reservation,
+                    allowed_lock_bytes=durable_lock_bytes,
+                )
+            )
+            if (
+                post_reservation_classification != "reservation_exact"
+                or post_lock_classification != "reservation_exact"
+            ):
+                blockers.append(
+                    "The project-update transaction namespace changed at the lock boundary; the exact new reservation was aborted before approval or domain work."
+                )
+                try:
+                    durable_reservation.abort_before_intent_seal(
+                        expected_lock_bytes=durable_lock_bytes,
+                    )
+                except BaseException:
+                    preserve_lock = True
+                    rollback["attempted"] = True
+                    rollback["succeeded"] = False
+                    rollback["source_restored"] = True
+                    rollback["pins_restored"] = True
+                    rollback["lock_removed"] = False
+                    return _project_update_finish_resource_only_result(
+                        result_payload("failed_rollback_incomplete"),
+                        close_owned_resources=directory_guard.close,
+                    )
+                lock_acquired = False
+                lock_release_state = "released"
+                lock_release_intent_status = "blocked"
+                rollback["attempted"] = True
+                rollback["succeeded"] = True
+                rollback["source_restored"] = True
+                rollback["pins_restored"] = True
+                rollback["lock_removed"] = True
+                return _project_update_finish_resource_only_result(
+                    result_payload("blocked"),
+                    close_owned_resources=directory_guard.close,
+                )
         else:
             _wom_kit_project_update_acquire_lock_exclusive(
                 project_root,
@@ -119364,9 +124556,11 @@ def _wom_kit_project_version_update_legacy_core_generator(
         lock_acquired = True
         lock_release_state = "held"
     except FileExistsError:
-        directory_guard.close()
         blockers.append("A concurrent project version update acquired the lock first.")
-        return result_payload("blocked")
+        return _project_update_finish_resource_only_result(
+            result_payload("blocked"),
+            close_owned_resources=directory_guard.close,
+        )
     except WomKitProjectUpdateReceiptUncertainError:
         lock_acquired = bool(
             wom_kit_real_path_kind(project_root, lock_path) != "missing"
@@ -119380,12 +124574,16 @@ def _wom_kit_project_version_update_legacy_core_generator(
         blockers.append(
             "The project version update lock ownership could not be verified; the uncertain path was preserved for review."
         )
-        directory_guard.close()
-        return result_payload("failed_rollback_incomplete")
+        return _project_update_finish_resource_only_result(
+            result_payload("failed_rollback_incomplete"),
+            close_owned_resources=directory_guard.close,
+        )
     except OSError:
-        directory_guard.close()
         blockers.append("The project version update lock could not be created.")
-        return result_payload("blocked")
+        return _project_update_finish_resource_only_result(
+            result_payload("blocked"),
+            close_owned_resources=directory_guard.close,
+        )
     except BaseException:
         lock_removed = bool(
             wom_kit_real_path_kind(project_root, lock_path) == "missing"
@@ -119410,11 +124608,13 @@ def _wom_kit_project_version_update_legacy_core_generator(
             if not lock_removed
             else "The project version update was interrupted before local mutation."
         )
-        directory_guard.close()
-        return result_payload(
-            "interrupted_rollback_incomplete"
-            if not lock_removed
-            else "interrupted_rolled_back"
+        return _project_update_finish_resource_only_result(
+            result_payload(
+                "interrupted_rollback_incomplete"
+                if not lock_removed
+                else "interrupted_rolled_back"
+            ),
+            close_owned_resources=directory_guard.close,
         )
 
     def cleanup_prepared_runtime_bundle_or_raise() -> None:
@@ -120148,6 +125348,11 @@ def _wom_kit_project_version_update_legacy_core_generator(
             durable_approval_state.prepared_preview = copy.deepcopy(
                 prepared_preview
             )
+            # From this assignment onward the sealed transaction and the
+            # driver own recovery.  Closing this legacy generator must never
+            # enter its historical rollback path after a durable component
+            # failure or after successful terminal finalization.
+            durable_handoff_complete = True
             yield _ProjectVersionUpdatePreparedApproval(
                 preview=copy.deepcopy(prepared_preview),
                 state=durable_approval_state,
@@ -120882,6 +126087,8 @@ def _wom_kit_project_version_update_legacy_core_generator(
         release_current_lock_or_raise("updated_restart_required")
         return result_payload("updated_restart_required")
     except BaseException as failure:
+        if durable_handoff_complete:
+            raise
         interrupted = not isinstance(failure, Exception)
         runtime_reference_cleanup_unverified = isinstance(
             failure,
@@ -121384,7 +126591,20 @@ def _wom_kit_project_version_update_legacy_core_generator(
         )
         return result_payload(status)
     finally:
-        directory_guard.close()
+        primary_failure = sys.exc_info()[1]
+        try:
+            directory_guard.close()
+        except BaseException as close_failure:
+            if isinstance(primary_failure, GeneratorExit):
+                raise
+            if primary_failure is None:
+                if last_result_payload is None:
+                    raise
+                _project_update_attach_nonterminal_close_truth(
+                    last_result_payload,
+                    service_resource_close_failure=close_failure,
+                    runner_close_failure=None,
+                )
 
 
 def _wom_kit_project_version_update_legacy_core(
@@ -121405,6 +126625,24 @@ def _wom_kit_project_version_update_legacy_core(
 ) -> dict[str, Any]:
     """Drive the historical core or one live lock-held approval yield."""
 
+    safe_progress_callback = progress_callback
+    if progress_callback is not None:
+        def best_effort_project_update_progress(
+            stage: str,
+            event: str,
+            current: int | None,
+            total: int | None,
+        ) -> None:
+            try:
+                progress_callback(stage, event, current, total)
+            except Exception:
+                # Progress is observational. In particular, a terminal
+                # domain result must not be replaced by an output/journal
+                # callback failure.
+                return
+
+        safe_progress_callback = best_effort_project_update_progress
+
     git_runner_lifetime = _ProjectVersionUpdateGitRunnerLifetime()
     transaction = _wom_kit_project_version_update_legacy_core_generator(
         inspection_root,
@@ -121417,7 +126655,7 @@ def _wom_kit_project_version_update_legacy_core(
         ),
         operation_exact_human_approval=operation_exact_human_approval,
         prepare_exact_approval=approval_executor is not None,
-        progress_callback=progress_callback,
+        progress_callback=safe_progress_callback,
         _expected_approval_root=_expected_approval_root,
         _expected_archive_id=_expected_archive_id,
         _git_runner_lifetime=git_runner_lifetime,
@@ -121425,21 +126663,23 @@ def _wom_kit_project_version_update_legacy_core(
     try:
         prepared_preview = next(transaction)
     except StopIteration as completed:
-        git_runner_lifetime.close_after_service_transaction()
-        result = completed.value
-        if not isinstance(result, Mapping):
-            raise ArchiveServiceError(
-                "project_version_update_result_invalid"
-            )
-        return dict(result)
+        return _project_update_finish_nonterminal_service_result(
+            completed.value,
+            git_runner_lifetime,
+            close_owned_resources=transaction.close,
+        )
     except BaseException:
-        transaction.close()
-        git_runner_lifetime.close_after_service_transaction()
+        _project_update_close_after_service_failure(
+            transaction.close,
+            git_runner_lifetime,
+        )
         raise
 
     if approval_executor is None:
-        transaction.close()
-        git_runner_lifetime.close_after_service_transaction()
+        _project_update_close_after_service_failure(
+            transaction.close,
+            git_runner_lifetime,
+        )
         raise ArchiveServiceError(
             "project_version_update_live_approval_executor_required"
         )
@@ -121567,18 +126807,26 @@ def _wom_kit_project_version_update_legacy_core(
                 raise ArchiveServiceError(
                     "project_version_update_result_invalid"
                 )
-            return dict(result)
         except BaseException as failure:
-            if (
-                not continuation_used
-                and getattr(failure, "code", None)
-                == "exact_human_approval_cancelled"
-            ):
-                _project_update_cancel_before_native(state)
+            try:
+                if (
+                    not continuation_used
+                    and getattr(failure, "code", None)
+                    == "exact_human_approval_cancelled"
+                ):
+                    _project_update_cancel_before_native(state)
+            finally:
+                _project_update_close_after_service_failure(
+                    transaction.close,
+                    git_runner_lifetime,
+                )
             raise
-        finally:
-            transaction.close()
-            git_runner_lifetime.close_after_service_transaction()
+        return _project_update_finish_service_result(
+            result,
+            state,
+            git_runner_lifetime,
+            close_owned_resources=transaction.close,
+        )
 
     continuation_used = False
 
@@ -121610,7 +126858,6 @@ def _wom_kit_project_version_update_legacy_core(
                     "project_version_update_result_invalid"
                 )
             return dict(result)
-        transaction.close()
         raise ArchiveServiceError(
             "project_version_update_approval_continuation_invalid"
         ) from RuntimeError(str(unexpected))
@@ -121628,10 +126875,17 @@ def _wom_kit_project_version_update_legacy_core(
             raise ArchiveServiceError(
                 "project_version_update_result_invalid"
             )
-        return dict(result)
-    finally:
-        transaction.close()
-        git_runner_lifetime.close_after_service_transaction()
+    except BaseException:
+        _project_update_close_after_service_failure(
+            transaction.close,
+            git_runner_lifetime,
+        )
+        raise
+    return _project_update_finish_nonterminal_service_result(
+        result,
+        git_runner_lifetime,
+        close_owned_resources=transaction.close,
+    )
 
 
 def ai_start_here_inbox_attention(archive_root: Path) -> dict[str, Any]:

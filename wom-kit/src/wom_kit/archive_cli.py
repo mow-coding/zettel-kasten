@@ -373,6 +373,7 @@ from __future__ import annotations
 
 import argparse
 import codecs
+import copy
 from concurrent.futures import ThreadPoolExecutor
 import io
 import getpass
@@ -8264,8 +8265,21 @@ def command_project_version_update(args: argparse.Namespace) -> int:
     reporter.progress("starting", "start", None, None)
     capture: _CommandRunResultCapture | None = None
     operation_journal: operation_control.OperationRunJournal | None = None
+    consumed_terminal_candidate: (
+        operation_control.ProjectUpdatePendingTerminalDelivery | None
+    ) = None
+    active_terminal_candidate: (
+        operation_control.ProjectUpdatePendingTerminalDelivery | None
+    ) = None
+    terminal_display_candidate: (
+        operation_control.ProjectUpdatePendingTerminalDelivery | None
+    ) = None
+    terminal_display_capability: str | None = None
     try:
         inspection_root = Path(args.inspection_root)
+        write_requested = bool(
+            args.approve or getattr(args, "resume", False)
+        )
         if getattr(args, "resume", False):
             if not bool(args.affirm_external_writers_quiescent):
                 raise ValueError("project_version_update_quiescence_required")
@@ -8281,8 +8295,25 @@ def command_project_version_update(args: argparse.Namespace) -> int:
                     "approval_id",
                 )
             )
+            observed_terminal_candidate = (
+                operation_control
+                .discover_pending_project_update_terminal_delivery(
+                    archive_services
+                    ._project_update_resume_project_root_read_only(
+                        inspection_root
+                    ),
+                    allow_active_handoff=True,
+                )
+            )
+            if observed_terminal_candidate is not None:
+                if observed_terminal_candidate.active_handoff:
+                    active_terminal_candidate = observed_terminal_candidate
+                else:
+                    consumed_terminal_candidate = observed_terminal_candidate
             cleanup_unknown = (
-                archive_services
+                None
+                if consumed_terminal_candidate is not None
+                else archive_services
                 ._project_update_terminal_cleanup_unknown_preflight_read_only(
                     inspection_root,
                     operator_resume_identifiers_supplied=(
@@ -8293,23 +8324,82 @@ def command_project_version_update(args: argparse.Namespace) -> int:
                     ),
                 )
             )
-            if cleanup_unknown is not None:
+            if (
+                cleanup_unknown is not None
+                and consumed_terminal_candidate is None
+            ):
                 # Leave before output-root resolution and, critically, before
                 # the archive identity/approval boundary reads archive.yml.
                 raise _ProjectVersionUpdateCleanupUnknownPreflight(
                     cleanup_unknown
                 )
-        if getattr(args, "output", None):
-            control_root = operation_control.require_control_root(
-                Path(args.inspection_root)
+        elif args.approve:
+            # A consumed result awaiting its final journal event is still the
+            # one authoritative update. Do not let a fresh approval create a
+            # second writer/result while identifier-free --resume can finish
+            # the exact prior delivery.
+            if (
+                operation_control
+                .discover_pending_project_update_terminal_delivery(
+                    archive_services
+                    ._project_update_resume_project_root_read_only(
+                        inspection_root
+                    ),
+                    allow_active_handoff=True,
+                )
+                is not None
+            ):
+                raise ValueError(
+                    "project_version_update_terminal_delivery_"
+                    "pending_resume_required"
+                )
+        output_argument = getattr(args, "output", None)
+        if (
+            consumed_terminal_candidate is not None
+            or active_terminal_candidate is not None
+        ) and output_argument:
+            raise ValueError(
+                "project_version_update_terminal_delivery_output_already_bound"
             )
-            archive_scoped = (control_root / "archive.yml").is_file()
+        if (
+            consumed_terminal_candidate is None
+            and active_terminal_candidate is None
+            and write_requested
+            and not output_argument
+        ):
+            # A successful update must have one durable delivery target so a
+            # later process can acknowledge the exact terminal capsule. The
+            # system owns the bounded project path; the human does not need to
+            # invent another safety identifier.
+            output_argument = (
+                operation_control.PROJECT_OUTPUT_PREFIX
+                + "project-version-update-"
+                + secrets.token_hex(16)
+                + ".json"
+            )
+        if output_argument:
+            control_root = (
+                archive_services
+                ._project_update_resume_project_root_read_only(
+                    inspection_root
+                )
+                if write_requested
+                else operation_control.require_control_root(
+                    Path(args.inspection_root)
+                )
+            )
+            archive_scoped = bool(
+                not write_requested
+                and (control_root / "archive.yml").is_file()
+            )
             capture = _CommandRunResultCapture.prepare(
-                str(args.output),
+                str(output_argument),
                 control_root,
                 command="project-version-update",
                 required_prefix=(
-                    operation_control.ARCHIVE_OUTPUT_PREFIX
+                    operation_control.PROJECT_OUTPUT_PREFIX
+                    if write_requested
+                    else operation_control.ARCHIVE_OUTPUT_PREFIX
                     if archive_scoped
                     else operation_control.PROJECT_OUTPUT_PREFIX
                 ),
@@ -8463,9 +8553,58 @@ def command_project_version_update(args: argparse.Namespace) -> int:
                         if str(args.transaction_ref or "").strip()
                         else None
                     )
-                    result = (
-                        archive_services
-                        ._wom_kit_project_version_update_resume_live_transaction(
+                    if consumed_terminal_candidate is not None:
+                        consumed_result = {
+                            key: copy.deepcopy(value)
+                            for key, value in (
+                                consumed_terminal_candidate.result_document.items()
+                            )
+                            if key
+                            not in {"cli_execution", "cli_output_artifact"}
+                        }
+                        consumed_capability = (
+                            archive_services
+                            ._project_update_reauthenticate_consumed_terminal_delivery(
+                                inspection_root,
+                                capsule_bytes=(
+                                    consumed_terminal_candidate.capsule_bytes
+                                ),
+                                expected_handoff_sha256=(
+                                    consumed_terminal_candidate
+                                    .terminal_handoff_sha256
+                                ),
+                                expected_result=consumed_result,
+                                target=args.target,
+                                reviewed_by=resume_reviewer,
+                                transaction_ref=resume_transaction_ref,
+                                approval_executor=(
+                                    _execute_project_version_update_approval
+                                ),
+                                expected_approval_root=approval_root,
+                                expected_archive_id=held_archive_id,
+                            )
+                        )
+                        verified_consumed = (
+                            operation_control
+                            .verify_pending_project_update_terminal_delivery(
+                                consumed_terminal_candidate,
+                                delivery_capability=consumed_capability,
+                            )
+                        )
+                        if verified_consumed is None:
+                            raise ValueError(
+                                "project_version_update_terminal_delivery_unverified"
+                            )
+                        consumed_terminal_candidate = verified_consumed
+                        terminal_display_candidate = verified_consumed
+                        terminal_display_capability = (
+                            consumed_capability
+                        )
+                        result = consumed_result
+                    else:
+                        result = (
+                            archive_services
+                            ._wom_kit_project_version_update_resume_live_transaction(
                             inspection_root,
                             target=args.target,
                             reviewed_by=resume_reviewer,
@@ -8473,14 +8612,116 @@ def command_project_version_update(args: argparse.Namespace) -> int:
                             approval_executor=(
                                 _execute_project_version_update_approval
                             ),
+                            progress_callback=progress_callback,
                             _approval_identifier_supplied=bool(
                                 str(args.approval_id or "").strip()
                             ),
                             _archive_identity_metadata_read=True,
                             _expected_approval_root=approval_root,
                             _expected_archive_id=held_archive_id,
+                            )
                         )
-                    )
+                        if active_terminal_candidate is not None:
+                            active_result = {
+                                key: copy.deepcopy(value)
+                                for key, value in (
+                                    active_terminal_candidate
+                                    .result_document.items()
+                                )
+                                if key
+                                not in {
+                                    "cli_execution",
+                                    "cli_output_artifact",
+                                }
+                            }
+                            active_authority = (
+                                archive_services
+                                ._project_update_terminal_delivery_capability_for_result(
+                                    inspection_root,
+                                    result,
+                                )
+                            )
+                            if (
+                                active_authority is None
+                                or active_authority[1]
+                                != active_terminal_candidate
+                                .terminal_handoff_sha256
+                            ):
+                                raise ValueError(
+                                    "project_version_update_terminal_"
+                                    "delivery_unverified"
+                                )
+                            verified_active = (
+                                operation_control
+                                .verify_pending_project_update_terminal_delivery(
+                                    active_terminal_candidate,
+                                    delivery_capability=(
+                                        active_authority[0]
+                                    ),
+                                )
+                            )
+                            if verified_active is None:
+                                raise ValueError(
+                                    "project_version_update_terminal_"
+                                    "delivery_unverified"
+                                )
+                            try:
+                                active_output_relative = (
+                                    verified_active.output_path
+                                    .relative_to(
+                                        verified_active.control_root
+                                    )
+                                    .as_posix()
+                                )
+                            except ValueError:
+                                raise ValueError(
+                                    "project_version_update_terminal_"
+                                    "delivery_unverified"
+                                ) from None
+                            display_ready = (
+                                archive_services
+                                ._project_update_acknowledge_terminal_result_delivery(
+                                    inspection_root,
+                                    active_result,
+                                    output_relative=(
+                                        active_output_relative
+                                    ),
+                                    run_id=verified_active.run_id,
+                                    operation_ref=(
+                                        verified_active.operation_ref
+                                    ),
+                                )
+                            )
+                            result = active_result
+                            if display_ready:
+                                pending_display = (
+                                    operation_control
+                                    .discover_pending_project_update_terminal_delivery(
+                                        verified_active.control_root
+                                    )
+                                )
+                                verified_display = (
+                                    operation_control
+                                    .verify_pending_project_update_terminal_delivery(
+                                        pending_display,
+                                        delivery_capability=(
+                                            active_authority[0]
+                                        ),
+                                    )
+                                    if pending_display is not None
+                                    else None
+                                )
+                                if verified_display is None:
+                                    raise ValueError(
+                                        "project_version_update_terminal_"
+                                        "delivery_unverified"
+                                    )
+                                terminal_display_candidate = (
+                                    verified_display
+                                )
+                                terminal_display_capability = (
+                                    active_authority[0]
+                                )
                 else:
                     result = (
                         archive_services
@@ -8542,9 +8783,50 @@ def command_project_version_update(args: argparse.Namespace) -> int:
         reporter.close()
 
     exit_code = 0 if result.get("ok") else 1
+    display_result = copy.deepcopy(result)
     if capture is not None:
+        terminal_delivery_authority = (
+            archive_services
+            ._project_update_terminal_delivery_capability_for_result(
+                inspection_root,
+                result,
+            )
+            if (
+                exit_code == 0
+                and result.get("ok") is True
+                and isinstance(
+                    result.get("terminal_finalization"),
+                    Mapping,
+                )
+                and result["terminal_finalization"].get(
+                    "transaction_cleanup_completed"
+                )
+                is True
+            )
+            else None
+        )
+        terminal_delivery = (
+            archive_services
+            ._project_update_terminal_delivery_output_proof(
+                terminal_delivery_authority[0],
+                result,
+                handoff_sha256=terminal_delivery_authority[1],
+                output_relative=capture.relative_path,
+                run_id=capture.run_id,
+                operation_ref=operation_journal.operation_ref,
+            )
+            if (
+                terminal_delivery_authority is not None
+                and operation_journal is not None
+            )
+            else None
+        )
         try:
-            capture.write_completed(exit_code=exit_code, result=result)
+            capture.write_completed(
+                exit_code=exit_code,
+                result=result,
+                terminal_delivery=terminal_delivery,
+            )
         except (OSError, ValueError):
             complete_operation_tracking(
                 operation_journal,
@@ -8558,32 +8840,233 @@ def command_project_version_update(args: argparse.Namespace) -> int:
                 file=sys.stderr,
             )
             return 1
-        complete_operation_tracking(
+        journal_terminal_published = complete_operation_tracking(
             operation_journal,
             capture,
             exit_code=exit_code,
             result_available=True,
             result_ok=bool(result.get("ok")),
+            # This immutable journal field means the output is durable but
+            # the ready capsule is still pending consumption. Read-only
+            # control projects delivery=true only after it also verifies the
+            # operation-bound consumed capsule.
+            terminal_delivery_acknowledged=(
+                False if terminal_delivery is not None else None
+            ),
+            terminal_handoff_sha256=(
+                terminal_delivery_authority[1]
+                if terminal_delivery is not None
+                and terminal_delivery_authority is not None
+                else None
+            ),
         )
+        delivery_acknowledged = False
+        if (
+            exit_code == 0
+            and result.get("ok") is True
+            and journal_terminal_published
+            and terminal_delivery is not None
+        ):
+            try:
+                delivery_acknowledged = (
+                    archive_services
+                    ._project_update_acknowledge_terminal_result_delivery(
+                        inspection_root,
+                        result,
+                        output_relative=capture.relative_path,
+                        run_id=capture.run_id,
+                        operation_ref=(
+                            operation_journal.operation_ref
+                            if operation_journal is not None
+                            else None
+                        ),
+                    )
+                )
+            except Exception:
+                # The authenticated domain result and its bound output are
+                # already durable. Keep the handoff for deterministic resume
+                # instead of turning delivery bookkeeping into total failure.
+                delivery_acknowledged = False
+            if delivery_acknowledged and terminal_delivery_authority is not None:
+                try:
+                    delivery_candidate = (
+                        operation_control
+                        .discover_pending_project_update_terminal_delivery(
+                            archive_services
+                            ._project_update_resume_project_root_read_only(
+                                inspection_root
+                            )
+                        )
+                    )
+                    verified_delivery_candidate = (
+                        operation_control
+                        .verify_pending_project_update_terminal_delivery(
+                            delivery_candidate,
+                            delivery_capability=(
+                                terminal_delivery_authority[0]
+                            ),
+                        )
+                        if delivery_candidate is not None
+                        else None
+                    )
+                    if verified_delivery_candidate is None:
+                        delivery_acknowledged = False
+                    else:
+                        terminal_display_candidate = (
+                            verified_delivery_candidate
+                        )
+                        terminal_display_capability = (
+                            terminal_delivery_authority[0]
+                        )
+                except Exception:
+                    delivery_acknowledged = False
+        terminal = display_result.get("terminal_finalization")
+        if (
+            isinstance(terminal, dict)
+            and terminal.get("durable_terminal_handoff_ready") is True
+        ):
+            terminal["durable_result_delivery_acknowledged"] = bool(
+                delivery_acknowledged
+            )
+            terminal["attention_required"] = not (
+                terminal.get("transaction_cleanup_completed") is True
+                and terminal.get("service_resource_close_verified") is True
+                and terminal.get("git_runner_close_verified") is True
+                and delivery_acknowledged
+            )
+            display_result["post_update_attention_required"] = terminal[
+                "attention_required"
+            ]
+            if delivery_acknowledged:
+                warnings = display_result.get("warnings")
+                if isinstance(warnings, list):
+                    display_result["warnings"] = [
+                        warning
+                        for warning in warnings
+                        if warning
+                        != archive_services
+                        ._PROJECT_UPDATE_TERMINAL_DELIVERY_WARNING
+                    ]
+                actions = display_result.get("next_safe_actions")
+                if isinstance(actions, list):
+                    display_result["next_safe_actions"] = [
+                        action
+                        for action in actions
+                        if action
+                        != archive_services
+                        ._PROJECT_UPDATE_TERMINAL_DELIVERY_ACTION
+                    ]
 
+    if (
+        capture is None
+        and terminal_display_candidate is not None
+        and terminal_display_capability is not None
+    ):
+        terminal = display_result.get("terminal_finalization")
+        if isinstance(terminal, dict):
+            terminal["durable_result_delivery_acknowledged"] = True
+            terminal["attention_required"] = not (
+                terminal.get("transaction_cleanup_completed") is True
+                and terminal.get("service_resource_close_verified") is True
+                and terminal.get("git_runner_close_verified") is True
+            )
+            display_result["post_update_attention_required"] = terminal[
+                "attention_required"
+            ]
+            warnings = display_result.get("warnings")
+            if isinstance(warnings, list):
+                display_result["warnings"] = [
+                    warning
+                    for warning in warnings
+                    if warning
+                    != archive_services
+                    ._PROJECT_UPDATE_TERMINAL_DELIVERY_WARNING
+                ]
+            actions = display_result.get("next_safe_actions")
+            if isinstance(actions, list):
+                display_result["next_safe_actions"] = [
+                    action
+                    for action in actions
+                    if action
+                    != archive_services
+                    ._PROJECT_UPDATE_TERMINAL_DELIVERY_ACTION
+                ]
+
+    terminal_output_observed = True
     if args.format == "json":
-        print_json(result)
+        terminal_output_observed = best_effort_terminal_json(display_result)
     else:
-        print(f"Project WOM-kit version update: {result.get('status') or 'unknown'}")
-        target = result.get("target") if isinstance(result.get("target"), dict) else {}
-        source = result.get("source_mirror") if isinstance(result.get("source_mirror"), dict) else {}
-        runtime = result.get("runtime") if isinstance(result.get("runtime"), dict) else {}
-        print(f"Target: {target.get('tag') or '-'}")
-        print(f"Source mirror: {source.get('path') or '-'}")
-        print(f"Configured-origin ancestry verified: {str(bool(target.get('configured_origin_main_ancestry_verified'))).lower()}")
-        print(f"Restart required: {str(bool(runtime.get('restart_required'))).lower()}")
-        if result.get("blockers"):
-            print("Blockers:")
-            for blocker in result["blockers"]:
-                print(f"- {blocker}")
-        print("Next safe actions:")
-        for action in result.get("next_safe_actions", []):
-            print(f"- {action}")
+        terminal_output_observed = best_effort_terminal_print(
+            "Project WOM-kit version update: "
+            + str(display_result.get("status") or "unknown")
+        )
+        target = display_result.get("target") if isinstance(display_result.get("target"), dict) else {}
+        source = display_result.get("source_mirror") if isinstance(display_result.get("source_mirror"), dict) else {}
+        runtime = display_result.get("runtime") if isinstance(display_result.get("runtime"), dict) else {}
+        terminal_output_observed = best_effort_terminal_print(
+            f"Target: {target.get('tag') or '-'}"
+        ) and terminal_output_observed
+        terminal_output_observed = best_effort_terminal_print(
+            f"Source mirror: {source.get('path') or '-'}"
+        ) and terminal_output_observed
+        terminal_output_observed = best_effort_terminal_print(
+            "Configured-origin ancestry verified: "
+            + str(
+                bool(
+                    target.get(
+                        "configured_origin_main_ancestry_verified"
+                    )
+                )
+            ).lower()
+        ) and terminal_output_observed
+        terminal_output_observed = best_effort_terminal_print(
+            "Restart required: "
+            + str(bool(runtime.get("restart_required"))).lower()
+        ) and terminal_output_observed
+        if display_result.get("blockers"):
+            terminal_output_observed = best_effort_terminal_print(
+                "Blockers:"
+            ) and terminal_output_observed
+            for blocker in display_result["blockers"]:
+                terminal_output_observed = best_effort_terminal_print(
+                    f"- {blocker}"
+                ) and terminal_output_observed
+        terminal_output_observed = best_effort_terminal_print(
+            "Next safe actions:"
+        ) and terminal_output_observed
+        for action in display_result.get("next_safe_actions", []):
+            terminal_output_observed = best_effort_terminal_print(
+                f"- {action}"
+            ) and terminal_output_observed
+    if (
+        terminal_output_observed
+        and terminal_display_candidate is not None
+        and terminal_display_capability is not None
+    ):
+        try:
+            terminal_display_finalized = (
+                archive_services
+                ._project_update_finalize_terminal_result_display(
+                    inspection_root,
+                    expected_handoff_sha256=(
+                        terminal_display_candidate
+                        .terminal_handoff_sha256
+                    ),
+                    delivery_capability=terminal_display_capability,
+                )
+            )
+        except (
+            archive_services.ArchiveServiceError,
+            OSError,
+            ValueError,
+        ):
+            terminal_display_finalized = False
+        if not terminal_display_finalized:
+            best_effort_terminal_print(
+                "Project version update result was delivered, but terminal "
+                "display finalization remains pending; run --resume.",
+                file=sys.stderr,
+            )
     return exit_code
 
 
@@ -9020,6 +9503,14 @@ def command_operator_feedback_compose(args: argparse.Namespace) -> int:
             False,
         )
     ):
+        emergency_trigger_reason = str(
+            getattr(
+                args,
+                "_wom_emergency_feedback_trigger_reason_code",
+                "",
+            )
+            or ""
+        )
         result = {
             **result,
             "emergency_preservation": {
@@ -9031,7 +9522,14 @@ def command_operator_feedback_compose(args: argparse.Namespace) -> int:
                 ),
                 "coordination_artifact_is_domain_record": False,
                 "append_only": True,
-                "project_update_recovery_still_required": True,
+                "trigger_reason_code": emergency_trigger_reason,
+                "project_update_recovery_still_required": (
+                    emergency_trigger_reason
+                    == "project_update_recovery_required"
+                ),
+                "project_runtime_alignment_required": (
+                    emergency_trigger_reason == "project_runtime_mismatch"
+                ),
                 "feedback_metadata_registered": False,
                 "feedback_delivered": False,
                 "feedback_resolved": False,
@@ -31093,6 +31591,9 @@ def _write_complete_json_no_overwrite(
                 partial_path.unlink()
             except OSError:
                 pass
+        archive_services.project_update_transaction._require_directory_durable(
+            output_path.parent
+        )
         if output_path.is_symlink() or not output_path.is_file():
             raise OSError("Command result publication was not verified.")
         if output_path.stat().st_size != len(data):
@@ -31181,6 +31682,7 @@ class _CommandRunResultCapture:
         exit_code: int,
         result: dict[str, Any] | None = None,
         error: BaseException | None = None,
+        terminal_delivery: Mapping[str, str] | None = None,
     ) -> dict[str, Any]:
         if result is None and error is None:
             raise ValueError("A completed command result requires a result or error.")
@@ -31230,6 +31732,18 @@ class _CommandRunResultCapture:
             "result_available": result is not None,
             "error": error_payload,
         }
+        if terminal_delivery is not None:
+            if (
+                result is None
+                or result.get("ok") is not True
+                or not isinstance(terminal_delivery, Mapping)
+            ):
+                raise ValueError(
+                    "project_update_terminal_delivery_capability_invalid"
+                )
+            payload["cli_execution"][
+                "terminal_delivery"
+            ] = dict(terminal_delivery)
         payload["cli_output_artifact"] = self.metadata
         _write_complete_json_no_overwrite(
             self.output_path,
@@ -31282,14 +31796,21 @@ def complete_operation_tracking(
     exit_code: int,
     result_available: bool,
     result_ok: bool | None,
-) -> None:
+    terminal_delivery_acknowledged: bool | None = None,
+    terminal_handoff_sha256: str | None = None,
+) -> bool:
     if journal is None:
-        return
+        return False
+    tracked = False
     try:
         tracked = journal.complete(
             exit_code=exit_code,
             result_available=result_available,
             result_ok=result_ok,
+            terminal_delivery_acknowledged=(
+                terminal_delivery_acknowledged
+            ),
+            terminal_handoff_sha256=terminal_handoff_sha256,
             result_path=(
                 capture.output_path
                 if result_available and capture is not None
@@ -31303,6 +31824,7 @@ def complete_operation_tracking(
             )
     finally:
         journal.close()
+    return tracked
 
 
 def _write_command_result_output_file(
@@ -32865,8 +33387,12 @@ def build_parser() -> argparse.ArgumentParser:
     project_version_update.add_argument(
         "--output",
         help=(
-            "Optional complete JSON result: use .zettel-kasten/diagnostics/*.json "
-            "from a project root or .wom-scratch/diagnostics/*.json from an archive root."
+            "Complete JSON result path. Approved or resumed updates create a "
+            "private project-scoped .zettel-kasten/diagnostics/*.json path "
+            "automatically when omitted; an explicit write path must use that "
+            "same project-scoped prefix even when inspection_root is the "
+            "archive. Dry-run output remains optional and follows the supplied "
+            "control root (.wom-scratch/diagnostics/*.json for an archive root)."
         ),
     )
     project_version_update.add_argument("--format", choices=["text", "json"], default="text", help="Output format.")
@@ -43655,12 +44181,16 @@ def _project_write_runtime_guard(
         if result.get("reason_code") == "project_runtime_pin_not_found":
             continue
         if result.get("blocked"):
+            guard_reason_code = str(result.get("reason_code") or "")
             recovery_required = (
-                result.get("reason_code")
-                == "project_update_recovery_required"
+                guard_reason_code == "project_update_recovery_required"
             )
             emergency_feedback_create = bool(
-                recovery_required
+                guard_reason_code
+                in {
+                    "project_update_recovery_required",
+                    "project_runtime_mismatch",
+                }
                 and runtime_effect == "append_only_emergency_feedback"
                 and getattr(args, "func", None)
                 is command_operator_feedback_compose
@@ -43680,6 +44210,11 @@ def _project_write_runtime_guard(
                     "_wom_project_update_recovery_emergency_lane",
                     True,
                 )
+                setattr(
+                    args,
+                    "_wom_emergency_feedback_trigger_reason_code",
+                    guard_reason_code,
+                )
                 return None
             return {
                 "schema": (
@@ -43694,6 +44229,7 @@ def _project_write_runtime_guard(
                 "command": command,
                 "reason_codes": [result["reason_code"]],
                 "detail_reason_code": result.get("detail_reason_code"),
+                "core_module_bindings": result.get("core_module_bindings"),
                 "project_pin": result.get("project_pin"),
                 "running_version": result.get("running_version"),
                 "project_runtime_argv": result["project_runtime_argv"],

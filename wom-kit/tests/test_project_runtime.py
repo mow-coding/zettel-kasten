@@ -11,6 +11,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import types
 import unittest
 import zipfile
 from pathlib import Path
@@ -279,7 +280,7 @@ class ProjectRuntimeTests(unittest.TestCase):
             "wom-kit/project-runtime-supply-lock-v*.json text eol=lf",
             attributes.splitlines(),
         )
-        raw = (KIT_ROOT / "project-runtime-supply-lock-v0.4.15.json").read_bytes()
+        raw = (KIT_ROOT / "project-runtime-supply-lock-v0.4.16.json").read_bytes()
         policy = project_runtime.project_runtime_policy_document(
             (KIT_ROOT / "project-runtime-policy.json").read_bytes()
         )
@@ -287,21 +288,21 @@ class ProjectRuntimeTests(unittest.TestCase):
         assert policy is not None
         self.assertEqual(
             policy["supply_lock"],
-            "wom-kit/project-runtime-supply-lock-v0.4.15.json",
+            "wom-kit/project-runtime-supply-lock-v0.4.16.json",
         )
         self.assertEqual(
             policy["supply_lock_sha256"],
-            "sha256:8cc4597742bab8bb4f7c1f4e4c28d90d0b8cddd1293247e680c615531d31953d",
+            "sha256:f924a3f714d5913dd2afe870d07e5619172b0e1fcb92f25b18f70a9cd4ad04d8",
         )
         supply = project_runtime.project_runtime_supply_lock(
             raw,
-            expected_target="v0.4.15",
+            expected_target="v0.4.16",
         )
         self.assertIsNotNone(supply)
         assert supply is not None
         self.assertEqual(
             supply.sha256,
-            "8cc4597742bab8bb4f7c1f4e4c28d90d0b8cddd1293247e680c615531d31953d",
+            "f924a3f714d5913dd2afe870d07e5619172b0e1fcb92f25b18f70a9cd4ad04d8",
         )
         self.assertEqual(
             [(item.distribution, item.version, item.size_bytes, item.sha256) for item in supply.artifacts],
@@ -805,6 +806,19 @@ class ProjectRuntimeTests(unittest.TestCase):
                     return_value={
                         "bound": True,
                         "reason_code": "current_project_runtime_bound",
+                        "core_module_bindings": {
+                            "archive_cli": {
+                                "observed": True,
+                                "expected_identity": True,
+                                "inventory_entry_present": True,
+                                "bytes_receipt_bound": True,
+                                "reason_code": (
+                                    "project_runtime_core_archive_cli_receipt_bound"
+                                ),
+                                "absolute_paths_echoed": False,
+                                "hashes_echoed": False,
+                            }
+                        },
                     },
                 ) as current_binding,
             ):
@@ -835,8 +849,18 @@ class ProjectRuntimeTests(unittest.TestCase):
             "project_runtime_static_receipt_invalid",
         )
         self.assertFalse(aligned["blocked"])
+        self.assertTrue(
+            aligned["core_module_bindings"]["archive_cli"]
+            ["bytes_receipt_bound"]
+        )
         self.assertEqual(
             current_binding.call_args.kwargs["running_module_path"],
+            running_module,
+        )
+        self.assertEqual(
+            current_binding.call_args.kwargs[
+                "running_archive_cli_module_path"
+            ],
             running_module,
         )
         self.assertTrue(recovery_required["blocked"])
@@ -968,6 +992,109 @@ class ProjectRuntimeTests(unittest.TestCase):
             "project_runtime_process_binding_mismatch",
         )
         self.assertFalse(global_process["absolute_paths_echoed"])
+
+    def test_binding_accepts_exact_archive_cli_executed_as_main(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp) / "project"
+            runtime, executable, module = _write_receipt_bound_runtime(project)
+            archive_cli_module = module.with_name("archive_cli.py")
+            package_origin = module.with_name("__init__.py")
+            launcher = project / project_runtime.PROJECT_RUNTIME_LAUNCHER_RELATIVE
+            launcher.parent.mkdir(parents=True)
+            launcher.write_bytes(project_runtime.launcher_bytes("0.4.3"))
+            main_module = types.ModuleType("__main__")
+            main_module.__file__ = str(archive_cli_module)
+            main_module.__spec__ = types.SimpleNamespace(
+                name="wom_kit.archive_cli",
+                origin=str(archive_cli_module),
+            )
+            canonical_module = sys.modules.pop("wom_kit.archive_cli", None)
+            try:
+                with patch.dict(
+                    sys.modules,
+                    {"__main__": main_module},
+                    clear=False,
+                ):
+                    binding = project_runtime.current_project_runtime_binding(
+                        project,
+                        "0.4.3",
+                        running_executable=executable,
+                        running_module_path=archive_cli_module,
+                        running_project_runtime_module_path=module,
+                        running_package_origin_path=package_origin,
+                        running_prefix=runtime,
+                        isolated_mode=True,
+                        dont_write_bytecode=True,
+                    )
+            finally:
+                if canonical_module is not None:
+                    sys.modules["wom_kit.archive_cli"] = canonical_module
+
+        self.assertTrue(binding["bound"])
+        self.assertTrue(binding["core_modules_receipt_bound"])
+        self.assertEqual(
+            binding["reason_code"],
+            "current_project_runtime_bound",
+        )
+        for detail in binding["core_module_bindings"].values():
+            self.assertTrue(detail["observed"])
+            self.assertTrue(detail["expected_identity"])
+            self.assertTrue(detail["inventory_entry_present"])
+            self.assertTrue(detail["bytes_receipt_bound"])
+            self.assertFalse(detail["absolute_paths_echoed"])
+            self.assertFalse(detail["hashes_echoed"])
+
+    def test_binding_rejects_unrelated_main_module_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp) / "project"
+            runtime, executable, module = _write_receipt_bound_runtime(project)
+            archive_cli_module = module.with_name("archive_cli.py")
+            package_origin = module.with_name("__init__.py")
+            launcher = project / project_runtime.PROJECT_RUNTIME_LAUNCHER_RELATIVE
+            launcher.parent.mkdir(parents=True)
+            launcher.write_bytes(project_runtime.launcher_bytes("0.4.3"))
+            main_module = types.ModuleType("__main__")
+            main_module.__file__ = str(archive_cli_module)
+            main_module.__spec__ = types.SimpleNamespace(
+                name="unrelated.main",
+                origin=str(archive_cli_module),
+            )
+            canonical_module = sys.modules.pop("wom_kit.archive_cli", None)
+            try:
+                with patch.dict(
+                    sys.modules,
+                    {"__main__": main_module},
+                    clear=False,
+                ):
+                    binding = project_runtime.current_project_runtime_binding(
+                        project,
+                        "0.4.3",
+                        running_executable=executable,
+                        running_module_path=archive_cli_module,
+                        running_project_runtime_module_path=module,
+                        running_package_origin_path=package_origin,
+                        running_prefix=runtime,
+                        isolated_mode=True,
+                        dont_write_bytecode=True,
+                    )
+            finally:
+                if canonical_module is not None:
+                    sys.modules["wom_kit.archive_cli"] = canonical_module
+
+        self.assertFalse(binding["bound"])
+        self.assertFalse(binding["core_modules_receipt_bound"])
+        self.assertEqual(
+            binding["reason_code"],
+            "project_runtime_core_modules_not_receipt_bound",
+        )
+        archive_cli_detail = binding["core_module_bindings"]["archive_cli"]
+        self.assertFalse(archive_cli_detail["observed"])
+        self.assertEqual(
+            archive_cli_detail["reason_code"],
+            "project_runtime_core_archive_cli_unobserved",
+        )
+        self.assertNotIn("path", archive_cli_detail)
+        self.assertNotIn("sha256", archive_cli_detail)
 
     def test_runtime_inspection_rejects_receipt_bound_payload_tamper(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

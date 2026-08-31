@@ -35,6 +35,7 @@ from .schema_validator import validate_schema
 
 PROJECT_RUNTIME_POLICY_SCHEMA = "wom-kit/project-runtime-policy/v0.1"
 PROJECT_RUNTIME_RECEIPT_SCHEMA = "wom-kit/project-runtime-receipt/v0.1"
+PROJECT_RUNTIME_REPAIR_RECEIPT_SCHEMA = "wom-kit/project-runtime-receipt/v0.2"
 PROJECT_RUNTIME_RELATIVE_ROOT = Path(".zettel-kasten") / "runtimes"
 PROJECT_RUNTIME_LAUNCHER_RELATIVE = Path(".zettel-kasten") / "bin" / "archive.cmd"
 PROJECT_RUNTIME_RECEIPT_NAME = "runtime-receipt.json"
@@ -50,6 +51,8 @@ PROJECT_RUNTIME_PREPARED_PREFIX = "wom-project-runtime-bundle-"
 PROJECT_RUNTIME_CANDIDATE_SCHEMA = "wom-kit/project-runtime-candidate/v0.1"
 PROJECT_RUNTIME_CANDIDATE_NAME = "runtime-candidate"
 PROJECT_RUNTIME_CANDIDATE_SEAL_NAME = "runtime-candidate-seal.json"
+PROJECT_RUNTIME_REPAIR_BACKUP_NAME = "runtime-repair-preimage"
+PROJECT_RUNTIME_ROLLBACK_CANDIDATE_NAME = "runtime-rollback-candidate"
 PROJECT_RUNTIME_TRANSACTION_RELATIVE_ROOT = (
     Path(".zettel-kasten") / "private" / "version-updates"
 )
@@ -302,9 +305,25 @@ class PreparedRuntimeCandidate:
     installed_distributions: tuple[Mapping[str, Any], ...] = field(repr=False)
     verification: Mapping[str, bool] = field(repr=False)
     existing_runtime_reusable: bool
+    existing_runtime_repair_required: bool
+    existing_runtime_root_identity: tuple[int, int] | None
+    existing_runtime_inventory: tuple[RuntimeCandidateInventoryEntry, ...] = field(
+        repr=False
+    )
+    existing_runtime_inventory_sha256: str | None
+    existing_runtime_inventory_count: int
+    existing_runtime_inventory_bytes: int
+    # v0.4.15 private recovery records and public approval summaries predate
+    # repair-only fields.  This bit is private reconstruction state only; it
+    # keeps those already-authenticated bytes and digests unchanged.
+    legacy_resume_shape: bool = field(
+        default=False,
+        repr=False,
+        compare=False,
+    )
 
     def public_summary(self) -> dict[str, Any]:
-        return {
+        summary = {
             "schema": PROJECT_RUNTIME_CANDIDATE_SCHEMA,
             "status": "sealed",
             "target_tag": self.target_tag,
@@ -342,6 +361,39 @@ class PreparedRuntimeCandidate:
             "private_values_echoed": False,
             "absolute_paths_echoed": False,
         }
+        if self.legacy_resume_shape:
+            return summary
+        summary.update(
+            {
+                "runtime_receipt_schema": _candidate_receipt_document(
+                    self.receipt_bytes
+                )["schema"],
+                "existing_runtime_repair_required": (
+                    self.existing_runtime_repair_required
+                ),
+                "existing_runtime_preimage_sha256": (
+                    None
+                    if self.existing_runtime_inventory_sha256 is None
+                    else f"sha256:{self.existing_runtime_inventory_sha256}"
+                ),
+                "existing_runtime_preimage_count": (
+                    self.existing_runtime_inventory_count
+                ),
+                "existing_runtime_preimage_bytes": (
+                    self.existing_runtime_inventory_bytes
+                ),
+                # Preview truth describes the exact future lifecycle.  The
+                # old runtime is bound now, but it is not moved into the
+                # private transaction until approved promotion.
+                "repair_preimage_exactly_bound": (
+                    self.existing_runtime_repair_required
+                ),
+                "will_preserve_during_active_transaction": (
+                    self.existing_runtime_repair_required
+                ),
+            }
+        )
+        return summary
 
 
 @dataclass(frozen=True)
@@ -360,6 +412,18 @@ class RuntimeMaterialization:
     python_version: str
     created: bool
     verification: Mapping[str, bool]
+    inventory: tuple[RuntimeCandidateInventoryEntry, ...] = field(
+        default=(), repr=False
+    )
+    repaired: bool = False
+    replaced_runtime_path: Path | None = field(default=None, repr=False)
+    replaced_runtime_identity: tuple[int, int] | None = field(
+        default=None, repr=False
+    )
+    replaced_runtime_inventory: tuple[RuntimeCandidateInventoryEntry, ...] = field(
+        default=(), repr=False
+    )
+    transaction_root: Path | None = field(default=None, repr=False)
 
     def public_summary(self) -> dict[str, Any]:
         return {
@@ -369,6 +433,13 @@ class RuntimeMaterialization:
             "target_commit": self.target_commit,
             "path": self.logical_path,
             "created": self.created,
+            "repaired": self.repaired,
+            # This summary is built while the authenticated transaction is
+            # still active.  Terminal projection replaces this live-state
+            # truth after exact cleanup has run.
+            "rollback_preimage_present": bool(
+                self.repaired and self.replaced_runtime_path is not None
+            ),
             "receipt_sha256": f"sha256:{self.receipt_sha256}",
             "wheel_sha256": f"sha256:{self.wheel_sha256}",
             "supply_lock_sha256": f"sha256:{self.supply_lock_sha256}",
@@ -605,8 +676,8 @@ def project_runtime_policy_document(raw: bytes | None) -> dict[str, Any] | None:
         "runtime_root": ".zettel-kasten/runtimes/vX.Y.Z",
         "active_version_pin": ".zettel-kasten/installed-version.txt",
         "launcher": ".zettel-kasten/bin/archive.cmd",
-        "supply_lock": "wom-kit/project-runtime-supply-lock-v0.4.15.json",
-        "supply_lock_sha256": "sha256:8cc4597742bab8bb4f7c1f4e4c28d90d0b8cddd1293247e680c615531d31953d",
+        "supply_lock": "wom-kit/project-runtime-supply-lock-v0.4.16.json",
+        "supply_lock_sha256": "sha256:f924a3f714d5913dd2afe870d07e5619172b0e1fcb92f25b18f70a9cd4ad04d8",
         "global_path_mutation": False,
     }
     if value != expected:
@@ -1024,14 +1095,43 @@ def current_project_runtime_binding(
         os.path.abspath(str(running_module_path or __file__))
     )
     archive_cli_loaded = sys.modules.get("wom_kit.archive_cli")
+    main_loaded = sys.modules.get("__main__")
     package_loaded = sys.modules.get("wom_kit")
-    archive_cli_module_path = Path(
-        os.path.abspath(
-            str(
-                running_archive_cli_module_path
-                or getattr(archive_cli_loaded, "__file__", "")
-            )
+
+    # The canonical project launcher uses ``python -m wom_kit.archive_cli``.
+    # In that process the executing module is registered as ``__main__`` and
+    # need not also exist under its canonical import name.  Accept that
+    # standard alias only when the import spec names the exact WOM entrypoint;
+    # the expected runtime path, real-component checks, receipt inventory,
+    # size, and digest are still verified below.
+    archive_cli_module_candidate: str | Path | None = (
+        running_archive_cli_module_path
+    )
+    if archive_cli_module_candidate is None:
+        archive_cli_module_candidate = getattr(
+            archive_cli_loaded,
+            "__file__",
+            None,
         )
+    if archive_cli_module_candidate is None:
+        main_spec = getattr(main_loaded, "__spec__", None)
+        main_spec_name = getattr(main_spec, "name", None)
+        main_file = getattr(main_loaded, "__file__", None)
+        main_origin = getattr(main_spec, "origin", None)
+        if (
+            main_spec_name == "wom_kit.archive_cli"
+            and isinstance(main_file, (str, Path))
+            and str(main_file)
+            and isinstance(main_origin, (str, Path))
+            and str(main_origin)
+            and _same_absolute_path(Path(main_file), Path(main_origin))
+        ):
+            archive_cli_module_candidate = main_file
+    archive_cli_module_path = (
+        Path(os.path.abspath(str(archive_cli_module_candidate)))
+        if archive_cli_module_candidate is not None
+        and str(archive_cli_module_candidate)
+        else None
     )
     project_runtime_module_path = Path(
         os.path.abspath(str(running_project_runtime_module_path or __file__))
@@ -1105,6 +1205,18 @@ def current_project_runtime_binding(
     executable_receipt_bound = False
     module_receipt_bound = False
     core_modules_receipt_bound = False
+    core_module_bindings: dict[str, dict[str, Any]] = {
+        label: {
+            "observed": False,
+            "expected_identity": False,
+            "inventory_entry_present": False,
+            "bytes_receipt_bound": False,
+            "reason_code": f"project_runtime_core_{label}_not_checked",
+            "absolute_paths_echoed": False,
+            "hashes_echoed": False,
+        }
+        for label in ("archive_cli", "project_runtime", "package_origin")
+    }
     if live_payload_aligned and executable_aligned and module_aligned:
         expected_payload = str(
             inspection.get("installed_payload_sha256") or ""
@@ -1116,7 +1228,9 @@ def current_project_runtime_binding(
             }
             live_payload_aligned = observed_payload == expected_payload
 
-            def receipt_bound_file(candidate: Path) -> bool:
+            def receipt_bound_file(candidate: Path | None) -> bool:
+                if candidate is None:
+                    return False
                 try:
                     logical = Path(os.path.abspath(str(candidate))).relative_to(
                         Path(os.path.abspath(str(final)))
@@ -1138,6 +1252,7 @@ def current_project_runtime_binding(
             module_receipt_bound = receipt_bound_file(module_path)
             expected_core_paths = (
                 (
+                    "archive_cli",
                     archive_cli_module_path,
                     final
                     / "Lib"
@@ -1146,6 +1261,7 @@ def current_project_runtime_binding(
                     / "archive_cli.py",
                 ),
                 (
+                    "project_runtime",
                     project_runtime_module_path,
                     final
                     / "Lib"
@@ -1154,14 +1270,67 @@ def current_project_runtime_binding(
                     / "project_runtime.py",
                 ),
                 (
+                    "package_origin",
                     package_origin_path,
                     final / "Lib" / "site-packages" / "wom_kit" / "__init__.py",
                 ),
             )
+            core_module_bindings = {}
+            for label, observed, expected in expected_core_paths:
+                observed_available = observed is not None
+                expected_identity = bool(
+                    observed_available
+                    and _same_absolute_path(observed, expected)
+                )
+                try:
+                    observed_logical = (
+                        Path(os.path.abspath(str(observed)))
+                        .relative_to(Path(os.path.abspath(str(final))))
+                        .as_posix()
+                        if observed is not None
+                        else None
+                    )
+                except (OSError, RuntimeError, ValueError):
+                    observed_logical = None
+                inventory_entry_present = bool(
+                    observed_logical is not None
+                    and observed_logical in inventory_by_path
+                )
+                bytes_receipt_bound = bool(
+                    expected_identity and receipt_bound_file(observed)
+                )
+                if not observed_available:
+                    detail_reason = (
+                        f"project_runtime_core_{label}_unobserved"
+                    )
+                elif not expected_identity:
+                    detail_reason = (
+                        f"project_runtime_core_{label}_identity_mismatch"
+                    )
+                elif not inventory_entry_present:
+                    detail_reason = (
+                        f"project_runtime_core_{label}_inventory_missing"
+                    )
+                elif not bytes_receipt_bound:
+                    detail_reason = (
+                        f"project_runtime_core_{label}_bytes_not_receipt_bound"
+                    )
+                else:
+                    detail_reason = (
+                        f"project_runtime_core_{label}_receipt_bound"
+                    )
+                core_module_bindings[label] = {
+                    "observed": observed_available,
+                    "expected_identity": expected_identity,
+                    "inventory_entry_present": inventory_entry_present,
+                    "bytes_receipt_bound": bytes_receipt_bound,
+                    "reason_code": detail_reason,
+                    "absolute_paths_echoed": False,
+                    "hashes_echoed": False,
+                }
             core_modules_receipt_bound = all(
-                _same_absolute_path(observed, expected)
-                and receipt_bound_file(observed)
-                for observed, expected in expected_core_paths
+                item["bytes_receipt_bound"]
+                for item in core_module_bindings.values()
             )
         except ProjectRuntimeError:
             live_payload_aligned = False
@@ -1207,6 +1376,7 @@ def current_project_runtime_binding(
         "running_executable_receipt_bound": executable_receipt_bound,
         "running_module_receipt_bound": module_receipt_bound,
         "core_modules_receipt_bound": core_modules_receipt_bound,
+        "core_module_bindings": core_module_bindings,
         "isolated_mode": isolated,
         "dont_write_bytecode": no_bytecode,
         "verification_scope": "current_process_operational_binding",
@@ -1283,6 +1453,7 @@ def project_write_guard(
         if pinned_version != running:
             blocked = True
             detail_reason_code = "project_runtime_version_mismatch"
+            core_module_bindings: dict[str, Any] | None = None
         else:
             minimum = _version("0.4.3")
             runtime_required = bool(
@@ -1296,6 +1467,7 @@ def project_write_guard(
                     project_root,
                     pinned_version,
                     running_module_path=running_module_path,
+                    running_archive_cli_module_path=running_module_path,
                     runtime_inspection=installed,
                 )
                 blocked = bool(
@@ -1310,9 +1482,16 @@ def project_write_guard(
                     if installed.get("live_payload_aligned") is not True
                     else str(binding.get("reason_code"))
                 )
+                binding_details = binding.get("core_module_bindings")
+                core_module_bindings = (
+                    dict(binding_details)
+                    if isinstance(binding_details, dict)
+                    else None
+                )
             else:
                 blocked = False
                 detail_reason_code = "project_runtime_version_aligned"
+                core_module_bindings = None
         return {
             "blocked": blocked,
             "reason_code": (
@@ -1324,6 +1503,7 @@ def project_write_guard(
             "project_pin": f"v{pinned_version}",
             "running_version": f"v{running}" if running else None,
             "project_runtime_argv": project_runtime_argv(),
+            "core_module_bindings": core_module_bindings,
             "private_values_echoed": False,
             "absolute_paths_echoed": False,
         }
@@ -1448,17 +1628,28 @@ def inspect_runtime(
         str(expected_supply_lock_sha256 or "").removeprefix("sha256:") or None
     )
     verification = receipt.get("verification") if isinstance(receipt, dict) else None
+    receipt_schema_name = (
+        "project-runtime-receipt-v0.2.schema.json"
+        if isinstance(receipt, dict)
+        and receipt.get("schema") == PROJECT_RUNTIME_REPAIR_RECEIPT_SCHEMA
+        else "project-runtime-receipt-v0.1.schema.json"
+        if isinstance(receipt, dict)
+        and receipt.get("schema") == PROJECT_RUNTIME_RECEIPT_SCHEMA
+        else None
+    )
     receipt_schema_valid = bool(
         isinstance(receipt, dict)
-        and not validate_schema(
-            receipt,
-            "project-runtime-receipt-v0.1.schema.json",
-        )
+        and receipt_schema_name is not None
+        and not validate_schema(receipt, receipt_schema_name)
     )
     python_executable = final / "Scripts" / "python.exe"
     static_receipt_valid = bool(
         receipt_schema_valid
-        and receipt.get("schema") == PROJECT_RUNTIME_RECEIPT_SCHEMA
+        and receipt.get("schema")
+        in {
+            PROJECT_RUNTIME_RECEIPT_SCHEMA,
+            PROJECT_RUNTIME_REPAIR_RECEIPT_SCHEMA,
+        }
         and receipt.get("target_tag") == f"v{version}"
         and receipt.get("target_version") == version
         and (expected_commit is None or receipt.get("target_commit") == expected_commit)
@@ -1566,7 +1757,7 @@ def plan_runtime(
     launcher = launcher_snapshot(project_root, target)
     blockers: list[str] = []
     warnings: list[str] = []
-    if required and installed["status"] in {"invalid", "unsafe"}:
+    if required and installed["status"] == "unsafe":
         blockers.append("project_runtime_target_directory_invalid")
     if required and not installed.get("verified") and bootstrap is None:
         blockers.append("project_runtime_exact_public_wheel_required")
@@ -1593,6 +1784,13 @@ def plan_runtime(
     runtime_creation_required = bool(
         required and not installed.get("receipt_candidate_valid")
     )
+    runtime_repair_required = bool(
+        required and installed.get("status") == "invalid"
+    )
+    if runtime_repair_required:
+        warnings.append(
+            "The target project runtime exists but does not match its bound receipt. The approved update will build and fully verify a private replacement, preserve the existing runtime as an exact private recovery preimage, and then repair the target atomically. After durable promotion, later component failures preserve that recovery state for authenticated forward resume instead of automatically rolling the runtime back."
+        )
     materialization_required = bool(required)
     activation_required = bool(required and not launcher.get("already_target"))
     summary = {
@@ -1617,11 +1815,25 @@ def plan_runtime(
         "interpreter_enforced": enforce_interpreter,
         "materialization_required": materialization_required,
         "runtime_creation_required": runtime_creation_required,
+        "runtime_repair_required": runtime_repair_required,
+        # Read-only planning has not yet snapshotted the exact repair tree.
+        # It describes what approval preparation must bind and what the active
+        # transaction will preserve, without claiming that either already
+        # happened.
+        "repair_preimage_exactly_bound": False,
+        "will_bind_repair_preimage_exactly_before_approval": (
+            runtime_repair_required
+        ),
+        "will_preserve_during_active_transaction": runtime_repair_required,
         "live_reverification_required": required,
         "activation_required": activation_required,
         "active_version_pin": ".zettel-kasten/installed-version.txt",
         "global_path_mutation": False,
-        "previous_runtime_deletion": False,
+        "old_invalid_runtime_deletion_stage": (
+            "terminal_cleanup_after_authenticated_success"
+            if runtime_repair_required
+            else "not_applicable"
+        ),
     }
     return summary, blockers, warnings
 
@@ -4216,8 +4428,11 @@ def _candidate_binding_digest(
     installed_payload_sha256: str,
     normalized_payload_inventory: tuple[tuple[str, int, str], ...],
     existing_runtime_reusable: bool,
+    existing_runtime_repair_required: bool,
+    existing_runtime_inventory_sha256: str | None,
     runtime_parent_existed_before: bool,
     inventory: tuple[RuntimeCandidateInventoryEntry, ...],
+    legacy_shape: bool = False,
 ) -> str:
     binding = {
         "schema": PROJECT_RUNTIME_CANDIDATE_SCHEMA,
@@ -4242,6 +4457,19 @@ def _candidate_binding_digest(
         "post_approval_network_allowed": False,
         "post_approval_copy_allowed": False,
     }
+    if not legacy_shape:
+        binding.update(
+            {
+                "existing_runtime_repair_required": (
+                    existing_runtime_repair_required
+                ),
+                "existing_runtime_inventory_sha256": (
+                    None
+                    if existing_runtime_inventory_sha256 is None
+                    else f"sha256:{existing_runtime_inventory_sha256}"
+                ),
+            }
+        )
     return _sha256_bytes(
         (json.dumps(binding, sort_keys=True, separators=(",", ":")) + "\n").encode(
             "utf-8"
@@ -4406,9 +4634,19 @@ def _candidate_receipt_document(data: bytes) -> dict[str, Any]:
         document = _json_without_duplicate_keys(data)
     except (UnicodeError, ValueError, json.JSONDecodeError) as error:
         raise ProjectRuntimeError("project_runtime_candidate_receipt_invalid") from error
+    schema_name = (
+        "project-runtime-receipt-v0.2.schema.json"
+        if isinstance(document, dict)
+        and document.get("schema") == PROJECT_RUNTIME_REPAIR_RECEIPT_SCHEMA
+        else "project-runtime-receipt-v0.1.schema.json"
+        if isinstance(document, dict)
+        and document.get("schema") == PROJECT_RUNTIME_RECEIPT_SCHEMA
+        else None
+    )
     if (
         not isinstance(document, dict)
-        or validate_schema(document, "project-runtime-receipt-v0.1.schema.json")
+        or schema_name is None
+        or validate_schema(document, schema_name)
     ):
         raise ProjectRuntimeError("project_runtime_candidate_receipt_invalid")
     return document
@@ -4484,6 +4722,58 @@ def _existing_runtime_matches_candidate(
         )
     except ProjectRuntimeError:
         return False
+
+
+def runtime_repair_state(candidate: PreparedRuntimeCandidate) -> str:
+    """Classify the three exact crash-reopen states of a runtime repair."""
+
+    if (
+        not isinstance(candidate, PreparedRuntimeCandidate)
+        or not candidate.existing_runtime_repair_required
+        or candidate.existing_runtime_root_identity is None
+        or candidate.existing_runtime_inventory_sha256 is None
+    ):
+        return "not_applicable"
+    final = runtime_path(candidate.project_root, candidate.target_version)
+    backup = _runtime_repair_backup_path(candidate)
+    candidate_at_staging = _runtime_inventory_matches(
+        candidate.candidate_root,
+        identity=candidate.candidate_root_identity,
+        inventory=candidate.inventory,
+    )
+    candidate_at_final = _runtime_inventory_matches(
+        final,
+        identity=candidate.candidate_root_identity,
+        inventory=candidate.inventory,
+    )
+    old_at_final = _runtime_inventory_matches(
+        final,
+        identity=candidate.existing_runtime_root_identity,
+        inventory=candidate.existing_runtime_inventory,
+    )
+    old_at_backup = _runtime_inventory_matches(
+        backup,
+        identity=candidate.existing_runtime_root_identity,
+        inventory=candidate.existing_runtime_inventory,
+    )
+    if candidate_at_staging and old_at_final and not _lexists(backup):
+        return "preimage_final"
+    if candidate_at_staging and not _lexists(final) and old_at_backup:
+        return "backup_only"
+    if not _lexists(candidate.candidate_root) and candidate_at_final and old_at_backup:
+        return "candidate_final_plus_backup"
+    return "invalid"
+
+
+def existing_runtime_repair_preimage_matches(
+    candidate: PreparedRuntimeCandidate,
+) -> bool:
+    """Prove the sealed preimage is available at either exact repair name."""
+
+    return runtime_repair_state(candidate) in {
+        "preimage_final",
+        "backup_only",
+    }
 
 
 def prepare_runtime_candidate(
@@ -4674,16 +4964,90 @@ def prepare_runtime_candidate(
             installed_distributions=tuple(dict(item) for item in packages),
             verification=dict(verification),
             existing_runtime_reusable=False,
+            existing_runtime_repair_required=False,
+            existing_runtime_root_identity=None,
+            existing_runtime_inventory=(),
+            existing_runtime_inventory_sha256=None,
+            existing_runtime_inventory_count=0,
+            existing_runtime_inventory_bytes=0,
         )
         final = runtime_path(project, version)
         existing_runtime_reusable = False
+        existing_runtime_repair_required = False
+        existing_runtime_root_identity: tuple[int, int] | None = None
+        existing_runtime_inventory: tuple[RuntimeCandidateInventoryEntry, ...] = ()
+        existing_runtime_inventory_sha256: str | None = None
+        existing_runtime_inventory_bytes = 0
         if _lexists(final):
             existing_runtime_reusable = _existing_runtime_matches_candidate(
                 project,
                 provisional,
             )
             if not existing_runtime_reusable:
-                raise ProjectRuntimeError("project_runtime_target_directory_invalid")
+                existing_runtime_repair_required = True
+                existing_runtime_root_identity = _path_identity(final)
+                existing_runtime_inventory = _candidate_inventory_snapshot(final)
+                existing_runtime_inventory_sha256 = (
+                    _recursive_candidate_inventory_digest(
+                        existing_runtime_inventory
+                    )
+                )
+                existing_runtime_inventory_bytes = sum(
+                    item.size_bytes
+                    for item in existing_runtime_inventory
+                    if item.entry_type == "file"
+                )
+        if existing_runtime_repair_required:
+            # The ordinary receipt remains v0.1.  Only a candidate that has
+            # now proven an exact invalid-runtime preimage is rewritten to the
+            # repair-aware v0.2 receipt before the candidate is sealed.
+            repair_receipt = {
+                **receipt,
+                "schema": PROJECT_RUNTIME_REPAIR_RECEIPT_SCHEMA,
+                "previous_runtime_deleted_during_materialization": False,
+                "terminal_cleanup_required_to_remove_private_repair_preimage": True,
+            }
+            repair_receipt.pop("previous_runtime_deleted", None)
+            if validate_schema(
+                repair_receipt,
+                "project-runtime-receipt-v0.2.schema.json",
+            ):
+                raise ProjectRuntimeError(
+                    "project_runtime_receipt_schema_invalid"
+                )
+            repair_receipt_bytes = (
+                json.dumps(
+                    repair_receipt,
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                + "\n"
+            ).encode("utf-8")
+            receipt_path = candidate_root / PROJECT_RUNTIME_RECEIPT_NAME
+            temporary_receipt = candidate_root / (
+                PROJECT_RUNTIME_RECEIPT_NAME + ".repair.tmp"
+            )
+            _write_exact_new_file(temporary_receipt, repair_receipt_bytes)
+            os.replace(temporary_receipt, receipt_path)
+            _flush_directory_durable(candidate_root)
+            receipt = repair_receipt
+            receipt_bytes = repair_receipt_bytes
+            _detach_candidate_hardlinks(candidate_root)
+            inventory = _candidate_inventory_snapshot(candidate_root)
+            provisional = PreparedRuntimeCandidate(
+                **{
+                    **provisional.__dict__,
+                    "inventory": inventory,
+                    "inventory_count": len(inventory),
+                    "inventory_bytes": sum(
+                        item.size_bytes
+                        for item in inventory
+                        if item.entry_type == "file"
+                    ),
+                    "receipt_bytes": receipt_bytes,
+                    "receipt_sha256": _sha256_bytes(receipt_bytes),
+                }
+            )
         inventory_sha256 = _recursive_candidate_inventory_digest(inventory)
         candidate_sha256 = _candidate_binding_digest(
             target_tag=f"v{version}",
@@ -4697,6 +5061,12 @@ def prepare_runtime_candidate(
             installed_payload_sha256=installed_payload_sha256,
             normalized_payload_inventory=normalized_payload_inventory,
             existing_runtime_reusable=existing_runtime_reusable,
+            existing_runtime_repair_required=(
+                existing_runtime_repair_required
+            ),
+            existing_runtime_inventory_sha256=(
+                existing_runtime_inventory_sha256
+            ),
             runtime_parent_existed_before=runtime_parent_existed_before,
             inventory=inventory,
         )
@@ -4724,6 +5094,20 @@ def prepare_runtime_candidate(
             "supply_lock_sha256": f"sha256:{supply.sha256}",
             "same_volume_verified": True,
             "existing_runtime_reusable": existing_runtime_reusable,
+            "existing_runtime_repair_required": (
+                existing_runtime_repair_required
+            ),
+            "existing_runtime_inventory_sha256": (
+                None
+                if existing_runtime_inventory_sha256 is None
+                else f"sha256:{existing_runtime_inventory_sha256}"
+            ),
+            "existing_runtime_inventory_count": len(
+                existing_runtime_inventory
+            ),
+            "existing_runtime_inventory_bytes": (
+                existing_runtime_inventory_bytes
+            ),
             "runtime_parent_existed_before": runtime_parent_existed_before,
             "path_identities": {
                 "project_root": list(project_identity),
@@ -4734,6 +5118,11 @@ def prepare_runtime_candidate(
                     None
                     if runtime_parent_existed_before
                     else list(runtime_parent_identity)
+                ),
+                "existing_runtime_root": (
+                    None
+                    if existing_runtime_root_identity is None
+                    else list(existing_runtime_root_identity)
                 ),
             },
             "recursive_directory_durability_verified": True,
@@ -4757,6 +5146,22 @@ def prepare_runtime_candidate(
                 "seal_bytes": seal_bytes,
                 "seal_sha256": _sha256_bytes(seal_bytes),
                 "existing_runtime_reusable": existing_runtime_reusable,
+                "existing_runtime_repair_required": (
+                    existing_runtime_repair_required
+                ),
+                "existing_runtime_root_identity": (
+                    existing_runtime_root_identity
+                ),
+                "existing_runtime_inventory": existing_runtime_inventory,
+                "existing_runtime_inventory_sha256": (
+                    existing_runtime_inventory_sha256
+                ),
+                "existing_runtime_inventory_count": len(
+                    existing_runtime_inventory
+                ),
+                "existing_runtime_inventory_bytes": (
+                    existing_runtime_inventory_bytes
+                ),
             }
         )
         verify_prepared_runtime_candidate(
@@ -4815,14 +5220,60 @@ def load_prepared_runtime_candidate(
         raise ProjectRuntimeError("project_runtime_candidate_seal_invalid") from error
     if not isinstance(seal, dict):
         raise ProjectRuntimeError("project_runtime_candidate_seal_invalid")
+    legacy_seal_keys = {
+        "schema",
+        "status",
+        "target_tag",
+        "target_commit",
+        "transaction_ref",
+        "candidate_locator",
+        "inventory_sha256",
+        "candidate_sha256",
+        "inventory_count",
+        "inventory_bytes",
+        "receipt_sha256",
+        "wheel_file_name",
+        "wheel_sha256",
+        "supply_lock_sha256",
+        "same_volume_verified",
+        "existing_runtime_reusable",
+        "runtime_parent_existed_before",
+        "path_identities",
+        "recursive_directory_durability_verified",
+        "seal_parent_durability_required",
+        "marker_free_final_postimage",
+        "post_approval_child_process_allowed",
+        "post_approval_network_allowed",
+        "post_approval_copy_allowed",
+        "absolute_paths_echoed",
+    }
+    current_seal_keys = legacy_seal_keys | {
+        "existing_runtime_repair_required",
+        "existing_runtime_inventory_sha256",
+        "existing_runtime_inventory_count",
+        "existing_runtime_inventory_bytes",
+    }
+    legacy_resume_shape = set(seal) == legacy_seal_keys
+    if not legacy_resume_shape and set(seal) != current_seal_keys:
+        raise ProjectRuntimeError("project_runtime_candidate_seal_invalid")
     identities = seal.get("path_identities")
-    if not isinstance(identities, dict) or set(identities) != {
+    legacy_identity_keys = {
         "project_root",
         "transaction_root",
         "candidate_root",
         "runtime_parent",
         "runtime_parent_created",
-    }:
+    }
+    current_identity_keys = legacy_identity_keys | {"existing_runtime_root"}
+    if (
+        not isinstance(identities, dict)
+        or set(identities)
+        != (
+            legacy_identity_keys
+            if legacy_resume_shape
+            else current_identity_keys
+        )
+    ):
         raise ProjectRuntimeError("project_runtime_candidate_seal_invalid")
     project_identity = _sealed_identity(identities.get("project_root"))
     transaction_identity = _sealed_identity(identities.get("transaction_root"))
@@ -4831,6 +5282,12 @@ def load_prepared_runtime_candidate(
     created_value = identities.get("runtime_parent_created")
     runtime_parent_created_identity = (
         None if created_value is None else _sealed_identity(created_value)
+    )
+    existing_runtime_value = identities.get("existing_runtime_root")
+    existing_runtime_root_identity = (
+        None
+        if existing_runtime_value is None
+        else _sealed_identity(existing_runtime_value)
     )
     inventory = _candidate_inventory_snapshot(candidate_root)
     receipt = _candidate_receipt_document(receipt_bytes)
@@ -4855,8 +5312,78 @@ def load_prepared_runtime_candidate(
         or isinstance(seal.get("inventory_bytes"), bool)
         or not isinstance(seal.get("existing_runtime_reusable"), bool)
         or not isinstance(seal.get("runtime_parent_existed_before"), bool)
+        or (
+            not legacy_resume_shape
+            and (
+                not isinstance(
+                    seal.get("existing_runtime_repair_required"), bool
+                )
+                or not isinstance(
+                    seal.get("existing_runtime_inventory_count"), int
+                )
+                or isinstance(
+                    seal.get("existing_runtime_inventory_count"), bool
+                )
+                or not isinstance(
+                    seal.get("existing_runtime_inventory_bytes"), int
+                )
+                or isinstance(
+                    seal.get("existing_runtime_inventory_bytes"), bool
+                )
+            )
+        )
     ):
         raise ProjectRuntimeError("project_runtime_candidate_seal_invalid")
+    repair_required = (
+        False
+        if legacy_resume_shape
+        else seal["existing_runtime_repair_required"]
+    )
+    repair_inventory_sha = seal.get("existing_runtime_inventory_sha256")
+    if repair_required:
+        if (
+            not isinstance(repair_inventory_sha, str)
+            or not repair_inventory_sha.startswith("sha256:")
+            or SHA256_RE.fullmatch(
+                repair_inventory_sha.removeprefix("sha256:")
+            )
+            is None
+            or existing_runtime_root_identity is None
+        ):
+            raise ProjectRuntimeError("project_runtime_candidate_seal_invalid")
+        final_runtime = runtime_path(project, target)
+        repair_backup = transaction / PROJECT_RUNTIME_REPAIR_BACKUP_NAME
+        if (
+            _lexists(final_runtime)
+            and _path_identity(final_runtime) == existing_runtime_root_identity
+        ):
+            existing_runtime_location = final_runtime
+        elif (
+            _lexists(repair_backup)
+            and _path_identity(repair_backup) == existing_runtime_root_identity
+        ):
+            existing_runtime_location = repair_backup
+        else:
+            raise ProjectRuntimeError(
+                "project_runtime_candidate_seal_invalid"
+            )
+        existing_runtime_inventory = _candidate_inventory_snapshot(
+            existing_runtime_location
+        )
+    else:
+        if (
+            repair_inventory_sha is not None
+            or existing_runtime_root_identity is not None
+            or (
+                not legacy_resume_shape
+                and (
+                    seal["existing_runtime_inventory_count"] != 0
+                    or seal["existing_runtime_inventory_bytes"] != 0
+                )
+            )
+        ):
+            raise ProjectRuntimeError("project_runtime_candidate_seal_invalid")
+        existing_runtime_inventory = ()
     distributions = receipt.get("installed_distributions")
     verification = receipt.get("verification")
     python_version = receipt.get("python_version")
@@ -4910,6 +5437,21 @@ def load_prepared_runtime_candidate(
         installed_distributions=tuple(dict(item) for item in distributions),
         verification=dict(verification),
         existing_runtime_reusable=seal["existing_runtime_reusable"],
+        existing_runtime_repair_required=repair_required,
+        existing_runtime_root_identity=existing_runtime_root_identity,
+        existing_runtime_inventory=existing_runtime_inventory,
+        existing_runtime_inventory_sha256=(
+            None
+            if repair_inventory_sha is None
+            else repair_inventory_sha.removeprefix("sha256:")
+        ),
+        existing_runtime_inventory_count=seal[
+            "existing_runtime_inventory_count"
+        ] if not legacy_resume_shape else 0,
+        existing_runtime_inventory_bytes=seal[
+            "existing_runtime_inventory_bytes"
+        ] if not legacy_resume_shape else 0,
+        legacy_resume_shape=legacy_resume_shape,
     )
     verify_prepared_runtime_candidate(
         candidate,
@@ -4959,6 +5501,11 @@ def verify_prepared_runtime_candidate(
         or supply.sha256 != candidate.supply_lock_sha256
         or _sha256_bytes(supply.raw_bytes) != supply.sha256
         or supply.raw_bytes != candidate.supply_lock_bytes
+        or type(candidate.legacy_resume_shape) is not bool
+        or (
+            candidate.legacy_resume_shape
+            and candidate.existing_runtime_repair_required
+        )
         or (
             candidate.runtime_parent_existed_before
             and candidate.runtime_parent_created_identity is not None
@@ -4967,6 +5514,35 @@ def verify_prepared_runtime_candidate(
             not candidate.runtime_parent_existed_before
             and candidate.runtime_parent_created_identity
             != candidate.runtime_parent_identity
+        )
+        or (
+            candidate.existing_runtime_reusable
+            and candidate.existing_runtime_repair_required
+        )
+        or (
+            candidate.existing_runtime_repair_required
+            and (
+                candidate.existing_runtime_root_identity is None
+                or candidate.existing_runtime_inventory_sha256 is None
+                or candidate.existing_runtime_inventory_count
+                != len(candidate.existing_runtime_inventory)
+                or candidate.existing_runtime_inventory_bytes
+                != sum(
+                    item.size_bytes
+                    for item in candidate.existing_runtime_inventory
+                    if item.entry_type == "file"
+                )
+            )
+        )
+        or (
+            not candidate.existing_runtime_repair_required
+            and (
+                candidate.existing_runtime_root_identity is not None
+                or candidate.existing_runtime_inventory
+                or candidate.existing_runtime_inventory_sha256 is not None
+                or candidate.existing_runtime_inventory_count != 0
+                or candidate.existing_runtime_inventory_bytes != 0
+            )
         )
     ):
         raise ProjectRuntimeError("project_runtime_candidate_binding_invalid")
@@ -4980,6 +5556,17 @@ def verify_prepared_runtime_candidate(
         or candidate.runtime_parent_identity[0] != candidate.same_volume_identity
     ):
         raise ProjectRuntimeError("project_runtime_candidate_identity_drift")
+    final = runtime_path(project, candidate.target_version)
+    if candidate.existing_runtime_repair_required:
+        if not existing_runtime_repair_preimage_matches(candidate):
+            raise ProjectRuntimeError(
+                "project_runtime_existing_repair_preimage_drift"
+            )
+    elif candidate.existing_runtime_reusable:
+        if not _existing_runtime_matches_candidate(project, candidate):
+            raise ProjectRuntimeError("project_runtime_existing_runtime_drift")
+    elif _lexists(final):
+        raise ProjectRuntimeError("project_runtime_target_directory_concurrent")
     try:
         seal_stat = candidate.seal_path.lstat()
     except OSError as error:
@@ -4998,7 +5585,7 @@ def verify_prepared_runtime_candidate(
         seal_document = _json_without_duplicate_keys(candidate.seal_bytes)
     except (UnicodeError, ValueError, json.JSONDecodeError) as error:
         raise ProjectRuntimeError("project_runtime_candidate_seal_drift") from error
-    expected_seal_keys = {
+    legacy_expected_seal_keys = {
         "schema",
         "status",
         "target_tag",
@@ -5025,6 +5612,51 @@ def verify_prepared_runtime_candidate(
         "post_approval_copy_allowed",
         "absolute_paths_echoed",
     }
+    expected_seal_keys = (
+        legacy_expected_seal_keys
+        if candidate.legacy_resume_shape
+        else legacy_expected_seal_keys
+        | {
+            "existing_runtime_repair_required",
+            "existing_runtime_inventory_sha256",
+            "existing_runtime_inventory_count",
+            "existing_runtime_inventory_bytes",
+        }
+    )
+    expected_path_identities = {
+        "project_root": list(candidate.project_root_identity),
+        "transaction_root": list(candidate.transaction_root_identity),
+        "candidate_root": list(candidate.candidate_root_identity),
+        "runtime_parent": list(candidate.runtime_parent_identity),
+        "runtime_parent_created": (
+            None
+            if candidate.runtime_parent_created_identity is None
+            else list(candidate.runtime_parent_created_identity)
+        ),
+    }
+    if not candidate.legacy_resume_shape:
+        expected_path_identities["existing_runtime_root"] = (
+            None
+            if candidate.existing_runtime_root_identity is None
+            else list(candidate.existing_runtime_root_identity)
+        )
+    repair_seal_matches = bool(
+        candidate.legacy_resume_shape
+        or (
+            seal_document.get("existing_runtime_repair_required")
+            is candidate.existing_runtime_repair_required
+            and seal_document.get("existing_runtime_inventory_sha256")
+            == (
+                None
+                if candidate.existing_runtime_inventory_sha256 is None
+                else f"sha256:{candidate.existing_runtime_inventory_sha256}"
+            )
+            and seal_document.get("existing_runtime_inventory_count")
+            == candidate.existing_runtime_inventory_count
+            and seal_document.get("existing_runtime_inventory_bytes")
+            == candidate.existing_runtime_inventory_bytes
+        )
+    )
     if (
         not isinstance(seal_document, dict)
         or set(seal_document) != expected_seal_keys
@@ -5051,20 +5683,10 @@ def verify_prepared_runtime_candidate(
         or seal_document.get("same_volume_verified") is not True
         or seal_document.get("existing_runtime_reusable")
         is not candidate.existing_runtime_reusable
+        or not repair_seal_matches
         or seal_document.get("runtime_parent_existed_before")
         is not candidate.runtime_parent_existed_before
-        or seal_document.get("path_identities")
-        != {
-            "project_root": list(candidate.project_root_identity),
-            "transaction_root": list(candidate.transaction_root_identity),
-            "candidate_root": list(candidate.candidate_root_identity),
-            "runtime_parent": list(candidate.runtime_parent_identity),
-            "runtime_parent_created": (
-                None
-                if candidate.runtime_parent_created_identity is None
-                else list(candidate.runtime_parent_created_identity)
-            ),
-        }
+        or seal_document.get("path_identities") != expected_path_identities
         or seal_document.get("recursive_directory_durability_verified") is not True
         or seal_document.get("seal_parent_durability_required") is not True
         or seal_document.get("marker_free_final_postimage") is not True
@@ -5098,8 +5720,15 @@ def verify_prepared_runtime_candidate(
         installed_payload_sha256=candidate.installed_payload_sha256,
         normalized_payload_inventory=candidate.normalized_payload_inventory,
         existing_runtime_reusable=candidate.existing_runtime_reusable,
+        existing_runtime_repair_required=(
+            candidate.existing_runtime_repair_required
+        ),
+        existing_runtime_inventory_sha256=(
+            candidate.existing_runtime_inventory_sha256
+        ),
         runtime_parent_existed_before=candidate.runtime_parent_existed_before,
         inventory=inventory,
+        legacy_shape=candidate.legacy_resume_shape,
     )
     if digest != candidate.candidate_sha256:
         raise ProjectRuntimeError("project_runtime_candidate_drift")
@@ -5127,6 +5756,23 @@ def verify_prepared_runtime_candidate(
         or tuple(receipt.get("installed_distributions", ()))
         != candidate.installed_distributions
         or receipt.get("verification") != dict(candidate.verification)
+        or (
+            candidate.existing_runtime_repair_required
+            and (
+                receipt.get("schema")
+                != PROJECT_RUNTIME_REPAIR_RECEIPT_SCHEMA
+                or receipt.get(
+                    "previous_runtime_deleted_during_materialization"
+                ) is not False
+                or receipt.get(
+                    "terminal_cleanup_required_to_remove_private_repair_preimage"
+                ) is not True
+            )
+        )
+        or (
+            not candidate.existing_runtime_repair_required
+            and receipt.get("schema") != PROJECT_RUNTIME_RECEIPT_SCHEMA
+        )
     ):
         raise ProjectRuntimeError("project_runtime_candidate_receipt_drift")
     canonical_inventory, _retained, _top = _verify_retained_artifacts(
@@ -5204,6 +5850,175 @@ def _verify_promoted_candidate_image(
         raise ProjectRuntimeError("project_runtime_candidate_promotion_ambiguous")
 
 
+def _runtime_repair_backup_path(
+    candidate: PreparedRuntimeCandidate,
+) -> Path:
+    return candidate.transaction_root / PROJECT_RUNTIME_REPAIR_BACKUP_NAME
+
+
+def _runtime_inventory_matches(
+    path: Path,
+    *,
+    identity: tuple[int, int],
+    inventory: tuple[RuntimeCandidateInventoryEntry, ...],
+) -> bool:
+    try:
+        return bool(
+            _path_identity(path) == identity
+            and _candidate_inventory_snapshot(path) == inventory
+        )
+    except (OSError, ProjectRuntimeError):
+        return False
+
+
+def _restore_failed_runtime_repair_promotion(
+    candidate: PreparedRuntimeCandidate,
+    *,
+    final: Path,
+    backup: Path,
+    tracker: RuntimeMutationTracker | None,
+) -> bool:
+    """Restore both names after any caught two-rename repair failure."""
+
+    old_identity = candidate.existing_runtime_root_identity
+    if old_identity is None:
+        return False
+    try:
+        candidate_at_final = _runtime_inventory_matches(
+            final,
+            identity=candidate.candidate_root_identity,
+            inventory=candidate.inventory,
+        )
+        if candidate_at_final:
+            if _lexists(candidate.candidate_root):
+                return False
+            _atomic_promote_directory_no_replace(
+                final,
+                candidate.candidate_root,
+            )
+            _flush_directory_durable(candidate.transaction_root)
+        elif _lexists(final) and not _runtime_inventory_matches(
+            final,
+            identity=old_identity,
+            inventory=candidate.existing_runtime_inventory,
+        ):
+            return False
+
+        if _lexists(backup):
+            if not _runtime_inventory_matches(
+                backup,
+                identity=old_identity,
+                inventory=candidate.existing_runtime_inventory,
+            ) or _lexists(final):
+                return False
+            _atomic_promote_directory_no_replace(backup, final)
+
+        _flush_directory_durable(
+            candidate.project_root / PROJECT_RUNTIME_RELATIVE_ROOT
+        )
+        _flush_directory_durable(candidate.transaction_root)
+        restored = bool(
+            not _lexists(backup)
+            and _runtime_inventory_matches(
+                final,
+                identity=old_identity,
+                inventory=candidate.existing_runtime_inventory,
+            )
+            and _runtime_inventory_matches(
+                candidate.candidate_root,
+                identity=candidate.candidate_root_identity,
+                inventory=candidate.inventory,
+            )
+        )
+        if tracker is not None:
+            restored = runtime_mutation_restored(
+                candidate.project_root,
+                tracker,
+            ) and restored
+        return restored
+    except (OSError, ProjectRuntimeError):
+        return False
+
+
+def reopen_promoted_runtime_materialization(
+    candidate: PreparedRuntimeCandidate,
+) -> RuntimeMaterialization:
+    """Rebuild exact rollback authority after promotion survived a process exit."""
+
+    if not isinstance(candidate, PreparedRuntimeCandidate):
+        raise ProjectRuntimeError("project_runtime_candidate_binding_invalid")
+    final = runtime_path(candidate.project_root, candidate.target_version)
+    repair_backup: Path | None = None
+    if candidate.existing_runtime_repair_required:
+        repair_backup = _runtime_repair_backup_path(candidate)
+
+    def exact_promoted_state() -> bool:
+        if not _existing_runtime_matches_candidate(
+            candidate.project_root,
+            candidate,
+        ):
+            return False
+        if candidate.existing_runtime_repair_required:
+            return bool(
+                repair_backup is not None
+                and runtime_repair_state(candidate)
+                == "candidate_final_plus_backup"
+                and candidate.existing_runtime_root_identity is not None
+                and _runtime_inventory_matches(
+                    repair_backup,
+                    identity=candidate.existing_runtime_root_identity,
+                    inventory=candidate.existing_runtime_inventory,
+                )
+            )
+        return bool(
+            candidate.existing_runtime_reusable
+            or not _lexists(candidate.candidate_root)
+        )
+
+    if not exact_promoted_state():
+        raise ProjectRuntimeError(
+            "project_runtime_candidate_promotion_ambiguous"
+        )
+    # A hard exit can occur after the candidate-to-final rename but before the
+    # original process flushes either directory.  Reopened execution must make
+    # both rename halves durable and then re-prove the exact identities/bytes
+    # before a runtime-verified checkpoint may be appended.
+    _flush_directory_durable(
+        candidate.project_root / PROJECT_RUNTIME_RELATIVE_ROOT
+    )
+    _flush_directory_durable(candidate.transaction_root)
+    if not exact_promoted_state():
+        raise ProjectRuntimeError(
+            "project_runtime_candidate_promotion_ambiguous"
+        )
+    return RuntimeMaterialization(
+        target_tag=candidate.target_tag,
+        target_version=candidate.target_version,
+        target_commit=candidate.target_commit,
+        final_path=final,
+        logical_path=runtime_logical_path(candidate.target_version),
+        receipt_bytes=candidate.receipt_bytes,
+        receipt_sha256=candidate.receipt_sha256,
+        wheel_sha256=candidate.wheel_sha256,
+        supply_lock_sha256=candidate.supply_lock_sha256,
+        artifact_inventory=candidate.artifact_inventory,
+        installed_payload_sha256=candidate.installed_payload_sha256,
+        python_version=candidate.python_version,
+        created=not candidate.existing_runtime_reusable,
+        verification=candidate.verification,
+        inventory=candidate.inventory,
+        repaired=candidate.existing_runtime_repair_required,
+        replaced_runtime_path=repair_backup,
+        replaced_runtime_identity=(
+            candidate.existing_runtime_root_identity
+        ),
+        replaced_runtime_inventory=(
+            candidate.existing_runtime_inventory
+        ),
+        transaction_root=candidate.transaction_root,
+    )
+
+
 def promote_runtime_candidate(
     project_root: Path,
     *,
@@ -5260,8 +6075,10 @@ def promote_runtime_candidate(
             python_version=candidate.python_version,
             created=False,
             verification=candidate.verification,
+            inventory=candidate.inventory,
+            transaction_root=candidate.transaction_root,
         )
-    if _lexists(final):
+    if _lexists(final) and not candidate.existing_runtime_repair_required:
         raise ProjectRuntimeError("project_runtime_target_directory_concurrent")
     runtimes_root = project / PROJECT_RUNTIME_RELATIVE_ROOT
     if (
@@ -5275,15 +6092,56 @@ def promote_runtime_candidate(
             raise ProjectRuntimeError("project_runtime_root_snapshot_unavailable")
         tracker.started = True
         tracker.cleanup_verified = False
+    repair_backup: Path | None = None
     try:
+        if candidate.existing_runtime_repair_required:
+            if not existing_runtime_repair_preimage_matches(candidate):
+                raise ProjectRuntimeError(
+                    "project_runtime_existing_repair_preimage_drift"
+                )
+            repair_backup = _runtime_repair_backup_path(candidate)
+            repair_state = runtime_repair_state(candidate)
+            if repair_state == "preimage_final":
+                if _lexists(repair_backup):
+                    raise ProjectRuntimeError(
+                        "project_runtime_repair_backup_collision"
+                    )
+                _atomic_promote_directory_no_replace(final, repair_backup)
+                _flush_directory_durable(runtimes_root)
+                _flush_directory_durable(candidate.transaction_root)
+            elif repair_state != "backup_only":
+                raise ProjectRuntimeError(
+                    "project_runtime_existing_repair_preimage_drift"
+                )
+            if not _runtime_inventory_matches(
+                repair_backup,
+                identity=candidate.existing_runtime_root_identity,
+                inventory=candidate.existing_runtime_inventory,
+            ):
+                raise ProjectRuntimeError(
+                    "project_runtime_repair_backup_drift"
+                )
         _atomic_promote_directory_no_replace(candidate.candidate_root, final)
         _verify_promoted_candidate_image(candidate, final)
-        # Persist both halves of the rename: destination addition and source
-        # removal.  A barrier failure is ambiguous and never triggers deletion.
+        # Persist both halves of each rename.  The old invalid runtime remains
+        # as an exact private rollback preimage after a successful repair.
         _flush_directory_durable(runtimes_root)
         _flush_directory_durable(candidate.transaction_root)
         _verify_promoted_candidate_image(candidate, final)
     except BaseException as error:
+        if (
+            candidate.existing_runtime_repair_required
+            and repair_backup is not None
+            and _restore_failed_runtime_repair_promotion(
+                candidate,
+                final=final,
+                backup=repair_backup,
+                tracker=tracker,
+            )
+        ):
+            raise ProjectRuntimeError(
+                "project_runtime_repair_promotion_rolled_back"
+            ) from error
         raise ProjectRuntimeError(
             "project_runtime_candidate_promotion_ambiguous"
         ) from error
@@ -5305,6 +6163,12 @@ def promote_runtime_candidate(
         python_version=candidate.python_version,
         created=True,
         verification=candidate.verification,
+        inventory=candidate.inventory,
+        repaired=candidate.existing_runtime_repair_required,
+        replaced_runtime_path=repair_backup,
+        replaced_runtime_identity=candidate.existing_runtime_root_identity,
+        replaced_runtime_inventory=candidate.existing_runtime_inventory,
+        transaction_root=candidate.transaction_root,
     )
 
 
@@ -5580,10 +6444,77 @@ def remove_materialized_runtime(
     *,
     mutation_tracker: RuntimeMutationTracker | None = None,
 ) -> bool:
-    """Never auto-delete a promoted final runtime.
+    """Exact rollback for a materialization owned by the current transaction."""
 
-    Durable project-update recovery owns any approved rollback/quarantine.  A
-    no-op reuse needs no deletion; a created final always remains in place.
-    """
-
-    return not runtime.created
+    if not runtime.created:
+        return True
+    project = Path(os.path.abspath(str(project_root)))
+    final = runtime_path(project, runtime.target_version)
+    if runtime.final_path != final or not runtime.inventory:
+        return False
+    # RuntimeMaterialization carries the exact child identities and bytes.  The
+    # final root name is separately fixed by target_version.
+    try:
+        if _candidate_inventory_snapshot(final) != runtime.inventory:
+            return False
+    except (OSError, ProjectRuntimeError):
+        return False
+    if (
+        _read_limited(
+            final / PROJECT_RUNTIME_RECEIPT_NAME,
+            limit=2 * 1024 * 1024,
+        )
+        != runtime.receipt_bytes
+    ):
+        return False
+    runtimes_root = project / PROJECT_RUNTIME_RELATIVE_ROOT
+    if runtime.repaired:
+        backup = runtime.replaced_runtime_path
+        old_identity = runtime.replaced_runtime_identity
+        transaction_root = runtime.transaction_root
+        if (
+            backup is None
+            or old_identity is None
+            or transaction_root is None
+            or backup != transaction_root / PROJECT_RUNTIME_REPAIR_BACKUP_NAME
+            or not _runtime_inventory_matches(
+                backup,
+                identity=old_identity,
+                inventory=runtime.replaced_runtime_inventory,
+            )
+        ):
+            return False
+        rollback_candidate = (
+            transaction_root / PROJECT_RUNTIME_ROLLBACK_CANDIDATE_NAME
+        )
+        if _lexists(rollback_candidate):
+            return False
+        try:
+            _atomic_promote_directory_no_replace(final, rollback_candidate)
+            _flush_directory_durable(runtimes_root)
+            _flush_directory_durable(transaction_root)
+            _atomic_promote_directory_no_replace(backup, final)
+            _flush_directory_durable(runtimes_root)
+            _flush_directory_durable(transaction_root)
+            if not _runtime_inventory_matches(
+                final,
+                identity=old_identity,
+                inventory=runtime.replaced_runtime_inventory,
+            ):
+                return False
+            if not _delete_exact_inventory_tree(
+                rollback_candidate,
+                runtime.inventory,
+            ):
+                return False
+            _flush_directory_durable(transaction_root)
+        except (OSError, ProjectRuntimeError):
+            return False
+    else:
+        if not _delete_exact_inventory_tree(final, runtime.inventory):
+            return False
+        if mutation_tracker is not None:
+            _remove_new_empty_runtime_root(project, mutation_tracker)
+    if mutation_tracker is not None:
+        return runtime_mutation_restored(project, mutation_tracker)
+    return True

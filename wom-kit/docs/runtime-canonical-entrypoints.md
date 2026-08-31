@@ -1,6 +1,8 @@
 # Runtime Canonical Entry Points
 
-Status: v0.4.15 authenticated project-update recovery and create-only incident reporting
+Status: v0.4.16 authenticated terminal-result delivery and runtime binding
+
+Previous checkpoint: Status: v0.4.15 authenticated project-update recovery and create-only incident reporting
 
 Previous checkpoint: Status: v0.4.14 reference-aware local recovery and safe decision views
 
@@ -40,7 +42,35 @@ The underlying raw context packet remains available through:
 archive runtime-context <archive-root> --format json
 ```
 
-## v0.4.15 Current Runtime Delta
+## v0.4.16 Current Runtime Delta
+
+Authenticated project-update success is written to a private durable terminal
+handoff before cleanup. `terminal_finalization` reports claim/checkpoint/lock
+verification, transaction cleanup, service-resource close, Git-runner close,
+durable output handoff, and attention state separately. One immutable terminal
+journal binds the exact output while the handoff advances through `active`,
+`display-pending`, and hash-named `consumed`. Identifier-free `--resume` reuses
+that output and gives identical at-least-once display without rerunning the
+domain writer. Consumed state is history and acknowledgement does not prove a
+person or model saw stdout. A complete legacy cleanup tombstone resumes only
+after exact validation; proof-only state attributes no past success and partial
+or malformed residue fails closed. New approved or unbound resume updates
+receive a private project-scoped output automatically when omitted.
+
+The canonical project launcher uses `python -m wom_kit.archive_cli`. v0.4.16
+recognizes its exact `__main__` import-spec alias and still requires expected
+identity, installed inventory, and receipt-bound bytes for `archive_cli`,
+`project_runtime`, and `package_origin`. `core_module_bindings` exposes only
+booleans and bounded reason codes, never absolute paths or hashes.
+
+Exact-approved create-only feedback may preserve a new body and receipt when
+either update recovery or runtime alignment blocks ordinary writers. Revision,
+lifecycle metadata, delivery, resolution, runtime/pin changes, and other writes
+remain blocked. Draft results separately report pre-write caller-input/body
+safety reads; concrete secret shapes remain fail-closed while fixed product
+definitions and placeholders are not rejected by vocabulary alone.
+
+## v0.4.15 Historical Runtime Delta
 
 `project-version-update --resume` validates the live update lock and
 authenticated sealed plan, restores the exact target, transaction, reviewer,
@@ -226,7 +256,7 @@ archive capabilities --machine --format json
 
 Its `data.approval_status_inventory` distinguishes
 `approval_available`, `approval_fixed_closed`, and `approval_not_exposed` for
-every canonical executable command path and its aliases. The current v0.4.15
+every canonical executable command path and its aliases. The current v0.4.16
 working-tree parser reports 315 canonical executable paths, 259 alias paths,
 and 574 total invocation paths: 47 operation-specific approval routes, 67
 fixed-closed routes, and 201 routes without an approval mode. Nine paths have
@@ -263,23 +293,23 @@ documented plans, previews, and audits remain available; a closed approval still
 `compound_exact_human_approval_binding_required`. `project-version-update`
 itself is separately reopened with an exact target/tag/source/rollback binding.
 
-When an updater bootstrap is needed and the exact public v0.4.15 GitHub Release
+When an updater bootstrap is needed and the exact public v0.4.16 GitHub Release
 wheel has been independently confirmed, use a dedicated external CPython 3.12
 environment:
 
 ```powershell
 $womBootstrapNonce = [guid]::NewGuid().ToString("N")
-$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0415-$womBootstrapNonce"
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0416-$womBootstrapNonce"
 if (Test-Path -LiteralPath $womBootstrapRoot) {
   throw "WOM bootstrap path must be new."
 }
 py -3.12 -m venv $womBootstrapRoot
 $womBootstrapPython = (Get-Item -LiteralPath (Join-Path $womBootstrapRoot "Scripts\python.exe")).FullName
-& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.15/wom_kit-0.4.15-py3-none-any.whl"
+& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.16/wom_kit-0.4.16-py3-none-any.whl"
 & "$womBootstrapRoot\Scripts\archive.exe" --version
 ```
 
-Require exactly `archive 0.4.15` from a new process. This does not update the
+Require exactly `archive 0.4.16` from a new process. This does not update the
 project-local WOM-kit source mirror or change a project pin. Those effects
 require the separate reviewed `project-version-update` plan and native
 approval, or its authenticated same-context resume after interruption.
@@ -550,9 +580,13 @@ printed to stderr before the long work begins.
 If the caller times out, do not start a duplicate writer. Use the exact
 starting root and reference with `operation-control --action status --dry-run`,
 bounded `wait`, or read-only `recovery-plan`. A wait deadline is neutral.
-Cancel and resume are unsupported and write nothing; no MCP, daemon, queue,
-background launcher, force kill, lock deletion, or automatic rollback exists.
-A completed output proves only the verified saved CLI result, so follow its
+Generic `operation-control` cancel and resume are unsupported and write
+nothing; no MCP, daemon, queue, background launcher, force kill, lock deletion,
+or automatic rollback exists. The separately authenticated,
+identifier-free `project-version-update --resume` command is the narrow
+transaction-aware exception: it continues the exact sealed updater from its
+next unverified checkpoint and never authorizes a generic writer retry. A
+completed output proves only the verified saved CLI result, so follow its
 command-specific next action.
 
 Generated-index health must pass the clean rollback `DELETE` header and
