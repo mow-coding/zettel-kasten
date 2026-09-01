@@ -27,18 +27,18 @@ class V0402HistoricalReleaseTests(unittest.TestCase):
         )
 
     def test_v0402_is_not_repackaged_as_the_current_release(self) -> None:
-        self.assertEqual(__version__, "0.4.16")
+        self.assertEqual(__version__, "0.4.17")
         self.assertFalse(PACKAGED_RELEASE_PATH.exists())
         release_names = sorted(
             path.name
             for path in (RESOURCE_ROOT / "release-notes").glob("v*.md")
         )
-        self.assertEqual(release_names, ["v0.4.16.md"])
+        self.assertEqual(release_names, ["v0.4.17.md"])
 
         manifest = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
-        self.assertEqual(manifest["version"], "0.4.16")
+        self.assertEqual(manifest["version"], "0.4.17")
         packaged_paths = {row["packaged"] for row in manifest["files"]}
-        self.assertIn("release-notes/v0.4.16.md", packaged_paths)
+        self.assertIn("release-notes/v0.4.17.md", packaged_paths)
         self.assertNotIn("release-notes/v0.4.14.md", packaged_paths)
         self.assertNotIn("release-notes/v0.4.13.md", packaged_paths)
         self.assertNotIn("release-notes/v0.4.12.md", packaged_paths)

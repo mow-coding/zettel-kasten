@@ -24,7 +24,7 @@ Before upgrading a real archive:
 
 The archive should never silently rewrite memory.
 
-## v0.4.16 Durable Project Update Result Delivery
+## v0.4.17 Terminal Cleanup Recovery
 
 Install the exact public wheel only after the matching release and asset exist.
 Use a new external CPython 3.12 environment so the real `python.exe -m pip`
@@ -32,17 +32,17 @@ records the wheel hash in installed PEP 610 metadata.
 
 ```powershell
 $womBootstrapNonce = [guid]::NewGuid().ToString("N")
-$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0416-$womBootstrapNonce"
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0417-$womBootstrapNonce"
 if (Test-Path -LiteralPath $womBootstrapRoot) {
   throw "WOM bootstrap path must be new."
 }
 py -3.12 -m venv $womBootstrapRoot
 $womBootstrapPython = (Get-Item -LiteralPath (Join-Path $womBootstrapRoot "Scripts\python.exe")).FullName
-& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.16/wom_kit-0.4.16-py3-none-any.whl"
+& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.17/wom_kit-0.4.17-py3-none-any.whl"
 & "$womBootstrapRoot\Scripts\archive.exe" --version
 ```
 
-Require exactly `archive 0.4.16` from a new process. Publishing or installing
+Require exactly `archive 0.4.17` from a new process. Publishing or installing
 the wheel changes no client archive, project runtime, or version pin. A client
 separately chooses and approves any project update.
 
@@ -50,8 +50,29 @@ Approved project-update mutation, same-version repair, and mutation-bearing
 resume remain Windows-only. POSIX supports preview and read-only inspection;
 those mutation paths fail closed without writing.
 
-For an interrupted approved update, keep other project writers stopped and use
-the identifier-free resume path:
+Fresh dry-run and approval now share one read-only terminal-cleanup preflight.
+If either returns `project_version_update_terminal_cleanup_required`, do not
+request another approval and do not inspect or edit private control files.
+Keep other writers for the same project stopped and use the identifier-free
+resume command below. WOM verifies and compacts only exact terminal abort
+history, preserves canonical proof history, and changes no project-domain file.
+After recovery finishes, run a new dry-run and request one fresh approval only
+if that new preview is ready.
+
+If the result is
+`project_version_update_terminal_cleanup_outcome_unknown`, stop. Do not loop
+resume, delete a lock, edit a pin, or remove transaction, tombstone, or proof
+evidence. Preserve the structured result for development review.
+
+The recovery result can show an empty `files_written` list while still reporting
+completed private control-history work. `files_written_scope:
+project_domain_only` limits that list to project-domain files. Read
+`terminal_abort_histories_compacted`, `terminal_abort_history_compaction_state`,
+and the content-free `effect_summary` together; `partial` or `incomplete` means
+stop and preserve the result rather than retrying or deleting evidence.
+
+For an interrupted approved update or exact terminal control history, keep
+other project writers stopped and use the identifier-free resume path:
 
 ```powershell
 & "$womBootstrapRoot\Scripts\archive.exe" project-version-update <project-or-archive-root> `

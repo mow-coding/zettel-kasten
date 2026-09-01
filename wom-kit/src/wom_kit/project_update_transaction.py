@@ -38,6 +38,12 @@ RESERVATION_ABORT_RECEIPT_SCHEMA = (
 RESERVATION_ABORT_PLAN_SCHEMA = (
     "wom-kit/project-update-reservation-abort-plan/v0.4.3"
 )
+RESERVATION_ABORT_CLEANUP_PLAN_SCHEMA = (
+    "wom-kit/project-update-reservation-abort-cleanup-plan/v0.4.17"
+)
+RESERVATION_ABORT_CLEANUP_RESULT_SCHEMA = (
+    "wom-kit/project-update-reservation-abort-cleanup-result/v0.4.17"
+)
 LOCK_BACKLINK_SCHEMA = "wom-kit/project-update-transaction-lock-backlink/v0.4.3"
 CHECKPOINT_SCHEMA = "wom-kit/project-update-transaction-checkpoint/v0.4.3"
 PUBLIC_SUMMARY_SCHEMA = "wom-kit/project-update-transaction-public-summary/v0.4.3"
@@ -113,6 +119,9 @@ PRIVATE_BINDINGS_NAME = "private-bindings"
 RESERVATION_LOCK_BACKLINK_NAME = "reservation-lock-backlink.json"
 RESERVATION_ABORT_INTENT_NAME = "reservation-abort-intent.json"
 RESERVATION_ABORT_RECEIPT_NAME = "reservation-abort-receipt.json"
+RESERVATION_ABORT_CLEANUP_PLAN_NAME = (
+    "reservation-abort-cleanup-plan-v0417.json"
+)
 SEALED_LOCK_BACKLINK_NAME = "lock-backlink.json"
 
 ABSENT_COMPONENT_SHA256 = "sha256:" + hashlib.sha256(
@@ -2195,6 +2204,24 @@ def _read_cleanup_linked_regular(
         identity = held.get("identity")
         if not isinstance(raw, bytes) or not isinstance(identity, tuple):
             raise _fail("project_update_transaction_cleanup_refused")
+        if os.name == "nt":
+            windows_handle = held.get("windows_handle")
+            if windows_handle is None:
+                raise _fail("project_update_transaction_cleanup_refused")
+            from .archive_services import (
+                _windows_assert_default_backup_stream_only,
+            )
+
+            try:
+                _windows_assert_default_backup_stream_only(
+                    windows_handle,
+                    expected_size=len(raw),
+                    error_prefix="project_update_transaction_cleanup",
+                )
+            except OSError:
+                raise _fail(
+                    "project_update_transaction_cleanup_refused"
+                ) from None
         try:
             named = os.lstat(canonical_path)
         except OSError:
@@ -2397,6 +2424,20 @@ class CleanupTombstoneInspection:
     terminal_checkpoint_sha256: str
     transaction_parent_identity: tuple[int, int, int, int]
     tombstone_identity: tuple[int, int, int, int]
+
+
+@dataclass(frozen=True)
+class ReservationAbortCleanupInspection:
+    """One exact abort history that still needs compaction or resume."""
+
+    transaction_ref: str
+    state: Literal[
+        "terminal_original",
+        "planned_original",
+        "cleanup_tombstone",
+    ]
+    cleanup_authority_sha256: str | None
+    entry_identity: tuple[int, int, int, int]
 
 
 @dataclass(frozen=True)
@@ -3709,6 +3750,554 @@ class ReservedProjectUpdateTransaction:
             "transaction_logical_ref": self.transaction_logical_ref,
             "transaction_ref": self.transaction_ref,
         }
+
+    @staticmethod
+    def _abort_cleanup_paths(
+        parent: Path, transaction_ref: str
+    ) -> tuple[Path, Path]:
+        _transaction_ref(transaction_ref)
+        return (
+            parent / f".cleanup_{transaction_ref}",
+            parent / f".cleanup-proof_{transaction_ref}.json",
+        )
+
+    @staticmethod
+    def _abort_cleanup_expected_files() -> tuple[str, ...]:
+        return (
+            "append.guard",
+            "marker.json",
+            RESERVATION_ABORT_INTENT_NAME,
+            RESERVATION_ABORT_RECEIPT_NAME,
+            RESERVATION_LOCK_BACKLINK_NAME,
+        )
+
+    @staticmethod
+    def _abort_cleanup_root_identity(
+        plan: Mapping[str, Any],
+    ) -> tuple[int, int, int | None]:
+        identity = plan["transaction_root_identity"]
+        return (
+            int(identity["device"]),
+            int(identity["inode"]),
+            identity["birthtime_ns"],
+        )
+
+    @staticmethod
+    def _abort_cleanup_file_snapshots(
+        plan: Mapping[str, Any],
+    ) -> dict[str, _CleanupFileSnapshot]:
+        snapshots: dict[str, _CleanupFileSnapshot] = {}
+        for item in plan["files"]:
+            identity = item["identity"]
+            snapshots[item["relative_path"]] = _CleanupFileSnapshot(
+                size=item["size"],
+                sha256=item["sha256"],
+                device=identity["device"],
+                inode=identity["inode"],
+                mtime_ns=identity["mtime_ns"],
+            )
+        return snapshots
+
+    @classmethod
+    def _validate_abort_cleanup_plan_document(
+        cls,
+        value: Any,
+        transaction_ref: str,
+        authority: str,
+    ) -> dict[str, Any]:
+        """Validate the canonical, content-free proof for one aborted reserve."""
+
+        expected_keys = {
+            "abort_receipt_sha256",
+            "candidate_cleanup_evidence_sha256",
+            "cleanup_authority_sha256",
+            "directories",
+            "files",
+            "operation",
+            "reservation_sha256",
+            "schema",
+            "terminal_state",
+            "transaction_logical_ref",
+            "transaction_ref",
+            "transaction_root_identity",
+        }
+        if (
+            type(value) is not dict
+            or set(value) != expected_keys
+            or value.get("schema") != RESERVATION_ABORT_CLEANUP_PLAN_SCHEMA
+            or value.get("operation") != "compact_terminal_reservation_abort"
+            or value.get("terminal_state") != "aborted_before_intent_seal"
+            or value.get("transaction_ref") != transaction_ref
+            or value.get("transaction_logical_ref")
+            != _transaction_logical_ref(transaction_ref)
+            or value.get("cleanup_authority_sha256") != authority
+            or value.get("directories") != []
+            or type(value.get("files")) is not list
+        ):
+            raise _fail("project_update_transaction_cleanup_refused")
+        _digest(
+            value.get("abort_receipt_sha256"),
+            code="project_update_transaction_cleanup_refused",
+        )
+        _digest(
+            value.get("candidate_cleanup_evidence_sha256"),
+            code="project_update_transaction_cleanup_refused",
+        )
+        _digest(
+            value.get("cleanup_authority_sha256"),
+            code="project_update_transaction_cleanup_refused",
+        )
+        _digest(
+            value.get("reservation_sha256"),
+            code="project_update_transaction_cleanup_refused",
+        )
+        root_identity = value.get("transaction_root_identity")
+        birthtime_ns = (
+            root_identity.get("birthtime_ns")
+            if type(root_identity) is dict
+            else None
+        )
+        if (
+            type(root_identity) is not dict
+            or set(root_identity) != {"birthtime_ns", "device", "inode"}
+            or type(root_identity.get("device")) is not int
+            or root_identity["device"] < 0
+            or type(root_identity.get("inode")) is not int
+            or root_identity["inode"] <= 0
+            or (
+                os.name == "nt"
+                and (type(birthtime_ns) is not int or birthtime_ns <= 0)
+            )
+            or (os.name != "nt" and birthtime_ns is not None)
+        ):
+            raise _fail("project_update_transaction_cleanup_refused")
+
+        expected_files = cls._abort_cleanup_expected_files()
+        observed_files: list[str] = []
+        for item in value["files"]:
+            identity = item.get("identity") if type(item) is dict else None
+            if (
+                type(item) is not dict
+                or set(item) != {"identity", "relative_path", "sha256", "size"}
+                or type(item.get("relative_path")) is not str
+                or type(item.get("size")) is not int
+                or item["size"] < 0
+                or item["size"] > MAX_DOCUMENT_BYTES + 1
+                or type(identity) is not dict
+                or set(identity) != {"device", "inode", "mtime_ns"}
+                or type(identity.get("device")) is not int
+                or identity["device"] < 0
+                or type(identity.get("inode")) is not int
+                or identity["inode"] <= 0
+                or type(identity.get("mtime_ns")) is not int
+                or identity["mtime_ns"] < 0
+            ):
+                raise _fail("project_update_transaction_cleanup_refused")
+            _digest(
+                item.get("sha256"),
+                code="project_update_transaction_cleanup_refused",
+            )
+            observed_files.append(item["relative_path"])
+        if tuple(observed_files) != expected_files:
+            raise _fail("project_update_transaction_cleanup_refused")
+        return value
+
+    def _build_abort_cleanup_plan(
+        self,
+        authority: str,
+        *,
+        transaction_root_identity: tuple[int, int, int | None],
+    ) -> dict[str, Any]:
+        """Bind the exact five-file terminal history and its file identities."""
+
+        if os.path.lexists(self._lock_path):
+            raise _fail("project_update_transaction_cleanup_refused")
+        terminal = self.inspect_abort_receipt()
+        if terminal is None:
+            raise _fail("project_update_transaction_cleanup_refused")
+        files, directories = ProjectUpdateTransaction._cleanup_descendant_snapshot(
+            self._transaction_root,
+            exclude={RESERVATION_ABORT_CLEANUP_PLAN_NAME},
+        )
+        if directories or tuple(sorted(files)) != self._abort_cleanup_expected_files():
+            raise _fail("project_update_transaction_cleanup_refused")
+        if os.path.lexists(self._lock_path):
+            raise _fail("project_update_transaction_cleanup_refused")
+        plan = {
+            "abort_receipt_sha256": terminal["receipt_sha256"],
+            "candidate_cleanup_evidence_sha256": terminal[
+                "candidate_cleanup_evidence_sha256"
+            ],
+            "cleanup_authority_sha256": authority,
+            "directories": [],
+            "files": [
+                {
+                    "identity": {
+                        "device": snapshot.device,
+                        "inode": snapshot.inode,
+                        "mtime_ns": snapshot.mtime_ns,
+                    },
+                    "relative_path": relative,
+                    "sha256": snapshot.sha256,
+                    "size": snapshot.size,
+                }
+                for relative, snapshot in sorted(files.items())
+            ],
+            "operation": "compact_terminal_reservation_abort",
+            "reservation_sha256": self.reservation.sha256,
+            "schema": RESERVATION_ABORT_CLEANUP_PLAN_SCHEMA,
+            "terminal_state": "aborted_before_intent_seal",
+            "transaction_logical_ref": self.transaction_logical_ref,
+            "transaction_ref": self.transaction_ref,
+            "transaction_root_identity": {
+                "birthtime_ns": transaction_root_identity[2],
+                "device": transaction_root_identity[0],
+                "inode": transaction_root_identity[1],
+            },
+        }
+        return self._validate_abort_cleanup_plan_document(
+            plan,
+            self.transaction_ref,
+            authority,
+        )
+
+    def exact_cleanup(self, *, cleanup_authority_sha256: str) -> bool:
+        """Compact one exact pre-intent abort while retaining canonical proof."""
+
+        try:
+            authority = _digest(
+                cleanup_authority_sha256,
+                code="project_update_transaction_cleanup_refused",
+            )
+            parent = self._transaction_root.parent
+            _safe_existing_chain(parent, directory=True)
+            tombstone, proof = self._abort_cleanup_paths(
+                parent,
+                self.transaction_ref,
+            )
+            if not os.path.lexists(self._transaction_root):
+                if os.path.lexists(tombstone) or os.path.lexists(proof):
+                    return self._resume_abort_cleanup_paths(
+                        self._project_root,
+                        self.transaction_ref,
+                        authority,
+                    )
+                return False
+            if (
+                os.path.lexists(self._lock_path)
+                or os.path.lexists(tombstone)
+                or os.path.lexists(proof)
+            ):
+                return False
+            root_before = _safe_directory(self._transaction_root, within=parent)
+            root_identity = _cleanup_directory_identity(root_before)
+            plan = self._build_abort_cleanup_plan(
+                authority,
+                transaction_root_identity=root_identity,
+            )
+            plan_bytes = _document_bytes(plan)
+            plan_path = (
+                self._transaction_root / RESERVATION_ABORT_CLEANUP_PLAN_NAME
+            )
+            if os.path.lexists(plan_path):
+                existing, _existing_info = _read_cleanup_linked_regular(
+                    self._project_root,
+                    plan_path,
+                    maximum=MAX_DOCUMENT_BYTES + 1,
+                )
+                if not hmac.compare_digest(existing, plan_bytes):
+                    return False
+            else:
+                _write_new(plan_path, plan_bytes, within=self._transaction_root)
+            _require_directory_durable(self._transaction_root)
+            rebuilt = self._build_abort_cleanup_plan(
+                authority,
+                transaction_root_identity=root_identity,
+            )
+            root_after = _safe_directory(self._transaction_root, within=parent)
+            if (
+                _cleanup_directory_identity(root_after) != root_identity
+                or os.path.lexists(self._lock_path)
+                or not hmac.compare_digest(_document_bytes(rebuilt), plan_bytes)
+                or not hmac.compare_digest(
+                    _read_cleanup_linked_regular(
+                        self._project_root,
+                        plan_path,
+                        maximum=MAX_DOCUMENT_BYTES + 1,
+                    )[0],
+                    plan_bytes,
+                )
+            ):
+                return False
+            try:
+                _atomic_move_directory_no_replace(self._transaction_root, tombstone)
+            except OSError:
+                return False
+            moved = _safe_directory(tombstone, within=parent)
+            if (
+                _cleanup_directory_identity(moved) != root_identity
+                or os.path.lexists(self._lock_path)
+                or not _fsync_directory(parent).durable
+            ):
+                return False
+            return self._resume_abort_cleanup_paths(
+                self._project_root,
+                self.transaction_ref,
+                authority,
+            )
+        except (OSError, ProjectUpdateTransactionError, KeyError, TypeError):
+            return False
+
+    @classmethod
+    def resume_cleanup(
+        cls,
+        project_root: Path | str,
+        transaction_ref: str,
+        *,
+        cleanup_authority_sha256: str,
+    ) -> bool:
+        """Resume only this primitive's identity-bound abort-history cleanup."""
+
+        try:
+            project = _absolute(project_root)
+            _safe_existing_chain(project, directory=True)
+            ref = _transaction_ref(transaction_ref)
+            authority = _digest(
+                cleanup_authority_sha256,
+                code="project_update_transaction_cleanup_refused",
+            )
+            return cls._resume_abort_cleanup_paths(project, ref, authority)
+        except (OSError, ProjectUpdateTransactionError, KeyError, TypeError):
+            return False
+
+    @classmethod
+    def _resume_abort_cleanup_paths(
+        cls,
+        project: Path,
+        transaction_ref: str,
+        authority: str,
+    ) -> bool:
+        parent = project / PurePosixPath(TRANSACTION_ROOT_LOGICAL)
+        _safe_existing_chain(parent, directory=True)
+        original = parent / transaction_ref
+        tombstone, proof = cls._abort_cleanup_paths(parent, transaction_ref)
+        lock_path = project / PurePosixPath(PROJECT_UPDATE_LOCK_LOGICAL)
+        if os.path.lexists(lock_path) or os.path.lexists(original):
+            return False
+
+        if os.path.lexists(proof):
+            proof_raw, proof_info = _read_cleanup_linked_regular(
+                project,
+                proof,
+                maximum=MAX_DOCUMENT_BYTES + 1,
+            )
+            proof_identity = (int(proof_info.st_dev), int(proof_info.st_ino))
+            plan = cls._validate_abort_cleanup_plan_document(
+                _parse_document(
+                    proof_raw,
+                    code="project_update_transaction_cleanup_refused",
+                ),
+                transaction_ref,
+                authority,
+            )
+            if os.path.lexists(tombstone):
+                tombstone_info = _safe_directory(tombstone, within=parent)
+                tombstone_generation = _cleanup_directory_identity(tombstone_info)
+                if tombstone_generation != cls._abort_cleanup_root_identity(plan):
+                    return False
+                tombstone_snapshot = _CleanupDirectorySnapshot(
+                    device=tombstone_generation[0],
+                    inode=tombstone_generation[1],
+                    birthtime_ns=tombstone_generation[2],
+                )
+                with _cleanup_bound_directory_context(project, tombstone):
+                    bound = _safe_directory(tombstone, within=parent)
+                    if (
+                        _cleanup_directory_identity(bound) != tombstone_generation
+                        or os.path.lexists(lock_path)
+                    ):
+                        return False
+                    with os.scandir(tombstone) as entries:
+                        names = tuple(sorted(entry.name for entry in entries))
+                    if names:
+                        if names != (RESERVATION_ABORT_CLEANUP_PLAN_NAME,):
+                            return False
+                        duplicate = (
+                            tombstone / RESERVATION_ABORT_CLEANUP_PLAN_NAME
+                        )
+                        duplicate_raw, duplicate_info = (
+                            _read_cleanup_linked_regular(
+                                project,
+                                duplicate,
+                                maximum=MAX_DOCUMENT_BYTES + 1,
+                            )
+                        )
+                        if (
+                            not hmac.compare_digest(duplicate_raw, proof_raw)
+                            or int(proof_info.st_nlink) != 2
+                            or int(duplicate_info.st_nlink) != 2
+                            or (
+                                int(duplicate_info.st_dev),
+                                int(duplicate_info.st_ino),
+                            )
+                            != proof_identity
+                        ):
+                            return False
+                        _unlink_exact_cleanup_plan_duplicate_windows(
+                            project,
+                            duplicate,
+                            proof,
+                            expected_raw=proof_raw,
+                            expected_identity=proof_identity,
+                        )
+                        if (
+                            not _fsync_directory(parent).durable
+                            or not _fsync_directory(tombstone).durable
+                        ):
+                            return False
+                    elif int(proof_info.st_nlink) != 1:
+                        return False
+                    if os.path.lexists(lock_path):
+                        return False
+                _delete_exact_cleanup_directory(
+                    project,
+                    tombstone,
+                    tombstone_snapshot,
+                )
+                if not _fsync_directory(parent).durable:
+                    return False
+            elif int(proof_info.st_nlink) != 1:
+                return False
+            if os.path.lexists(lock_path):
+                return False
+            final_raw, final_info = _read_cleanup_linked_regular(
+                project,
+                proof,
+                maximum=MAX_DOCUMENT_BYTES + 1,
+            )
+            return (
+                not os.path.lexists(original)
+                and not os.path.lexists(tombstone)
+                and hmac.compare_digest(final_raw, proof_raw)
+                and int(final_info.st_nlink) == 1
+                and (int(final_info.st_dev), int(final_info.st_ino))
+                == proof_identity
+            )
+
+        if not os.path.lexists(tombstone):
+            return False
+        tombstone_info = _safe_directory(tombstone, within=parent)
+        tombstone_generation = _cleanup_directory_identity(tombstone_info)
+        tombstone_snapshot = _CleanupDirectorySnapshot(
+            device=tombstone_generation[0],
+            inode=tombstone_generation[1],
+            birthtime_ns=tombstone_generation[2],
+        )
+        plan_path = tombstone / RESERVATION_ABORT_CLEANUP_PLAN_NAME
+        with _cleanup_bound_directory_context(project, tombstone):
+            bound = _safe_directory(tombstone, within=parent)
+            if (
+                _cleanup_directory_identity(bound) != tombstone_generation
+                or os.path.lexists(lock_path)
+                or not os.path.lexists(plan_path)
+            ):
+                return False
+            plan_raw, plan_info = _read_cleanup_linked_regular(
+                project,
+                plan_path,
+                maximum=MAX_DOCUMENT_BYTES + 1,
+            )
+            plan_identity = (int(plan_info.st_dev), int(plan_info.st_ino))
+            plan = cls._validate_abort_cleanup_plan_document(
+                _parse_document(
+                    plan_raw,
+                    code="project_update_transaction_cleanup_refused",
+                ),
+                transaction_ref,
+                authority,
+            )
+            if cls._abort_cleanup_root_identity(plan) != tombstone_generation:
+                return False
+            expected_files = cls._abort_cleanup_file_snapshots(plan)
+            actual_files, actual_directories = (
+                ProjectUpdateTransaction._cleanup_descendant_snapshot(
+                    tombstone,
+                    exclude={RESERVATION_ABORT_CLEANUP_PLAN_NAME},
+                )
+            )
+            if actual_directories or not set(actual_files).issubset(expected_files):
+                return False
+            if any(
+                actual_files[relative] != expected_files[relative]
+                for relative in actual_files
+            ):
+                return False
+            for relative in sorted(actual_files):
+                if os.path.lexists(lock_path):
+                    return False
+                _delete_exact_cleanup_file(
+                    project,
+                    tombstone / PurePosixPath(relative),
+                    expected_files[relative],
+                )
+            remaining_files, remaining_directories = (
+                ProjectUpdateTransaction._cleanup_descendant_snapshot(
+                    tombstone,
+                    exclude={RESERVATION_ABORT_CLEANUP_PLAN_NAME},
+                )
+            )
+            if (
+                remaining_files
+                or remaining_directories
+                or os.path.lexists(lock_path)
+                or _cleanup_directory_identity(
+                    _safe_directory(tombstone, within=parent)
+                )
+                != tombstone_generation
+            ):
+                return False
+            try:
+                _atomic_move_file_no_replace(plan_path, proof)
+            except OSError:
+                return False
+            moved_raw, moved_info = _read_cleanup_linked_regular(
+                project,
+                proof,
+                maximum=MAX_DOCUMENT_BYTES + 1,
+            )
+            if (
+                not hmac.compare_digest(moved_raw, plan_raw)
+                or int(moved_info.st_nlink) != 1
+                or (int(moved_info.st_dev), int(moved_info.st_ino))
+                != plan_identity
+                or not _fsync_directory(parent).durable
+                or not _fsync_directory(tombstone).durable
+                or os.path.lexists(lock_path)
+            ):
+                return False
+            if _cleanup_directory_identity(
+                _safe_directory(tombstone, within=parent)
+            ) != tombstone_generation:
+                return False
+            with os.scandir(tombstone) as entries:
+                if next(entries, None) is not None:
+                    return False
+        _delete_exact_cleanup_directory(project, tombstone, tombstone_snapshot)
+        if not _fsync_directory(parent).durable or os.path.lexists(lock_path):
+            return False
+        final_raw, final_info = _read_cleanup_linked_regular(
+            project,
+            proof,
+            maximum=MAX_DOCUMENT_BYTES + 1,
+        )
+        return (
+            not os.path.lexists(original)
+            and not os.path.lexists(tombstone)
+            and hmac.compare_digest(final_raw, plan_raw)
+            and int(final_info.st_nlink) == 1
+            and (int(final_info.st_dev), int(final_info.st_ino))
+            == plan_identity
+        )
 
     @staticmethod
     def _candidate_seal(
@@ -5778,12 +6367,15 @@ class ProjectUpdateTransaction:
     ) -> CleanupTombstoneInspection | None:
         """Find one byte-complete legacy tombstone without trusting its claim.
 
-        Canonical cleanup-proof-shaped files are inert history. Any live
-        transaction, malformed name or artifact, unsafe entry, concurrent
-        directory drift, live global lock, or more than one tombstone refuses
-        discovery. A returned value authorizes only atomic restoration of these
-        exact private bytes so the ordinary transaction and claim validators can
-        run; it does not itself attribute past success.
+        Canonical cleanup-proof-shaped files are inert history. Exact abort
+        originals and abort-cleanup tombstones are independently validated and
+        excluded so one ordinary tombstone can still be recovered from a mixed
+        crash state. Any other live transaction, malformed name or artifact,
+        unsafe entry, concurrent drift, live global lock, or more than one
+        ordinary tombstone refuses discovery. A returned value authorizes only
+        atomic restoration of these exact private bytes so the ordinary
+        transaction and claim validators can run; it does not itself attribute
+        past success.
         """
 
         project = _absolute(project_root)
@@ -5798,6 +6390,19 @@ class ProjectUpdateTransaction:
         if not os.path.lexists(parent):
             return None
         _safe_existing_chain(parent, directory=True)
+        abort_inspections = discover_exact_reservation_abort_cleanup_read_only(
+            project
+        )
+        abort_originals = {
+            item.transaction_ref: item
+            for item in abort_inspections
+            if item.state != "cleanup_tombstone"
+        }
+        abort_tombstones = {
+            item.transaction_ref: item
+            for item in abort_inspections
+            if item.state == "cleanup_tombstone"
+        }
         parent_before = _stable_path_identity(
             _safe_directory(parent, within=project)
         )
@@ -5817,6 +6422,17 @@ class ProjectUpdateTransaction:
                     if stat.S_ISLNK(info.st_mode) or _is_reparse(info):
                         raise _fail("project_update_transaction_path_unsafe")
                     name = entry.name
+                    abort_original = abort_originals.get(name)
+                    if abort_original is not None:
+                        if (
+                            not stat.S_ISDIR(info.st_mode)
+                            or _stable_path_identity(info)
+                            != abort_original.entry_identity
+                        ):
+                            raise _fail(
+                                "project_update_transaction_cleanup_refused"
+                            )
+                        continue
                     tombstone_match = re.fullmatch(
                         r"\.cleanup_(update_[0-9a-f]{32})", name
                     )
@@ -5824,11 +6440,32 @@ class ProjectUpdateTransaction:
                         r"\.cleanup-proof_(update_[0-9a-f]{32})\.json", name
                     )
                     if tombstone_match is not None:
+                        ref = tombstone_match.group(1)
+                        abort_tombstone = abort_tombstones.get(ref)
+                        if abort_tombstone is not None:
+                            if (
+                                not stat.S_ISDIR(info.st_mode)
+                                or _stable_path_identity(info)
+                                != abort_tombstone.entry_identity
+                            ):
+                                raise _fail(
+                                    "project_update_transaction_cleanup_refused"
+                                )
+                            continue
                         if not stat.S_ISDIR(info.st_mode):
                             raise _fail("project_update_transaction_cleanup_refused")
-                        tombstones.append((tombstone_match.group(1), path))
+                        tombstones.append((ref, path))
                         continue
                     if proof_match is not None:
+                        if proof_match.group(1) in abort_tombstones:
+                            if not stat.S_ISREG(info.st_mode):
+                                raise _fail(
+                                    "project_update_transaction_cleanup_refused"
+                                )
+                            # The paired abort discovery validated proof bytes,
+                            # link cardinality, and tombstone identity. Its
+                            # second pass below closes this scan's race window.
+                            continue
                         if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
                             raise _fail("project_update_transaction_cleanup_refused")
                         ref = proof_match.group(1)
@@ -5860,7 +6497,12 @@ class ProjectUpdateTransaction:
         parent_after_scan = _stable_path_identity(
             _safe_directory(parent, within=project)
         )
-        if parent_after_scan != parent_before or os.path.lexists(lock_path):
+        if (
+            parent_after_scan != parent_before
+            or os.path.lexists(lock_path)
+            or discover_exact_reservation_abort_cleanup_read_only(project)
+            != abort_inspections
+        ):
             raise _fail("project_update_transaction_cleanup_refused")
         if not tombstones:
             return None
@@ -5932,6 +6574,8 @@ class ProjectUpdateTransaction:
             != tombstone_generation
             or parent_after_content != parent_before
             or os.path.lexists(lock_path)
+            or discover_exact_reservation_abort_cleanup_read_only(project)
+            != abort_inspections
         ):
             raise _fail("project_update_transaction_cleanup_refused")
         return CleanupTombstoneInspection(
@@ -6508,6 +7152,15 @@ class ProjectUpdateTransaction:
     def _validate_cleanup_plan_document(
         value: Any, transaction_ref: str, authority: str
     ) -> dict[str, Any]:
+        if (
+            type(value) is dict
+            and value.get("schema") == RESERVATION_ABORT_CLEANUP_PLAN_SCHEMA
+        ):
+            return ReservedProjectUpdateTransaction._validate_abort_cleanup_plan_document(
+                value,
+                transaction_ref,
+                authority,
+            )
         legacy_expected = {
             "cleanup_authority_sha256",
             "directories",
@@ -7627,6 +8280,406 @@ def inspect_prelock_orphans(project_root: Path | str) -> tuple[OrphanInspection,
     return tuple(result)
 
 
+def discover_exact_reservation_abort_cleanup_read_only(
+    project_root: Path | str,
+) -> tuple[ReservationAbortCleanupInspection, ...]:
+    """Find every exact abort history that still needs cleanup or resume.
+
+    Completed proof-only history is deliberately excluded.  A live lock,
+    unsafe namespace entry, mixed ref state, partial abort evidence, or drift
+    during the bounded scan refuses discovery rather than returning a subset.
+    """
+
+    project = _absolute(project_root)
+    _safe_existing_chain(project, directory=True)
+    lock_path = project / PurePosixPath(PROJECT_UPDATE_LOCK_LOGICAL)
+    _within(lock_path, project)
+    if os.path.lexists(lock_path):
+        raise _fail("project_update_transaction_cleanup_refused")
+    parent = project / PurePosixPath(TRANSACTION_ROOT_LOGICAL)
+    _within(parent, project)
+    if not os.path.lexists(parent):
+        return ()
+    _safe_existing_chain(parent, directory=True)
+    parent_before = _stable_path_identity(_safe_directory(parent, within=project))
+
+    originals: dict[str, tuple[Path, os.stat_result]] = {}
+    tombstones: dict[str, tuple[Path, os.stat_result]] = {}
+    proofs: dict[
+        str,
+        tuple[bytes, os.stat_result, dict[str, Any]],
+    ] = {}
+    seen = 0
+    try:
+        with os.scandir(parent) as entries:
+            for entry in entries:
+                seen += 1
+                if seen > MAX_TERMINAL_CLEANUP_SCAN_ENTRIES:
+                    raise _fail("project_update_transaction_scan_incomplete")
+                path = Path(entry.path)
+                _within(path, parent)
+                info = path.lstat()
+                if stat.S_ISLNK(info.st_mode) or _is_reparse(info):
+                    raise _fail("project_update_transaction_path_unsafe")
+                original_match = TRANSACTION_REF_RE.fullmatch(entry.name)
+                tombstone_match = re.fullmatch(
+                    r"\.cleanup_(update_[0-9a-f]{32})",
+                    entry.name,
+                )
+                proof_match = re.fullmatch(
+                    r"\.cleanup-proof_(update_[0-9a-f]{32})\.json",
+                    entry.name,
+                )
+                if original_match is not None:
+                    if not stat.S_ISDIR(info.st_mode):
+                        raise _fail("project_update_transaction_cleanup_refused")
+                    originals[entry.name] = (path, info)
+                    continue
+                if tombstone_match is not None:
+                    if not stat.S_ISDIR(info.st_mode):
+                        raise _fail("project_update_transaction_cleanup_refused")
+                    ref = tombstone_match.group(1)
+                    if ref in tombstones:
+                        raise _fail("project_update_transaction_cleanup_refused")
+                    tombstones[ref] = (path, info)
+                    continue
+                if proof_match is None or not stat.S_ISREG(info.st_mode):
+                    raise _fail("project_update_transaction_cleanup_refused")
+                ref = proof_match.group(1)
+                raw, proof_info = _read_cleanup_linked_regular(
+                    project,
+                    path,
+                    maximum=MAX_DOCUMENT_BYTES + 1,
+                )
+                value = _parse_document(
+                    raw,
+                    code="project_update_transaction_cleanup_refused",
+                )
+                authority = _digest(
+                    value.get("cleanup_authority_sha256"),
+                    code="project_update_transaction_cleanup_refused",
+                )
+                ProjectUpdateTransaction._validate_cleanup_plan_document(
+                    value,
+                    ref,
+                    authority,
+                )
+                proofs[ref] = (raw, proof_info, value)
+    except OSError:
+        raise _fail("project_update_transaction_path_unsafe") from None
+
+    if set(originals) & (set(tombstones) | set(proofs)):
+        raise _fail("project_update_transaction_cleanup_refused")
+    candidates: list[ReservationAbortCleanupInspection] = []
+
+    for ref in sorted(originals):
+        root, root_scan_info = originals[ref]
+        root_before = _stable_path_identity(
+            _safe_directory(root, within=parent)
+        )
+        if root_before != _stable_path_identity(root_scan_info):
+            raise _fail("project_update_transaction_cleanup_refused")
+        reserved = ReservedProjectUpdateTransaction.open(project, ref)
+        abort_intent_present = os.path.lexists(
+            root / RESERVATION_ABORT_INTENT_NAME
+        )
+        abort_receipt_present = os.path.lexists(
+            root / RESERVATION_ABORT_RECEIPT_NAME
+        )
+        abort_plan_present = os.path.lexists(
+            root / RESERVATION_ABORT_CLEANUP_PLAN_NAME
+        )
+        if not abort_intent_present and not abort_receipt_present:
+            if abort_plan_present:
+                raise _fail("project_update_transaction_cleanup_refused")
+            continue
+        if not abort_intent_present or not abort_receipt_present:
+            raise _fail("project_update_transaction_cleanup_refused")
+        files, directories = ProjectUpdateTransaction._descendant_names(root)
+        terminal = reserved.inspect_abort_receipt()
+        if terminal is None:
+            raise _fail("project_update_transaction_cleanup_refused")
+        expected_files = set(reserved._abort_cleanup_expected_files())
+        plan_present = RESERVATION_ABORT_CLEANUP_PLAN_NAME in files
+        if plan_present:
+            expected_files.add(RESERVATION_ABORT_CLEANUP_PLAN_NAME)
+        if directories or files != expected_files:
+            raise _fail("project_update_transaction_cleanup_refused")
+        authority: str | None = None
+        state: Literal["terminal_original", "planned_original"] = (
+            "terminal_original"
+        )
+        if plan_present:
+            plan_path = root / RESERVATION_ABORT_CLEANUP_PLAN_NAME
+            plan_raw, _plan_info = _read_cleanup_linked_regular(
+                project,
+                plan_path,
+                maximum=MAX_DOCUMENT_BYTES + 1,
+            )
+            plan_value = _parse_document(
+                plan_raw,
+                code="project_update_transaction_cleanup_refused",
+            )
+            authority = _digest(
+                plan_value.get("cleanup_authority_sha256"),
+                code="project_update_transaction_cleanup_refused",
+            )
+            plan = reserved._validate_abort_cleanup_plan_document(
+                plan_value,
+                ref,
+                authority,
+            )
+            if (
+                reserved._abort_cleanup_root_identity(plan)
+                != _cleanup_directory_identity(
+                    _safe_directory(root, within=parent)
+                )
+                or plan["reservation_sha256"] != reserved.reservation.sha256
+                or plan["abort_receipt_sha256"] != terminal["receipt_sha256"]
+                or plan["candidate_cleanup_evidence_sha256"]
+                != terminal["candidate_cleanup_evidence_sha256"]
+            ):
+                raise _fail("project_update_transaction_cleanup_refused")
+            actual, actual_directories = (
+                ProjectUpdateTransaction._cleanup_descendant_snapshot(
+                    root,
+                    exclude={RESERVATION_ABORT_CLEANUP_PLAN_NAME},
+                )
+            )
+            if (
+                actual_directories
+                or actual != reserved._abort_cleanup_file_snapshots(plan)
+            ):
+                raise _fail("project_update_transaction_cleanup_refused")
+            state = "planned_original"
+        root_after = _stable_path_identity(
+            _safe_directory(root, within=parent)
+        )
+        if root_after != root_before or os.path.lexists(lock_path):
+            raise _fail("project_update_transaction_cleanup_refused")
+        candidates.append(
+            ReservationAbortCleanupInspection(
+                transaction_ref=ref,
+                state=state,
+                cleanup_authority_sha256=authority,
+                entry_identity=root_after,
+            )
+        )
+
+    for ref in sorted(tombstones):
+        tombstone, tombstone_scan_info = tombstones[ref]
+        tombstone_before = _stable_path_identity(
+            _safe_directory(tombstone, within=parent)
+        )
+        if tombstone_before != _stable_path_identity(tombstone_scan_info):
+            raise _fail("project_update_transaction_cleanup_refused")
+        proof_entry = proofs.get(ref)
+        with os.scandir(tombstone) as entries:
+            names = tuple(sorted(entry.name for entry in entries))
+        if proof_entry is not None:
+            proof_raw, proof_info, proof_value = proof_entry
+            if proof_value.get("schema") != RESERVATION_ABORT_CLEANUP_PLAN_SCHEMA:
+                # A generic completed-transaction tombstone is outside this
+                # primitive and remains for the ordinary cleanup resumer.
+                continue
+            authority = _digest(
+                proof_value.get("cleanup_authority_sha256"),
+                code="project_update_transaction_cleanup_refused",
+            )
+            plan = ReservedProjectUpdateTransaction._validate_abort_cleanup_plan_document(
+                proof_value,
+                ref,
+                authority,
+            )
+            if (
+                ReservedProjectUpdateTransaction._abort_cleanup_root_identity(plan)
+                != _cleanup_directory_identity(
+                    _safe_directory(tombstone, within=parent)
+                )
+            ):
+                raise _fail("project_update_transaction_cleanup_refused")
+            if names:
+                if names != (RESERVATION_ABORT_CLEANUP_PLAN_NAME,):
+                    raise _fail("project_update_transaction_cleanup_refused")
+                duplicate_raw, duplicate_info = _read_cleanup_linked_regular(
+                    project,
+                    tombstone / RESERVATION_ABORT_CLEANUP_PLAN_NAME,
+                    maximum=MAX_DOCUMENT_BYTES + 1,
+                )
+                if (
+                    not hmac.compare_digest(duplicate_raw, proof_raw)
+                    or int(proof_info.st_nlink) != 2
+                    or int(duplicate_info.st_nlink) != 2
+                    or (int(proof_info.st_dev), int(proof_info.st_ino))
+                    != (int(duplicate_info.st_dev), int(duplicate_info.st_ino))
+                ):
+                    raise _fail("project_update_transaction_cleanup_refused")
+            elif int(proof_info.st_nlink) != 1:
+                raise _fail("project_update_transaction_cleanup_refused")
+            authority_for_candidate = authority
+        else:
+            if RESERVATION_ABORT_CLEANUP_PLAN_NAME not in names:
+                # A canonical complete-transaction tombstone is deliberately
+                # left to ProjectUpdateTransaction.resume_cleanup.
+                if set(names) & {CLEANUP_PLAN_NAME, LEGACY_CLEANUP_PLAN_NAME}:
+                    continue
+                raise _fail("project_update_transaction_cleanup_refused")
+            plan_path = tombstone / RESERVATION_ABORT_CLEANUP_PLAN_NAME
+            plan_raw, _plan_info = _read_cleanup_linked_regular(
+                project,
+                plan_path,
+                maximum=MAX_DOCUMENT_BYTES + 1,
+            )
+            plan_value = _parse_document(
+                plan_raw,
+                code="project_update_transaction_cleanup_refused",
+            )
+            authority_for_candidate = _digest(
+                plan_value.get("cleanup_authority_sha256"),
+                code="project_update_transaction_cleanup_refused",
+            )
+            plan = ReservedProjectUpdateTransaction._validate_abort_cleanup_plan_document(
+                plan_value,
+                ref,
+                authority_for_candidate,
+            )
+            if (
+                ReservedProjectUpdateTransaction._abort_cleanup_root_identity(plan)
+                != _cleanup_directory_identity(
+                    _safe_directory(tombstone, within=parent)
+                )
+            ):
+                raise _fail("project_update_transaction_cleanup_refused")
+            expected = (
+                ReservedProjectUpdateTransaction._abort_cleanup_file_snapshots(
+                    plan
+                )
+            )
+            actual, actual_directories = (
+                ProjectUpdateTransaction._cleanup_descendant_snapshot(
+                    tombstone,
+                    exclude={RESERVATION_ABORT_CLEANUP_PLAN_NAME},
+                )
+            )
+            if (
+                actual_directories
+                or not set(actual).issubset(expected)
+                or any(actual[item] != expected[item] for item in actual)
+            ):
+                raise _fail("project_update_transaction_cleanup_refused")
+        tombstone_after = _stable_path_identity(
+            _safe_directory(tombstone, within=parent)
+        )
+        if tombstone_after != tombstone_before or os.path.lexists(lock_path):
+            raise _fail("project_update_transaction_cleanup_refused")
+        candidates.append(
+            ReservationAbortCleanupInspection(
+                transaction_ref=ref,
+                state="cleanup_tombstone",
+                cleanup_authority_sha256=authority_for_candidate,
+                entry_identity=tombstone_after,
+            )
+        )
+
+    for ref, (_raw, proof_info, _value) in proofs.items():
+        if ref not in tombstones and int(proof_info.st_nlink) != 1:
+            raise _fail("project_update_transaction_cleanup_refused")
+    parent_after = _stable_path_identity(_safe_directory(parent, within=project))
+    if parent_after != parent_before or os.path.lexists(lock_path):
+        raise _fail("project_update_transaction_cleanup_refused")
+    return tuple(sorted(candidates, key=lambda item: item.transaction_ref))
+
+
+def compact_exact_reservation_abort_history(
+    project_root: Path | str,
+    transaction_ref: str,
+    *,
+    cleanup_authority_sha256: str | None,
+) -> bool:
+    """Compact or resume one discovered exact abort history idempotently."""
+
+    try:
+        project = _absolute(project_root)
+        ref = _transaction_ref(transaction_ref)
+        supplied = (
+            None
+            if cleanup_authority_sha256 is None
+            else _digest(
+                cleanup_authority_sha256,
+                code="project_update_transaction_cleanup_refused",
+            )
+        )
+        candidates = discover_exact_reservation_abort_cleanup_read_only(project)
+        inspection = next(
+            (item for item in candidates if item.transaction_ref == ref),
+            None,
+        )
+        if inspection is None:
+            if supplied is None:
+                return False
+            return ReservedProjectUpdateTransaction.resume_cleanup(
+                project,
+                ref,
+                cleanup_authority_sha256=supplied,
+            )
+        persisted = inspection.cleanup_authority_sha256
+        if persisted is not None and supplied not in {None, persisted}:
+            return False
+        authority = persisted or supplied
+        if authority is None:
+            return False
+        if inspection.state == "cleanup_tombstone":
+            return ReservedProjectUpdateTransaction.resume_cleanup(
+                project,
+                ref,
+                cleanup_authority_sha256=authority,
+            )
+        transaction = ReservedProjectUpdateTransaction.open(project, ref)
+        return transaction.exact_cleanup(
+            cleanup_authority_sha256=authority,
+        )
+    except (OSError, ProjectUpdateTransactionError, KeyError, TypeError):
+        return False
+
+
+def compact_exact_reservation_abort_histories(
+    project_root: Path | str,
+    *,
+    cleanup_authority_sha256: str,
+) -> dict[str, Any]:
+    """Compact all exact abort histories, stopping at the first refusal."""
+
+    project = _absolute(project_root)
+    authority = _digest(
+        cleanup_authority_sha256,
+        code="project_update_transaction_cleanup_refused",
+    )
+    inspections = discover_exact_reservation_abort_cleanup_read_only(project)
+    completed: list[str] = []
+    failed_ref: str | None = None
+    for inspection in inspections:
+        item_authority = inspection.cleanup_authority_sha256 or authority
+        if not compact_exact_reservation_abort_history(
+            project,
+            inspection.transaction_ref,
+            cleanup_authority_sha256=item_authority,
+        ):
+            failed_ref = inspection.transaction_ref
+            break
+        completed.append(inspection.transaction_ref)
+    remaining = discover_exact_reservation_abort_cleanup_read_only(project)
+    remaining_refs = [item.transaction_ref for item in remaining]
+    return {
+        "completed_count": len(completed),
+        "completed_refs": completed,
+        "discovered_count": len(inspections),
+        "failed_ref": failed_ref,
+        "ok": failed_ref is None and not remaining_refs,
+        "remaining_refs": remaining_refs,
+        "schema": RESERVATION_ABORT_CLEANUP_RESULT_SCHEMA,
+    }
+
+
 __all__ = [
     "ABSENT_COMPONENT_SHA256",
     "ALLOWED_CHECKPOINT_PHASES",
@@ -7649,6 +8702,9 @@ __all__ = [
     "ProjectUpdateReservation",
     "ProjectUpdateTransaction",
     "ProjectUpdateTransactionError",
+    "RESERVATION_ABORT_CLEANUP_PLAN_SCHEMA",
+    "RESERVATION_ABORT_CLEANUP_RESULT_SCHEMA",
+    "ReservationAbortCleanupInspection",
     "ReservedProjectUpdateTransaction",
     "RuntimeCandidateBinding",
     "RuntimeCandidateTreeInventory",
@@ -7658,7 +8714,10 @@ __all__ = [
     "active_transaction_ref_from_lock_read_only",
     "canonical_json_bytes",
     "classify_components",
+    "compact_exact_reservation_abort_histories",
+    "compact_exact_reservation_abort_history",
     "digest_component",
+    "discover_exact_reservation_abort_cleanup_read_only",
     "inspect_prelock_orphans",
     "inspect_terminal_cleanup_artifacts_for_resume_read_only",
     "lock_document_bytes",

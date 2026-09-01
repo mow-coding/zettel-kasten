@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import json
 import os
+import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 
@@ -69,7 +72,10 @@ class V0416TerminalCreateRecoveryTests(unittest.TestCase):
     def _write_private_stage(path: Path, raw: bytes) -> None:
         descriptor = os.open(
             path,
-            os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+            os.O_WRONLY
+            | os.O_CREAT
+            | os.O_EXCL
+            | getattr(os, "O_BINARY", 0),
             0o600,
         )
         try:
@@ -77,6 +83,575 @@ class V0416TerminalCreateRecoveryTests(unittest.TestCase):
             os.fsync(descriptor)
         finally:
             os.close(descriptor)
+
+    @staticmethod
+    def _state_document() -> dict[str, object]:
+        return {
+            "schema": archive_services._PROJECT_UPDATE_TERMINAL_HANDOFF_SCHEMA,
+            "state": "claim_succeeded_pre_unlock",
+            "pending": {"status": "succeeded"},
+        }
+
+    def _write_unbound_active(self) -> tuple[Path, bytes]:
+        handoff, _guard = archive_services._project_update_terminal_handoff_paths(
+            self.project
+        )
+        handoff.parent.mkdir(parents=True)
+        raw = archive_services._project_update_canonical_bytes(
+            self._state_document()
+        )
+        self._write_private_stage(handoff, raw)
+        return handoff, raw
+
+    @staticmethod
+    def _create_directory_reparse(link: Path, target: Path) -> None:
+        link.parent.mkdir(parents=True, exist_ok=True)
+        completed = subprocess.run(
+            [
+                "cmd.exe",
+                "/d",
+                "/c",
+                "mklink",
+                "/J",
+                str(link),
+                str(target),
+            ],
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        if completed.returncode != 0:
+            raise OSError("Windows junction creation failed")
+
+    def _reserve_locked_update(self):
+        reserved = (
+            project_update_transaction.ProjectUpdateTransaction.reserve(
+                self.project,
+                project_identity_sha256=(
+                    project_update_transaction.sha256_bytes(
+                        b"terminal-cleanup-classifier-project"
+                    )
+                ),
+                requested_target_tag="v0.4.17",
+                transaction_ref="update_0123456789abcdef0123456789abcdef",
+                ownership_nonce="abcdef0123456789abcdef0123456789",
+                created_at="2026-09-01T00:00:00Z",
+            )
+        )
+        reserved.acquire_lock()
+        return reserved
+
+    def _assert_live_resume_stops_at_cleanup_unknown(self) -> None:
+        with patch.object(
+            archive_services,
+            "_project_update_resume_preapproval_transaction",
+            side_effect=AssertionError(
+                "mixed cleanup state entered preapproval recovery"
+            ),
+        ) as preapproval_recovery, patch.object(
+            archive_services,
+            "_project_update_durable_writer",
+            side_effect=AssertionError(
+                "mixed cleanup state entered the domain writer"
+            ),
+        ) as domain_writer:
+            result = (
+                archive_services
+                ._wom_kit_project_version_update_resume_live_transaction(
+                    self.project,
+                    target=None,
+                    reviewed_by=None,
+                    transaction_ref=None,
+                    approval_executor=lambda *_args, **_kwargs: {},
+                    _expected_approval_root=self.project,
+                    _expected_archive_id="archive:test-only",
+                )
+            )
+        self.assertEqual(
+            result["status"],
+            "terminal_cleanup_outcome_unknown",
+        )
+        self.assertFalse(result["domain_writer_entered"])
+        self.assertEqual(result["project_domain_files_written"], [])
+        preapproval_recovery.assert_not_called()
+        domain_writer.assert_not_called()
+
+    def _assert_invalid_terminal_resume_stops_at_cleanup_unknown(
+        self,
+        *,
+        private_values: tuple[str, ...] = (),
+    ) -> dict[str, object]:
+        with (
+            patch.object(
+                archive_services,
+                "_project_update_resume_preapproval_transaction",
+                side_effect=AssertionError(
+                    "unsafe terminal document entered preapproval recovery"
+                ),
+            ) as preapproval_recovery,
+            patch.object(
+                archive_services,
+                "_project_update_durable_writer",
+                side_effect=AssertionError(
+                    "unsafe terminal document entered the domain writer"
+                ),
+            ) as domain_writer,
+            patch.object(
+                archive_services,
+                "_project_update_replay_ready_terminal_handoff",
+                side_effect=AssertionError(
+                    "unsafe terminal document entered terminal replay"
+                ),
+            ) as terminal_replay,
+            patch.object(
+                archive_services,
+                "_project_update_reauthenticate_consumed_terminal_delivery",
+                side_effect=AssertionError(
+                    "unsafe terminal document entered terminal delivery"
+                ),
+            ) as terminal_delivery,
+            patch.object(
+                archive_services,
+                "_project_update_acknowledge_terminal_result_delivery",
+                side_effect=AssertionError(
+                    "unsafe terminal document acknowledged delivery"
+                ),
+            ) as delivery_acknowledgement,
+        ):
+            result = (
+                archive_services
+                ._wom_kit_project_version_update_resume_live_transaction(
+                    self.project,
+                    target=None,
+                    reviewed_by=None,
+                    transaction_ref=None,
+                    approval_executor=lambda *_args, **_kwargs: self.fail(
+                        "unsafe terminal document entered native approval"
+                    ),
+                    _expected_approval_root=self.project,
+                    _expected_archive_id="archive:test-only",
+                )
+            )
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(
+            result["status"],
+            "terminal_cleanup_outcome_unknown",
+        )
+        self.assertEqual(
+            result["reason_code"],
+            "project_version_update_terminal_cleanup_outcome_unknown",
+        )
+        self.assertFalse(result["domain_writer_entered"])
+        self.assertFalse(result["client_archive_domain_content_accessed"])
+        self.assertEqual(result["project_domain_files_written"], [])
+        self.assertEqual(result["files_written"], [])
+        preapproval_recovery.assert_not_called()
+        domain_writer.assert_not_called()
+        terminal_replay.assert_not_called()
+        terminal_delivery.assert_not_called()
+        delivery_acknowledgement.assert_not_called()
+        serialized = json.dumps(result, sort_keys=True)
+        self.assertNotIn(str(self.project), serialized)
+        for private_value in private_values:
+            self.assertNotIn(private_value, serialized)
+        return result
+
+    def test_unbound_reader_missing_terminal_document_is_none(self) -> None:
+        self.assertIsNone(
+            archive_services._project_update_terminal_handoff_state_read_only(
+                self.project
+            )
+        )
+
+    @unittest.skipUnless(os.name == "nt", "Windows exact unbound reader")
+    def test_unbound_reader_accepts_single_link_active_document(self) -> None:
+        handoff, raw = self._write_unbound_active()
+
+        self.assertEqual(
+            archive_services._project_update_terminal_handoff_state_read_only(
+                self.project
+            ),
+            "claim_succeeded_pre_unlock",
+        )
+        observed = archive_services._project_update_read_terminal_document(
+            self.project,
+            handoff,
+        )
+        self.assertIsNotNone(observed)
+        self.assertEqual(observed[1], raw)
+        self.assertEqual(os.lstat(handoff).st_nlink, 1)
+
+    @unittest.skipUnless(os.name == "nt", "Windows held parent authority")
+    def test_unbound_reader_holds_parent_against_root_swap(self) -> None:
+        handoff, raw = self._write_unbound_active()
+        moved = handoff.parent.with_name("version-update-terminal-moved")
+        foreign_root = self.project / "foreign-terminal-root"
+        foreign_root.mkdir()
+        foreign_active = foreign_root / handoff.name
+        foreign_raw = b"PRIVATE-FOREIGN-TERMINAL-BYTES"
+        foreign_active.write_bytes(foreign_raw)
+        real_bound_reader = (
+            archive_services._project_update_read_terminal_document_bound
+        )
+        swap_blocked: list[bool] = []
+
+        def attempt_parent_swap(project_root, binding, path):
+            with self.assertRaises(OSError):
+                os.replace(handoff.parent, moved)
+            swap_blocked.append(True)
+            return real_bound_reader(project_root, binding, path)
+
+        with patch.object(
+            archive_services,
+            "_project_update_read_terminal_document_bound",
+            side_effect=attempt_parent_swap,
+        ):
+            observed = archive_services._project_update_read_terminal_document(
+                self.project,
+                handoff,
+            )
+
+        self.assertEqual(swap_blocked, [True])
+        self.assertIsNotNone(observed)
+        self.assertEqual(observed[1], raw)
+        self.assertTrue(handoff.parent.is_dir())
+        self.assertFalse(moved.exists())
+        self.assertEqual(foreign_active.read_bytes(), foreign_raw)
+
+    @unittest.skipUnless(os.name == "nt", "Windows single-link authority")
+    def test_unbound_reader_rejects_active_hardlink(self) -> None:
+        handoff, raw = self._write_unbound_active()
+        alias = self.project / "outside-terminal-active-reader-alias.json"
+        os.link(handoff, alias)
+
+        with self.assertRaisesRegex(
+            archive_services.ArchiveServiceError,
+            "project_version_update_terminal_handoff_invalid",
+        ):
+            archive_services._project_update_terminal_handoff_state_read_only(
+                self.project
+            )
+
+        self.assertEqual(handoff.read_bytes(), raw)
+        self.assertEqual(alias.read_bytes(), raw)
+        self.assertEqual(os.lstat(handoff).st_nlink, 2)
+        self._assert_invalid_terminal_resume_stops_at_cleanup_unknown(
+            private_values=(alias.name,),
+        )
+        self.assertEqual(handoff.read_bytes(), raw)
+        self.assertEqual(alias.read_bytes(), raw)
+
+    @unittest.skipUnless(os.name == "nt", "Windows default-stream authority")
+    def test_unbound_reader_rejects_active_named_stream(self) -> None:
+        handoff, raw = self._write_unbound_active()
+        named_stream = Path(str(handoff) + ":foreign")
+        try:
+            named_stream.write_bytes(b"foreign-terminal-reader-stream")
+        except OSError:
+            self.skipTest("filesystem does not support named data streams")
+
+        with self.assertRaisesRegex(
+            archive_services.ArchiveServiceError,
+            "project_version_update_terminal_handoff_invalid",
+        ):
+            archive_services._project_update_terminal_handoff_state_read_only(
+                self.project
+            )
+
+        self.assertEqual(handoff.read_bytes(), raw)
+        self.assertEqual(
+            named_stream.read_bytes(),
+            b"foreign-terminal-reader-stream",
+        )
+        self._assert_invalid_terminal_resume_stops_at_cleanup_unknown(
+            private_values=("foreign-terminal-reader-stream",),
+        )
+        self.assertEqual(handoff.read_bytes(), raw)
+        self.assertEqual(
+            named_stream.read_bytes(),
+            b"foreign-terminal-reader-stream",
+        )
+
+    @unittest.skipUnless(os.name == "nt", "Windows reparse parent authority")
+    def test_unbound_reader_rejects_reparse_parent_without_following_it(
+        self,
+    ) -> None:
+        handoff, _guard = archive_services._project_update_terminal_handoff_paths(
+            self.project
+        )
+        foreign_root = self.project / "foreign-terminal-reparse-target"
+        foreign_root.mkdir()
+        foreign_active = foreign_root / handoff.name
+        foreign_raw = b"PRIVATE-FOREIGN-REPARSE-ACTIVE"
+        foreign_active.write_bytes(foreign_raw)
+        try:
+            try:
+                self._create_directory_reparse(handoff.parent, foreign_root)
+            except OSError as failure:
+                self.skipTest(str(failure))
+
+            with self.assertRaisesRegex(
+                archive_services.ArchiveServiceError,
+                "project_version_update_terminal_handoff_invalid",
+            ):
+                archive_services._project_update_terminal_handoff_state_read_only(
+                    self.project
+                )
+            self._assert_invalid_terminal_resume_stops_at_cleanup_unknown(
+                private_values=(
+                    foreign_root.name,
+                    foreign_raw.decode("ascii"),
+                ),
+            )
+            self.assertEqual(foreign_active.read_bytes(), foreign_raw)
+            self.assertTrue(handoff.parent.exists())
+        finally:
+            if os.path.lexists(handoff.parent):
+                os.rmdir(handoff.parent)
+        self.assertTrue(foreign_root.is_dir())
+        self.assertEqual(foreign_active.read_bytes(), foreign_raw)
+
+    @unittest.skipUnless(os.name == "nt", "Windows reparse file authority")
+    def test_unbound_reader_rejects_reparse_file_attribute(self) -> None:
+        handoff, raw = self._write_unbound_active()
+        real_lstat = os.lstat
+
+        def report_active_as_reparse(path):
+            observed = real_lstat(path)
+            if Path(path).name != handoff.name:
+                return observed
+            return SimpleNamespace(
+                st_mode=observed.st_mode,
+                st_file_attributes=(
+                    getattr(observed, "st_file_attributes", 0) | 0x400
+                ),
+                st_dev=observed.st_dev,
+                st_ino=observed.st_ino,
+                st_nlink=observed.st_nlink,
+                st_size=observed.st_size,
+                st_mtime_ns=observed.st_mtime_ns,
+                st_ctime_ns=observed.st_ctime_ns,
+            )
+
+        with patch.object(
+            archive_services.os,
+            "lstat",
+            side_effect=report_active_as_reparse,
+        ):
+            with self.assertRaisesRegex(
+                archive_services.ArchiveServiceError,
+                "project_version_update_terminal_handoff_invalid",
+            ):
+                archive_services._project_update_terminal_handoff_state_read_only(
+                    self.project
+                )
+            self._assert_invalid_terminal_resume_stops_at_cleanup_unknown()
+
+        self.assertEqual(handoff.read_bytes(), raw)
+
+    def test_terminal_handoff_invalid_is_the_only_structured_unknown_allowlist(
+        self,
+    ) -> None:
+        sentinel = "project_version_update_terminal_handoff_conflict"
+        with (
+            patch.object(
+                archive_services,
+                "_project_update_terminal_handoff_state_read_only",
+                side_effect=archive_services.ArchiveServiceError(sentinel),
+            ),
+            patch.object(
+                archive_services,
+                "_project_update_resume_preapproval_transaction",
+                side_effect=AssertionError(
+                    "non-allowlisted terminal failure entered recovery"
+                ),
+            ) as preapproval_recovery,
+            patch.object(
+                archive_services,
+                "_project_update_durable_writer",
+                side_effect=AssertionError(
+                    "non-allowlisted terminal failure entered writer"
+                ),
+            ) as domain_writer,
+        ):
+            with self.assertRaisesRegex(
+                archive_services.ArchiveServiceError,
+                sentinel,
+            ):
+                archive_services._wom_kit_project_version_update_resume_live_transaction(
+                    self.project,
+                    target=None,
+                    reviewed_by=None,
+                    transaction_ref=None,
+                    approval_executor=lambda *_args, **_kwargs: self.fail(
+                        "non-allowlisted terminal failure entered approval"
+                    ),
+                    _expected_approval_root=self.project,
+                    _expected_archive_id="archive:test-only",
+                )
+
+        preapproval_recovery.assert_not_called()
+        domain_writer.assert_not_called()
+
+    @unittest.skipUnless(os.name == "nt", "Windows exact-name race")
+    def test_unbound_reader_never_accepts_swapped_foreign_bytes(self) -> None:
+        handoff, raw = self._write_unbound_active()
+        preserved = self.project / "preserved-terminal-active.json"
+        foreign_raw = archive_services._project_update_canonical_bytes(
+            {
+                "schema": (
+                    archive_services._PROJECT_UPDATE_TERMINAL_HANDOFF_SCHEMA
+                ),
+                "state": "claim_succeeded_pre_unlock",
+                "pending": {"status": "foreign"},
+            }
+        )
+        real_reader = (
+            archive_services
+            ._project_update_terminal_windows_move_exact_no_replace
+        )
+        swapped = False
+
+        def swap_before_exact_open(source, destination, **kwargs):
+            nonlocal swapped
+            if (
+                source.name == handoff.name
+                and destination is None
+                and not swapped
+            ):
+                os.replace(handoff, preserved)
+                handoff.write_bytes(foreign_raw)
+                swapped = True
+            return real_reader(source, destination, **kwargs)
+
+        with patch.object(
+            archive_services,
+            "_project_update_terminal_windows_move_exact_no_replace",
+            side_effect=swap_before_exact_open,
+        ):
+            with self.assertRaisesRegex(
+                archive_services.ArchiveServiceError,
+                "project_version_update_terminal_handoff_invalid",
+            ):
+                archive_services._project_update_terminal_handoff_state_read_only(
+                    self.project
+                )
+
+        self.assertTrue(swapped)
+        self.assertEqual(preserved.read_bytes(), raw)
+        self.assertEqual(handoff.read_bytes(), foreign_raw)
+
+    @unittest.skipIf(os.name == "nt", "POSIX private read-only contract")
+    def test_posix_unbound_reader_requires_private_single_link_active(self) -> None:
+        handoff, raw = self._write_unbound_active()
+        self.assertEqual(
+            archive_services._project_update_terminal_handoff_state_read_only(
+                self.project
+            ),
+            "claim_succeeded_pre_unlock",
+        )
+
+        handoff.chmod(0o644)
+        with self.assertRaisesRegex(
+            archive_services.ArchiveServiceError,
+            "project_version_update_terminal_handoff_invalid",
+        ):
+            archive_services._project_update_terminal_handoff_state_read_only(
+                self.project
+            )
+        handoff.chmod(0o600)
+
+        alias = self.project / "outside-terminal-active-reader-alias.json"
+        os.link(handoff, alias)
+        with self.assertRaisesRegex(
+            archive_services.ArchiveServiceError,
+            "project_version_update_terminal_handoff_invalid",
+        ):
+            archive_services._project_update_terminal_handoff_state_read_only(
+                self.project
+            )
+        self.assertEqual(handoff.read_bytes(), raw)
+        self.assertEqual(alias.read_bytes(), raw)
+
+    def test_exact_locked_preapproval_is_explicitly_resumable(self) -> None:
+        reserved = self._reserve_locked_update()
+
+        self.assertEqual(
+            project_update_transaction.inspect_prelock_orphans(
+                self.project
+            )[0].classification,
+            "reserved_locked_unsealed",
+        )
+        self.assertEqual(
+            archive_services
+            ._project_update_terminal_cleanup_artifact_classification_read_only(
+                self.project
+            ),
+            ("resume_required_exact", 1),
+        )
+        self.assertIsNone(
+            archive_services
+            ._project_update_terminal_cleanup_unknown_gate_read_only(
+                self.project,
+                operator_resume_identifiers_supplied=False,
+            )
+        )
+        self.assertTrue(reserved.transaction_root.is_dir())
+
+    def test_active_plus_malformed_tombstone_stops_before_recovery(self) -> None:
+        reserved = self._reserve_locked_update()
+        malformed = reserved.transaction_root.parent / (
+            ".cleanup_update_11111111111111111111111111111111"
+        )
+        malformed.mkdir()
+        (malformed / "foreign.bin").write_bytes(b"foreign cleanup bytes")
+
+        self.assertEqual(
+            archive_services
+            ._project_update_terminal_cleanup_artifact_classification_read_only(
+                self.project
+            ),
+            ("unresolved", 0),
+        )
+        self._assert_live_resume_stops_at_cleanup_unknown()
+
+    def test_active_plus_unknown_namespace_name_stops_before_recovery(
+        self,
+    ) -> None:
+        reserved = self._reserve_locked_update()
+        (reserved.transaction_root.parent / "foreign.bin").write_bytes(
+            b"unknown transaction namespace entry"
+        )
+
+        self.assertEqual(
+            archive_services
+            ._project_update_terminal_cleanup_artifact_classification_read_only(
+                self.project
+            ),
+            ("unresolved", 0),
+        )
+        self._assert_live_resume_stops_at_cleanup_unknown()
+
+    def test_active_plus_unsafe_transaction_entry_stops_before_recovery(
+        self,
+    ) -> None:
+        reserved = self._reserve_locked_update()
+        unsafe = reserved.transaction_root.parent / (
+            "update_22222222222222222222222222222222"
+        )
+        unsafe.write_bytes(
+            b"regular file where a transaction directory was expected"
+        )
+
+        self.assertEqual(
+            archive_services
+            ._project_update_terminal_cleanup_artifact_classification_read_only(
+                self.project
+            ),
+            ("unresolved", 0),
+        )
+        self._assert_live_resume_stops_at_cleanup_unknown()
 
     @unittest.skipUnless(os.name == "nt", "Windows named-stage recovery")
     def test_exact_content_bound_stage_resumes_after_hard_exit(self) -> None:

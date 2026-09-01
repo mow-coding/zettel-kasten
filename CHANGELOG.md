@@ -6,6 +6,53 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.4.17 - 2026-09-01
+
+- Made fresh `project-version-update` dry-run and approval use the same bounded,
+  read-only terminal-cleanup namespace classification. Exact terminal history
+  now blocks both paths with `project_version_update_terminal_cleanup_required`
+  before native approval or domain-writer entry instead of allowing a preview
+  that the matching approval cannot execute.
+- Added identifier-free, interruption-safe compaction for the exact durable
+  preapproval-abort history produced by WOM. The cleanup plan binds the fixed
+  file set, identities, hashes, reservation and abort evidence, archive
+  identity, and cleanup authority; it retains one canonical proof and refuses
+  unexpected, changed, linked, raced, locked, or unsafe state.
+- Kept exact abort-history compaction separate from project-domain mutation. It
+  changes no project source, runtime, version pin, or archive content, attributes
+  no past update success, and grants no fresh approval authority.
+- Made mixed and partial recovery results preserve exact content-free effect
+  truth. `files_written` is explicitly project-domain-only, while separate
+  counts, compaction state, and `effect_summary` report completed or possibly
+  incomplete private-control evidence without exposing its paths or identifiers.
+- Preserved the existing authenticated v0.4.16 transaction and terminal-result
+  recovery contract. Identifier-free `--resume` reuses the prior claim and
+  cleanup authority without a second native decision or domain-writer replay;
+  proof-only state remains inert history requiring a fresh preview and approval.
+- Replaced the known terminal-cleanup generic command failure with a strictly
+  allowlisted, privacy-safe structured reason and actionable `next_safe_actions`.
+  Arbitrary internal exception text, paths, hashes, identifiers, and values are
+  still never reflected into public output.
+- Kept malformed, partial, mixed, ambiguous, or changing cleanup residue
+  fail-closed as `project_version_update_terminal_cleanup_outcome_unknown` and
+  explicitly forbade manual lock, pin, transaction, tombstone, or proof edits.
+- Hardened every authority-bearing terminal-result read against hard-link,
+  reparse, parent-swap, and Windows alternate-stream substitution. A valid
+  active transaction no longer masks a malformed sibling cleanup artifact;
+  mixed state stops before recovery, approval, or domain-writer entry. The exact
+  invalid-terminal-document code now becomes the same structured cleanup-unknown
+  result instead of a generic command error; other exceptions remain private.
+- Bound fresh approval, mutation-bearing resume, and terminal-ready replay to
+  one held project terminal guard from the final active-handoff revalidation
+  through claim checkpoints, domain writing, terminal publication, replay, and
+  exact cleanup. CLI delivery discovery also compares strict active-handoff
+  snapshots before and after journal discovery, so state, digest, or
+  transaction-correlation drift fails closed instead of borrowing authority
+  from another session.
+- Publishing or installing v0.4.17 performs no client archive, project update,
+  version-pin, credential, provider, or remote-service mutation. The client
+  separately chooses whether to run recovery and one reviewed project update.
+
 ## v0.4.16 - 2026-08-31
 
 - Preserved authenticated project-update success in a private durable terminal

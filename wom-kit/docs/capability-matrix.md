@@ -1,10 +1,24 @@
 ﻿# WOM-kit Capability Matrix
 
-Status: v0.4.16 authenticated terminal-result delivery and runtime binding
-Date: 2026-08-31
-Version: v0.4.16 implementation and release scope
+Status: v0.4.17 terminal-cleanup recovery and dry-run/approval parity
+Date: 2026-09-01
+Version: v0.4.17 implementation and release scope
 
-The current v0.4.16 working tree preserves one authenticated project-update
+The current v0.4.17 working tree gives fresh project-update dry-run and approval
+one bounded, read-only terminal-cleanup classification. Exact WOM-produced
+terminal control history blocks both paths with
+`project_version_update_terminal_cleanup_required` before native approval or
+domain-writer entry and routes to identifier-free `--resume`. Exact
+preapproval-abort history may be compacted into canonical proof history only
+after WOM binds its fixed evidence, file identities, archive identity, and
+cleanup authority. That recovery changes no source, runtime, pin, or archive
+content and grants no fresh approval authority. Partial, changed, mixed,
+ambiguous, or unsafe residue remains
+`project_version_update_terminal_cleanup_outcome_unknown`. Known gates expose a
+fixed privacy-safe reason and actionable next steps without private paths,
+hashes, identifiers, values, or raw error text.
+
+v0.4.16 established preservation of one authenticated project-update
 domain result in a durable terminal handoff before cleanup. The public
 `terminal_finalization` separates claim/checkpoint/lock verification from
 transaction cleanup, service-resource close, Git-runner close, durable output
@@ -43,10 +57,10 @@ shapes, JWTs, and private-key markers remain fail-closed. `input_privacy_check`
 truthfully reports caller-input/body safety reads separately from
 `first_read_check.body_read_for_check`. It adds no top-level command.
 
-Current release note: [v0.4.16](releases/v0.4.16.md).
+Current release note: [v0.4.17](releases/v0.4.17.md).
 
 Current conditional wheel URL:
-`https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.16/wom_kit-0.4.16-py3-none-any.whl`.
+`https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.17/wom_kit-0.4.17-py3-none-any.whl`.
 
 The v0.4.11 checkpoint recorded the following historical runtime context:
 

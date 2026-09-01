@@ -2,7 +2,7 @@
 
 `operation-control` gives a later CLI process a small, content-free view of a
 long command. It is available when one of these commands has a bound `--output`
-file. The caller supplies that file for ordinary observation; a v0.4.16
+file. The caller supplies that file for ordinary observation; a v0.4.17
 approved or resumed project update that has no earlier result binding may
 choose its private project-scoped output automatically:
 
@@ -13,11 +13,21 @@ choose its private project-scoped output automatically:
 
 Without a bound output, these commands create no operation journal. For
 `index`, `index-health`, `staged-cleanup-check`, and read-only updater previews,
-that means the caller must pass `--output`. A v0.4.16 approved or resumed
+that means the caller must pass `--output`. A v0.4.17 approved or resumed
 updater with no prior result binding creates its private bound output first.
 Once bound, stderr prints an opaque `op:sha256:<digest>` reference early. The
 same reference and follow-up command templates are stored under
 `cli_output_artifact.operation` in the complete JSON result.
+
+Fresh project-update dry-run and approval also share one content-free terminal-
+cleanup preflight. Exact terminal control history returns the fixed
+`project_version_update_terminal_cleanup_required` reason and directs the
+operator to identifier-free `project-version-update --resume`; no operation
+reference, transaction identifier, path, hash, or file count is needed.
+Malformed or ambiguous residue returns
+`project_version_update_terminal_cleanup_outcome_unknown` and stops. These
+blocked results must not be converted into generic operation-control resume,
+manual cleanup, or a duplicate writer.
 
 For `staged-cleanup-check`, operation control keeps only the inspection state,
 the `safe_to_cleanup` boolean, four bounded counts, and fixed reason codes. It
@@ -100,7 +110,7 @@ complete output agree, status may report
 CLI result. It does not prove fresh domain truth; follow the command-specific
 verification action.
 
-For a successful v0.4.16 project update, the terminal journal is immutable
+For a successful v0.4.16 or v0.4.17 project update, the terminal journal is immutable
 after its one terminal result record. WOM does not append a later
 delivery-committed or display-committed event. Instead, the exact output-bound
 handoff moves in one private directory from `active` to `display-pending`, then
