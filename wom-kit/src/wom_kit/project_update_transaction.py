@@ -3964,6 +3964,11 @@ class ReservedProjectUpdateTransaction:
     def exact_cleanup(self, *, cleanup_authority_sha256: str) -> bool:
         """Compact one exact pre-intent abort while retaining canonical proof."""
 
+        # The exact compare-and-delete primitive is intentionally Windows-only.
+        # Refuse before publishing a cleanup plan or moving the transaction
+        # directory so POSIX resume remains genuinely read-only and fail-closed.
+        if os.name != "nt":
+            return False
         try:
             authority = _digest(
                 cleanup_authority_sha256,
@@ -4058,6 +4063,8 @@ class ReservedProjectUpdateTransaction:
     ) -> bool:
         """Resume only this primitive's identity-bound abort-history cleanup."""
 
+        if os.name != "nt":
+            return False
         try:
             project = _absolute(project_root)
             _safe_existing_chain(project, directory=True)

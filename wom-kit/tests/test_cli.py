@@ -69,6 +69,18 @@ from wom_kit.exact_human_approval_windows import (
 )
 
 
+def _no_project_update_terminal_handoff(
+    _root: Path,
+    *,
+    _observation_out: list[Any] | None = None,
+) -> None:
+    """Model an absent handoff while honoring the strict observation seam."""
+
+    if isinstance(_observation_out, list):
+        _observation_out.append(None)
+    return None
+
+
 class _FakeUrlOpener:
     def __init__(self, callback):
         self._callback = callback
@@ -13134,15 +13146,6 @@ if __name__ == "__main__":
             )
             sentinel = {"ok": True, "status": "fresh-approval-entered"}
 
-            def no_terminal_handoff(
-                _root: Path,
-                *,
-                _observation_out: list[Any] | None = None,
-            ) -> None:
-                if isinstance(_observation_out, list):
-                    _observation_out.append(None)
-                return None
-
             with patch.object(
                 archive_services,
                 "_wom_kit_project_version_update_approval_authority_matches",
@@ -13150,7 +13153,7 @@ if __name__ == "__main__":
             ), patch.object(
                 archive_services,
                 "_project_update_terminal_handoff_state_read_only",
-                side_effect=no_terminal_handoff,
+                side_effect=_no_project_update_terminal_handoff,
             ), patch.object(
                 archive_services,
                 "_wom_kit_project_version_update_legacy_core",
@@ -13206,7 +13209,7 @@ if __name__ == "__main__":
             ), patch.object(
                 archive_services,
                 "_project_update_terminal_handoff_state_read_only",
-                side_effect=no_terminal_handoff,
+                side_effect=_no_project_update_terminal_handoff,
             ), patch.object(
                 archive_services,
                 "_wom_kit_project_version_update_legacy_core",
@@ -13255,6 +13258,10 @@ if __name__ == "__main__":
             self.assertEqual(approval_calls, [])
             legacy_core.assert_not_called()
 
+    @unittest.skipUnless(
+        WINDOWS_PROJECT_RUNTIME,
+        "exact project-update cleanup mutation is Windows-only",
+    )
     def test_project_version_update_identifier_free_resume_compacts_exact_abort_history_without_writer(
         self,
     ) -> None:
@@ -13341,6 +13348,10 @@ if __name__ == "__main__":
                 (),
             )
 
+    @unittest.skipUnless(
+        WINDOWS_PROJECT_RUNTIME,
+        "exact project-update cleanup mutation is Windows-only",
+    )
     def test_project_version_update_identifier_free_resume_finishes_abort_cleanup_tombstone_without_writer(
         self,
     ) -> None:
@@ -13467,6 +13478,10 @@ if __name__ == "__main__":
                 (),
             )
 
+    @unittest.skipUnless(
+        WINDOWS_PROJECT_RUNTIME,
+        "exact project-update cleanup mutation is Windows-only",
+    )
     def test_project_version_update_partial_abort_history_compaction_reports_exact_effect_truth(
         self,
     ) -> None:
@@ -13634,7 +13649,7 @@ if __name__ == "__main__":
             ), patch.object(
                 archive_services,
                 "_project_update_terminal_handoff_state_read_only",
-                return_value=None,
+                side_effect=_no_project_update_terminal_handoff,
             ), patch.object(
                 archive_services,
                 "_wom_kit_project_version_update_legacy_core",
@@ -13695,7 +13710,7 @@ if __name__ == "__main__":
             ), patch.object(
                 archive_services,
                 "_project_update_terminal_handoff_state_read_only",
-                return_value=None,
+                side_effect=_no_project_update_terminal_handoff,
             ), patch.object(
                 archive_services,
                 "_wom_kit_project_version_update_legacy_core",
@@ -14399,7 +14414,7 @@ if __name__ == "__main__":
             ), patch.object(
                 archive_services,
                 "_project_update_terminal_handoff_state_read_only",
-                return_value=None,
+                side_effect=_no_project_update_terminal_handoff,
             ), patch.object(
                 transaction_type,
                 "reserve",

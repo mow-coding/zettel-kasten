@@ -41,6 +41,7 @@ from wom_kit.schema_validator import validate_schema
 ZERO_SHA = "sha256:" + ("0" * 64)
 ONE_SHA = "sha256:" + ("1" * 64)
 _TEST_ARCHIVE_IDENTITY_LOCK = threading.Lock()
+INTERPROCESS_PACER_TEST_TIMEOUT_SECONDS = 60
 
 
 def make_manifest(group_counts: tuple[int, ...] = (2,)) -> dict:
@@ -284,7 +285,7 @@ def _interprocess_pacer_worker(root: str, ready, start, result) -> None:
     try:
         pacer = ArchiveInterprocessRequestPacer(root)
         ready.put("ready")
-        if not start.wait(timeout=10):
+        if not start.wait(timeout=INTERPROCESS_PACER_TEST_TIMEOUT_SECONDS):
             result.put("start_timeout")
             return
         pacer.before_request()
@@ -565,6 +566,7 @@ class NotionPageRecoveryPacerTests(unittest.TestCase):
             ready = context.Queue()
             start = context.Event()
             result = context.Queue()
+            process_timeout_seconds = INTERPROCESS_PACER_TEST_TIMEOUT_SECONDS
             processes = [
                 context.Process(
                     target=_interprocess_pacer_worker,
@@ -572,20 +574,44 @@ class NotionPageRecoveryPacerTests(unittest.TestCase):
                 )
                 for _ in range(2)
             ]
-            for process in processes:
-                process.start()
-            self.assertEqual([ready.get(timeout=15) for _ in processes], ["ready", "ready"])
-            started = time.monotonic()
-            start.set()
-            outcomes = [result.get(timeout=15) for _ in processes]
-            elapsed = time.monotonic() - started
-            for process in processes:
-                process.join(timeout=15)
-                self.assertEqual(process.exitcode, 0)
-            self.assertEqual(outcomes, ["ok", "ok"])
-            # The second grant cannot complete until one 1/3-second interval
-            # after the first archive-wide grant. Keep tolerance for schedulers.
-            self.assertGreaterEqual(elapsed, 0.25)
+            started_processes = []
+            try:
+                for process in processes:
+                    process.start()
+                    started_processes.append(process)
+                self.assertEqual(
+                    [
+                        ready.get(timeout=process_timeout_seconds)
+                        for _ in processes
+                    ],
+                    ["ready", "ready"],
+                )
+                started = time.monotonic()
+                start.set()
+                outcomes = [
+                    result.get(timeout=process_timeout_seconds)
+                    for _ in processes
+                ]
+                elapsed = time.monotonic() - started
+                for process in processes:
+                    process.join(timeout=process_timeout_seconds)
+                    self.assertEqual(process.exitcode, 0)
+                self.assertEqual(outcomes, ["ok", "ok"])
+                # The second grant cannot complete until one 1/3-second interval
+                # after the first archive-wide grant. Keep tolerance for schedulers.
+                self.assertGreaterEqual(elapsed, 0.25)
+            finally:
+                start.set()
+                for process in started_processes:
+                    if process.is_alive():
+                        process.terminate()
+                    process.join(timeout=process_timeout_seconds)
+                    if process.is_alive():
+                        process.kill()
+                        process.join(timeout=process_timeout_seconds)
+                for queue in (ready, result):
+                    queue.close()
+                    queue.join_thread()
 
 
 class NotionPageRecoveryExecutionTests(unittest.TestCase):
