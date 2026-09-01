@@ -27,6 +27,7 @@ from contextlib import (
     redirect_stdout,
 )
 from pathlib import Path, PurePosixPath
+from types import SimpleNamespace
 from typing import Any, Mapping
 from unittest.mock import patch
 
@@ -66,6 +67,18 @@ from wom_kit.exact_human_approval import (
 from wom_kit.exact_human_approval_windows import (
     _ExactHumanApprovalDecision as ExactHumanApprovalDecision,
 )
+
+
+def _no_project_update_terminal_handoff(
+    _root: Path,
+    *,
+    _observation_out: list[Any] | None = None,
+) -> None:
+    """Model an absent handoff while honoring the strict observation seam."""
+
+    if isinstance(_observation_out, list):
+        _observation_out.append(None)
+    return None
 
 
 class _FakeUrlOpener:
@@ -10797,7 +10810,6 @@ from unittest.mock import patch
 from tests.test_cli import ArchiveCliTests
 from wom_kit import archive_cli, archive_services, operation_control
 
-
 class V0415CleanupTombstoneWorker(ArchiveCliTests):
     def test_complete_cleanup_tombstone_hard_exit(self) -> None:
         root_value = os.environ["WOM_TEST_PROJECT_UPDATE_HARD_EXIT_ROOT"]
@@ -12180,6 +12192,247 @@ if __name__ == "__main__":
                         )
                     )
 
+    @unittest.skipUnless(
+        WINDOWS_PROJECT_RUNTIME,
+        "the production runtime supply is Windows CPython 3.12",
+    )
+    def test_project_version_update_no_journal_ready_handoff_tamper_is_content_free(
+        self,
+    ) -> None:
+        """A real pre-cleanup capsule never turns tampering into authority."""
+
+        self.assertIsNotNone(shutil.which("git"))
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_root = Path(tmp)
+            environment = dict(os.environ)
+            environment.update(
+                {
+                    "PYTHONPATH": str(SRC_ROOT),
+                    "PYTHONUTF8": "1",
+                    "WOM_TEST_PROJECT_UPDATE_HARD_EXIT_BOUNDARY": (
+                        "ready_handoff_before_cleanup"
+                    ),
+                    "WOM_TEST_PROJECT_UPDATE_HARD_EXIT_ROOT": str(tmp_root),
+                }
+            )
+            crashed = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "unittest",
+                    (
+                        "tests.test_cli.ArchiveCliTests."
+                        "test_project_version_update_hard_exit_subprocess_worker"
+                    ),
+                ],
+                cwd=KIT_ROOT,
+                env=environment,
+                capture_output=True,
+                text=True,
+                timeout=240,
+                check=False,
+            )
+            self.assertEqual(
+                crashed.returncode,
+                86,
+                crashed.stdout + crashed.stderr,
+            )
+            control = json.loads(
+                (tmp_root / "hard-exit-control.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            project_root = Path(control["project_root"])
+            active_handoff, _handoff_guard = (
+                archive_services._project_update_terminal_handoff_paths(
+                    project_root
+                )
+            )
+            baseline_bytes = active_handoff.read_bytes()
+            baseline = json.loads(baseline_bytes.decode("ascii"))
+            self.assertEqual(baseline["state"], "terminal_ready")
+            self.assertEqual(
+                set(baseline),
+                {"schema", "state", "pending", "ready"},
+            )
+            real_ref = baseline["pending"]["payload"]["transaction_ref"]
+            self.assertRegex(real_ref, r"^update_[0-9a-f]{32}$")
+            foreign_ref = "update_" + "f" * 32
+            if foreign_ref == real_ref:
+                foreign_ref = "update_" + "e" * 32
+            private_marker = "PRIVATE_TERMINAL_HANDOFF_TAMPER_MARKER"
+            privacy_probe = "|".join(
+                (
+                    str(project_root),
+                    real_ref,
+                    foreign_ref,
+                    private_marker,
+                )
+            )
+
+            def tamper_pending_attachment_hash(
+                document: dict[str, Any],
+            ) -> None:
+                document["pending"]["attachments"]["domain_result"][
+                    "privacy_probe"
+                ] = privacy_probe
+
+            def tamper_ready_pending_hash(
+                document: dict[str, Any],
+            ) -> None:
+                document["ready"]["payload"]["pending_record_sha256"] = (
+                    "sha256:"
+                    + hashlib.sha256(privacy_probe.encode("utf-8")).hexdigest()
+                )
+                document["ready"]["attachments"][
+                    "privacy_probe"
+                ] = privacy_probe
+
+            def tamper_transaction_correlation(
+                document: dict[str, Any],
+            ) -> None:
+                document["pending"]["payload"]["transaction_ref"] = (
+                    foreign_ref
+                )
+                document["pending"]["attachments"][
+                    "privacy_probe"
+                ] = privacy_probe
+
+            tamper_cases = (
+                (
+                    "pending-attachment-hash-binding",
+                    tamper_pending_attachment_hash,
+                ),
+                (
+                    "ready-pending-hash-binding",
+                    tamper_ready_pending_hash,
+                ),
+                (
+                    "transaction-correlation",
+                    tamper_transaction_correlation,
+                ),
+            )
+            original_resume = (
+                archive_cli
+                ._resume_exact_human_approved_transaction_auto_core
+            )
+
+            def resume_with_test_key(*args: Any, **kwargs: Any) -> Any:
+                kwargs["key_provider"] = _ProjectUpdateResumeKeyProvider()
+                return original_resume(*args, **kwargs)
+
+            for label, tamper in tamper_cases:
+                with self.subTest(tamper=label):
+                    active_handoff.write_bytes(baseline_bytes)
+                    self.assertIsNone(
+                        archive_cli
+                        ._project_version_update_discover_terminal_delivery_strict(
+                            project_root
+                        )
+                    )
+                    tampered = copy.deepcopy(baseline)
+                    tamper(tampered)
+                    tampered_bytes = (
+                        archive_services._project_update_canonical_bytes(
+                            tampered
+                        )
+                    )
+                    self.assertEqual(
+                        json.loads(tampered_bytes.decode("ascii")),
+                        tampered,
+                    )
+                    active_handoff.write_bytes(tampered_bytes)
+
+                    with patch.object(
+                        archive_cli,
+                        "_resume_exact_human_approved_transaction_auto_core",
+                        side_effect=resume_with_test_key,
+                    ), patch.object(
+                        archive_services,
+                        "_project_update_durable_writer",
+                        side_effect=AssertionError(
+                            "tampered handoff entered domain writer"
+                        ),
+                    ) as domain_writer, patch.object(
+                        archive_services,
+                        "_project_update_perform_component",
+                        side_effect=AssertionError(
+                            "tampered handoff entered component writer"
+                        ),
+                    ) as component_writer, patch.object(
+                        archive_services,
+                        "_project_update_resume_authenticated_terminal_cleanup",
+                        side_effect=AssertionError(
+                            "tampered handoff entered authenticated cleanup"
+                        ),
+                    ) as authenticated_cleanup:
+                        code, stdout, stderr = self.run_cli_split(
+                            [
+                                "project-version-update",
+                                str(project_root),
+                                "--resume",
+                                "--affirm-external-writers-quiescent",
+                                "--format",
+                                "json",
+                            ]
+                        )
+
+                    self.assertEqual(code, 1, stdout + stderr)
+                    result = json.loads(stdout)
+                    self.assertEqual(
+                        result["status"],
+                        "terminal_cleanup_outcome_unknown",
+                    )
+                    self.assertEqual(
+                        result["reason_codes"],
+                        [
+                            "project_version_update_"
+                            "terminal_cleanup_outcome_unknown"
+                        ],
+                    )
+                    self.assertFalse(result["domain_writer_entered"])
+                    self.assertFalse(result["domain_writer_reentered"])
+                    self.assertFalse(result["approval_key_accessed"])
+                    self.assertFalse(
+                        result["approval_claim_store_accessed"]
+                    )
+                    self.assertFalse(result["native_approval_ui_entered"])
+                    self.assertFalse(
+                        result["operator_resume_identifiers_supplied"]
+                    )
+                    self.assertEqual(result["project_domain_files_written"], [])
+                    self.assertEqual(result["files_written"], [])
+                    domain_writer.assert_not_called()
+                    component_writer.assert_not_called()
+                    authenticated_cleanup.assert_not_called()
+                    self.assertEqual(
+                        active_handoff.read_bytes(),
+                        tampered_bytes,
+                    )
+                    serialized = stdout + stderr
+                    for private_value in (
+                        str(project_root),
+                        real_ref,
+                        foreign_ref,
+                        private_marker,
+                    ):
+                        self.assertNotIn(private_value, serialized)
+                    normalized = serialized.replace("\\", "/").casefold()
+                    self.assertNotIn(
+                        ".zettel-kasten/private/",
+                        normalized,
+                    )
+                    self.assertNotIn(
+                        ".wom-scratch/private/",
+                        normalized,
+                    )
+                    self.assertIsNone(
+                        re.search(
+                            r"(?i)(?<![A-Za-z0-9])[A-Z]:[\\/]",
+                            serialized,
+                        )
+                    )
+
     def test_project_version_update_supplied_approval_id_still_routes_through_discovery(
         self,
     ) -> None:
@@ -12520,11 +12773,21 @@ if __name__ == "__main__":
                 active_handoff.parent.mkdir()
                 active_handoff.write_bytes(b"synthetic active handoff\n")
                 events: list[str] = []
+                observation = SimpleNamespace(
+                    state="terminal_ready",
+                    raw_sha256="sha256:" + "b" * 64,
+                    pending_record_sha256="sha256:" + "c" * 64,
+                    transaction_ref="update_" + "d" * 32,
+                )
                 real_write_completed = (
                     archive_cli._CommandRunResultCapture.write_completed
                 )
                 real_complete_tracking = archive_cli.complete_operation_tracking
                 real_terminal_json = archive_cli.best_effort_terminal_json
+                real_terminal_boundary = (
+                    archive_services
+                    ._project_update_terminal_control_boundary
+                )
 
                 def observed_write_completed(
                     capture: Any,
@@ -12548,6 +12811,22 @@ if __name__ == "__main__":
                 def observed_ack(*_args: Any, **_kwargs: Any) -> bool:
                     events.append("prepare-display")
                     return acknowledged
+
+                def observed_strict_discovery(
+                    _root: Path,
+                    *,
+                    _stable_observation_out: list[object | None] | None = None,
+                ) -> None:
+                    if isinstance(_stable_observation_out, list):
+                        _stable_observation_out.append(observation)
+                    return None
+
+                @contextmanager
+                def observed_terminal_boundary(root: Path):
+                    events.append("boundary-enter")
+                    with real_terminal_boundary(root) as held:
+                        yield held
+                    events.append("boundary-exit")
 
                 candidate = (
                     operation_control.ProjectUpdatePendingTerminalDelivery(
@@ -12583,6 +12862,7 @@ if __name__ == "__main__":
                 ) -> Any:
                     if allow_active_handoff or not acknowledged:
                         return None
+                    events.append("discover-display")
                     return candidate
 
                 def observed_terminal_json(value: Any) -> bool:
@@ -12597,6 +12877,18 @@ if __name__ == "__main__":
                     archive_services,
                     "_project_update_terminal_cleanup_unknown_preflight_read_only",
                     return_value=None,
+                ), patch.object(
+                    archive_cli,
+                    "_project_version_update_discover_terminal_delivery_strict",
+                    side_effect=observed_strict_discovery,
+                ), patch.object(
+                    archive_cli,
+                    "_project_version_update_strict_active_handoff_snapshot",
+                    return_value=observation,
+                ), patch.object(
+                    archive_services,
+                    "_project_update_terminal_control_boundary",
+                    side_effect=observed_terminal_boundary,
                 ), patch.object(
                     archive_cli,
                     "_project_version_update_approval_read_boundary",
@@ -12668,12 +12960,21 @@ if __name__ == "__main__":
                     )
 
                 self.assertEqual(code, 0, stderr)
+                boundary_prefix = (
+                    ["boundary-enter"] if os.name == "nt" else []
+                )
+                boundary_suffix = (
+                    ["boundary-exit"] if os.name == "nt" else []
+                )
                 self.assertEqual(
                     events,
                     [
+                        *boundary_prefix,
                         "output",
                         "journal",
                         "prepare-display",
+                        *boundary_suffix,
+                        *(["discover-display"] if acknowledged else []),
                         "display",
                         *(["finalize"] if acknowledged else []),
                     ],
@@ -13137,7 +13438,7 @@ if __name__ == "__main__":
             ), patch.object(
                 archive_services,
                 "_project_update_terminal_handoff_state_read_only",
-                return_value=None,
+                side_effect=_no_project_update_terminal_handoff,
             ), patch.object(
                 archive_services,
                 "_wom_kit_project_version_update_legacy_core",
@@ -13160,6 +13461,448 @@ if __name__ == "__main__":
             fresh_service.assert_called_once()
             self.assertTrue(proof_path.is_file())
 
+    def test_project_version_update_exact_pre_intent_abort_blocks_dry_run_and_approval_equally(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project_root = Path(tmp) / "project"
+            project_root.mkdir()
+            reservation = (
+                archive_services.project_update_transaction
+                .ProjectUpdateTransaction.reserve(
+                    project_root,
+                    project_identity_sha256="sha256:" + "4" * 64,
+                    requested_target_tag="v0.4.17",
+                    transaction_ref="update_" + "c" * 32,
+                    ownership_nonce="d" * 32,
+                )
+            )
+            lock_bytes = reservation.acquire_lock()
+            reservation.abort_before_intent_seal(
+                expected_lock_bytes=lock_bytes,
+            )
+            approval_calls: list[bool] = []
+
+            def approval_executor(*_args, **_kwargs):
+                approval_calls.append(True)
+                self.fail("exact abort history entered native approval")
+
+            with patch.object(
+                archive_services,
+                "_wom_kit_project_version_update_approval_authority_matches",
+                return_value=True,
+            ), patch.object(
+                archive_services,
+                "_project_update_terminal_handoff_state_read_only",
+                side_effect=_no_project_update_terminal_handoff,
+            ), patch.object(
+                archive_services,
+                "_wom_kit_project_version_update_legacy_core",
+                side_effect=AssertionError(
+                    "exact abort history entered Git/service core"
+                ),
+            ) as legacy_core:
+                dry_run_result = (
+                    archive_services.wom_kit_project_version_update(
+                        project_root,
+                        target="v0.4.17",
+                        dry_run=True,
+                    )
+                )
+                approval_result = (
+                    archive_services
+                    ._wom_kit_project_version_update_live_approval_transaction(
+                        project_root,
+                        target="v0.4.17",
+                        reviewed_by="reviewer",
+                        affirm_external_writers_quiescent=True,
+                        approval_executor=approval_executor,
+                        _expected_approval_root=project_root,
+                        _expected_archive_id="archive:test",
+                    )
+                )
+
+            for result in (dry_run_result, approval_result):
+                self.assertFalse(result["ok"])
+                self.assertEqual(
+                    result["status"],
+                    "terminal_cleanup_required",
+                )
+                self.assertEqual(
+                    result["reason_code"],
+                    "project_version_update_terminal_cleanup_required",
+                )
+                self.assertEqual(result["effects_state"], "none")
+                self.assertEqual(result["exact_terminal_history_count"], 1)
+                self.assertFalse(result["resumable_transaction_present"])
+                self.assertFalse(result["native_approval_ui_entered"])
+                self.assertFalse(result["domain_writer_entered"])
+                self.assertEqual(result["project_domain_files_written"], [])
+                self.assertEqual(result["files_written"], [])
+            self.assertEqual(dry_run_result, approval_result)
+            self.assertEqual(approval_calls, [])
+            legacy_core.assert_not_called()
+
+    @unittest.skipUnless(
+        WINDOWS_PROJECT_RUNTIME,
+        "exact project-update cleanup mutation is Windows-only",
+    )
+    def test_project_version_update_identifier_free_resume_compacts_exact_abort_history_without_writer(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project_root = Path(tmp) / "project"
+            project_root.mkdir()
+            reservation = (
+                archive_services.project_update_transaction
+                .ProjectUpdateTransaction.reserve(
+                    project_root,
+                    project_identity_sha256="sha256:" + "5" * 64,
+                    requested_target_tag="v0.4.17",
+                    transaction_ref="update_" + "e" * 32,
+                    ownership_nonce="f" * 32,
+                )
+            )
+            lock_bytes = reservation.acquire_lock()
+            reservation.abort_before_intent_seal(
+                expected_lock_bytes=lock_bytes,
+            )
+            approval_calls: list[bool] = []
+
+            def approval_executor(*_args, **_kwargs):
+                approval_calls.append(True)
+                self.fail("abort-history compaction entered native approval")
+
+            with patch.object(
+                archive_services,
+                "_wom_kit_project_version_update_approval_authority_matches",
+                return_value=True,
+            ), patch.object(
+                archive_services,
+                "_wom_kit_project_version_update_legacy_core",
+                side_effect=AssertionError(
+                    "abort-history compaction entered domain writer"
+                ),
+            ) as legacy_core, patch.object(
+                archive_services.project_update_git_runner
+                .TrustedProjectUpdateGitRunner,
+                "resolve_preapproval",
+                side_effect=AssertionError(
+                    "abort-history compaction opened Git writer"
+                ),
+            ) as git_runner:
+                result = (
+                    archive_services
+                    ._wom_kit_project_version_update_resume_live_transaction(
+                        project_root,
+                        target=None,
+                        reviewed_by=None,
+                        transaction_ref=None,
+                        approval_executor=approval_executor,
+                        _expected_approval_root=project_root,
+                        _expected_archive_id="archive:test",
+                    )
+                )
+
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["status"], "terminal_history_compacted")
+            self.assertFalse(result["update_completed"])
+            self.assertTrue(result["fresh_approval_required"])
+            self.assertFalse(result["operator_resume_identifiers_supplied"])
+            self.assertEqual(result["terminal_abort_histories_compacted"], 1)
+            self.assertEqual(result["cleanup_proofs_written_or_verified"], 1)
+            self.assertEqual(result["project_domain_effects"], "none")
+            self.assertFalse(result["domain_writer_entered"])
+            self.assertEqual(result["project_domain_files_written"], [])
+            self.assertEqual(result["files_written"], [])
+            self.assertEqual(approval_calls, [])
+            legacy_core.assert_not_called()
+            git_runner.assert_not_called()
+            self.assertEqual(
+                archive_services
+                ._project_update_terminal_cleanup_artifact_classification_read_only(
+                    project_root
+                ),
+                ("history_only_exact", 1),
+            )
+            self.assertEqual(
+                archive_services.project_update_transaction
+                .discover_exact_reservation_abort_cleanup_read_only(
+                    project_root
+                ),
+                (),
+            )
+
+    @unittest.skipUnless(
+        WINDOWS_PROJECT_RUNTIME,
+        "exact project-update cleanup mutation is Windows-only",
+    )
+    def test_project_version_update_identifier_free_resume_finishes_abort_cleanup_tombstone_without_writer(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project_root = Path(tmp) / "project"
+            project_root.mkdir()
+            transaction_module = (
+                archive_services.project_update_transaction
+            )
+            reservation = (
+                transaction_module.ProjectUpdateTransaction.reserve(
+                    project_root,
+                    project_identity_sha256="sha256:" + "6" * 64,
+                    requested_target_tag="v0.4.17",
+                    transaction_ref="update_" + "a" * 32,
+                    ownership_nonce="b" * 32,
+                )
+            )
+            lock_bytes = reservation.acquire_lock()
+            terminal = reservation.abort_before_intent_seal(
+                expected_lock_bytes=lock_bytes,
+            )
+            cleanup_authority = terminal["receipt_sha256"]
+            real_delete = transaction_module._delete_exact_cleanup_file
+            deleted = {"count": 0}
+
+            def interrupt_after_first_delete(
+                project: Path,
+                path: Path,
+                snapshot,
+            ) -> None:
+                real_delete(project, path, snapshot)
+                deleted["count"] += 1
+                if deleted["count"] == 1:
+                    raise OSError(
+                        "synthetic process loss after exact abort delete"
+                    )
+
+            with patch.object(
+                transaction_module,
+                "_delete_exact_cleanup_file",
+                side_effect=interrupt_after_first_delete,
+            ):
+                self.assertFalse(
+                    reservation.exact_cleanup(
+                        cleanup_authority_sha256=cleanup_authority,
+                    )
+                )
+            cleanup_tombstone = (
+                reservation.transaction_root.parent
+                / f".cleanup_{reservation.transaction_ref}"
+            )
+            self.assertTrue(cleanup_tombstone.is_dir())
+            interrupted = (
+                transaction_module
+                .discover_exact_reservation_abort_cleanup_read_only(
+                    project_root
+                )
+            )
+            self.assertEqual(len(interrupted), 1)
+            self.assertEqual(interrupted[0].state, "cleanup_tombstone")
+            approval_calls: list[bool] = []
+
+            def approval_executor(*_args, **_kwargs):
+                approval_calls.append(True)
+                self.fail("abort tombstone resume entered native approval")
+
+            with patch.object(
+                archive_services,
+                "_wom_kit_project_version_update_approval_authority_matches",
+                return_value=True,
+            ), patch.object(
+                archive_services,
+                "_wom_kit_project_version_update_legacy_core",
+                side_effect=AssertionError(
+                    "abort tombstone resume entered domain writer"
+                ),
+            ) as legacy_core, patch.object(
+                archive_services.project_update_git_runner
+                .TrustedProjectUpdateGitRunner,
+                "resolve_preapproval",
+                side_effect=AssertionError(
+                    "abort tombstone resume opened Git writer"
+                ),
+            ) as git_runner:
+                result = (
+                    archive_services
+                    ._wom_kit_project_version_update_resume_live_transaction(
+                        project_root,
+                        target=None,
+                        reviewed_by=None,
+                        transaction_ref=None,
+                        approval_executor=approval_executor,
+                        _expected_approval_root=project_root,
+                        _expected_archive_id="archive:test",
+                    )
+                )
+
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["status"], "terminal_history_compacted")
+            self.assertFalse(result["update_completed"])
+            self.assertFalse(result["operator_resume_identifiers_supplied"])
+            self.assertEqual(result["terminal_abort_histories_compacted"], 1)
+            self.assertEqual(result["project_domain_effects"], "none")
+            self.assertFalse(result["domain_writer_entered"])
+            self.assertEqual(result["project_domain_files_written"], [])
+            self.assertEqual(result["files_written"], [])
+            self.assertFalse(cleanup_tombstone.exists())
+            self.assertEqual(approval_calls, [])
+            legacy_core.assert_not_called()
+            git_runner.assert_not_called()
+            self.assertEqual(
+                archive_services
+                ._project_update_terminal_cleanup_artifact_classification_read_only(
+                    project_root
+                ),
+                ("history_only_exact", 1),
+            )
+            self.assertEqual(
+                transaction_module
+                .discover_exact_reservation_abort_cleanup_read_only(
+                    project_root
+                ),
+                (),
+            )
+
+    @unittest.skipUnless(
+        WINDOWS_PROJECT_RUNTIME,
+        "exact project-update cleanup mutation is Windows-only",
+    )
+    def test_project_version_update_partial_abort_history_compaction_reports_exact_effect_truth(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project_root = Path(tmp) / "project"
+            project_root.mkdir()
+            transaction_module = (
+                archive_services.project_update_transaction
+            )
+            transaction_refs = (
+                "update_" + "1" * 32,
+                "update_" + "2" * 32,
+            )
+            for index, transaction_ref in enumerate(
+                transaction_refs,
+                start=1,
+            ):
+                reservation = transaction_module.ProjectUpdateTransaction.reserve(
+                    project_root,
+                    project_identity_sha256="sha256:" + str(index) * 64,
+                    requested_target_tag="v0.4.17",
+                    transaction_ref=transaction_ref,
+                    ownership_nonce=str(index + 2) * 32,
+                )
+                lock_bytes = reservation.acquire_lock()
+                reservation.abort_before_intent_seal(
+                    expected_lock_bytes=lock_bytes,
+                )
+
+            real_compact = (
+                transaction_module
+                .compact_exact_reservation_abort_history
+            )
+            attempted: list[bool] = []
+
+            def compact_first_then_refuse_second(*args, **kwargs):
+                attempted.append(True)
+                if len(attempted) == 1:
+                    return real_compact(*args, **kwargs)
+                return False
+
+            approval_calls: list[bool] = []
+            with patch.object(
+                archive_services,
+                "_wom_kit_project_version_update_approval_authority_matches",
+                return_value=True,
+            ), patch.object(
+                transaction_module,
+                "compact_exact_reservation_abort_history",
+                side_effect=compact_first_then_refuse_second,
+            ), patch.object(
+                archive_services.project_update_git_runner
+                .TrustedProjectUpdateGitRunner,
+                "resolve_preapproval",
+                side_effect=AssertionError(
+                    "partial abort compaction opened Git writer"
+                ),
+            ) as git_runner:
+                result = (
+                    archive_services
+                    ._wom_kit_project_version_update_resume_live_transaction(
+                        project_root,
+                        target=None,
+                        reviewed_by=None,
+                        transaction_ref=None,
+                        approval_executor=lambda *_args, **_kwargs: (
+                            approval_calls.append(True)
+                        ),
+                        _expected_approval_root=project_root,
+                        _expected_archive_id="archive:test",
+                    )
+                )
+
+            self.assertFalse(result["ok"])
+            self.assertEqual(
+                result["status"],
+                "terminal_cleanup_outcome_unknown",
+            )
+            self.assertEqual(
+                result["reason_code"],
+                "project_version_update_terminal_cleanup_outcome_unknown",
+            )
+            self.assertEqual(result["terminal_abort_histories_compacted"], 1)
+            self.assertEqual(result["cleanup_proofs_written_or_verified"], 1)
+            self.assertEqual(
+                result["terminal_abort_history_compaction_state"],
+                "partial",
+            )
+            self.assertTrue(
+                result["terminal_abort_history_compaction_incomplete"]
+            )
+            self.assertEqual(result["files_written_scope"], "project_domain_only")
+            self.assertEqual(result["files_written"], [])
+            self.assertEqual(result["project_domain_files_written"], [])
+            self.assertFalse(
+                result["effect_summary"][
+                    "project_domain_writes_performed"
+                ]
+            )
+            self.assertTrue(
+                result["effect_summary"][
+                    "durable_control_evidence_written_or_verified"
+                ]
+            )
+            self.assertTrue(
+                result["effect_summary"][
+                    "terminal_abort_history_compaction_performed_or_verified"
+                ]
+            )
+            self.assertTrue(
+                result["effect_summary"][
+                    "private_control_mutation_performed_or_verified"
+                ]
+            )
+            self.assertTrue(
+                result["effect_summary"][
+                    "private_control_mutation_may_be_incomplete"
+                ]
+            )
+            self.assertTrue(
+                result["effect_summary"][
+                    "terminal_abort_history_cleanup_incomplete"
+                ]
+            )
+            self.assertEqual(len(attempted), 2)
+            self.assertEqual(approval_calls, [])
+            git_runner.assert_not_called()
+            serialized = json.dumps(result, sort_keys=True)
+            for private_value in (
+                *transaction_refs,
+                str(project_root),
+                "sha256:" + "1" * 64,
+                "sha256:" + "2" * 64,
+            ):
+                self.assertNotIn(private_value, serialized)
+
     def test_project_version_update_unresolved_cleanup_blocks_before_fresh_service_core(
         self,
     ) -> None:
@@ -13178,6 +13921,11 @@ if __name__ == "__main__":
             )
             partial.mkdir()
             (partial / "partial.bin").write_bytes(b"partial")
+            approval_calls: list[bool] = []
+
+            def approval_executor(*_args, **_kwargs):
+                approval_calls.append(True)
+                self.fail("unresolved cleanup entered approval executor")
 
             with patch.object(
                 archive_services,
@@ -13186,7 +13934,7 @@ if __name__ == "__main__":
             ), patch.object(
                 archive_services,
                 "_project_update_terminal_handoff_state_read_only",
-                return_value=None,
+                side_effect=_no_project_update_terminal_handoff,
             ), patch.object(
                 archive_services,
                 "_wom_kit_project_version_update_legacy_core",
@@ -13194,23 +13942,32 @@ if __name__ == "__main__":
                     "unresolved cleanup entered Git/service core"
                 ),
             ) as fresh_service:
-                with self.assertRaisesRegex(
-                    archive_services.ArchiveServiceError,
-                    "project_version_update_terminal_cleanup_"
-                    "recovery_required",
-                ):
-                    archive_services._wom_kit_project_version_update_live_approval_transaction(
+                result = (
+                    archive_services
+                    ._wom_kit_project_version_update_live_approval_transaction(
                         project_root,
                         target="v0.4.16",
                         reviewed_by="reviewer",
                         affirm_external_writers_quiescent=True,
-                        approval_executor=lambda *_args, **_kwargs: self.fail(
-                            "unresolved cleanup entered approval executor"
-                        ),
+                        approval_executor=approval_executor,
                         _expected_approval_root=project_root,
                         _expected_archive_id="archive:test",
                     )
+                )
 
+            self.assertFalse(result["ok"])
+            self.assertEqual(
+                result["status"],
+                "terminal_cleanup_outcome_unknown",
+            )
+            self.assertEqual(
+                result["reason_code"],
+                "project_version_update_terminal_cleanup_outcome_unknown",
+            )
+            self.assertEqual(result["effects_state"], "unknown")
+            self.assertEqual(result["project_domain_files_written"], [])
+            self.assertEqual(result["files_written"], [])
+            self.assertEqual(approval_calls, [])
             fresh_service.assert_not_called()
 
     def test_project_version_update_orphan_lock_blocks_before_git_or_fresh_service_core(
@@ -13225,6 +13982,11 @@ if __name__ == "__main__":
             )
             lock_path.parent.mkdir(parents=True)
             lock_path.write_bytes(b"malformed-orphan-lock")
+            approval_calls: list[bool] = []
+
+            def approval_executor(*_args, **_kwargs):
+                approval_calls.append(True)
+                self.fail("orphan lock entered approval executor")
 
             with patch.object(
                 archive_services,
@@ -13233,7 +13995,7 @@ if __name__ == "__main__":
             ), patch.object(
                 archive_services,
                 "_project_update_terminal_handoff_state_read_only",
-                return_value=None,
+                side_effect=_no_project_update_terminal_handoff,
             ), patch.object(
                 archive_services,
                 "_wom_kit_project_version_update_legacy_core",
@@ -13248,26 +14010,805 @@ if __name__ == "__main__":
                     "orphan lock resolved the first Git runner"
                 ),
             ) as git_runner:
-                with self.assertRaisesRegex(
-                    archive_services.ArchiveServiceError,
-                    "project_version_update_terminal_cleanup_"
-                    "recovery_required",
-                ):
-                    archive_services._wom_kit_project_version_update_live_approval_transaction(
+                result = (
+                    archive_services
+                    ._wom_kit_project_version_update_live_approval_transaction(
                         project_root,
                         target="v0.4.16",
                         reviewed_by="reviewer",
                         affirm_external_writers_quiescent=True,
-                        approval_executor=lambda *_args, **_kwargs: self.fail(
-                            "orphan lock entered approval executor"
-                        ),
+                        approval_executor=approval_executor,
                         _expected_approval_root=project_root,
                         _expected_archive_id="archive:test",
                     )
+                )
 
+            self.assertFalse(result["ok"])
+            self.assertEqual(
+                result["status"],
+                "terminal_cleanup_outcome_unknown",
+            )
+            self.assertEqual(
+                result["reason_code"],
+                "project_version_update_terminal_cleanup_outcome_unknown",
+            )
+            self.assertEqual(result["effects_state"], "unknown")
+            self.assertEqual(result["project_domain_files_written"], [])
+            self.assertEqual(result["files_written"], [])
+            self.assertEqual(approval_calls, [])
             fresh_service.assert_not_called()
             git_runner.assert_not_called()
             self.assertEqual(lock_path.read_bytes(), b"malformed-orphan-lock")
+
+    def test_project_version_update_cli_malformed_live_lock_returns_fixed_unknown_result(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project_root = Path(tmp) / "private-client-project"
+            lock_path = (
+                project_root
+                / archive_services.project_update_transaction
+                .PROJECT_UPDATE_LOCK_LOGICAL
+            )
+            lock_path.parent.mkdir(parents=True)
+            private_lock_bytes = b"PRIVATE-MALFORMED-LIVE-LOCK"
+            lock_path.write_bytes(private_lock_bytes)
+
+            code, stdout, stderr = self.run_cli_split(
+                [
+                    "project-version-update",
+                    str(project_root),
+                    "--resume",
+                    "--affirm-external-writers-quiescent",
+                    "--format",
+                    "json",
+                ]
+            )
+
+            self.assertEqual(code, 1, stderr)
+            self.assertNotIn(
+                "failed before a privacy-safe result could be produced",
+                stderr,
+            )
+            result = json.loads(stdout)
+            self.assertFalse(result["ok"])
+            self.assertEqual(
+                result["status"],
+                "terminal_cleanup_outcome_unknown",
+            )
+            self.assertEqual(
+                result["reason_code"],
+                "project_version_update_terminal_cleanup_outcome_unknown",
+            )
+            self.assertFalse(result["automatic_retry_authorized"])
+            self.assertFalse(result["cleanup_authorized"])
+            self.assertFalse(result["fresh_approval_authorized"])
+            self.assertEqual(result["files_written"], [])
+            self.assertTrue(
+                any(
+                    "Stop without deleting private update metadata" in action
+                    for action in result["next_safe_actions"]
+                )
+            )
+            serialized = json.dumps(result, sort_keys=True)
+            self.assertNotIn(str(project_root), serialized)
+            self.assertNotIn(
+                private_lock_bytes.decode("ascii"),
+                serialized,
+            )
+            self.assertEqual(lock_path.read_bytes(), private_lock_bytes)
+
+    def test_project_version_update_cli_maps_known_terminal_cleanup_gate_to_exact_safe_result(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project_root = Path(tmp) / "project"
+            project_root.mkdir()
+            output_relative = (
+                ".zettel-kasten/diagnostics/"
+                "project-version-update-terminal-cleanup-required.json"
+            )
+
+            with patch.object(
+                archive_cli.operation_control,
+                "discover_pending_project_update_terminal_delivery",
+                return_value=None,
+            ), patch.object(
+                archive_cli,
+                "_project_version_update_approval_read_boundary",
+                return_value=nullcontext((project_root, "archive:test")),
+            ), patch.object(
+                archive_services,
+                "_wom_kit_project_version_update_live_approval_transaction",
+                side_effect=archive_services.ArchiveServiceError(
+                    "project_version_update_terminal_cleanup_"
+                    "recovery_required"
+                ),
+            ):
+                code, stdout, stderr = self.run_cli_split(
+                    [
+                        "project-version-update",
+                        str(project_root),
+                        "--target",
+                        "v0.4.17",
+                        "--approve",
+                        "--reviewed-by",
+                        "reviewer",
+                        "--affirm-external-writers-quiescent",
+                        "--output",
+                        output_relative,
+                        "--format",
+                        "json",
+                    ]
+                )
+
+            self.assertEqual(code, 1, stderr)
+            self.assertNotIn(
+                "failed before a privacy-safe result could be produced",
+                stderr,
+            )
+            result = json.loads(stdout)
+            self.assertFalse(result["ok"])
+            self.assertEqual(result["status"], "terminal_cleanup_required")
+            self.assertEqual(
+                result["reason_code"],
+                "project_version_update_terminal_cleanup_required",
+            )
+            self.assertEqual(result["effects_state"], "none")
+            self.assertTrue(
+                result["details"][
+                    "authenticated_identifier_free_resume_required"
+                ]
+            )
+            self.assertTrue(
+                any(
+                    "project-version-update --resume" in action
+                    for action in result["next_safe_actions"]
+                )
+            )
+            self.assertFalse(result["private_identifiers_echoed"])
+            self.assertFalse(result["raw_errors_echoed"])
+
+            saved_text = (project_root / output_relative).read_text(
+                encoding="utf-8"
+            )
+            self.assertNotIn(str(project_root), saved_text)
+            saved = json.loads(saved_text)
+            self.assertEqual(saved["status"], "terminal_cleanup_required")
+            self.assertEqual(
+                saved["reason_code"],
+                "project_version_update_terminal_cleanup_required",
+            )
+            self.assertEqual(saved["cli_execution"]["exit_code"], 1)
+            self.assertTrue(
+                saved["cli_execution"]["result_available"]
+            )
+            self.assertIsNone(saved["cli_execution"]["error"])
+
+    def test_project_version_update_cli_maps_known_unknown_cleanup_gate_without_retry(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project_root = Path(tmp) / "project"
+            project_root.mkdir()
+            output_relative = (
+                ".zettel-kasten/diagnostics/"
+                "project-version-update-cleanup-outcome-unknown.json"
+            )
+
+            with patch.object(
+                archive_services,
+                "wom_kit_project_version_update",
+                side_effect=archive_services.ArchiveServiceError(
+                    "project_version_update_terminal_cleanup_"
+                    "outcome_unknown"
+                ),
+            ):
+                code, stdout, stderr = self.run_cli_split(
+                    [
+                        "project-version-update",
+                        str(project_root),
+                        "--target",
+                        "v0.4.17",
+                        "--dry-run",
+                        "--output",
+                        output_relative,
+                        "--format",
+                        "json",
+                    ]
+                )
+
+            self.assertEqual(code, 1, stderr)
+            result = json.loads(stdout)
+            self.assertEqual(
+                result["status"],
+                "terminal_cleanup_outcome_unknown",
+            )
+            self.assertEqual(
+                result["reason_code"],
+                "project_version_update_terminal_cleanup_outcome_unknown",
+            )
+            self.assertEqual(result["effects_state"], "unknown")
+            self.assertFalse(
+                result["details"][
+                    "authenticated_identifier_free_resume_required"
+                ]
+            )
+            self.assertFalse(result["automatic_retry_authorized"])
+            self.assertTrue(
+                any(
+                    "Stop automatic recovery" in action
+                    for action in result["next_safe_actions"]
+                )
+            )
+
+            saved = json.loads(
+                (project_root / output_relative).read_text(encoding="utf-8")
+            )
+            self.assertEqual(
+                saved["status"],
+                "terminal_cleanup_outcome_unknown",
+            )
+            self.assertEqual(saved["effects_state"], "unknown")
+            self.assertTrue(saved["cli_execution"]["result_available"])
+            self.assertIsNone(saved["cli_execution"]["error"])
+
+    def test_project_version_update_cli_does_not_echo_unallowlisted_exception(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project_root = Path(tmp) / "project"
+            project_root.mkdir()
+            output_relative = (
+                ".zettel-kasten/diagnostics/"
+                "project-version-update-redacted-error.json"
+            )
+            private_error = (
+                r"C:\private-owner\archive\zettels\secret.md "
+                "PRIVATE-BODY-MARKER"
+            )
+
+            with patch.object(
+                archive_services,
+                "wom_kit_project_version_update",
+                side_effect=archive_services.ArchiveServiceError(
+                    private_error
+                ),
+            ):
+                code, stdout, stderr = self.run_cli_split(
+                    [
+                        "project-version-update",
+                        str(project_root),
+                        "--target",
+                        "v0.4.17",
+                        "--dry-run",
+                        "--output",
+                        output_relative,
+                        "--format",
+                        "json",
+                    ]
+                )
+
+            self.assertEqual(code, 1)
+            self.assertEqual(stdout, "")
+            self.assertIn(
+                "failed before a privacy-safe result could be produced",
+                stderr,
+            )
+            self.assertNotIn("private-owner", stderr)
+            self.assertNotIn("PRIVATE-BODY-MARKER", stderr)
+
+            saved_text = (project_root / output_relative).read_text(
+                encoding="utf-8"
+            )
+            self.assertNotIn("private-owner", saved_text)
+            self.assertNotIn("PRIVATE-BODY-MARKER", saved_text)
+            saved = json.loads(saved_text)
+            self.assertFalse(saved["ok"])
+            self.assertEqual(
+                saved["blockers"],
+                ["project_version_update_command_failed"],
+            )
+            self.assertFalse(
+                saved["cli_execution"]["result_available"]
+            )
+            self.assertEqual(
+                saved["cli_execution"]["error"]["type"],
+                "ArchiveServiceError",
+            )
+            self.assertFalse(
+                saved["cli_execution"]["error"]["raw_message_stored"]
+            )
+            self.assertIsNone(
+                archive_cli
+                ._project_version_update_privacy_safe_failure_result(
+                    ValueError(
+                        "project_version_update_terminal_cleanup_required"
+                    )
+                )
+            )
+            self.assertIsNone(
+                archive_cli
+                ._project_version_update_privacy_safe_failure_result(
+                    archive_services.ArchiveServiceError(
+                        "project_version_update_terminal_cleanup_required",
+                        private_error,
+                    )
+                )
+            )
+
+    def test_project_version_update_cli_strict_terminal_discovery_continuity(
+        self,
+    ) -> None:
+        root = Path("C:/synthetic-project")
+        first = archive_services._ProjectUpdateTerminalHandoffObservation(
+            state="terminal_ready",
+            raw_sha256="sha256:" + "1" * 64,
+            pending_record_sha256="sha256:" + "2" * 64,
+            transaction_ref="update_" + "3" * 32,
+        )
+        changed = archive_services._ProjectUpdateTerminalHandoffObservation(
+            state="terminal_ready",
+            raw_sha256="sha256:" + "4" * 64,
+            pending_record_sha256="sha256:" + "2" * 64,
+            transaction_ref="update_" + "3" * 32,
+        )
+        state_changed = (
+            archive_services._ProjectUpdateTerminalHandoffObservation(
+                state="claim_succeeded_pre_unlock",
+                raw_sha256="sha256:" + "6" * 64,
+                pending_record_sha256="sha256:" + "2" * 64,
+                transaction_ref="update_" + "3" * 32,
+            )
+        )
+        pending_changed = (
+            archive_services._ProjectUpdateTerminalHandoffObservation(
+                state="terminal_ready",
+                raw_sha256="sha256:" + "7" * 64,
+                pending_record_sha256="sha256:" + "8" * 64,
+                transaction_ref="update_" + "3" * 32,
+            )
+        )
+        active = SimpleNamespace(
+            active_handoff=True,
+            terminal_handoff_sha256=first.raw_sha256,
+        )
+        consumed = SimpleNamespace(
+            active_handoff=False,
+            display_pending=True,
+            terminal_handoff_sha256="sha256:" + "5" * 64,
+        )
+
+        with self.subTest("none-to-present"):
+            with patch.object(
+                archive_cli,
+                "_project_version_update_strict_active_handoff_snapshot",
+                side_effect=[None, first],
+            ), patch.object(
+                archive_cli.operation_control,
+                "discover_pending_project_update_terminal_delivery",
+                return_value=None,
+            ):
+                with self.assertRaises(
+                    archive_cli._ProjectVersionUpdateCleanupUnknownPreflight
+                ) as raised:
+                    archive_cli._project_version_update_discover_terminal_delivery_strict(
+                        root
+                    )
+            self.assertEqual(
+                raised.exception.result["status"],
+                "terminal_cleanup_outcome_unknown",
+            )
+
+        with self.subTest("stable-active-before-delivery-journal"):
+            with patch.object(
+                archive_cli,
+                "_project_version_update_strict_active_handoff_snapshot",
+                side_effect=[first, first],
+            ), patch.object(
+                archive_cli.operation_control,
+                "discover_pending_project_update_terminal_delivery",
+                return_value=None,
+            ):
+                observed = (
+                    archive_cli
+                    ._project_version_update_discover_terminal_delivery_strict(
+                        root
+                    )
+                )
+            self.assertIsNone(observed)
+
+        with self.subTest("stable-pre-unlock-before-delivery-journal"):
+            with patch.object(
+                archive_cli,
+                "_project_version_update_strict_active_handoff_snapshot",
+                side_effect=[state_changed, state_changed],
+            ), patch.object(
+                archive_cli.operation_control,
+                "discover_pending_project_update_terminal_delivery",
+                return_value=None,
+            ):
+                observed = (
+                    archive_cli
+                    ._project_version_update_discover_terminal_delivery_strict(
+                        root
+                    )
+                )
+            self.assertIsNone(observed)
+
+        with self.subTest("digest-change"):
+            with patch.object(
+                archive_cli,
+                "_project_version_update_strict_active_handoff_snapshot",
+                side_effect=[first, changed],
+            ), patch.object(
+                archive_cli.operation_control,
+                "discover_pending_project_update_terminal_delivery",
+                return_value=active,
+            ):
+                with self.assertRaises(
+                    archive_cli._ProjectVersionUpdateCleanupUnknownPreflight
+                ):
+                    archive_cli._project_version_update_discover_terminal_delivery_strict(
+                        root
+                    )
+
+        mismatched_active = SimpleNamespace(
+            active_handoff=True,
+            terminal_handoff_sha256="sha256:" + "9" * 64,
+        )
+        unsafe_cases = (
+            ("present-to-none", [first, None], None),
+            ("state-change", [first, state_changed], active),
+            ("pending-digest-change", [first, pending_changed], active),
+            ("active-candidate-without-active", [None, None], active),
+            ("consumed-with-active", [first, first], consumed),
+            ("active-candidate-hash-mismatch", [first, first], mismatched_active),
+        )
+        for label, snapshots, candidate in unsafe_cases:
+            with self.subTest(label):
+                with patch.object(
+                    archive_cli,
+                    "_project_version_update_strict_active_handoff_snapshot",
+                    side_effect=snapshots,
+                ), patch.object(
+                    archive_cli.operation_control,
+                    "discover_pending_project_update_terminal_delivery",
+                    return_value=candidate,
+                ):
+                    with self.assertRaises(
+                        archive_cli._ProjectVersionUpdateCleanupUnknownPreflight
+                    ):
+                        archive_cli._project_version_update_discover_terminal_delivery_strict(
+                            root
+                        )
+
+        with self.subTest("arbitrary-operation-error-remains-generic"):
+            failure = archive_cli.operation_control.OperationControlError(
+                "private_generic_operation_failure"
+            )
+            with patch.object(
+                archive_cli,
+                "_project_version_update_strict_active_handoff_snapshot",
+                side_effect=[None, None],
+            ), patch.object(
+                archive_cli.operation_control,
+                "discover_pending_project_update_terminal_delivery",
+                side_effect=failure,
+            ):
+                with self.assertRaises(
+                    archive_cli.operation_control.OperationControlError
+                ) as raised:
+                    archive_cli._project_version_update_discover_terminal_delivery_strict(
+                        root
+                    )
+            self.assertIs(raised.exception, failure)
+
+        for label, before, candidate in (
+            ("active", first, active),
+            ("consumed-display", None, consumed),
+        ):
+            with self.subTest(label):
+                with patch.object(
+                    archive_cli,
+                    "_project_version_update_strict_active_handoff_snapshot",
+                    side_effect=[before, before],
+                ), patch.object(
+                    archive_cli.operation_control,
+                    "discover_pending_project_update_terminal_delivery",
+                    return_value=candidate,
+                ):
+                    observed = archive_cli._project_version_update_discover_terminal_delivery_strict(
+                        root
+                    )
+                self.assertIs(observed, candidate)
+
+    def test_project_version_update_cli_strict_snapshot_maps_only_exact_invalid(
+        self,
+    ) -> None:
+        root = Path("C:/synthetic-project")
+        exact = archive_services.ArchiveServiceError(
+            "project_version_update_terminal_handoff_invalid"
+        )
+        with patch.object(
+            archive_services,
+            "_project_update_terminal_handoff_state_read_only",
+            side_effect=exact,
+        ):
+            with self.assertRaises(
+                archive_cli._ProjectVersionUpdateCleanupUnknownPreflight
+            ) as raised:
+                archive_cli._project_version_update_strict_active_handoff_snapshot(
+                    root
+                )
+        self.assertEqual(
+            raised.exception.result["status"],
+            "terminal_cleanup_outcome_unknown",
+        )
+
+        for failure in (
+            archive_services.ArchiveServiceError(
+                "project_version_update_terminal_handoff_invalid",
+                "extra",
+            ),
+            archive_services.ArchiveServiceError(
+                "another_archive_service_failure"
+            ),
+        ):
+            with self.subTest(args=failure.args):
+                with patch.object(
+                    archive_services,
+                    "_project_update_terminal_handoff_state_read_only",
+                    side_effect=failure,
+                ):
+                    with self.assertRaises(
+                        archive_services.ArchiveServiceError
+                    ) as generic:
+                        archive_cli._project_version_update_strict_active_handoff_snapshot(
+                            root
+                        )
+                self.assertIs(generic.exception, failure)
+
+    @unittest.skipUnless(
+        WINDOWS_PROJECT_RUNTIME,
+        "terminal delivery serialization is Windows CPython 3.12",
+    )
+    def test_project_version_update_unbound_delivery_serializes_before_output(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp) / "project"
+            project.mkdir()
+            observation = SimpleNamespace(
+                state="terminal_ready",
+                raw_sha256="sha256:" + "1" * 64,
+                pending_record_sha256="sha256:" + "2" * 64,
+                transaction_ref="update_" + "3" * 32,
+            )
+            winner_entered = threading.Event()
+            release_winner = threading.Event()
+            winner_failures: list[BaseException] = []
+
+            def winner() -> None:
+                try:
+                    with ExitStack() as stack:
+                        archive_cli._project_version_update_enter_unbound_terminal_delivery_boundary(
+                            stack,
+                            project,
+                            expected_observation=observation,
+                        )
+                        winner_entered.set()
+                        if not release_winner.wait(timeout=5.0):
+                            raise RuntimeError("synthetic_winner_release_timeout")
+                except BaseException as failure:
+                    winner_failures.append(failure)
+                    winner_entered.set()
+
+            with patch.object(
+                archive_cli,
+                "_project_version_update_strict_active_handoff_snapshot",
+                return_value=observation,
+            ):
+                worker = threading.Thread(target=winner)
+                worker.start()
+                self.assertTrue(winner_entered.wait(timeout=5.0))
+                self.assertEqual(winner_failures, [])
+                with ExitStack() as losing_stack:
+                    with self.assertRaises(
+                        archive_cli._ProjectVersionUpdateCleanupUnknownPreflight
+                    ) as raised:
+                        archive_cli._project_version_update_enter_unbound_terminal_delivery_boundary(
+                            losing_stack,
+                            project,
+                            expected_observation=observation,
+                        )
+                self.assertEqual(
+                    raised.exception.result["status"],
+                    "terminal_cleanup_outcome_unknown",
+                )
+                release_winner.set()
+                worker.join(timeout=5.0)
+                self.assertFalse(worker.is_alive())
+                self.assertEqual(winner_failures, [])
+                with ExitStack() as successor_stack:
+                    archive_cli._project_version_update_enter_unbound_terminal_delivery_boundary(
+                        successor_stack,
+                        project,
+                        expected_observation=observation,
+                    )
+
+                late_candidate = SimpleNamespace(active_handoff=True)
+
+                def discover_late_journal(
+                    _root: Path,
+                    *,
+                    _stable_observation_out: (
+                        list[object | None] | None
+                    ) = None,
+                ) -> Any:
+                    if isinstance(_stable_observation_out, list):
+                        _stable_observation_out.append(observation)
+                    return late_candidate
+
+                with patch.object(
+                    archive_cli,
+                    "_project_version_update_discover_terminal_delivery_strict",
+                    side_effect=discover_late_journal,
+                ), ExitStack() as late_stack:
+                    with self.assertRaises(
+                        archive_cli._ProjectVersionUpdateCleanupUnknownPreflight
+                    ) as late:
+                        archive_cli._project_version_update_enter_unbound_terminal_delivery_boundary(
+                            late_stack,
+                            project,
+                            expected_observation=observation,
+                        )
+                self.assertEqual(
+                    late.exception.result["status"],
+                    "terminal_cleanup_outcome_unknown",
+                )
+
+    @unittest.skipUnless(
+        WINDOWS_PROJECT_RUNTIME,
+        "terminal delivery serialization is Windows CPython 3.12",
+    )
+    def test_project_version_update_stale_display_pending_stops_before_output(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp) / "project"
+            project.mkdir()
+            display_pending = (
+                project
+                / ".zettel-kasten"
+                / "private"
+                / "version-update-terminal"
+                / "display-pending.json"
+            )
+            display_raw = (
+                archive_services.project_update_transaction
+                .canonical_json_bytes({"state": "synthetic-display-pending"})
+            )
+            real_strict_discovery = (
+                archive_cli
+                ._project_version_update_discover_terminal_delivery_strict
+            )
+            real_enter_boundary = (
+                archive_cli
+                ._project_version_update_enter_unbound_terminal_delivery_boundary
+            )
+            discovery_calls: list[str] = []
+
+            def initial_then_real_discovery(
+                root: Path,
+                *,
+                _stable_observation_out: list[object | None] | None = None,
+            ) -> Any:
+                discovery_calls.append("initial" if not discovery_calls else "held")
+                if len(discovery_calls) == 1:
+                    if isinstance(_stable_observation_out, list):
+                        _stable_observation_out.append(None)
+                    return None
+                return real_strict_discovery(
+                    root,
+                    _stable_observation_out=_stable_observation_out,
+                )
+
+            def publish_stale_display_then_enter(
+                stack: ExitStack,
+                inspection_root: Path,
+                *,
+                expected_observation: object | None,
+            ) -> None:
+                display_pending.parent.mkdir(parents=True, exist_ok=True)
+                display_pending.write_bytes(display_raw)
+                real_enter_boundary(
+                    stack,
+                    inspection_root,
+                    expected_observation=expected_observation,
+                )
+
+            with patch.object(
+                archive_cli,
+                "_project_version_update_discover_terminal_delivery_strict",
+                side_effect=initial_then_real_discovery,
+            ), patch.object(
+                archive_cli,
+                "_project_version_update_enter_unbound_terminal_delivery_boundary",
+                side_effect=publish_stale_display_then_enter,
+            ), patch.object(
+                archive_services,
+                "_project_update_fresh_update_cleanup_preflight_read_only",
+                return_value=None,
+            ), patch.object(
+                archive_cli,
+                "_project_version_update_approval_read_boundary",
+                side_effect=AssertionError(
+                    "stale display-pending opened archive identity boundary"
+                ),
+            ) as approval_boundary, patch.object(
+                archive_services,
+                "_wom_kit_project_version_update_live_approval_transaction",
+                side_effect=AssertionError(
+                    "stale display-pending entered project writer"
+                ),
+            ) as project_writer:
+                code, stdout, stderr = self.run_cli_split(
+                    [
+                        "project-version-update",
+                        str(project),
+                        "--target",
+                        "v0.4.17",
+                        "--approve",
+                        "--reviewed-by",
+                        "reviewer",
+                        "--affirm-external-writers-quiescent",
+                        "--format",
+                        "json",
+                    ]
+                )
+
+            self.assertEqual(code, 1, stderr)
+            result = json.loads(stdout)
+            self.assertEqual(result["status"], "terminal_cleanup_outcome_unknown")
+            self.assertFalse(result["archive_identity_metadata_read"])
+            self.assertFalse(result["client_archive_domain_content_accessed"])
+            self.assertFalse(result["domain_writer_entered"])
+            self.assertEqual(result["files_written"], [])
+            self.assertNotIn(str(project), stdout)
+            self.assertNotIn("synthetic-display-pending", stdout)
+            self.assertEqual(discovery_calls, ["initial", "held"])
+            approval_boundary.assert_not_called()
+            project_writer.assert_not_called()
+            self.assertEqual(display_pending.read_bytes(), display_raw)
+            self.assertFalse((project / ".zettel-kasten" / "diagnostics").exists())
+            self.assertFalse((project / ".zettel-kasten" / "operations").exists())
+
+    def test_project_version_update_terminal_boundary_close_is_content_free(
+        self,
+    ) -> None:
+        stack = ExitStack()
+        private_failure = OSError(
+            r"C:\private-owner\archive\secret-terminal-path"
+        )
+        with patch.object(
+            stack,
+            "close",
+            side_effect=private_failure,
+        ):
+            self.assertFalse(
+                archive_cli
+                ._project_version_update_close_terminal_delivery_boundary(
+                    stack
+                )
+            )
+
+        self.assertTrue(
+            archive_cli
+            ._project_version_update_close_terminal_delivery_boundary(
+                ExitStack()
+            )
+        )
 
     def test_project_version_update_cleanup_classifier_requires_full_namespace_allowlist(
         self,
@@ -13435,7 +14976,7 @@ if __name__ == "__main__":
             ), patch.object(
                 archive_services,
                 "_project_update_terminal_handoff_state_read_only",
-                return_value=None,
+                side_effect=_no_project_update_terminal_handoff,
             ), patch.object(
                 transaction_type,
                 "reserve",
@@ -14433,8 +15974,36 @@ if __name__ == "__main__":
                     )
 
                 self.assertEqual(code, 1, stdout + stderr)
-                self.assertEqual(stdout, "")
-                self.assertIn("failed before a privacy-safe result", stderr)
+                if drift_kind == "pin":
+                    result = json.loads(stdout)
+                    self.assertEqual(
+                        result["status"],
+                        "terminal_cleanup_outcome_unknown",
+                    )
+                    self.assertEqual(result["effects_state"], "unknown")
+                    self.assertFalse(result["automatic_retry_authorized"])
+                    self.assertFalse(result["cleanup_authorized"])
+                    self.assertFalse(result["fresh_approval_authorized"])
+                    self.assertEqual(result["project_domain_files_written"], [])
+                    self.assertEqual(result["files_written"], [])
+                    serialized = json.dumps(result, sort_keys=True)
+                    self.assertNotIn(str(fixture["project_root"]), serialized)
+                    self.assertIsNone(
+                        re.search(
+                            r"(?i)(?<![A-Za-z0-9])[A-Z]:[\\/]",
+                            serialized,
+                        )
+                    )
+                    self.assertNotIn(
+                        "failed before a privacy-safe result",
+                        stderr,
+                    )
+                else:
+                    self.assertEqual(stdout, "")
+                    self.assertIn(
+                        "failed before a privacy-safe result",
+                        stderr,
+                    )
                 self.assertEqual(transport_after_approval, [])
                 self.assertEqual(
                     self.git_fixture_command(

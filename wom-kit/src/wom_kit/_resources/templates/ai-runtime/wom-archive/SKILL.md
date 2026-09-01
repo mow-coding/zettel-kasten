@@ -1,6 +1,6 @@
 ---
 name: wom-archive
-description: Operate, inspect, explain, and safely update a local WOM archive. Use when an AI must recover archive context, read zet memory, capture source material, prepare or publish a zet, review shared material, run Doctor, or explain archive state.
+description: Safely inspect and update a local WOM archive. Use for context recovery, zet reading, source capture, drafting, publication, shared review, or Doctor.
 ---
 
 # WOM Archive
@@ -20,8 +20,8 @@ archive ai-start-here <archive-root> --dry-run --progress --format json
 4. Follow `action_routing` and `next_safe_steps`; surface unpublished-draft
    attention. Run `--full-doctor` only when requested or required by a write.
 
-Read [startup-and-update.md](references/startup-and-update.md) for profile,
-prompt, fallback, progress, version-update, and long-operation recovery details.
+Read [startup-and-update.md](references/startup-and-update.md) for startup,
+update, progress, and recovery details.
 
 ## Load One Relevant Reference
 
@@ -45,8 +45,7 @@ Do not preload every reference.
 - Treat time-situated artifacts and their chronology as primary evidence.
   `canonical` means the current human-reviewed archive state, not objective
   truth. Matching names or labels never authorize a silent identity merge.
-  Preserve contradictions and changed meanings; graphs, indexes, embeddings,
-  nodes, ties, and edges remain regenerable aids or reviewable claims.
+  Preserve contradictions; graphs and indexes remain reviewable aids.
 - Prefer read-only inspection and `--dry-run`; preview is not write approval.
 - Official search is `archive search <archive-root> <query> --count-total
   --format json`. Raw grep/SQL are diagnostic, not authoritative WOM results.
@@ -156,8 +155,12 @@ Do not preload every reference.
 - Cancel and resume are unsupported in generic `operation-control`.
   Identifier-free `project-version-update --resume` alone reuses pending bound
   output without `--output`; redisplay may repeat and consumed is history.
-  Exact complete tombstones may resume; proof-only needs fresh approval and
-  partial or malformed state stops.
+  Fresh dry-run and approval share one cleanup preflight. Exact history returns
+  `project_version_update_terminal_cleanup_required`: pause same-project writers
+  and run identifier-free `--resume`. WOM compacts only exact preapproval-abort
+  history into inert proof, with no domain write or fresh authority. Proof-only
+  needs fresh approval. `project_version_update_terminal_cleanup_outcome_unknown`
+  means stop; never edit locks, pins, transactions, tombstones, or proofs.
 - Approved project-update mutation, same-version repair, and mutation-bearing
   resume are Windows-only. On POSIX use preview or read-only inspection; every
   mutation path must fail closed without writing.
@@ -178,10 +181,9 @@ Do not preload every reference.
 
 ## Finish
 
-Finish the approved goal, explain the verified state, and name only a
-needed next step. Separate engineering completion, human review, and real-use
-validation. Record substantial decisions, corrections, implementation, and
-design shifts. Before reset/handoff, use the receipt-backed close procedure in
+Finish the goal and report verified state. Separate engineering
+completion, human review, and real-use validation. Record substantial decisions
+and corrections. Before reset/handoff, use the receipt-backed close procedure in
 [reading-memory-and-revision.md](references/reading-memory-and-revision.md).
 
 Use plain language first: “published note,” “source file,” “change

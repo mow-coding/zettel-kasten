@@ -11,6 +11,7 @@ import sys
 import tempfile
 import threading
 import unittest
+from contextlib import ExitStack, contextmanager, nullcontext
 from pathlib import Path, PurePosixPath
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -21,6 +22,7 @@ SRC_ROOT = KIT_ROOT / "src"
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
+from wom_kit import archive_cli
 from wom_kit import archive_services
 from wom_kit import exact_human_approval
 from wom_kit import project_update_transaction as transaction_module
@@ -574,6 +576,8 @@ class ProjectUpdateTransactionTests(unittest.TestCase):
                 "candidate_cleanup_performed_or_verified": (
                     candidate_cleanup
                 ),
+                "private_control_mutation_performed_or_verified": True,
+                "private_control_mutation_may_be_incomplete": False,
                 "candidate_absence_verified": True,
                 "lock_release_performed_or_verified": True,
                 "paths_or_identifiers_disclosed": False,
@@ -594,6 +598,64 @@ class ProjectUpdateTransactionTests(unittest.TestCase):
             lock_binding_verified_during_recovery,
         )
         self.assertTrue(recovery["lock_absence_verified_after_recovery"])
+
+    def assert_cleanup_hardlink_blocks_fresh_writer(self) -> None:
+        self.assertEqual(
+            archive_services
+            ._project_update_terminal_cleanup_artifact_classification_read_only(
+                self.project
+            ),
+            ("unresolved", 0),
+        )
+        approval_calls: list[bool] = []
+        with (
+            patch.object(
+                archive_services,
+                "_wom_kit_project_version_update_approval_authority_matches",
+                return_value=True,
+            ),
+            patch.object(
+                archive_services,
+                "_wom_kit_project_version_update_legacy_core",
+                side_effect=AssertionError(
+                    "hardlinked cleanup evidence entered project writer"
+                ),
+            ) as legacy_core,
+        ):
+            dry_run_result = archive_services.wom_kit_project_version_update(
+                self.project,
+                target="v0.4.17",
+                dry_run=True,
+            )
+            approval_result = (
+                archive_services
+                ._wom_kit_project_version_update_live_approval_transaction(
+                    self.project,
+                    target="v0.4.17",
+                    reviewed_by="person:hardlink-reviewer",
+                    affirm_external_writers_quiescent=True,
+                    approval_executor=lambda *_args, **_kwargs: (
+                        approval_calls.append(True)
+                    ),
+                    _expected_approval_root=self.project,
+                    _expected_archive_id="archive-identity",
+                )
+            )
+        self.assertEqual(dry_run_result, approval_result)
+        self.assertFalse(dry_run_result["ok"])
+        self.assertEqual(
+            dry_run_result["status"],
+            "terminal_cleanup_outcome_unknown",
+        )
+        self.assertEqual(
+            dry_run_result["reason_code"],
+            "project_version_update_terminal_cleanup_outcome_unknown",
+        )
+        self.assertFalse(dry_run_result["domain_writer_entered"])
+        self.assertEqual(dry_run_result["project_domain_files_written"], [])
+        self.assertEqual(dry_run_result["files_written"], [])
+        self.assertEqual(approval_calls, [])
+        legacy_core.assert_not_called()
 
     def assert_reopen_guard_failure_closes_all_handles(
         self,
@@ -3913,6 +3975,11 @@ class ProjectUpdateTransactionTests(unittest.TestCase):
         with (
             patch.object(
                 archive_services,
+                "_wom_kit_project_version_update_approval_authority_matches",
+                return_value=True,
+            ),
+            patch.object(
+                archive_services,
                 "_project_update_resume_preapproval_transaction",
                 return_value=None,
             ),
@@ -4029,11 +4096,17 @@ class ProjectUpdateTransactionTests(unittest.TestCase):
                     state.terminal_handoff_sha256 = "sha256:" + "a" * 64
                     return domain_result
 
+                def cleanup_gate(*_args, **kwargs):
+                    observed = kwargs.get("_handoff_observation_out")
+                    if isinstance(observed, list):
+                        observed.append(None)
+                    return None
+
                 with (
                     patch.object(
                         archive_services,
                         "_project_update_terminal_cleanup_unknown_gate_read_only",
-                        return_value=None,
+                        side_effect=cleanup_gate,
                     ),
                     patch.object(
                         archive_services,
@@ -4044,6 +4117,11 @@ class ProjectUpdateTransactionTests(unittest.TestCase):
                         archive_services,
                         "_project_update_reopen_durable_state",
                         return_value=(state, lifetime),
+                    ),
+                    patch.object(
+                        archive_services,
+                        "_project_update_terminal_execution_lease",
+                        return_value=nullcontext(),
                     ),
                 ):
                     result = archive_services._wom_kit_project_version_update_resume_live_transaction(
@@ -4134,11 +4212,17 @@ class ProjectUpdateTransactionTests(unittest.TestCase):
                 "synthetic_domain_failure"
             )
 
+        def cleanup_gate(*_args, **kwargs):
+            observed = kwargs.get("_handoff_observation_out")
+            if isinstance(observed, list):
+                observed.append(None)
+            return None
+
         with (
             patch.object(
                 archive_services,
                 "_project_update_terminal_cleanup_unknown_gate_read_only",
-                return_value=None,
+                side_effect=cleanup_gate,
             ),
             patch.object(
                 archive_services,
@@ -4154,6 +4238,11 @@ class ProjectUpdateTransactionTests(unittest.TestCase):
                         close_after_service_transaction=close_runner
                     ),
                 ),
+            ),
+            patch.object(
+                archive_services,
+                "_project_update_terminal_execution_lease",
+                return_value=nullcontext(),
             ),
         ):
             with self.assertRaisesRegex(
@@ -5184,6 +5273,167 @@ class ProjectUpdateTransactionTests(unittest.TestCase):
         self.assertTrue(all(path.is_file() for path in consumed_paths))
 
     @unittest.skipUnless(os.name == "nt", "terminal mutation is Windows-only")
+    def test_terminal_delivery_acknowledgement_reuses_outer_lease_and_blocks_competitor(
+        self,
+    ) -> None:
+        fixture = self.prepare_terminal_delivery_fixture(
+            "outer-lease-acknowledgement"
+        )
+        handoff, _guard = (
+            archive_services._project_update_terminal_handoff_paths(
+                self.project
+            )
+        )
+        display_pending = (
+            archive_services._project_update_terminal_display_pending_path(
+                self.project
+            )
+        )
+        competing_acquired: list[bool] = []
+        competing_finished = threading.Event()
+
+        def competing_guard() -> None:
+            try:
+                with (
+                    archive_services
+                    ._project_update_terminal_control_boundary(self.project)
+                ):
+                    competing_acquired.append(True)
+            except OSError:
+                competing_acquired.append(False)
+            finally:
+                competing_finished.set()
+
+        with archive_services._project_update_terminal_control_boundary(
+            self.project
+        ):
+            competitor = threading.Thread(target=competing_guard)
+            competitor.start()
+            self.assertTrue(competing_finished.wait(timeout=5.0))
+            competitor.join(timeout=5.0)
+            self.assertFalse(competitor.is_alive())
+            self.assertEqual(competing_acquired, [False])
+            acknowledged = (
+                archive_services
+                ._project_update_acknowledge_terminal_result_delivery(
+                    self.project,
+                    fixture["result"],
+                    output_relative=str(fixture["output_relative"]),
+                    run_id=str(fixture["run_id"]),
+                    operation_ref=str(fixture["operation_ref"]),
+                )
+            )
+
+        self.assertTrue(acknowledged)
+        self.assertFalse(handoff.exists())
+        self.assertEqual(
+            display_pending.read_bytes(),
+            fixture["handoff_raw"],
+        )
+        self.assertFalse(
+            archive_services._project_update_terminal_consumed_path(
+                self.project,
+                str(fixture["handoff_sha256"]),
+            ).exists()
+        )
+
+    @unittest.skipUnless(os.name == "nt", "terminal mutation is Windows-only")
+    def test_stale_unbound_boundary_refuses_real_display_pending_before_output(
+        self,
+    ) -> None:
+        initial = (
+            archive_cli
+            ._project_version_update_strict_active_handoff_snapshot(
+                self.project
+            )
+        )
+        self.assertIsNone(initial)
+        fixture = self.prepare_terminal_delivery_fixture(
+            "stale-real-display-pending"
+        )
+        acknowledged = (
+            archive_services
+            ._project_update_acknowledge_terminal_result_delivery(
+                self.project,
+                fixture["result"],
+                output_relative=str(fixture["output_relative"]),
+                run_id=str(fixture["run_id"]),
+                operation_ref=str(fixture["operation_ref"]),
+            )
+        )
+        self.assertTrue(acknowledged)
+
+        handoff, _guard = (
+            archive_services._project_update_terminal_handoff_paths(
+                self.project
+            )
+        )
+        display_pending = (
+            archive_services._project_update_terminal_display_pending_path(
+                self.project
+            )
+        )
+        consumed = archive_services._project_update_terminal_consumed_path(
+            self.project,
+            str(fixture["handoff_sha256"]),
+        )
+        self.assertFalse(handoff.exists())
+        self.assertEqual(
+            display_pending.read_bytes(),
+            fixture["handoff_raw"],
+        )
+        self.assertFalse(consumed.exists())
+
+        diagnostics = self.project / ".zettel-kasten" / "diagnostics"
+        diagnostics_before = {
+            path.relative_to(diagnostics).as_posix(): path.read_bytes()
+            for path in diagnostics.rglob("*")
+            if path.is_file()
+        }
+        operations = self.project.joinpath(
+            *archive_cli.operation_control.PROJECT_JOURNAL_RELATIVE.parts
+        )
+        self.assertFalse(os.path.lexists(operations))
+
+        with ExitStack() as stale_stack:
+            with self.assertRaises(
+                archive_cli._ProjectVersionUpdateCleanupUnknownPreflight
+            ) as raised:
+                archive_cli._project_version_update_enter_unbound_terminal_delivery_boundary(
+                    stale_stack,
+                    self.project,
+                    expected_observation=initial,
+                )
+
+        result = raised.exception.result
+        self.assertEqual(result["status"], "terminal_cleanup_outcome_unknown")
+        self.assertEqual(result["effects_state"], "unknown")
+        self.assertFalse(result["archive_identity_metadata_read"])
+        self.assertFalse(result["client_archive_domain_content_accessed"])
+        self.assertFalse(result["domain_writer_entered"])
+        self.assertEqual(result["files_written"], [])
+        serialized = json.dumps(result, sort_keys=True)
+        self.assertNotIn(str(self.project), serialized)
+        self.assertIsNone(
+            re.search(r"(?i)(?<![A-Za-z0-9])[A-Z]:[\\/]", serialized)
+        )
+        self.assertFalse(handoff.exists())
+        self.assertEqual(
+            display_pending.read_bytes(),
+            fixture["handoff_raw"],
+        )
+        self.assertFalse(consumed.exists())
+        self.assertEqual(
+            {
+                path.relative_to(diagnostics).as_posix(): path.read_bytes()
+                for path in diagnostics.rglob("*")
+                if path.is_file()
+            },
+            diagnostics_before,
+        )
+        self.assertFalse(os.path.lexists(operations))
+
+    @unittest.skipUnless(os.name == "nt", "terminal mutation is Windows-only")
     def test_terminal_delivery_waits_for_transaction_cleanup_before_ack(
         self,
     ) -> None:
@@ -6104,6 +6354,10 @@ class ProjectUpdateTransactionTests(unittest.TestCase):
         self.assertEqual(cleanup_calls, [])
         self.assertEqual(closed, ["directory", "runner"])
 
+    @unittest.skipUnless(
+        os.name == "nt",
+        "approved project-update mutation is Windows-only",
+    )
     def test_fresh_executor_gets_publication_boundary_released_before_writer(
         self,
     ) -> None:
@@ -6116,6 +6370,8 @@ class ProjectUpdateTransactionTests(unittest.TestCase):
             live_component_sha256=live,
         )
         state = SimpleNamespace(
+            inspection_root=self.project,
+            project_root=self.project,
             transaction=project_transaction,
             expected_lock_bytes=lock_bytes,
             approved_plan_sha256=None,
@@ -6368,6 +6624,27 @@ class ProjectUpdateTransactionTests(unittest.TestCase):
         )
         self.assertEqual(completed.phase, "completed")
 
+    def prepare_terminal_reserved_abort(
+        self,
+        *,
+        transaction_ref: str = DEFAULT_TRANSACTION_REF,
+    ):
+        reserved = ProjectUpdateTransaction.reserve(
+            self.project,
+            project_identity_sha256=digest("project-identity"),
+            requested_target_tag="v0.4.17",
+            transaction_ref=transaction_ref,
+            ownership_nonce="abcdef0123456789abcdef0123456789",
+            created_at=self.CREATED_AT,
+        )
+        lock_bytes = reserved.acquire_lock()
+        evidence = reserved.reservation_abort_plan_sha256()
+        terminal = reserved.abort_before_intent_seal(
+            expected_lock_bytes=lock_bytes,
+            candidate_cleanup_evidence_sha256=evidence,
+        )
+        return reserved, terminal
+
     def test_reserved_fetch_failure_abort_is_durable_and_idempotent(self) -> None:
         reserved = ProjectUpdateTransaction.reserve(
             self.project,
@@ -6405,6 +6682,765 @@ class ProjectUpdateTransactionTests(unittest.TestCase):
         self.assert_code(
             "project_update_transaction_state_transition_invalid",
             lambda: reopened.acquire_lock(),
+        )
+
+    @unittest.skipUnless(
+        os.name == "nt",
+        "exact project-update cleanup mutation is Windows-only",
+    )
+    def test_reserved_abort_terminal_history_cleanup_leaves_canonical_inert_proof(
+        self,
+    ) -> None:
+        reserved, terminal = self.prepare_terminal_reserved_abort()
+        authority = terminal["receipt_sha256"]
+        discovered = (
+            transaction_module
+            .discover_exact_reservation_abort_cleanup_read_only(self.project)
+        )
+        self.assertEqual(len(discovered), 1)
+        self.assertEqual(discovered[0].transaction_ref, reserved.transaction_ref)
+        self.assertEqual(discovered[0].state, "terminal_original")
+        self.assertIsNone(discovered[0].cleanup_authority_sha256)
+
+        self.assertTrue(
+            transaction_module.compact_exact_reservation_abort_history(
+                self.project,
+                reserved.transaction_ref,
+                cleanup_authority_sha256=authority,
+            )
+        )
+        parent = reserved.transaction_root.parent
+        proof = parent / f".cleanup-proof_{reserved.transaction_ref}.json"
+        proof_raw = proof.read_bytes()
+        proof_info = proof.stat()
+        document = json.loads(proof_raw)
+        self.assertEqual(
+            document["schema"],
+            transaction_module.RESERVATION_ABORT_CLEANUP_PLAN_SCHEMA,
+        )
+        self.assertEqual(document["cleanup_authority_sha256"], authority)
+        self.assertEqual(document["abort_receipt_sha256"], authority)
+        self.assertEqual(
+            [item["relative_path"] for item in document["files"]],
+            [
+                "append.guard",
+                "marker.json",
+                "reservation-abort-intent.json",
+                "reservation-abort-receipt.json",
+                "reservation-lock-backlink.json",
+            ],
+        )
+        ProjectUpdateTransaction._validate_cleanup_plan_document(
+            document,
+            reserved.transaction_ref,
+            authority,
+        )
+        self.assertFalse(reserved.transaction_root.exists())
+        self.assertFalse(
+            (parent / f".cleanup_{reserved.transaction_ref}").exists()
+        )
+        self.assertEqual(
+            transaction_module
+            .discover_exact_reservation_abort_cleanup_read_only(self.project),
+            (),
+        )
+
+        self.assertTrue(
+            transaction_module.compact_exact_reservation_abort_history(
+                self.project,
+                reserved.transaction_ref,
+                cleanup_authority_sha256=authority,
+            )
+        )
+        self.assertTrue(
+            transaction_module.ReservedProjectUpdateTransaction.resume_cleanup(
+                self.project,
+                reserved.transaction_ref,
+                cleanup_authority_sha256=authority,
+            )
+        )
+        proof_after = proof.stat()
+        self.assertEqual(proof.read_bytes(), proof_raw)
+        self.assertEqual(
+            (proof_after.st_dev, proof_after.st_ino, proof_after.st_mtime_ns),
+            (proof_info.st_dev, proof_info.st_ino, proof_info.st_mtime_ns),
+        )
+        self.assertEqual(
+            archive_services
+            ._project_update_terminal_cleanup_namespace_classification_read_only(
+                self.project
+            ),
+            ("history_only_exact", 1),
+        )
+
+    @unittest.skipIf(
+        os.name == "nt",
+        "POSIX-only fail-closed mutation boundary",
+    )
+    def test_reserved_abort_cleanup_posix_refuses_before_control_mutation(
+        self,
+    ) -> None:
+        reserved, terminal = self.prepare_terminal_reserved_abort()
+        before = self.tree_snapshot(self.project)
+
+        self.assertFalse(
+            transaction_module.compact_exact_reservation_abort_history(
+                self.project,
+                reserved.transaction_ref,
+                cleanup_authority_sha256=terminal["receipt_sha256"],
+            )
+        )
+
+        self.assertEqual(self.tree_snapshot(self.project), before)
+        discovered = (
+            transaction_module
+            .discover_exact_reservation_abort_cleanup_read_only(self.project)
+        )
+        self.assertEqual(len(discovered), 1)
+        self.assertEqual(discovered[0].state, "terminal_original")
+
+    def test_reserved_abort_cleanup_unsupported_platform_guard_precedes_mutation(
+        self,
+    ) -> None:
+        reserved, terminal = self.prepare_terminal_reserved_abort()
+        before = self.tree_snapshot(self.project)
+
+        with patch.object(transaction_module.os, "name", "posix"):
+            self.assertFalse(
+                reserved.exact_cleanup(
+                    cleanup_authority_sha256=terminal["receipt_sha256"],
+                )
+            )
+            self.assertFalse(
+                transaction_module.ReservedProjectUpdateTransaction
+                .resume_cleanup(
+                    self.project,
+                    reserved.transaction_ref,
+                    cleanup_authority_sha256=terminal["receipt_sha256"],
+                )
+            )
+
+        self.assertEqual(self.tree_snapshot(self.project), before)
+
+    @unittest.skipUnless(
+        os.name == "nt",
+        "exact project-update cleanup mutation is Windows-only",
+    )
+    def test_reserved_abort_cleanup_resumes_after_partial_exact_delete(self) -> None:
+        reserved, terminal = self.prepare_terminal_reserved_abort()
+        authority = terminal["receipt_sha256"]
+        real_delete = transaction_module._delete_exact_cleanup_file
+        deleted = {"count": 0}
+
+        def crash_after_first_delete(project: Path, path: Path, snapshot) -> None:
+            real_delete(project, path, snapshot)
+            deleted["count"] += 1
+            if deleted["count"] == 1:
+                raise OSError("synthetic process loss after exact delete")
+
+        with patch.object(
+            transaction_module,
+            "_delete_exact_cleanup_file",
+            side_effect=crash_after_first_delete,
+        ):
+            self.assertFalse(
+                reserved.exact_cleanup(cleanup_authority_sha256=authority)
+            )
+        tombstone = (
+            reserved.transaction_root.parent
+            / f".cleanup_{reserved.transaction_ref}"
+        )
+        self.assertFalse(reserved.transaction_root.exists())
+        self.assertTrue(tombstone.is_dir())
+        discovered = (
+            transaction_module
+            .discover_exact_reservation_abort_cleanup_read_only(self.project)
+        )
+        self.assertEqual(discovered[0].state, "cleanup_tombstone")
+        self.assertEqual(discovered[0].cleanup_authority_sha256, authority)
+        self.assertFalse(
+            transaction_module.compact_exact_reservation_abort_history(
+                self.project,
+                reserved.transaction_ref,
+                cleanup_authority_sha256=digest("wrong-abort-cleanup-authority"),
+            )
+        )
+        self.assertTrue(tombstone.is_dir())
+        self.assertTrue(
+            transaction_module.compact_exact_reservation_abort_history(
+                self.project,
+                reserved.transaction_ref,
+                cleanup_authority_sha256=authority,
+            )
+        )
+        self.assertFalse(tombstone.exists())
+
+    @unittest.skipUnless(
+        os.name == "nt",
+        "exact project-update cleanup mutation is Windows-only",
+    )
+    def test_reserved_abort_cleanup_resumes_after_proof_publication(self) -> None:
+        reserved, terminal = self.prepare_terminal_reserved_abort()
+        authority = terminal["receipt_sha256"]
+        real_delete_directory = transaction_module._delete_exact_cleanup_directory
+        crashed = {"done": False}
+
+        def crash_before_tombstone_delete(project: Path, path: Path, snapshot) -> None:
+            if path.name == f".cleanup_{reserved.transaction_ref}" and not crashed["done"]:
+                crashed["done"] = True
+                raise OSError("synthetic process loss after proof publication")
+            real_delete_directory(project, path, snapshot)
+
+        with patch.object(
+            transaction_module,
+            "_delete_exact_cleanup_directory",
+            side_effect=crash_before_tombstone_delete,
+        ):
+            self.assertFalse(
+                reserved.exact_cleanup(cleanup_authority_sha256=authority)
+            )
+        parent = reserved.transaction_root.parent
+        tombstone = parent / f".cleanup_{reserved.transaction_ref}"
+        proof = parent / f".cleanup-proof_{reserved.transaction_ref}.json"
+        self.assertTrue(tombstone.is_dir())
+        self.assertEqual(list(tombstone.iterdir()), [])
+        proof_raw = proof.read_bytes()
+        proof_info = proof.stat()
+        discovered = (
+            transaction_module
+            .discover_exact_reservation_abort_cleanup_read_only(self.project)
+        )
+        self.assertEqual(discovered[0].state, "cleanup_tombstone")
+        self.assertTrue(
+            transaction_module.compact_exact_reservation_abort_history(
+                self.project,
+                reserved.transaction_ref,
+                cleanup_authority_sha256=authority,
+            )
+        )
+        self.assertFalse(tombstone.exists())
+        proof_after = proof.stat()
+        self.assertEqual(proof.read_bytes(), proof_raw)
+        self.assertEqual(
+            (proof_after.st_dev, proof_after.st_ino, proof_after.st_mtime_ns),
+            (proof_info.st_dev, proof_info.st_ino, proof_info.st_mtime_ns),
+        )
+
+    @unittest.skipUnless(
+        os.name == "nt",
+        "exact project-update cleanup mutation is Windows-only",
+    )
+    def test_reserved_abort_cleanup_resumes_after_plan_visibility(self) -> None:
+        reserved, terminal = self.prepare_terminal_reserved_abort()
+        authority = terminal["receipt_sha256"]
+        with patch.object(
+            transaction_module,
+            "_atomic_move_directory_no_replace",
+            side_effect=OSError("synthetic process loss before tombstone move"),
+        ):
+            self.assertFalse(
+                reserved.exact_cleanup(cleanup_authority_sha256=authority)
+            )
+        plan = (
+            reserved.transaction_root
+            / transaction_module.RESERVATION_ABORT_CLEANUP_PLAN_NAME
+        )
+        self.assertTrue(plan.is_file())
+        discovered = (
+            transaction_module
+            .discover_exact_reservation_abort_cleanup_read_only(self.project)
+        )
+        self.assertEqual(discovered[0].state, "planned_original")
+        self.assertEqual(discovered[0].cleanup_authority_sha256, authority)
+        self.assertTrue(
+            transaction_module.compact_exact_reservation_abort_history(
+                self.project,
+                reserved.transaction_ref,
+                cleanup_authority_sha256=authority,
+            )
+        )
+
+    @unittest.skipUnless(os.name == "nt", "NTFS hardlink contract")
+    def test_reserved_abort_planned_cleanup_refuses_external_hardlink(
+        self,
+    ) -> None:
+        reserved, terminal = self.prepare_terminal_reserved_abort()
+        authority = terminal["receipt_sha256"]
+        with patch.object(
+            transaction_module,
+            "_atomic_move_directory_no_replace",
+            side_effect=OSError("synthetic stop after plan durability"),
+        ):
+            self.assertFalse(
+                reserved.exact_cleanup(
+                    cleanup_authority_sha256=authority
+                )
+            )
+        plan = (
+            reserved.transaction_root
+            / transaction_module.RESERVATION_ABORT_CLEANUP_PLAN_NAME
+        )
+        external = (
+            Path(self.temporary.name)
+            / "external-abort-plan-hardlink.json"
+        )
+        plan_before = plan.read_bytes()
+        try:
+            os.link(plan, external)
+        except OSError as failure:
+            self.skipTest(f"hardlink creation unavailable: {failure}")
+        self.assertEqual(plan.stat().st_nlink, 2)
+        self.assertEqual(external.read_bytes(), plan_before)
+
+        self.assert_code(
+            "project_update_transaction_path_unsafe",
+            lambda: transaction_module
+            .discover_exact_reservation_abort_cleanup_read_only(
+                self.project
+            ),
+        )
+        self.assert_cleanup_hardlink_blocks_fresh_writer()
+        self.assertFalse(
+            transaction_module.compact_exact_reservation_abort_history(
+                self.project,
+                reserved.transaction_ref,
+                cleanup_authority_sha256=authority,
+            )
+        )
+        self.assertTrue(reserved.transaction_root.is_dir())
+        self.assertTrue(plan.is_file())
+        self.assertTrue(external.is_file())
+        self.assertEqual(plan.read_bytes(), plan_before)
+        self.assertEqual(external.read_bytes(), plan_before)
+        self.assertEqual(plan.stat().st_nlink, 2)
+
+    @unittest.skipUnless(os.name == "nt", "NTFS hardlink contract")
+    def test_reserved_abort_proof_only_refuses_external_hardlink(
+        self,
+    ) -> None:
+        reserved, terminal = self.prepare_terminal_reserved_abort()
+        authority = terminal["receipt_sha256"]
+        self.assertTrue(
+            transaction_module.compact_exact_reservation_abort_history(
+                self.project,
+                reserved.transaction_ref,
+                cleanup_authority_sha256=authority,
+            )
+        )
+        proof = (
+            reserved.transaction_root.parent
+            / f".cleanup-proof_{reserved.transaction_ref}.json"
+        )
+        external = (
+            Path(self.temporary.name)
+            / "external-abort-proof-hardlink.json"
+        )
+        proof_before = proof.read_bytes()
+        try:
+            os.link(proof, external)
+        except OSError as failure:
+            self.skipTest(f"hardlink creation unavailable: {failure}")
+        self.assertEqual(proof.stat().st_nlink, 2)
+        self.assertEqual(external.read_bytes(), proof_before)
+
+        self.assert_code(
+            "project_update_transaction_cleanup_refused",
+            lambda: transaction_module
+            .discover_exact_reservation_abort_cleanup_read_only(
+                self.project
+            ),
+        )
+        self.assert_cleanup_hardlink_blocks_fresh_writer()
+        self.assertFalse(
+            transaction_module.compact_exact_reservation_abort_history(
+                self.project,
+                reserved.transaction_ref,
+                cleanup_authority_sha256=authority,
+            )
+        )
+        self.assertTrue(proof.is_file())
+        self.assertTrue(external.is_file())
+        self.assertEqual(proof.read_bytes(), proof_before)
+        self.assertEqual(external.read_bytes(), proof_before)
+        self.assertEqual(proof.stat().st_nlink, 2)
+
+    @unittest.skipUnless(os.name == "nt", "NTFS named-stream contract")
+    def test_reserved_abort_cleanup_refuses_named_stream_on_tombstone_plan(
+        self,
+    ) -> None:
+        reserved, terminal = self.prepare_terminal_reserved_abort()
+        authority = terminal["receipt_sha256"]
+        with patch.object(
+            transaction_module,
+            "_delete_exact_cleanup_file",
+            side_effect=OSError("synthetic stop before exact delete"),
+        ):
+            self.assertFalse(
+                reserved.exact_cleanup(cleanup_authority_sha256=authority)
+            )
+
+        parent = reserved.transaction_root.parent
+        tombstone = parent / f".cleanup_{reserved.transaction_ref}"
+        plan = tombstone / transaction_module.RESERVATION_ABORT_CLEANUP_PLAN_NAME
+        proof = parent / f".cleanup-proof_{reserved.transaction_ref}.json"
+        named_stream = Path(str(plan) + ":foreign")
+        try:
+            named_stream.write_bytes(b"foreign-abort-cleanup-plan-stream")
+        except OSError as exc:
+            self.skipTest(f"named stream creation unavailable: {exc}")
+        plan_before = plan.read_bytes()
+        names_before = tuple(sorted(item.name for item in tombstone.iterdir()))
+
+        self.assert_code(
+            "project_update_transaction_cleanup_refused",
+            lambda: transaction_module
+            .discover_exact_reservation_abort_cleanup_read_only(self.project),
+        )
+        self.assertFalse(
+            transaction_module.compact_exact_reservation_abort_history(
+                self.project,
+                reserved.transaction_ref,
+                cleanup_authority_sha256=authority,
+            )
+        )
+        self.assertTrue(tombstone.is_dir())
+        self.assertFalse(proof.exists())
+        self.assertEqual(plan.read_bytes(), plan_before)
+        self.assertEqual(
+            named_stream.read_bytes(),
+            b"foreign-abort-cleanup-plan-stream",
+        )
+        self.assertEqual(
+            tuple(sorted(item.name for item in tombstone.iterdir())),
+            names_before,
+        )
+
+    @unittest.skipUnless(os.name == "nt", "NTFS named-stream contract")
+    def test_reserved_abort_cleanup_refuses_named_stream_on_published_proof(
+        self,
+    ) -> None:
+        reserved, terminal = self.prepare_terminal_reserved_abort()
+        authority = terminal["receipt_sha256"]
+        real_delete_directory = transaction_module._delete_exact_cleanup_directory
+
+        def stop_before_tombstone_delete(project: Path, path: Path, snapshot) -> None:
+            if path.name == f".cleanup_{reserved.transaction_ref}":
+                raise OSError("synthetic stop after proof publication")
+            real_delete_directory(project, path, snapshot)
+
+        with patch.object(
+            transaction_module,
+            "_delete_exact_cleanup_directory",
+            side_effect=stop_before_tombstone_delete,
+        ):
+            self.assertFalse(
+                reserved.exact_cleanup(cleanup_authority_sha256=authority)
+            )
+
+        parent = reserved.transaction_root.parent
+        tombstone = parent / f".cleanup_{reserved.transaction_ref}"
+        proof = parent / f".cleanup-proof_{reserved.transaction_ref}.json"
+        named_stream = Path(str(proof) + ":foreign")
+        try:
+            named_stream.write_bytes(b"foreign-abort-cleanup-proof-stream")
+        except OSError as exc:
+            self.skipTest(f"named stream creation unavailable: {exc}")
+        proof_before = proof.read_bytes()
+
+        self.assert_code(
+            "project_update_transaction_cleanup_refused",
+            lambda: transaction_module
+            .discover_exact_reservation_abort_cleanup_read_only(self.project),
+        )
+        self.assertFalse(
+            transaction_module.compact_exact_reservation_abort_history(
+                self.project,
+                reserved.transaction_ref,
+                cleanup_authority_sha256=authority,
+            )
+        )
+        self.assertTrue(tombstone.is_dir())
+        self.assertEqual(list(tombstone.iterdir()), [])
+        self.assertEqual(proof.read_bytes(), proof_before)
+        self.assertEqual(
+            named_stream.read_bytes(),
+            b"foreign-abort-cleanup-proof-stream",
+        )
+
+    @unittest.skipUnless(
+        os.name == "nt",
+        "exact project-update cleanup mutation is Windows-only",
+    )
+    def test_reserved_abort_cleanup_actual_process_exit_resumes(self) -> None:
+        reserved, terminal = self.prepare_terminal_reserved_abort()
+        authority = terminal["receipt_sha256"]
+        worker = "\n".join(
+            (
+                "import os, sys",
+                "from pathlib import Path",
+                "from wom_kit import project_update_transaction as module",
+                "reserved = module.ReservedProjectUpdateTransaction.open(Path(sys.argv[1]), sys.argv[2])",
+                "real_delete = module._delete_exact_cleanup_file",
+                "def crash(project, path, snapshot):",
+                "    real_delete(project, path, snapshot)",
+                "    os._exit(91)",
+                "module._delete_exact_cleanup_file = crash",
+                "reserved.exact_cleanup(cleanup_authority_sha256=sys.argv[3])",
+                "raise SystemExit(99)",
+            )
+        )
+        self.run_hard_exit_worker(
+            worker,
+            str(self.project),
+            reserved.transaction_ref,
+            authority,
+            expected_returncode=91,
+        )
+        discovered = (
+            transaction_module
+            .discover_exact_reservation_abort_cleanup_read_only(self.project)
+        )
+        self.assertEqual(discovered[0].state, "cleanup_tombstone")
+        self.assertTrue(
+            transaction_module.compact_exact_reservation_abort_history(
+                self.project,
+                reserved.transaction_ref,
+                cleanup_authority_sha256=authority,
+            )
+        )
+
+    def test_reserved_abort_cleanup_refuses_unknown_tampered_live_and_proof_collision(
+        self,
+    ) -> None:
+        original_project = self.project
+        cases = ("unknown", "tampered", "live_lock", "proof_collision")
+        try:
+            for index, case in enumerate(cases, start=1):
+                with self.subTest(case=case):
+                    self.project = Path(self.temporary.name) / f"abort-{index}"
+                    self.project.mkdir()
+                    reserved, terminal = self.prepare_terminal_reserved_abort()
+                    authority = terminal["receipt_sha256"]
+                    root = reserved.transaction_root
+                    parent = root.parent
+                    if case == "unknown":
+                        changed = root / "unexpected-private.bin"
+                        changed.write_bytes(b"must remain")
+                    elif case == "tampered":
+                        changed = root / "reservation-abort-receipt.json"
+                        changed.write_bytes(b"tampered receipt\n")
+                    elif case == "live_lock":
+                        changed = (
+                            self.project
+                            / ".zettel-kasten"
+                            / "version-update.lock"
+                        )
+                        changed.write_bytes(b"foreign live lock")
+                    else:
+                        changed = (
+                            parent
+                            / f".cleanup-proof_{reserved.transaction_ref}.json"
+                        )
+                        changed.write_bytes(b"preexisting proof collision\n")
+                    changed_before = changed.read_bytes()
+                    self.assertFalse(
+                        reserved.exact_cleanup(
+                            cleanup_authority_sha256=authority
+                        )
+                    )
+                    self.assertTrue(root.is_dir())
+                    self.assertEqual(changed.read_bytes(), changed_before)
+                    self.assertFalse(
+                        (
+                            root
+                            / transaction_module
+                            .RESERVATION_ABORT_CLEANUP_PLAN_NAME
+                        ).exists()
+                    )
+        finally:
+            self.project = original_project
+
+    def test_reserved_abort_cleanup_refuses_symlink_without_mutation(self) -> None:
+        reserved, terminal = self.prepare_terminal_reserved_abort()
+        authority = terminal["receipt_sha256"]
+        link = reserved.transaction_root / "unexpected-link"
+        try:
+            os.symlink(reserved.transaction_root / "marker.json", link)
+        except OSError:
+            link.write_bytes(b"synthetic reparse sentinel")
+            link_info = link.lstat()
+            link_identity = (int(link_info.st_dev), int(link_info.st_ino))
+            real_is_reparse = transaction_module._is_reparse
+
+            def identify_synthetic_reparse(info) -> bool:
+                return (
+                    (int(info.st_dev), int(info.st_ino)) == link_identity
+                    or real_is_reparse(info)
+                )
+
+            with patch.object(
+                transaction_module,
+                "_is_reparse",
+                side_effect=identify_synthetic_reparse,
+            ):
+                self.assertFalse(
+                    reserved.exact_cleanup(
+                        cleanup_authority_sha256=authority
+                    )
+                )
+            self.assertEqual(link.read_bytes(), b"synthetic reparse sentinel")
+            self.assertFalse(
+                (
+                    reserved.transaction_root
+                    / transaction_module.RESERVATION_ABORT_CLEANUP_PLAN_NAME
+                ).exists()
+            )
+            return
+        self.assertFalse(
+            reserved.exact_cleanup(cleanup_authority_sha256=authority)
+        )
+        self.assertTrue(link.is_symlink())
+        self.assertFalse(
+            (
+                reserved.transaction_root
+                / transaction_module.RESERVATION_ABORT_CLEANUP_PLAN_NAME
+            ).exists()
+        )
+
+    @unittest.skipUnless(
+        os.name == "nt",
+        "exact project-update cleanup mutation is Windows-only",
+    )
+    def test_reserved_abort_cleanup_refuses_same_byte_file_identity_drift(self) -> None:
+        reserved, terminal = self.prepare_terminal_reserved_abort()
+        authority = terminal["receipt_sha256"]
+        real_move = transaction_module._atomic_move_directory_no_replace
+
+        def replace_marker_then_move(source: Path, destination: Path) -> None:
+            marker = source / "marker.json"
+            replacement = source / "marker.replacement"
+            replacement.write_bytes(marker.read_bytes())
+            os.replace(replacement, marker)
+            real_move(source, destination)
+
+        with patch.object(
+            transaction_module,
+            "_atomic_move_directory_no_replace",
+            side_effect=replace_marker_then_move,
+        ):
+            self.assertFalse(
+                reserved.exact_cleanup(cleanup_authority_sha256=authority)
+            )
+        parent = reserved.transaction_root.parent
+        tombstone = parent / f".cleanup_{reserved.transaction_ref}"
+        proof = parent / f".cleanup-proof_{reserved.transaction_ref}.json"
+        self.assertTrue(tombstone.is_dir())
+        self.assertFalse(proof.exists())
+        self.assertEqual((tombstone / "marker.json").read_bytes(), (
+            json.dumps(
+                reserved.reservation.document(),
+                ensure_ascii=True,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("ascii")
+            + b"\n"
+        ))
+        self.assertFalse(
+            transaction_module.compact_exact_reservation_abort_history(
+                self.project,
+                reserved.transaction_ref,
+                cleanup_authority_sha256=authority,
+            )
+        )
+        self.assertTrue(tombstone.is_dir())
+
+    @unittest.skipUnless(
+        os.name == "nt",
+        "exact project-update cleanup mutation is Windows-only",
+    )
+    def test_reserved_abort_cleanup_discovery_excludes_exact_abort_tombstone_from_generic(
+        self,
+    ) -> None:
+        generic_ref = "update_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        generic = self.create_transaction(transaction_ref=generic_ref)
+        self.finish_forward(generic)
+        with patch.object(
+            ProjectUpdateTransaction,
+            "_resume_cleanup_paths",
+            return_value=False,
+        ):
+            self.assertFalse(
+                generic.exact_cleanup(
+                    cleanup_authority_sha256=digest("generic-cleanup")
+                )
+            )
+        abort_ref = "update_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        reserved, terminal = self.prepare_terminal_reserved_abort(
+            transaction_ref=abort_ref
+        )
+        authority = terminal["receipt_sha256"]
+        with patch.object(
+            transaction_module.ReservedProjectUpdateTransaction,
+            "_resume_abort_cleanup_paths",
+            return_value=False,
+        ):
+            self.assertFalse(
+                reserved.exact_cleanup(cleanup_authority_sha256=authority)
+            )
+
+        discovered = (
+            transaction_module
+            .discover_exact_reservation_abort_cleanup_read_only(self.project)
+        )
+        self.assertEqual(
+            [(item.transaction_ref, item.state) for item in discovered],
+            [(abort_ref, "cleanup_tombstone")],
+        )
+        generic_inspection = (
+            ProjectUpdateTransaction
+            .discover_complete_cleanup_tombstone_for_resume_read_only(self.project)
+        )
+        self.assertIsNotNone(generic_inspection)
+        self.assertEqual(generic_inspection.transaction_ref, generic_ref)
+        self.assertTrue(
+            transaction_module.compact_exact_reservation_abort_history(
+                self.project,
+                abort_ref,
+                cleanup_authority_sha256=authority,
+            )
+        )
+        generic_after = (
+            ProjectUpdateTransaction
+            .discover_complete_cleanup_tombstone_for_resume_read_only(self.project)
+        )
+        self.assertEqual(generic_after.transaction_ref, generic_ref)
+
+    @unittest.skipUnless(
+        os.name == "nt",
+        "exact project-update cleanup mutation is Windows-only",
+    )
+    def test_reserved_abort_cleanup_all_reports_exact_progress(self) -> None:
+        first_ref = "update_cccccccccccccccccccccccccccccccc"
+        second_ref = "update_dddddddddddddddddddddddddddddddd"
+        self.prepare_terminal_reserved_abort(transaction_ref=first_ref)
+        self.prepare_terminal_reserved_abort(transaction_ref=second_ref)
+        result = transaction_module.compact_exact_reservation_abort_histories(
+            self.project,
+            cleanup_authority_sha256=digest("abort-cleanup-batch"),
+        )
+        self.assertEqual(
+            result,
+            {
+                "completed_count": 2,
+                "completed_refs": [first_ref, second_ref],
+                "discovered_count": 2,
+                "failed_ref": None,
+                "ok": True,
+                "remaining_refs": [],
+                "schema": (
+                    transaction_module.RESERVATION_ABORT_CLEANUP_RESULT_SCHEMA
+                ),
+            },
         )
 
     def test_reserved_partial_candidate_abort_refuses_and_preserves(self) -> None:
@@ -6749,7 +7785,19 @@ class ProjectUpdateTransactionTests(unittest.TestCase):
                             {
                             "ok": False,
                             "status": "terminal_cleanup_outcome_unknown",
+                            "reason_code": (
+                                "project_version_update_terminal_cleanup_outcome_unknown"
+                            ),
+                            "reason_codes": [
+                                "project_version_update_terminal_cleanup_outcome_unknown"
+                            ],
+                            "blocker_codes": [
+                                "project_version_update_terminal_cleanup_outcome_unknown"
+                            ],
+                            "lifecycle_action": "project_version_update",
+                            "error_class": "reconciliation",
                             "effects_state": "unknown",
+                            "reconciliation_required": True,
                             "outcome_basis": (
                                 "terminal_cleanup_residue_observed_or_could_not_be_ruled_out"
                             ),
@@ -6771,6 +7819,10 @@ class ProjectUpdateTransactionTests(unittest.TestCase):
                             "client_archive_domain_content_accessed": False,
                             "project_domain_files_written": [],
                             "files_written": [],
+                            "next_safe_actions": [
+                                "Stop without deleting private update metadata, changing the project pin, or retrying approval.",
+                                "Send the content-free result to the WOM maintainer for forensic review.",
+                            ],
                             },
                         )
                     self.assertEqual(executor_calls, [])
@@ -6992,16 +8044,254 @@ class ProjectUpdateTransactionTests(unittest.TestCase):
             )
         self.assertEqual(self.tree_snapshot(self.project), before)
 
-    def test_public_resume_retries_regular_locator_when_cleanup_scan_sees_new_lock(
+    @unittest.skipUnless(
+        os.name == "nt",
+        "approved project-update mutation is Windows-only",
+    )
+    def test_abort_compaction_effect_is_preserved_on_mixed_normal_resume_result(
+        self,
+    ) -> None:
+        normal = self.create_transaction(
+            transaction_ref="update_11111111111111111111111111111111"
+        )
+        self.finish_forward(normal)
+        abort_ref = "update_22222222222222222222222222222222"
+        abort = ProjectUpdateTransaction.reserve(
+            self.project,
+            project_identity_sha256=digest("abort-history-project"),
+            requested_target_tag="v0.4.17",
+            transaction_ref=abort_ref,
+            ownership_nonce="1234567890abcdef1234567890abcdef",
+            created_at=self.CREATED_AT,
+        )
+        abort_lock = abort.acquire_lock()
+        abort.abort_before_intent_seal(
+            expected_lock_bytes=abort_lock,
+        )
+        recovered = {
+            "ok": True,
+            "status": "normal_resume_completed",
+            "files_written": [
+                ".zettel-kasten/installed-version.txt"
+            ],
+        }
+
+        with (
+            patch.object(
+                archive_services,
+                "_wom_kit_project_version_update_approval_authority_matches",
+                return_value=True,
+            ),
+            patch.object(
+                archive_services,
+                "_project_update_resume_preapproval_transaction",
+                return_value=recovered,
+            ) as normal_resume,
+        ):
+            result = (
+                archive_services
+                ._wom_kit_project_version_update_resume_live_transaction(
+                    self.project,
+                    target=None,
+                    reviewed_by=None,
+                    transaction_ref=None,
+                    approval_executor=lambda *_args, **_kwargs: self.fail(
+                        "mixed normal result entered approval executor"
+                    ),
+                    _expected_approval_root=self.project,
+                    _expected_archive_id="archive-identity",
+                )
+            )
+
+        self.assertEqual(result["status"], "normal_resume_completed")
+        self.assertEqual(
+            result["files_written"],
+            [".zettel-kasten/installed-version.txt"],
+        )
+        self.assertEqual(result["files_written_scope"], "project_domain_only")
+        self.assertEqual(result["terminal_abort_histories_compacted"], 1)
+        self.assertEqual(result["cleanup_proofs_written_or_verified"], 1)
+        self.assertEqual(
+            result["terminal_abort_history_compaction_state"],
+            "complete",
+        )
+        self.assertFalse(
+            result["terminal_abort_history_compaction_incomplete"]
+        )
+        self.assertTrue(
+            result["effect_summary"]["project_domain_writes_performed"]
+        )
+        self.assertEqual(
+            result["effect_summary"]["project_domain_files_written"],
+            [".zettel-kasten/installed-version.txt"],
+        )
+        self.assertTrue(
+            result["effect_summary"][
+                "durable_control_evidence_written_or_verified"
+            ]
+        )
+        self.assertTrue(
+            result["effect_summary"][
+                "terminal_abort_history_compaction_performed_or_verified"
+            ]
+        )
+        self.assertTrue(
+            result["effect_summary"][
+                "private_control_mutation_performed_or_verified"
+            ]
+        )
+        self.assertFalse(
+            result["effect_summary"][
+                "private_control_mutation_may_be_incomplete"
+            ]
+        )
+        self.assertFalse(
+            result["effect_summary"][
+                "terminal_abort_history_cleanup_incomplete"
+            ]
+        )
+        normal_resume.assert_called_once()
+        serialized = json.dumps(result, sort_keys=True)
+        self.assertNotIn(abort_ref, serialized)
+        self.assertNotIn(digest("abort-history-project"), serialized)
+
+    def test_public_resume_ambiguous_lockless_locator_returns_fixed_unknown_result(
+        self,
+    ) -> None:
+        first = self.create_transaction(
+            transaction_ref="update_33333333333333333333333333333333"
+        )
+        self.finish_forward(first)
+        second = self.create_transaction(
+            transaction_ref="update_44444444444444444444444444444444"
+        )
+        self.finish_forward(second)
+        before = self.tree_snapshot(self.project)
+
+        result = (
+            archive_services
+            ._wom_kit_project_version_update_resume_live_transaction(
+                self.project,
+                target=None,
+                reviewed_by=None,
+                transaction_ref=None,
+                approval_executor=lambda *_args, **_kwargs: self.fail(
+                    "ambiguous locator entered approval executor"
+                ),
+                _expected_approval_root=self.project,
+                _expected_archive_id="archive-identity",
+            )
+        )
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(
+            result["status"],
+            "terminal_cleanup_outcome_unknown",
+        )
+        self.assertEqual(
+            result["reason_code"],
+            "project_version_update_terminal_cleanup_outcome_unknown",
+        )
+        self.assertFalse(result["domain_writer_entered"])
+        self.assertEqual(result["project_domain_files_written"], [])
+        self.assertEqual(result["files_written"], [])
+        self.assertEqual(self.tree_snapshot(self.project), before)
+
+    @unittest.skipUnless(os.name == "nt", "NTFS named-stream contract")
+    def test_cleanup_proof_named_stream_blocks_fresh_preview_and_approval(
+        self,
+    ) -> None:
+        transaction = self.create_transaction()
+        self.finish_forward(transaction)
+        cleanup_authority = digest("cleanup-proof-ads-authority")
+        self.assertTrue(
+            transaction.exact_cleanup(
+                cleanup_authority_sha256=cleanup_authority,
+            )
+        )
+        proof = (
+            transaction.transaction_root.parent
+            / f".cleanup-proof_{transaction.transaction_ref}.json"
+        )
+        self.assertTrue(proof.is_file())
+        named_stream = Path(str(proof) + ":private-review-residue")
+        private_stream_bytes = b"PRIVATE-NTFS-PROOF-STREAM"
+        try:
+            named_stream.write_bytes(private_stream_bytes)
+        except OSError as failure:
+            self.skipTest(f"named stream creation unavailable: {failure}")
+        before = self.tree_snapshot(self.project)
+        approval_calls: list[bool] = []
+
+        with (
+            patch.object(
+                archive_services,
+                "_wom_kit_project_version_update_approval_authority_matches",
+                return_value=True,
+            ),
+            patch.object(
+                archive_services,
+                "_wom_kit_project_version_update_legacy_core",
+                side_effect=AssertionError(
+                    "ADS-tainted cleanup proof entered project writer"
+                ),
+            ) as legacy_core,
+        ):
+            dry_run_result = archive_services.wom_kit_project_version_update(
+                self.project,
+                target="v0.4.17",
+                dry_run=True,
+            )
+            approval_result = (
+                archive_services
+                ._wom_kit_project_version_update_live_approval_transaction(
+                    self.project,
+                    target="v0.4.17",
+                    reviewed_by="person:ads-proof-reviewer",
+                    affirm_external_writers_quiescent=True,
+                    approval_executor=lambda *_args, **_kwargs: (
+                        approval_calls.append(True)
+                    ),
+                    _expected_approval_root=self.project,
+                    _expected_archive_id="archive-identity",
+                )
+            )
+
+        self.assertEqual(
+            archive_services
+            ._project_update_terminal_cleanup_artifact_classification_read_only(
+                self.project
+            ),
+            ("unresolved", 0),
+        )
+        self.assertEqual(dry_run_result, approval_result)
+        self.assertFalse(dry_run_result["ok"])
+        self.assertEqual(
+            dry_run_result["status"],
+            "terminal_cleanup_outcome_unknown",
+        )
+        self.assertEqual(
+            dry_run_result["reason_code"],
+            "project_version_update_terminal_cleanup_outcome_unknown",
+        )
+        self.assertFalse(dry_run_result["domain_writer_entered"])
+        self.assertEqual(dry_run_result["project_domain_files_written"], [])
+        self.assertEqual(dry_run_result["files_written"], [])
+        self.assertEqual(approval_calls, [])
+        legacy_core.assert_not_called()
+        self.assertEqual(self.tree_snapshot(self.project), before)
+        self.assertEqual(named_stream.read_bytes(), private_stream_bytes)
+        serialized = json.dumps(dry_run_result, sort_keys=True)
+        self.assertNotIn(str(self.project), serialized)
+        self.assertNotIn(private_stream_bytes.decode("ascii"), serialized)
+
+    def test_public_resume_returns_unknown_when_mock_lock_has_no_namespace_entry(
         self,
     ) -> None:
         not_found = ProjectUpdateTransactionError(
             "project_update_transaction_not_found"
         )
-        recovered = {
-            "ok": True,
-            "status": "new_live_lock_recovered",
-        }
+        before = self.tree_snapshot(self.project)
         with (
             patch.object(
                 transaction_module,
@@ -7020,7 +8310,9 @@ class ProjectUpdateTransactionTests(unittest.TestCase):
             patch.object(
                 archive_services,
                 "_project_update_resume_preapproval_transaction",
-                return_value=recovered,
+                side_effect=AssertionError(
+                    "mock-only active locator entered a writer"
+                ),
             ) as preapproval,
         ):
             result = archive_services._wom_kit_project_version_update_resume_live_transaction(
@@ -7035,16 +8327,24 @@ class ProjectUpdateTransactionTests(unittest.TestCase):
                 _expected_archive_id="archive-identity",
             )
 
-        self.assertEqual(result, recovered)
-        self.assertNotEqual(
-            result.get("status"),
+        self.assertFalse(result["ok"])
+        self.assertEqual(
+            result["status"],
             "terminal_cleanup_outcome_unknown",
         )
-        self.assertEqual(locator.call_count, 3)
-        self.assertEqual(cleanup_scan.call_count, 1)
-        self.assertEqual(preapproval.call_count, 1)
+        self.assertEqual(
+            result["reason_code"],
+            "project_version_update_terminal_cleanup_outcome_unknown",
+        )
+        self.assertFalse(result["domain_writer_entered"])
+        self.assertEqual(result["project_domain_files_written"], [])
+        self.assertEqual(result["files_written"], [])
+        self.assertEqual(locator.call_count, 2)
+        self.assertEqual(cleanup_scan.call_count, 2)
+        preapproval.assert_not_called()
+        self.assertEqual(self.tree_snapshot(self.project), before)
 
-    def test_historical_cleanup_proof_does_not_mask_unique_exact_unlock_tail(
+    def test_untrusted_historical_cleanup_proof_blocks_exact_unlock_tail(
         self,
     ) -> None:
         transaction = self.create_transaction()
@@ -7058,16 +8358,15 @@ class ProjectUpdateTransactionTests(unittest.TestCase):
             / ".cleanup-proof_update_ffffffffffffffffffffffffffffffff.json"
         )
         proof.write_bytes(b"untrusted historical proof")
-        recovered = {
-            "ok": True,
-            "status": "exact_unlock_tail_selected",
-        }
+        before = self.tree_snapshot(self.project)
 
         with (
             patch.object(
                 archive_services,
                 "_project_update_resume_preapproval_transaction",
-                return_value=recovered,
+                side_effect=AssertionError(
+                    "untrusted cleanup proof entered a writer"
+                ),
             ) as preapproval,
             patch.object(
                 transaction_module,
@@ -7089,12 +8388,20 @@ class ProjectUpdateTransactionTests(unittest.TestCase):
                 _expected_archive_id="archive-identity",
             )
 
-        self.assertEqual(result, recovered)
-        self.assertNotEqual(
-            result.get("status"),
+        self.assertFalse(result["ok"])
+        self.assertEqual(
+            result["status"],
             "terminal_cleanup_outcome_unknown",
         )
-        self.assertEqual(preapproval.call_count, 1)
+        self.assertEqual(
+            result["reason_code"],
+            "project_version_update_terminal_cleanup_outcome_unknown",
+        )
+        self.assertFalse(result["domain_writer_entered"])
+        self.assertEqual(result["project_domain_files_written"], [])
+        self.assertEqual(result["files_written"], [])
+        preapproval.assert_not_called()
+        self.assertEqual(self.tree_snapshot(self.project), before)
 
     def test_hidden_approval_id_blocks_empty_reservation_recovery_without_writes(
         self,
@@ -7243,6 +8550,733 @@ class ProjectUpdateTransactionTests(unittest.TestCase):
             self.project, transaction.transaction_ref
         )
         self.assertEqual(len(reopened.inspect().journal.verified_prefix), 1)
+
+    def test_claim_succeeded_handoff_correlates_same_ref_cleanup_tombstone(
+        self,
+    ) -> None:
+        handoff_ref = "update_" + "a" * 32
+        observation = (
+            archive_services._ProjectUpdateTerminalHandoffObservation(
+                state="claim_succeeded_pre_unlock",
+                raw_sha256="sha256:" + "1" * 64,
+                pending_record_sha256="sha256:" + "2" * 64,
+                transaction_ref=handoff_ref,
+            )
+        )
+
+        def observe_handoff(_root, *, _observation_out=None):
+            if isinstance(_observation_out, list):
+                _observation_out.append(observation)
+            return "claim_succeeded_pre_unlock"
+
+        not_found = ProjectUpdateTransactionError(
+            "project_update_transaction_not_found"
+        )
+        for tombstone_ref, expected_status in (
+            (handoff_ref, None),
+            ("update_" + "b" * 32, "terminal_cleanup_outcome_unknown"),
+        ):
+            with self.subTest(tombstone_ref=tombstone_ref):
+                tombstone = SimpleNamespace(transaction_ref=tombstone_ref)
+                with (
+                    patch.object(
+                        archive_services,
+                        "_project_update_terminal_handoff_state_read_only",
+                        side_effect=observe_handoff,
+                    ),
+                    patch.object(
+                        transaction_module,
+                        "active_transaction_ref_for_resume_read_only",
+                        side_effect=not_found,
+                    ),
+                    patch.object(
+                        transaction_module,
+                        "inspect_terminal_cleanup_artifacts_for_resume_read_only",
+                        return_value="exact_cleanup_observed",
+                    ),
+                    patch.object(
+                        archive_services,
+                        "_project_update_terminal_cleanup_artifact_classification_read_only",
+                        return_value=("recoverable_exact", 1),
+                    ),
+                    patch.object(
+                        ProjectUpdateTransaction,
+                        "discover_complete_cleanup_tombstone_for_resume_read_only",
+                        return_value=tombstone,
+                    ),
+                ):
+                    gate = (
+                        archive_services
+                        ._project_update_terminal_cleanup_unknown_gate_read_only(
+                            self.project,
+                            operator_resume_identifiers_supplied=False,
+                        )
+                    )
+                    fresh = (
+                        archive_services
+                        ._project_update_fresh_update_cleanup_preflight_read_only(
+                            self.project
+                        )
+                    )
+                if expected_status is None:
+                    self.assertIsNone(gate)
+                    self.assertEqual(
+                        fresh["status"],
+                        "terminal_cleanup_required",
+                    )
+                else:
+                    self.assertEqual(gate["status"], expected_status)
+                    self.assertEqual(fresh["status"], expected_status)
+
+    @unittest.skipUnless(os.name == "nt", "terminal mutation is Windows-only")
+    def test_fresh_approval_holds_one_exact_terminal_lease_through_callbacks(
+        self,
+    ) -> None:
+        transaction_ref = "update_" + "7" * 32
+        transaction_state = SimpleNamespace(
+            transaction_ref=transaction_ref,
+        )
+        state = SimpleNamespace(
+            inspection_root=self.project,
+            project_root=self.project,
+            transaction=transaction_state,
+            prepared_preview={"status": "prepared"},
+            reviewer="reviewer-a",
+            terminal_update_verified=False,
+        )
+        prepared = archive_services._ProjectVersionUpdatePreparedApproval(
+            preview={"status": "prepared"},
+            state=state,
+        )
+
+        def prepared_generator():
+            yield prepared
+
+        guard_enters: list[str] = []
+        actual_bound_guard = (
+            archive_services._project_update_terminal_bound_guard
+        )
+
+        @contextmanager
+        def counted_bound_guard(*args, **kwargs):
+            guard_enters.append("entered")
+            with actual_bound_guard(*args, **kwargs) as held:
+                yield held
+
+        terminal_checks: list[str] = []
+        domain_result = {"ok": True, "status": "synthetic-complete"}
+
+        def writer(observed_state, _claim):
+            self.assertIs(observed_state, state)
+            self.assertTrue(
+                archive_services
+                ._project_update_terminal_execution_lease_is_held(state)
+            )
+            terminal_checks.append("writer")
+            return domain_result
+
+        def finalizer(observed_state, _claim):
+            self.assertIs(observed_state, state)
+            self.assertTrue(
+                archive_services
+                ._project_update_terminal_execution_lease_is_held(state)
+            )
+            terminal_checks.append("finalizer")
+
+        def checkpoint_guard(observed_state, _claim, *, succeeded):
+            self.assertIs(observed_state, state)
+            self.assertTrue(
+                archive_services
+                ._project_update_terminal_execution_lease_is_held(state)
+            )
+            terminal_checks.append(
+                "succeeded-guard" if succeeded else "started-guard"
+            )
+            return True
+
+        def approval_executor(
+            _preview,
+            continue_started,
+            finalize_succeeded,
+            started_guard,
+            succeeded_guard,
+            **_kwargs,
+        ):
+            self.assertTrue(
+                archive_services
+                ._project_update_terminal_execution_lease_is_held(state)
+            )
+            claim = object()
+            self.assertTrue(started_guard(claim))
+            result = continue_started(
+                claim,
+                "sha256:" + "1" * 64,
+                "sha256:" + "2" * 64,
+            )
+            self.assertTrue(succeeded_guard(claim))
+            finalize_succeeded(claim)
+            return result
+
+        binding = SimpleNamespace(
+            plan_sha256="sha256:" + "1" * 64,
+            target_binding_sha256="sha256:" + "2" * 64,
+        )
+        with (
+            patch.object(
+                archive_services,
+                "_project_update_fresh_update_cleanup_preflight_read_only",
+                return_value=None,
+            ),
+            patch.object(
+                archive_services,
+                "_wom_kit_project_version_update_approval_authority_matches",
+                return_value=True,
+            ),
+            patch.object(
+                archive_services,
+                "_wom_kit_project_version_update_legacy_core_generator",
+                side_effect=lambda *_args, **_kwargs: prepared_generator(),
+            ),
+            patch.object(
+                archive_services,
+                "_project_update_terminal_cleanup_unknown_gate_read_only",
+                return_value=None,
+            ),
+            patch.object(
+                archive_services,
+                "_project_update_terminal_bound_guard",
+                side_effect=counted_bound_guard,
+            ),
+            patch.object(
+                archive_services,
+                "project_version_update_approval_binding",
+                return_value=binding,
+            ),
+            patch.object(
+                archive_services,
+                "assert_same_binding",
+                return_value=None,
+            ),
+            patch.object(
+                archive_services,
+                "_project_update_durable_writer",
+                side_effect=writer,
+            ),
+            patch.object(
+                archive_services,
+                "_project_update_succeeded_claim_finalizer",
+                side_effect=finalizer,
+            ),
+            patch.object(
+                archive_services,
+                "_project_update_claim_checkpoint_guard",
+                side_effect=checkpoint_guard,
+            ),
+        ):
+            result = (
+                archive_services
+                ._wom_kit_project_version_update_live_approval_transaction(
+                    self.project,
+                    target="v0.4.17",
+                    reviewed_by="reviewer-a",
+                    affirm_external_writers_quiescent=True,
+                    approval_executor=approval_executor,
+                    _expected_approval_root=self.project,
+                    _expected_archive_id="archive:test",
+                )
+            )
+
+        self.assertEqual(result, domain_result)
+        self.assertEqual(guard_enters, ["entered"])
+        self.assertEqual(
+            terminal_checks,
+            ["started-guard", "writer", "succeeded-guard", "finalizer"],
+        )
+
+    @unittest.skipUnless(os.name == "nt", "terminal mutation is Windows-only")
+    def test_terminal_execution_lease_is_owned_by_exact_state_identity(self) -> None:
+        transaction = SimpleNamespace(
+            transaction_ref="update_" + "8" * 32,
+        )
+        first = SimpleNamespace(
+            inspection_root=self.project,
+            project_root=self.project,
+            transaction=transaction,
+        )
+        second = SimpleNamespace(
+            inspection_root=self.project,
+            project_root=self.project,
+            transaction=transaction,
+        )
+        with patch.object(
+            archive_services,
+            "_project_update_terminal_cleanup_unknown_gate_read_only",
+            return_value=None,
+        ):
+            with archive_services._project_update_terminal_execution_lease(
+                first,
+                expected_handoff_observation=None,
+                fresh_absence=True,
+            ):
+                self.assertTrue(
+                    archive_services
+                    ._project_update_terminal_execution_lease_is_held(first)
+                )
+                self.assertFalse(
+                    archive_services
+                    ._project_update_terminal_execution_lease_is_held(second)
+                )
+
+    @unittest.skipUnless(os.name == "nt", "terminal mutation is Windows-only")
+    def test_terminal_ready_replay_holds_guard_through_native_and_cleanup(
+        self,
+    ) -> None:
+        handoff_ref = "update_" + "c" * 32
+        pending_record = {
+            "payload": {
+                "plan_sha256": "sha256:" + "1" * 64,
+                "target_binding_sha256": "sha256:" + "2" * 64,
+                "claim_succeeded_checkpoint_sha256": (
+                    "sha256:" + "3" * 64
+                ),
+                "exact_postimage_sha256": "sha256:" + "4" * 64,
+                "legacy_cleanup_authority_sha256": None,
+                "reviewer": "reviewer-a",
+                "transaction_ref": handoff_ref,
+            }
+        }
+        ready_record = {
+            "payload": {
+                "plan_sha256": "sha256:" + "1" * 64,
+                "target_binding_sha256": "sha256:" + "2" * 64,
+                "pending_record_sha256": (
+                    archive_services.project_update_transaction
+                    .sha256_document(pending_record)
+                ),
+                "claim_succeeded_checkpoint_sha256": (
+                    "sha256:" + "3" * 64
+                ),
+                "exact_postimage_sha256": "sha256:" + "4" * 64,
+                "delivery_capability_sha256": (
+                    archive_services.project_update_transaction.sha256_bytes(
+                        b"capability"
+                    )
+                ),
+                "legacy_cleanup_authority_sha256": None,
+            }
+        }
+        active = {
+            "schema": archive_services._PROJECT_UPDATE_TERMINAL_HANDOFF_SCHEMA,
+            "state": "terminal_ready",
+            "pending": pending_record,
+            "ready": ready_record,
+        }
+        active_raw = archive_services._project_update_canonical_bytes(active)
+        observation = (
+            archive_services._ProjectUpdateTerminalHandoffObservation(
+                state="terminal_ready",
+                raw_sha256=(
+                    archive_services.project_update_transaction.sha256_bytes(
+                        active_raw
+                    )
+                ),
+                pending_record_sha256=(
+                    archive_services.project_update_transaction
+                    .sha256_document(pending_record)
+                ),
+                transaction_ref=handoff_ref,
+            )
+        )
+        binding = SimpleNamespace(
+            plan_sha256="sha256:" + "1" * 64,
+            target_binding_sha256="sha256:" + "2" * 64,
+        )
+        domain_result = {"ok": True, "status": "updated_restart_required"}
+        cleanup_entered: list[bool] = []
+        competing_acquired: list[bool] = []
+        competing_finished = threading.Event()
+
+        def competing_guard() -> None:
+            try:
+                with archive_services._project_update_terminal_control_boundary(
+                    self.project
+                ):
+                    competing_acquired.append(True)
+            except OSError:
+                competing_acquired.append(False)
+            finally:
+                competing_finished.set()
+
+        def approval_executor(
+            _preview,
+            _started_writer,
+            finalizer,
+            _started_guard,
+            succeeded_guard,
+            _reviewer,
+            **_kwargs,
+        ):
+            competitor = threading.Thread(target=competing_guard)
+            competitor.start()
+            self.assertTrue(competing_finished.wait(timeout=5.0))
+            competitor.join(timeout=5.0)
+            self.assertFalse(competitor.is_alive())
+            claim = SimpleNamespace(public_reference=lambda: {})
+            self.assertTrue(succeeded_guard(claim))
+            finalizer(claim)
+            return {"ok": True}
+
+        def authenticated_cleanup(*_args, **_kwargs):
+            cleanup_entered.append(True)
+            self.assertEqual(competing_acquired, [False])
+            return True
+
+        with (
+            patch.object(
+                archive_services,
+                "_project_update_read_terminal_document",
+                return_value=(active, active_raw),
+            ),
+            patch.object(
+                archive_services,
+                "_project_update_terminal_handoff_attachments",
+                return_value=(
+                    {"status": "prepared"},
+                    domain_result,
+                    {"target_tag": "v0.4.17"},
+                    {},
+                ),
+            ),
+            patch.object(
+                archive_services,
+                "project_version_update_approval_binding",
+                return_value=binding,
+            ),
+            patch.object(
+                archive_services,
+                "_wom_kit_project_version_update_approval_authority_matches",
+                return_value=True,
+            ),
+            patch.object(
+                archive_services,
+                "_project_update_terminal_delivery_capability",
+                return_value="capability",
+            ),
+            patch.object(
+                archive_services,
+                "_project_update_terminal_record_matches_claim",
+                return_value=True,
+            ),
+            patch.object(
+                archive_services,
+                "_project_update_terminal_postimage_matches",
+                return_value=True,
+            ),
+            patch.object(
+                archive_services,
+                "_project_update_register_terminal_delivery_capability",
+            ),
+            patch.object(
+                archive_services,
+                "_project_update_resume_authenticated_terminal_cleanup",
+                side_effect=authenticated_cleanup,
+            ),
+        ):
+            replayed = (
+                archive_services
+                ._project_update_replay_ready_terminal_handoff(
+                    self.project,
+                    target=None,
+                    reviewed_by=None,
+                    transaction_ref=None,
+                    approval_executor=approval_executor,
+                    expected_approval_root=self.project,
+                    expected_archive_id="archive:test",
+                    _expected_handoff_observation=observation,
+                )
+            )
+
+        self.assertTrue(replayed["ok"])
+        self.assertEqual(competing_acquired, [False])
+        self.assertEqual(cleanup_entered, [True])
+
+    @unittest.skipUnless(os.name == "nt", "terminal mutation is Windows-only")
+    def test_mutation_resume_holds_one_exact_terminal_lease_through_callbacks(
+        self,
+    ) -> None:
+        project_transaction = self.create_transaction(
+            transaction_ref="update_" + "d" * 32
+        )
+        lock_bytes = self.activate(project_transaction)
+        live = self.live_pre()
+        project_transaction.append(
+            phase="lock_backlinked",
+            stage="verified",
+            live_component_sha256=live,
+        )
+        closed: list[str] = []
+        state = SimpleNamespace(
+            inspection_root=self.project,
+            project_root=self.project,
+            transaction=project_transaction,
+            expected_lock_bytes=lock_bytes,
+            prepared_preview={"status": "prepared"},
+            reviewer="reviewer-a",
+            approved_plan_sha256=None,
+            approved_target_binding_sha256=None,
+            terminal_update_verified=False,
+            transaction_cleanup_completed=None,
+            directory_guard=SimpleNamespace(
+                close=lambda: closed.append("directory")
+            ),
+        )
+        lifetime = SimpleNamespace(
+            close_after_service_transaction=lambda: closed.append("runner")
+        )
+        guard_enters: list[str] = []
+        callback_checks: list[str] = []
+        actual_bound_guard = (
+            archive_services._project_update_terminal_bound_guard
+        )
+
+        @contextmanager
+        def counted_bound_guard(*args, **kwargs):
+            guard_enters.append("entered")
+            with actual_bound_guard(*args, **kwargs) as held:
+                yield held
+
+        def assert_owned(label: str) -> None:
+            self.assertTrue(
+                archive_services
+                ._project_update_terminal_execution_lease_is_held(state)
+            )
+            callback_checks.append(label)
+
+        result_payload = {"ok": True, "status": "resume-complete"}
+
+        def writer(observed_state, _claim):
+            self.assertIs(observed_state, state)
+            assert_owned("writer")
+            return result_payload
+
+        def finalizer(observed_state, _claim):
+            self.assertIs(observed_state, state)
+            assert_owned("finalizer")
+
+        def checkpoint_guard(observed_state, _claim, *, succeeded):
+            self.assertIs(observed_state, state)
+            assert_owned(
+                "succeeded-guard" if succeeded else "started-guard"
+            )
+            return True
+
+        def approval_executor(
+            _preview,
+            continue_started,
+            finalize_succeeded,
+            started_guard,
+            succeeded_guard,
+            _reviewer,
+            **_kwargs,
+        ):
+            assert_owned("executor")
+            claim = object()
+            self.assertTrue(started_guard(claim))
+            result = continue_started(
+                claim,
+                "sha256:" + "1" * 64,
+                "sha256:" + "2" * 64,
+            )
+            self.assertTrue(succeeded_guard(claim))
+            finalize_succeeded(claim)
+            return result
+
+        binding = SimpleNamespace(
+            plan_sha256="sha256:" + "1" * 64,
+            target_binding_sha256="sha256:" + "2" * 64,
+        )
+        with (
+            patch.object(
+                archive_services,
+                "_wom_kit_project_version_update_approval_authority_matches",
+                return_value=True,
+            ),
+            patch.object(
+                archive_services,
+                "_project_update_resume_preapproval_transaction",
+                return_value=None,
+            ),
+            patch.object(
+                archive_services,
+                "_project_update_reopen_durable_state",
+                return_value=(state, lifetime),
+            ),
+            patch.object(
+                archive_services,
+                "_project_update_terminal_bound_guard",
+                side_effect=counted_bound_guard,
+            ),
+            patch.object(
+                archive_services,
+                "project_version_update_approval_binding",
+                return_value=binding,
+            ),
+            patch.object(
+                archive_services,
+                "assert_same_binding",
+                return_value=None,
+            ),
+            patch.object(
+                archive_services,
+                "_project_update_durable_writer",
+                side_effect=writer,
+            ),
+            patch.object(
+                archive_services,
+                "_project_update_succeeded_claim_finalizer",
+                side_effect=finalizer,
+            ),
+            patch.object(
+                archive_services,
+                "_project_update_claim_checkpoint_guard",
+                side_effect=checkpoint_guard,
+            ),
+        ):
+            result = (
+                archive_services
+                ._wom_kit_project_version_update_resume_live_transaction(
+                    self.project,
+                    target=None,
+                    reviewed_by=None,
+                    transaction_ref=None,
+                    approval_executor=approval_executor,
+                    _expected_approval_root=self.project,
+                    _expected_archive_id="archive:test",
+                )
+            )
+
+        self.assertEqual(result, result_payload)
+        self.assertEqual(guard_enters, ["entered"])
+        self.assertEqual(
+            callback_checks,
+            [
+                "executor",
+                "started-guard",
+                "writer",
+                "succeeded-guard",
+                "finalizer",
+            ],
+        )
+        self.assertEqual(closed, ["directory", "runner"])
+
+    def test_fresh_terminal_boundary_failure_cancels_preapproval_with_effect_truth(
+        self,
+    ) -> None:
+        for cleanup_succeeds in (True, False):
+            with self.subTest(cleanup_succeeds=cleanup_succeeds):
+                state = SimpleNamespace(
+                    inspection_root=self.project,
+                    project_root=self.project,
+                    transaction=SimpleNamespace(
+                        transaction_ref="update_" + "9" * 32,
+                    ),
+                    prepared_preview={"status": "prepared"},
+                    reviewer="reviewer-a",
+                    terminal_update_verified=False,
+                )
+                prepared = (
+                    archive_services._ProjectVersionUpdatePreparedApproval(
+                        preview={"status": "prepared"},
+                        state=state,
+                    )
+                )
+
+                def prepared_generator():
+                    yield prepared
+
+                @contextmanager
+                def failed_boundary(*_args, **_kwargs):
+                    raise archive_services.ArchiveServiceError(
+                        "project_version_update_terminal_execution_boundary_unknown"
+                    )
+                    yield
+
+                cleanup_calls: list[str] = []
+
+                def cancel_before_native(_state):
+                    cleanup_calls.append("attempted")
+                    if not cleanup_succeeds:
+                        raise archive_services.ArchiveServiceError(
+                            "private-cleanup-failure-must-not-escape"
+                        )
+
+                executor_calls: list[str] = []
+                with (
+                    patch.object(
+                        archive_services,
+                        "_project_update_fresh_update_cleanup_preflight_read_only",
+                        return_value=None,
+                    ),
+                    patch.object(
+                        archive_services,
+                        "_wom_kit_project_version_update_approval_authority_matches",
+                        return_value=True,
+                    ),
+                    patch.object(
+                        archive_services,
+                        "_wom_kit_project_version_update_legacy_core_generator",
+                        side_effect=lambda *_args, **_kwargs: prepared_generator(),
+                    ),
+                    patch.object(
+                        archive_services,
+                        "_project_update_terminal_execution_lease",
+                        side_effect=failed_boundary,
+                    ),
+                    patch.object(
+                        archive_services,
+                        "_project_update_cancel_before_native",
+                        side_effect=cancel_before_native,
+                    ),
+                ):
+                    result = (
+                        archive_services
+                        ._wom_kit_project_version_update_live_approval_transaction(
+                            self.project,
+                            target="v0.4.17",
+                            reviewed_by="reviewer-a",
+                            affirm_external_writers_quiescent=True,
+                            approval_executor=lambda *_args, **_kwargs: (
+                                executor_calls.append("entered")
+                            ),
+                            _expected_approval_root=self.project,
+                            _expected_archive_id="archive:test",
+                        )
+                    )
+
+                self.assertEqual(cleanup_calls, ["attempted"])
+                self.assertEqual(executor_calls, [])
+                self.assertEqual(
+                    result["status"],
+                    "terminal_cleanup_outcome_unknown",
+                )
+                self.assertFalse(
+                    result["effect_summary"][
+                        "project_domain_writes_performed"
+                    ]
+                )
+                self.assertIs(
+                    result["preapproval_cleanup"]["completed"],
+                    cleanup_succeeds,
+                )
+                self.assertIs(
+                    result["effect_summary"][
+                        "private_control_mutation_may_be_incomplete"
+                    ],
+                    not cleanup_succeeds,
+                )
+                serialized = json.dumps(result, sort_keys=True)
+                self.assertNotIn("private-cleanup-failure", serialized)
+                self.assertNotIn("update_" + "9" * 32, serialized)
 
 
 if __name__ == "__main__":

@@ -1,6 +1,6 @@
 # Project Version Update
 
-Status: v0.4.16 exact-human project update with authenticated terminal-result delivery; collision and bytecode repair writers remain closed
+Status: v0.4.17 exact-human project update with recoverable terminal control history; collision and bytecode repair writers remain closed
 
 Current boundary: `project-version-update` is reopened only through the native
 exact-human approval broker. The CLI derives a content-free dry-run digest and
@@ -10,7 +10,63 @@ locked updater may fetch or write. Direct unbound service calls fail before a
 private project read. Collision preserve-relocate and `project-bytecode-repair`
 approval remain fixed closed.
 
-## v0.4.16 Terminal Result Boundary
+## v0.4.17 Terminal Cleanup Recovery Boundary
+
+Fresh `project-version-update --dry-run` and the matching approval path now run
+the same bounded, read-only classification of the private transaction
+namespace. The dry-run cannot report `ready_for_approval` when exact terminal
+control history would make the approval fail. Both paths instead return
+`terminal_cleanup_required` with
+`project_version_update_terminal_cleanup_required` before native approval,
+approval-key access, or project-domain writer entry.
+
+The operator does not supply a target, transaction ref, approval id, cleanup
+proof, file count, or digest. Keep other writers for the same project stopped
+and run the public identifier-free recovery command:
+
+```powershell
+& <exact-target-bootstrap> project-version-update <project-or-archive-root> `
+  --resume `
+  --affirm-external-writers-quiescent `
+  --progress `
+  --format json
+```
+
+WOM recognizes a preapproval abort only when its complete fixed control tree,
+reservation, abort intent and receipt, identities, hashes, archive identity,
+and cleanup authority all agree. It writes an identity-bound v0.4.17 cleanup
+plan, moves the exact tree to a no-replace tombstone, deletes only plan-bound
+members, and retains one canonical proof. The same authority can resume at
+every supported cleanup boundary. Unexpected members, link anomalies, unsafe
+types, active locks, identity or byte changes, and namespace races refuse
+cleanup without deleting the evidence.
+
+Abort-history compaction is not a project update. It does not enter the domain
+writer, modify source, install or replace a runtime, change the pin, alter
+archive content, attribute a past success, or authorize a fresh approval. After
+recovery converges to proof-only history, run a new dry-run and request one new
+exact approval only if that new preview is ready.
+
+If compaction accompanies another resume or stops after completing only some
+exact histories, the result preserves both facts. It reports
+`terminal_abort_histories_compacted`, `cleanup_proofs_written_or_verified`,
+`terminal_abort_history_compaction_state`, and
+`terminal_abort_history_compaction_incomplete`. `files_written_scope:
+project_domain_only` means an empty `files_written` list does not deny private
+control effects. The content-free `effect_summary` records
+`private_control_mutation_performed_or_verified` and
+`private_control_mutation_may_be_incomplete` without exposing private paths,
+references, hashes, or authorities.
+
+Partial, malformed, mixed, changing, ambiguous, or unsafe residue remains
+`terminal_cleanup_outcome_unknown` with
+`project_version_update_terminal_cleanup_outcome_unknown`. Do not loop resume,
+delete a lock, edit a pin, or remove a transaction directory, tombstone, or
+proof. Known cleanup gates cross the CLI boundary only through fixed allowlisted
+reason codes and privacy-safe next actions; arbitrary internal exception text
+is never echoed.
+
+## v0.4.16 Historical Terminal Result Boundary
 
 After the exact one-use claim succeeds and the complete postimage is verified,
 WOM writes a private authenticated terminal handoff before transaction cleanup.

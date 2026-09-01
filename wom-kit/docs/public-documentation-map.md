@@ -2,11 +2,26 @@
 
 Status: public navigation baseline
 Date: 2026-06-02
-Updated: 2026-08-31
+Updated: 2026-09-01
 Philosophy clarified: 2026-07-15
 Harness compatibility clarified: 2026-07-16
 
-Current v0.4.16 delta: authenticated project-update success is preserved in a
+Current v0.4.17 delta: fresh project-update dry-run and approval share one
+bounded, read-only terminal-cleanup classification. Exact terminal control
+history returns `project_version_update_terminal_cleanup_required` before
+native approval or domain-writer entry and routes to identifier-free
+`--resume`. WOM may compact only exact WOM-produced preapproval-abort history
+into canonical proof history after binding its fixed evidence, identities,
+archive identity, and cleanup authority. It changes no source, runtime, pin, or
+archive content and grants no fresh approval authority. Partial, changed,
+mixed, ambiguous, or unsafe residue remains
+`project_version_update_terminal_cleanup_outcome_unknown`. Known gates expose
+fixed privacy-safe reasons and next actions without private paths, hashes,
+identifiers, values, or raw exception text. Publishing or installing the
+release changes no client archive; the client separately chooses recovery and
+one reviewed project update.
+
+Historical v0.4.16 delta: authenticated project-update success is preserved in a
 private durable terminal handoff before cleanup. The result separately reports
 claim/checkpoint/lock verification, transaction cleanup, service-resource close,
 Git-runner close, durable output handoff, and attention state. One immutable
