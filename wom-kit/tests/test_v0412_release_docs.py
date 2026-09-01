@@ -20,7 +20,7 @@ LOCK_SHA256 = "3bdad30b08eb6ba3152946ead94f1cf55a1130fadcfb1a1b6c9ef7dddd969e2a"
 
 class V0412ReleaseDocsTests(unittest.TestCase):
     def test_v0412_release_is_preserved_as_source_history(self) -> None:
-        self.assertEqual(__version__, "0.4.16")
+        self.assertEqual(__version__, "0.4.17")
         self.assertTrue(RELEASE.is_file())
         packaged = RESOURCE_ROOT / "release-notes" / "v0.4.12.md"
         self.assertFalse(packaged.exists())
@@ -139,7 +139,7 @@ class V0412ReleaseDocsTests(unittest.TestCase):
                 state,
             )
 
-    def test_v0412_supply_lock_is_historical_and_current_policy_is_v0416(self) -> None:
+    def test_v0412_supply_lock_is_historical_and_current_policy_is_v0417(self) -> None:
         current = LOCK.read_bytes()
         historical = (KIT / "project-runtime-supply-lock-v0.4.11.json").read_bytes()
         historical_lf = historical.replace(b"\r\n", b"\n")
@@ -154,10 +154,10 @@ class V0412ReleaseDocsTests(unittest.TestCase):
         policy = project_runtime.project_runtime_policy_document(policy_raw)
         self.assertIsNotNone(policy)
         assert policy is not None
-        self.assertEqual(policy["supply_lock"], "wom-kit/project-runtime-supply-lock-v0.4.16.json")
+        self.assertEqual(policy["supply_lock"], "wom-kit/project-runtime-supply-lock-v0.4.17.json")
         self.assertEqual(
             policy["supply_lock_sha256"],
-            "sha256:f924a3f714d5913dd2afe870d07e5619172b0e1fcb92f25b18f70a9cd4ad04d8",
+            "sha256:4a321346b9231646c0c74e0784d42ca75a866200e497283f54b015165a87a28f",
         )
 
 

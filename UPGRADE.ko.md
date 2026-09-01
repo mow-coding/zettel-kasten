@@ -2,7 +2,7 @@
 
 [English Upgrade Guide](UPGRADE.md)
 
-## v0.4.16 durable project update 결과 전달
+## v0.4.17 terminal cleanup 복구
 
 일치하는 공개 릴리스와 자산이 실제로 존재한 뒤에만 정확한 wheel을 설치합니다.
 새 외부 CPython 3.12 환경의 실제 `python.exe -m pip`를 사용해 설치된 PEP 610
@@ -10,17 +10,17 @@ metadata에 wheel hash가 남게 합니다.
 
 ```powershell
 $womBootstrapNonce = [guid]::NewGuid().ToString("N")
-$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0416-$womBootstrapNonce"
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0417-$womBootstrapNonce"
 if (Test-Path -LiteralPath $womBootstrapRoot) {
   throw "WOM bootstrap path must be new."
 }
 py -3.12 -m venv $womBootstrapRoot
 $womBootstrapPython = (Get-Item -LiteralPath (Join-Path $womBootstrapRoot "Scripts\python.exe")).FullName
-& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.16/wom_kit-0.4.16-py3-none-any.whl"
+& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.17/wom_kit-0.4.17-py3-none-any.whl"
 & "$womBootstrapRoot\Scripts\archive.exe" --version
 ```
 
-새 프로세스에서 정확히 `archive 0.4.16`인지 확인합니다. wheel 공개·설치만으로
+새 프로세스에서 정확히 `archive 0.4.17`인지 확인합니다. wheel 공개·설치만으로
 client archive·project runtime·version pin은 바뀌지 않습니다. project update는
 client가 별도로 선택하고 승인합니다.
 
@@ -28,8 +28,27 @@ client가 별도로 선택하고 승인합니다.
 Windows 전용입니다. POSIX는 preview와 읽기 전용 검사만 지원하며, 이 쓰기
 경로는 아무것도 변경하지 않고 fail-closed합니다.
 
-승인된 update가 중단됐다면 다른 project writer를 멈춘 채 identifier 없는
-resume 경로를 사용합니다.
+fresh dry-run과 approval은 이제 같은 read-only terminal-cleanup preflight를
+사용합니다. 둘 중 하나가 `project_version_update_terminal_cleanup_required`를
+반환하면 새 approval을 요청하거나 비공개 control 파일을 조사·수정하지 마세요.
+같은 project의 다른 writer를 멈춘 채 아래 identifier 없는 resume을 사용합니다.
+WOM이 exact terminal abort 이력만 검증·정리하고 canonical proof 이력을 보존하며,
+project-domain 파일은 바꾸지 않습니다. 복구가 끝난 뒤 새 dry-run을 실행하고 그
+새 preview가 ready일 때만 한 번의 새 approval을 요청합니다.
+
+결과가 `project_version_update_terminal_cleanup_outcome_unknown`이면 중단합니다.
+resume을 반복하거나 lock을 지우거나 pin·transaction·tombstone·proof evidence를
+손으로 고치지 말고 구조화된 결과를 개발 검토용으로 보존합니다.
+
+복구 결과의 `files_written`이 비어 있어도 비공개 control 이력 정리가 끝난 항목은
+있을 수 있습니다. `files_written_scope: project_domain_only`는 그 목록이 project-domain
+파일만 뜻한다는 표시입니다. `terminal_abort_histories_compacted`,
+`terminal_abort_history_compaction_state`, 내용 없는 `effect_summary`를 함께 보세요.
+`partial` 또는 `incomplete`이면 재시도하거나 evidence를 지우지 말고 중단해 결과를
+보존합니다.
+
+승인된 update가 중단됐거나 exact terminal control 이력이 남았다면 다른 project
+writer를 멈춘 채 identifier 없는 resume 경로를 사용합니다.
 
 ```powershell
 & "$womBootstrapRoot\Scripts\archive.exe" project-version-update <project-or-archive-root> `

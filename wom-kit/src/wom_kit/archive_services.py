@@ -34,6 +34,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from contextlib import ExitStack, contextmanager, nullcontext
+from contextvars import ContextVar
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
@@ -115694,6 +115695,13 @@ def wom_kit_project_version_update(
             "project_version_update_live_approval_transaction_required"
         )
     if dry_run:
+        cleanup_preflight = (
+            _project_update_fresh_update_cleanup_preflight_read_only(
+                inspection_root
+            )
+        )
+        if cleanup_preflight is not None:
+            return cleanup_preflight
         return _wom_kit_project_version_update_legacy_core(
             inspection_root,
             target=target,
@@ -115733,6 +115741,13 @@ def _wom_kit_project_version_update_live_approval_transaction(
     reviewer = safe_foreign_quarantine_actor_id(reviewed_by)
     if reviewer is None:
         raise ArchiveServiceError("project_version_update_reviewer_invalid")
+    cleanup_preflight = (
+        _project_update_fresh_update_cleanup_preflight_read_only(
+            inspection_root
+        )
+    )
+    if cleanup_preflight is not None:
+        return cleanup_preflight
     if not _wom_kit_project_version_update_approval_authority_matches(
         inspection_root,
         expected_root=_expected_approval_root,
@@ -115741,33 +115756,48 @@ def _wom_kit_project_version_update_live_approval_transaction(
         raise ArchiveServiceError(
             "project_version_update_approval_archive_identity_changed"
         )
-    if _project_update_terminal_handoff_state_read_only(
-        inspection_root
-    ) in {"claim_succeeded_pre_unlock", "terminal_ready"}:
-        raise ArchiveServiceError(
-            "project_version_update_terminal_handoff_recovery_required"
+    try:
+        return _wom_kit_project_version_update_legacy_core(
+            inspection_root,
+            target=target,
+            dry_run=False,
+            approve=True,
+            reviewed_by=reviewer,
+            affirm_external_writers_quiescent=True,
+            approval_executor=approval_executor,
+            progress_callback=progress_callback,
+            _expected_approval_root=_expected_approval_root,
+            _expected_archive_id=_expected_archive_id,
         )
-    cleanup_classification, _history_count = (
-        _project_update_terminal_cleanup_artifact_classification_read_only(
-            _project_update_resume_project_root_read_only(inspection_root)
-        )
-    )
-    if cleanup_classification not in {"absent", "history_only_exact"}:
-        raise ArchiveServiceError(
-            "project_version_update_terminal_cleanup_recovery_required"
-        )
-    return _wom_kit_project_version_update_legacy_core(
-        inspection_root,
-        target=target,
-        dry_run=False,
-        approve=True,
-        reviewed_by=reviewer,
-        affirm_external_writers_quiescent=True,
-        approval_executor=approval_executor,
-        progress_callback=progress_callback,
-        _expected_approval_root=_expected_approval_root,
-        _expected_archive_id=_expected_archive_id,
-    )
+    except ArchiveServiceError as failure:
+        if (
+            len(failure.args) == 1
+            and type(failure.args[0]) is str
+            and failure.args[0]
+            == "project_version_update_fresh_terminal_invalid_prewrite"
+        ):
+            return _project_update_terminal_cleanup_outcome_unknown_result(
+                operator_resume_identifiers_supplied=False,
+                archive_identity_metadata_read=True,
+            )
+        if (
+            len(failure.args) == 1
+            and type(failure.args[0]) is str
+            and failure.args[0]
+            == "project_version_update_terminal_execution_boundary_unknown"
+        ):
+            return _project_update_terminal_cleanup_outcome_unknown_result(
+                operator_resume_identifiers_supplied=False,
+                archive_identity_metadata_read=True,
+            )
+        if (
+            len(failure.args) == 1
+            and type(failure.args[0]) is str
+            and failure.args[0]
+            == "project_version_update_fresh_terminal_present_prewrite"
+        ):
+            return _project_update_terminal_handoff_recovery_required_result()
+        raise
 
 
 def _project_update_preapproval_cancel_effect_summary(
@@ -115796,6 +115826,8 @@ def _project_update_preapproval_cancel_effect_summary(
             cancellation_checkpoints
         ),
         "candidate_cleanup_performed_or_verified": bool(candidate_cleanup),
+        "private_control_mutation_performed_or_verified": True,
+        "private_control_mutation_may_be_incomplete": False,
         "candidate_absence_verified": True,
         "lock_release_performed_or_verified": True,
         "paths_or_identifiers_disclosed": False,
@@ -116214,18 +116246,57 @@ def _project_update_candidate_missing_handler(
 
 
 @contextmanager
+def _project_update_fresh_terminal_absence_boundary(
+    project_root: Path,
+) -> Iterator[None]:
+    """Hold the terminal guard while proving no prior active result exists."""
+
+    with _project_update_terminal_control_boundary(project_root) as (
+        scaffold,
+        binding,
+    ):
+        handoff, _guard = _project_update_terminal_handoff_paths(
+            scaffold.project_root
+        )
+        try:
+            observed = _project_update_read_terminal_document_bound(
+                scaffold.project_root,
+                binding,
+                scaffold.terminal_root / handoff.name,
+            )
+        except ArchiveServiceError as failure:
+            if _project_update_exact_terminal_handoff_invalid_failure(failure):
+                raise ArchiveServiceError(
+                    "project_version_update_fresh_terminal_invalid_prewrite"
+                ) from None
+            raise
+        if observed is not None:
+            raise ArchiveServiceError(
+                "project_version_update_fresh_terminal_present_prewrite"
+            )
+        yield
+
+
+@contextmanager
 def _project_update_claim_publication_boundary(
     state: _ProjectVersionUpdateDurableApprovalState,
 ) -> Iterator[None]:
     """Hold append authority only across exact approval claim publication."""
 
-    with state.transaction.append_guard_nonblocking():
-        live = _project_update_live_component_sha256(state)
-        state.transaction.validate_claim_publication_boundary_guard_held(
-            expected_lock_bytes=state.expected_lock_bytes,
-            live_component_sha256=live,
+    if not _project_update_terminal_execution_lease_is_held(state):
+        raise ArchiveServiceError(
+            "project_version_update_terminal_execution_boundary_unknown"
         )
-        yield
+    with _project_update_fresh_terminal_absence_boundary(
+        state.project_root
+    ):
+        with state.transaction.append_guard_nonblocking():
+            live = _project_update_live_component_sha256(state)
+            state.transaction.validate_claim_publication_boundary_guard_held(
+                expected_lock_bytes=state.expected_lock_bytes,
+                live_component_sha256=live,
+            )
+            yield
 
 
 def _project_update_resume_project_root_read_only(
@@ -116272,7 +116343,17 @@ def _project_update_terminal_cleanup_outcome_unknown_result(
     return {
         "ok": False,
         "status": "terminal_cleanup_outcome_unknown",
+        "reason_code": "project_version_update_terminal_cleanup_outcome_unknown",
+        "reason_codes": [
+            "project_version_update_terminal_cleanup_outcome_unknown"
+        ],
+        "blocker_codes": [
+            "project_version_update_terminal_cleanup_outcome_unknown"
+        ],
+        "lifecycle_action": "project_version_update",
+        "error_class": "reconciliation",
         "effects_state": "unknown",
+        "reconciliation_required": True,
         "outcome_basis": (
             "terminal_cleanup_residue_observed_or_could_not_be_ruled_out"
         ),
@@ -116300,6 +116381,10 @@ def _project_update_terminal_cleanup_outcome_unknown_result(
         "client_archive_domain_content_accessed": False,
         "project_domain_files_written": [],
         "files_written": [],
+        "next_safe_actions": [
+            "Stop without deleting private update metadata, changing the project pin, or retrying approval.",
+            "Send the content-free result to the WOM maintainer for forensic review."
+        ],
     }
 
 
@@ -116354,6 +116439,105 @@ def _project_update_history_only_cleanup_result(
     }
 
 
+def _project_update_terminal_cleanup_required_result(
+    *,
+    exact_history_count: int,
+    resumable_transaction_present: bool,
+) -> dict[str, Any]:
+    """Block fresh work while verified terminal control history needs resume.
+
+    The count is produced by WOM's bounded private-metadata scan.  It is useful
+    for automated drift checks, but the operator is never asked to reproduce or
+    approve it.  ``--resume`` remains the sole public recovery surface.
+    """
+
+    if (
+        type(exact_history_count) is not int
+        or exact_history_count < 1
+        or exact_history_count
+        > project_update_transaction.MAX_TERMINAL_CLEANUP_SCAN_ENTRIES
+        or type(resumable_transaction_present) is not bool
+    ):
+        raise ArchiveServiceError(
+            "project_version_update_resume_locator_changed"
+        )
+    return {
+        "ok": False,
+        "status": "terminal_cleanup_required",
+        "reason_code": "project_version_update_terminal_cleanup_required",
+        "reason_codes": [
+            "project_version_update_terminal_cleanup_required"
+        ],
+        "blocker_codes": [
+            "project_version_update_terminal_cleanup_required"
+        ],
+        "lifecycle_action": "project_version_update",
+        "error_class": "reconciliation",
+        "effects_state": "none",
+        "reconciliation_required": True,
+        "outcome_basis": "exact_terminal_control_history_requires_resume",
+        "update_completed": False,
+        "exact_terminal_history_count": exact_history_count,
+        "resumable_transaction_present": resumable_transaction_present,
+        "automatic_resume_discovery": True,
+        "operator_must_supply_private_identifiers": False,
+        "cleanup_authorized": False,
+        "fresh_approval_authorized": False,
+        "native_approval_ui_entered": False,
+        "domain_writer_entered": False,
+        "project_domain_files_written": [],
+        "files_written": [],
+        "next_safe_actions": [
+            "Pause other writers for this project, then run project-version-update --resume with the quiescence affirmation and no private identifiers.",
+            "After WOM finishes the verified control-history recovery, run a fresh project-version-update preview."
+        ],
+    }
+
+
+def _project_update_terminal_handoff_recovery_required_result() -> dict[str, Any]:
+    """Route one exact active terminal capsule to identifier-free resume."""
+
+    result = _project_update_terminal_cleanup_required_result(
+        exact_history_count=1,
+        resumable_transaction_present=True,
+    )
+    result.update(
+        {
+            "outcome_basis": "exact_active_terminal_handoff_requires_resume",
+            "terminal_handoff_recovery_required": True,
+        }
+    )
+    return result
+
+
+def _project_update_exact_preapproval_resume_classification_read_only(
+    project_root: Path,
+    transaction_ref: str,
+) -> str | None:
+    """Return one fully classified preapproval crash state, never a guess."""
+
+    matching = [
+        item
+        for item in project_update_transaction.inspect_prelock_orphans(
+            project_root
+        )
+        if item.transaction_ref == transaction_ref
+    ]
+    if len(matching) != 1:
+        return None
+    classification = matching[0].classification
+    return (
+        classification
+        if classification
+        in {
+            "reserved_locked_unsealed",
+            "reserved_abort_receipt_pending",
+            "intent_sealed_lock_binding_incomplete",
+        }
+        else None
+    )
+
+
 def _project_update_terminal_cleanup_namespace_classification_read_only(
     project_root: Path,
     *,
@@ -116365,12 +116549,14 @@ def _project_update_terminal_cleanup_namespace_classification_read_only(
     """Classify one exact bounded transaction namespace allowlist.
 
     Proof bytes are not authenticated success authority. This strict read-only
-    classifier proves that every namespace entry is either one canonical
-    cleanup-plan document or, when explicitly supplied by the current call,
-    that call's exact just-created reservation.  Other original transactions,
-    tombstones, arbitrary names, unsafe types, mixed state, scan races, and
-    partial cleanup all return ``None``.  This keeps a fresh approval from
-    treating an ignored namespace entry as ordinary absence.
+    classifier proves every namespace entry. Besides canonical cleanup proofs,
+    it recognizes only two original-directory states: one transaction selected
+    by the authenticated resume locator, and exact pre-intent abort receipts
+    whose five-file tree proves that no project-domain writer ran. Unknown
+    originals, arbitrary names, unsafe types, scan races, and partial cleanup
+    all return ``None``. This keeps a fresh approval from treating an ignored
+    namespace entry as ordinary absence while allowing the public ``--resume``
+    path to compact terminal control history produced by WOM itself.
     """
 
     if (
@@ -116384,11 +116570,13 @@ def _project_update_terminal_cleanup_namespace_classification_read_only(
         ).parts
     )
     try:
-        if allowed_lock_bytes is None:
-            if os.path.lexists(lock_path):
-                return None
-        else:
-            if not os.path.lexists(lock_path) or not hmac.compare_digest(
+        live_lock_present = os.path.lexists(lock_path)
+        # A lock is not itself cleanup authority, but neither is it an
+        # automatic classification failure. Without an explicitly supplied
+        # reservation, the strict active locator and orphan inspection below
+        # must bind it to the one exact resumable transaction.
+        if allowed_lock_bytes is not None:
+            if not live_lock_present or not hmac.compare_digest(
                 project_update_transaction._read_regular(
                     lock_path,
                     within=project_root,
@@ -116413,7 +116601,7 @@ def _project_update_terminal_cleanup_namespace_classification_read_only(
         if not os.path.lexists(transaction_root):
             return (
                 ("absent", 0)
-                if allowed_reservation is None
+                if allowed_reservation is None and not live_lock_present
                 else None
             )
         project_update_transaction._safe_existing_chain(
@@ -116431,8 +116619,38 @@ def _project_update_terminal_cleanup_namespace_classification_read_only(
             if allowed_reservation is not None
             else None
         )
+        expected_resume_ref: str | None = expected_reservation_ref
+        if allowed_reservation is None:
+            try:
+                expected_resume_ref = (
+                    project_update_transaction
+                    .active_transaction_ref_for_resume_read_only(project_root)
+                )
+            except project_update_transaction.ProjectUpdateTransactionError as failure:
+                if failure.code != "project_update_transaction_not_found":
+                    return None
+        exact_preapproval_classification: str | None = None
+        if allowed_reservation is None and expected_resume_ref is not None:
+            matching_orphans = [
+                item
+                for item in project_update_transaction.inspect_prelock_orphans(
+                    project_root
+                )
+                if item.transaction_ref == expected_resume_ref
+            ]
+            if len(matching_orphans) != 1:
+                return None
+            candidate_classification = matching_orphans[0].classification
+            if candidate_classification in {
+                "reserved_locked_unsealed",
+                "reserved_abort_receipt_pending",
+                "intent_sealed_lock_binding_incomplete",
+            }:
+                exact_preapproval_classification = candidate_classification
         allowed_reservation_seen = False
-        recoverable_tombstone_ref: str | None = None
+        resumable_transaction_seen = False
+        abort_original_refs: set[str] = set()
+        tombstone_refs: set[str] = set()
         seen = 0
         proof_count = 0
         with os.scandir(transaction_root) as entries:
@@ -116458,48 +116676,113 @@ def _project_update_terminal_cleanup_namespace_classification_read_only(
                     name,
                 )
                 if original_match is not None:
-                    if (
-                        expected_reservation_ref is None
-                        or name != expected_reservation_ref
-                        or allowed_reservation_seen
-                        or not entry.is_dir(follow_symlinks=False)
-                    ):
+                    if not entry.is_dir(follow_symlinks=False):
                         return None
                     reservation_root = Path(entry.path)
                     reservation_before = os.lstat(reservation_root)
-                    reopened = (
-                        project_update_transaction
-                        .ReservedProjectUpdateTransaction.open(
-                            project_root,
-                            expected_reservation_ref,
-                        )
-                    )
-                    if (
-                        expected_reservation_sha256 is None
-                        or reopened.reservation.sha256
-                        != expected_reservation_sha256
-                    ):
-                        return None
-                    files, directories = (
-                        project_update_transaction.ProjectUpdateTransaction
-                        ._descendant_names(reservation_root)
-                    )
-                    expected_files = {
-                        "append.guard",
-                        "marker.json",
-                    }
-                    if allowed_lock_bytes is not None:
-                        expected_files.add(
-                            project_update_transaction
-                            .RESERVATION_LOCK_BACKLINK_NAME
-                        )
-                        if not hmac.compare_digest(
-                            reopened.existing_lock_bytes_read_only(),
-                            allowed_lock_bytes,
-                        ):
+                    if name == expected_resume_ref:
+                        if resumable_transaction_seen:
                             return None
-                    if directories or files != expected_files:
-                        return None
+                        if allowed_reservation is not None:
+                            reopened = (
+                                project_update_transaction
+                                .ReservedProjectUpdateTransaction.open(
+                                    project_root,
+                                    expected_reservation_ref,
+                                )
+                            )
+                            if (
+                                expected_reservation_sha256 is None
+                                or reopened.reservation.sha256
+                                != expected_reservation_sha256
+                            ):
+                                return None
+                            files, directories = (
+                                project_update_transaction
+                                .ProjectUpdateTransaction._descendant_names(
+                                    reservation_root
+                                )
+                            )
+                            expected_files = {
+                                "append.guard",
+                                "marker.json",
+                            }
+                            if allowed_lock_bytes is not None:
+                                expected_files.add(
+                                    project_update_transaction
+                                    .RESERVATION_LOCK_BACKLINK_NAME
+                                )
+                                if not hmac.compare_digest(
+                                    reopened.existing_lock_bytes_read_only(),
+                                    allowed_lock_bytes,
+                                ):
+                                    return None
+                            if directories or files != expected_files:
+                                return None
+                            allowed_reservation_seen = True
+                        else:
+                            if exact_preapproval_classification in {
+                                "reserved_locked_unsealed",
+                                "reserved_abort_receipt_pending",
+                            }:
+                                active_reservation = (
+                                    project_update_transaction
+                                    .ReservedProjectUpdateTransaction.open(
+                                        project_root,
+                                        name,
+                                    )
+                                )
+                                if (
+                                    exact_preapproval_classification
+                                    == "reserved_locked_unsealed"
+                                ):
+                                    active_reservation.existing_lock_bytes_read_only()
+                                elif (
+                                    active_reservation
+                                    .inspect_abort_receipt_pending_read_only()
+                                    is None
+                                ):
+                                    return None
+                            else:
+                                active = (
+                                    project_update_transaction
+                                    .ProjectUpdateTransaction.open(
+                                        project_root,
+                                        name,
+                                        verify_candidate_content=False,
+                                    )
+                                )
+                                active_inspection = active.inspect(
+                                    verify_candidate_content=False
+                                )
+                                active_prefix = (
+                                    active_inspection.journal.verified_prefix
+                                )
+                                if exact_preapproval_classification == (
+                                    "intent_sealed_lock_binding_incomplete"
+                                ):
+                                    if (
+                                        active_inspection.lock_backlinked
+                                        or active_inspection.journal.state
+                                        != "exact"
+                                        or active_prefix
+                                    ):
+                                        return None
+                                elif (
+                                    not active_inspection.lock_backlinked
+                                    or active_inspection.journal.state
+                                    != "exact"
+                                ):
+                                    return None
+                            resumable_transaction_seen = True
+                    else:
+                        if allowed_reservation is not None:
+                            return None
+                        # The bounded abort-cleanup discovery below validates
+                        # both the five-file terminal form and the crash state
+                        # where its identity-bound cleanup plan is already
+                        # durable. Merely seeing this name grants nothing.
+                        abort_original_refs.add(name)
                     reservation_after = os.lstat(reservation_root)
                     if (
                         (
@@ -116514,28 +116797,34 @@ def _project_update_terminal_cleanup_namespace_classification_read_only(
                         )
                     ):
                         return None
-                    allowed_reservation_seen = True
                     continue
                 if tombstone_match is not None:
                     if (
                         allowed_reservation is not None
-                        or recoverable_tombstone_ref is not None
                         or not entry.is_dir(follow_symlinks=False)
                     ):
                         return None
-                    recoverable_tombstone_ref = tombstone_match.group(1)
+                    tombstone_ref = tombstone_match.group(1)
+                    if tombstone_ref in tombstone_refs:
+                        return None
+                    tombstone_refs.add(tombstone_ref)
                     continue
                 if proof_match is None:
                     return None
                 transaction_ref = proof_match.group(1)
                 proof_path = Path(entry.path)
-                proof_raw = project_update_transaction._read_regular(
-                    proof_path,
-                    within=transaction_root,
-                    maximum=(
-                        project_update_transaction.MAX_DOCUMENT_BYTES
-                    ),
+                proof_raw, proof_info = (
+                    project_update_transaction
+                    ._read_cleanup_linked_regular(
+                        project_root,
+                        proof_path,
+                        maximum=(
+                            project_update_transaction.MAX_DOCUMENT_BYTES
+                        ),
+                    )
                 )
+                if int(proof_info.st_nlink) != 1:
+                    return None
                 proof = project_update_transaction._parse_document(
                     proof_raw,
                     code="project_update_transaction_cleanup_refused",
@@ -116570,6 +116859,12 @@ def _project_update_terminal_cleanup_namespace_classification_read_only(
             and not allowed_reservation_seen
         ):
             return None
+        if (
+            allowed_reservation is None
+            and expected_resume_ref is not None
+            and not resumable_transaction_seen
+        ):
+            return None
         after = os.lstat(transaction_root)
         if (
             (int(before.st_dev), int(before.st_ino))
@@ -116577,7 +116872,39 @@ def _project_update_terminal_cleanup_namespace_classification_read_only(
             or int(before.st_mtime_ns) != int(after.st_mtime_ns)
         ):
             return None
-        if recoverable_tombstone_ref is not None:
+        abort_cleanup_states: tuple[
+            project_update_transaction.ReservationAbortCleanupInspection,
+            ...,
+        ] = ()
+        if allowed_reservation is None and (
+            abort_original_refs or tombstone_refs
+        ):
+            abort_cleanup_states = (
+                project_update_transaction
+                .discover_exact_reservation_abort_cleanup_read_only(
+                    project_root
+                )
+            )
+        discovered_abort_original_refs = {
+            item.transaction_ref
+            for item in abort_cleanup_states
+            if item.state in {"terminal_original", "planned_original"}
+        }
+        discovered_abort_tombstone_refs = {
+            item.transaction_ref
+            for item in abort_cleanup_states
+            if item.state == "cleanup_tombstone"
+        }
+        if discovered_abort_original_refs != abort_original_refs:
+            return None
+        if not discovered_abort_tombstone_refs.issubset(tombstone_refs):
+            return None
+        normal_tombstone_refs = tombstone_refs - discovered_abort_tombstone_refs
+        if len(normal_tombstone_refs) > 1:
+            return None
+        exact_abort_history_count = len(abort_cleanup_states)
+        if normal_tombstone_refs:
+            recoverable_tombstone_ref = next(iter(normal_tombstone_refs))
             tombstone = (
                 project_update_transaction.ProjectUpdateTransaction
                 .discover_complete_cleanup_tombstone_for_resume_read_only(
@@ -116590,9 +116917,24 @@ def _project_update_terminal_cleanup_namespace_classification_read_only(
                 != recoverable_tombstone_ref
             ):
                 return None
-            return "recoverable_exact", proof_count
+            return (
+                "recoverable_exact",
+                proof_count + exact_abort_history_count + 1,
+            )
         if allowed_reservation is not None:
+            if exact_abort_history_count:
+                return None
             return "reservation_exact", proof_count
+        if resumable_transaction_seen:
+            return (
+                "resume_required_exact",
+                proof_count + exact_abort_history_count + 1,
+            )
+        if exact_abort_history_count:
+            return (
+                "terminal_history_exact",
+                proof_count + exact_abort_history_count,
+            )
         if proof_count:
             return "history_only_exact", proof_count
         return "absent", 0
@@ -116628,15 +116970,412 @@ def _project_update_terminal_cleanup_artifact_classification_read_only(
     return classification
 
 
+def _project_update_fresh_update_cleanup_preflight_read_only(
+    inspection_root: Path | str,
+) -> dict[str, Any] | None:
+    """Give dry-run and approve the same privacy-safe cleanup decision."""
+
+    project_root = _project_update_resume_project_root_read_only(
+        inspection_root
+    )
+    handoff_observation: list[
+        _ProjectUpdateTerminalHandoffObservation | None
+    ] = []
+    try:
+        handoff_state = _project_update_terminal_handoff_state_read_only(
+            inspection_root,
+            _observation_out=handoff_observation,
+        )
+    except ArchiveServiceError as failure:
+        if _project_update_exact_terminal_handoff_invalid_failure(failure):
+            return _project_update_terminal_cleanup_outcome_unknown_result(
+                operator_resume_identifiers_supplied=False,
+                archive_identity_metadata_read=False,
+            )
+        raise
+    if len(handoff_observation) != 1:
+        raise ArchiveServiceError(
+            "project_version_update_resume_locator_changed"
+        )
+    classification, exact_history_count = (
+        _project_update_terminal_cleanup_artifact_classification_read_only(
+            project_root
+        )
+    )
+    if classification == "unresolved":
+        return _project_update_terminal_cleanup_outcome_unknown_result(
+            operator_resume_identifiers_supplied=False,
+            archive_identity_metadata_read=False,
+        )
+    if handoff_state is not None:
+        observation = handoff_observation[0]
+        if observation is None:
+            return _project_update_terminal_cleanup_outcome_unknown_result(
+                operator_resume_identifiers_supplied=False,
+                archive_identity_metadata_read=False,
+            )
+        try:
+            active_ref = (
+                project_update_transaction
+                .active_transaction_ref_for_resume_read_only(project_root)
+            )
+        except project_update_transaction.ProjectUpdateTransactionError as failure:
+            if failure.code == "project_update_transaction_not_found":
+                active_ref = None
+            else:
+                return _project_update_terminal_cleanup_outcome_unknown_result(
+                    operator_resume_identifiers_supplied=False,
+                    archive_identity_metadata_read=False,
+                )
+        active_handoff_ref_matches = bool(
+            active_ref is not None
+            and observation.transaction_ref is not None
+            and hmac.compare_digest(
+                observation.transaction_ref,
+                active_ref,
+            )
+        )
+        tombstone_handoff_ref_matches = False
+        if classification == "recoverable_exact":
+            try:
+                tombstone = (
+                    project_update_transaction.ProjectUpdateTransaction
+                    .discover_complete_cleanup_tombstone_for_resume_read_only(
+                        project_root
+                    )
+                )
+            except project_update_transaction.ProjectUpdateTransactionError:
+                tombstone = None
+            if (
+                tombstone is None
+                or observation.transaction_ref is None
+                or not hmac.compare_digest(
+                    observation.transaction_ref,
+                    tombstone.transaction_ref,
+                )
+            ):
+                return _project_update_terminal_cleanup_outcome_unknown_result(
+                    operator_resume_identifiers_supplied=False,
+                    archive_identity_metadata_read=False,
+                )
+            tombstone_handoff_ref_matches = True
+        handoff_ref_matches = bool(
+            active_handoff_ref_matches
+            or (
+                active_ref is None
+                and tombstone_handoff_ref_matches
+            )
+        )
+        if (
+            handoff_state == "claim_succeeded_pre_unlock"
+            and not handoff_ref_matches
+        ) or (
+            handoff_state == "terminal_ready"
+            and active_ref is not None
+            and not active_handoff_ref_matches
+        ):
+            return _project_update_terminal_cleanup_outcome_unknown_result(
+                operator_resume_identifiers_supplied=False,
+                archive_identity_metadata_read=False,
+            )
+        return _project_update_terminal_handoff_recovery_required_result()
+    if classification in {"absent", "history_only_exact"}:
+        return None
+    if classification in {
+        "recoverable_exact",
+        "resume_required_exact",
+        "terminal_history_exact",
+    }:
+        return _project_update_terminal_cleanup_required_result(
+            exact_history_count=exact_history_count,
+            resumable_transaction_present=classification
+            in {"recoverable_exact", "resume_required_exact"},
+        )
+    return _project_update_terminal_cleanup_outcome_unknown_result(
+        operator_resume_identifiers_supplied=False,
+        archive_identity_metadata_read=False,
+    )
+
+
+@dataclass(frozen=True)
+class _ProjectUpdateAbortHistoryCompactionOutcome:
+    """Privacy-safe truth about one bounded abort-history compaction pass."""
+
+    discovered_count: int
+    attempted_count: int
+    completed_count: int
+    cleanup_proof_count: int
+    incomplete: bool
+
+
+def _project_update_compact_exact_abort_histories_for_resume(
+    project_root: Path,
+) -> _ProjectUpdateAbortHistoryCompactionOutcome:
+    """Compact only machine-verified pre-intent abort histories.
+
+    A terminal abort receipt is the cleanup authority for a newly discovered
+    five-file history. If a previous cleanup invocation already persisted its
+    plan or tombstone, that exact persisted authority is reused. An
+    incomplete outcome means the caller must preserve all remaining
+    evidence and report cleanup outcome unknown.  The structured return keeps
+    already completed proof publication visible without disclosing refs,
+    paths, or authorities and never authorizes a best-effort deletion.
+    """
+
+    discovered_count = 0
+    attempted_count = 0
+    completed = 0
+    try:
+        inspections = (
+            project_update_transaction
+            .discover_exact_reservation_abort_cleanup_read_only(project_root)
+        )
+        discovered_count = len(inspections)
+        for inspection in inspections:
+            authority = inspection.cleanup_authority_sha256
+            if authority is None:
+                reservation = (
+                    project_update_transaction
+                    .ReservedProjectUpdateTransaction.open(
+                        project_root,
+                        inspection.transaction_ref,
+                    )
+                )
+                terminal = reservation.inspect_abort_receipt()
+                authority = (
+                    terminal.get("receipt_sha256")
+                    if isinstance(terminal, Mapping)
+                    else None
+                )
+            if (
+                type(authority) is not str
+                or re.fullmatch(r"sha256:[0-9a-f]{64}", authority) is None
+            ):
+                return _ProjectUpdateAbortHistoryCompactionOutcome(
+                    discovered_count=discovered_count,
+                    attempted_count=attempted_count,
+                    completed_count=completed,
+                    cleanup_proof_count=completed,
+                    incomplete=True,
+                )
+            attempted_count += 1
+            if not (
+                project_update_transaction
+                .compact_exact_reservation_abort_history(
+                    project_root,
+                    inspection.transaction_ref,
+                    cleanup_authority_sha256=authority,
+                )
+            ):
+                return _ProjectUpdateAbortHistoryCompactionOutcome(
+                    discovered_count=discovered_count,
+                    attempted_count=attempted_count,
+                    completed_count=completed,
+                    cleanup_proof_count=completed,
+                    incomplete=True,
+                )
+            completed += 1
+        if (
+            project_update_transaction
+            .discover_exact_reservation_abort_cleanup_read_only(project_root)
+        ):
+            return _ProjectUpdateAbortHistoryCompactionOutcome(
+                discovered_count=discovered_count,
+                attempted_count=attempted_count,
+                completed_count=completed,
+                cleanup_proof_count=completed,
+                incomplete=True,
+            )
+        return _ProjectUpdateAbortHistoryCompactionOutcome(
+            discovered_count=discovered_count,
+            attempted_count=attempted_count,
+            completed_count=completed,
+            cleanup_proof_count=completed,
+            incomplete=False,
+        )
+    except (
+        OSError,
+        KeyError,
+        TypeError,
+        ValueError,
+        project_update_transaction.ProjectUpdateTransactionError,
+    ):
+        return _ProjectUpdateAbortHistoryCompactionOutcome(
+            discovered_count=discovered_count,
+            attempted_count=attempted_count,
+            completed_count=completed,
+            cleanup_proof_count=completed,
+            incomplete=True,
+        )
+
+
+def _project_update_attach_abort_history_compaction_effect(
+    result: Mapping[str, Any],
+    outcome: _ProjectUpdateAbortHistoryCompactionOutcome,
+) -> dict[str, Any]:
+    """Attach exact private-control effects without widening public paths.
+
+    ``files_written`` remains the project-domain-only compatibility list.  A
+    caller can therefore see that private control evidence changed while no
+    private path, transaction ref, or cleanup authority is reflected.
+    """
+
+    if not isinstance(result, Mapping) or not isinstance(
+        outcome,
+        _ProjectUpdateAbortHistoryCompactionOutcome,
+    ):
+        raise ArchiveServiceError(
+            "project_version_update_resume_locator_changed"
+        )
+    if (
+        outcome.discovered_count < 0
+        or outcome.attempted_count < 0
+        or outcome.completed_count < 0
+        or outcome.cleanup_proof_count < 0
+        or outcome.completed_count > outcome.attempted_count
+        or outcome.cleanup_proof_count != outcome.completed_count
+        or outcome.attempted_count > outcome.discovered_count
+    ):
+        raise ArchiveServiceError(
+            "project_version_update_resume_locator_changed"
+        )
+    attached = dict(result)
+    domain_files = attached.get("files_written")
+    if type(domain_files) is not list:
+        domain_files = attached.get("project_domain_files_written")
+    public_domain_files = (
+        list(domain_files) if type(domain_files) is list else []
+    )
+    existing_summary = attached.get("effect_summary")
+    summary = (
+        dict(existing_summary)
+        if isinstance(existing_summary, Mapping)
+        else {}
+    )
+    project_domain_writes_performed = bool(
+        summary.get("project_domain_writes_performed") is True
+        or public_domain_files
+        or attached.get("domain_writer_entered") is True
+    )
+    summary.update(
+        {
+            "project_domain_writes_performed": (
+                project_domain_writes_performed
+            ),
+            "project_domain_files_written": public_domain_files,
+            "durable_control_evidence_written_or_verified": bool(
+                outcome.cleanup_proof_count
+            ),
+            "private_control_mutation_performed_or_verified": bool(
+                outcome.completed_count
+            ),
+            "private_control_mutation_may_be_incomplete": bool(
+                outcome.incomplete
+                and outcome.attempted_count > outcome.completed_count
+            ),
+            "terminal_abort_history_compaction_performed_or_verified": bool(
+                outcome.completed_count
+            ),
+            "terminal_abort_history_cleanup_incomplete": bool(
+                outcome.incomplete
+            ),
+            "paths_or_identifiers_disclosed": False,
+        }
+    )
+    attached.update(
+        {
+            "terminal_abort_histories_compacted": outcome.completed_count,
+            "cleanup_proofs_written_or_verified": (
+                outcome.cleanup_proof_count
+            ),
+            "terminal_abort_history_compaction_state": (
+                "partial"
+                if outcome.incomplete and outcome.completed_count
+                else "incomplete"
+                if outcome.incomplete
+                else "complete"
+            ),
+            "terminal_abort_history_compaction_incomplete": bool(
+                outcome.incomplete
+            ),
+            "files_written_scope": "project_domain_only",
+            "effect_summary": summary,
+        }
+    )
+    return attached
+
+
+def _project_update_abort_history_compacted_result(
+    *,
+    compacted_count: int,
+) -> dict[str, Any]:
+    """Report an exact private-control cleanup with zero project-domain write."""
+
+    if (
+        type(compacted_count) is not int
+        or compacted_count < 1
+        or compacted_count
+        > project_update_transaction.MAX_TERMINAL_CLEANUP_SCAN_ENTRIES
+    ):
+        raise ArchiveServiceError(
+            "project_version_update_resume_locator_changed"
+        )
+    return {
+        "ok": True,
+        "status": "terminal_history_compacted",
+        "update_completed": False,
+        "fresh_approval_required": True,
+        "native_approval_redisplayed": False,
+        "automatic_resume_discovery": True,
+        "operator_resume_identifiers_supplied": False,
+        "terminal_abort_histories_compacted": compacted_count,
+        "cleanup_proofs_written_or_verified": compacted_count,
+        "project_domain_effects": "none",
+        "domain_writer_entered": False,
+        "project_domain_files_written": [],
+        "files_written_scope": "project_domain_only",
+        "files_written": [],
+        "effect_summary": {
+            "project_domain_writes_performed": False,
+            "project_domain_files_written": [],
+            "durable_control_evidence_written_or_verified": True,
+            "terminal_abort_history_compaction_performed_or_verified": True,
+            "paths_or_identifiers_disclosed": False,
+        },
+        "privacy_guards": {
+            "private_paths_echoed": False,
+            "private_identifiers_echoed": False,
+            "private_hashes_echoed": False,
+        },
+        "next_safe_actions": [
+            "Run a fresh project-version-update preview, then request one new exact approval."
+        ],
+    }
+
+
 def _project_update_terminal_cleanup_unknown_gate_read_only(
     inspection_root: Path | str,
     *,
     operator_resume_identifiers_supplied: bool,
     archive_identity_metadata_read: bool = False,
+    exact_terminal_delivery_observed: bool = False,
+    _handoff_observation_out: (
+        list[_ProjectUpdateTerminalHandoffObservation | None] | None
+    ) = None,
 ) -> dict[str, Any] | None:
     """Separate ordinary not-found from untrusted cleanup-shaped residue."""
 
-    if type(archive_identity_metadata_read) is not bool:
+    if (
+        type(archive_identity_metadata_read) is not bool
+        or type(exact_terminal_delivery_observed) is not bool
+        or (
+            _handoff_observation_out is not None
+            and (
+                type(_handoff_observation_out) is not list
+                or _handoff_observation_out
+            )
+        )
+    ):
         raise ArchiveServiceError(
             "project_version_update_resume_locator_changed"
         )
@@ -116644,56 +117383,169 @@ def _project_update_terminal_cleanup_unknown_gate_read_only(
     project_root = _project_update_resume_project_root_read_only(
         inspection_root
     )
-    handoff_state = _project_update_terminal_handoff_state_read_only(
-        inspection_root
-    )
-    if handoff_state in {
-        "claim_succeeded_pre_unlock",
-        "terminal_ready",
-    }:
-        return None
+    observed_handoff: list[
+        _ProjectUpdateTerminalHandoffObservation | None
+    ] = []
+    try:
+        handoff_state = _project_update_terminal_handoff_state_read_only(
+            inspection_root,
+            _observation_out=observed_handoff,
+        )
+    except ArchiveServiceError as failure:
+        if _project_update_exact_terminal_handoff_invalid_failure(failure):
+            return _project_update_terminal_cleanup_outcome_unknown_result(
+                operator_resume_identifiers_supplied=(
+                    operator_resume_identifiers_supplied
+                ),
+                archive_identity_metadata_read=(
+                    archive_identity_metadata_read
+                ),
+            )
+        raise
+    if len(observed_handoff) != 1:
+        raise ArchiveServiceError(
+            "project_version_update_resume_locator_changed"
+        )
+    handoff_observation = observed_handoff[0]
+    if _handoff_observation_out is not None:
+        _handoff_observation_out.append(handoff_observation)
     for attempt in range(2):
         regular_scan_incomplete = False
+        active_transaction_observed = False
+        active_transaction_ref: str | None = None
         try:
-            project_update_transaction.active_transaction_ref_for_resume_read_only(
-                project_root
+            active_transaction_ref = (
+                project_update_transaction
+                .active_transaction_ref_for_resume_read_only(project_root)
             )
-            return None
+            active_transaction_observed = True
         except project_update_transaction.ProjectUpdateTransactionError as failure:
-            if failure.code in {
-                "project_update_transaction_scan_incomplete",
-                "project_update_transaction_path_unsafe",
-            }:
+            if failure.code == "project_update_transaction_not_found":
+                active_transaction_observed = False
+            else:
+                # A malformed live lock, ambiguous lockless locator, unsafe
+                # entry, or bounded-scan failure is cleanup outcome unknown.
+                # None of these read-only failures may fall through to a
+                # generic CLI error or authorize a writer.
                 regular_scan_incomplete = True
-            elif failure.code != "project_update_transaction_not_found":
-                raise
-        cleanup_state = (
-            project_update_transaction
-            .inspect_terminal_cleanup_artifacts_for_resume_read_only(
-                project_root
-            )
-        )
-        if cleanup_state == "observed_or_scan_incomplete":
-            cleanup_classification, history_only_count = (
-                _project_update_terminal_cleanup_artifact_classification_read_only(
+        try:
+            cleanup_state = (
+                project_update_transaction
+                .inspect_terminal_cleanup_artifacts_for_resume_read_only(
                     project_root
                 )
-                if not regular_scan_incomplete
-                else ("unresolved", 0)
             )
-            if cleanup_classification == "history_only_exact":
-                return _project_update_history_only_cleanup_result(
+        except project_update_transaction.ProjectUpdateTransactionError:
+            return _project_update_terminal_cleanup_outcome_unknown_result(
+                operator_resume_identifiers_supplied=(
+                    operator_resume_identifiers_supplied
+                ),
+                archive_identity_metadata_read=(
+                    archive_identity_metadata_read
+                ),
+            )
+        if (
+            cleanup_state == "active_lock_changed"
+            and not active_transaction_observed
+            and attempt == 0
+        ):
+            continue
+        cleanup_classification, history_only_count = (
+            _project_update_terminal_cleanup_artifact_classification_read_only(
+                project_root
+            )
+            if not regular_scan_incomplete
+            else ("unresolved", 0)
+        )
+        if handoff_observation is not None:
+            active_handoff_ref_matches = bool(
+                active_transaction_ref is not None
+                and handoff_observation.transaction_ref is not None
+                and hmac.compare_digest(
+                    handoff_observation.transaction_ref,
+                    active_transaction_ref,
+                )
+            )
+            tombstone_handoff_ref_matches = False
+            if cleanup_classification == "recoverable_exact":
+                try:
+                    tombstone = (
+                        project_update_transaction.ProjectUpdateTransaction
+                        .discover_complete_cleanup_tombstone_for_resume_read_only(
+                            project_root
+                        )
+                    )
+                except project_update_transaction.ProjectUpdateTransactionError:
+                    tombstone = None
+                if (
+                    tombstone is None
+                    or handoff_observation.transaction_ref is None
+                    or not hmac.compare_digest(
+                        handoff_observation.transaction_ref,
+                        tombstone.transaction_ref,
+                    )
+                ):
+                    return _project_update_terminal_cleanup_outcome_unknown_result(
+                        operator_resume_identifiers_supplied=(
+                            operator_resume_identifiers_supplied
+                        ),
+                        archive_identity_metadata_read=(
+                            archive_identity_metadata_read
+                        ),
+                    )
+                tombstone_handoff_ref_matches = True
+            handoff_ref_matches = bool(
+                active_handoff_ref_matches
+                or (
+                    active_transaction_ref is None
+                    and tombstone_handoff_ref_matches
+                )
+            )
+            if (
+                handoff_observation.state
+                == "claim_succeeded_pre_unlock"
+                and not handoff_ref_matches
+            ) or (
+                handoff_observation.state == "terminal_ready"
+                and active_transaction_ref is not None
+                and not active_handoff_ref_matches
+            ):
+                return _project_update_terminal_cleanup_outcome_unknown_result(
                     operator_resume_identifiers_supplied=(
                         operator_resume_identifiers_supplied
                     ),
-                    proof_count=history_only_count,
+                    archive_identity_metadata_read=(
+                        archive_identity_metadata_read
+                    ),
                 )
-            if cleanup_classification == "recoverable_exact":
-                # Restoration is allowed only after the archive identity and
-                # succeeded-claim boundary opens in the live resume service.
-                # This metadata-only gate merely permits that authenticated
-                # path; it grants no cleanup or success authority itself.
+        if cleanup_classification == "history_only_exact":
+            if handoff_state is not None or exact_terminal_delivery_observed:
                 return None
+            return _project_update_history_only_cleanup_result(
+                operator_resume_identifiers_supplied=(
+                    operator_resume_identifiers_supplied
+                ),
+                proof_count=history_only_count,
+            )
+        if cleanup_classification in {
+            "recoverable_exact",
+            "resume_required_exact",
+            "terminal_history_exact",
+        }:
+            # Restoration/compaction is allowed only after the archive identity
+            # boundary opens in the live resume service. This read-only gate
+            # merely routes an exact state there; it grants no success or
+            # project-domain write authority itself.
+            return None
+        if (
+            regular_scan_incomplete
+            or cleanup_state == "observed_or_scan_incomplete"
+            or cleanup_classification == "unresolved"
+            or (
+                active_transaction_observed
+                and cleanup_classification == "absent"
+            )
+        ):
             return _project_update_terminal_cleanup_outcome_unknown_result(
                 operator_resume_identifiers_supplied=(
                     operator_resume_identifiers_supplied
@@ -116702,21 +117554,12 @@ def _project_update_terminal_cleanup_unknown_gate_read_only(
                     archive_identity_metadata_read
                 ),
             )
-        if cleanup_state == "active_lock_changed" and attempt == 0:
-            continue
-        if cleanup_state == "active_lock_changed":
+        if cleanup_classification != "absent":
             raise ArchiveServiceError(
                 "project_version_update_resume_locator_changed"
             )
-        if regular_scan_incomplete:
-            return _project_update_terminal_cleanup_outcome_unknown_result(
-                operator_resume_identifiers_supplied=(
-                    operator_resume_identifiers_supplied
-                ),
-                archive_identity_metadata_read=(
-                    archive_identity_metadata_read
-                ),
-            )
+        if handoff_state is not None or exact_terminal_delivery_observed:
+            return None
         raise project_update_transaction.ProjectUpdateTransactionError(
             "project_update_transaction_not_found"
         )
@@ -116725,9 +117568,43 @@ def _project_update_terminal_cleanup_unknown_gate_read_only(
     )
 
 
+@dataclass(frozen=True)
+class _ProjectUpdateTerminalHandoffObservation:
+    """Private continuity token for one exact active terminal document."""
+
+    state: str
+    raw_sha256: str
+    pending_record_sha256: str | None
+    transaction_ref: str | None
+
+
+def _project_update_exact_terminal_handoff_invalid_failure(
+    failure: BaseException,
+) -> bool:
+    """Recognize only the one fixed, argument-free public safety sentinel."""
+
+    return bool(
+        type(failure) is ArchiveServiceError
+        and len(failure.args) == 1
+        and type(failure.args[0]) is str
+        and failure.args[0]
+        == "project_version_update_terminal_handoff_invalid"
+    )
+
+
 def _project_update_terminal_handoff_state_read_only(
     inspection_root: Path | str,
+    *,
+    _observation_out: (
+        list[_ProjectUpdateTerminalHandoffObservation | None] | None
+    ) = None,
 ) -> str | None:
+    if _observation_out is not None and (
+        type(_observation_out) is not list or _observation_out
+    ):
+        raise ArchiveServiceError(
+            "project_version_update_resume_locator_changed"
+        )
     project_root = _project_update_resume_project_root_read_only(
         inspection_root
     )
@@ -116736,8 +117613,10 @@ def _project_update_terminal_handoff_state_read_only(
     )
     observed = _project_update_read_terminal_document(project_root, handoff)
     if observed is None:
+        if _observation_out is not None:
+            _observation_out.append(None)
         return None
-    value, _raw = observed
+    value, raw = observed
     state = value.get("state")
     expected_keys = (
         {"schema", "state", "pending"}
@@ -116753,7 +117632,130 @@ def _project_update_terminal_handoff_state_read_only(
         raise ArchiveServiceError(
             "project_version_update_terminal_handoff_invalid"
         )
+    pending = value.get("pending")
+    pending_payload = (
+        pending.get("payload") if type(pending) is dict else None
+    )
+    transaction_ref = (
+        pending_payload.get("transaction_ref")
+        if type(pending_payload) is dict
+        and type(pending_payload.get("transaction_ref")) is str
+        and project_update_transaction.TRANSACTION_REF_RE.fullmatch(
+            pending_payload["transaction_ref"]
+        )
+        is not None
+        else None
+    )
+    if _observation_out is not None:
+        _observation_out.append(
+            _ProjectUpdateTerminalHandoffObservation(
+                state=str(state),
+                raw_sha256=project_update_transaction.sha256_bytes(raw),
+                pending_record_sha256=(
+                    project_update_transaction.sha256_document(pending)
+                    if type(pending) is dict
+                    else None
+                ),
+                transaction_ref=transaction_ref,
+            )
+        )
     return str(state)
+
+
+@contextmanager
+def _project_update_terminal_execution_lease(
+    state: _ProjectVersionUpdateDurableApprovalState,
+    *,
+    expected_handoff_observation: (
+        _ProjectUpdateTerminalHandoffObservation | None
+    ),
+    fresh_absence: bool,
+) -> Iterator[None]:
+    """Bind the terminal namespace from native approval through publication.
+
+    The project update transaction and its project lock already exist when
+    this boundary is entered.  Fresh approval expects no active handoff;
+    mutation-bearing resume may instead bind the exact pre-unlock handoff it
+    observed during the strict read-only gate.  The same non-reentrant OS
+    guard remains owned while nested terminal reads and CAS publications reuse
+    the ContextVar-bound parent/guard handles.
+    """
+
+    if type(fresh_absence) is not bool or (
+        expected_handoff_observation is not None
+        and expected_handoff_observation.state
+        != "claim_succeeded_pre_unlock"
+    ):
+        raise ArchiveServiceError(
+            "project_version_update_terminal_execution_boundary_unknown"
+        )
+    try:
+        with _project_update_terminal_control_boundary(state.project_root):
+            observed: list[
+                _ProjectUpdateTerminalHandoffObservation | None
+            ] = []
+            try:
+                _project_update_terminal_handoff_state_read_only(
+                    state.inspection_root,
+                    _observation_out=observed,
+                )
+            except ArchiveServiceError as failure:
+                if _project_update_exact_terminal_handoff_invalid_failure(
+                    failure
+                ):
+                    raise ArchiveServiceError(
+                        "project_version_update_terminal_execution_boundary_unknown"
+                    ) from None
+                raise
+            if len(observed) != 1:
+                raise ArchiveServiceError(
+                    "project_version_update_terminal_execution_boundary_unknown"
+                )
+            current = observed[0]
+            if expected_handoff_observation is None:
+                if current is not None:
+                    raise ArchiveServiceError(
+                        "project_version_update_terminal_execution_boundary_unknown"
+                    )
+            elif (
+                current != expected_handoff_observation
+                or current.transaction_ref
+                != state.transaction.transaction_ref
+            ):
+                raise ArchiveServiceError(
+                    "project_version_update_terminal_execution_boundary_unknown"
+                )
+            cleanup_result = (
+                _project_update_terminal_cleanup_unknown_gate_read_only(
+                    state.inspection_root,
+                    operator_resume_identifiers_supplied=False,
+                    archive_identity_metadata_read=True,
+                )
+            )
+            if cleanup_result is not None:
+                raise ArchiveServiceError(
+                    "project_version_update_terminal_execution_boundary_unknown"
+                )
+            execution_token = (
+                _PROJECT_UPDATE_TERMINAL_EXECUTION_LEASE.set(
+                    (id(state), state.transaction.transaction_ref)
+                )
+            )
+            try:
+                yield
+            finally:
+                _PROJECT_UPDATE_TERMINAL_EXECUTION_LEASE.reset(
+                    execution_token
+                )
+    except ArchiveServiceError:
+        raise
+    except (
+        OSError,
+        project_update_transaction.ProjectUpdateTransactionError,
+    ):
+        raise ArchiveServiceError(
+            "project_version_update_terminal_execution_boundary_unknown"
+        ) from None
 
 
 def _project_update_terminal_handoff_attachments(
@@ -116988,10 +117990,48 @@ def _project_update_replay_ready_terminal_handoff(
     approval_executor: Callable[..., Mapping[str, Any]],
     expected_approval_root: Path,
     expected_archive_id: str,
+    _expected_handoff_observation: (
+        _ProjectUpdateTerminalHandoffObservation | None
+    ) = None,
+    _terminal_control_lease_held: bool = False,
 ) -> dict[str, Any] | None:
     project_root = _project_update_resume_project_root_read_only(
         inspection_root
     )
+    if (
+        type(_terminal_control_lease_held) is not bool
+        or _expected_handoff_observation is None
+        or _expected_handoff_observation.state != "terminal_ready"
+    ):
+        raise ArchiveServiceError(
+            "project_version_update_terminal_handoff_invalid"
+        )
+    if not _terminal_control_lease_held:
+        try:
+            with _project_update_terminal_control_boundary(project_root):
+                return _project_update_replay_ready_terminal_handoff(
+                    inspection_root,
+                    target=target,
+                    reviewed_by=reviewed_by,
+                    transaction_ref=transaction_ref,
+                    approval_executor=approval_executor,
+                    expected_approval_root=expected_approval_root,
+                    expected_archive_id=expected_archive_id,
+                    _expected_handoff_observation=(
+                        _expected_handoff_observation
+                    ),
+                    _terminal_control_lease_held=True,
+                )
+        except ArchiveServiceError:
+            raise
+        except OSError:
+            raise ArchiveServiceError(
+                "project_version_update_terminal_handoff_invalid"
+            ) from None
+    if _PROJECT_UPDATE_TERMINAL_CONTROL_LEASE.get() is None:
+        raise ArchiveServiceError(
+            "project_version_update_terminal_handoff_invalid"
+        )
     handoff, _guard = _project_update_terminal_handoff_paths(
         project_root
     )
@@ -117009,6 +118049,21 @@ def _project_update_replay_ready_terminal_handoff(
         )
     pending_record = active["pending"]
     ready_record = active["ready"]
+    if _expected_handoff_observation is not None and (
+        _expected_handoff_observation.state != "terminal_ready"
+        or not hmac.compare_digest(
+            _expected_handoff_observation.raw_sha256,
+            project_update_transaction.sha256_bytes(active_bytes),
+        )
+        or _expected_handoff_observation.pending_record_sha256 is None
+        or not hmac.compare_digest(
+            _expected_handoff_observation.pending_record_sha256,
+            project_update_transaction.sha256_document(pending_record),
+        )
+    ):
+        raise ArchiveServiceError(
+            "project_version_update_terminal_handoff_invalid"
+        )
     preview, domain_result, basis, postimage = (
         _project_update_terminal_handoff_attachments(pending_record)
     )
@@ -117512,7 +118567,7 @@ def _project_update_acknowledge_terminal_result_delivery(
         result_payload_sha256,
     ):
         return False
-    handoff, guard = _project_update_terminal_handoff_paths(
+    handoff, _guard = _project_update_terminal_handoff_paths(
         project_root
     )
     observed = _project_update_read_terminal_document(project_root, handoff)
@@ -117570,13 +118625,23 @@ def _project_update_acknowledge_terminal_result_delivery(
     )
     display_pending_verified = False
     try:
-        with project_update_transaction._exclusive_guard(
-            guard,
-            within=project_root,
+        # The CLI may already hold this exact boundary across service replay,
+        # immutable output publication, journal completion, and acknowledgement.
+        # Reuse that ContextVar-bound lease instead of attempting to acquire the
+        # non-reentrant OS guard a second time.  A standalone caller still takes
+        # the same boundary here before the final compare-and-move.
+        with _project_update_terminal_control_boundary(project_root) as (
+            scaffold,
+            binding,
         ):
-            current = _project_update_read_terminal_document(
-                project_root,
-                handoff,
+            bound_handoff = scaffold.terminal_root / handoff.name
+            bound_display_pending = (
+                scaffold.terminal_root / display_pending_path.name
+            )
+            current = _project_update_read_terminal_document_bound(
+                scaffold.project_root,
+                binding,
+                bound_handoff,
             )
             if (
                 current is None
@@ -117600,11 +118665,18 @@ def _project_update_acknowledge_terminal_result_delivery(
                 )
             ):
                 return False
-            consumed_root = project_update_transaction._mkdirs(
-                project_root,
-                _PROJECT_UPDATE_TERMINAL_CONSUMED_ROOT_LOGICAL,
-            )
-            if display_pending_path.parent != consumed_root:
+            consumed_root = scaffold.terminal_root
+            try:
+                original_parent_matches = bool(
+                    os.path.samefile(handoff.parent, consumed_root)
+                    and os.path.samefile(
+                        display_pending_path.parent,
+                        consumed_root,
+                    )
+                )
+            except OSError:
+                original_parent_matches = False
+            if not original_parent_matches:
                 return False
             if os.path.lexists(display_pending_path):
                 return False
@@ -117615,11 +118687,12 @@ def _project_update_acknowledge_terminal_result_delivery(
             # Both names share one directory, so this single flush commits
             # both sides of the atomic rename.
             project_update_transaction._require_directory_durable(
-                consumed_root
+                display_pending_path.parent
             )
-            display_pending = _project_update_read_terminal_document(
-                project_root,
-                display_pending_path,
+            display_pending = _project_update_read_terminal_document_bound(
+                scaffold.project_root,
+                binding,
+                bound_display_pending,
             )
             if (
                 display_pending is None
@@ -117804,6 +118877,7 @@ def _project_update_terminal_cleanup_unknown_preflight_read_only(
     *,
     operator_resume_identifiers_supplied: bool,
     approval_identifier_supplied: bool,
+    exact_terminal_delivery_observed: bool = False,
 ) -> dict[str, Any] | None:
     """Return cleanup-unknown before any archive identity boundary is opened.
 
@@ -117816,6 +118890,7 @@ def _project_update_terminal_cleanup_unknown_preflight_read_only(
     if (
         type(operator_resume_identifiers_supplied) is not bool
         or type(approval_identifier_supplied) is not bool
+        or type(exact_terminal_delivery_observed) is not bool
     ):
         raise ArchiveServiceError(
             "project_version_update_resume_locator_changed"
@@ -117826,6 +118901,9 @@ def _project_update_terminal_cleanup_unknown_preflight_read_only(
             operator_resume_identifiers_supplied
         ),
         archive_identity_metadata_read=False,
+        exact_terminal_delivery_observed=(
+            exact_terminal_delivery_observed
+        ),
     )
     if result is not None and approval_identifier_supplied:
         raise ArchiveServiceError(
@@ -117879,6 +118957,9 @@ def _wom_kit_project_version_update_resume_live_transaction(
         or str(reviewed_by or "").strip()
         or _approval_identifier_supplied
     )
+    initial_handoff_observation: list[
+        _ProjectUpdateTerminalHandoffObservation | None
+    ] = []
     cleanup_unknown = (
         _project_update_terminal_cleanup_unknown_gate_read_only(
             inspection_root,
@@ -117888,6 +118969,7 @@ def _wom_kit_project_version_update_resume_live_transaction(
             archive_identity_metadata_read=(
                 _archive_identity_metadata_read
             ),
+            _handoff_observation_out=initial_handoff_observation,
         )
     )
     if cleanup_unknown is not None:
@@ -117896,27 +118978,63 @@ def _wom_kit_project_version_update_resume_live_transaction(
                 "exact_human_approval_resume_claim_invalid"
             )
         return cleanup_unknown
+    if len(initial_handoff_observation) != 1:
+        raise ArchiveServiceError(
+            "project_version_update_resume_locator_changed"
+        )
     project_root = _project_update_resume_project_root_read_only(
         inspection_root
     )
+    active_transaction_ref: str | None = None
     try:
-        project_update_transaction.active_transaction_ref_for_resume_read_only(
-            project_root
+        active_transaction_ref = (
+            project_update_transaction
+            .active_transaction_ref_for_resume_read_only(project_root)
         )
         active_transaction_observed = True
     except project_update_transaction.ProjectUpdateTransactionError as failure:
-        if failure.code != "project_update_transaction_not_found":
-            raise
-        active_transaction_observed = False
+        if failure.code == "project_update_transaction_not_found":
+            active_transaction_observed = False
+        else:
+            return _project_update_terminal_cleanup_outcome_unknown_result(
+                operator_resume_identifiers_supplied=(
+                    operator_resume_identifiers_supplied
+                ),
+                archive_identity_metadata_read=(
+                    _archive_identity_metadata_read
+                ),
+            )
     cleanup_classification, _history_count = (
         _project_update_terminal_cleanup_artifact_classification_read_only(
             project_root
         )
     )
-    if (
-        not active_transaction_observed
-        and cleanup_classification == "recoverable_exact"
-    ):
+    compacted_abort_history_count = 0
+    abort_compaction_outcome: (
+        _ProjectUpdateAbortHistoryCompactionOutcome | None
+    ) = None
+
+    def attach_abort_compaction_effect(
+        result: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        if (
+            abort_compaction_outcome is None
+            or (
+                abort_compaction_outcome.completed_count == 0
+                and not abort_compaction_outcome.incomplete
+            )
+        ):
+            return dict(result)
+        return _project_update_attach_abort_history_compaction_effect(
+            result,
+            abort_compaction_outcome,
+        )
+
+    if cleanup_classification in {
+        "recoverable_exact",
+        "resume_required_exact",
+        "terminal_history_exact",
+    }:
         if not _wom_kit_project_version_update_approval_authority_matches(
             inspection_root,
             expected_root=_expected_approval_root,
@@ -117925,6 +119043,100 @@ def _wom_kit_project_version_update_resume_live_transaction(
             raise ArchiveServiceError(
                 "project_version_update_approval_archive_identity_changed"
             )
+        exact_preapproval_resume = (
+            None
+            if active_transaction_ref is None
+            else _project_update_exact_preapproval_resume_classification_read_only(
+                project_root,
+                active_transaction_ref,
+            )
+        )
+        skip_abort_history_compaction = bool(
+            cleanup_classification == "resume_required_exact"
+            and (
+                os.path.lexists(
+                    project_root.joinpath(
+                        *PurePosixPath(
+                            project_update_transaction
+                            .PROJECT_UPDATE_LOCK_LOGICAL
+                        ).parts
+                    )
+                )
+                or exact_preapproval_resume is not None
+            )
+        )
+        if not skip_abort_history_compaction:
+            abort_compaction_outcome = (
+                _project_update_compact_exact_abort_histories_for_resume(
+                    project_root
+                )
+            )
+            if abort_compaction_outcome.incomplete:
+                return attach_abort_compaction_effect(
+                    _project_update_terminal_cleanup_outcome_unknown_result(
+                        operator_resume_identifiers_supplied=(
+                            operator_resume_identifiers_supplied
+                        ),
+                        archive_identity_metadata_read=True,
+                    )
+                )
+            compacted_abort_history_count = (
+                abort_compaction_outcome.completed_count
+            )
+        if compacted_abort_history_count:
+            report_progress(
+                "project-preflight",
+                "resume-terminal-abort-history-compacted",
+            )
+        cleanup_classification, _history_count = (
+            _project_update_terminal_cleanup_artifact_classification_read_only(
+                project_root
+            )
+        )
+        active_transaction_ref = None
+        try:
+            active_transaction_ref = (
+                project_update_transaction
+                .active_transaction_ref_for_resume_read_only(project_root)
+            )
+            active_transaction_observed = True
+        except project_update_transaction.ProjectUpdateTransactionError as failure:
+            if failure.code == "project_update_transaction_not_found":
+                active_transaction_observed = False
+            else:
+                return attach_abort_compaction_effect(
+                    _project_update_terminal_cleanup_outcome_unknown_result(
+                        operator_resume_identifiers_supplied=(
+                            operator_resume_identifiers_supplied
+                        ),
+                        archive_identity_metadata_read=True,
+                    )
+                )
+        if (
+            compacted_abort_history_count
+            and not active_transaction_observed
+            and cleanup_classification in {"absent", "history_only_exact"}
+        ):
+            compacted_result = _project_update_abort_history_compacted_result(
+                compacted_count=compacted_abort_history_count
+            )
+            compacted_result["operator_resume_identifiers_supplied"] = bool(
+                operator_resume_identifiers_supplied
+            )
+            return compacted_result
+    if cleanup_classification == "unresolved":
+        return attach_abort_compaction_effect(
+            _project_update_terminal_cleanup_outcome_unknown_result(
+                operator_resume_identifiers_supplied=(
+                    operator_resume_identifiers_supplied
+                ),
+                archive_identity_metadata_read=True,
+            )
+        )
+    if (
+        not active_transaction_observed
+        and cleanup_classification == "recoverable_exact"
+    ):
         tombstone = (
             project_update_transaction.ProjectUpdateTransaction
             .discover_complete_cleanup_tombstone_for_resume_read_only(
@@ -117972,25 +119184,94 @@ def _wom_kit_project_version_update_resume_live_transaction(
         raise ArchiveServiceError(
             "project_version_update_terminal_cleanup_recovery_required"
         )
-    terminal_handoff_state = (
-        _project_update_terminal_handoff_state_read_only(inspection_root)
-    )
-    if terminal_handoff_state == "terminal_ready":
-        replayed = _project_update_replay_ready_terminal_handoff(
-            inspection_root,
-            target=target,
-            reviewed_by=reviewed_by,
-            transaction_ref=transaction_ref,
-            approval_executor=approval_executor,
-            expected_approval_root=_expected_approval_root,
-            expected_archive_id=_expected_archive_id,
+    current_handoff_observation: list[
+        _ProjectUpdateTerminalHandoffObservation | None
+    ] = []
+    try:
+        terminal_handoff_state = (
+            _project_update_terminal_handoff_state_read_only(
+                inspection_root,
+                _observation_out=current_handoff_observation,
+            )
         )
+    except ArchiveServiceError as failure:
+        if (
+            len(failure.args) == 1
+            and type(failure.args[0]) is str
+            and failure.args[0]
+            == "project_version_update_terminal_handoff_invalid"
+        ):
+            return attach_abort_compaction_effect(
+                _project_update_terminal_cleanup_outcome_unknown_result(
+                    operator_resume_identifiers_supplied=(
+                        operator_resume_identifiers_supplied
+                    ),
+                    archive_identity_metadata_read=(
+                        _archive_identity_metadata_read
+                    ),
+                )
+            )
+        raise
+    if (
+        len(current_handoff_observation) != 1
+        or current_handoff_observation
+        != initial_handoff_observation
+    ):
+        return attach_abort_compaction_effect(
+            _project_update_terminal_cleanup_outcome_unknown_result(
+                operator_resume_identifiers_supplied=(
+                    operator_resume_identifiers_supplied
+                ),
+                archive_identity_metadata_read=(
+                    _archive_identity_metadata_read
+                ),
+            )
+        )
+    if terminal_handoff_state == "terminal_ready":
+        try:
+            replayed = _project_update_replay_ready_terminal_handoff(
+                inspection_root,
+                target=target,
+                reviewed_by=reviewed_by,
+                transaction_ref=transaction_ref,
+                approval_executor=approval_executor,
+                expected_approval_root=_expected_approval_root,
+                expected_archive_id=_expected_archive_id,
+                _expected_handoff_observation=(
+                    current_handoff_observation[0]
+                ),
+            )
+        except ArchiveServiceError as failure:
+            if (
+                len(failure.args) == 1
+                and type(failure.args[0]) is str
+                and failure.args[0]
+                == "project_version_update_terminal_handoff_invalid"
+            ):
+                return attach_abort_compaction_effect(
+                    _project_update_terminal_cleanup_outcome_unknown_result(
+                        operator_resume_identifiers_supplied=(
+                            operator_resume_identifiers_supplied
+                        ),
+                        archive_identity_metadata_read=(
+                            _archive_identity_metadata_read
+                        ),
+                    )
+                )
+            raise
         if replayed is None:
-            raise ArchiveServiceError(
-                "project_version_update_terminal_handoff_invalid"
+            return attach_abort_compaction_effect(
+                _project_update_terminal_cleanup_outcome_unknown_result(
+                    operator_resume_identifiers_supplied=(
+                        operator_resume_identifiers_supplied
+                    ),
+                    archive_identity_metadata_read=(
+                        _archive_identity_metadata_read
+                    ),
+                )
             )
         report_progress("write-receipt", "resume-terminal-result-replayed")
-        return replayed
+        return attach_abort_compaction_effect(replayed)
     preapproval_recovery: dict[str, Any] | None = None
     for attempt in range(2):
         if attempt:
@@ -118010,7 +119291,7 @@ def _wom_kit_project_version_update_resume_live_transaction(
                     raise ArchiveServiceError(
                         "exact_human_approval_resume_claim_invalid"
                     )
-                return cleanup_unknown
+                return attach_abort_compaction_effect(cleanup_unknown)
         try:
             preapproval_recovery = (
                 _project_update_resume_preapproval_transaction(
@@ -118037,7 +119318,7 @@ def _wom_kit_project_version_update_resume_live_transaction(
             "project_version_update_resume_locator_changed"
         )
     if preapproval_recovery is not None:
-        return preapproval_recovery
+        return attach_abort_compaction_effect(preapproval_recovery)
     try:
         state, lifetime = _project_update_reopen_durable_state(
             inspection_root,
@@ -118066,7 +119347,7 @@ def _wom_kit_project_version_update_resume_live_transaction(
                 raise ArchiveServiceError(
                     "exact_human_approval_resume_claim_invalid"
                 )
-            return cleanup_unknown
+            return attach_abort_compaction_effect(cleanup_unknown)
         raise
 
     report_progress("verify-release", "resume-authenticated-state")
@@ -118135,32 +119416,58 @@ def _wom_kit_project_version_update_resume_live_transaction(
         ),
     )
     try:
-        result = approval_executor(
-            copy.deepcopy(state.prepared_preview),
-            continue_started_claim,
-            finalize_succeeded_claim,
-            started_guard,
-            succeeded_guard,
-            state.reviewer,
-            candidate_missing_handler=candidate_missing_handler,
-        )
-        if not isinstance(result, Mapping):
-            raise ArchiveServiceError(
-                "project_version_update_result_invalid"
+        with _project_update_terminal_execution_lease(
+            state,
+            expected_handoff_observation=(
+                initial_handoff_observation[0]
+            ),
+            fresh_absence=False,
+        ):
+            result = approval_executor(
+                copy.deepcopy(state.prepared_preview),
+                continue_started_claim,
+                finalize_succeeded_claim,
+                started_guard,
+                succeeded_guard,
+                state.reviewer,
+                candidate_missing_handler=candidate_missing_handler,
             )
-        completed_result = dict(result)
-        report_progress("write-receipt", "resume-terminal-result")
-    except BaseException:
+            if not isinstance(result, Mapping):
+                raise ArchiveServiceError(
+                    "project_version_update_result_invalid"
+                )
+            completed_result = dict(result)
+            report_progress("write-receipt", "resume-terminal-result")
+    except BaseException as failure:
         _project_update_close_after_service_failure(
             state.directory_guard.close,
             lifetime,
         )
+        if (
+            type(failure) is ArchiveServiceError
+            and len(failure.args) == 1
+            and type(failure.args[0]) is str
+            and failure.args[0]
+            == "project_version_update_terminal_execution_boundary_unknown"
+        ):
+            return attach_abort_compaction_effect(
+                _project_update_terminal_cleanup_outcome_unknown_result(
+                    operator_resume_identifiers_supplied=(
+                        operator_resume_identifiers_supplied
+                    ),
+                    archive_identity_metadata_read=(
+                        _archive_identity_metadata_read
+                    ),
+                )
+            )
         raise
-    return _project_update_finish_service_result(
-        completed_result,
-        state,
-        lifetime,
-        close_owned_resources=state.directory_guard.close,
+    return attach_abort_compaction_effect(
+        _project_update_finish_service_result(
+            completed_result,
+            state,
+            lifetime,
+            close_owned_resources=state.directory_guard.close,
+        )
     )
 
 
@@ -118945,6 +120252,20 @@ class _ProjectUpdateTerminalControlScaffold:
     guard_identity: tuple[int, int]
 
 
+_PROJECT_UPDATE_TERMINAL_CONTROL_LEASE: ContextVar[
+    tuple[_ProjectUpdateTerminalControlScaffold, dict[str, Any]] | None
+] = ContextVar(
+    "wom_project_update_terminal_control_lease",
+    default=None,
+)
+_PROJECT_UPDATE_TERMINAL_EXECUTION_LEASE: ContextVar[
+    tuple[int, str] | None
+] = ContextVar(
+    "wom_project_update_terminal_execution_lease",
+    default=None,
+)
+
+
 def _project_update_terminal_control_scaffold_state(
     project_root: Path,
 ) -> _ProjectUpdateTerminalControlScaffold:
@@ -119154,6 +120475,40 @@ def _project_update_terminal_control_boundary(
     canonical_project_root = Path(project_root).resolve(strict=True)
     if not os.path.samefile(project_root, canonical_project_root):
         raise OSError("project_update_terminal_control_boundary_changed")
+    existing_lease = _PROJECT_UPDATE_TERMINAL_CONTROL_LEASE.get()
+    if existing_lease is not None:
+        existing_scaffold, existing_binding = existing_lease
+        if (
+            existing_scaffold.project_root != canonical_project_root
+            or existing_binding.get("path")
+            != existing_scaffold.terminal_root
+            or _project_update_terminal_identity(
+                existing_scaffold.terminal_root,
+                regular=False,
+            )
+            != existing_scaffold.terminal_root_identity
+            or _project_update_terminal_identity(
+                existing_scaffold.guard,
+                regular=True,
+            )
+            != existing_scaffold.guard_identity
+        ):
+            raise OSError("project_update_terminal_control_boundary_changed")
+        yield existing_lease
+        if (
+            _project_update_terminal_identity(
+                existing_scaffold.terminal_root,
+                regular=False,
+            )
+            != existing_scaffold.terminal_root_identity
+            or _project_update_terminal_identity(
+                existing_scaffold.guard,
+                regular=True,
+            )
+            != existing_scaffold.guard_identity
+        ):
+            raise OSError("project_update_terminal_control_boundary_changed")
+        return
     terminal_root = canonical_project_root.joinpath(
         *PurePosixPath(
             _PROJECT_UPDATE_TERMINAL_CONSUMED_ROOT_LOGICAL
@@ -119294,7 +120649,7 @@ def _project_update_terminal_control_boundary(
                 raise OSError(
                     "project_update_terminal_control_boundary_changed"
                 )
-            yield (
+            lease = (
                 _ProjectUpdateTerminalControlScaffold(
                     project_root=canonical_project_root,
                     terminal_root=terminal_root,
@@ -119304,10 +120659,47 @@ def _project_update_terminal_control_boundary(
                 ),
                 binding,
             )
-            if not terminal_namespace_matches():
-                raise OSError(
-                    "project_update_terminal_control_boundary_changed"
-                )
+            lease_token = _PROJECT_UPDATE_TERMINAL_CONTROL_LEASE.set(lease)
+            try:
+                yield lease
+                if not terminal_namespace_matches():
+                    raise OSError(
+                        "project_update_terminal_control_boundary_changed"
+                    )
+            finally:
+                _PROJECT_UPDATE_TERMINAL_CONTROL_LEASE.reset(lease_token)
+
+
+def _project_update_terminal_execution_lease_is_held(
+    state: _ProjectVersionUpdateDurableApprovalState,
+) -> bool:
+    """Return only whether this state owns the currently bound guard lease."""
+
+    lease = _PROJECT_UPDATE_TERMINAL_CONTROL_LEASE.get()
+    execution_owner = _PROJECT_UPDATE_TERMINAL_EXECUTION_LEASE.get()
+    transaction_ref = getattr(
+        getattr(state, "transaction", None),
+        "transaction_ref",
+        None,
+    )
+    if (
+        lease is None
+        or execution_owner is None
+        or type(transaction_ref) is not str
+        or execution_owner != (id(state), transaction_ref)
+    ):
+        return False
+    scaffold, _binding = lease
+    try:
+        if (
+            scaffold.project_root
+            != Path(state.project_root).resolve(strict=True)
+        ):
+            return False
+        with _project_update_terminal_control_boundary(state.project_root):
+            return True
+    except (OSError, RuntimeError, ValueError):
+        return False
 
 
 def _project_update_terminal_consumed_path(
@@ -119331,52 +120723,74 @@ def _project_update_read_terminal_document(
     project_root: Path,
     path: Path,
 ) -> tuple[dict[str, Any], bytes] | None:
+    """Read one authority-bearing terminal document through held names.
+
+    The active, display-pending, and consumed terminal documents all live in
+    one fixed private directory.  Treating an arbitrary regular file at the
+    supplied path as equivalent would let a hard link, alternate data stream,
+    or namespace swap lend foreign bytes the terminal document's authority.
+    Bind the complete parent chain first, then reuse the same exact file reader
+    used by terminal publication.
+    """
+
     try:
-        observed = os.lstat(path)
+        requested_root = Path(os.path.abspath(str(project_root)))
+        requested_path = Path(os.path.abspath(str(path)))
+        try:
+            relative_path = requested_path.relative_to(requested_root)
+        except ValueError:
+            raise ArchiveServiceError(
+                "project_version_update_terminal_handoff_invalid"
+            ) from None
+        if not wom_kit_existing_path_components_are_real(
+            requested_root,
+            requested_path.parent,
+        ):
+            raise ArchiveServiceError(
+                "project_version_update_terminal_handoff_invalid"
+            )
+        # Windows may spell the same existing root through an 8.3 alias.
+        # Resolve that already-validated root once, then rebuild rather than
+        # resolving the child path (which could follow a hostile reparse point).
+        canonical_root = requested_root.resolve(strict=True)
+        canonical_path = canonical_root.joinpath(*relative_path.parts)
+        terminal_root = canonical_root.joinpath(
+            *PurePosixPath(
+                _PROJECT_UPDATE_TERMINAL_CONSUMED_ROOT_LOGICAL
+            ).parts
+        )
+        allowed_name = bool(
+            canonical_path.name
+            in {
+                Path(_PROJECT_UPDATE_TERMINAL_HANDOFF_LOGICAL).name,
+                Path(_PROJECT_UPDATE_TERMINAL_DISPLAY_PENDING_LOGICAL).name,
+            }
+            or re.fullmatch(r"[0-9a-f]{64}\.json", canonical_path.name)
+        )
+        if (
+            canonical_path.parent != terminal_root
+            or not allowed_name
+        ):
+            raise ArchiveServiceError(
+                "project_version_update_terminal_handoff_invalid"
+            )
+        with _activity_group_bound_directory_chain(
+            canonical_root,
+            canonical_path.parent,
+        ) as binding:
+            return _project_update_read_terminal_document_bound(
+                canonical_root,
+                binding,
+                canonical_path,
+            )
     except FileNotFoundError:
         return None
+    except ArchiveServiceError:
+        raise
     except OSError:
         raise ArchiveServiceError(
             "project_version_update_terminal_handoff_invalid"
         ) from None
-    if (
-        stat.S_ISLNK(observed.st_mode)
-        or bool(
-            getattr(observed, "st_file_attributes", 0)
-            & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
-        )
-        or not stat.S_ISREG(observed.st_mode)
-        or not wom_kit_existing_path_components_are_real(project_root, path)
-    ):
-        raise ArchiveServiceError(
-            "project_version_update_terminal_handoff_invalid"
-        )
-    raw = _wom_kit_read_bounded_real_bytes(
-        project_root,
-        path,
-        max_bytes=_PROJECT_UPDATE_TERMINAL_HANDOFF_MAX_BYTES,
-    )
-    if not isinstance(raw, bytes):
-        raise ArchiveServiceError(
-            "project_version_update_terminal_handoff_invalid"
-        )
-    try:
-        value = project_update_transaction._parse_document(
-            raw,
-            code="project_update_transaction_invalid",
-        )
-    except project_update_transaction.ProjectUpdateTransactionError:
-        raise ArchiveServiceError(
-            "project_version_update_terminal_handoff_invalid"
-        ) from None
-    if (
-        type(value) is not dict
-        or _project_update_canonical_bytes(value) != raw
-    ):
-        raise ArchiveServiceError(
-            "project_version_update_terminal_handoff_invalid"
-        )
-    return value, raw
 
 
 def _project_update_read_terminal_document_bound(
@@ -119392,22 +120806,170 @@ def _project_update_read_terminal_document_bound(
         )
     try:
         if os.name == "nt":
+            before = os.lstat(path)
+            reparse_flag = getattr(
+                stat,
+                "FILE_ATTRIBUTE_REPARSE_POINT",
+                0,
+            )
+            before_identity = (int(before.st_dev), int(before.st_ino))
+            before_snapshot = (
+                *before_identity,
+                int(before.st_size),
+                int(before.st_mtime_ns),
+                int(before.st_ctime_ns),
+                int(before.st_nlink),
+            )
+            if (
+                not stat.S_ISREG(before.st_mode)
+                or stat.S_ISLNK(before.st_mode)
+                or int(before.st_nlink) != 1
+                or int(before.st_size)
+                > _PROJECT_UPDATE_TERMINAL_HANDOFF_MAX_BYTES
+                or before_identity[1] <= 0
+                or bool(
+                    reparse_flag
+                    and getattr(before, "st_file_attributes", 0)
+                    & reparse_flag
+                )
+            ):
+                raise OSError(
+                    "project_update_terminal_handoff_file_unsafe"
+                )
             # Re-open the exact named file with delete sharing denied, flush
             # that same handle, and require one link plus the default data
             # stream only.  Initial publication and idempotent re-use therefore
             # enforce the same terminal-file invariants.
+            named_identity: list[tuple[int, int]] = []
             raw = _project_update_terminal_windows_move_exact_no_replace(
                 path,
                 None,
                 expected_raw=None,
+                _named_identity_out=named_identity,
             )
+            after = os.lstat(path)
+            after_snapshot = (
+                int(after.st_dev),
+                int(after.st_ino),
+                int(after.st_size),
+                int(after.st_mtime_ns),
+                int(after.st_ctime_ns),
+                int(after.st_nlink),
+            )
+            if (
+                named_identity != [before_identity]
+                or after_snapshot != before_snapshot
+                or int(after.st_size) != len(raw)
+            ):
+                raise OSError(
+                    "project_update_terminal_handoff_file_changed"
+                )
         else:
-            raw = _read_activity_group_regular_bytes_bound(
-                project_root,
-                binding,
-                path,
-                max_bytes=_PROJECT_UPDATE_TERMINAL_HANDOFF_MAX_BYTES,
+            parent_descriptor = binding.get("descriptor")
+            if not isinstance(parent_descriptor, int):
+                raise OSError(
+                    "project_update_terminal_handoff_parent_unbound"
+                )
+            flags = os.O_RDONLY | getattr(os, "O_BINARY", 0)
+            flags |= getattr(os, "O_NOFOLLOW", 0)
+            descriptor = os.open(
+                path.name,
+                flags,
+                dir_fd=parent_descriptor,
             )
+            try:
+                opened = os.fstat(descriptor)
+                named_before = os.stat(
+                    path.name,
+                    dir_fd=parent_descriptor,
+                    follow_symlinks=False,
+                )
+                opened_snapshot = (
+                    int(opened.st_dev),
+                    int(opened.st_ino),
+                    int(opened.st_size),
+                    int(opened.st_mtime_ns),
+                    int(opened.st_ctime_ns),
+                    int(opened.st_nlink),
+                    stat.S_IMODE(opened.st_mode),
+                    int(opened.st_uid),
+                )
+                if (
+                    not stat.S_ISREG(opened.st_mode)
+                    or int(opened.st_nlink) != 1
+                    or int(opened.st_uid) != int(os.geteuid())
+                    or stat.S_IMODE(opened.st_mode) & 0o077
+                    or int(opened.st_size)
+                    > _PROJECT_UPDATE_TERMINAL_HANDOFF_MAX_BYTES
+                    or (
+                        int(named_before.st_dev),
+                        int(named_before.st_ino),
+                    )
+                    != (
+                        int(opened.st_dev),
+                        int(opened.st_ino),
+                    )
+                ):
+                    raise OSError(
+                        "project_update_terminal_handoff_file_unsafe"
+                    )
+
+                def read_exact() -> bytes:
+                    os.lseek(descriptor, 0, os.SEEK_SET)
+                    chunks: list[bytes] = []
+                    remaining = (
+                        _PROJECT_UPDATE_TERMINAL_HANDOFF_MAX_BYTES + 1
+                    )
+                    while remaining:
+                        chunk = os.read(
+                            descriptor,
+                            min(64 * 1024, remaining),
+                        )
+                        if not chunk:
+                            break
+                        chunks.append(chunk)
+                        remaining -= len(chunk)
+                    return b"".join(chunks)
+
+                raw = read_exact()
+                stable_raw = read_exact()
+                final = os.fstat(descriptor)
+                named_after = os.stat(
+                    path.name,
+                    dir_fd=parent_descriptor,
+                    follow_symlinks=False,
+                )
+                final_snapshot = (
+                    int(final.st_dev),
+                    int(final.st_ino),
+                    int(final.st_size),
+                    int(final.st_mtime_ns),
+                    int(final.st_ctime_ns),
+                    int(final.st_nlink),
+                    stat.S_IMODE(final.st_mode),
+                    int(final.st_uid),
+                )
+                if (
+                    len(raw)
+                    > _PROJECT_UPDATE_TERMINAL_HANDOFF_MAX_BYTES
+                    or not hmac.compare_digest(raw, stable_raw)
+                    or opened_snapshot != final_snapshot
+                    or len(raw) != int(final.st_size)
+                    or int(named_after.st_nlink) != 1
+                    or (
+                        int(named_after.st_dev),
+                        int(named_after.st_ino),
+                    )
+                    != (
+                        int(final.st_dev),
+                        int(final.st_ino),
+                    )
+                ):
+                    raise OSError(
+                        "project_update_terminal_handoff_file_changed"
+                    )
+            finally:
+                os.close(descriptor)
     except FileNotFoundError:
         return None
     except OSError:
@@ -120863,6 +122425,10 @@ def _project_update_publish_preunlock_terminal_handoff(
     claim: _ClaimedExactHumanApproval,
     domain_result: Mapping[str, Any],
 ) -> tuple[dict[str, Any], str]:
+    if not _project_update_terminal_execution_lease_is_held(state):
+        raise ArchiveServiceError(
+            "project_version_update_terminal_execution_boundary_unknown"
+        )
     inspection = state.transaction.inspect()
     claim_checkpoints = [
         item
@@ -121035,6 +122601,10 @@ def _project_update_publish_ready_terminal_handoff(
     pending_handoff_sha256: str,
     live: Mapping[str, str],
 ) -> str:
+    if not _project_update_terminal_execution_lease_is_held(state):
+        raise ArchiveServiceError(
+            "project_version_update_terminal_execution_boundary_unknown"
+        )
     inspection = state.transaction.inspect()
     if (
         not inspection.terminal
@@ -121318,6 +122888,8 @@ def _project_update_claim_checkpoint_guard(
 ) -> bool:
     """Authenticate a resume branch against the exact transaction journal."""
 
+    if not _project_update_terminal_execution_lease_is_held(state):
+        return False
     reference_sha256 = project_update_transaction.sha256_bytes(
         _project_update_canonical_bytes(claim.public_reference())
     )
@@ -121824,6 +123396,10 @@ def _project_update_durable_writer(
 ) -> dict[str, Any]:
     """Resume-safe exact component writer; it deliberately keeps the lock."""
 
+    if not _project_update_terminal_execution_lease_is_held(state):
+        raise ArchiveServiceError(
+            "project_version_update_terminal_execution_boundary_unknown"
+        )
     if not _wom_kit_project_version_update_approval_authority_matches(
         state.inspection_root,
         expected_root=state.expected_approval_root,
@@ -121950,6 +123526,10 @@ def _project_update_succeeded_claim_finalizer(
 ) -> None:
     """Finish the authenticated journal tail, exact unlock, then cleanup."""
 
+    if not _project_update_terminal_execution_lease_is_held(state):
+        raise ArchiveServiceError(
+            "project_version_update_terminal_execution_boundary_unknown"
+        )
     evidence = claim.succeeded_evidence_digests(
         project_version_update_approval_binding(
             state.prepared_preview
@@ -126702,6 +128282,10 @@ def _wom_kit_project_version_update_legacy_core(
                 raise ArchiveServiceError(
                     "project_version_update_approval_continuation_reused"
                 )
+            with _project_update_fresh_terminal_absence_boundary(
+                state.project_root
+            ):
+                pass
             continuation_used = True
             binding = project_version_update_approval_binding(
                 prepared.preview
@@ -126791,23 +128375,92 @@ def _wom_kit_project_version_update_legacy_core(
             return _project_update_claim_publication_boundary(state)
 
         try:
-            result = approval_executor(
-                copy.deepcopy(dict(prepared.preview)),
-                durable_continue_after_approval,
-                durable_claim_succeeded_finalizer,
-                durable_started_guard,
-                durable_succeeded_guard,
-                claim_publication_boundary=claim_publication_boundary,
-            )
-            if not continuation_used:
-                raise ArchiveServiceError(
-                    "project_version_update_approval_continuation_not_used"
+            with _project_update_terminal_execution_lease(
+                state,
+                expected_handoff_observation=None,
+                fresh_absence=True,
+            ):
+                result = approval_executor(
+                    copy.deepcopy(dict(prepared.preview)),
+                    durable_continue_after_approval,
+                    durable_claim_succeeded_finalizer,
+                    durable_started_guard,
+                    durable_succeeded_guard,
+                    claim_publication_boundary=claim_publication_boundary,
                 )
-            if not isinstance(result, Mapping):
-                raise ArchiveServiceError(
-                    "project_version_update_result_invalid"
-                )
+                if not continuation_used:
+                    raise ArchiveServiceError(
+                        "project_version_update_approval_continuation_not_used"
+                    )
+                if not isinstance(result, Mapping):
+                    raise ArchiveServiceError(
+                        "project_version_update_result_invalid"
+                    )
         except BaseException as failure:
+            terminal_boundary_unknown = bool(
+                type(failure) is ArchiveServiceError
+                and len(failure.args) == 1
+                and type(failure.args[0]) is str
+                and failure.args[0]
+                in {
+                    "project_version_update_terminal_execution_boundary_unknown",
+                    "project_version_update_fresh_terminal_invalid_prewrite",
+                    "project_version_update_fresh_terminal_present_prewrite",
+                }
+            )
+            if terminal_boundary_unknown and not continuation_used:
+                cleanup_completed = False
+                try:
+                    _project_update_cancel_before_native(state)
+                    cleanup_completed = True
+                except BaseException:
+                    # The public result below intentionally retains only
+                    # content-free uncertainty.  The original exception and
+                    # all private transaction paths/identifiers stay local.
+                    cleanup_completed = False
+                unknown = (
+                    _project_update_terminal_cleanup_outcome_unknown_result(
+                        operator_resume_identifiers_supplied=False,
+                        archive_identity_metadata_read=True,
+                    )
+                )
+                unknown["files_written_scope"] = "project_domain_only"
+                unknown["files_written"] = []
+                unknown["effect_summary"] = (
+                    _project_update_preapproval_cancel_effect_summary(
+                        reservation_abort_evidence=False,
+                        cancellation_checkpoints=True,
+                        candidate_cleanup=True,
+                    )
+                    if cleanup_completed
+                    else {
+                        "project_domain_writes_performed": False,
+                        "project_domain_files_written": [],
+                        "durable_control_evidence_written_or_verified": None,
+                        "reservation_abort_evidence_written_or_verified": False,
+                        "cancellation_checkpoints_written_or_verified": None,
+                        "candidate_cleanup_performed_or_verified": None,
+                        "private_control_mutation_performed_or_verified": None,
+                        "private_control_mutation_may_be_incomplete": True,
+                        "candidate_absence_verified": None,
+                        "lock_release_performed_or_verified": None,
+                        "paths_or_identifiers_disclosed": False,
+                    }
+                )
+                unknown["preapproval_cleanup"] = {
+                    "attempted": True,
+                    "completed": cleanup_completed,
+                    "domain_writer_entered": False,
+                    "native_approval_entered": False,
+                    "private_paths_echoed": False,
+                    "private_identifiers_echoed": False,
+                    "raw_errors_echoed": False,
+                }
+                return _project_update_finish_nonterminal_service_result(
+                    unknown,
+                    git_runner_lifetime,
+                    close_owned_resources=transaction.close,
+                )
             try:
                 if (
                     not continuation_used
@@ -126840,6 +128493,10 @@ def _wom_kit_project_version_update_legacy_core(
             raise ArchiveServiceError(
                 "project_version_update_approval_continuation_reused"
             )
+        with _project_update_fresh_terminal_absence_boundary(
+            _project_update_resume_project_root_read_only(inspection_root)
+        ):
+            pass
         continuation_used = True
         try:
             unexpected = transaction.send(

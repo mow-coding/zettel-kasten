@@ -1,6 +1,8 @@
 # Runtime Canonical Entry Points
 
-Status: v0.4.16 authenticated terminal-result delivery and runtime binding
+Status: v0.4.17 terminal-cleanup recovery and dry-run/approval parity
+
+Previous checkpoint: Status: v0.4.16 authenticated terminal-result delivery and runtime binding
 
 Previous checkpoint: Status: v0.4.15 authenticated project-update recovery and create-only incident reporting
 
@@ -42,7 +44,21 @@ The underlying raw context packet remains available through:
 archive runtime-context <archive-root> --format json
 ```
 
-## v0.4.16 Current Runtime Delta
+## v0.4.17 Current Runtime Delta
+
+Fresh `project-version-update` preview and approval call the same bounded,
+read-only terminal-cleanup classifier. Exact WOM-produced terminal control
+history returns `project_version_update_terminal_cleanup_required` before a
+native decision or domain-writer entry. The only recovery surface remains the
+authenticated, identifier-free `project-version-update --resume` route. It may
+compact exact preapproval-abort control history into canonical proof history
+without changing source, runtime, pin, or archive content and without creating
+new approval authority. Partial, changed, mixed, ambiguous, or unsafe residue
+remains `project_version_update_terminal_cleanup_outcome_unknown` and must not
+be edited manually. Known gates produce fixed privacy-safe structured reasons
+and next steps; arbitrary internal exception messages remain redacted.
+
+## v0.4.16 Historical Runtime Delta
 
 Authenticated project-update success is written to a private durable terminal
 handoff before cleanup. `terminal_finalization` reports claim/checkpoint/lock
@@ -256,7 +272,7 @@ archive capabilities --machine --format json
 
 Its `data.approval_status_inventory` distinguishes
 `approval_available`, `approval_fixed_closed`, and `approval_not_exposed` for
-every canonical executable command path and its aliases. The current v0.4.16
+every canonical executable command path and its aliases. The current v0.4.17
 working-tree parser reports 315 canonical executable paths, 259 alias paths,
 and 574 total invocation paths: 47 operation-specific approval routes, 67
 fixed-closed routes, and 201 routes without an approval mode. Nine paths have
@@ -293,23 +309,23 @@ documented plans, previews, and audits remain available; a closed approval still
 `compound_exact_human_approval_binding_required`. `project-version-update`
 itself is separately reopened with an exact target/tag/source/rollback binding.
 
-When an updater bootstrap is needed and the exact public v0.4.16 GitHub Release
+When an updater bootstrap is needed and the exact public v0.4.17 GitHub Release
 wheel has been independently confirmed, use a dedicated external CPython 3.12
 environment:
 
 ```powershell
 $womBootstrapNonce = [guid]::NewGuid().ToString("N")
-$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0416-$womBootstrapNonce"
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0417-$womBootstrapNonce"
 if (Test-Path -LiteralPath $womBootstrapRoot) {
   throw "WOM bootstrap path must be new."
 }
 py -3.12 -m venv $womBootstrapRoot
 $womBootstrapPython = (Get-Item -LiteralPath (Join-Path $womBootstrapRoot "Scripts\python.exe")).FullName
-& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.16/wom_kit-0.4.16-py3-none-any.whl"
+& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.17/wom_kit-0.4.17-py3-none-any.whl"
 & "$womBootstrapRoot\Scripts\archive.exe" --version
 ```
 
-Require exactly `archive 0.4.16` from a new process. This does not update the
+Require exactly `archive 0.4.17` from a new process. This does not update the
 project-local WOM-kit source mirror or change a project pin. Those effects
 require the separate reviewed `project-version-update` plan and native
 approval, or its authenticated same-context resume after interruption.

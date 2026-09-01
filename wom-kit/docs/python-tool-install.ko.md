@@ -1,6 +1,6 @@
 # WOM-kit Python 도구 설치
 
-상태: v0.4.16 조건부 GitHub wheel 계약; 정확한 pip 부트스트랩과 durable 인증 update 결과 전달
+상태: v0.4.17 조건부 GitHub wheel 계약; 정확한 pip 부트스트랩과 terminal-cleanup 복구
 
 WOM-kit은 명령줄 도구입니다. 일반 앱 프로젝트의 Python 의존성과 섞지 말고
 별도의 격리된 Python 환경에 설치하는 것이 좋습니다.
@@ -31,14 +31,14 @@ wheel을 설치하고 그 환경의 `Scripts\archive.exe`를 정확한 경로로
 실행기는 바뀌지 않습니다. 이 경계는 WOM 명령의 프로젝트 런타임 격리이며,
 Windows 사용자 권한이나 WOM 밖의 프로그램까지 격리한다는 뜻은 아닙니다.
 
-아래 v0.4.16 URL은 조건부 계약이며 공개 자산이 실제로 존재한다는 증거가
+아래 v0.4.17 URL은 조건부 계약이며 공개 자산이 실제로 존재한다는 증거가
 아닙니다. 정확히 일치하는 GitHub Release가 존재하고 검증된 wheel을 자산으로
 나열한 뒤에만 사용하세요. 소스 상태와 릴리스 증거의 구분은
-[v0.4.16 릴리스 노트](releases/v0.4.16.md)를 보세요.
+[v0.4.17 릴리스 노트](releases/v0.4.17.md)를 보세요.
 
-설치된 이전 runtime에는 v0.4.16의 인증된 terminal result delivery, 정확한
-`python -m` binding, runtime-mismatch feedback lane이 없을 수 있습니다. 저장소
-파일만 업데이트해도 설치된 wheel은 바뀌지 않습니다. 검증된 v0.4.16 자산이 실제로 생긴 뒤 그 정확한
+설치된 이전 runtime에는 v0.4.17의 공통 cleanup preflight, exact abort-history
+정리, privacy-safe cleanup reason이 없을 수 있습니다. 저장소 파일만 업데이트해도
+설치된 wheel은 바뀌지 않습니다. 검증된 v0.4.17 자산이 실제로 생긴 뒤 그 정확한
 wheel을 설치하고 새 프로세스를 시작하세요.
 
 ## 권장 프로젝트 부트스트랩
@@ -50,17 +50,17 @@ wheel을 설치하고 새 프로세스를 시작하세요.
 
 ```powershell
 $womBootstrapNonce = [guid]::NewGuid().ToString("N")
-$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0416-$womBootstrapNonce"
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0417-$womBootstrapNonce"
 if (Test-Path -LiteralPath $womBootstrapRoot) {
   throw "WOM bootstrap path must be new."
 }
 py -3.12 -m venv $womBootstrapRoot
 $womBootstrapPython = (Get-Item -LiteralPath (Join-Path $womBootstrapRoot "Scripts\python.exe")).FullName
-& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.16/wom_kit-0.4.16-py3-none-any.whl"
+& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.17/wom_kit-0.4.17-py3-none-any.whl"
 & "$womBootstrapRoot\Scripts\archive.exe" --version
 ```
 
-새 프로세스가 정확히 `archive 0.4.16`을 보고하면 그 명시적 부트스트랩으로
+새 프로세스가 정확히 `archive 0.4.17`을 보고하면 그 명시적 부트스트랩으로
 `project-version-update`를 실행합니다. 승인 성공 뒤 프로젝트 런타임을
 검증하고 해당 launcher를 사용합니다.
 
@@ -110,9 +110,9 @@ pin을 손으로 고치지 마세요. [Project Version Update](project-version-u
 다른 외부 가상환경을 사용합니다.
 
 ```powershell
-$womToolRoot = Join-Path $env:LOCALAPPDATA "WOM\tool-v0416"
+$womToolRoot = Join-Path $env:LOCALAPPDATA "WOM\tool-v0417"
 py -3.12 -m venv $womToolRoot
-& "$womToolRoot\Scripts\python.exe" -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.16/wom_kit-0.4.16-py3-none-any.whl"
+& "$womToolRoot\Scripts\python.exe" -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.17/wom_kit-0.4.17-py3-none-any.whl"
 & "$womToolRoot\Scripts\archive.exe" --version
 ```
 
@@ -216,6 +216,19 @@ proof-only 상태는 `no_resumable_project_update`로 끝나고 과거 성공을
 않으며, 새 update에는 새 preview와 승인이 필요합니다. 일부·malformed·mixed·변경
 중·unsafe residue는 `terminal_cleanup_outcome_unknown`으로 남습니다. cleanup proof
 만으로 success·cleanup·handoff 생성·retry 권한을 얻지 못합니다.
+
+v0.4.17은 fresh dry-run과 approval이 같은 read-only terminal-cleanup preflight를
+사용합니다. `project_version_update_terminal_cleanup_required`는 exact control
+이력을 identifier 없는 `project-version-update --resume`으로 먼저 정합해야 한다는
+뜻입니다. target·transaction ref·approval id·파일 개수·digest를 사람이 제공하지
+않습니다. 복구는 WOM이 만든 exact preapproval-abort 이력만 정리할 수 있고
+project-domain writer에 들어가지 않으며 canonical proof 이력을 남깁니다. 복구 뒤
+새 preview를 실행하고 그 preview가 ready일 때만 한 번의 fresh approval을
+요청합니다.
+
+`project_version_update_terminal_cleanup_outcome_unknown`이면 계속 중단합니다.
+resume을 반복하거나 lock·pin·transaction directory·tombstone·proof를 손으로
+수정하지 말고 구조화된 privacy-safe 결과를 개발 검토용으로 보존합니다.
 
 결과에는 `external_writer_quiescence_required: true`,
 `external_writer_quiescence_affirmed: true`,

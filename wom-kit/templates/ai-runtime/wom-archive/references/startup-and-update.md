@@ -67,8 +67,8 @@ without writing. The authenticated, identifier-free `project-version-update
 <root> --resume --affirm-external-writers-quiescent` exception continues an exact
 sealed update or validated complete legacy cleanup tombstone without new approval
 or writer replay. Pending handoff reuses the bound output and may redisplay it;
-consumed is history, proof-only needs fresh approval, and malformed cleanup stops.
-This opens no MCP control, daemon, queue, force kill, lock deletion, or rollback.
+consumed is history. Fresh dry-run and approval share one cleanup preflight: exact history returns `project_version_update_terminal_cleanup_required` and routes to identifier-free resume; WOM compacts only exact preapproval-abort history into proof with no domain write or fresh authority, while proof-only needs fresh approval.
+`project_version_update_terminal_cleanup_outcome_unknown` means stop and preserve evidence; never loop resume or edit locks, pins, transactions, tombstones, or proofs. This opens no MCP control, daemon, queue, force kill, lock deletion, or rollback.
 
 ## Development Fallback When The Console Script Is Missing
 

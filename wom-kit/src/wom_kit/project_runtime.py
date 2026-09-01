@@ -71,6 +71,8 @@ PUBLIC_WHEEL_PATH_RE = re.compile(
 )
 PROJECT_RUNTIME_TRANSIENT_UNLINK_ATTEMPTS = 8
 PROJECT_RUNTIME_TRANSIENT_UNLINK_BACKOFF_SECONDS = 0.025
+PROJECT_RUNTIME_TRANSIENT_TREE_SCAN_ATTEMPTS = 3
+PROJECT_RUNTIME_TRANSIENT_TREE_SCAN_BACKOFF_SECONDS = 0.025
 PROJECT_RUNTIME_TRANSIENT_WINDOWS_ERRORS = frozenset({5, 32, 33})
 
 
@@ -676,8 +678,8 @@ def project_runtime_policy_document(raw: bytes | None) -> dict[str, Any] | None:
         "runtime_root": ".zettel-kasten/runtimes/vX.Y.Z",
         "active_version_pin": ".zettel-kasten/installed-version.txt",
         "launcher": ".zettel-kasten/bin/archive.cmd",
-        "supply_lock": "wom-kit/project-runtime-supply-lock-v0.4.16.json",
-        "supply_lock_sha256": "sha256:f924a3f714d5913dd2afe870d07e5619172b0e1fcb92f25b18f70a9cd4ad04d8",
+        "supply_lock": "wom-kit/project-runtime-supply-lock-v0.4.17.json",
+        "supply_lock_sha256": "sha256:4a321346b9231646c0c74e0784d42ca75a866200e497283f54b015165a87a28f",
         "global_path_mutation": False,
     }
     if value != expected:
@@ -2747,7 +2749,26 @@ def _bound_delete_error_is_unsafe(error: BaseException) -> bool:
 
 
 def _remove_runtime_bytecode(runtime: Path) -> None:
-    files = _walk_regular_files(runtime)
+    files: list[tuple[str, Path, int, str]] | None = None
+    for attempt in range(PROJECT_RUNTIME_TRANSIENT_TREE_SCAN_ATTEMPTS):
+        try:
+            files = _walk_regular_files(
+                runtime,
+                require_stable_tree_generation=True,
+            )
+            break
+        except ProjectRuntimeError as error:
+            if (
+                error.args != ("project_runtime_tree_changed",)
+                or attempt == PROJECT_RUNTIME_TRANSIENT_TREE_SCAN_ATTEMPTS - 1
+            ):
+                raise
+            time.sleep(
+                PROJECT_RUNTIME_TRANSIENT_TREE_SCAN_BACKOFF_SECONDS
+                * (attempt + 1)
+            )
+    if files is None:
+        raise ProjectRuntimeError("project_runtime_tree_changed")
     for logical, path, _size, _digest in files:
         if path.suffix.casefold() == ".pyc" or "__pycache__" in {
             part.casefold() for part in PurePosixPath(logical).parts
