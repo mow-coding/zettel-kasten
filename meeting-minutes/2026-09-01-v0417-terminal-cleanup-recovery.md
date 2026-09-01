@@ -497,9 +497,79 @@ mocked service result cannot make the unsupported control boundary appear to
 have executed. A fresh exact-head public CI run is required after this test
 correction; the failed run cannot authorize merge or release.
 
-## Pending release-record additions
+## Public release and independent installation evidence
 
-Before release closure, append the exact public PR, merge commit, annotated tag,
-CI result, release URL, wheel digest, anonymous-install verification, secret-
-scan status, and task-owned branch/worktree cleanup evidence. Do not place any
-private client identifiers in that appendix.
+The corrected release head was
+`e133871cca6f5904d9b3c7ea50a65c06c8b9136e`. PR
+[#93](https://github.com/mow-coding/zettel-kasten/pull/93) remained blocked until
+the exact-head full CI run
+[#33516164948](https://github.com/mow-coding/zettel-kasten/actions/runs/33516164948)
+completed with every matrix, scale, readiness, and required aggregate job
+successful. The PR was merged without changing its reviewed head. Merge commit
+`7dd3d5f35cc3e0020d043b01d97c79e0c6a65142` has exactly the previous main
+`37c013779294b118cd12b0122990ed8d7c16ae13` and reviewed head `e133871c` as
+its two parents. The exact-merge main readiness run
+[#33520733741](https://github.com/mow-coding/zettel-kasten/actions/runs/33520733741)
+also passed.
+
+Annotated tag `v0.4.17` was created and independently verified both locally
+and through the remote peeled tag as the exact merge commit. Its readiness run
+[#33520887491](https://github.com/mow-coding/zettel-kasten/actions/runs/33520887491)
+passed. [WOM-kit v0.4.17](https://github.com/mow-coding/zettel-kasten/releases/tag/v0.4.17)
+was first uploaded as a draft. The draft bound the exact committed release-note
+body and one asset named `wom_kit-0.4.17-py3-none-any.whl`; its GitHub asset
+digest matched the locally verified SHA-256
+`7263293ae800a56b112ad7106c6f75e8e2d66c77a8aeabb95388a25b5b8e2050`.
+Only after that comparison was the release published and marked latest.
+
+The public release API and wheel download were then fetched without an
+authorization or cookie header and both returned HTTP 200. The anonymously
+downloaded bytes reproduced the exact release digest. A second resource and
+privacy audit of those downloaded bytes verified all 169 manifested resources,
+252 wheel members, and 15,059,904 text-like bytes, with zero Windows user-path
+matches and zero secret-pattern matches.
+
+A fresh external CPython 3.12 environment installed only that anonymous wheel.
+`pip check` reported no broken requirements, a new process returned
+`archive 0.4.17`, the installed resource check returned `verified`, and the
+installed manifest reported version `0.4.17` with 169 resources. The installed
+`direct_url.json` bound the same public-wheel SHA-256.
+
+The release acceptance harness copied the exact-merge tests and public fixture
+files into a task-owned temporary directory but deliberately copied no `src`
+directory. All `wom_kit` imports and worker subprocesses therefore used the
+freshly installed public wheel. Two real process-loss boundaries,
+`lock_unlinked` and `ready_handoff_before_cleanup`, resumed through the public
+identifier-free path in 105.603 seconds. The terminal output/journal/display
+ordering regression, ordinary approved inbox-draft creation with provenance,
+and source-fidelity receipt/approval-link regression then passed together in
+2.991 seconds. A separate project-local launcher generated from the installed
+public wheel returned `archive 0.4.17` from a new process.
+
+The pre-release rehearsal initially copied the selected fixture directories but
+omitted two top-level public runtime-policy files. Its worker stopped before
+product execution with `FileNotFoundError`; this was a harness assembly error,
+not recovery evidence. The harness was corrected to copy all top-level public
+files while still excluding `src`, and the same candidate-wheel process-loss,
+draft, receipt, and launcher checks passed before the public-wheel run above.
+
+After publication and acceptance, GitHub reported zero open secret-scanning
+alerts. The merged feature branch was absent remotely and removed locally; its
+clean feature worktree and the clean detached release worktree were removed.
+Both exact task-owned preflight and release temporary roots, including their
+throwaway virtual environments, were deleted after their evidence was captured.
+The canonical shared development checkout was not rewritten or fast-forwarded
+as part of that cleanup. No client runtime, archive, credential, provider, pin,
+or client data was read or changed by this release execution.
+
+The first evidence-only PR CI correctly blocked one private client proper noun
+that had been copied into the no-touch sentence above. The documentation was
+still unmerged, and no release asset contained that appendix. The proper noun
+was removed in favor of generic client terminology before merge; the focused
+sealed-surface privacy regression and a fresh full CI run remain required.
+
+This evidence proves the released implementation and a synthetic public-wheel
+workflow. It does not prove that a client project has completed its own
+recovery or created a real ordinary draft. Letter 152 therefore remains
+release-addressed and awaiting separate client validation; it is not marked
+resolved by publication alone.
