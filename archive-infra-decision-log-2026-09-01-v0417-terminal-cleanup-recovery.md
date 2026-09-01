@@ -95,6 +95,11 @@ Do not add a cleanup command or ask the operator to identify private artifacts.
     while the same active capsule remains. Either change, or any discovery
     error, stops before output capture, archive identity access, approval, or
     domain-writer entry.
+22. Terminal-delivery ordering regressions assert the operating-system
+    contract exactly. Windows must show the held outer terminal boundary around
+    immutable output, journal completion, and acknowledgement preparation.
+    POSIX must show the same output/display ordering without claiming that the
+    unsupported Windows control boundary ran.
 
 ## Human responsibility
 

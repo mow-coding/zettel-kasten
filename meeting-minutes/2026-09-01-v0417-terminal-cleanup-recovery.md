@@ -473,6 +473,30 @@ tests in 4.136 seconds with no failure. The package-resource, release-readiness,
 public-privacy, and v0.4.17 document modules then passed 56 tests in 53.495
 seconds, with one declared operating-system skip.
 
+## First exact-head public CI correction: platform-specific boundary trace
+
+The first public CI run for exact head `4d1aa8e8` correctly blocked release.
+Ubuntu Python 3.10 and 3.12 shard 1 each completed 2,269 tests with the same two
+subtest failures in
+`test_project_version_update_terminal_output_precedes_journal_and_atomic_consumption`.
+Both failures were in the test's event-list expectation: it required the
+Windows-only terminal control boundary to emit `boundary-enter` and
+`boundary-exit` on POSIX. The production command intentionally enters that
+boundary only when `os.name == "nt"`; unsupported POSIX mutation must not
+create the Windows private terminal namespace. The actual Ubuntu sequence
+still proved that immutable output preceded operation-journal completion,
+display preparation, and terminal display.
+
+The regression now retains one exact event assertion on every platform while
+making the platform contract explicit. Windows must include the outer boundary
+around output, journal completion, and acknowledgement preparation. POSIX must
+include neither boundary event and must retain the same output and display
+ordering. This does not weaken the Windows race proof; the Windows CI shard
+continues to require both boundary events, while Ubuntu now also proves that a
+mocked service result cannot make the unsupported control boundary appear to
+have executed. A fresh exact-head public CI run is required after this test
+correction; the failed run cannot authorize merge or release.
+
 ## Pending release-record additions
 
 Before release closure, append the exact public PR, merge commit, annotated tag,
