@@ -73,6 +73,28 @@ Do not add a cleanup command or ask the operator to identify private artifacts.
     provider rate interval. The test may use a bounded 60-second process budget
     and mandatory child cleanup while retaining the exact 1/3-second pacing
     assertion.
+18. A stable active handoff with no complete operation-bound delivery journal
+    is a supported pre-delivery recovery state, not unknown residue. It may
+    proceed only to the held service replay that reauthenticates the exact
+    claim, postimage, transaction, and cleanup authority.
+19. Every fresh approval or unbound resume that can create a new output must
+    hold one project terminal boundary from the exact preflight recheck through
+    service execution, immutable output publication, journal completion, and
+    `active` to `display-pending` acknowledgement. The losing process creates
+    no output or journal and enters no writer. Pending discovery and final
+    display consumption occur only after that outer boundary is released.
+20. A newly owned runtime candidate may retry only an exact transient
+    `project_runtime_tree_changed` from its initial bytecode read scan. The
+    retry is bounded, requires a complete stable tree generation on each
+    attempt, and begins no deletion before stability. Every unsafe or nonexact
+    error and every later integrity failure remains immediately fail-closed.
+21. The final held terminal-boundary recheck binds both the exact active
+    observation and the absence of a complete delivery candidate. Re-reading
+    `active.json` alone is insufficient: another invocation may have moved it
+    to `display-pending`, or may have published a complete output and journal
+    while the same active capsule remains. Either change, or any discovery
+    error, stops before output capture, archive identity access, approval, or
+    domain-writer entry.
 
 ## Human responsibility
 
@@ -95,8 +117,17 @@ and postconditions. Private transaction identifiers are never operator inputs.
 - The top-level command and human-decision counts do not increase.
 - Two same-project WOM sessions cannot both cross the terminal authority
   boundary cooperatively. Losing the guard or observing different handoff
-  authority stops the later invocation before it can borrow the first
-  invocation's result or cleanup authority.
+  authority stops the later invocation before it can create an output journal,
+  borrow the first invocation's result, or use its cleanup authority.
+- A process that observed no delivery before waiting cannot mistake a later
+  `display-pending` result for the same empty state. A process that observed an
+  active capsule without a journal cannot create a second output after another
+  process publishes that journal.
+- A normal pre-delivery `active.json` no longer blocks its own authenticated
+  cleanup merely because a complete delivery journal does not yet exist.
+- A short owned Windows tree-generation settling event no longer converts a
+  safe preapproval candidate into permanent manual-review state, while a
+  persistent or unsafe mutation remains blocked with all evidence preserved.
 - v0.4.16 terminal schema identifiers and historical evidence remain readable;
   v0.4.17 adds a narrow cleanup-plan/result schema rather than rewriting prior
   records.

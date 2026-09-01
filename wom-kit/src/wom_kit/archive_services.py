@@ -118567,7 +118567,7 @@ def _project_update_acknowledge_terminal_result_delivery(
         result_payload_sha256,
     ):
         return False
-    handoff, guard = _project_update_terminal_handoff_paths(
+    handoff, _guard = _project_update_terminal_handoff_paths(
         project_root
     )
     observed = _project_update_read_terminal_document(project_root, handoff)
@@ -118625,13 +118625,23 @@ def _project_update_acknowledge_terminal_result_delivery(
     )
     display_pending_verified = False
     try:
-        with project_update_transaction._exclusive_guard(
-            guard,
-            within=project_root,
+        # The CLI may already hold this exact boundary across service replay,
+        # immutable output publication, journal completion, and acknowledgement.
+        # Reuse that ContextVar-bound lease instead of attempting to acquire the
+        # non-reentrant OS guard a second time.  A standalone caller still takes
+        # the same boundary here before the final compare-and-move.
+        with _project_update_terminal_control_boundary(project_root) as (
+            scaffold,
+            binding,
         ):
-            current = _project_update_read_terminal_document(
-                project_root,
-                handoff,
+            bound_handoff = scaffold.terminal_root / handoff.name
+            bound_display_pending = (
+                scaffold.terminal_root / display_pending_path.name
+            )
+            current = _project_update_read_terminal_document_bound(
+                scaffold.project_root,
+                binding,
+                bound_handoff,
             )
             if (
                 current is None
@@ -118655,11 +118665,18 @@ def _project_update_acknowledge_terminal_result_delivery(
                 )
             ):
                 return False
-            consumed_root = project_update_transaction._mkdirs(
-                project_root,
-                _PROJECT_UPDATE_TERMINAL_CONSUMED_ROOT_LOGICAL,
-            )
-            if display_pending_path.parent != consumed_root:
+            consumed_root = scaffold.terminal_root
+            try:
+                original_parent_matches = bool(
+                    os.path.samefile(handoff.parent, consumed_root)
+                    and os.path.samefile(
+                        display_pending_path.parent,
+                        consumed_root,
+                    )
+                )
+            except OSError:
+                original_parent_matches = False
+            if not original_parent_matches:
                 return False
             if os.path.lexists(display_pending_path):
                 return False
@@ -118670,11 +118687,12 @@ def _project_update_acknowledge_terminal_result_delivery(
             # Both names share one directory, so this single flush commits
             # both sides of the atomic rename.
             project_update_transaction._require_directory_durable(
-                consumed_root
+                display_pending_path.parent
             )
-            display_pending = _project_update_read_terminal_document(
-                project_root,
-                display_pending_path,
+            display_pending = _project_update_read_terminal_document_bound(
+                scaffold.project_root,
+                binding,
+                bound_display_pending,
             )
             if (
                 display_pending is None

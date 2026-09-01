@@ -357,6 +357,122 @@ and `finally` cleanup terminates and joins any surviving child before closing
 the queues. Three cold-process repetitions passed locally. This changes only
 test reliability and does not relax the archive-wide rate interval.
 
+## Second remote CI feedback: terminal delivery and candidate settling
+
+The corrected public run removed the earlier Ubuntu errors but exposed five
+Windows failures in two independent areas. Four belonged to terminal replay.
+A valid `active.json` can exist before any complete operation-bound output:
+process loss may occur before cleanup, and a cleanup-incomplete result
+intentionally carries no delivery proof. CLI discovery incorrectly treated the
+stable active handoff plus no delivery candidate as unknown residue, so the
+authenticated service replay never ran. The same error blocked the
+`lock_unlinked` and `ready_handoff_before_cleanup` hard-exit boundaries.
+
+The CLI now distinguishes that exact normal state from drift. It still compares
+the handoff state, raw digest, pending digest, and transaction correlation on
+both sides of operation discovery. If the stable active handoff has no bound
+delivery candidate, the held service boundary reauthenticates the exact claim,
+postimage, and transaction before cleanup. Any discovery error, observation
+change, malformed document, or candidate mismatch remains fail-closed.
+
+Review then found a second-order concurrency gap. If two processes both reached
+stable active state before either published an output, each could create a
+different valid journal for the same handoff. The existing ambiguity check
+would preserve data but could permanently block result delivery. Every write
+invocation that may create a new updater output now acquires the project
+terminal boundary before capture creation, rechecks the exact preflight state
+under that boundary, and holds it through service execution, immutable output,
+journal completion, and `active` to `display-pending` acknowledgement. A losing
+process stops before output, approval, cleanup, or domain writing. The boundary
+is released before pending-delivery discovery and final display consumption;
+the acknowledgement path reuses an already held lease without self-deadlock.
+Boundary-close failure is content-free, preserves the capsule, and leaves
+delivery pending instead of reflecting a private error.
+
+The fifth Windows failure was a separate preapproval runtime-candidate race.
+Immediately after owned venv, pip, and script mutations, the first strict
+bytecode scan observed one directory generation change and converted the new
+candidate into manual-review partial state. The scan remains strict. Only the
+exact one-argument `project_runtime_tree_changed` result from this first owned
+read is retried, at most three times with 0.025- and 0.05-second backoff, and
+every attempt requires identical whole-tree shape before and after hashing.
+Unsafe, unreadable, colliding, reparse, oversized, or nonexact failures are
+never retried. No deletion begins until one complete stable inventory exists;
+all later wheel, payload, receipt, seal, and hard-link verification remains.
+
+Deterministic regressions now cover stable pre-unlock and terminal-ready
+handoffs without a delivery journal, strict drift rejection, boundary ordering
+around output and journal publication, a competing updater losing before
+output, nested acknowledgement without self-deadlock, privacy-safe close
+failure, one transient tree change, exhausted changes with zero deletion, and
+immediate refusal of every nonexact tree error. The previously failing runtime
+candidate integration passed in 229.800 seconds. The repaired-runtime and two
+hard-exit recovery cases passed together on the final current code in 189.343
+seconds.
+
+The complete project-update transaction module then passed 155 tests in
+183.351 seconds; its one skip was the declared POSIX-only refusal assertion on
+this Windows run. The complete runtime-candidate module passed all 10 tests in
+500.826 seconds, including the real venv creation, same-version corrupt and
+empty-runtime repair, exact rollback, and transient-tree settling paths. These
+are local candidate results; the fresh public PR head must still pass every
+required Ubuntu and Windows CI shard before merge.
+
+## Independent final audit correction: stale delivery after guard wait
+
+The second independent final audit found a release-blocking interleaving that
+the first layer tests had not covered. Two fresh commands could both initially
+observe no active handoff. Invocation A could then complete, acknowledge its
+result by moving `active` to `display-pending`, and release the outer guard
+before stdout finalization. A delayed invocation B could acquire that guard and
+still see `active` absent, which looked identical to its stale first snapshot.
+The held fresh-update preflight did not inspect `display-pending`, so B could
+reach a new output and writer while A's result still awaited display. A similar
+gap existed if A published a complete output and journal but acknowledgement
+failed while the same active capsule remained.
+
+The race was reproduced with the real terminal fixture and real
+acknowledgement path before correction: `active` was absent,
+`display-pending` was present, and the stale unbound boundary incorrectly
+opened. The command boundary now repeats the complete strict delivery discovery
+while holding the guard and requires both the exact original active observation
+and no delivery candidate. A newly appeared display-pending candidate, a newly
+complete journal for the same active capsule, observation drift, malformed
+state, or discovery error maps to the content-free cleanup-unknown result and
+closes the guard before output capture.
+
+Deterministic command-level coverage now proves that the stale invocation
+creates no diagnostics output or operation journal, reads no archive identity,
+enters no project writer, preserves the terminal bytes, and reflects no private
+path or raw state. A second regression uses a valid real acknowledgement rather
+than malformed synthetic bytes and proves the exact display-pending capsule is
+preserved. The two original hard-exit boundaries passed again in 97.023
+seconds, and the same-version repaired-runtime terminal replay passed again in
+85.317 seconds on the corrected code.
+
+The complete project-update transaction module then passed 156 tests in
+169.937 seconds, with only its declared POSIX-only assertion skipped on
+Windows. The newly reachable active-without-delivery-journal security path was
+also frozen with one real `ready_handoff_before_cleanup` process-loss fixture.
+Three adversarial subtests changed the pending attachment/hash binding, the
+ready pending-record hash, and the transaction correlation independently. All
+three public identifier-free resumes returned the same content-free unknown
+result, entered neither a domain/component writer nor authenticated cleanup,
+preserved the exact tampered active bytes for evidence, and reflected none of
+the private project path, real or foreign transaction references, or injected
+private marker. The focused test passed in 46.493 seconds.
+
+The final independent re-audit found no remaining P0, P1, or P2 issue and
+independently reran the real acknowledgement race, command-level stale-display
+boundary, and all three no-journal tamper cases: three tests passed in 47.384
+seconds. The first broad historical release-document command was launched
+without the source package on `PYTHONPATH`, so ten modules failed at import and
+no affected test body ran. This was a test-launch mistake, not a product
+failure. The corrected command ran all 120 historical and current release-note
+tests in 4.136 seconds with no failure. The package-resource, release-readiness,
+public-privacy, and v0.4.17 document modules then passed 56 tests in 53.495
+seconds, with one declared operating-system skip.
+
 ## Pending release-record additions
 
 Before release closure, append the exact public PR, merge commit, annotated tag,

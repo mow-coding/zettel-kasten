@@ -8294,8 +8294,18 @@ def _project_version_update_strict_active_handoff_snapshot(
 
 def _project_version_update_discover_terminal_delivery_strict(
     inspection_root: Path | str,
+    *,
+    _stable_observation_out: list[object | None] | None = None,
 ) -> operation_control.ProjectUpdatePendingTerminalDelivery | None:
     """Bind active.json continuity around operation-journal discovery."""
+
+    if _stable_observation_out is not None and (
+        type(_stable_observation_out) is not list
+        or _stable_observation_out
+    ):
+        raise archive_services.ArchiveServiceError(
+            "project_version_update_resume_locator_changed"
+        )
 
     project_root = (
         archive_services._project_update_resume_project_root_read_only(
@@ -8329,11 +8339,16 @@ def _project_version_update_discover_terminal_delivery_strict(
     )
     if after != before:
         raise _project_version_update_terminal_cleanup_unknown_preflight()
+    if _stable_observation_out is not None:
+        _stable_observation_out.append(after)
     if candidate is None:
-        if after is not None:
-            raise (
-                _project_version_update_terminal_cleanup_unknown_preflight()
-            )
+        # A stable active handoff may legitimately predate its first complete
+        # operation-bound output: process loss can happen before cleanup, and
+        # a cleanup-incomplete terminal result intentionally carries no
+        # delivery proof.  In that case the service's held terminal guard must
+        # reauthenticate the exact claim, postimage, and transaction before it
+        # resumes cleanup.  Discovery errors and every before/after handoff
+        # change above still fail closed.
         return None
     if candidate.active_handoff:
         raw_sha256 = getattr(after, "raw_sha256", None)
@@ -8347,6 +8362,67 @@ def _project_version_update_discover_terminal_delivery_strict(
     elif after is not None:
         raise _project_version_update_terminal_cleanup_unknown_preflight()
     return candidate
+
+
+def _project_version_update_enter_unbound_terminal_delivery_boundary(
+    stack: ExitStack,
+    inspection_root: Path | str,
+    *,
+    expected_observation: object | None,
+) -> None:
+    """Serialize one new updater result before creating its output journal."""
+
+    if not isinstance(stack, ExitStack):
+        raise archive_services.ArchiveServiceError(
+            "project_version_update_resume_locator_changed"
+        )
+    project_root = (
+        archive_services._project_update_resume_project_root_read_only(
+            inspection_root
+        )
+    )
+    held_observation: list[object | None] = []
+    try:
+        stack.enter_context(
+            archive_services._project_update_terminal_control_boundary(
+                project_root
+            )
+        )
+        held_candidate = (
+            _project_version_update_discover_terminal_delivery_strict(
+                inspection_root,
+                _stable_observation_out=held_observation,
+            )
+        )
+    except (
+        archive_services.ArchiveServiceError,
+        operation_control.OperationControlError,
+        OSError,
+        RuntimeError,
+        ValueError,
+    ):
+        _project_version_update_close_terminal_delivery_boundary(stack)
+        raise _project_version_update_terminal_cleanup_unknown_preflight() from None
+    if (
+        held_observation != [expected_observation]
+        or held_candidate is not None
+    ):
+        _project_version_update_close_terminal_delivery_boundary(stack)
+        raise _project_version_update_terminal_cleanup_unknown_preflight()
+
+
+def _project_version_update_close_terminal_delivery_boundary(
+    stack: ExitStack,
+) -> bool:
+    """Release command serialization without reflecting private close errors."""
+
+    if not isinstance(stack, ExitStack):
+        return False
+    try:
+        stack.close()
+    except Exception:
+        return False
+    return True
 
 
 _PROJECT_VERSION_UPDATE_TERMINAL_CLEANUP_FAILURE_KINDS = {
@@ -8437,7 +8513,10 @@ def _project_version_update_privacy_safe_failure_result(
     }
 
 
-def command_project_version_update(args: argparse.Namespace) -> int:
+def _command_project_version_update_core(
+    args: argparse.Namespace,
+    terminal_delivery_boundary: ExitStack,
+) -> int:
     reporter = CommandProgressReporter(
         bool(getattr(args, "progress", False)),
         label="project-version-update",
@@ -8458,6 +8537,7 @@ def command_project_version_update(args: argparse.Namespace) -> int:
         operation_control.ProjectUpdatePendingTerminalDelivery | None
     ) = None
     terminal_display_capability: str | None = None
+    terminal_discovery_observation: list[object | None] = []
     try:
         inspection_root = Path(args.inspection_root)
         write_requested = bool(
@@ -8480,7 +8560,10 @@ def command_project_version_update(args: argparse.Namespace) -> int:
             )
             observed_terminal_candidate = (
                 _project_version_update_discover_terminal_delivery_strict(
-                    inspection_root
+                    inspection_root,
+                    _stable_observation_out=(
+                        terminal_discovery_observation
+                    ),
                 )
             )
             if observed_terminal_candidate is not None:
@@ -8516,7 +8599,10 @@ def command_project_version_update(args: argparse.Namespace) -> int:
             # the exact prior delivery.
             pending_terminal_candidate = (
                 _project_version_update_discover_terminal_delivery_strict(
-                    inspection_root
+                    inspection_root,
+                    _stable_observation_out=(
+                        terminal_discovery_observation
+                    ),
                 )
             )
             cleanup_preflight = (
@@ -8533,6 +8619,47 @@ def command_project_version_update(args: argparse.Namespace) -> int:
                 raise ValueError(
                     "project_version_update_terminal_delivery_"
                     "pending_resume_required"
+                )
+        if (
+            write_requested
+            and os.name == "nt"
+            and consumed_terminal_candidate is None
+            and active_terminal_candidate is None
+        ):
+            if len(terminal_discovery_observation) != 1:
+                raise _project_version_update_terminal_cleanup_unknown_preflight()
+            _project_version_update_enter_unbound_terminal_delivery_boundary(
+                terminal_delivery_boundary,
+                inspection_root,
+                expected_observation=terminal_discovery_observation[0],
+            )
+            if getattr(args, "resume", False):
+                held_cleanup_unknown = (
+                    archive_services
+                    ._project_update_terminal_cleanup_unknown_preflight_read_only(
+                        inspection_root,
+                        operator_resume_identifiers_supplied=(
+                            operator_resume_identifiers_supplied
+                        ),
+                        approval_identifier_supplied=(
+                            approval_identifier_supplied
+                        ),
+                        exact_terminal_delivery_observed=False,
+                    )
+                )
+            else:
+                held_cleanup_unknown = (
+                    archive_services
+                    ._project_update_fresh_update_cleanup_preflight_read_only(
+                        inspection_root
+                    )
+                )
+            if held_cleanup_unknown is not None:
+                _project_version_update_close_terminal_delivery_boundary(
+                    terminal_delivery_boundary
+                )
+                raise _ProjectVersionUpdateCleanupUnknownPreflight(
+                    held_cleanup_unknown
                 )
         output_argument = getattr(args, "output", None)
         if (
@@ -9076,6 +9203,17 @@ def command_project_version_update(args: argparse.Namespace) -> int:
                 # already durable. Keep the handoff for deterministic resume
                 # instead of turning delivery bookkeeping into total failure.
                 delivery_acknowledged = False
+            # A new output and journal are now either durably bound to the
+            # exact capsule or safely incomplete. Release the outer command
+            # serialization before read-only pending discovery/final display;
+            # those operations take their own exact guard.
+            boundary_released = (
+                _project_version_update_close_terminal_delivery_boundary(
+                    terminal_delivery_boundary
+                )
+            )
+            if not boundary_released:
+                delivery_acknowledged = False
             if delivery_acknowledged and terminal_delivery_authority is not None:
                 try:
                     delivery_candidate = (
@@ -9257,6 +9395,21 @@ def command_project_version_update(args: argparse.Namespace) -> int:
                 file=sys.stderr,
             )
     return exit_code
+
+
+def command_project_version_update(args: argparse.Namespace) -> int:
+    """Run one updater command with cleanup-safe terminal lease unwinding."""
+
+    terminal_delivery_boundary = ExitStack()
+    try:
+        return _command_project_version_update_core(
+            args,
+            terminal_delivery_boundary,
+        )
+    finally:
+        _project_version_update_close_terminal_delivery_boundary(
+            terminal_delivery_boundary
+        )
 
 
 def git_version_tags() -> list[str]:
