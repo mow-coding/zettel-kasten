@@ -12960,14 +12960,20 @@ if __name__ == "__main__":
                     )
 
                 self.assertEqual(code, 0, stderr)
+                boundary_prefix = (
+                    ["boundary-enter"] if os.name == "nt" else []
+                )
+                boundary_suffix = (
+                    ["boundary-exit"] if os.name == "nt" else []
+                )
                 self.assertEqual(
                     events,
                     [
-                        "boundary-enter",
+                        *boundary_prefix,
                         "output",
                         "journal",
                         "prepare-display",
-                        "boundary-exit",
+                        *boundary_suffix,
                         *(["discover-display"] if acknowledged else []),
                         "display",
                         *(["finalize"] if acknowledged else []),
