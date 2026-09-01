@@ -1,8 +1,19 @@
 # Agent Operator Capabilities Manifest
 
-Status: v0.4.16 working-tree parser, durable update-result delivery, runtime binding, and emergency feedback truth
+Status: v0.4.17 working-tree parser and recoverable terminal-cleanup control history
 
-v0.4.16 keeps the command inventory stable while making several result surfaces
+v0.4.17 keeps the command inventory stable and makes fresh project-update
+preview and approval share one bounded read-only cleanup classification. Exact
+terminal control history returns
+`project_version_update_terminal_cleanup_required` before native approval or
+domain-writer entry and routes to identifier-free `--resume`. WOM, not the
+operator, validates and compacts an exact preapproval-abort history into
+canonical proof history. Unknown, partial, changed, mixed, raced, or unsafe
+state remains `project_version_update_terminal_cleanup_outcome_unknown`.
+Structured diagnostics expose fixed reason codes and next actions without
+private paths, hashes, identifiers, values, or raw exception text.
+
+v0.4.16 kept the command inventory stable while making several result surfaces
 more truthful. Authenticated project-update success is preserved before cleanup
 and its terminal finalization reports cleanup, independent close, and durable
 output-handoff state separately. One immutable terminal journal binds the exact
@@ -89,7 +100,7 @@ These are parser facts, not execution promises. `approval_available` does not
 mean that archive-specific prerequisites have passed. `approval_not_exposed`
 does not mean that the command is read-only.
 
-For the current v0.4.16 working-tree parser, the inventory snapshot is:
+For the current v0.4.17 working-tree parser, the inventory snapshot is:
 
 ```text
 canonical executable command paths: 315

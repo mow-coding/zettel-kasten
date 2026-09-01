@@ -2,11 +2,24 @@
 
 상태: 공개 navigation baseline
 날짜: 2026-05-27
-갱신: 2026-08-31
+갱신: 2026-09-01
 철학 갱신: 2026-07-15
 하네스 호환 경계 갱신: 2026-07-16
 
-현재 v0.4.16 변경점: 인증된 project-update 성공 결과를 cleanup 전에 비공개
+현재 v0.4.17 변경점: fresh project-update dry-run과 approval은 하나의 제한된
+read-only terminal-cleanup 분류를 공유합니다. exact terminal control 이력은 native
+approval이나 domain-writer 진입 전에
+`project_version_update_terminal_cleanup_required`를 반환하고 identifier 없는
+`--resume`으로 보냅니다. WOM은 fixed evidence·identity·archive identity·cleanup
+authority가 모두 맞는 WOM 자체의 exact preapproval-abort 이력만 canonical proof
+이력으로 정리할 수 있습니다. source·runtime·pin·archive content를 바꾸거나 fresh
+approval 권한을 만들지 않습니다. 일부·변경·혼합·모호·unsafe residue는
+`project_version_update_terminal_cleanup_outcome_unknown`으로 남습니다. 알려진
+gate는 비공개 path·hash·identifier·value·raw exception 없이 고정된 privacy-safe
+reason과 다음 행동을 제공합니다. 공개·설치만으로 client archive는 바뀌지 않으며
+client가 복구와 한 번의 검토된 project update를 별도로 선택합니다.
+
+과거 v0.4.16 변경점: 인증된 project-update 성공 결과를 cleanup 전에 비공개
 durable terminal handoff로 보존합니다. 결과는 claim·checkpoint·lock 검증과
 transaction cleanup·service-resource close·Git-runner close·durable output
 handoff·attention 상태를 각각 구분합니다. 불변 terminal journal이 정확한 output을

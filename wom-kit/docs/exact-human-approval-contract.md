@@ -1,12 +1,23 @@
 # Exact Human Approval Contract
 
-Status: v0.4.16 authenticated terminal-result delivery and create-only runtime-mismatch reporting; v0.4.0 one-use authority baseline preserved
+Status: v0.4.17 cleanup recovery without human forensics; v0.4.0 one-use authority baseline preserved
 
 ## Purpose
 
 A caller-supplied actor label or command-line affirmation does not prove that a
 human reviewed exact archive changes. v0.4.0 therefore separates ordinary
 operator intent from one-use exact human approval.
+
+v0.4.17 does not turn cleanup into a new human decision. Fresh project-update
+dry-run and approval use one read-only namespace classification before native
+approval. Exact terminal control history requires identifier-free `--resume`;
+WOM verifies its fixed evidence and cleanup authority, while the person only
+affirms that other writers for the same project are paused. Exact preapproval-
+abort compaction enters no project-domain writer, grants no fresh approval
+authority, and retains canonical proof history. Partial, malformed, changing,
+mixed, ambiguous, or unsafe evidence stays fail-closed. A known gate returns a
+fixed privacy-safe reason and next action, never private identifiers or raw
+exception text.
 
 v0.4.16 does not create a second approval or broaden the approved domain
 effect. For project update, the exact succeeded claim signs a private terminal
