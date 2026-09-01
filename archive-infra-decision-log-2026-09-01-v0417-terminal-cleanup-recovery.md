@@ -65,6 +65,14 @@ Do not add a cleanup command or ask the operator to identify private artifacts.
     snapshots. Handoff presence, state, digest, or candidate-correlation drift
     is cleanup-outcome-unknown; unrelated operation-control errors remain
     generic and private.
+16. Exact reservation-abort cleanup mutation is Windows-only. POSIX must refuse
+    before creating a cleanup plan, renaming a transaction directory, or
+    changing any other private-control byte; read-only discovery remains
+    available and independently tested.
+17. A multiprocessing readiness timeout tests runner scheduling, not the WOM
+    provider rate interval. The test may use a bounded 60-second process budget
+    and mandatory child cleanup while retaining the exact 1/3-second pacing
+    assertion.
 
 ## Human responsibility
 
@@ -94,6 +102,9 @@ and postconditions. Private transaction identifiers are never operator inputs.
   records.
 - Publishing or installing the release does not apply recovery to any client
   project. Client execution and durable verification remain separate.
+- POSIX cannot be left in a newly planned or renamed cleanup state merely by
+  attempting an unsupported recovery. The platform refusal itself has zero
+  filesystem effects.
 
 ## Rejected alternatives
 

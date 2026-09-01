@@ -326,6 +326,37 @@ candidate wheel SHA-256 is
 This is candidate evidence only; the release wheel must be rebuilt or
 byte-verified from the exact merge commit.
 
+## First remote CI feedback correction
+
+The first public PR run exposed a platform-contract error before merge. The
+exact reservation-abort cleanup uses the existing compare-and-delete primitive,
+which is deliberately Windows-only. On POSIX, the first candidate could write
+a cleanup plan and move the transaction directory before the unsupported exact
+delete refused. That behavior was fail-closed with respect to archive data but
+was not read-only with respect to private control state.
+
+The production cleanup entrypoints now refuse POSIX before writing a cleanup
+plan or moving any namespace entry. A POSIX regression test freezes the complete
+project tree before the call, verifies byte-for-byte unchanged state afterward,
+and confirms that read-only discovery still reports the original exact terminal
+history. Success-path cleanup and mutation-lease tests are explicitly marked as
+Windows-only; Ubuntu continues to test discovery, classification, and the new
+zero-mutation refusal.
+
+The same CI run found test-only contract drift: one test referred to a helper
+local to another test, and three no-handoff mocks returned `None` without
+populating the strict observation output. One shared test helper now models an
+absent handoff while honoring that output contract. The corrected seven focused
+CLI tests passed, and the full project-update transaction module passed 154
+tests on supported Windows, with one POSIX-only assertion skipped there.
+
+An unchanged Notion interprocess pacing test also crossed its old 15-second
+spawn-readiness timeout on a busy Windows runner. The pacing assertion itself
+did not fail. Its process-readiness, result, and join budgets are now 60 seconds,
+and `finally` cleanup terminates and joins any surviving child before closing
+the queues. Three cold-process repetitions passed locally. This changes only
+test reliability and does not relax the archive-wide rate interval.
+
 ## Pending release-record additions
 
 Before release closure, append the exact public PR, merge commit, annotated tag,

@@ -6192,6 +6192,10 @@ class ProjectUpdateTransactionTests(unittest.TestCase):
         self.assertEqual(cleanup_calls, [])
         self.assertEqual(closed, ["directory", "runner"])
 
+    @unittest.skipUnless(
+        os.name == "nt",
+        "approved project-update mutation is Windows-only",
+    )
     def test_fresh_executor_gets_publication_boundary_released_before_writer(
         self,
     ) -> None:
@@ -6518,6 +6522,10 @@ class ProjectUpdateTransactionTests(unittest.TestCase):
             lambda: reopened.acquire_lock(),
         )
 
+    @unittest.skipUnless(
+        os.name == "nt",
+        "exact project-update cleanup mutation is Windows-only",
+    )
     def test_reserved_abort_terminal_history_cleanup_leaves_canonical_inert_proof(
         self,
     ) -> None:
@@ -6603,6 +6611,59 @@ class ProjectUpdateTransactionTests(unittest.TestCase):
             ("history_only_exact", 1),
         )
 
+    @unittest.skipIf(
+        os.name == "nt",
+        "POSIX-only fail-closed mutation boundary",
+    )
+    def test_reserved_abort_cleanup_posix_refuses_before_control_mutation(
+        self,
+    ) -> None:
+        reserved, terminal = self.prepare_terminal_reserved_abort()
+        before = self.tree_snapshot(self.project)
+
+        self.assertFalse(
+            transaction_module.compact_exact_reservation_abort_history(
+                self.project,
+                reserved.transaction_ref,
+                cleanup_authority_sha256=terminal["receipt_sha256"],
+            )
+        )
+
+        self.assertEqual(self.tree_snapshot(self.project), before)
+        discovered = (
+            transaction_module
+            .discover_exact_reservation_abort_cleanup_read_only(self.project)
+        )
+        self.assertEqual(len(discovered), 1)
+        self.assertEqual(discovered[0].state, "terminal_original")
+
+    def test_reserved_abort_cleanup_unsupported_platform_guard_precedes_mutation(
+        self,
+    ) -> None:
+        reserved, terminal = self.prepare_terminal_reserved_abort()
+        before = self.tree_snapshot(self.project)
+
+        with patch.object(transaction_module.os, "name", "posix"):
+            self.assertFalse(
+                reserved.exact_cleanup(
+                    cleanup_authority_sha256=terminal["receipt_sha256"],
+                )
+            )
+            self.assertFalse(
+                transaction_module.ReservedProjectUpdateTransaction
+                .resume_cleanup(
+                    self.project,
+                    reserved.transaction_ref,
+                    cleanup_authority_sha256=terminal["receipt_sha256"],
+                )
+            )
+
+        self.assertEqual(self.tree_snapshot(self.project), before)
+
+    @unittest.skipUnless(
+        os.name == "nt",
+        "exact project-update cleanup mutation is Windows-only",
+    )
     def test_reserved_abort_cleanup_resumes_after_partial_exact_delete(self) -> None:
         reserved, terminal = self.prepare_terminal_reserved_abort()
         authority = terminal["receipt_sha256"]
@@ -6652,6 +6713,10 @@ class ProjectUpdateTransactionTests(unittest.TestCase):
         )
         self.assertFalse(tombstone.exists())
 
+    @unittest.skipUnless(
+        os.name == "nt",
+        "exact project-update cleanup mutation is Windows-only",
+    )
     def test_reserved_abort_cleanup_resumes_after_proof_publication(self) -> None:
         reserved, terminal = self.prepare_terminal_reserved_abort()
         authority = terminal["receipt_sha256"]
@@ -6699,6 +6764,10 @@ class ProjectUpdateTransactionTests(unittest.TestCase):
             (proof_info.st_dev, proof_info.st_ino, proof_info.st_mtime_ns),
         )
 
+    @unittest.skipUnless(
+        os.name == "nt",
+        "exact project-update cleanup mutation is Windows-only",
+    )
     def test_reserved_abort_cleanup_resumes_after_plan_visibility(self) -> None:
         reserved, terminal = self.prepare_terminal_reserved_abort()
         authority = terminal["receipt_sha256"]
@@ -6936,6 +7005,10 @@ class ProjectUpdateTransactionTests(unittest.TestCase):
             b"foreign-abort-cleanup-proof-stream",
         )
 
+    @unittest.skipUnless(
+        os.name == "nt",
+        "exact project-update cleanup mutation is Windows-only",
+    )
     def test_reserved_abort_cleanup_actual_process_exit_resumes(self) -> None:
         reserved, terminal = self.prepare_terminal_reserved_abort()
         authority = terminal["receipt_sha256"]
@@ -7072,6 +7145,10 @@ class ProjectUpdateTransactionTests(unittest.TestCase):
             ).exists()
         )
 
+    @unittest.skipUnless(
+        os.name == "nt",
+        "exact project-update cleanup mutation is Windows-only",
+    )
     def test_reserved_abort_cleanup_refuses_same_byte_file_identity_drift(self) -> None:
         reserved, terminal = self.prepare_terminal_reserved_abort()
         authority = terminal["receipt_sha256"]
@@ -7115,6 +7192,10 @@ class ProjectUpdateTransactionTests(unittest.TestCase):
         )
         self.assertTrue(tombstone.is_dir())
 
+    @unittest.skipUnless(
+        os.name == "nt",
+        "exact project-update cleanup mutation is Windows-only",
+    )
     def test_reserved_abort_cleanup_discovery_excludes_exact_abort_tombstone_from_generic(
         self,
     ) -> None:
@@ -7172,6 +7253,10 @@ class ProjectUpdateTransactionTests(unittest.TestCase):
         )
         self.assertEqual(generic_after.transaction_ref, generic_ref)
 
+    @unittest.skipUnless(
+        os.name == "nt",
+        "exact project-update cleanup mutation is Windows-only",
+    )
     def test_reserved_abort_cleanup_all_reports_exact_progress(self) -> None:
         first_ref = "update_cccccccccccccccccccccccccccccccc"
         second_ref = "update_dddddddddddddddddddddddddddddddd"
@@ -7797,6 +7882,10 @@ class ProjectUpdateTransactionTests(unittest.TestCase):
             )
         self.assertEqual(self.tree_snapshot(self.project), before)
 
+    @unittest.skipUnless(
+        os.name == "nt",
+        "approved project-update mutation is Windows-only",
+    )
     def test_abort_compaction_effect_is_preserved_on_mixed_normal_resume_result(
         self,
     ) -> None:
