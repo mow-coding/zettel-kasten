@@ -11,7 +11,7 @@ import sys
 import tempfile
 import threading
 import unittest
-from contextlib import contextmanager, nullcontext
+from contextlib import ExitStack, contextmanager, nullcontext
 from pathlib import Path, PurePosixPath
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -22,6 +22,7 @@ SRC_ROOT = KIT_ROOT / "src"
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
+from wom_kit import archive_cli
 from wom_kit import archive_services
 from wom_kit import exact_human_approval
 from wom_kit import project_update_transaction as transaction_module
@@ -5270,6 +5271,167 @@ class ProjectUpdateTransactionTests(unittest.TestCase):
             consumed_paths.append(consumed)
         self.assertNotEqual(consumed_paths[0], consumed_paths[1])
         self.assertTrue(all(path.is_file() for path in consumed_paths))
+
+    @unittest.skipUnless(os.name == "nt", "terminal mutation is Windows-only")
+    def test_terminal_delivery_acknowledgement_reuses_outer_lease_and_blocks_competitor(
+        self,
+    ) -> None:
+        fixture = self.prepare_terminal_delivery_fixture(
+            "outer-lease-acknowledgement"
+        )
+        handoff, _guard = (
+            archive_services._project_update_terminal_handoff_paths(
+                self.project
+            )
+        )
+        display_pending = (
+            archive_services._project_update_terminal_display_pending_path(
+                self.project
+            )
+        )
+        competing_acquired: list[bool] = []
+        competing_finished = threading.Event()
+
+        def competing_guard() -> None:
+            try:
+                with (
+                    archive_services
+                    ._project_update_terminal_control_boundary(self.project)
+                ):
+                    competing_acquired.append(True)
+            except OSError:
+                competing_acquired.append(False)
+            finally:
+                competing_finished.set()
+
+        with archive_services._project_update_terminal_control_boundary(
+            self.project
+        ):
+            competitor = threading.Thread(target=competing_guard)
+            competitor.start()
+            self.assertTrue(competing_finished.wait(timeout=5.0))
+            competitor.join(timeout=5.0)
+            self.assertFalse(competitor.is_alive())
+            self.assertEqual(competing_acquired, [False])
+            acknowledged = (
+                archive_services
+                ._project_update_acknowledge_terminal_result_delivery(
+                    self.project,
+                    fixture["result"],
+                    output_relative=str(fixture["output_relative"]),
+                    run_id=str(fixture["run_id"]),
+                    operation_ref=str(fixture["operation_ref"]),
+                )
+            )
+
+        self.assertTrue(acknowledged)
+        self.assertFalse(handoff.exists())
+        self.assertEqual(
+            display_pending.read_bytes(),
+            fixture["handoff_raw"],
+        )
+        self.assertFalse(
+            archive_services._project_update_terminal_consumed_path(
+                self.project,
+                str(fixture["handoff_sha256"]),
+            ).exists()
+        )
+
+    @unittest.skipUnless(os.name == "nt", "terminal mutation is Windows-only")
+    def test_stale_unbound_boundary_refuses_real_display_pending_before_output(
+        self,
+    ) -> None:
+        initial = (
+            archive_cli
+            ._project_version_update_strict_active_handoff_snapshot(
+                self.project
+            )
+        )
+        self.assertIsNone(initial)
+        fixture = self.prepare_terminal_delivery_fixture(
+            "stale-real-display-pending"
+        )
+        acknowledged = (
+            archive_services
+            ._project_update_acknowledge_terminal_result_delivery(
+                self.project,
+                fixture["result"],
+                output_relative=str(fixture["output_relative"]),
+                run_id=str(fixture["run_id"]),
+                operation_ref=str(fixture["operation_ref"]),
+            )
+        )
+        self.assertTrue(acknowledged)
+
+        handoff, _guard = (
+            archive_services._project_update_terminal_handoff_paths(
+                self.project
+            )
+        )
+        display_pending = (
+            archive_services._project_update_terminal_display_pending_path(
+                self.project
+            )
+        )
+        consumed = archive_services._project_update_terminal_consumed_path(
+            self.project,
+            str(fixture["handoff_sha256"]),
+        )
+        self.assertFalse(handoff.exists())
+        self.assertEqual(
+            display_pending.read_bytes(),
+            fixture["handoff_raw"],
+        )
+        self.assertFalse(consumed.exists())
+
+        diagnostics = self.project / ".zettel-kasten" / "diagnostics"
+        diagnostics_before = {
+            path.relative_to(diagnostics).as_posix(): path.read_bytes()
+            for path in diagnostics.rglob("*")
+            if path.is_file()
+        }
+        operations = self.project.joinpath(
+            *archive_cli.operation_control.PROJECT_JOURNAL_RELATIVE.parts
+        )
+        self.assertFalse(os.path.lexists(operations))
+
+        with ExitStack() as stale_stack:
+            with self.assertRaises(
+                archive_cli._ProjectVersionUpdateCleanupUnknownPreflight
+            ) as raised:
+                archive_cli._project_version_update_enter_unbound_terminal_delivery_boundary(
+                    stale_stack,
+                    self.project,
+                    expected_observation=initial,
+                )
+
+        result = raised.exception.result
+        self.assertEqual(result["status"], "terminal_cleanup_outcome_unknown")
+        self.assertEqual(result["effects_state"], "unknown")
+        self.assertFalse(result["archive_identity_metadata_read"])
+        self.assertFalse(result["client_archive_domain_content_accessed"])
+        self.assertFalse(result["domain_writer_entered"])
+        self.assertEqual(result["files_written"], [])
+        serialized = json.dumps(result, sort_keys=True)
+        self.assertNotIn(str(self.project), serialized)
+        self.assertIsNone(
+            re.search(r"(?i)(?<![A-Za-z0-9])[A-Z]:[\\/]", serialized)
+        )
+        self.assertFalse(handoff.exists())
+        self.assertEqual(
+            display_pending.read_bytes(),
+            fixture["handoff_raw"],
+        )
+        self.assertFalse(consumed.exists())
+        self.assertEqual(
+            {
+                path.relative_to(diagnostics).as_posix(): path.read_bytes()
+                for path in diagnostics.rglob("*")
+                if path.is_file()
+            },
+            diagnostics_before,
+        )
+        self.assertFalse(os.path.lexists(operations))
 
     @unittest.skipUnless(os.name == "nt", "terminal mutation is Windows-only")
     def test_terminal_delivery_waits_for_transaction_cleanup_before_ack(

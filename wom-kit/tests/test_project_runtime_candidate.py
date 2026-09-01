@@ -266,6 +266,161 @@ class CompleteRuntimeCandidateTests(unittest.TestCase):
             sleep.assert_called_once()
             self.assertEqual(removable.read_bytes(), b"foreign-replacement")
 
+    def test_runtime_bytecode_cleanup_retries_one_exact_tree_change(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime = Path(tmp) / "runtime"
+            bytecode_directory = runtime / "package" / "__pycache__"
+            bytecode_directory.mkdir(parents=True)
+            bytecode = bytecode_directory / "module.cpython-312.pyc"
+            bytecode_bytes = b"synthetic-bytecode"
+            bytecode.write_bytes(bytecode_bytes)
+            attempts = 0
+
+            def transient_then_stable(
+                observed_runtime: Path,
+                **kwargs: object,
+            ) -> list[tuple[str, Path, int, str]]:
+                nonlocal attempts
+                attempts += 1
+                self.assertEqual(observed_runtime, runtime)
+                self.assertEqual(
+                    kwargs,
+                    {"require_stable_tree_generation": True},
+                )
+                if attempts == 1:
+                    raise project_runtime.ProjectRuntimeError(
+                        "project_runtime_tree_changed"
+                    )
+                return [
+                    (
+                        "package/__pycache__/module.cpython-312.pyc",
+                        bytecode,
+                        len(bytecode_bytes),
+                        hashlib.sha256(bytecode_bytes).hexdigest(),
+                    )
+                ]
+
+            with patch.object(
+                project_runtime,
+                "_walk_regular_files",
+                side_effect=transient_then_stable,
+            ), patch.object(project_runtime.time, "sleep") as sleep:
+                project_runtime._remove_runtime_bytecode(runtime)
+
+            self.assertEqual(attempts, 2)
+            self.assertEqual(
+                [item.args for item in sleep.call_args_list],
+                [
+                    (
+                        project_runtime
+                        .PROJECT_RUNTIME_TRANSIENT_TREE_SCAN_BACKOFF_SECONDS,
+                    )
+                ],
+            )
+            self.assertFalse(bytecode.exists())
+            self.assertFalse(bytecode_directory.exists())
+
+    def test_runtime_bytecode_cleanup_exhausts_tree_changes_without_delete(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime = Path(tmp) / "runtime"
+            bytecode_directory = runtime / "package" / "__pycache__"
+            bytecode_directory.mkdir(parents=True)
+            bytecode = bytecode_directory / "module.cpython-312.pyc"
+            bytecode_bytes = b"must-remain"
+            bytecode.write_bytes(bytecode_bytes)
+            attempts = 0
+
+            def always_changed(
+                observed_runtime: Path,
+                **kwargs: object,
+            ) -> list[tuple[str, Path, int, str]]:
+                nonlocal attempts
+                attempts += 1
+                self.assertEqual(observed_runtime, runtime)
+                self.assertEqual(
+                    kwargs,
+                    {"require_stable_tree_generation": True},
+                )
+                raise project_runtime.ProjectRuntimeError(
+                    "project_runtime_tree_changed"
+                )
+
+            with patch.object(
+                project_runtime,
+                "_walk_regular_files",
+                side_effect=always_changed,
+            ), patch.object(project_runtime.time, "sleep") as sleep:
+                with self.assertRaisesRegex(
+                    project_runtime.ProjectRuntimeError,
+                    "project_runtime_tree_changed",
+                ):
+                    project_runtime._remove_runtime_bytecode(runtime)
+
+            self.assertEqual(
+                attempts,
+                project_runtime.PROJECT_RUNTIME_TRANSIENT_TREE_SCAN_ATTEMPTS,
+            )
+            self.assertEqual(
+                [item.args for item in sleep.call_args_list],
+                [
+                    (
+                        project_runtime
+                        .PROJECT_RUNTIME_TRANSIENT_TREE_SCAN_BACKOFF_SECONDS,
+                    ),
+                    (
+                        project_runtime
+                        .PROJECT_RUNTIME_TRANSIENT_TREE_SCAN_BACKOFF_SECONDS
+                        * 2,
+                    ),
+                ],
+            )
+            self.assertEqual(bytecode.read_bytes(), bytecode_bytes)
+            self.assertTrue(bytecode_directory.is_dir())
+
+    def test_runtime_bytecode_cleanup_does_not_retry_nonexact_tree_errors(
+        self,
+    ) -> None:
+        failures = (
+            ("project_runtime_tree_unsafe",),
+            ("project_runtime_tree_changed", "nonexact-detail"),
+        )
+        for failure_args in failures:
+            with (
+                self.subTest(failure_args=failure_args),
+                tempfile.TemporaryDirectory() as tmp,
+            ):
+                runtime = Path(tmp) / "runtime"
+                bytecode_directory = runtime / "package" / "__pycache__"
+                bytecode_directory.mkdir(parents=True)
+                bytecode = bytecode_directory / "module.cpython-312.pyc"
+                bytecode_bytes = b"must-remain"
+                bytecode.write_bytes(bytecode_bytes)
+                failure = project_runtime.ProjectRuntimeError(*failure_args)
+
+                with patch.object(
+                    project_runtime,
+                    "_walk_regular_files",
+                    side_effect=failure,
+                ) as walk, patch.object(
+                    project_runtime.time,
+                    "sleep",
+                ) as sleep:
+                    with self.assertRaises(
+                        project_runtime.ProjectRuntimeError
+                    ) as caught:
+                        project_runtime._remove_runtime_bytecode(runtime)
+
+                self.assertEqual(caught.exception.args, failure_args)
+                walk.assert_called_once_with(
+                    runtime,
+                    require_stable_tree_generation=True,
+                )
+                sleep.assert_not_called()
+                self.assertEqual(bytecode.read_bytes(), bytecode_bytes)
+                self.assertTrue(bytecode_directory.is_dir())
+
     @unittest.skipUnless(
         WINDOWS_RUNTIME,
         "Complete project runtime candidates are CPython 3.12 Windows AMD64.",
