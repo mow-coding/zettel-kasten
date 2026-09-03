@@ -1793,6 +1793,228 @@ def inspect_terminal_cleanup_artifacts_for_resume_read_only(
     return state
 
 
+@dataclass(frozen=True)
+class TerminalOriginalInspection:
+    """Private capability for one exact completed original without handoff.
+
+    v0.4.18: a v0.4.15-era transaction can reach ``completed`` and stop before
+    its directory moved to the cleanup tombstone, and the project may later
+    move on to another version.  The journal's ``approval_reference_sha256``
+    is the only cleanup authority such a directory can still prove.  This
+    record never carries a path, reviewer, or private value.
+    """
+
+    transaction_ref: str
+    transaction_logical_ref: str
+    intent_sha256: str
+    terminal_checkpoint_sha256: str
+    approval_reference_sha256: str
+    cleanup_plan_present: bool
+    cleanup_plan_schema: str | None
+    cleanup_plan_sha256: str | None
+    file_count: int
+    directory_count: int
+    transaction_root_identity: tuple[int, int, int | None]
+
+
+TerminalOriginalState = Literal["exact", "not_applicable", "refused"]
+
+
+def classify_terminal_original_for_resume_read_only(
+    project_root: Path | str,
+    transaction_ref: str,
+) -> tuple[TerminalOriginalState, TerminalOriginalInspection | None]:
+    """Classify one still-present completed original without handoff authority.
+
+    Three outcomes, none of which writes or grants authority by itself:
+
+    - ``exact`` with an inspection: the shape below holds exactly, and a
+      caller may finish its private cleanup only after authenticating the
+      returned ``approval_reference_sha256`` against the archive claim store.
+    - ``not_applicable``: the directory is a completed original that this
+      contract does not own (a cancellation journal, a rollback journal, no
+      retained cleanup plan, or a current identity-bound plan whose authority
+      is a terminal-handoff digest).  Callers keep their existing routing.
+    - ``refused``: positive evidence contradicts the exact shape (a live lock,
+      a tombstone or proof beside the original, a retained plan whose
+      authority is not the journal's approval reference, a tree that differs
+      from that plan, an identity drift, or a read failure).  Callers treat
+      the namespace as unresolved.
+
+    The exact shape is: no live project lock; the original exists without its
+    tombstone or proof; the transaction opens with full sealed-state
+    verification; the lock backlink is sealed; the journal is exact, forward,
+    and terminal (``completed``); the verified ``approval_bound`` checkpoint
+    carries a digest-shaped approval reference that every later checkpoint
+    repeats; a retained cleanup plan (predecessor legacy schema, or the
+    current identity-bound schema bound to this directory's identity) names
+    that same approval reference as its cleanup authority; and the plan's
+    file list and directories equal the current tree exactly.
+    """
+
+    try:
+        project = _absolute(project_root)
+        _safe_existing_chain(project, directory=True)
+        ref = _transaction_ref(transaction_ref)
+        lock_path = project / PurePosixPath(PROJECT_UPDATE_LOCK_LOGICAL)
+        _within(lock_path, project)
+        parent = project / PurePosixPath(TRANSACTION_ROOT_LOGICAL)
+        _within(parent, project)
+        original = parent / ref
+        tombstone, proof = ProjectUpdateTransaction._cleanup_paths(parent, ref)
+        if not os.path.lexists(original):
+            return "not_applicable", None
+        if (
+            os.path.lexists(lock_path)
+            or os.path.lexists(tombstone)
+            or os.path.lexists(proof)
+        ):
+            return "refused", None
+        root_before = _safe_directory(original, within=parent)
+        root_identity = _cleanup_directory_identity(root_before)
+        transaction = ProjectUpdateTransaction.open(
+            project,
+            ref,
+            verify_candidate_content=True,
+        )
+        intent, journal, backlink, cleanup = transaction._load_exact_state(
+            verify_candidate_content=True
+        )
+        prefix = journal.verified_prefix
+        if (
+            backlink is None
+            or journal.state != "exact"
+            or not prefix
+            or prefix[-1].phase != "completed"
+            or prefix[-1].stage != "verified"
+            or _next_events(prefix, intent)
+        ):
+            return "not_applicable", None
+        if prefix[0].phase != "lock_backlinked" or any(
+            item.phase.startswith("preapproval_cancel")
+            or item.phase.startswith("rollback")
+            for item in prefix
+        ):
+            return "not_applicable", None
+        approval_index = next(
+            (
+                index
+                for index, item in enumerate(prefix)
+                if item.phase == "approval_bound" and item.stage == "verified"
+            ),
+            None,
+        )
+        if approval_index is None or approval_index == 0:
+            return "not_applicable", None
+        if cleanup is None:
+            # v0.4.18 finishes only a transaction whose own durable plan
+            # already binds the exact member set.  A plan-less completed
+            # original keeps the generic terminal-handoff/claim route.
+            return "not_applicable", None
+        reference = _digest(
+            prefix[approval_index].approval_reference_sha256,
+            code="project_update_transaction_cleanup_refused",
+        )
+        for item in prefix[approval_index:]:
+            if (
+                type(item.approval_reference_sha256) is not str
+                or not hmac.compare_digest(
+                    item.approval_reference_sha256,
+                    reference,
+                )
+            ):
+                return "refused", None
+        cleanup_plan_schema = cleanup.get("schema")
+        plan_authority = cleanup.get("cleanup_authority_sha256")
+        authority_matches = bool(
+            type(plan_authority) is str
+            and hmac.compare_digest(plan_authority, reference)
+        )
+        if cleanup_plan_schema == LEGACY_CLEANUP_PLAN_SCHEMA:
+            if not authority_matches:
+                # The predecessor always recorded the approval reference; a
+                # different authority is foreign or altered evidence.
+                return "refused", None
+        elif cleanup_plan_schema == CLEANUP_PLAN_SCHEMA:
+            if not authority_matches:
+                # A terminal-handoff digest authority belongs to the v0.4.16
+                # replay contract, not to this route.
+                return "not_applicable", None
+            identity = cleanup.get("transaction_root_identity")
+            if (
+                type(identity) is not dict
+                or identity.get("device") != int(root_identity[0])
+                or identity.get("inode") != int(root_identity[1])
+                or identity.get("birthtime_ns") != root_identity[2]
+            ):
+                return "refused", None
+        else:
+            return "refused", None
+        plan_name = _cleanup_plan_name_for_document(cleanup)
+        files, directories = ProjectUpdateTransaction._descendant_snapshot(
+            original,
+            exclude={plan_name},
+        )
+        expected_files = {
+            str(item["relative_path"]): (
+                int(item["size"]),
+                str(item["sha256"]),
+            )
+            for item in cleanup["files"]
+        }
+        if (
+            files != expected_files
+            or set(directories) != set(cleanup["directories"])
+        ):
+            return "refused", None
+        cleanup_plan_sha256 = sha256_document(cleanup)
+        if (
+            os.path.lexists(lock_path)
+            or os.path.lexists(tombstone)
+            or os.path.lexists(proof)
+        ):
+            return "refused", None
+        root_after = _safe_directory(original, within=parent)
+        if _cleanup_directory_identity(root_after) != root_identity:
+            return "refused", None
+        return "exact", TerminalOriginalInspection(
+            transaction_ref=intent.transaction_ref,
+            transaction_logical_ref=intent.transaction_logical_ref,
+            intent_sha256=intent.sha256,
+            terminal_checkpoint_sha256=journal.head_sha256,
+            approval_reference_sha256=reference,
+            cleanup_plan_present=True,
+            cleanup_plan_schema=str(cleanup_plan_schema),
+            cleanup_plan_sha256=cleanup_plan_sha256,
+            file_count=len(files),
+            directory_count=len(directories),
+            transaction_root_identity=root_identity,
+        )
+    except (
+        OSError,
+        KeyError,
+        TypeError,
+        ValueError,
+        ProjectUpdateTransactionError,
+    ):
+        return "refused", None
+
+
+def inspect_terminal_original_for_resume_read_only(
+    project_root: Path | str,
+    transaction_ref: str,
+) -> TerminalOriginalInspection | None:
+    """Return the exact terminal-original inspection, else ``None``."""
+
+    state, inspection = classify_terminal_original_for_resume_read_only(
+        project_root,
+        transaction_ref,
+    )
+    if state != "exact":
+        return None
+    return inspection
+
+
 def _identity_document(info: os.stat_result) -> dict[str, int]:
     return {
         "device": int(info.st_dev),

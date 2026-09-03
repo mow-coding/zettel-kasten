@@ -6,8 +6,12 @@
 철학 갱신: 2026-07-15
 하네스 호환 경계 갱신: 2026-07-16
 
-현재 v0.4.17 변경점: fresh project-update dry-run과 approval은 하나의 제한된
-read-only terminal-cleanup 분류를 공유합니다. exact terminal control 이력은 native
+현재 v0.4.18 변경점: identifier 없는 `--resume`이 project가 다른 버전으로 넘어간
+뒤에도 자기 cleanup을 끝내지 못한 완료된 project-update 원본 하나를, archive의
+원래 승인 claim을 cleanup authority로 다시 인증해 마무리합니다. dry-run·approval·
+resume이 그 directory를 같은 방식으로 분류하고, redacted 실패 산출물은 고정된 내부
+reason code 하나를 담을 수 있습니다. v0.4.17은 fresh project-update dry-run과
+approval이 하나의 제한된 read-only terminal-cleanup 분류를 공유하게 했습니다. exact terminal control 이력은 native
 approval이나 domain-writer 진입 전에
 `project_version_update_terminal_cleanup_required`를 반환하고 identifier 없는
 `--resume`으로 보냅니다. WOM은 fixed evidence·identity·archive identity·cleanup

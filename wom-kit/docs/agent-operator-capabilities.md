@@ -1,9 +1,12 @@
 # Agent Operator Capabilities Manifest
 
-Status: v0.4.17 working-tree parser and recoverable terminal-cleanup control history
+Status: v0.4.18 working-tree parser and terminal-original cleanup
 
-v0.4.17 keeps the command inventory stable and makes fresh project-update
-preview and approval share one bounded read-only cleanup classification. Exact
+v0.4.18 keeps the command inventory stable and lets identifier-free `--resume`
+finish one completed project-update original that outlived its own cleanup
+after the project moved on, using the archive's succeeded approval claim as the
+cleanup authority. v0.4.17 made fresh project-update preview and approval
+share one bounded read-only cleanup classification. Exact
 terminal control history returns
 `project_version_update_terminal_cleanup_required` before native approval or
 domain-writer entry and routes to identifier-free `--resume`. WOM, not the
@@ -100,7 +103,7 @@ These are parser facts, not execution promises. `approval_available` does not
 mean that archive-specific prerequisites have passed. `approval_not_exposed`
 does not mean that the command is read-only.
 
-For the current v0.4.17 working-tree parser, the inventory snapshot is:
+For the current v0.4.18 working-tree parser, the inventory snapshot is:
 
 ```text
 canonical executable command paths: 315

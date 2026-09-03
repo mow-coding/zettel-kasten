@@ -656,15 +656,19 @@ def _read_claim(
     return document
 
 
-def _authenticated_claim_routing_core(
+def _authenticated_claim_document_core(
     archive_root: Path | str,
     approval_id: str,
     receipt_authentication_key: bytes | bytearray | memoryview,
     *,
     bound_archive_root: Path | None = None,
     claim_parent_binding: dict[str, Any] | None = None,
-) -> tuple[str, str]:
-    """Authenticate only the context digest and status used for routing."""
+) -> tuple[dict[str, Any], str]:
+    """Authenticate one claim document's bytes and MAC without a context.
+
+    The returned mapping is the parsed, MAC-verified document.  Callers must
+    project only fixed fields from it; the key is zeroed before returning.
+    """
 
     root, archive_id = _archive_identity(archive_root)
     if (
@@ -724,10 +728,75 @@ def _authenticated_claim_routing_core(
             or status not in {"started", "succeeded", "failed"}
         ):
             raise _fail("exact_human_approval_claim_document_invalid")
-        return context_sha256, status
+        return dict(parsed), archive_id
     finally:
         for index in range(len(key)):
             key[index] = 0
+
+
+def _authenticated_claim_routing_core(
+    archive_root: Path | str,
+    approval_id: str,
+    receipt_authentication_key: bytes | bytearray | memoryview,
+    *,
+    bound_archive_root: Path | None = None,
+    claim_parent_binding: dict[str, Any] | None = None,
+) -> tuple[str, str]:
+    """Authenticate only the context digest and status used for routing."""
+
+    parsed, _archive_id = _authenticated_claim_document_core(
+        archive_root,
+        approval_id,
+        receipt_authentication_key,
+        bound_archive_root=bound_archive_root,
+        claim_parent_binding=claim_parent_binding,
+    )
+    return str(parsed["context_sha256"]), str(parsed["status"])
+
+
+def _authenticated_claim_reference_core(
+    archive_root: Path | str,
+    approval_id: str,
+    receipt_authentication_key: bytes | bytearray | memoryview,
+    *,
+    bound_archive_root: Path | None = None,
+    claim_parent_binding: dict[str, Any] | None = None,
+) -> tuple[dict[str, Any], str]:
+    """Authenticate one claim and return its public reference plus status.
+
+    v0.4.18 uses this to re-authenticate the cleanup authority of a completed
+    project-update transaction whose domain post-image has since been
+    superseded: the transaction journal binds
+    ``sha256(canonical(public_reference))`` at ``approval_bound`` and every
+    later checkpoint, so an exact match against a MAC-verified ``succeeded``
+    claim proves which native decision authorized that transaction without
+    rebuilding the approval context or re-checking live components.  The
+    reference carries no reviewer, path, or private value.
+    """
+
+    parsed, _archive_id = _authenticated_claim_document_core(
+        archive_root,
+        approval_id,
+        receipt_authentication_key,
+        bound_archive_root=bound_archive_root,
+        claim_parent_binding=claim_parent_binding,
+    )
+    authority_sha256 = parsed.get("approval_authority_sha256")
+    if (
+        type(authority_sha256) is not str
+        or _SHA256_RE.fullmatch(authority_sha256) is None
+    ):
+        raise _fail("exact_human_approval_claim_document_invalid")
+    reference = {
+        "schema_version": REFERENCE_SCHEMA_VERSION,
+        "approval_id": approval_id,
+        "context_sha256": str(parsed["context_sha256"]),
+        "approval_authority_sha256": authority_sha256,
+        "one_use": True,
+    }
+    if not _exact_public_reference_is_valid(reference):
+        raise _fail("exact_human_approval_claim_document_invalid")
+    return reference, str(parsed["status"])
 
 
 def _exact_public_reference_is_valid(reference: Any) -> bool:

@@ -86,6 +86,10 @@ class _ArchiveAuthenticationKeyProvider(Protocol):
     ) -> _T: ...
 
 
+_CAUSE_CODE_RE = re.compile(r"[a-z][a-z0-9_]{0,95}")
+_CAUSE_STAGES = frozenset({"candidate_missing_handler"})
+
+
 class ExactHumanApprovalWorkflowError(RuntimeError):
     _CODES = {
         "exact_human_approval_cancelled",
@@ -100,16 +104,65 @@ class ExactHumanApprovalWorkflowError(RuntimeError):
         "exact_human_approval_state_unknown",
     }
 
-    def __init__(self, code: str) -> None:
+    def __init__(
+        self,
+        code: str,
+        *,
+        cause_code: str | None = None,
+        cause_stage: str | None = None,
+    ) -> None:
         self.code = code if code in self._CODES else "exact_human_approval_state_unknown"
+        # v0.4.18: a wrapped service failure may leave one fixed, code-shaped
+        # inner reason and the fixed stage that wrapped it.  Free text, paths,
+        # values, and identifiers never qualify, and ``args``/``str()`` still
+        # carry only the public workflow code.
+        self.cause_code = (
+            cause_code
+            if type(cause_code) is str
+            and _CAUSE_CODE_RE.fullmatch(cause_code) is not None
+            else None
+        )
+        self.cause_stage = (
+            cause_stage if cause_stage in _CAUSE_STAGES else None
+        )
         super().__init__(self.code)
 
     def __repr__(self) -> str:
         return f"ExactHumanApprovalWorkflowError({self.code!r})"
 
 
-def _fail(code: str) -> ExactHumanApprovalWorkflowError:
-    return ExactHumanApprovalWorkflowError(code)
+def _content_free_cause_code(cause: BaseException | None) -> str | None:
+    """Return a wrapped service error's fixed code only when it is code-shaped.
+
+    ``ArchiveServiceError`` is also used for messages that can contain private
+    paths or values, so only a single string argument that matches the fixed
+    reason-code shape is carried.  The class is matched by name so this module
+    never imports the service layer.
+    """
+
+    if (
+        cause is None
+        or type(cause).__name__
+        not in {"ArchiveServiceError", "ProjectUpdateTransactionError"}
+        or len(cause.args) != 1
+        or type(cause.args[0]) is not str
+        or _CAUSE_CODE_RE.fullmatch(cause.args[0]) is None
+    ):
+        return None
+    return cause.args[0]
+
+
+def _fail(
+    code: str,
+    *,
+    cause: BaseException | None = None,
+    cause_stage: str | None = None,
+) -> ExactHumanApprovalWorkflowError:
+    return ExactHumanApprovalWorkflowError(
+        code,
+        cause_code=_content_free_cause_code(cause),
+        cause_stage=cause_stage,
+    )
 
 
 def _automatic_resume_content_free_projection(
@@ -814,16 +867,25 @@ def _discover_exact_human_approved_transaction_resume_core(
             raw_result = candidate_missing_handler(reason)
         except ExactHumanApprovalWorkflowError:
             raise
-        except BaseException:
+        except BaseException as failure:
             # The handler may have completed zero, some, or all of its bounded
             # recovery effect.  Do not turn an exception into a retryable
-            # ordinary missing-candidate result.
-            raise _fail("exact_human_approval_state_unknown") from None
+            # ordinary missing-candidate result.  Only a fixed code-shaped
+            # service reason survives as ``cause_code``; the exception text
+            # itself is dropped.
+            raise _fail(
+                "exact_human_approval_state_unknown",
+                cause=failure,
+                cause_stage="candidate_missing_handler",
+            ) from None
         if (
             not isinstance(raw_result, Mapping)
             or type(raw_result.get("ok")) is not bool
         ):
-            raise _fail("exact_human_approval_state_unknown")
+            raise _fail(
+                "exact_human_approval_state_unknown",
+                cause_stage="candidate_missing_handler",
+            )
         return dict(raw_result)
 
     def _with_key(

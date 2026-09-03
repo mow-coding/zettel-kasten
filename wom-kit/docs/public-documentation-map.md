@@ -6,7 +6,12 @@ Updated: 2026-09-01
 Philosophy clarified: 2026-07-15
 Harness compatibility clarified: 2026-07-16
 
-Current v0.4.17 delta: fresh project-update dry-run and approval share one
+Current v0.4.18 delta: identifier-free `--resume` finishes one completed
+project-update original that outlived its own cleanup after the project moved
+to another version, re-authenticating the original approval claim from the
+archive as the cleanup authority; dry-run, approval, and resume classify it
+identically, and the redacted failure artifact may carry one fixed inner reason
+code. v0.4.17 gave fresh project-update dry-run and approval one
 bounded, read-only terminal-cleanup classification. Exact terminal control
 history returns `project_version_update_terminal_cleanup_required` before
 native approval or domain-writer entry and routes to identifier-free

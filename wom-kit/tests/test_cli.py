@@ -9990,6 +9990,10 @@ class ArchiveCliTests(unittest.TestCase):
             )
             resumed = json.loads(resume_stdout)
             self.assertTrue(resumed["ok"])
+            # The live pin still equals the transaction post-image, so the
+            # v0.4.16 replay contract (claim rediscovery, handoff, result)
+            # remains the route; v0.4.18 only takes over once the project
+            # has moved on.
             self.assertEqual(
                 resumed["status"],
                 "updated_restart_required",
@@ -76910,6 +76914,364 @@ state:
             self.assertNotEqual(r1["path"], r2["path"])
             # The pre-existing draft fixture file is still present, untouched.
             self.assertTrue(fixture.is_file())
+    # ------------------------------------------------------------------
+    # v0.4.18: fixed inner cause code in the redacted failure artifact and
+    # identifier-free cleanup of a superseded completed original.
+    # ------------------------------------------------------------------
+
+    def test_project_version_update_cli_records_fixed_inner_cause_code_only(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project_root = Path(tmp) / "project"
+            project_root.mkdir()
+            cases = (
+                (
+                    "allowlisted",
+                    "project_version_update_preapproval_recovery_failed",
+                    "candidate_missing_handler",
+                    True,
+                ),
+                (
+                    "unlisted_code",
+                    "project_version_update_other_gate",
+                    "candidate_missing_handler",
+                    False,
+                ),
+                (
+                    "unlisted_stage",
+                    "project_version_update_preapproval_recovery_failed",
+                    "other_stage",
+                    False,
+                ),
+            )
+            for index, (case, cause_code, cause_stage, expected) in enumerate(
+                cases, start=1
+            ):
+                with self.subTest(case=case):
+                    output_relative = (
+                        ".zettel-kasten/diagnostics/"
+                        f"project-version-update-cause-{index}.json"
+                    )
+                    error = archive_cli.ExactHumanApprovalWorkflowError(
+                        "exact_human_approval_state_unknown",
+                        cause_code=cause_code,
+                        cause_stage=cause_stage,
+                    )
+                    with patch.object(
+                        archive_services,
+                        "wom_kit_project_version_update",
+                        side_effect=error,
+                    ):
+                        code, stdout, stderr = self.run_cli_split(
+                            [
+                                "project-version-update",
+                                str(project_root),
+                                "--target",
+                                "v0.4.18",
+                                "--dry-run",
+                                "--output",
+                                output_relative,
+                                "--format",
+                                "json",
+                            ]
+                        )
+                    self.assertEqual(code, 1)
+                    self.assertEqual(stdout, "")
+                    self.assertIn(
+                        "failed before a privacy-safe result could be produced",
+                        stderr,
+                    )
+                    saved = json.loads(
+                        (project_root / output_relative).read_text(
+                            encoding="utf-8"
+                        )
+                    )
+                    self.assertFalse(saved["ok"])
+                    self.assertEqual(
+                        saved["blockers"],
+                        ["project_version_update_command_failed"],
+                    )
+                    error_payload = saved["cli_execution"]["error"]
+                    self.assertEqual(
+                        error_payload["type"],
+                        "ExactHumanApprovalWorkflowError",
+                    )
+                    self.assertEqual(
+                        error_payload["code"],
+                        "project_version_update_command_failed",
+                    )
+                    self.assertFalse(error_payload["raw_message_stored"])
+                    if expected:
+                        self.assertEqual(
+                            error_payload["cause_code"],
+                            "project_version_update_preapproval_recovery_failed",
+                        )
+                        self.assertEqual(
+                            error_payload["cause_stage"],
+                            "candidate_missing_handler",
+                        )
+                        self.assertEqual(
+                            error_payload["cause_code_source"],
+                            "fixed_literal_allowlist",
+                        )
+                        self.assertIn(
+                            "inner reason (fixed code): "
+                            "project_version_update_preapproval_recovery_failed "
+                            "at candidate_missing_handler.",
+                            stderr,
+                        )
+                    else:
+                        self.assertNotIn("cause_code", error_payload)
+                        self.assertNotIn("cause_stage", error_payload)
+                        self.assertNotIn("inner reason", stderr)
+
+    @unittest.skipUnless(
+        WINDOWS_PROJECT_RUNTIME,
+        "the production runtime supply is Windows CPython 3.12",
+    )
+    def test_project_version_update_resumes_superseded_terminal_original_without_writer(
+        self,
+    ) -> None:
+        """A completed predecessor-shaped original whose pin moved on is cleaned."""
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_root = Path(tmp)
+            fixture = self.create_project_version_update_fixture(
+                tmp_root,
+                project_runtime_policy=True,
+            )
+            artifacts = self.project_runtime_candidate_artifact_fixture(
+                tmp_root,
+                fixture,
+            )
+            transaction_module = archive_services.project_update_transaction
+            transaction_type = transaction_module.ProjectUpdateTransaction
+            original_exact_cleanup = transaction_type.exact_cleanup
+
+            def cleanup_without_tombstone_rename(
+                transaction: Any,
+                *,
+                cleanup_authority_sha256: str,
+            ) -> bool:
+                # The predecessor crash window: the plan is durable inside the
+                # original directory but the tombstone rename never happened.
+                with patch.object(
+                    transaction_module,
+                    "_atomic_move_directory_no_replace",
+                    side_effect=OSError("synthetic tombstone rename failure"),
+                ):
+                    return original_exact_cleanup(
+                        transaction,
+                        cleanup_authority_sha256=cleanup_authority_sha256,
+                    )
+
+            with self.fast_project_runtime_candidate_patches(
+                artifacts
+            ), patch.object(
+                transaction_type,
+                "exact_cleanup",
+                new=cleanup_without_tombstone_rename,
+            ):
+                first_code, first_stdout, first_stderr = self.run_cli_split(
+                    [
+                        "project-version-update",
+                        str(fixture["project_root"]),
+                        "--target",
+                        fixture["target_tag"],
+                        "--approve",
+                        "--affirm-external-writers-quiescent",
+                        "--reviewed-by",
+                        "person:terminal-original-reviewer",
+                        "--format",
+                        "json",
+                    ]
+                )
+
+            self.assertEqual(first_code, 0, first_stdout + first_stderr)
+            first_result = json.loads(first_stdout)
+            self.assertFalse(
+                first_result["terminal_finalization"]
+                ["transaction_cleanup_completed"]
+            )
+            transaction_parent = (
+                fixture["project_root"]
+                / transaction_module.TRANSACTION_ROOT_LOGICAL
+            )
+            originals = [
+                path
+                for path in transaction_parent.iterdir()
+                if path.name.startswith("update_") and path.is_dir()
+            ]
+            self.assertEqual(len(originals), 1)
+            original = originals[0]
+            transaction_ref = original.name
+            self.assertFalse(
+                (transaction_parent / f".cleanup_{transaction_ref}").exists()
+            )
+            checkpoints = [
+                json.loads(line)
+                for line in (original / "checkpoints.jsonl")
+                .read_text(encoding="utf-8")
+                .splitlines()
+                if line
+            ]
+            self.assertEqual(checkpoints[-1]["phase"], "completed")
+            approval_checkpoint = next(
+                item
+                for item in checkpoints
+                if item.get("phase") == "approval_bound"
+            )
+            journal_authority = approval_checkpoint["approval_reference_sha256"]
+
+            # Recreate the exact predecessor shape: a v0.4.3 plan whose
+            # authority is the journal approval reference, no identity-bound
+            # sidecar, and no terminal handoff (v0.4.15 wrote none).
+            current_plan_path = original / transaction_module.CLEANUP_PLAN_NAME
+            cleanup_plan = json.loads(
+                current_plan_path.read_text(encoding="ascii")
+            )
+            cleanup_plan["schema"] = transaction_module.LEGACY_CLEANUP_PLAN_SCHEMA
+            cleanup_plan.pop("transaction_root_identity")
+            cleanup_plan["cleanup_authority_sha256"] = journal_authority
+            legacy_plan_path = (
+                original / transaction_module.LEGACY_CLEANUP_PLAN_NAME
+            )
+            legacy_plan_path.write_bytes(
+                transaction_module._document_bytes(cleanup_plan)
+            )
+            current_plan_path.unlink()
+            active_handoff, _guard = (
+                archive_services._project_update_terminal_handoff_paths(
+                    fixture["project_root"]
+                )
+            )
+            self.assertTrue(active_handoff.is_file())
+            active_handoff.unlink()
+
+            # The project later moved on: the live pin no longer equals the
+            # transaction's post-image, so the succeeded-claim live guard can
+            # never pass again.
+            pin_path = fixture["metadata_root"] / "installed-version.txt"
+            self.assertEqual(
+                pin_path.read_text(encoding="utf-8").strip(),
+                fixture["target_tag"],
+            )
+            pin_path.write_bytes(b"v9.9.9\n")
+
+            preflight = (
+                archive_services
+                ._project_update_fresh_update_cleanup_preflight_read_only(
+                    fixture["project_root"]
+                )
+            )
+            assert preflight is not None
+            self.assertEqual(preflight["status"], "terminal_cleanup_required")
+            self.assertEqual(
+                preflight["outcome_basis"],
+                "exact_terminal_transaction_cleanup_requires_resume",
+            )
+
+            cleanup_calls: list[str] = []
+
+            def observe_terminal_cleanup(
+                transaction: Any,
+                *,
+                cleanup_authority_sha256: str,
+            ) -> bool:
+                self.assertEqual(cleanup_authority_sha256, journal_authority)
+                self.assertFalse(active_handoff.exists())
+                cleanup_calls.append(transaction.transaction_ref)
+                return original_exact_cleanup(
+                    transaction,
+                    cleanup_authority_sha256=cleanup_authority_sha256,
+                )
+
+            with self.fast_project_runtime_candidate_patches(
+                artifacts
+            ), patch.object(
+                archive_services,
+                "_project_update_durable_writer",
+                side_effect=AssertionError(
+                    "superseded terminal original reentered domain writer"
+                ),
+            ) as domain_writer, patch.object(
+                archive_services,
+                "_project_update_reopen_durable_state",
+                side_effect=AssertionError(
+                    "superseded terminal original reopened durable state"
+                ),
+            ) as reopen, patch.object(
+                archive_cli,
+                "_execute_project_version_update_exact_human_approved_write",
+                side_effect=AssertionError(
+                    "superseded terminal original opened native approval"
+                ),
+            ) as native_approval, patch.object(
+                transaction_type,
+                "exact_cleanup",
+                new=observe_terminal_cleanup,
+            ), patch.object(
+                archive_services,
+                "_project_update_terminal_original_key_provider",
+                return_value=_ProjectUpdateResumeKeyProvider(),
+            ):
+                resume_code, resume_stdout, resume_stderr = (
+                    self.run_cli_split(
+                        [
+                            "project-version-update",
+                            str(fixture["project_root"]),
+                            "--resume",
+                            "--affirm-external-writers-quiescent",
+                            "--format",
+                            "json",
+                        ]
+                    )
+                )
+
+            self.assertEqual(
+                resume_code,
+                0,
+                resume_stdout + resume_stderr,
+            )
+            resumed = json.loads(resume_stdout)
+            self.assertTrue(resumed["ok"])
+            self.assertEqual(
+                resumed["status"],
+                "terminal_transaction_cleanup_completed",
+            )
+            self.assertFalse(resumed["update_completed"])
+            self.assertFalse(resumed["past_update_success_attributed"])
+            self.assertTrue(resumed["fresh_approval_required"])
+            self.assertEqual(resumed["terminal_transactions_cleaned"], 1)
+            self.assertEqual(resumed["files_written"], [])
+            self.assertEqual(resumed["project_domain_effects"], "none")
+            domain_writer.assert_not_called()
+            reopen.assert_not_called()
+            native_approval.assert_not_called()
+            self.assertEqual(cleanup_calls, [transaction_ref])
+            self.assertFalse(original.exists())
+            self.assertFalse(
+                (transaction_parent / f".cleanup_{transaction_ref}").exists()
+            )
+            proof = transaction_parent / f".cleanup-proof_{transaction_ref}.json"
+            self.assertTrue(proof.is_file())
+            proof_document = json.loads(proof.read_text(encoding="ascii"))
+            self.assertEqual(
+                proof_document["cleanup_authority_sha256"],
+                journal_authority,
+            )
+            self.assertEqual(pin_path.read_bytes(), b"v9.9.9\n")
+            self.assertNotIn(transaction_ref, resume_stdout)
+            self.assertNotIn(journal_authority, resume_stdout)
+            self.assertNotIn(str(fixture["project_root"]), resume_stdout)
+            self.assertIsNone(
+                archive_services
+                ._project_update_fresh_update_cleanup_preflight_read_only(
+                    fixture["project_root"]
+                )
+            )
+
 
 
 class ObjetCaptureTests(unittest.TestCase):

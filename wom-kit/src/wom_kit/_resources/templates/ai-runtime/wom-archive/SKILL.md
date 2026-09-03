@@ -157,9 +157,11 @@ Do not preload every reference.
   output without `--output`; redisplay may repeat and consumed is history.
   Fresh dry-run and approval share one cleanup preflight. Exact history returns
   `project_version_update_terminal_cleanup_required`: pause same-project writers
-  and run identifier-free `--resume`. WOM compacts only exact preapproval-abort
-  history into inert proof, with no domain write or fresh authority. Proof-only
-  needs fresh approval. `project_version_update_terminal_cleanup_outcome_unknown`
+  and run identifier-free `--resume`. WOM compacts exact preapproval-abort
+  history, and a superseded completed original
+  (`terminal_transaction_cleanup_completed`), into proof with no domain write,
+  success claim, or fresh authority. Proof-only needs approval.
+  `project_version_update_terminal_cleanup_outcome_unknown`
   means stop; never edit locks, pins, transactions, tombstones, or proofs.
 - Approved project-update mutation, same-version repair, and mutation-bearing
   resume are Windows-only. On POSIX use preview or read-only inspection; every
