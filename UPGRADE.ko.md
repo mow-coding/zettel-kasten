@@ -2,7 +2,7 @@
 
 [English Upgrade Guide](UPGRADE.md)
 
-## v0.4.17 terminal cleanup 복구
+## v0.4.18 terminal original 정리
 
 일치하는 공개 릴리스와 자산이 실제로 존재한 뒤에만 정확한 wheel을 설치합니다.
 새 외부 CPython 3.12 환경의 실제 `python.exe -m pip`를 사용해 설치된 PEP 610
@@ -10,23 +10,37 @@ metadata에 wheel hash가 남게 합니다.
 
 ```powershell
 $womBootstrapNonce = [guid]::NewGuid().ToString("N")
-$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0417-$womBootstrapNonce"
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0418-$womBootstrapNonce"
 if (Test-Path -LiteralPath $womBootstrapRoot) {
   throw "WOM bootstrap path must be new."
 }
 py -3.12 -m venv $womBootstrapRoot
 $womBootstrapPython = (Get-Item -LiteralPath (Join-Path $womBootstrapRoot "Scripts\python.exe")).FullName
-& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.17/wom_kit-0.4.17-py3-none-any.whl"
+& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.18/wom_kit-0.4.18-py3-none-any.whl"
 & "$womBootstrapRoot\Scripts\archive.exe" --version
 ```
 
-새 프로세스에서 정확히 `archive 0.4.17`인지 확인합니다. wheel 공개·설치만으로
+새 프로세스에서 정확히 `archive 0.4.18`인지 확인합니다. wheel 공개·설치만으로
 client archive·project runtime·version pin은 바뀌지 않습니다. project update는
 client가 별도로 선택하고 승인합니다.
 
 승인된 project update 쓰기, 동일 버전 repair, 쓰기를 포함한 resume은 계속
 Windows 전용입니다. POSIX는 preview와 읽기 전용 검사만 지원하며, 이 쓰기
 경로는 아무것도 변경하지 않고 fail-closed합니다.
+
+v0.4.18은 사람에게 아무것도 묻지 않고 한 가지 모양을 더 끝냅니다. 이전
+update가 `completed`까지 갔는데 transaction directory가 cleanup plan을 안에 둔
+채 남아 있고, 그 뒤 project가 다른 버전으로 넘어간 경우, dry-run과 approval은
+`terminal_cleanup_required`를 `exact_terminal_transaction_cleanup_requires_resume`
+근거와 함께 반환합니다. 아래 identifier 없는 resume은 archive에서 원래 승인
+claim을 다시 인증한 뒤 그 비공개 transaction directory만 canonical proof 하나로
+정리하고, `update_completed: false`와 `past_update_success_attributed: false`가
+담긴 `terminal_transaction_cleanup_completed`를 반환합니다. source·runtime·pin·
+archive content는 바꾸지 않고 새 결정도 열지 않습니다. 끝난 뒤 fresh preview를
+다시 실행하고, 그 preview가 준비된 경우에만 새 approval을 한 번 요청합니다.
+같은 resume이 다시 실패하면 redacted `--output` 산출물이 고정된 내부
+`cause_code`와 `cause_stage`를 하나 남기므로, 재시도 대신 그 content-free 결과를
+개발진에 보내세요.
 
 fresh dry-run과 approval은 이제 같은 read-only terminal-cleanup preflight를
 사용합니다. 둘 중 하나가 `project_version_update_terminal_cleanup_required`를

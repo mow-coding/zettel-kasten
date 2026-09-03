@@ -92,6 +92,7 @@ from .agent_instruction_policy import (
 from .exact_human_approval import (
     CLAIMS_RELATIVE_ROOT,
     _ClaimedExactHumanApproval,
+    _authenticated_claim_reference_core,
     ExactHumanApprovalError,
     exact_human_approval_archive_identity_sha256,
 )
@@ -116649,6 +116650,7 @@ def _project_update_terminal_cleanup_namespace_classification_read_only(
                 exact_preapproval_classification = candidate_classification
         allowed_reservation_seen = False
         resumable_transaction_seen = False
+        terminal_original_seen = False
         abort_original_refs: set[str] = set()
         tombstone_refs: set[str] = set()
         seen = 0
@@ -116774,6 +116776,25 @@ def _project_update_terminal_cleanup_namespace_classification_read_only(
                                     != "exact"
                                 ):
                                     return None
+                                elif active_inspection.terminal:
+                                    # v0.4.18: a completed original whose own
+                                    # durable plan names the journal approval
+                                    # reference is finished by the
+                                    # terminal-original route.  Shapes this
+                                    # contract does not own keep today's
+                                    # label; only positive contradicting
+                                    # evidence becomes unresolved residue.
+                                    terminal_state, _terminal_inspection = (
+                                        project_update_transaction
+                                        .classify_terminal_original_for_resume_read_only(
+                                            project_root,
+                                            name,
+                                        )
+                                    )
+                                    if terminal_state == "refused":
+                                        return None
+                                    if terminal_state == "exact":
+                                        terminal_original_seen = True
                             resumable_transaction_seen = True
                     else:
                         if allowed_reservation is not None:
@@ -116904,6 +116925,10 @@ def _project_update_terminal_cleanup_namespace_classification_read_only(
             return None
         exact_abort_history_count = len(abort_cleanup_states)
         if normal_tombstone_refs:
+            if terminal_original_seen:
+                # Two terminal transactions each needing cleanup is not one
+                # exact recoverable shape.  Preserve both and fail closed.
+                return None
             recoverable_tombstone_ref = next(iter(normal_tombstone_refs))
             tombstone = (
                 project_update_transaction.ProjectUpdateTransaction
@@ -116925,6 +116950,14 @@ def _project_update_terminal_cleanup_namespace_classification_read_only(
             if exact_abort_history_count:
                 return None
             return "reservation_exact", proof_count
+        if terminal_original_seen:
+            # v0.4.18: one exact completed original without handoff authority.
+            # Identifier-free resume finishes its private control cleanup
+            # after re-authenticating the journal's approval reference.
+            return (
+                "terminal_original_exact",
+                proof_count + exact_abort_history_count + 1,
+            )
         if resumable_transaction_seen:
             return (
                 "resume_required_exact",
@@ -117081,6 +117114,10 @@ def _project_update_fresh_update_cleanup_preflight_read_only(
         return _project_update_terminal_handoff_recovery_required_result()
     if classification in {"absent", "history_only_exact"}:
         return None
+    if classification == "terminal_original_exact":
+        return _project_update_terminal_transaction_cleanup_required_result(
+            exact_history_count=exact_history_count,
+        )
     if classification in {
         "recoverable_exact",
         "resume_required_exact",
@@ -117531,6 +117568,7 @@ def _project_update_terminal_cleanup_unknown_gate_read_only(
             "recoverable_exact",
             "resume_required_exact",
             "terminal_history_exact",
+            "terminal_original_exact",
         }:
             # Restoration/compaction is allowed only after the archive identity
             # boundary opens in the live resume service. This read-only gate
@@ -118482,6 +118520,475 @@ def _project_update_resume_authenticated_terminal_cleanup(
     )
 
 
+_PROJECT_UPDATE_APPROVAL_CLAIM_FILENAME_RE = re.compile(
+    r"^(approval_[0-9a-f]{32})\.json$"
+)
+_PROJECT_UPDATE_MAX_TERMINAL_CLAIM_DIRECTORY_ENTRIES = 100_000
+
+
+def _project_update_terminal_transaction_cleanup_required_result(
+    *,
+    exact_history_count: int,
+) -> dict[str, Any]:
+    """Route one exact completed original without handoff to --resume.
+
+    v0.4.18: the same structured blocker as other exact terminal history, with
+    a distinct content-free basis so dry-run, approval, and resume all name
+    the same recovery.  Nothing here attributes a past update success or
+    grants cleanup, retry, or fresh approval authority.
+    """
+
+    result = _project_update_terminal_cleanup_required_result(
+        exact_history_count=exact_history_count,
+        resumable_transaction_present=True,
+    )
+    result.update(
+        {
+            "outcome_basis": (
+                "exact_terminal_transaction_cleanup_requires_resume"
+            ),
+            "terminal_transaction_cleanup_required": True,
+            "past_update_success_attributed": False,
+        }
+    )
+    return result
+
+
+def _project_update_terminal_cleanup_platform_unsupported_result(
+    *,
+    operator_resume_identifiers_supplied: bool,
+) -> dict[str, Any]:
+    """Refuse terminal-original cleanup off Windows with zero writes."""
+
+    return {
+        "ok": False,
+        "status": "terminal_cleanup_platform_unsupported",
+        "reason_code": (
+            "project_version_update_terminal_cleanup_platform_unsupported"
+        ),
+        "reason_codes": [
+            "project_version_update_terminal_cleanup_platform_unsupported"
+        ],
+        "blocker_codes": [
+            "project_version_update_terminal_cleanup_platform_unsupported"
+        ],
+        "lifecycle_action": "project_version_update",
+        "error_class": "reconciliation",
+        "effects_state": "none",
+        "reconciliation_required": True,
+        "outcome_basis": (
+            "exact_terminal_transaction_cleanup_requires_windows_resume"
+        ),
+        "update_completed": False,
+        "past_update_success_attributed": False,
+        "automatic_resume_discovery": True,
+        "operator_resume_identifiers_supplied": bool(
+            operator_resume_identifiers_supplied
+        ),
+        "automatic_retry_authorized": False,
+        "cleanup_authorized": False,
+        "fresh_approval_authorized": False,
+        "native_approval_redisplayed": False,
+        "domain_writer_reentered": False,
+        "approval_key_accessed": False,
+        "approval_claim_store_accessed": False,
+        "native_approval_ui_entered": False,
+        "domain_writer_entered": False,
+        "client_archive_domain_content_accessed": False,
+        "project_domain_files_written": [],
+        "files_written": [],
+        "next_safe_actions": [
+            "Run identifier-free project-version-update --resume on the Windows machine that owns this project; mutation-bearing cleanup is Windows-only.",
+            "Do not delete locks, transaction directories, tombstones, or proofs by hand.",
+        ],
+    }
+
+
+def _project_update_terminal_original_cleanup_completed_result(
+    *,
+    operator_resume_identifiers_supplied: bool,
+    cleanup_proof_count: int,
+) -> dict[str, Any]:
+    """Report exact private-control cleanup of one completed original."""
+
+    if (
+        type(cleanup_proof_count) is not int
+        or cleanup_proof_count < 1
+        or cleanup_proof_count
+        > project_update_transaction.MAX_TERMINAL_CLEANUP_SCAN_ENTRIES
+    ):
+        raise ArchiveServiceError(
+            "project_version_update_resume_locator_changed"
+        )
+    return {
+        "ok": True,
+        "status": "terminal_transaction_cleanup_completed",
+        "update_completed": False,
+        "past_update_success_attributed": False,
+        "current_project_state_independently_verified": False,
+        "fresh_approval_required": True,
+        "native_approval_redisplayed": False,
+        "automatic_resume_discovery": True,
+        "operator_resume_identifiers_supplied": bool(
+            operator_resume_identifiers_supplied
+        ),
+        "terminal_transactions_cleaned": 1,
+        "cleanup_proofs_written_or_verified": 1,
+        "namespace_cleanup_proof_count": cleanup_proof_count,
+        "cleanup_authority_basis": (
+            "journal_approval_reference_reauthenticated_against_succeeded_claim"
+        ),
+        "approval_key_accessed": True,
+        "approval_claim_store_accessed": True,
+        "project_domain_effects": "none",
+        "domain_writer_entered": False,
+        "domain_writer_reentered": False,
+        "native_approval_ui_entered": False,
+        "project_domain_files_written": [],
+        "files_written_scope": "project_domain_only",
+        "files_written": [],
+        "effect_summary": {
+            "project_domain_writes_performed": False,
+            "project_domain_files_written": [],
+            "durable_control_evidence_written_or_verified": True,
+            "private_control_mutation_performed_or_verified": True,
+            "private_control_mutation_may_be_incomplete": False,
+            "terminal_transaction_cleanup_performed_or_verified": True,
+            "paths_or_identifiers_disclosed": False,
+        },
+        "privacy_guards": {
+            "private_paths_echoed": False,
+            "private_identifiers_echoed": False,
+            "private_hashes_echoed": False,
+        },
+        "next_safe_actions": [
+            "Run a fresh project-version-update preview, then request one new exact approval."
+        ],
+    }
+
+
+def _project_update_terminal_original_key_provider() -> Any:
+    """Return the production archive key provider (test seam)."""
+
+    from .exact_human_approval_workflow import _production_key_provider
+
+    return _production_key_provider()
+
+
+_PROJECT_UPDATE_TERMINAL_ORIGINAL_PIN_MAX_BYTES = 4096
+
+
+def _project_update_terminal_original_postimage_superseded_read_only(
+    project_root: Path,
+    transaction_ref: str,
+) -> bool:
+    """Report whether the live active pin left the transaction's post-image.
+
+    A completed transaction whose active pin still equals its post-image can
+    be finished by the v0.4.16 replay contract (claim rediscovery, terminal
+    handoff, bound result).  Once the project has moved on, that contract's
+    live-component guard can never pass again, so identifier-free resume
+    finishes only the private control cleanup.  An absent, unsafe, or
+    unreadable pin counts as superseded because the replay contract would
+    refuse it as well.  Read-only; echoes nothing.
+    """
+
+    try:
+        transaction = project_update_transaction.ProjectUpdateTransaction.open(
+            project_root,
+            transaction_ref,
+            verify_candidate_content=False,
+        )
+        pin = next(
+            (
+                component
+                for component in transaction.intent.components
+                if component.role == "active_pin"
+            ),
+            None,
+        )
+        if pin is None:
+            return False
+        target = project_root.joinpath(
+            *PurePosixPath(pin.logical_target).parts
+        )
+        value = _project_update_safe_read_component(
+            project_root,
+            target,
+            maximum=_PROJECT_UPDATE_TERMINAL_ORIGINAL_PIN_MAX_BYTES,
+        )
+        if not isinstance(value, bytes):
+            return True
+        return not hmac.compare_digest(
+            project_update_transaction.digest_component(value),
+            pin.post_sha256,
+        )
+    except (
+        OSError,
+        TypeError,
+        ValueError,
+        project_update_transaction.ProjectUpdateTransactionError,
+    ):
+        return True
+
+
+def _project_update_authenticate_terminal_original_authority(
+    *,
+    expected_approval_root: Path | None,
+    expected_archive_id: str | None,
+    approval_reference_sha256: str,
+) -> bool:
+    """Prove one succeeded claim authorized the journal's approval reference.
+
+    The transaction journal binds ``sha256(canonical(public_reference))`` at
+    ``approval_bound`` and repeats it through ``completed``.  Exactly one
+    MAC-verified ``succeeded`` claim in the bound archive claim store must
+    reproduce that digest.  No approval context is rebuilt, no live component
+    is classified, no key or claim is created, and nothing is echoed.  Any
+    unreadable, unauthenticated, ambiguous, or non-succeeded match fails
+    closed.
+    """
+
+    if (
+        not isinstance(expected_approval_root, Path)
+        or type(expected_archive_id) is not str
+        or type(approval_reference_sha256) is not str
+        or re.fullmatch(
+            r"sha256:[0-9a-f]{64}",
+            approval_reference_sha256,
+        )
+        is None
+    ):
+        return False
+    try:
+        canonical_root = require_existing_archive_root(expected_approval_root)
+        if read_archive_id(canonical_root) != expected_archive_id:
+            return False
+        claims_parent = canonical_root.joinpath(
+            *Path(CLAIMS_RELATIVE_ROOT).parts
+        )
+        with _activity_group_bound_directory_chain(
+            canonical_root,
+            claims_parent,
+            create=False,
+        ) as binding:
+            if binding.get("path") != claims_parent:
+                return False
+            directory_target = binding.get("descriptor")
+            if type(directory_target) is not int:
+                directory_target = claims_parent
+            names = os.listdir(directory_target)
+            if (
+                len(names)
+                > _PROJECT_UPDATE_MAX_TERMINAL_CLAIM_DIRECTORY_ENTRIES
+                or any(type(name) is not str for name in names)
+            ):
+                return False
+            approval_ids = tuple(
+                match.group(1)
+                for name in sorted(names)
+                if (
+                    match := _PROJECT_UPDATE_APPROVAL_CLAIM_FILENAME_RE
+                    .fullmatch(name)
+                )
+                is not None
+            )
+            if not approval_ids:
+                return False
+
+            def _with_key(key: memoryview) -> bool:
+                matches = 0
+                for approval_id in approval_ids:
+                    try:
+                        reference, status = (
+                            _authenticated_claim_reference_core(
+                                canonical_root,
+                                approval_id,
+                                key,
+                                bound_archive_root=canonical_root,
+                                claim_parent_binding=binding,
+                            )
+                        )
+                    except ExactHumanApprovalError:
+                        # An unreadable, foreign-key, or torn sibling claim
+                        # cannot be the candidate: the reference digest
+                        # covers the approval id, so it can neither hide nor
+                        # forge a match.  Only the candidate must verify.
+                        continue
+                    digest = project_update_transaction.sha256_bytes(
+                        _project_update_canonical_bytes(reference)
+                    )
+                    if hmac.compare_digest(digest, approval_reference_sha256):
+                        if status != "succeeded":
+                            return False
+                        matches += 1
+                return matches == 1
+
+            provider = _project_update_terminal_original_key_provider()
+            return bool(
+                provider.use_key(
+                    canonical_root,
+                    _with_key,
+                    create_if_missing=False,
+                )
+            )
+    except (
+        OSError,
+        ArchiveServiceError,
+        ExactHumanApprovalError,
+        RuntimeError,
+        TypeError,
+        ValueError,
+    ):
+        return False
+
+
+def _project_update_resume_terminal_original_cleanup(
+    inspection_root: Path | str,
+    *,
+    project_root: Path,
+    transaction_ref: str,
+    terminal_inspection: Any,
+    operator_resume_identifiers_supplied: bool,
+    expected_approval_root: Path | None,
+    expected_archive_id: str | None,
+    report_progress: Callable[[str, str], None],
+    route: str = "direct",
+) -> dict[str, Any]:
+    """Finish exact private cleanup of one completed original without handoff.
+
+    v0.4.18.  Runs only for ``terminal_original_exact`` with no terminal
+    handoff.  Holds the project terminal guard from the final read-only
+    observation through cleanup, re-authenticates the journal's approval
+    reference against exactly one succeeded claim, and then reuses the
+    existing ``exact_cleanup`` primitive.  It never enters the domain writer,
+    reopens durable approval state, opens native approval, changes source,
+    runtime, pin, or archive content, or attributes a past update success.
+    """
+
+    if os.name != "nt":
+        # Mutation-bearing cleanup is Windows-only.  Refuse before holding the
+        # terminal guard so POSIX resume performs zero writes.
+        return _project_update_terminal_cleanup_platform_unsupported_result(
+            operator_resume_identifiers_supplied=(
+                operator_resume_identifiers_supplied
+            ),
+        )
+
+    authority_attempted = False
+
+    def unknown(basis: str) -> dict[str, Any]:
+        result = _project_update_terminal_cleanup_outcome_unknown_result(
+            operator_resume_identifiers_supplied=(
+                operator_resume_identifiers_supplied
+            ),
+            archive_identity_metadata_read=True,
+        )
+        result["outcome_basis"] = basis
+        # Forensic truth: once the archive key and claim store were consulted
+        # for this route, the result must say so even when it fails closed.
+        result["approval_key_accessed"] = authority_attempted
+        result["approval_claim_store_accessed"] = authority_attempted
+        return result
+
+    proof_count = 0
+    try:
+        with _project_update_terminal_control_boundary(project_root):
+            observed: list[
+                _ProjectUpdateTerminalHandoffObservation | None
+            ] = []
+            handoff_state = _project_update_terminal_handoff_state_read_only(
+                inspection_root,
+                _observation_out=observed,
+            )
+            if handoff_state is not None or observed != [None]:
+                return unknown("terminal_transaction_cleanup_boundary_changed")
+            current = (
+                project_update_transaction
+                .inspect_terminal_original_for_resume_read_only(
+                    project_root,
+                    transaction_ref,
+                )
+            )
+            if current is None or current != terminal_inspection:
+                return unknown("terminal_transaction_cleanup_boundary_changed")
+            gate = _project_update_terminal_cleanup_unknown_gate_read_only(
+                inspection_root,
+                operator_resume_identifiers_supplied=(
+                    operator_resume_identifiers_supplied
+                ),
+                archive_identity_metadata_read=True,
+            )
+            if gate is not None:
+                return gate
+            report_progress(
+                "project-preflight",
+                "resume-terminal-original-authority",
+            )
+            authority_attempted = True
+            if not _project_update_authenticate_terminal_original_authority(
+                expected_approval_root=expected_approval_root,
+                expected_archive_id=expected_archive_id,
+                approval_reference_sha256=(
+                    current.approval_reference_sha256
+                ),
+            ):
+                return unknown(
+                    "terminal_transaction_cleanup_authority_unverified"
+                )
+            report_progress(
+                "project-preflight",
+                "resume-terminal-original-cleanup",
+            )
+            transaction = (
+                project_update_transaction.ProjectUpdateTransaction.open(
+                    project_root,
+                    transaction_ref,
+                )
+            )
+            if not transaction.exact_cleanup(
+                cleanup_authority_sha256=current.approval_reference_sha256
+            ):
+                return unknown("terminal_transaction_cleanup_incomplete")
+            classification, proof_count = (
+                _project_update_terminal_cleanup_artifact_classification_read_only(
+                    project_root
+                )
+            )
+            if classification not in {
+                "history_only_exact",
+                "terminal_history_exact",
+            }:
+                return unknown(
+                    "terminal_transaction_cleanup_namespace_unverified"
+                )
+    except ArchiveServiceError as failure:
+        if _project_update_exact_terminal_handoff_invalid_failure(failure):
+            return unknown("terminal_transaction_cleanup_boundary_changed")
+        raise
+    except (
+        OSError,
+        project_update_transaction.ProjectUpdateTransactionError,
+    ):
+        return unknown("terminal_transaction_cleanup_boundary_unknown")
+    report_progress(
+        "project-preflight",
+        "resume-terminal-original-cleanup-completed",
+    )
+    completed = _project_update_terminal_original_cleanup_completed_result(
+        operator_resume_identifiers_supplied=(
+            operator_resume_identifiers_supplied
+        ),
+        cleanup_proof_count=proof_count,
+    )
+    completed["terminal_transaction_cleanup_route"] = (
+        route
+        if route in {"direct", "fallback_after_generic_resume_refusal"}
+        else "direct"
+    )
+    return completed
+
+
 def _project_update_acknowledge_terminal_result_delivery(
     inspection_root: Path | str,
     result: Mapping[str, Any],
@@ -119034,6 +119541,7 @@ def _wom_kit_project_version_update_resume_live_transaction(
         "recoverable_exact",
         "resume_required_exact",
         "terminal_history_exact",
+        "terminal_original_exact",
     }:
         if not _wom_kit_project_version_update_approval_authority_matches(
             inspection_root,
@@ -119174,6 +119682,17 @@ def _wom_kit_project_version_update_resume_live_transaction(
             "project-preflight",
             "resume-complete-cleanup-tombstone-restored",
         )
+        # v0.4.18: the restored original may already be the exact
+        # terminal-original shape.  Re-classify so the handoff-less arm
+        # below can finish its private cleanup without routing a superseded
+        # transaction into claim rediscovery.
+        active_transaction_ref = restored.transaction_ref
+        active_transaction_observed = True
+        cleanup_classification, _history_count = (
+            _project_update_terminal_cleanup_artifact_classification_read_only(
+                project_root
+            )
+        )
     elif (
         not active_transaction_observed
         and cleanup_classification not in {
@@ -119227,6 +119746,70 @@ def _wom_kit_project_version_update_resume_live_transaction(
                 ),
             )
         )
+    terminal_original_fallback: Any = None
+    if (
+        active_transaction_observed
+        and active_transaction_ref is not None
+        and cleanup_classification == "terminal_original_exact"
+        and terminal_handoff_state is None
+    ):
+        # v0.4.18: a completed original whose post-image was later superseded
+        # cannot pass the succeeded-claim live guard and must never be routed
+        # into claimless preapproval cancellation.  Finish only its private
+        # control cleanup under the journal's re-authenticated authority.
+        if _approval_identifier_supplied:
+            raise ArchiveServiceError(
+                "exact_human_approval_resume_claim_invalid"
+            )
+        supplied_transaction_ref = str(transaction_ref or "").strip()
+        if (
+            supplied_transaction_ref
+            and supplied_transaction_ref != active_transaction_ref
+        ):
+            raise ArchiveServiceError(
+                "project_version_update_resume_binding_mismatch"
+            )
+        terminal_inspection = (
+            project_update_transaction
+            .inspect_terminal_original_for_resume_read_only(
+                project_root,
+                active_transaction_ref,
+            )
+        )
+        if terminal_inspection is None:
+            return attach_abort_compaction_effect(
+                _project_update_terminal_cleanup_outcome_unknown_result(
+                    operator_resume_identifiers_supplied=(
+                        operator_resume_identifiers_supplied
+                    ),
+                    archive_identity_metadata_read=True,
+                )
+            )
+        if _project_update_terminal_original_postimage_superseded_read_only(
+            project_root,
+            active_transaction_ref,
+        ):
+            return attach_abort_compaction_effect(
+                _project_update_resume_terminal_original_cleanup(
+                    inspection_root,
+                    project_root=project_root,
+                    transaction_ref=active_transaction_ref,
+                    terminal_inspection=terminal_inspection,
+                    operator_resume_identifiers_supplied=(
+                        operator_resume_identifiers_supplied
+                    ),
+                    expected_approval_root=_expected_approval_root,
+                    expected_archive_id=_expected_archive_id,
+                    report_progress=report_progress,
+                    route="direct",
+                )
+            )
+        # The live pin still equals the transaction post-image, so the
+        # v0.4.16 replay contract (claim rediscovery, terminal handoff, bound
+        # result) stays the route.  Terminal-original cleanup is the fallback
+        # only when that contract refuses through its fixed candidate-missing
+        # gate, which is the exact dead end this release closes.
+        terminal_original_fallback = terminal_inspection
     if terminal_handoff_state == "terminal_ready":
         try:
             replayed = _project_update_replay_ready_terminal_handoff(
@@ -119443,6 +120026,37 @@ def _wom_kit_project_version_update_resume_live_transaction(
             state.directory_guard.close,
             lifetime,
         )
+        if (
+            terminal_original_fallback is not None
+            and active_transaction_ref is not None
+            and getattr(failure, "cause_code", None)
+            == "project_version_update_preapproval_recovery_failed"
+            and getattr(failure, "cause_stage", None)
+            == "candidate_missing_handler"
+        ):
+            # v0.4.18: the replay contract found no checkpoint-valid claim
+            # and its only fallback (claimless preapproval cancellation)
+            # refused the completed journal.  Nothing was written.  Finish
+            # the exact private control cleanup instead of masking the gate.
+            report_progress(
+                "project-preflight",
+                "resume-terminal-original-fallback",
+            )
+            return attach_abort_compaction_effect(
+                _project_update_resume_terminal_original_cleanup(
+                    inspection_root,
+                    project_root=project_root,
+                    transaction_ref=active_transaction_ref,
+                    terminal_inspection=terminal_original_fallback,
+                    operator_resume_identifiers_supplied=(
+                        operator_resume_identifiers_supplied
+                    ),
+                    expected_approval_root=_expected_approval_root,
+                    expected_archive_id=_expected_archive_id,
+                    report_progress=report_progress,
+                    route="fallback_after_generic_resume_refusal",
+                )
+            )
         if (
             type(failure) is ArchiveServiceError
             and len(failure.args) == 1

@@ -25,6 +25,9 @@ if str(SRC_ROOT) not in sys.path:
 from wom_kit import archive_cli
 from wom_kit import archive_services
 from wom_kit import exact_human_approval
+from wom_kit.exact_human_approval_windows import (
+    CURRENT_INTERACTIVE_INTENT_MECHANISM,
+)
 from wom_kit import project_update_transaction as transaction_module
 from wom_kit.project_update_transaction import (
     ABSENT_COMPONENT_SHA256,
@@ -816,7 +819,12 @@ class ProjectUpdateTransactionTests(unittest.TestCase):
         shutil.rmtree(moved)
         self.assertFalse(moved.exists())
 
-    def begin(self, transaction: ProjectUpdateTransaction) -> tuple[bytes, dict[str, str]]:
+    def begin(
+        self,
+        transaction: ProjectUpdateTransaction,
+        *,
+        approval_reference: str | None = None,
+    ) -> tuple[bytes, dict[str, str]]:
         lock_bytes = self.activate(transaction)
         live = self.live_pre()
         first = transaction.append(
@@ -829,15 +837,23 @@ class ProjectUpdateTransactionTests(unittest.TestCase):
             phase="approval_bound",
             stage="verified",
             live_component_sha256=live,
-            approval_reference_sha256=digest("main-approval-reference"),
+            approval_reference_sha256=(
+                approval_reference or digest("main-approval-reference")
+            ),
             approval_mac_sha256=digest("main-approval-mac"),
         )
         return lock_bytes, live
 
     def ready_forward(
-        self, transaction: ProjectUpdateTransaction
+        self,
+        transaction: ProjectUpdateTransaction,
+        *,
+        approval_reference: str | None = None,
     ) -> tuple[bytes, dict[str, str]]:
-        lock_bytes, live = self.begin(transaction)
+        lock_bytes, live = self.begin(
+            transaction,
+            approval_reference=approval_reference,
+        )
         for component in transaction.intent.components:
             transaction.append(
                 phase=component.role,
@@ -865,7 +881,9 @@ class ProjectUpdateTransactionTests(unittest.TestCase):
             claim_mac_sha256=digest("claim-mac"),
             claim_evidence=self.claim_evidence(
                 transaction,
-                approval_reference=digest("main-approval-reference"),
+                approval_reference=(
+                    approval_reference or digest("main-approval-reference")
+                ),
                 claim_receipt=digest("claim-receipt"),
                 claim_mac=digest("claim-mac"),
             ),
@@ -878,9 +896,15 @@ class ProjectUpdateTransactionTests(unittest.TestCase):
         return lock_bytes, live
 
     def finish_forward(
-        self, transaction: ProjectUpdateTransaction
+        self,
+        transaction: ProjectUpdateTransaction,
+        *,
+        approval_reference: str | None = None,
     ) -> tuple[bytes, dict[str, str]]:
-        lock_bytes, live = self.ready_forward(transaction)
+        lock_bytes, live = self.ready_forward(
+            transaction,
+            approval_reference=approval_reference,
+        )
         release = transaction.release_lock_exact(
             expected_lock_bytes=lock_bytes,
             live_component_sha256=live,
@@ -8054,7 +8078,22 @@ class ProjectUpdateTransactionTests(unittest.TestCase):
         normal = self.create_transaction(
             transaction_ref="update_11111111111111111111111111111111"
         )
-        self.finish_forward(normal)
+        # v0.4.18: a fully ``completed`` original without handoff now routes to
+        # terminal-original cleanup instead of the generic resume path, so the
+        # "normal" resumable transaction here stops at the exact lockless
+        # ``lock_released`` tail that the generic path still owns.
+        normal_lock_bytes, normal_live = self.ready_forward(normal)
+        normal_release = normal.release_lock_exact(
+            expected_lock_bytes=normal_lock_bytes,
+            live_component_sha256=normal_live,
+        )
+        self.assertTrue(normal_release.released)
+        normal.append(
+            phase="lock_released",
+            stage="verified",
+            live_component_sha256=normal_live,
+            lock_release_result=normal_release,
+        )
         abort_ref = "update_22222222222222222222222222222222"
         abort = ProjectUpdateTransaction.reserve(
             self.project,
@@ -9277,6 +9316,1065 @@ class ProjectUpdateTransactionTests(unittest.TestCase):
                 serialized = json.dumps(result, sort_keys=True)
                 self.assertNotIn("private-cleanup-failure", serialized)
                 self.assertNotIn("update_" + "9" * 32, serialized)
+
+    # ------------------------------------------------------------------
+    # v0.4.18: one completed original without handoff authority whose
+    # project post-image was later superseded (the beta letter 153 shape).
+    # ------------------------------------------------------------------
+
+    TERMINAL_ORIGINAL_TEST_KEY = bytes(range(32))
+    TERMINAL_ORIGINAL_ARCHIVE_ID = "terminal-original-archive"
+    TERMINAL_ORIGINAL_APPROVAL_ID = "approval_" + "5" * 32
+
+    def terminal_original_archive_root(self) -> Path:
+        approval_root = Path(self.temporary.name) / "terminal-original-archive"
+        if not approval_root.exists():
+            approval_root.mkdir()
+            (approval_root / "archive.yml").write_text(
+                f"archive_id: {self.TERMINAL_ORIGINAL_ARCHIVE_ID}\n",
+                encoding="utf-8",
+            )
+            (approval_root / "sentinel.bin").write_bytes(b"client archive")
+        return approval_root
+
+    def synthetic_claim_reference(
+        self,
+        archive_root: Path,
+        *,
+        status: str = "succeeded",
+        approval_id: str | None = None,
+        plan_label: str = "terminal-original-plan",
+    ) -> str:
+        """Write one MAC-authenticated claim; return its journal reference digest."""
+
+        approval_id = approval_id or self.TERMINAL_ORIGINAL_APPROVAL_ID
+        archive_id = self.TERMINAL_ORIGINAL_ARCHIVE_ID
+        context = {
+            "operation": "project_version_update",
+            "archive_identity_sha256": (
+                exact_human_approval.exact_human_approval_archive_identity_sha256(
+                    archive_id
+                )
+            ),
+            "plan_sha256": digest(plan_label),
+            "target_binding_sha256": digest("terminal-original-target"),
+            "reviewer_claim_sha256": digest("terminal-original-reviewer"),
+            "review_binding_codes": ["plan_digest", "target_digest"],
+            "warning_codes": [],
+        }
+        context_sha256 = exact_human_approval._sha256(
+            exact_human_approval._AUTHORITY_DOMAIN
+            + exact_human_approval._canonical_bytes(context)
+        )
+        approved_at = "2026-08-29T08:36:00.000000Z"
+        authority = {
+            "approval_id": approval_id,
+            "archive_id": archive_id,
+            "context_sha256": context_sha256,
+            "reviewer_claim_sha256": context["reviewer_claim_sha256"],
+            "approved_at": approved_at,
+        }
+        authority_sha256 = exact_human_approval._sha256(
+            exact_human_approval._AUTHORITY_DOMAIN
+            + exact_human_approval._canonical_bytes(authority)
+        )
+        document = {
+            "schema_version": exact_human_approval.CLAIM_SCHEMA_VERSION,
+            "approval_id": approval_id,
+            "archive_id": archive_id,
+            "context": context,
+            "context_sha256": context_sha256,
+            "approval_authority_sha256": authority_sha256,
+            "reviewer_claim_sha256": context["reviewer_claim_sha256"],
+            "reviewer_identity_authenticated": False,
+            "interactive_intent": {
+                "mechanism": CURRENT_INTERACTIVE_INTENT_MECHANISM,
+                "confirmed": True,
+            },
+            "approved_at": approved_at,
+            "started_at": approved_at,
+            "status": status,
+            "finished_at": (
+                None if status == "started" else "2026-08-29T08:37:00.000000Z"
+            ),
+            "failure_code": "synthetic_failure" if status == "failed" else None,
+        }
+        authenticated = exact_human_approval._authenticated(
+            document,
+            self.TERMINAL_ORIGINAL_TEST_KEY,
+        )
+        claims_root = archive_root.joinpath(
+            *Path(exact_human_approval.CLAIMS_RELATIVE_ROOT).parts
+        )
+        claims_root.mkdir(parents=True, exist_ok=True)
+        (claims_root / f"{approval_id}.json").write_bytes(
+            exact_human_approval._canonical_bytes(authenticated)
+        )
+        reference = {
+            "schema_version": exact_human_approval.REFERENCE_SCHEMA_VERSION,
+            "approval_id": approval_id,
+            "context_sha256": context_sha256,
+            "approval_authority_sha256": authority_sha256,
+            "one_use": True,
+        }
+        return sha256_bytes(
+            archive_services._project_update_canonical_bytes(reference)
+        )
+
+    class _TerminalOriginalKeyProvider:
+        def __init__(self, key: bytes) -> None:
+            self.key = key
+            self.calls = 0
+            self.create_if_missing: list[bool] = []
+
+        def use_key(self, _root, consumer, *, create_if_missing=False):
+            self.calls += 1
+            self.create_if_missing.append(create_if_missing)
+            buffer = bytearray(self.key)
+            try:
+                return consumer(memoryview(buffer))
+            finally:
+                buffer[:] = b"\0" * len(buffer)
+
+    def build_terminal_original(
+        self,
+        *,
+        approval_reference: str,
+        transaction_ref: str = DEFAULT_TRANSACTION_REF,
+        legacy_plan: bool = True,
+    ) -> ProjectUpdateTransaction:
+        """Leave exactly the predecessor 'plan written, rename lost' shape."""
+
+        transaction = self.create_transaction(transaction_ref=transaction_ref)
+        self.finish_forward(transaction, approval_reference=approval_reference)
+        root = self.transaction_root(transaction)
+        if legacy_plan:
+            with patch.object(
+                transaction_module,
+                "_atomic_move_directory_no_replace",
+                side_effect=OSError("synthetic tombstone rename failure"),
+            ):
+                self.assertFalse(
+                    transaction.exact_cleanup(
+                        cleanup_authority_sha256=approval_reference
+                    )
+                )
+            self.assertTrue(root.is_dir())
+            current_plan_path = root / CLEANUP_PLAN_NAME
+            legacy_plan_path = root / LEGACY_CLEANUP_PLAN_NAME
+            legacy = json.loads(current_plan_path.read_text(encoding="ascii"))
+            legacy["schema"] = LEGACY_CLEANUP_PLAN_SCHEMA
+            legacy.pop("transaction_root_identity")
+            legacy_plan_path.write_bytes(transaction_module._document_bytes(legacy))
+            current_plan_path.unlink()
+        self.assertFalse((root.parent / f".cleanup_{transaction_ref}").exists())
+        self.assertFalse(
+            (root.parent / f".cleanup-proof_{transaction_ref}.json").exists()
+        )
+        self.assertFalse(
+            (self.project / ".zettel-kasten" / "version-update.lock").exists()
+        )
+        return ProjectUpdateTransaction.open(self.project, transaction_ref)
+
+    def run_terminal_original_resume(
+        self,
+        *,
+        approval_root: Path,
+        key_provider=None,
+        extra_patches=(),
+    ) -> dict:
+        executor_calls: list[bool] = []
+
+        def approval_executor(*_args, **_kwargs):
+            executor_calls.append(True)
+            self.fail("terminal original entered the approval executor")
+
+        stack = ExitStack()
+        with stack:
+            stack.enter_context(
+                patch.object(
+                    archive_services,
+                    "_wom_kit_project_version_update_approval_authority_matches",
+                    return_value=True,
+                )
+            )
+            stack.enter_context(
+                patch.object(
+                    archive_services,
+                    "_project_update_reopen_durable_state",
+                    side_effect=AssertionError(
+                        "terminal original reopened durable approval state"
+                    ),
+                )
+            )
+            stack.enter_context(
+                patch.object(
+                    archive_services,
+                    "_project_update_durable_writer",
+                    side_effect=AssertionError(
+                        "terminal original entered the domain writer"
+                    ),
+                )
+            )
+            if key_provider is not None:
+                stack.enter_context(
+                    patch.object(
+                        archive_services,
+                        "_project_update_terminal_original_key_provider",
+                        return_value=key_provider,
+                    )
+                )
+            for extra in extra_patches:
+                stack.enter_context(extra)
+            result = (
+                archive_services
+                ._wom_kit_project_version_update_resume_live_transaction(
+                    self.project,
+                    target=None,
+                    reviewed_by=None,
+                    transaction_ref=None,
+                    approval_executor=approval_executor,
+                    _expected_approval_root=approval_root,
+                    _expected_archive_id=self.TERMINAL_ORIGINAL_ARCHIVE_ID,
+                )
+            )
+        self.assertEqual(executor_calls, [])
+        return result
+
+    def test_terminal_original_inspection_accepts_exact_legacy_planned_original_only(
+        self,
+    ) -> None:
+        reference = digest("terminal-original-approval-reference")
+        transaction = self.build_terminal_original(approval_reference=reference)
+        root = self.transaction_root(transaction)
+        ref = transaction.transaction_ref
+
+        inspection = (
+            transaction_module.inspect_terminal_original_for_resume_read_only(
+                self.project,
+                ref,
+            )
+        )
+        self.assertIsNotNone(inspection)
+        assert inspection is not None
+        self.assertEqual(inspection.transaction_ref, ref)
+        self.assertEqual(inspection.approval_reference_sha256, reference)
+        self.assertTrue(inspection.cleanup_plan_present)
+        self.assertEqual(inspection.cleanup_plan_schema, LEGACY_CLEANUP_PLAN_SCHEMA)
+        self.assertEqual(
+            inspection.terminal_checkpoint_sha256,
+            transaction.inspect().journal.head_sha256,
+        )
+        self.assertEqual(inspection.intent_sha256, transaction.intent.sha256)
+        self.assertGreater(inspection.file_count, 0)
+        pristine = self.tree_snapshot(self.project)
+
+        legacy_plan_path = root / LEGACY_CLEANUP_PLAN_NAME
+        original_plan_bytes = legacy_plan_path.read_bytes()
+        lock_path = self.project / ".zettel-kasten" / "version-update.lock"
+        tombstone = root.parent / f".cleanup_{ref}"
+        proof = root.parent / f".cleanup-proof_{ref}.json"
+        sidecar = root / CLEANUP_PLAN_NAME
+        extra = root / "extra-member.bin"
+
+        def rewrite_plan(**changes) -> None:
+            plan = json.loads(original_plan_bytes.decode("ascii"))
+            plan.update(changes)
+            legacy_plan_path.write_bytes(transaction_module._document_bytes(plan))
+
+        drift_cases = {
+            "plan_authority_mismatch": (
+                lambda: rewrite_plan(
+                    cleanup_authority_sha256=digest("foreign-authority")
+                ),
+                lambda: legacy_plan_path.write_bytes(original_plan_bytes),
+            ),
+            "unexpected_member": (
+                lambda: extra.write_bytes(b"unexpected"),
+                lambda: extra.unlink(),
+            ),
+            "tombstone_present": (
+                lambda: tombstone.mkdir(),
+                lambda: tombstone.rmdir(),
+            ),
+            "proof_present": (
+                lambda: proof.write_bytes(b"{}\n"),
+                lambda: proof.unlink(),
+            ),
+            "live_lock_present": (
+                lambda: lock_path.write_bytes(b"lock"),
+                lambda: lock_path.unlink(),
+            ),
+            "current_schema_sidecar_present": (
+                lambda: sidecar.write_bytes(b"{}\n"),
+                lambda: sidecar.unlink(),
+            ),
+        }
+        for case, (apply, revert) in drift_cases.items():
+            with self.subTest(case=case):
+                apply()
+                try:
+                    self.assertIsNone(
+                        transaction_module
+                        .inspect_terminal_original_for_resume_read_only(
+                            self.project,
+                            ref,
+                        )
+                    )
+                finally:
+                    revert()
+                self.assertEqual(self.tree_snapshot(self.project), pristine)
+
+    def test_terminal_original_plan_less_completed_original_keeps_generic_route(
+        self,
+    ) -> None:
+        reference = digest("terminal-original-approval-reference")
+        transaction = self.build_terminal_original(
+            approval_reference=reference,
+            legacy_plan=False,
+        )
+        ref = transaction.transaction_ref
+        self.assertEqual(
+            transaction_module.classify_terminal_original_for_resume_read_only(
+                self.project,
+                ref,
+            ),
+            ("not_applicable", None),
+        )
+        self.assertIsNone(
+            transaction_module.inspect_terminal_original_for_resume_read_only(
+                self.project,
+                ref,
+            )
+        )
+        # Today's label and generic routing are preserved for shapes this
+        # contract does not own (v0.4.17 decision 18 stays intact).
+        self.assertEqual(
+            archive_services
+            ._project_update_terminal_cleanup_artifact_classification_read_only(
+                self.project
+            ),
+            ("resume_required_exact", 1),
+        )
+        preflight = (
+            archive_services
+            ._project_update_fresh_update_cleanup_preflight_read_only(
+                self.project
+            )
+        )
+        assert preflight is not None
+        self.assertEqual(
+            preflight["outcome_basis"],
+            "exact_terminal_control_history_requires_resume",
+        )
+
+    def test_terminal_original_current_schema_sidecar_is_exact_only_with_journal_authority(
+        self,
+    ) -> None:
+        reference = digest("terminal-original-approval-reference")
+        transaction = self.build_terminal_original(approval_reference=reference)
+        root = self.transaction_root(transaction)
+        ref = transaction.transaction_ref
+        # v0.4.18's own crash window: the identity-bound sidecar is durable
+        # beside the legacy plan but the tombstone rename never happened.
+        with patch.object(
+            transaction_module,
+            "_atomic_move_directory_no_replace",
+            side_effect=OSError("synthetic tombstone rename failure"),
+        ):
+            self.assertFalse(
+                ProjectUpdateTransaction.open(self.project, ref).exact_cleanup(
+                    cleanup_authority_sha256=reference
+                )
+            )
+        sidecar = root / CLEANUP_PLAN_NAME
+        self.assertTrue(sidecar.is_file())
+        self.assertTrue((root / LEGACY_CLEANUP_PLAN_NAME).is_file())
+        state, inspection = (
+            transaction_module.classify_terminal_original_for_resume_read_only(
+                self.project,
+                ref,
+            )
+        )
+        self.assertEqual(state, "exact")
+        assert inspection is not None
+        self.assertEqual(inspection.cleanup_plan_schema, CLEANUP_PLAN_SCHEMA)
+        self.assertEqual(inspection.approval_reference_sha256, reference)
+        self.assertEqual(
+            archive_services
+            ._project_update_terminal_cleanup_artifact_classification_read_only(
+                self.project
+            ),
+            ("terminal_original_exact", 1),
+        )
+
+        sidecar_bytes = sidecar.read_bytes()
+        sidecar_document = json.loads(sidecar_bytes.decode("ascii"))
+        handoff_authority = dict(sidecar_document)
+        handoff_authority["cleanup_authority_sha256"] = digest("handoff-digest")
+        sidecar.write_bytes(transaction_module._document_bytes(handoff_authority))
+        try:
+            self.assertEqual(
+                transaction_module
+                .classify_terminal_original_for_resume_read_only(
+                    self.project,
+                    ref,
+                ),
+                ("not_applicable", None),
+            )
+            self.assertEqual(
+                archive_services
+                ._project_update_terminal_cleanup_artifact_classification_read_only(
+                    self.project
+                ),
+                ("resume_required_exact", 1),
+            )
+        finally:
+            sidecar.write_bytes(sidecar_bytes)
+
+        moved_identity = dict(sidecar_document)
+        moved_identity["transaction_root_identity"] = {
+            **sidecar_document["transaction_root_identity"],
+            "inode": sidecar_document["transaction_root_identity"]["inode"] + 1,
+        }
+        sidecar.write_bytes(transaction_module._document_bytes(moved_identity))
+        try:
+            self.assertEqual(
+                transaction_module
+                .classify_terminal_original_for_resume_read_only(
+                    self.project,
+                    ref,
+                )[0],
+                "refused",
+            )
+            self.assertEqual(
+                archive_services
+                ._project_update_terminal_cleanup_artifact_classification_read_only(
+                    self.project
+                ),
+                ("unresolved", 0),
+            )
+        finally:
+            sidecar.write_bytes(sidecar_bytes)
+
+    def test_terminal_original_is_classified_and_blocked_consistently_read_only(
+        self,
+    ) -> None:
+        reference = digest("terminal-original-approval-reference")
+        transaction = self.build_terminal_original(approval_reference=reference)
+        root = self.transaction_root(transaction)
+        pristine = self.tree_snapshot(self.project)
+
+        self.assertEqual(
+            archive_services
+            ._project_update_terminal_cleanup_artifact_classification_read_only(
+                self.project
+            ),
+            ("terminal_original_exact", 1),
+        )
+        preflight = (
+            archive_services
+            ._project_update_fresh_update_cleanup_preflight_read_only(
+                self.project
+            )
+        )
+        self.assertIsNotNone(preflight)
+        assert preflight is not None
+        self.assertFalse(preflight["ok"])
+        self.assertEqual(preflight["status"], "terminal_cleanup_required")
+        self.assertEqual(
+            preflight["reason_code"],
+            "project_version_update_terminal_cleanup_required",
+        )
+        self.assertEqual(
+            preflight["outcome_basis"],
+            "exact_terminal_transaction_cleanup_requires_resume",
+        )
+        self.assertTrue(preflight["terminal_transaction_cleanup_required"])
+        self.assertTrue(preflight["resumable_transaction_present"])
+        self.assertFalse(preflight["past_update_success_attributed"])
+        self.assertEqual(preflight["exact_terminal_history_count"], 1)
+        self.assertFalse(preflight["cleanup_authorized"])
+        self.assertFalse(preflight["fresh_approval_authorized"])
+        self.assertIsNone(
+            archive_services._project_update_terminal_cleanup_unknown_gate_read_only(
+                self.project,
+                operator_resume_identifiers_supplied=False,
+            )
+        )
+        dry_run = archive_services.wom_kit_project_version_update(
+            self.project,
+            target="v0.4.18",
+            dry_run=True,
+        )
+        self.assertEqual(dry_run, preflight)
+        approval = (
+            archive_services
+            ._wom_kit_project_version_update_live_approval_transaction(
+                self.project,
+                target="v0.4.18",
+                reviewed_by="reviewer",
+                affirm_external_writers_quiescent=True,
+                approval_executor=lambda *_args, **_kwargs: self.fail(
+                    "terminal original entered native approval"
+                ),
+                _expected_approval_root=self.project,
+                _expected_archive_id="archive:test",
+            )
+        )
+        self.assertEqual(approval, preflight)
+        serialized = json.dumps(preflight, sort_keys=True)
+        self.assertNotIn(transaction.transaction_ref, serialized)
+        self.assertNotIn(reference, serialized)
+        self.assertNotIn(str(self.project), serialized)
+        self.assertEqual(self.tree_snapshot(self.project), pristine)
+
+        # Tampered plan authority is unresolved residue on every surface.
+        legacy_plan_path = root / LEGACY_CLEANUP_PLAN_NAME
+        original_plan_bytes = legacy_plan_path.read_bytes()
+        tampered = json.loads(original_plan_bytes.decode("ascii"))
+        tampered["cleanup_authority_sha256"] = digest("foreign-authority")
+        legacy_plan_path.write_bytes(transaction_module._document_bytes(tampered))
+        try:
+            self.assertEqual(
+                archive_services
+                ._project_update_terminal_cleanup_artifact_classification_read_only(
+                    self.project
+                ),
+                ("unresolved", 0),
+            )
+            unresolved_preflight = (
+                archive_services
+                ._project_update_fresh_update_cleanup_preflight_read_only(
+                    self.project
+                )
+            )
+            assert unresolved_preflight is not None
+            self.assertEqual(
+                unresolved_preflight["status"],
+                "terminal_cleanup_outcome_unknown",
+            )
+            gate = archive_services._project_update_terminal_cleanup_unknown_gate_read_only(
+                self.project,
+                operator_resume_identifiers_supplied=False,
+            )
+            assert gate is not None
+            self.assertEqual(gate["status"], "terminal_cleanup_outcome_unknown")
+        finally:
+            legacy_plan_path.write_bytes(original_plan_bytes)
+        self.assertEqual(self.tree_snapshot(self.project), pristine)
+
+    def test_terminal_original_with_pre_unlock_handoff_keeps_generic_resume_route(
+        self,
+    ) -> None:
+        reference = digest("terminal-original-approval-reference")
+        transaction = self.build_terminal_original(approval_reference=reference)
+        observation = archive_services._ProjectUpdateTerminalHandoffObservation(
+            state="claim_succeeded_pre_unlock",
+            raw_sha256=digest("handoff-raw"),
+            pending_record_sha256=digest("handoff-pending"),
+            transaction_ref=transaction.transaction_ref,
+        )
+
+        def handoff_state(_inspection_root, *, _observation_out=None):
+            if _observation_out is not None:
+                _observation_out.append(observation)
+            return "claim_succeeded_pre_unlock"
+
+        class _GenericRouteReached(Exception):
+            pass
+
+        with (
+            patch.object(
+                archive_services,
+                "_wom_kit_project_version_update_approval_authority_matches",
+                return_value=True,
+            ),
+            patch.object(
+                archive_services,
+                "_project_update_terminal_handoff_state_read_only",
+                side_effect=handoff_state,
+            ),
+            patch.object(
+                archive_services,
+                "_project_update_resume_preapproval_transaction",
+                return_value=None,
+            ),
+            patch.object(
+                archive_services,
+                "_project_update_reopen_durable_state",
+                side_effect=_GenericRouteReached("generic route"),
+            ),
+            patch.object(
+                archive_services,
+                "_project_update_resume_terminal_original_cleanup",
+                side_effect=AssertionError(
+                    "pre-unlock handoff entered terminal-original cleanup"
+                ),
+            ),
+        ):
+            with self.assertRaises(_GenericRouteReached):
+                archive_services._wom_kit_project_version_update_resume_live_transaction(
+                    self.project,
+                    target=None,
+                    reviewed_by=None,
+                    transaction_ref=None,
+                    approval_executor=lambda *_args, **_kwargs: self.fail(
+                        "executor before reopen"
+                    ),
+                    _expected_approval_root=self.project,
+                    _expected_archive_id="archive:test",
+                )
+
+    def test_terminal_original_with_intact_pin_keeps_replay_route_and_falls_back_on_candidate_missing(
+        self,
+    ) -> None:
+        from wom_kit.exact_human_approval_workflow import (
+            ExactHumanApprovalWorkflowError,
+        )
+
+        reference = digest("terminal-original-approval-reference")
+        transaction = self.build_terminal_original(approval_reference=reference)
+        ref = transaction.transaction_ref
+        pin = next(
+            component
+            for component in transaction.intent.components
+            if component.role == "active_pin"
+        )
+        pin_path = self.project.joinpath(*PurePosixPath(pin.logical_target).parts)
+        pin_path.parent.mkdir(parents=True, exist_ok=True)
+        pin_path.write_bytes(self.post_values["active-pin"])
+        self.assertFalse(
+            archive_services
+            ._project_update_terminal_original_postimage_superseded_read_only(
+                self.project,
+                ref,
+            )
+        )
+        pin_path.write_bytes(b"v9.9.9\n")
+        self.assertTrue(
+            archive_services
+            ._project_update_terminal_original_postimage_superseded_read_only(
+                self.project,
+                ref,
+            )
+        )
+        pin_path.write_bytes(self.post_values["active-pin"])
+
+        closed: list[str] = []
+        state = SimpleNamespace(
+            inspection_root=self.project,
+            project_root=self.project,
+            transaction=transaction,
+            expected_lock_bytes=b"",
+            expected_approval_root=self.project,
+            expected_archive_id="archive:test",
+            prepared_preview={"status": "prepared"},
+            reviewer="reviewer-a",
+            runtime_candidate=object(),
+            directory_guard=SimpleNamespace(
+                close=lambda: closed.append("directory")
+            ),
+            terminal_update_verified=False,
+        )
+        lifetime = SimpleNamespace(
+            close_after_service_transaction=lambda: closed.append("runner")
+        )
+        cleanup_routes: list[tuple[str, str]] = []
+
+        def fake_terminal_cleanup(_inspection_root, **kwargs):
+            cleanup_routes.append(
+                (kwargs["transaction_ref"], kwargs.get("route", "direct"))
+            )
+            return {"ok": True, "status": "sentinel_terminal_cleanup"}
+
+        cases = (
+            (
+                "candidate_missing_gate",
+                ExactHumanApprovalWorkflowError(
+                    "exact_human_approval_state_unknown",
+                    cause_code=(
+                        "project_version_update_preapproval_recovery_failed"
+                    ),
+                    cause_stage="candidate_missing_handler",
+                ),
+                True,
+            ),
+            (
+                "other_workflow_failure",
+                ExactHumanApprovalWorkflowError(
+                    "exact_human_approval_state_unknown",
+                ),
+                False,
+            ),
+        )
+        for case, failure, expect_fallback in cases:
+            with self.subTest(case=case):
+                cleanup_routes.clear()
+                closed.clear()
+
+                def approval_executor(*_args, failure=failure, **_kwargs):
+                    raise failure
+
+                with (
+                    patch.object(
+                        archive_services,
+                        "_wom_kit_project_version_update_approval_authority_matches",
+                        return_value=True,
+                    ),
+                    patch.object(
+                        archive_services,
+                        "_project_update_resume_preapproval_transaction",
+                        return_value=None,
+                    ),
+                    patch.object(
+                        archive_services,
+                        "_project_update_reopen_durable_state",
+                        return_value=(state, lifetime),
+                    ),
+                    patch.object(
+                        archive_services,
+                        "_project_update_terminal_execution_lease",
+                        return_value=nullcontext(),
+                    ),
+                    patch.object(
+                        archive_services,
+                        "_project_update_resume_terminal_original_cleanup",
+                        side_effect=fake_terminal_cleanup,
+                    ),
+                ):
+                    if expect_fallback:
+                        result = archive_services._wom_kit_project_version_update_resume_live_transaction(
+                            self.project,
+                            target=None,
+                            reviewed_by=None,
+                            transaction_ref=None,
+                            approval_executor=approval_executor,
+                            _expected_approval_root=self.project,
+                            _expected_archive_id="archive:test",
+                        )
+                        self.assertEqual(
+                            result["status"],
+                            "sentinel_terminal_cleanup",
+                        )
+                        self.assertEqual(
+                            cleanup_routes,
+                            [(ref, "fallback_after_generic_resume_refusal")],
+                        )
+                    else:
+                        with self.assertRaises(
+                            ExactHumanApprovalWorkflowError
+                        ):
+                            archive_services._wom_kit_project_version_update_resume_live_transaction(
+                                self.project,
+                                target=None,
+                                reviewed_by=None,
+                                transaction_ref=None,
+                                approval_executor=approval_executor,
+                                _expected_approval_root=self.project,
+                                _expected_archive_id="archive:test",
+                            )
+                        self.assertEqual(cleanup_routes, [])
+                self.assertEqual(closed, ["directory", "runner"])
+
+    @unittest.skipIf(
+        os.name == "nt",
+        "POSIX-only fail-closed mutation boundary",
+    )
+    def test_terminal_original_resume_refuses_off_windows_with_zero_writes(
+        self,
+    ) -> None:
+        reference = digest("terminal-original-approval-reference")
+        self.build_terminal_original(approval_reference=reference)
+        approval_root = self.terminal_original_archive_root()
+        pristine = self.tree_snapshot(self.project)
+        archive_before = self.tree_snapshot(approval_root)
+
+        result = self.run_terminal_original_resume(approval_root=approval_root)
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["status"], "terminal_cleanup_platform_unsupported")
+        self.assertEqual(
+            result["reason_code"],
+            "project_version_update_terminal_cleanup_platform_unsupported",
+        )
+        self.assertEqual(result["effects_state"], "none")
+        self.assertFalse(result["cleanup_authorized"])
+        self.assertFalse(result["approval_key_accessed"])
+        self.assertFalse(result["approval_claim_store_accessed"])
+        self.assertFalse(result["past_update_success_attributed"])
+        self.assertEqual(result["files_written"], [])
+        self.assertEqual(self.tree_snapshot(self.project), pristine)
+        self.assertEqual(self.tree_snapshot(approval_root), archive_before)
+
+    @unittest.skipUnless(os.name == "nt", "terminal mutation is Windows-only")
+    def test_terminal_original_resume_fails_closed_without_matching_succeeded_claim(
+        self,
+    ) -> None:
+        approval_root = self.terminal_original_archive_root()
+        claims_root = approval_root.joinpath(
+            *Path(exact_human_approval.CLAIMS_RELATIVE_ROOT).parts
+        )
+        provider = self._TerminalOriginalKeyProvider(
+            self.TERMINAL_ORIGINAL_TEST_KEY
+        )
+        cases = ("claim_store_absent", "reference_mismatch", "started_claim")
+        for index, case in enumerate(cases, start=1):
+            with self.subTest(case=case):
+                self.project = Path(self.temporary.name) / f"terminal-{index}"
+                self.project.mkdir()
+                if claims_root.exists():
+                    shutil.rmtree(claims_root)
+                if case == "reference_mismatch":
+                    self.synthetic_claim_reference(
+                        approval_root,
+                        plan_label="unrelated-plan",
+                    )
+                    reference = digest("terminal-original-approval-reference")
+                elif case == "started_claim":
+                    reference = self.synthetic_claim_reference(
+                        approval_root,
+                        status="started",
+                    )
+                else:
+                    reference = digest("terminal-original-approval-reference")
+                transaction = self.build_terminal_original(
+                    approval_reference=reference
+                )
+                namespace = transaction.transaction_root.parent
+                namespace_before = self.tree_snapshot(namespace)
+                archive_before = self.tree_snapshot(approval_root)
+
+                result = self.run_terminal_original_resume(
+                    approval_root=approval_root,
+                    key_provider=provider,
+                )
+
+                self.assertFalse(result["ok"])
+                self.assertEqual(
+                    result["status"],
+                    "terminal_cleanup_outcome_unknown",
+                )
+                self.assertEqual(
+                    result["outcome_basis"],
+                    "terminal_transaction_cleanup_authority_unverified",
+                )
+                self.assertFalse(result["cleanup_authorized"])
+                self.assertTrue(result["approval_key_accessed"])
+                self.assertTrue(result["approval_claim_store_accessed"])
+                self.assertEqual(self.tree_snapshot(namespace), namespace_before)
+                self.assertEqual(self.tree_snapshot(approval_root), archive_before)
+                serialized = json.dumps(result, sort_keys=True)
+                self.assertNotIn(transaction.transaction_ref, serialized)
+                self.assertNotIn(reference, serialized)
+                self.assertNotIn(self.TERMINAL_ORIGINAL_APPROVAL_ID, serialized)
+        self.assertNotIn(True, provider.create_if_missing)
+
+    @unittest.skipUnless(os.name == "nt", "terminal mutation is Windows-only")
+    def test_terminal_original_resume_cleans_exact_original_after_claim_reauthentication(
+        self,
+    ) -> None:
+        approval_root = self.terminal_original_archive_root()
+        reference = self.synthetic_claim_reference(approval_root)
+        transaction = self.build_terminal_original(approval_reference=reference)
+        root = self.transaction_root(transaction)
+        ref = transaction.transaction_ref
+        provider = self._TerminalOriginalKeyProvider(
+            self.TERMINAL_ORIGINAL_TEST_KEY
+        )
+        archive_before = self.tree_snapshot(approval_root)
+        cleanup_calls: list[str] = []
+        original_exact_cleanup = ProjectUpdateTransaction.exact_cleanup
+
+        def observe_cleanup(transaction_object, *, cleanup_authority_sha256):
+            self.assertEqual(cleanup_authority_sha256, reference)
+            cleanup_calls.append(transaction_object.transaction_ref)
+            return original_exact_cleanup(
+                transaction_object,
+                cleanup_authority_sha256=cleanup_authority_sha256,
+            )
+
+        result = self.run_terminal_original_resume(
+            approval_root=approval_root,
+            key_provider=provider,
+            extra_patches=(
+                patch.object(
+                    ProjectUpdateTransaction,
+                    "exact_cleanup",
+                    new=observe_cleanup,
+                ),
+            ),
+        )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["status"], "terminal_transaction_cleanup_completed")
+        self.assertFalse(result["update_completed"])
+        self.assertFalse(result["past_update_success_attributed"])
+        self.assertTrue(result["fresh_approval_required"])
+        self.assertEqual(result["terminal_transactions_cleaned"], 1)
+        self.assertEqual(result["cleanup_proofs_written_or_verified"], 1)
+        self.assertEqual(result["namespace_cleanup_proof_count"], 1)
+        self.assertTrue(result["approval_key_accessed"])
+        self.assertTrue(result["approval_claim_store_accessed"])
+        self.assertEqual(result["project_domain_effects"], "none")
+        self.assertFalse(result["domain_writer_entered"])
+        self.assertEqual(result["files_written"], [])
+        self.assertEqual(result["files_written_scope"], "project_domain_only")
+        self.assertTrue(
+            result["effect_summary"][
+                "private_control_mutation_performed_or_verified"
+            ]
+        )
+        self.assertFalse(
+            result["effect_summary"]["project_domain_writes_performed"]
+        )
+        self.assertEqual(cleanup_calls, [ref])
+        self.assertEqual(provider.calls, 1)
+        self.assertEqual(provider.create_if_missing, [False])
+        self.assertFalse(root.exists())
+        self.assertFalse((root.parent / f".cleanup_{ref}").exists())
+        proof = root.parent / f".cleanup-proof_{ref}.json"
+        self.assertTrue(proof.is_file())
+        proof_document = json.loads(proof.read_text(encoding="ascii"))
+        self.assertEqual(proof_document["schema"], CLEANUP_PLAN_SCHEMA)
+        self.assertEqual(proof_document["cleanup_authority_sha256"], reference)
+        self.assertEqual(self.tree_snapshot(approval_root), archive_before)
+        serialized = json.dumps(result, sort_keys=True)
+        self.assertNotIn(ref, serialized)
+        self.assertNotIn(reference, serialized)
+        self.assertNotIn(self.TERMINAL_ORIGINAL_APPROVAL_ID, serialized)
+        self.assertNotIn(str(self.project), serialized)
+
+        self.assertEqual(
+            archive_services
+            ._project_update_terminal_cleanup_artifact_classification_read_only(
+                self.project
+            ),
+            ("history_only_exact", 1),
+        )
+        self.assertIsNone(
+            archive_services
+            ._project_update_fresh_update_cleanup_preflight_read_only(
+                self.project
+            )
+        )
+        second = self.run_terminal_original_resume(
+            approval_root=approval_root,
+            key_provider=provider,
+        )
+        self.assertEqual(second["status"], "no_resumable_project_update")
+        self.assertEqual(provider.calls, 1)
+
+    @unittest.skipUnless(os.name == "nt", "terminal mutation is Windows-only")
+    def test_terminal_original_cleanup_is_reentrant_after_its_own_rename_failure(
+        self,
+    ) -> None:
+        approval_root = self.terminal_original_archive_root()
+        reference = self.synthetic_claim_reference(approval_root)
+        transaction = self.build_terminal_original(approval_reference=reference)
+        root = self.transaction_root(transaction)
+        ref = transaction.transaction_ref
+        provider = self._TerminalOriginalKeyProvider(
+            self.TERMINAL_ORIGINAL_TEST_KEY
+        )
+
+        first = self.run_terminal_original_resume(
+            approval_root=approval_root,
+            key_provider=provider,
+            extra_patches=(
+                patch.object(
+                    transaction_module,
+                    "_atomic_move_directory_no_replace",
+                    side_effect=OSError("synthetic tombstone rename failure"),
+                ),
+            ),
+        )
+        self.assertEqual(first["status"], "terminal_cleanup_outcome_unknown")
+        self.assertEqual(
+            first["outcome_basis"],
+            "terminal_transaction_cleanup_incomplete",
+        )
+        self.assertTrue(first["approval_key_accessed"])
+        self.assertTrue(root.is_dir())
+        self.assertTrue((root / CLEANUP_PLAN_NAME).is_file())
+        self.assertTrue((root / LEGACY_CLEANUP_PLAN_NAME).is_file())
+        self.assertEqual(
+            archive_services
+            ._project_update_terminal_cleanup_artifact_classification_read_only(
+                self.project
+            ),
+            ("terminal_original_exact", 1),
+        )
+        preflight = (
+            archive_services
+            ._project_update_fresh_update_cleanup_preflight_read_only(
+                self.project
+            )
+        )
+        assert preflight is not None
+        self.assertEqual(
+            preflight["outcome_basis"],
+            "exact_terminal_transaction_cleanup_requires_resume",
+        )
+
+        second = self.run_terminal_original_resume(
+            approval_root=approval_root,
+            key_provider=provider,
+        )
+        self.assertEqual(second["status"], "terminal_transaction_cleanup_completed")
+        self.assertFalse(root.exists())
+        self.assertTrue((root.parent / f".cleanup-proof_{ref}.json").is_file())
+        self.assertEqual(provider.calls, 2)
+
+    @unittest.skipUnless(os.name == "nt", "terminal mutation is Windows-only")
+    def test_terminal_original_cleanup_finishes_restored_tombstone_without_claim_rediscovery(
+        self,
+    ) -> None:
+        approval_root = self.terminal_original_archive_root()
+        reference = self.synthetic_claim_reference(approval_root)
+        transaction = self.build_terminal_original(approval_reference=reference)
+        root = self.transaction_root(transaction)
+        ref = transaction.transaction_ref
+        provider = self._TerminalOriginalKeyProvider(
+            self.TERMINAL_ORIGINAL_TEST_KEY
+        )
+
+        first = self.run_terminal_original_resume(
+            approval_root=approval_root,
+            key_provider=provider,
+            extra_patches=(
+                patch.object(
+                    ProjectUpdateTransaction,
+                    "_resume_cleanup_paths",
+                    return_value=False,
+                ),
+            ),
+        )
+        self.assertEqual(first["status"], "terminal_cleanup_outcome_unknown")
+        self.assertEqual(
+            first["outcome_basis"],
+            "terminal_transaction_cleanup_incomplete",
+        )
+        tombstone = root.parent / f".cleanup_{ref}"
+        self.assertFalse(root.exists())
+        self.assertTrue(tombstone.is_dir())
+        self.assertEqual(
+            archive_services
+            ._project_update_terminal_cleanup_artifact_classification_read_only(
+                self.project
+            ),
+            ("recoverable_exact", 1),
+        )
+
+        second = self.run_terminal_original_resume(
+            approval_root=approval_root,
+            key_provider=provider,
+        )
+        self.assertEqual(second["status"], "terminal_transaction_cleanup_completed")
+        self.assertFalse(root.exists())
+        self.assertFalse(tombstone.exists())
+        self.assertTrue((root.parent / f".cleanup-proof_{ref}.json").is_file())
+        self.assertEqual(provider.calls, 2)
 
 
 if __name__ == "__main__":

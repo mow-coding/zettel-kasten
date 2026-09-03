@@ -2,7 +2,7 @@
 
 `operation-control` gives a later CLI process a small, content-free view of a
 long command. It is available when one of these commands has a bound `--output`
-file. The caller supplies that file for ordinary observation; a v0.4.17
+file. The caller supplies that file for ordinary observation; a v0.4.18
 approved or resumed project update that has no earlier result binding may
 choose its private project-scoped output automatically:
 
@@ -13,7 +13,7 @@ choose its private project-scoped output automatically:
 
 Without a bound output, these commands create no operation journal. For
 `index`, `index-health`, `staged-cleanup-check`, and read-only updater previews,
-that means the caller must pass `--output`. A v0.4.17 approved or resumed
+that means the caller must pass `--output`. A v0.4.18 approved or resumed
 updater with no prior result binding creates its private bound output first.
 Once bound, stderr prints an opaque `op:sha256:<digest>` reference early. The
 same reference and follow-up command templates are stored under
@@ -110,7 +110,7 @@ complete output agree, status may report
 CLI result. It does not prove fresh domain truth; follow the command-specific
 verification action.
 
-For a successful v0.4.16 or v0.4.17 project update, the terminal journal is immutable
+For a successful v0.4.16, v0.4.17, or v0.4.18 project update, the terminal journal is immutable
 after its one terminal result record. WOM does not append a later
 delivery-committed or display-committed event. Instead, the exact output-bound
 handoff moves in one private directory from `active` to `display-pending`, then

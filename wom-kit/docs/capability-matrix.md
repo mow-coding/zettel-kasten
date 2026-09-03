@@ -1,10 +1,18 @@
 ﻿# WOM-kit Capability Matrix
 
-Status: v0.4.17 terminal-cleanup recovery and dry-run/approval parity
-Date: 2026-09-01
-Version: v0.4.17 implementation and release scope
+Status: v0.4.18 terminal-original cleanup and claim-reference cleanup authority
+Date: 2026-09-03
+Version: v0.4.18 implementation and release scope
 
-The current v0.4.17 working tree gives fresh project-update dry-run and approval
+The current v0.4.18 working tree finishes one completed project-update
+original that outlived its own cleanup after the project moved to another
+version: dry-run, approval, and identifier-free `--resume` classify it as
+`terminal_original_exact`, resume re-authenticates the original approval claim
+from the archive as the cleanup authority and cleans only that private
+directory into one canonical proof, and the result attributes no past success.
+The redacted failure artifact may carry one allowlisted inner reason code.
+
+v0.4.17 gave fresh project-update dry-run and approval
 one bounded, read-only terminal-cleanup classification. Exact WOM-produced
 terminal control history blocks both paths with
 `project_version_update_terminal_cleanup_required` before native approval or
@@ -57,10 +65,10 @@ shapes, JWTs, and private-key markers remain fail-closed. `input_privacy_check`
 truthfully reports caller-input/body safety reads separately from
 `first_read_check.body_read_for_check`. It adds no top-level command.
 
-Current release note: [v0.4.17](releases/v0.4.17.md).
+Current release note: [v0.4.18](releases/v0.4.18.md).
 
 Current conditional wheel URL:
-`https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.17/wom_kit-0.4.17-py3-none-any.whl`.
+`https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.18/wom_kit-0.4.18-py3-none-any.whl`.
 
 The v0.4.11 checkpoint recorded the following historical runtime context:
 

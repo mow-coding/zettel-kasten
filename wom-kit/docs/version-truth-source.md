@@ -1,10 +1,10 @@
 # WOM-kit Version Truth Source
 
-Status: v0.4.17 terminal-cleanup recovery and exact-pip bootstrap
+Status: v0.4.18 terminal-original cleanup and exact-pip bootstrap
 
-Current checkpoint: Status: v0.4.17 cleanup-preflight parity, terminal-history recovery, and installed-wheel hash truth
+Current checkpoint: Status: v0.4.18 terminal-original cleanup, claim-reference cleanup authority, and installed-wheel hash truth
 
-Previous checkpoint: Status: v0.4.16 terminal handoff, runtime receipt binding, and installed-wheel hash truth
+Previous checkpoint: Status: v0.4.17 cleanup-preflight parity, terminal-history recovery, and installed-wheel hash truth
 
 Previous checkpoint: Status: v0.4.15 identifier-free update recovery and installed-wheel hash truth
 
@@ -50,22 +50,22 @@ or runtime workflow. This page defines the safe order for checking them.
 
 ## Current Public Tool
 
-The v0.4.17 URL is a conditional release-artifact contract. Use it only after
+The v0.4.18 URL is a conditional release-artifact contract. Use it only after
 the matching public GitHub Release exists and lists the exact wheel:
 
 ```powershell
 $womBootstrapNonce = [guid]::NewGuid().ToString("N")
-$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0417-$womBootstrapNonce"
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0418-$womBootstrapNonce"
 if (Test-Path -LiteralPath $womBootstrapRoot) {
   throw "WOM bootstrap path must be new."
 }
 py -3.12 -m venv $womBootstrapRoot
 $womBootstrapPython = (Get-Item -LiteralPath (Join-Path $womBootstrapRoot "Scripts\python.exe")).FullName
-& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.17/wom_kit-0.4.17-py3-none-any.whl"
+& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.18/wom_kit-0.4.18-py3-none-any.whl"
 & "$womBootstrapRoot\Scripts\archive.exe" --version
 ```
 
-Require exactly `archive 0.4.17` from a new process. The external CPython 3.12
+Require exactly `archive 0.4.18` from a new process. The external CPython 3.12
 environment and exact real `python.exe -m pip` retain the wheel SHA-256 in the
 installed PEP 610 metadata. A user-scoped tool environment without that archive
 hash is not project-updater supply evidence. A bootstrap install alone changes
@@ -77,7 +77,16 @@ plan are canonical recovery evidence. Normal `project-version-update --resume`
 restores target, transaction, reviewer, and approval bindings without caller-
 supplied identifiers or a second native decision, and requires exactly one
 checkpoint-valid claim. See [Project Version Update](project-version-update.md)
-and the [v0.4.17 release note](releases/v0.4.17.md).
+and the [v0.4.18 release note](releases/v0.4.18.md).
+
+v0.4.18 finishes one completed project-update original that outlived its own
+cleanup after the project moved to another version. Dry-run, approval, and
+identifier-free `--resume` classify it as `terminal_original_exact`; resume
+re-authenticates the original approval claim from the archive as the cleanup
+authority, cleans only that private directory into one canonical proof, and
+returns `terminal_transaction_cleanup_completed` without attributing past
+success. `marker.json` is an identity anchor; the verified checkpoint journal
+is the completion truth.
 
 v0.4.17 makes a fresh dry-run and its approval consult the same read-only
 terminal-cleanup preflight. Exact control history produces
@@ -123,7 +132,7 @@ form is for AI runtimes and scripts. `runtime-context` includes the same
 version summary under `wom_kit_version`, so an agent can confirm archive identity
 and kit version in one read-only request.
 
-For a v0.4.17 project, the `project_runtime` object is also canonical evidence.
+For a v0.4.18 project, the `project_runtime` object is also canonical evidence.
 It separately reports the versioned receipt, a freshly observed installed-
 payload tree hash, installed module inventory, stable launcher, current
 executable/module/prefix and isolated Python flags, project-relative
