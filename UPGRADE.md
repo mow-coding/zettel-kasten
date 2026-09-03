@@ -24,7 +24,7 @@ Before upgrading a real archive:
 
 The archive should never silently rewrite memory.
 
-## v0.4.17 Terminal Cleanup Recovery
+## v0.4.18 Terminal Original Cleanup
 
 Install the exact public wheel only after the matching release and asset exist.
 Use a new external CPython 3.12 environment so the real `python.exe -m pip`
@@ -32,23 +32,38 @@ records the wheel hash in installed PEP 610 metadata.
 
 ```powershell
 $womBootstrapNonce = [guid]::NewGuid().ToString("N")
-$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0417-$womBootstrapNonce"
+$womBootstrapRoot = Join-Path $env:LOCALAPPDATA "WOM\bootstrap-v0418-$womBootstrapNonce"
 if (Test-Path -LiteralPath $womBootstrapRoot) {
   throw "WOM bootstrap path must be new."
 }
 py -3.12 -m venv $womBootstrapRoot
 $womBootstrapPython = (Get-Item -LiteralPath (Join-Path $womBootstrapRoot "Scripts\python.exe")).FullName
-& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.17/wom_kit-0.4.17-py3-none-any.whl"
+& $womBootstrapPython -m pip install "https://github.com/mow-coding/zettel-kasten/releases/download/v0.4.18/wom_kit-0.4.18-py3-none-any.whl"
 & "$womBootstrapRoot\Scripts\archive.exe" --version
 ```
 
-Require exactly `archive 0.4.17` from a new process. Publishing or installing
+Require exactly `archive 0.4.18` from a new process. Publishing or installing
 the wheel changes no client archive, project runtime, or version pin. A client
 separately chooses and approves any project update.
 
 Approved project-update mutation, same-version repair, and mutation-bearing
 resume remain Windows-only. POSIX supports preview and read-only inspection;
 those mutation paths fail closed without writing.
+
+v0.4.18 finishes one more shape without asking the person for anything. If an
+earlier update reached `completed` but its transaction directory still exists
+with its cleanup plan inside, and the project has since moved to another
+version, dry-run and approval return `terminal_cleanup_required` with the
+basis `exact_terminal_transaction_cleanup_requires_resume`. The identifier-free
+resume below then re-authenticates the original approval claim from the
+archive, cleans only that private transaction directory into one canonical
+proof, and returns `terminal_transaction_cleanup_completed` with
+`update_completed: false` and `past_update_success_attributed: false`. It does
+not change source, runtime, pin, or archive content and does not open a new
+decision. Run a fresh preview afterwards and request one new approval only if
+that preview is ready. If the same resume fails again, the redacted `--output`
+artifact now names one fixed inner `cause_code` and `cause_stage`; send that
+content-free result to development instead of retrying.
 
 Fresh dry-run and approval now share one read-only terminal-cleanup preflight.
 If either returns `project_version_update_terminal_cleanup_required`, do not

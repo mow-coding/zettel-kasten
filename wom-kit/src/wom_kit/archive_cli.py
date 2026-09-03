@@ -8435,6 +8435,40 @@ _PROJECT_VERSION_UPDATE_TERMINAL_CLEANUP_FAILURE_KINDS = {
     "project_version_update_terminal_cleanup_outcome_unknown": "unknown",
 }
 
+# v0.4.18: fixed inner reason codes that an ``exact_human_approval_state_unknown``
+# wrapper may carry into the redacted failure artifact.  Each literal names a
+# service gate, never a path, value, identifier, or free text.  The stage set
+# names the one wrapper that is allowed to record a cause.
+_PROJECT_VERSION_UPDATE_CONTENT_FREE_CAUSE_CODES = frozenset(
+    {
+        "project_version_update_preapproval_recovery_failed",
+    }
+)
+_PROJECT_VERSION_UPDATE_CONTENT_FREE_CAUSE_STAGES = frozenset(
+    {"candidate_missing_handler"}
+)
+_PROJECT_VERSION_UPDATE_CAUSE_TOKEN_RE = re.compile(r"[a-z][a-z0-9_]{0,95}")
+
+
+def _project_version_update_content_free_cause(
+    error: BaseException,
+) -> dict[str, str] | None:
+    """Project one allowlisted wrapped reason code without any error text."""
+
+    if not isinstance(error, ExactHumanApprovalWorkflowError):
+        return None
+    cause_code = getattr(error, "cause_code", None)
+    cause_stage = getattr(error, "cause_stage", None)
+    if (
+        type(cause_code) is not str
+        or type(cause_stage) is not str
+        or cause_code not in _PROJECT_VERSION_UPDATE_CONTENT_FREE_CAUSE_CODES
+        or cause_stage
+        not in _PROJECT_VERSION_UPDATE_CONTENT_FREE_CAUSE_STAGES
+    ):
+        return None
+    return {"cause_code": cause_code, "cause_stage": cause_stage}
+
 
 def _project_version_update_privacy_safe_failure_result(
     error: BaseException,
@@ -9080,9 +9114,16 @@ def _command_project_version_update_core(
             result = safe_failure
         else:
             failure_result_written = False
+            content_free_cause = _project_version_update_content_free_cause(
+                exc
+            )
             if capture is not None:
                 try:
-                    capture.write_completed(exit_code=1, error=exc)
+                    capture.write_completed(
+                        exit_code=1,
+                        error=exc,
+                        cause=content_free_cause,
+                    )
                     failure_result_written = True
                 except (OSError, ValueError):
                     pass
@@ -9094,6 +9135,13 @@ def _command_project_version_update_core(
                 result_ok=False if failure_result_written else None,
             )
             print("Project version update failed before a privacy-safe result could be produced.", file=sys.stderr)
+            if content_free_cause is not None:
+                print(
+                    "Project version update inner reason (fixed code): "
+                    f"{content_free_cause['cause_code']} "
+                    f"at {content_free_cause['cause_stage']}.",
+                    file=sys.stderr,
+                )
             return 1
     finally:
         reporter.close()
@@ -32025,6 +32073,7 @@ class _CommandRunResultCapture:
         result: dict[str, Any] | None = None,
         error: BaseException | None = None,
         terminal_delivery: Mapping[str, str] | None = None,
+        cause: Mapping[str, str] | None = None,
     ) -> dict[str, Any]:
         if result is None and error is None:
             raise ValueError("A completed command result requires a result or error.")
@@ -32062,6 +32111,25 @@ class _CommandRunResultCapture:
                 "message": "The command failed before a complete successful result was available.",
                 "raw_message_stored": False,
             }
+            if cause is not None and isinstance(cause, Mapping):
+                # Defense in depth: the caller already allowlisted the literal,
+                # but this writer is shared by several commands, so it accepts
+                # only code-shaped tokens and never raw exception text.
+                cause_code = cause.get("cause_code")
+                cause_stage = cause.get("cause_stage")
+                if (
+                    type(cause_code) is str
+                    and type(cause_stage) is str
+                    and re.fullmatch(r"[a-z][a-z0-9_]{0,95}", cause_code)
+                    is not None
+                    and re.fullmatch(r"[a-z][a-z0-9_]{0,95}", cause_stage)
+                    is not None
+                ):
+                    error_payload["cause_code"] = cause_code
+                    error_payload["cause_stage"] = cause_stage
+                    error_payload["cause_code_source"] = (
+                        "fixed_literal_allowlist"
+                    )
         payload["cli_execution"] = {
             "status": "completed",
             "run_id": self.run_id,

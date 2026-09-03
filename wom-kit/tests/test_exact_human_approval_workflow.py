@@ -1581,6 +1581,103 @@ class ExactHumanApprovalWorkflowTests(unittest.TestCase):
             "exact_human_approval_resume_claim_invalid",
         )
 
+    def test_workflow_error_carries_only_code_shaped_inner_cause(self) -> None:
+        plain = ExactHumanApprovalWorkflowError("exact_human_approval_state_unknown")
+        self.assertIsNone(plain.cause_code)
+        self.assertIsNone(plain.cause_stage)
+        self.assertEqual(plain.args, ("exact_human_approval_state_unknown",))
+
+        carried = ExactHumanApprovalWorkflowError(
+            "exact_human_approval_state_unknown",
+            cause_code="project_version_update_preapproval_recovery_failed",
+            cause_stage="candidate_missing_handler",
+        )
+        self.assertEqual(
+            carried.cause_code,
+            "project_version_update_preapproval_recovery_failed",
+        )
+        self.assertEqual(carried.cause_stage, "candidate_missing_handler")
+        self.assertEqual(str(carried), "exact_human_approval_state_unknown")
+        self.assertEqual(
+            repr(carried),
+            "ExactHumanApprovalWorkflowError('exact_human_approval_state_unknown')",
+        )
+
+        rejected = ExactHumanApprovalWorkflowError(
+            "exact_human_approval_state_unknown",
+            cause_code=r"C:\private\path secret",
+            cause_stage="unknown_stage",
+        )
+        self.assertIsNone(rejected.cause_code)
+        self.assertIsNone(rejected.cause_stage)
+
+    def test_transaction_auto_resume_candidate_missing_handler_keeps_fixed_inner_cause(
+        self,
+    ) -> None:
+        (self.root / CLAIMS_RELATIVE_ROOT).mkdir(parents=True)
+        cases = (
+            (
+                "fixed_service_code",
+                archive_services.ArchiveServiceError(
+                    "project_version_update_preapproval_recovery_failed"
+                ),
+                "project_version_update_preapproval_recovery_failed",
+            ),
+            (
+                "private_service_text",
+                archive_services.ArchiveServiceError(
+                    r"C:\private-owner\archive\secret.md PRIVATE-BODY"
+                ),
+                None,
+            ),
+            (
+                "two_argument_service_error",
+                archive_services.ArchiveServiceError(
+                    "project_version_update_preapproval_recovery_failed",
+                    "extra",
+                ),
+                None,
+            ),
+            (
+                "other_exception_type",
+                ValueError("project_version_update_preapproval_recovery_failed"),
+                None,
+            ),
+        )
+
+        def raising_handler(failure):
+            def handle(_reason):
+                raise failure
+
+            return handle
+
+        for case, failure, expected in cases:
+            with self.subTest(case=case):
+                with self.assertRaises(ExactHumanApprovalWorkflowError) as caught:
+                    resume_exact_human_approved_transaction_auto(
+                        self.root,
+                        self.context,
+                        lambda _claim: True,
+                        lambda _claim: {"ok": True},
+                        lambda _claim: True,
+                        lambda _claim: None,
+                        candidate_missing_handler=raising_handler(failure),
+                        key_provider=_KeyProvider(),
+                        resume_boundary=self._resume_boundary,
+                    )
+                self.assertEqual(
+                    caught.exception.code,
+                    "exact_human_approval_state_unknown",
+                )
+                self.assertEqual(caught.exception.cause_code, expected)
+                self.assertEqual(
+                    caught.exception.cause_stage,
+                    "candidate_missing_handler",
+                )
+                self.assertIsNone(caught.exception.__cause__)
+                self.assertNotIn("private-owner", str(caught.exception))
+                self.assertNotIn("PRIVATE-BODY", repr(caught.exception))
+
 
 if __name__ == "__main__":
     unittest.main()

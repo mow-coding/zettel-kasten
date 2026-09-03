@@ -1,7 +1,7 @@
 # WOM Philosophy Implementation Evidence
 
-Status: v0.4.17 review of the v0.3.252 public traceability checkpoint
-Date: 2026-09-01
+Status: v0.4.18 review of the v0.3.252 public traceability checkpoint
+Date: 2026-09-03
 
 ## Purpose
 
@@ -37,9 +37,10 @@ layers.
 | AI-generated documents and conversation-derived work must not evaporate. | `ai-artifact-inventory` classifies local AI artifacts, operational context records unfinished work, and `session-handoff-checkpoint` blocks a clean handoff when durable capture evidence is missing or stale. | AI artifact inventory and session-handoff CLI tests. | The tool does not ingest chat automatically or decide which generated artifact deserves preservation. Human/AI review remains necessary. |
 | AI operation should use progressive disclosure and plain human language. | The packaged Agent Skill has a compact root, goal-focused references, a machine-readable capabilities manifest, and a human-language response contract and terminology guide. Approval surfaces let WOM verify counts, hashes, and target state while the person decides only whether to perform the plainly described effect; safe local-only clues help identify the target without entering receipts or public output. | Runtime-skill package validation, capability tests, approval-preview privacy tests, and documentation contract tests. | Plain-language quality and good judgment are guidance-level behavior; WOM cannot deterministically validate every model response, and an omitted unsafe clue must never be replaced by leaked private context. |
 
-v0.4.17 makes the human boundary operational instead of merely defensive.
+v0.4.18 keeps the human boundary operational instead of merely defensive.
 Fresh preview and approval use the same machine classification, and exact
-terminal abort history routes to identifier-free recovery. WOM verifies the
+terminal control history, including a completed original the project has
+moved past, routes to identifier-free recovery. WOM verifies the
 private file set, identities, hashes, archive identity, and cleanup authority;
 the person does not perform filesystem forensics or reproduce machine counts.
 Only exact WOM-produced control history may converge to canonical proof
@@ -61,7 +62,7 @@ follow-up control step succeeded.
 
 ## Current Engineering Conclusion
 
-The public v0.4.17 implementation contains concrete, regression-checked
+The public v0.4.18 implementation contains concrete, regression-checked
 mechanisms for the Memento Problem: first-read reconstruction, artifact-first
 reasoning, reviewed revision and recovery, durable session handoff, and honest
 local backup evidence. These mechanisms are not merely roadmap prose.

@@ -1,6 +1,6 @@
 # Project Version Update
 
-Status: v0.4.17 exact-human project update with recoverable terminal control history; collision and bytecode repair writers remain closed
+Status: v0.4.18 exact-human project update with recoverable terminal control history; collision and bytecode repair writers remain closed
 
 Current boundary: `project-version-update` is reopened only through the native
 exact-human approval broker. The CLI derives a content-free dry-run digest and
@@ -9,6 +9,54 @@ the preview again and authenticates the one-use claim before the existing
 locked updater may fetch or write. Direct unbound service calls fail before a
 private project read. Collision preserve-relocate and `project-bytecode-repair`
 approval remain fixed closed.
+
+## v0.4.18 Terminal Original Cleanup Boundary
+
+A completed transaction directory can outlive its own cleanup: the predecessor
+updater wrote `cleanup-plan.json` inside the original and never renamed it to
+its tombstone, or a later resume restored a complete tombstone and stopped
+before deleting it. When the project has since moved to another version, no
+earlier release could finish that directory. v0.4.18 classifies it read-only
+as `terminal_original_exact` only when the journal is exact, forward, and
+terminal, no lock, tombstone, or proof contradicts it, the retained plan names
+the journal approval reference as its cleanup authority, and the plan equals
+the current tree exactly. Fresh dry-run and approval then return
+`terminal_cleanup_required` with `outcome_basis:
+exact_terminal_transaction_cleanup_requires_resume` and
+`terminal_transaction_cleanup_required: true`; contradicting evidence is
+`terminal_cleanup_outcome_unknown` on every surface.
+
+Identifier-free `--resume` finishes that directory without a person supplying
+anything. If the live active pin still equals the transaction post-image, the
+v0.4.16 replay contract runs first and the cleanup below is its fallback after
+the fixed candidate-missing gate. Otherwise resume holds the project terminal
+guard, re-reads the archive claim store with the production key, requires
+exactly one MAC-verified `succeeded` claim whose public reference digest
+reproduces the journal approval reference, and reuses the exact cleanup
+primitive: identity-bound sidecar, no-replace tombstone, plan-bound deletion,
+one canonical proof. The result `terminal_transaction_cleanup_completed`
+reports `update_completed: false`, `past_update_success_attributed: false`,
+`fresh_approval_required: true`, `project_domain_effects: none`,
+`approval_key_accessed: true`, and `approval_claim_store_accessed: true`. It
+enters no domain writer, rebuilds no approval context, and changes no source,
+runtime, pin, or archive content. A durable sidecar beside the legacy plan or
+a restored tombstone is finished by the same route on the next resume; an
+unverified authority, an incomplete cleanup, or an observation change under
+the guard returns `terminal_cleanup_outcome_unknown` with a fixed basis. Off
+Windows the route returns `terminal_cleanup_platform_unsupported` with zero
+writes.
+
+`marker.json` keeps `state: reserved` for the whole life of a transaction. It
+is an identity anchor that every open re-validates, not a lifecycle record.
+The verified prefix of `checkpoints.jsonl` is the authority for progress; a
+`completed:verified` head with no remaining events is terminal and the public
+summary reports `lifecycle: terminal`. A retained plan, tombstone, or proof
+describes the cleanup stage and never attributes success.
+
+When the exact-human workflow masks a service failure as
+`exact_human_approval_state_unknown`, the redacted `--output` artifact may
+carry one allowlisted inner `cause_code` and its fixed `cause_stage`; see
+[Exact Human Approval Contract](exact-human-approval-contract.md).
 
 ## v0.4.17 Terminal Cleanup Recovery Boundary
 
