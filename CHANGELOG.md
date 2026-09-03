@@ -6,6 +6,48 @@ This project uses semantic versioning for public compatibility checkpoints.
 
 ## Unreleased
 
+## v0.4.18 - 2026-09-03
+
+- Finished the identifier-free recovery of one completed project-update
+  original that outlived its own cleanup. A predecessor transaction whose
+  cleanup plan is durable inside the original directory, or whose complete
+  tombstone was restored, is now classified read-only as
+  `terminal_original_exact` when its journal is exact, forward, and terminal,
+  its plan names the journal approval reference as cleanup authority, and the
+  plan equals the current tree exactly.
+- Made fresh dry-run, approval, and `--resume` agree on that shape. Dry-run and
+  approval return `terminal_cleanup_required` with the content-free basis
+  `exact_terminal_transaction_cleanup_requires_resume`; resume finishes the
+  cleanup instead of routing the completed journal into claimless preapproval
+  cancellation. Contradicting evidence is `terminal_cleanup_outcome_unknown` on
+  every surface.
+- Added claim-reference cleanup authority for a superseded post-image. When the
+  live active pin no longer equals the transaction post-image, resume holds the
+  project terminal guard, re-authenticates exactly one MAC-verified
+  `succeeded` claim whose public reference digest reproduces the journal
+  approval reference, and reuses the exact cleanup primitive. It enters no
+  domain writer, rebuilds no approval context, changes no source, runtime,
+  pin, or archive content, and attributes no past success. The completed
+  result is `terminal_transaction_cleanup_completed`; an intact pin keeps the
+  v0.4.16 replay contract, with the same cleanup as fallback after the fixed
+  candidate-missing gate.
+- Kept the new cleanup re-entrant and fail-closed: a durable identity-bound
+  sidecar beside the legacy plan, a restored tombstone, an unverified
+  authority, an incomplete cleanup, and an observation change under the guard
+  each have a fixed outcome; POSIX returns
+  `terminal_cleanup_platform_unsupported` with zero writes.
+- Carried one fixed inner reason code into the redacted failure artifact.
+  `exact_human_approval_state_unknown` may now record an allowlisted
+  `cause_code` and `cause_stage` (`project_version_update_preapproval_recovery_failed`
+  at `candidate_missing_handler`) plus one fixed stderr line; raw exception
+  text, paths, and identifiers are still never reflected.
+- Documented that `marker.json` `state: reserved` is an identity anchor, not a
+  lifecycle record; the verified `checkpoints.jsonl` prefix is the authority
+  for completion.
+- Publishing or installing v0.4.18 performs no client archive, project update,
+  version-pin, credential, provider, or remote-service mutation. The client
+  separately chooses whether to run recovery and one reviewed project update.
+
 ## v0.4.17 - 2026-09-01
 
 - Made fresh `project-version-update` dry-run and approval use the same bounded,

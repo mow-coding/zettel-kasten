@@ -1,12 +1,26 @@
 # Exact Human Approval Contract
 
-Status: v0.4.17 cleanup recovery without human forensics; v0.4.0 one-use authority baseline preserved
+Status: v0.4.18 claim-reference cleanup authority and fixed inner cause codes; v0.4.0 one-use authority baseline preserved
 
 ## Purpose
 
 A caller-supplied actor label or command-line affirmation does not prove that a
 human reviewed exact archive changes. v0.4.0 therefore separates ordinary
 operator intent from one-use exact human approval.
+
+v0.4.18 lets a completed project-update transaction whose post-image the
+project has since left prove its cleanup authority from the archive claim
+store. The transaction journal binds the digest of the succeeded claim's public
+reference at `approval_bound` and on every later checkpoint; identifier-free
+`--resume` re-reads the bound claim store with the production key and accepts
+exactly one MAC-verified `succeeded` claim that reproduces that digest. No
+approval context is rebuilt, no live component is classified, and no key or
+claim is created. The authenticated claim, not the retained plan, is the
+authority, and the result attributes no past success. When the exact-human
+workflow wraps a service failure as `exact_human_approval_state_unknown`, the
+error may carry one fixed code-shaped `cause_code` and its fixed `cause_stage`;
+the CLI copies only allowlisted literals into the redacted failure artifact and
+never raw exception text.
 
 v0.4.17 does not turn cleanup into a new human decision. Fresh project-update
 dry-run and approval use one read-only namespace classification before native
