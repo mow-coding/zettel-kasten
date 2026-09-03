@@ -161,6 +161,52 @@ writers are paused for the complete transaction, and whether to update after
 recovery and a fresh preview. WOM owns classification, authority
 re-authentication, exact deletion, proof retention, and postconditions.
 
+## Public release and independent installation evidence
+
+The reviewed head was `94605566cbb336b70a917efb8c1b3868301c7b3e` on branch
+`claude/v0.4.18-terminal-original-cleanup`. Its full pull-request CI run
+[#33700612500](https://github.com/mow-coding/zettel-kasten/actions/runs/33700612500)
+completed with every test shard (Ubuntu 3.12 and 3.10, two shards each;
+Windows 3.12, four shards), the Doctor and link-index scale gates, the release
+readiness gate, and the required aggregate job successful. PR
+[#95](https://github.com/mow-coding/zettel-kasten/pull/95) was merged without
+changing its reviewed head. Merge commit
+`c0af18350cd154059b25523afd50ae558f29ba8f` has exactly the previous main
+`40c5b4bbfc285eeaf23dc5931a3a1b851e6ba4cf` and the reviewed head as its two
+parents. The exact-merge main run
+[#33704450598](https://github.com/mow-coding/zettel-kasten/actions/runs/33704450598)
+also passed.
+
+The release wheel was rebuilt from that exact merge commit in a clean
+worktree by the installed-wheel checker: 169 manifested resources verified,
+runtime-skill lifecycle, onboarding preview/fixed-close, and the strict Doctor
+fixture green, wheel SHA-256
+`ab8d07f57c50b97ba35db56112629227838916e054bc584f3c8ba8b1552f8041`.
+
+Annotated tag `v0.4.18` was created at the merge commit, verified locally and
+through the remote peeled reference as `c0af1835…`, and pushed. Its push run
+[#33704581159](https://github.com/mow-coding/zettel-kasten/actions/runs/33704581159)
+passed. [WOM-kit v0.4.18](https://github.com/mow-coding/zettel-kasten/releases/tag/v0.4.18)
+was first uploaded as a draft binding the committed release-note body and one
+asset named `wom_kit-0.4.18-py3-none-any.whl`. GitHub reported the asset digest
+`sha256:ab8d07f5…8041`, identical to the locally verified wheel, and only after
+that comparison was the release published and marked latest
+(2026-09-03T01:40:39Z). The `releases/latest` API now resolves to `v0.4.18`.
+
+The public release API and the wheel download were then fetched without an
+authorization or cookie header; both returned HTTP 200 and the downloaded
+bytes reproduced the same SHA-256. A fresh external CPython 3.12 virtual
+environment installed only that anonymous wheel: `pip check` reported no
+broken requirements, a new process returned `archive 0.4.18`, the installed
+manifest reported version `0.4.18` with 169 resources, and the installed
+`direct_url.json` bound the same wheel SHA-256.
+
+GitHub reported zero open secret-scanning alerts after publication. The merged
+feature branch was removed remotely and locally, and the canonical checkout
+was fast-forwarded to the merge commit with a clean worktree. No client
+runtime, archive, credential, provider, pin, or client data was read or
+changed by this release execution.
+
 ## Release and client boundary
 
 Publishing or installing the wheel changes no client archive or project. The
