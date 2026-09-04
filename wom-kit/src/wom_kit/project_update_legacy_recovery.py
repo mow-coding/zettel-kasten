@@ -54,6 +54,16 @@ CANCELLATION_RESULT_SCHEMA = (
 CANCELLATION_TERMINAL_FINALIZATION_SCHEMA = (
     "wom-kit/project-version-update-cancellation-terminal-finalization/v0.4.19"
 )
+CANCELLATION_TERMINAL_HANDOFF_SCHEMA = (
+    "wom-kit/project-version-update-cancellation-terminal-handoff/v0.4.19"
+)
+CANCELLATION_TERMINAL_PAYLOAD_SCHEMA = (
+    "wom-kit/project-version-update-cancellation-terminal-payload/v0.4.19"
+)
+CANCELLATION_TERMINAL_DELIVERY_CAPABILITY_SCHEMA = (
+    "wom-kit/project-version-update-cancellation-terminal-"
+    "delivery-capability/v0.4.19"
+)
 CANCELLATION_PLAN_SCHEMA = (
     "wom-kit/project-update-legacy-cancellation-plan/v0.4.19"
 )
@@ -84,6 +94,9 @@ RECOVERY_ROOT_LOGICAL = (
 )
 ACTIVE_LOCATOR_LOGICAL = (
     ".zettel-kasten/private/version-update-terminal/legacy-prewrite-active.json"
+)
+TERMINAL_HANDOFF_LOGICAL = (
+    ".zettel-kasten/private/version-update-terminal/active.json"
 )
 RECOVERY_GUARD_LOGICAL = (
     ".zettel-kasten/private/version-update-terminal/legacy-prewrite.guard"
@@ -212,6 +225,40 @@ def sha256_bytes(raw: bytes) -> str:
 
 def sha256_document(value: Mapping[str, Any]) -> str:
     return sha256_bytes(_canonical(value))
+
+
+def _transaction_semantic_sha256(value: Mapping[str, Any]) -> str:
+    """Match the project-update transaction semantic-document digest.
+
+    Recovery control documents bind their complete on-disk bytes, including
+    the canonical trailing newline.  The three semantic evidence slots in the
+    terminal receipt instead use the transaction layer's canonical JSON bytes
+    without that storage newline.  Keeping this helper narrow prevents those
+    two deliberately distinct digest domains from being interchanged.
+    """
+
+    canonical_storage = _canonical(value)
+    if not canonical_storage.endswith(b"\n"):
+        raise _fail("project_update_legacy_recovery_binding_invalid")
+    return sha256_bytes(canonical_storage[:-1])
+
+
+def _cancellation_delivery_payload_sha256(
+    value: Mapping[str, Any],
+) -> str:
+    """Digest the public cancellation payload in its delivery domain.
+
+    The terminal handoff does not bind the on-disk cancellation-result
+    document.  It binds the content-free public result projection used by the
+    project-update transaction layer, whose canonical JSON omits the storage
+    newline.  Keep that semantic digest separate from both the authenticated
+    handoff MAC and the create-only recovery-document digest.
+    """
+
+    canonical_storage = _canonical(value)
+    if not canonical_storage.endswith(b"\n"):
+        raise _fail("project_update_legacy_recovery_binding_invalid")
+    return sha256_bytes(canonical_storage[:-1])
 
 
 def _validated_key(value: bytes | bytearray | memoryview) -> bytearray:
@@ -1598,6 +1645,32 @@ def terminal_receipt_document(
 
 
 @dataclass(frozen=True)
+class ResolvedPendingCancellationTerminal:
+    """Bounded proof of a cancellation capsule awaiting locator retirement.
+
+    The delivery capability itself, the raw reviewer, paths, and the public
+    result body deliberately do not leave the authenticated resolver.  The
+    service receives only the exact digests needed to finish the already
+    authorized terminal-control transition without reopening approval or a
+    project-domain writer.
+    """
+
+    recovery_ref: str
+    outcome: str
+    archive_identity_sha256: str
+    intent_sha256: str
+    journal_head_sha256: str
+    active_locator_state: str
+    active_locator_sha256: str
+    terminal_receipt_document_sha256: str
+    cancellation_result_document_sha256: str
+    cancellation_result_sha256: str
+    result_payload_sha256: str
+    terminal_handoff_document_sha256: str
+    delivery_capability_sha256: str
+
+
+@dataclass(frozen=True)
 class ResolvedActiveRecovery:
     """Private, authenticated state used only by the project-update service."""
 
@@ -1641,6 +1714,9 @@ class ResolvedActiveRecovery:
     cancellation_restore_evidence_document_sha256: str | None
     terminal_receipt_document_sha256: str | None
     fresh_transaction_ref: str | None
+    pending_cancellation_terminal: (
+        ResolvedPendingCancellationTerminal | None
+    )
 
 
 @dataclass(frozen=True)
@@ -1671,6 +1747,191 @@ class ResolvedTerminalRecovery:
     cancellation_cleanup_evidence_sha256: str
     cancellation_restore_evidence_document_sha256: str
     cancellation_restore_evidence_sha256: str
+
+
+def _resolve_pending_cancellation_terminal(
+    *,
+    paths: RecoveryPaths,
+    key: bytes | bytearray | memoryview,
+    locator: Mapping[str, Any],
+    locator_sha256: str,
+    intent: Mapping[str, Any],
+    intent_sha256: str,
+    journal_head_sha256: str | None,
+    terminal_receipt: Mapping[str, Any] | None,
+    terminal_receipt_document_sha256: str | None,
+    cancellation_result_document_sha256: str | None,
+    cancellation_result_sha256: str | None,
+) -> ResolvedPendingCancellationTerminal | None:
+    """Authenticate the one capsule-before-locator-retirement boundary.
+
+    An absent handoff is not inferred as a cancellation: the caller may still
+    be at the receipt-only durable prefix.  Once a handoff exists, however,
+    every authority must be present and exact.  This function is read-only;
+    any collision or drift is preserved for explicit reconciliation.
+    """
+
+    handoff_path = paths.project_root.joinpath(
+        *PurePosixPath(TERMINAL_HANDOFF_LOGICAL).parts
+    )
+    terminal_locator_path = paths.recovery_root / "terminal-locator.json"
+    locator_transition_path = _locator_transition_path(paths.locator_path)
+    with _retained_parent_chains(
+        paths.project_root,
+        paths.recovery_root,
+        handoff_path.parent,
+    ):
+        if os.path.lexists(terminal_locator_path):
+            raise _fail("project_update_legacy_recovery_state_ambiguous")
+        if not os.path.lexists(handoff_path):
+            return None
+        handoff_raw = _read_regular(handoff_path)
+        handoff = verify_authenticated_document(
+            _parse_json(handoff_raw), key
+        )
+        payload = handoff.get("payload")
+        handoff_keys = {"payload", "schema", "state"}
+        payload_keys = {
+            "archive_identity_sha256",
+            "cancellation_result_document_sha256",
+            "delivery_capability_sha256",
+            "intent_sha256",
+            "outcome",
+            "recovery_ref",
+            "result_payload_sha256",
+            "schema",
+            "terminal_receipt_sha256",
+        }
+        if (
+            set(handoff) != handoff_keys
+            or handoff.get("schema")
+            != CANCELLATION_TERMINAL_HANDOFF_SCHEMA
+            or handoff.get("state") != "terminal_ready_unapproved"
+            or not isinstance(payload, Mapping)
+            or set(payload) != payload_keys
+            or payload.get("schema")
+            != CANCELLATION_TERMINAL_PAYLOAD_SCHEMA
+            or payload.get("outcome") != "unapproved_restored"
+            or _RECOVERY_REF_RE.fullmatch(
+                str(payload.get("recovery_ref") or "")
+            )
+            is None
+            or any(
+                type(payload.get(name)) is not str
+                or _SHA_RE.fullmatch(str(payload.get(name))) is None
+                for name in (
+                    "archive_identity_sha256",
+                    "cancellation_result_document_sha256",
+                    "delivery_capability_sha256",
+                    "intent_sha256",
+                    "result_payload_sha256",
+                    "terminal_receipt_sha256",
+                )
+            )
+        ):
+            raise _fail("project_update_legacy_recovery_binding_invalid")
+
+        binding = {
+            name: payload[name]
+            for name in (
+                "archive_identity_sha256",
+                "cancellation_result_document_sha256",
+                "intent_sha256",
+                "outcome",
+                "recovery_ref",
+                "result_payload_sha256",
+                "terminal_receipt_sha256",
+            )
+        }
+        capability_document = authenticated_document(
+            {
+                "schema": CANCELLATION_TERMINAL_DELIVERY_CAPABILITY_SCHEMA,
+                **binding,
+            },
+            key,
+        )
+        authentication = capability_document.get("authentication")
+        capability = (
+            authentication.get("mac")
+            if isinstance(authentication, Mapping)
+            else None
+        )
+        if (
+            type(capability) is not str
+            or re.fullmatch(r"hmac-sha256:[0-9a-f]{64}", capability)
+            is None
+        ):
+            raise _fail("project_update_legacy_recovery_binding_invalid")
+        capability_sha256 = sha256_bytes(capability.encode("ascii"))
+
+        if (
+            locator.get("state") != "unapproved_restored"
+            or locator.get("recovery_ref") != paths.recovery_ref
+            or locator.get("intent_sha256") != intent_sha256
+            or locator.get("journal_head_sha256") != journal_head_sha256
+            or terminal_receipt is None
+            or terminal_receipt.get("outcome") != "unapproved_restored"
+            or terminal_receipt.get("recovery_ref") != paths.recovery_ref
+            or terminal_receipt.get("intent_sha256") != intent_sha256
+            or terminal_receipt.get("journal_head_sha256")
+            != journal_head_sha256
+            or terminal_receipt_document_sha256 is None
+            or cancellation_result_document_sha256 is None
+            or cancellation_result_sha256 is None
+            or payload.get("recovery_ref") != paths.recovery_ref
+            or payload.get("archive_identity_sha256")
+            != intent.get("archive_identity_sha256")
+            or payload.get("intent_sha256") != intent_sha256
+            or payload.get("terminal_receipt_sha256")
+            != terminal_receipt_document_sha256
+            or payload.get("cancellation_result_document_sha256")
+            != cancellation_result_document_sha256
+            or payload.get("result_payload_sha256")
+            != _cancellation_delivery_payload_sha256(
+                cancellation_result_document()
+            )
+            or cancellation_result_sha256
+            != sha256_document(cancellation_result_document())
+            or payload.get("delivery_capability_sha256")
+            != capability_sha256
+            or locator.get("terminal_receipt_sha256") is not None
+        ):
+            raise _fail("project_update_legacy_recovery_state_changed")
+
+        selected_locator = (
+            paths.locator_path
+            if os.path.lexists(paths.locator_path)
+            else locator_transition_path
+        )
+        if (
+            not os.path.lexists(selected_locator)
+            or sha256_bytes(_read_regular(selected_locator)) != locator_sha256
+            or not hmac.compare_digest(
+                _read_regular(handoff_path), handoff_raw
+            )
+            or os.path.lexists(terminal_locator_path)
+        ):
+            raise _fail("project_update_legacy_recovery_state_ambiguous")
+
+        return ResolvedPendingCancellationTerminal(
+            recovery_ref=paths.recovery_ref,
+            outcome="unapproved_restored",
+            archive_identity_sha256=str(intent["archive_identity_sha256"]),
+            intent_sha256=intent_sha256,
+            journal_head_sha256=str(journal_head_sha256),
+            active_locator_state=str(locator["state"]),
+            active_locator_sha256=locator_sha256,
+            terminal_receipt_document_sha256=(
+                terminal_receipt_document_sha256
+            ),
+            cancellation_result_document_sha256=(
+                cancellation_result_document_sha256
+            ),
+            cancellation_result_sha256=cancellation_result_sha256,
+            result_payload_sha256=str(payload["result_payload_sha256"]),
+            terminal_handoff_document_sha256=sha256_bytes(handoff_raw),
+            delivery_capability_sha256=capability_sha256,
+        )
 
 
 class LegacyRecoveryStore:
@@ -4576,7 +4837,7 @@ def resolve_active_recovery(
                             or terminal_receipt.get(
                                 "cancelled_fresh_staging_sha256"
                             )
-                            != sha256_document(
+                            != _transaction_semantic_sha256(
                                 cancellation_stage_evidence
                             )
                             or terminal_receipt.get(
@@ -4586,7 +4847,7 @@ def resolve_active_recovery(
                             or terminal_receipt.get(
                                 "cancelled_fresh_cleanup_evidence_sha256"
                             )
-                            != sha256_document(
+                            != _transaction_semantic_sha256(
                                 cancellation_cleanup_evidence
                             )
                             or terminal_receipt.get(
@@ -4596,7 +4857,7 @@ def resolve_active_recovery(
                             or terminal_receipt.get(
                                 "restored_evidence_sha256"
                             )
-                            != sha256_document(
+                            != _transaction_semantic_sha256(
                                 cancellation_restore_evidence
                             )
                             or terminal_receipt.get(
@@ -4628,6 +4889,25 @@ def resolve_active_recovery(
                     raise _fail("project_update_legacy_recovery_state_changed")
             elif locator_terminal:
                 raise _fail("project_update_legacy_recovery_state_changed")
+            pending_cancellation_terminal = (
+                _resolve_pending_cancellation_terminal(
+                    paths=store.paths,
+                    key=store._key,
+                    locator=locator,
+                    locator_sha256=locator_sha256,
+                    intent=intent,
+                    intent_sha256=intent_sha256,
+                    journal_head_sha256=journal_head,
+                    terminal_receipt=terminal_receipt,
+                    terminal_receipt_document_sha256=(
+                        terminal_receipt_document_sha256
+                    ),
+                    cancellation_result_document_sha256=(
+                        cancellation_result_document_sha256
+                    ),
+                    cancellation_result_sha256=cancellation_result_sha256,
+                )
+            )
             return ResolvedActiveRecovery(
                 paths=store.paths,
                 locator=dict(locator),
@@ -4771,6 +5051,9 @@ def resolve_active_recovery(
                     terminal_receipt_document_sha256
                 ),
                 fresh_transaction_ref=terminal_ref or established_ref,
+                pending_cancellation_terminal=(
+                    pending_cancellation_terminal
+                ),
             )
 
     try:
@@ -5404,9 +5687,15 @@ def resolve_terminal_recovery(
                 )
                 for state in ("staged", "already_staged")
             }
-            stage_semantic_sha256 = sha256_document(stage_evidence)
-            cleanup_semantic_sha256 = sha256_document(cleanup_evidence)
-            restore_semantic_sha256 = sha256_document(restore_evidence)
+            stage_semantic_sha256 = _transaction_semantic_sha256(
+                stage_evidence
+            )
+            cleanup_semantic_sha256 = _transaction_semantic_sha256(
+                cleanup_evidence
+            )
+            restore_semantic_sha256 = _transaction_semantic_sha256(
+                restore_evidence
+            )
             if (
                 checkpoint_by_phase["old_transaction_staged"][
                     "evidence_sha256"

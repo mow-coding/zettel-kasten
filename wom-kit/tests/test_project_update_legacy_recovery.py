@@ -68,6 +68,58 @@ class ProjectUpdateLegacyRecoveryPrimitiveTests(unittest.TestCase):
             _failpoint=failpoint,
         )
 
+    def cancellation_terminal_handoff(
+        self,
+        *,
+        recovery_ref: str,
+        intent_sha256: str,
+        terminal_receipt_sha256: str,
+        cancellation_result_document_sha256: str,
+    ) -> tuple[dict[str, object], str]:
+        result_sha256 = recovery._cancellation_delivery_payload_sha256(
+            recovery.cancellation_result_document()
+        )
+        binding = {
+            "archive_identity_sha256": "sha256:" + "6" * 64,
+            "cancellation_result_document_sha256": (
+                cancellation_result_document_sha256
+            ),
+            "intent_sha256": intent_sha256,
+            "outcome": "unapproved_restored",
+            "recovery_ref": recovery_ref,
+            "result_payload_sha256": result_sha256,
+            "terminal_receipt_sha256": terminal_receipt_sha256,
+        }
+        capability_document = recovery.authenticated_document(
+            {
+                "schema": (
+                    recovery.CANCELLATION_TERMINAL_DELIVERY_CAPABILITY_SCHEMA
+                ),
+                **binding,
+            },
+            self.key,
+        )
+        capability = capability_document["authentication"]["mac"]
+        capability_sha256 = recovery.sha256_bytes(
+            capability.encode("ascii")
+        )
+        payload = {
+            "schema": recovery.CANCELLATION_TERMINAL_PAYLOAD_SCHEMA,
+            **binding,
+            "delivery_capability_sha256": capability_sha256,
+        }
+        return (
+            recovery.authenticated_document(
+                {
+                    "schema": recovery.CANCELLATION_TERMINAL_HANDOFF_SCHEMA,
+                    "state": "terminal_ready_unapproved",
+                    "payload": payload,
+                },
+                self.key,
+            ),
+            capability_sha256,
+        )
+
     def test_fresh_approval_seed_is_private_exact_and_idempotent(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             project = self.project(Path(tmp))
@@ -1544,8 +1596,8 @@ class ProjectUpdateLegacyRecoveryPrimitiveTests(unittest.TestCase):
                 fresh_transaction_ref=fresh_ref,
                 old_transaction_inventory_sha256=old_transaction_sha,
                 claim_absence_evidence_sha256=claim_absence_sha,
-                cancelled_fresh_staging_sha256=recovery.sha256_document(
-                    stage_document
+                cancelled_fresh_staging_sha256=(
+                    recovery._transaction_semantic_sha256(stage_document)
                 ),
                 cancelled_fresh_transaction_inventory_sha256=(
                     sealed_inventory["fresh_transaction_inventory_sha256"]
@@ -1556,7 +1608,7 @@ class ProjectUpdateLegacyRecoveryPrimitiveTests(unittest.TestCase):
                     ]
                 ),
                 cancelled_fresh_cleanup_evidence_sha256=(
-                    recovery.sha256_document(cleanup_document)
+                    recovery._transaction_semantic_sha256(cleanup_document)
                 ),
                 restored_old_transaction_sha256=old_transaction_sha,
                 preserved_old_lock_sha256=old_lock_sha,
@@ -1571,8 +1623,8 @@ class ProjectUpdateLegacyRecoveryPrimitiveTests(unittest.TestCase):
                 cancelled_fresh_cleanup_evidence_document_sha256=(
                     cleanup_doc_sha
                 ),
-                restored_evidence_sha256=recovery.sha256_document(
-                    restore_document
+                restored_evidence_sha256=(
+                    recovery._transaction_semantic_sha256(restore_document)
                 ),
                 restored_evidence_document_sha256=restore_doc_sha,
             )
@@ -1603,13 +1655,264 @@ class ProjectUpdateLegacyRecoveryPrimitiveTests(unittest.TestCase):
                 reconstructed.terminal_receipt["outcome"],
                 "unapproved_restored",
             )
+            self.assertIsNone(
+                reconstructed.pending_cancellation_terminal
+            )
+
+            paths = recovery.RecoveryPaths.build(project, ref)
+            handoff_path = project.joinpath(
+                *recovery.PurePosixPath(
+                    recovery.TERMINAL_HANDOFF_LOGICAL
+                ).parts
+            )
+            handoff, capability_sha256 = self.cancellation_terminal_handoff(
+                recovery_ref=ref,
+                intent_sha256=intent_sha,
+                terminal_receipt_sha256=receipt_sha,
+                cancellation_result_document_sha256=result_record[
+                    "cancellation_result_document_sha256"
+                ],
+            )
+            exact_handoff_raw = recovery._canonical(handoff)
+            handoff_path.write_bytes(exact_handoff_raw)
+            recovery._fsync_directory(handoff_path.parent)
+
+            pending_resolution = resolve()
+            restarted_pending_resolution = resolve()
+            pending = pending_resolution.pending_cancellation_terminal
+            self.assertIsNotNone(pending)
+            self.assertEqual(
+                pending,
+                restarted_pending_resolution.pending_cancellation_terminal,
+            )
+            self.assertEqual(pending.recovery_ref, ref)
+            self.assertEqual(pending.outcome, "unapproved_restored")
+            self.assertEqual(
+                pending.active_locator_state,
+                "unapproved_restored",
+            )
+            self.assertEqual(
+                pending.active_locator_sha256,
+                pending_resolution.locator_sha256,
+            )
+            self.assertEqual(
+                pending.terminal_receipt_document_sha256,
+                receipt_sha,
+            )
+            self.assertEqual(
+                pending.cancellation_result_document_sha256,
+                result_record["cancellation_result_document_sha256"],
+            )
+            self.assertEqual(
+                pending.cancellation_result_sha256,
+                result_record["cancellation_result_sha256"],
+            )
+            self.assertEqual(
+                pending.result_payload_sha256,
+                recovery._cancellation_delivery_payload_sha256(
+                    recovery.cancellation_result_document()
+                ),
+            )
+            self.assertNotEqual(
+                pending.result_payload_sha256,
+                pending.cancellation_result_sha256,
+            )
+            self.assertEqual(
+                pending.terminal_handoff_document_sha256,
+                recovery.sha256_bytes(exact_handoff_raw),
+            )
+            self.assertEqual(
+                pending.delivery_capability_sha256,
+                capability_sha256,
+            )
+            self.assertNotIn("reviewer", pending.__dataclass_fields__)
+            self.assertNotIn("paths", pending.__dataclass_fields__)
+            self.assertNotIn(
+                "cancellation_result", pending.__dataclass_fields__
+            )
+
+            def control_bytes() -> dict[str, bytes]:
+                candidates = [
+                    item
+                    for item in paths.recovery_root.rglob("*")
+                    if item.is_file()
+                ]
+                candidates.extend(
+                    item
+                    for item in (paths.locator_path, handoff_path)
+                    if item.is_file()
+                )
+                return {
+                    str(item): item.read_bytes()
+                    for item in sorted(candidates, key=str)
+                }
+
+            # A capsule cannot lead its receipt.  The receipt-only prefix is
+            # valid, while capsule-without-receipt is preserved and blocked.
+            held_receipt = receipt_path.with_suffix(".held")
+            receipt_path.rename(held_receipt)
+            capsule_without_receipt = control_bytes()
+            try:
+                with self.assertRaisesRegex(
+                    recovery.LegacyProjectUpdateRecoveryError,
+                    "project_update_legacy_recovery_state_changed",
+                ):
+                    resolve()
+                self.assertEqual(
+                    control_bytes(), capsule_without_receipt
+                )
+            finally:
+                held_receipt.rename(receipt_path)
+
+            def rewrite_handoff(mutator) -> None:
+                outer = recovery.verify_authenticated_document(
+                    json.loads(exact_handoff_raw), self.key
+                )
+                mutator(outer)
+                handoff_path.write_bytes(
+                    recovery._canonical(
+                        recovery.authenticated_document(outer, self.key)
+                    )
+                )
+
+            capsule_mutations = (
+                (
+                    "missing",
+                    lambda outer: outer["payload"].pop(
+                        "delivery_capability_sha256"
+                    ),
+                    "project_update_legacy_recovery_binding_invalid",
+                ),
+                (
+                    "extra",
+                    lambda outer: outer.__setitem__("unexpected", True),
+                    "project_update_legacy_recovery_binding_invalid",
+                ),
+                (
+                    "cross_ref",
+                    lambda outer: outer["payload"].__setitem__(
+                        "recovery_ref", "recovery_" + "f" * 32
+                    ),
+                    "project_update_legacy_recovery_state_changed",
+                ),
+                (
+                    "cross_receipt",
+                    lambda outer: outer["payload"].__setitem__(
+                        "terminal_receipt_sha256", "sha256:" + "f" * 64
+                    ),
+                    "project_update_legacy_recovery_state_changed",
+                ),
+                (
+                    "cross_result",
+                    lambda outer: outer["payload"].__setitem__(
+                        "result_payload_sha256", "sha256:" + "f" * 64
+                    ),
+                    "project_update_legacy_recovery_state_changed",
+                ),
+                (
+                    "storage_digest_is_not_delivery_digest",
+                    lambda outer: outer["payload"].__setitem__(
+                        "result_payload_sha256",
+                        recovery.sha256_document(
+                            recovery.cancellation_result_document()
+                        ),
+                    ),
+                    "project_update_legacy_recovery_state_changed",
+                ),
+                (
+                    "success_mismatch",
+                    lambda outer: outer["payload"].__setitem__(
+                        "outcome", "success"
+                    ),
+                    "project_update_legacy_recovery_binding_invalid",
+                ),
+            )
+            for name, mutate, error in capsule_mutations:
+                with self.subTest(cancellation_capsule_mutation=name):
+                    rewrite_handoff(mutate)
+                    preserved = control_bytes()
+                    try:
+                        with self.assertRaisesRegex(
+                            recovery.LegacyProjectUpdateRecoveryError,
+                            error,
+                        ):
+                            resolve()
+                        self.assertEqual(control_bytes(), preserved)
+                    finally:
+                        handoff_path.write_bytes(exact_handoff_raw)
+
+            unauthenticated = json.loads(exact_handoff_raw)
+            mac = unauthenticated["authentication"]["mac"]
+            unauthenticated["authentication"]["mac"] = (
+                mac[:-1] + ("0" if mac[-1] != "0" else "1")
+            )
+            handoff_path.write_bytes(recovery._canonical(unauthenticated))
+            preserved = control_bytes()
+            try:
+                with self.assertRaisesRegex(
+                    recovery.LegacyProjectUpdateRecoveryError,
+                    "project_update_legacy_recovery_authentication_invalid",
+                ):
+                    resolve()
+                self.assertEqual(control_bytes(), preserved)
+            finally:
+                handoff_path.write_bytes(exact_handoff_raw)
+
+            terminal_locator_path = (
+                paths.recovery_root / "terminal-locator.json"
+            )
+            terminal_locator_path.write_bytes(
+                paths.locator_path.read_bytes()
+            )
+            collision = control_bytes()
+            try:
+                with self.assertRaisesRegex(
+                    recovery.LegacyProjectUpdateRecoveryError,
+                    "project_update_legacy_recovery_state_ambiguous",
+                ):
+                    resolve()
+                self.assertEqual(control_bytes(), collision)
+            finally:
+                terminal_locator_path.unlink()
+
+            with self.assertRaisesRegex(
+                recovery.LegacyProjectUpdateRecoveryError,
+                "project_update_legacy_recovery_authentication_invalid",
+            ):
+                recovery.resolve_active_recovery(
+                    project,
+                    archive,
+                    Provider(bytes(reversed(self.key))),
+                )
+
+            # A terminal_completed active locator is not the capsule-before-
+            # retirement boundary.  It must be completed only through the
+            # store's authenticated terminal publication primitive, never
+            # reconstructed as pending cancellation authority.
+            with recovery.LegacyRecoveryStore(
+                project, ref, self.key
+            ) as store:
+                terminal_active_sha = store.publish_locator(
+                    state="terminal_completed",
+                    intent_sha256=intent_sha,
+                    journal_head_sha256=restore_head,
+                    previous_locator_sha256=pending.active_locator_sha256,
+                    terminal_receipt_sha256=receipt_sha,
+                )
+            terminal_active_bytes = control_bytes()
+            with self.assertRaisesRegex(
+                recovery.LegacyProjectUpdateRecoveryError,
+                "project_update_legacy_recovery_state_changed",
+            ):
+                resolve()
+            self.assertEqual(control_bytes(), terminal_active_bytes)
             with recovery.LegacyRecoveryStore(
                 project, ref, self.key
             ) as store:
                 retired = store.publish_terminal_locator_and_retire(
                     intent_sha256=intent_sha,
                     journal_head_sha256=restore_head,
-                    previous_locator_sha256=reconstructed.locator_sha256,
+                    previous_locator_sha256=terminal_active_sha,
                     terminal_receipt_sha256=receipt_sha,
                 )
             self.assertFalse(
