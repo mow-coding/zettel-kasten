@@ -25,6 +25,7 @@ COMMAND_STATUS_INVENTORY_SCHEMA = (
 SUGGESTED_COMMAND_MODE_STATUS_SCHEMA = (
     "wom-kit/suggested-command-mode-status/v0.2"
 )
+CAPABILITY_AVAILABILITY_SCHEMA = "wom-kit/capability-availability/v0.1"
 
 APPROVAL_AVAILABLE = "approval_available"
 APPROVAL_FIXED_CLOSED = "approval_fixed_closed"
@@ -34,6 +35,18 @@ APPROVAL_STATUSES = (
     APPROVAL_FIXED_CLOSED,
     APPROVAL_NOT_EXPOSED,
 )
+
+CAPABILITY_AVAILABLE = "available"
+CAPABILITY_WRITER_UNAVAILABLE = "writer_unavailable"
+CAPABILITY_MODE_UNAVAILABLE = "mode_unavailable"
+CAPABILITY_NOT_REQUESTED = "not_requested"
+CAPABILITY_AVAILABILITY_STATES = (
+    CAPABILITY_AVAILABLE,
+    CAPABILITY_WRITER_UNAVAILABLE,
+    CAPABILITY_MODE_UNAVAILABLE,
+    CAPABILITY_NOT_REQUESTED,
+)
+WRITER_UNAVAILABLE_REASON_CODE = "writer_unavailable"
 
 COMPOUND_APPROVAL_REASON_CODE = (
     "compound_exact_human_approval_binding_required"
@@ -837,6 +850,281 @@ def _approval_scope_mode_status(
     raise ValueError("command_approval_scope_invalid")
 
 
+def _capability_availability_for_command(
+    command: Mapping[str, Any],
+    *,
+    requested_mode: str,
+    argument_tokens: tuple[str, ...] = (),
+) -> dict[str, Any]:
+    """Resolve one parser-declared mode through the shared availability gate.
+
+    This deliberately answers only whether the installed command surface can
+    dispatch the requested mode.  Archive, provider, credential, and other
+    runtime prerequisites remain separate.  Argument values may be inspected
+    for a parser-declared allowlist, but they are never returned.
+    """
+
+    if requested_mode not in {
+        "dry_run",
+        "approve",
+        "conflicting",
+        "unspecified",
+    }:
+        raise ValueError("capability_requested_mode_invalid")
+    if (
+        type(argument_tokens) is not tuple
+        or any(type(token) is not str for token in argument_tokens)
+    ):
+        raise TypeError("capability_argument_tokens_invalid")
+
+    canonical_path = command.get("canonical_path")
+    invocation_available = command.get("invocation_surface_available") is True
+    dry_run_exposed = command.get("dry_run_exposed") is True
+    approval_status = command.get("approval_status")
+    approval_reason_code = command.get("approval_reason_code")
+    raw_scope = command.get("approval_scope")
+    approval_scope = dict(raw_scope) if isinstance(raw_scope, Mapping) else None
+
+    available: bool | None
+    state: str
+    reason_code: str | None = None
+    detail_reason_code: str | None = None
+    if requested_mode == "unspecified":
+        available = None
+        state = CAPABILITY_NOT_REQUESTED
+    elif requested_mode == "conflicting":
+        available = False
+        state = CAPABILITY_MODE_UNAVAILABLE
+        reason_code = "capability_mode_conflicting"
+    elif not invocation_available:
+        available = False
+        state = CAPABILITY_MODE_UNAVAILABLE
+        reason_code = "invocation_surface_unavailable"
+    elif requested_mode == "dry_run":
+        available = dry_run_exposed
+        state = CAPABILITY_AVAILABLE if available else CAPABILITY_MODE_UNAVAILABLE
+        if not available:
+            reason_code = "dry_run_unavailable"
+    else:
+        if approval_status == APPROVAL_AVAILABLE:
+            scope_available, scope_reason = _approval_scope_mode_status(
+                approval_scope,
+                argument_tokens,
+            )
+            available = scope_available
+            if available:
+                state = CAPABILITY_AVAILABLE
+            else:
+                state = CAPABILITY_WRITER_UNAVAILABLE
+                reason_code = WRITER_UNAVAILABLE_REASON_CODE
+                detail_reason_code = scope_reason
+        else:
+            available = False
+            state = CAPABILITY_WRITER_UNAVAILABLE
+            reason_code = WRITER_UNAVAILABLE_REASON_CODE
+            detail_reason_code = str(
+                approval_reason_code
+                or approval_status
+                or "approval_surface_unavailable"
+            )
+
+    return {
+        "schema": CAPABILITY_AVAILABILITY_SCHEMA,
+        "canonical_path": canonical_path,
+        "requested_mode": requested_mode,
+        "state": state,
+        "available": available,
+        "reason_code": reason_code,
+        "detail_reason_code": detail_reason_code,
+        "approval_status": approval_status,
+        "dry_run_exposed": dry_run_exposed,
+        "parser_derived": True,
+        "argument_scope_evaluated": requested_mode == "approve",
+        "prerequisites_evaluated": False,
+        "private_values_echoed": False,
+        "external_effects_performed": False,
+    }
+
+
+def resolve_capability_availability(
+    inventory: Mapping[str, Any],
+    command_path: str,
+    *,
+    requested_mode: str,
+    argument_tokens: tuple[str, ...] = (),
+) -> dict[str, Any]:
+    """Resolve a canonical or alias command path without executing it."""
+
+    commands = _validated_inventory_commands(inventory)
+    if (
+        type(command_path) is not str
+        or _COMMAND_PATH_PATTERN.fullmatch(command_path) is None
+    ):
+        raise ValueError("capability_command_path_invalid")
+    matches = [
+        command
+        for command in commands
+        if command_path == command["canonical_path"]
+        or command_path in command["alias_paths"]
+    ]
+    if len(matches) != 1:
+        raise ValueError("capability_command_path_unresolved")
+    return _capability_availability_for_command(
+        matches[0],
+        requested_mode=requested_mode,
+        argument_tokens=argument_tokens,
+    )
+
+
+def build_capability_availability_projection(
+    inventory: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Return content-free dry-run and writer availability for capabilities."""
+
+    commands = _validated_inventory_commands(inventory)
+    rows = []
+    for command in commands:
+        rows.append(
+            {
+                "canonical_path": command["canonical_path"],
+                "dry_run": _capability_availability_for_command(
+                    command,
+                    requested_mode="dry_run",
+                ),
+                # Conditional approval rows are conservatively unavailable
+                # without exact arguments.  Actual dispatch resolves them again
+                # after argparse has validated the concrete invocation.
+                "approve_without_arguments": (
+                    _capability_availability_for_command(
+                        command,
+                        requested_mode="approve",
+                    )
+                ),
+            }
+        )
+    return {
+        "schema": "wom-kit/capability-availability-projection/v0.1",
+        "state": "complete",
+        "rows": rows,
+        "parser_derived": True,
+        "prerequisites_evaluated": False,
+        "private_values_echoed": False,
+        "external_effects_performed": False,
+    }
+
+
+def _selected_canonical_parser_path(
+    parser: argparse.ArgumentParser,
+    namespace: argparse.Namespace,
+) -> tuple[str, argparse.ArgumentParser]:
+    current = parser
+    canonical_segments: list[str] = []
+    while True:
+        matches: list[tuple[str, argparse.ArgumentParser]] = []
+        for action in _subparser_actions(current):
+            selected = getattr(namespace, action.dest, None)
+            if type(selected) is not str or selected not in action.choices:
+                continue
+            selected_parser = action.choices[selected]
+            canonical_name = next(
+                name
+                for name, candidate in action.choices.items()
+                if candidate is selected_parser
+            )
+            matches.append((canonical_name, selected_parser))
+        if not matches:
+            break
+        if len(matches) != 1:
+            raise ValueError("capability_namespace_path_ambiguous")
+        canonical_name, current = matches[0]
+        canonical_segments.append(canonical_name)
+    if not canonical_segments or not callable(current._defaults.get("func")):
+        raise ValueError("capability_namespace_path_unresolved")
+    return " ".join(canonical_segments), current
+
+
+def _namespace_approval_scope_tokens(
+    leaf_parser: argparse.ArgumentParser,
+    namespace: argparse.Namespace,
+    scope: Mapping[str, Any] | None,
+) -> tuple[str, ...]:
+    if scope is None:
+        return ()
+    option_actions = {
+        option: action
+        for action in leaf_parser._actions
+        for option in action.option_strings
+    }
+    kind = scope.get("kind")
+    if kind == "argument_value_allowlist":
+        option = scope.get("argument")
+        action = option_actions.get(option)
+        if type(option) is not str or action is None:
+            raise ValueError("command_approval_scope_invalid")
+        value = getattr(namespace, action.dest, None)
+        if type(value) is not str:
+            return ()
+        return (option, value)
+    if kind in {
+        "argument_flag_exactly_one_allowlist",
+        "argument_flag_any_allowlist",
+    }:
+        tokens: list[str] = []
+        for option in scope.get("allowed_flags") or []:
+            action = option_actions.get(option)
+            if action is None:
+                raise ValueError("command_approval_scope_invalid")
+            if getattr(namespace, action.dest, False) is True:
+                tokens.append(option)
+        return tuple(tokens)
+    raise ValueError("command_approval_scope_invalid")
+
+
+def resolve_namespace_capability_availability(
+    parser: argparse.ArgumentParser,
+    inventory: Mapping[str, Any],
+    namespace: argparse.Namespace,
+) -> dict[str, Any]:
+    """Resolve actual argparse dispatch through the same availability truth."""
+
+    if not isinstance(parser, argparse.ArgumentParser):
+        raise TypeError("capability_parser_invalid")
+    if not isinstance(namespace, argparse.Namespace):
+        raise TypeError("capability_namespace_invalid")
+    canonical_path, leaf_parser = _selected_canonical_parser_path(
+        parser,
+        namespace,
+    )
+    commands = _validated_inventory_commands(inventory)
+    command = next(
+        (row for row in commands if row["canonical_path"] == canonical_path),
+        None,
+    )
+    if command is None:
+        raise ValueError("capability_namespace_path_unresolved")
+    dry_run = getattr(namespace, "dry_run", False) is True
+    approve = getattr(namespace, "approve", False) is True
+    requested_mode = (
+        "conflicting"
+        if dry_run and approve
+        else "dry_run"
+        if dry_run
+        else "approve"
+        if approve
+        else "unspecified"
+    )
+    argument_tokens = _namespace_approval_scope_tokens(
+        leaf_parser,
+        namespace,
+        command.get("approval_scope"),
+    )
+    return _capability_availability_for_command(
+        command,
+        requested_mode=requested_mode,
+        argument_tokens=argument_tokens,
+    )
+
+
 def _unresolved_suggested_command_status(
     *,
     reason_code: str,
@@ -864,6 +1152,7 @@ def _unresolved_suggested_command_status(
         "approval_scope": None,
         "approval_mode_available_for_arguments": None,
         "approval_mode_reason_code_for_arguments": reason_code,
+        "capability_availability": None,
         "portable_invocation_syntax_evaluated": True,
         "portable_invocation_syntax_safe": portable_syntax_safe,
         "portable_template_placeholders_present": (
@@ -1020,43 +1309,38 @@ def resolve_suggested_command_mode(
     raw_scope = command.get("approval_scope")
     approval_scope = dict(raw_scope) if isinstance(raw_scope, Mapping) else None
 
-    approval_mode_available_for_arguments: bool
-    approval_mode_reason_code_for_arguments: str | None = None
-    if not invocation_available:
-        approval_mode_available_for_arguments = False
-        approval_mode_reason_code_for_arguments = (
-            "suggested_command_invocation_surface_unavailable"
-        )
-    elif approval_status != APPROVAL_AVAILABLE:
-        approval_mode_available_for_arguments = False
-        approval_mode_reason_code_for_arguments = str(
-            approval_reason_code
-            or approval_status
-            or "suggested_command_approval_unavailable"
-        )
-    else:
-        (
-            approval_mode_available_for_arguments,
-            approval_mode_reason_code_for_arguments,
-        ) = _approval_scope_mode_status(approval_scope, argument_tokens)
+    approval_availability = _capability_availability_for_command(
+        command,
+        requested_mode="approve",
+        argument_tokens=argument_tokens,
+    )
+    approval_mode_available_for_arguments = bool(
+        approval_availability["available"]
+    )
+    approval_mode_reason_code_for_arguments = (
+        approval_availability["detail_reason_code"]
+        or approval_availability["reason_code"]
+    )
 
-    requested_mode_available: bool | None
-    requested_mode_reason_code: str | None = None
+    capability_availability = _capability_availability_for_command(
+        command,
+        requested_mode=requested_mode,
+        argument_tokens=argument_tokens,
+    )
+    requested_mode_available = capability_availability["available"]
+    requested_mode_reason_code = capability_availability[
+        "detail_reason_code"
+    ] or capability_availability["reason_code"]
+    # Preserve the established public reason vocabulary while the nested
+    # CapabilityAvailability record supplies the new normalized state.
     if requested_mode == "conflicting":
-        requested_mode_available = False
         requested_mode_reason_code = "suggested_command_mode_conflicting"
     elif not invocation_available:
-        requested_mode_available = False
-        requested_mode_reason_code = "suggested_command_invocation_surface_unavailable"
-    elif requested_mode == "dry_run":
-        requested_mode_available = dry_run_exposed
-        if not requested_mode_available:
-            requested_mode_reason_code = "suggested_command_dry_run_not_exposed"
-    elif requested_mode == "approve":
-        requested_mode_available = approval_mode_available_for_arguments
-        requested_mode_reason_code = approval_mode_reason_code_for_arguments
-    else:
-        requested_mode_available = None
+        requested_mode_reason_code = (
+            "suggested_command_invocation_surface_unavailable"
+        )
+    elif requested_mode == "dry_run" and requested_mode_available is False:
+        requested_mode_reason_code = "suggested_command_dry_run_not_exposed"
 
     return {
         "schema": SUGGESTED_COMMAND_MODE_STATUS_SCHEMA,
@@ -1079,6 +1363,7 @@ def resolve_suggested_command_mode(
         "approval_mode_reason_code_for_arguments": (
             approval_mode_reason_code_for_arguments
         ),
+        "capability_availability": capability_availability,
         "portable_invocation_syntax_evaluated": True,
         "portable_invocation_syntax_safe": True,
         "portable_template_placeholders_present": placeholders_present,
