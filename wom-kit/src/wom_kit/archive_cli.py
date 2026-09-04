@@ -2120,10 +2120,7 @@ class Doctor:
             return
         try:
             parser = build_parser()
-            inventory = command_status.build_command_status_inventory(
-                parser,
-                COMPOUND_APPROVAL_BLOCKED_COMMANDS,
-            )
+            inventory = _parser_capability_inventory(parser)
         except (TypeError, ValueError):
             parser = None
             inventory = None
@@ -9575,9 +9572,11 @@ def parser_command_manifest(parser: argparse.ArgumentParser) -> list[dict[str, A
 def command_capabilities(args: argparse.Namespace) -> int:
     parser = build_parser()
     commands = parser_command_manifest(parser)
-    approval_inventory = command_status.build_command_status_inventory(
-        parser,
-        COMPOUND_APPROVAL_BLOCKED_COMMANDS,
+    approval_inventory = _parser_capability_inventory(parser)
+    capability_availability = (
+        command_status.build_capability_availability_projection(
+            approval_inventory
+        )
     )
     approval_counts = approval_inventory["counts"]
     if args.no_commands:
@@ -9585,16 +9584,22 @@ def command_capabilities(args: argparse.Namespace) -> int:
             **approval_inventory,
             "commands": [],
         }
+        capability_availability = {
+            **capability_availability,
+            "rows": [],
+        }
     release = release_identity_probe()
     data = {
         "command_count": len(commands),
         "commands": [] if args.no_commands else commands,
         "approval_status_inventory": approval_inventory,
+        "capability_availability": capability_availability,
         "agent_operator_notes": [
             "This manifest is generated from the actual local CLI parser.",
             "release_state is local-only and does not call GitHub or any provider.",
             "Use required_positionals and options for command planning; use each command's --help for full usage.",
             "approval_status is parser-derived and does not claim that archive-specific prerequisites have passed.",
+            "capability_availability is the same parser-derived mode gate used by help, Doctor suggestions, and actual CLI dispatch.",
             "approval_not_exposed does not claim that a command is read-only.",
         ],
         "recommended_agent_checks": [
@@ -33449,12 +33454,45 @@ COMPOUND_APPROVAL_BLOCKED_COMMANDS = (
 )
 
 
-def _mark_compound_approval_help(
-    subcommands: argparse._SubParsersAction,
-) -> None:
+def _parser_capability_inventory(
+    parser: argparse.ArgumentParser,
+) -> dict[str, Any]:
+    cached = getattr(parser, "_wom_capability_inventory", None)
+    if isinstance(cached, dict):
+        return cached
+    return command_status.build_command_status_inventory(
+        parser,
+        COMPOUND_APPROVAL_BLOCKED_COMMANDS,
+    )
+
+
+def _mark_compound_approval_help(parser: argparse.ArgumentParser) -> None:
     """Make every fixed-closed public approval option honest in ``--help``."""
 
+    actions = command_status._subparser_actions(parser)
+    if len(actions) != 1:
+        raise RuntimeError("compound_approval_help_root_invalid")
+    subcommands = actions[0]
+    inventory = command_status.build_command_status_inventory(
+        parser,
+        COMPOUND_APPROVAL_BLOCKED_COMMANDS,
+    )
+    setattr(parser, "_wom_capability_inventory", inventory)
     for command_path in sorted(COMPOUND_APPROVAL_BLOCKED_COMMANDS):
+        availability = command_status.resolve_capability_availability(
+            inventory,
+            command_path,
+            requested_mode="approve",
+        )
+        if (
+            availability["state"]
+            != command_status.CAPABILITY_WRITER_UNAVAILABLE
+            or availability["reason_code"]
+            != command_status.WRITER_UNAVAILABLE_REASON_CODE
+        ):
+            raise RuntimeError(
+                "compound_approval_help_availability_invalid:" + command_path
+            )
         segments = tuple(command_path.split())
         current_subcommands = subcommands
         command_parser: argparse.ArgumentParser | None = None
@@ -44467,7 +44505,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     init.set_defaults(func=command_init)
 
-    _mark_compound_approval_help(subcommands)
+    _mark_compound_approval_help(parser)
     return parser
 
 
@@ -44663,6 +44701,73 @@ def _project_write_runtime_guard(
     return None
 
 
+def _writer_unavailable_dispatch_error(
+    args: argparse.Namespace,
+    availability: Mapping[str, Any],
+    *,
+    json_requested: bool,
+) -> int:
+    """Refuse a parser-known unavailable writer before its handler runs."""
+
+    canonical_path = str(availability.get("canonical_path") or "")
+    top_level_command = canonical_path.split(" ", 1)[0]
+    detail_reason = str(
+        availability.get("detail_reason_code")
+        or command_status.COMPOUND_APPROVAL_REASON_CODE
+    )
+    lifecycle_action = str(
+        getattr(getattr(args, "func", None), "__name__", "command_dispatch")
+    )
+    if lifecycle_action.startswith("command_"):
+        lifecycle_action = lifecycle_action[len("command_") :]
+    if not re.fullmatch(r"[a-z][a-z0-9_]{0,95}", lifecycle_action):
+        lifecycle_action = "capability_availability_dispatch"
+    if json_requested:
+        print_json(
+            {
+                "schema": "wom-kit/cli-error/v0.1",
+                "ok": False,
+                "state": "blocked",
+                "status_class": "blocked",
+                "capability_state": (
+                    command_status.CAPABILITY_WRITER_UNAVAILABLE
+                ),
+                "command": (
+                    top_level_command
+                    if re.fullmatch(
+                        r"[a-z0-9][a-z0-9-]*",
+                        top_level_command,
+                    )
+                    else None
+                ),
+                "canonical_command_path": canonical_path,
+                "lifecycle_action": lifecycle_action,
+                "error_class": "policy",
+                # Keep the established detailed code for compatible clients;
+                # capability_state is the normalized operator-facing truth.
+                "reason_codes": [detail_reason],
+                "capability_reason_codes": [
+                    command_status.WRITER_UNAVAILABLE_REASON_CODE,
+                    detail_reason,
+                ],
+                "capability_availability": dict(availability),
+                "exit_code": 1,
+                "effects_state": "none",
+                "files_written": [],
+                "private_values_echoed": False,
+            }
+        )
+    else:
+        print(
+            "Writer unavailable in this installed WOM version. Exact compound "
+            "human-approval binding is not implemented for this command; the "
+            "write did not start. Use the command's dry-run, plan, or audit "
+            "mode and check `archive capabilities --machine`.",
+            file=sys.stderr,
+        )
+    return 1
+
+
 def main(argv: list[str] | None = None) -> int:
     _harden_std_streams()
     raw_argv = sys.argv[1:] if argv is None else list(argv)
@@ -44796,6 +44901,58 @@ def main(argv: list[str] | None = None) -> int:
             }
         )
         return exit_code
+    try:
+        capability_availability = (
+            command_status.resolve_namespace_capability_availability(
+                parser,
+                _parser_capability_inventory(parser),
+                args,
+            )
+        )
+    except (TypeError, ValueError):
+        capability_availability = (
+            {
+                "schema": command_status.CAPABILITY_AVAILABILITY_SCHEMA,
+                "canonical_path": str(
+                    getattr(args, "command", "") or ""
+                ),
+                "requested_mode": "approve",
+                "state": command_status.CAPABILITY_WRITER_UNAVAILABLE,
+                "available": False,
+                "reason_code": (
+                    command_status.WRITER_UNAVAILABLE_REASON_CODE
+                ),
+                "detail_reason_code": (
+                    "capability_availability_unresolved"
+                ),
+                "approval_status": None,
+                "dry_run_exposed": None,
+                "parser_derived": False,
+                "argument_scope_evaluated": False,
+                "prerequisites_evaluated": False,
+                "private_values_echoed": False,
+                "external_effects_performed": False,
+            }
+            if getattr(args, "approve", False) is True
+            else None
+        )
+    if capability_availability is not None:
+        setattr(
+            args,
+            "_wom_capability_availability",
+            capability_availability,
+        )
+        if (
+            capability_availability.get("requested_mode") == "approve"
+            and capability_availability.get("state")
+            == command_status.CAPABILITY_WRITER_UNAVAILABLE
+        ):
+            return _writer_unavailable_dispatch_error(
+                args,
+                capability_availability,
+                json_requested=json_requested,
+            )
+
     runtime_blocker = _project_write_runtime_guard(args, raw_argv)
     if runtime_blocker is not None:
         if json_requested:
