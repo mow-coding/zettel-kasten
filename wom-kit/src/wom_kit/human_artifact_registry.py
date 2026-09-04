@@ -37,6 +37,7 @@ from .exact_human_approval_windows import (
     ExactHumanApprovalContext,
     ExactHumanApprovalOperation,
 )
+from .process_launch import noninteractive_creationflags
 
 
 REGISTRY_SCHEMA_VERSION = "wom-kit/human-artifact-registry/v0.1"
@@ -607,7 +608,6 @@ def _require_private_registry_ignored(context: _ArchiveContext) -> None:
         break
     if not git_admin_present:
         return
-    creation_flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
     try:
         tracked = subprocess.run(
             [
@@ -623,7 +623,7 @@ def _require_private_registry_ignored(context: _ArchiveContext) -> None:
             stderr=subprocess.DEVNULL,
             check=False,
             timeout=5,
-            creationflags=creation_flags,
+            creationflags=noninteractive_creationflags(),
         )
     except (OSError, subprocess.SubprocessError):
         raise _fail("human_artifact_private_registry_not_ignored") from None

@@ -27,6 +27,7 @@ from typing import Any, Callable, Iterable, Mapping
 from urllib.parse import urlsplit
 
 from . import archive_services
+from .process_launch import noninteractive_creationflags
 
 
 GIT_BACKUP_PLAN_SCHEMA = "wom-kit/git-backup-plan/v0.1"
@@ -550,8 +551,9 @@ def _run_transport_capped(
     if timeout_seconds <= 0 or max_output_bytes < 0:
         return None
     process_options: dict[str, Any] = {}
+    creation_flags = noninteractive_creationflags()
     if os.name == "nt":
-        process_options["creationflags"] = (
+        creation_flags = noninteractive_creationflags(
             subprocess.CREATE_NEW_PROCESS_GROUP | 0x00000004
         )
     else:
@@ -564,6 +566,7 @@ def _run_transport_capped(
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
             env=environment,
+            creationflags=creation_flags,
             **process_options,
         )
     except (OSError, ValueError):
@@ -1469,6 +1472,7 @@ def _git_config_trust_digest(root: Path) -> str | None:
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
             env=environment,
+            creationflags=noninteractive_creationflags(),
         )
         if config_process.stdout is None:
             raise OSError("git_config_stdout_unavailable")
@@ -1478,6 +1482,7 @@ def _git_config_trust_digest(root: Path) -> str | None:
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
             env=environment,
+            creationflags=noninteractive_creationflags(),
         )
         config_process.stdout.close()
         digest_stdout, _ = digest_process.communicate(timeout=15)

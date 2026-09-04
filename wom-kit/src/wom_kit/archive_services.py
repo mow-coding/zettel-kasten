@@ -54,6 +54,7 @@ from .paths import (
 )
 from .resource_paths import runtime_resource_root
 from .markdown_display import project_wom_safe_markdown
+from .process_launch import noninteractive_creationflags
 from . import (
     command_status,
     project_runtime,
@@ -87902,6 +87903,9 @@ def safe_keepassxc_database_path_for_write(
 
 
 def _run_keepassxc_cli_add(argv: list[str]) -> int:
+    # This is the deliberate exception to WOM's no-console subprocess policy:
+    # KeePassXC owns a human-visible local database-unlock prompt.  Hiding that
+    # prompt would turn a required human decision into an apparent hang.
     completed = subprocess.run(argv, check=False)
     return int(completed.returncode)
 
@@ -106094,6 +106098,11 @@ def git(root, args, cap=4194304):
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
             env=clean_env(),
+            creationflags=(
+                getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+                if os.name == "nt"
+                else 0
+            ),
         )
     except BaseException:
         return None
@@ -109283,6 +109292,7 @@ def _wom_kit_project_update_run_capped(
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
             env=environment,
+            creationflags=noninteractive_creationflags(),
         )
     except (OSError, ValueError):
         return None
@@ -109766,6 +109776,7 @@ def _wom_kit_project_update_run_batch_capped(
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
             env=environment,
+            creationflags=noninteractive_creationflags(),
         )
     except (OSError, ValueError):
         return None
@@ -110024,6 +110035,7 @@ def wom_kit_project_update_git_config_trust_digest(
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
             env=environment,
+            creationflags=noninteractive_creationflags(),
         )
         if config_process.stdout is None:
             raise OSError("git_config_stdout_unavailable")
@@ -110037,6 +110049,7 @@ def wom_kit_project_update_git_config_trust_digest(
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
             env=environment,
+            creationflags=noninteractive_creationflags(),
         )
         config_process.stdout.close()
         digest_stdout, _ = digest_process.communicate(timeout=15)

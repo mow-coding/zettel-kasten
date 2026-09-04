@@ -31,6 +31,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Mapping
 
 from .schema_validator import validate_schema
+from .process_launch import noninteractive_creationflags
 
 
 PROJECT_RUNTIME_POLICY_SCHEMA = "wom-kit/project-runtime-policy/v0.1"
@@ -1969,6 +1970,7 @@ def _run_bounded(
         stderr=subprocess.DEVNULL,
         text=False,
         env=_isolated_python_environment(),
+        creationflags=noninteractive_creationflags(),
     )
     while process.poll() is None:
         now = time.monotonic()
