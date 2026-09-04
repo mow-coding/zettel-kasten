@@ -464,6 +464,7 @@ from .exact_human_approval_workflow import (
 )
 from .exact_operation_manifest import ExactOperationManifestError, ExactOperationProgress
 from .markdown_display import project_wom_safe_markdown
+from .process_launch import noninteractive_creationflags
 from .resource_paths import runtime_release_note_path, runtime_resource_root
 from .schema_validator import validate_schema
 
@@ -6534,7 +6535,13 @@ class Doctor:
                         continue
                     path = Path(entry.path)
                     try:
-                        observed = entry.stat(follow_symlinks=False)
+                        # Capture one lstat generation and project both type and
+                        # identity from it.  The previous entry.stat + lstat
+                        # pair doubled the dominant full-tree metadata work
+                        # without producing a stronger generation: later
+                        # descriptor reads and completion revalidation already
+                        # reject replacements against this exact identity.
+                        observed = os.lstat(path)
                     except OSError:
                         continue
                     if (
@@ -6543,23 +6550,11 @@ class Doctor:
                         and stat.S_ISDIR(observed.st_mode)
                     ):
                         relative = self._lexical_archive_relative(path)
-                        try:
-                            directory_observed = os.lstat(path)
-                        except OSError:
-                            directory_observed = None
-                        if (
-                            relative is not None
-                            and directory_observed is not None
-                            and not stat.S_ISLNK(directory_observed.st_mode)
-                            and not archive_doctor._is_reparse_point(
-                                directory_observed
-                            )
-                            and stat.S_ISDIR(directory_observed.st_mode)
-                        ):
+                        if relative is not None:
                             self._archive_tree_directory_identities[
                                 self._archive_tree_key(relative)
                             ] = self._inventory_directory_identity(
-                                directory_observed
+                                observed
                             )
                             child_directories.append(path)
                         continue
@@ -6569,22 +6564,10 @@ class Doctor:
                         and stat.S_ISREG(observed.st_mode)
                     ):
                         relative = self._lexical_archive_relative(path)
-                        try:
-                            file_observed = os.lstat(path)
-                        except OSError:
-                            file_observed = None
-                        if (
-                            relative is not None
-                            and file_observed is not None
-                            and not stat.S_ISLNK(file_observed.st_mode)
-                            and not archive_doctor._is_reparse_point(
-                                file_observed
-                            )
-                            and stat.S_ISREG(file_observed.st_mode)
-                        ):
+                        if relative is not None:
                             self._archive_tree_file_identities[
                                 self._archive_tree_key(relative)
-                            ] = self._inventory_stat_identity(file_observed)
+                            ] = self._inventory_stat_identity(observed)
                         continue
                     if stat.S_ISLNK(observed.st_mode):
                         try:
@@ -9465,6 +9448,7 @@ def git_version_tags() -> list[str]:
             capture_output=True,
             text=True,
             timeout=3,
+            creationflags=noninteractive_creationflags(),
         )
     except (OSError, subprocess.SubprocessError):
         return []
@@ -31071,6 +31055,7 @@ def docker_runtime_check() -> dict[str, Any]:
         text=True,
         encoding="utf-8",
         timeout=30,
+        creationflags=noninteractive_creationflags(),
     )
     if compose.returncode != 0:
         return {
@@ -31087,6 +31072,7 @@ def docker_runtime_check() -> dict[str, Any]:
         text=True,
         encoding="utf-8",
         timeout=30,
+        creationflags=noninteractive_creationflags(),
     )
     if info.returncode != 0:
         return {
@@ -31103,6 +31089,7 @@ def docker_runtime_check() -> dict[str, Any]:
         text=True,
         encoding="utf-8",
         timeout=60,
+        creationflags=noninteractive_creationflags(),
     )
     if config.returncode != 0:
         return {
