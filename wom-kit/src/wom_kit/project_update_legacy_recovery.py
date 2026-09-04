@@ -1643,6 +1643,36 @@ class ResolvedActiveRecovery:
     fresh_transaction_ref: str | None
 
 
+@dataclass(frozen=True)
+class ResolvedTerminalRecovery:
+    """Bounded authenticated proof for one retired cancellation terminal.
+
+    Only fixed identifiers and digests needed to bind a restart delivery
+    capsule leave the resolver.  In particular, the private approval seed,
+    its raw reviewer, filesystem paths, and the public result projection are
+    deliberately not exposed.
+    """
+
+    recovery_ref: str
+    outcome: str
+    archive_identity_sha256: str
+    project_identity_sha256: str
+    intent_sha256: str
+    journal_head_sha256: str
+    fresh_transaction_ref: str
+    terminal_locator_sha256: str
+    terminal_receipt_document_sha256: str
+    cancellation_result_document_sha256: str
+    cancellation_result_sha256: str
+    cancellation_plan_document_sha256: str
+    cancellation_stage_evidence_document_sha256: str
+    cancellation_stage_evidence_sha256: str
+    cancellation_cleanup_evidence_document_sha256: str
+    cancellation_cleanup_evidence_sha256: str
+    cancellation_restore_evidence_document_sha256: str
+    cancellation_restore_evidence_sha256: str
+
+
 class LegacyRecoveryStore:
     """Create/read an authenticated create-only recovery record chain."""
 
@@ -4741,6 +4771,894 @@ def resolve_active_recovery(
                     terminal_receipt_document_sha256
                 ),
                 fresh_transaction_ref=terminal_ref or established_ref,
+            )
+
+    try:
+        return key_provider.use_key(
+            archive_root,
+            consume,
+            create_if_missing=False,
+        )
+    except LegacyProjectUpdateRecoveryError:
+        raise
+    except BaseException:
+        raise _fail(
+            "project_update_legacy_recovery_authentication_invalid"
+        ) from None
+
+
+def resolve_terminal_recovery(
+    project_root: Path | str,
+    archive_root: Path | str,
+    recovery_ref: str,
+    key_provider: Any,
+    *,
+    create_if_missing: bool = False,
+) -> ResolvedTerminalRecovery:
+    """Reauthenticate one retired, unapproved recovery after restart.
+
+    The caller-provided reference selects a private recovery directory but is
+    not authority.  Authority comes only from the existing archive key and
+    the authenticated terminal locator, complete checkpoint chain, immutable
+    evidence documents, and terminal receipt below it.
+    """
+
+    if (
+        type(recovery_ref) is not str
+        or _RECOVERY_REF_RE.fullmatch(recovery_ref) is None
+        or type(create_if_missing) is not bool
+        or create_if_missing
+        or not callable(getattr(key_provider, "use_key", None))
+    ):
+        raise _fail("project_update_legacy_recovery_binding_invalid")
+    project = Path(os.path.abspath(str(project_root)))
+    RecoveryPaths.build(project, recovery_ref)
+
+    def consume(key: memoryview) -> ResolvedTerminalRecovery:
+        with LegacyRecoveryStore(project, recovery_ref, key) as store:
+            terminal_path = store.paths.recovery_root / "terminal-locator.json"
+            transition_path = _locator_transition_path(
+                store.paths.locator_path
+            )
+            if os.path.lexists(store.paths.locator_path) or os.path.lexists(
+                transition_path
+            ):
+                raise _fail(
+                    "project_update_legacy_recovery_state_ambiguous"
+                )
+            _safe_directory(store.paths.recovery_root)
+            if not os.path.lexists(terminal_path):
+                raise _fail("project_update_legacy_recovery_state_changed")
+            terminal_raw = _read_regular(terminal_path)
+            terminal = verify_authenticated_document(
+                _parse_json(terminal_raw), store._key
+            )
+            terminal_keys = {
+                "intent_sha256",
+                "journal_head_sha256",
+                "previous_locator_sha256",
+                "recovery_ref",
+                "schema",
+                "state",
+                "terminal_receipt_sha256",
+            }
+            if (
+                set(terminal) != terminal_keys
+                or terminal.get("schema") != ACTIVE_LOCATOR_SCHEMA
+                or terminal.get("recovery_ref") != recovery_ref
+                or terminal.get("state") != "terminal_completed"
+                or any(
+                    type(terminal.get(name)) is not str
+                    or _SHA_RE.fullmatch(str(terminal.get(name))) is None
+                    for name in (
+                        "intent_sha256",
+                        "journal_head_sha256",
+                        "previous_locator_sha256",
+                        "terminal_receipt_sha256",
+                    )
+                )
+            ):
+                raise _fail(
+                    "project_update_legacy_recovery_binding_invalid"
+                )
+            terminal_locator_sha256 = sha256_bytes(terminal_raw)
+            preterminal_locator_sha256 = str(
+                terminal["previous_locator_sha256"]
+            )
+            history_root = store.paths.recovery_root / "locator-history"
+            preterminal_path = (
+                history_root
+                / (
+                    preterminal_locator_sha256.removeprefix("sha256:")
+                    + ".json"
+                )
+            )
+            with _retained_parent_chains(
+                store.paths.project_root,
+                store.paths.recovery_root,
+                history_root,
+            ):
+                if not os.path.lexists(preterminal_path):
+                    raise _fail(
+                        "project_update_legacy_recovery_state_changed"
+                    )
+                preterminal_raw = _read_regular(preterminal_path)
+            preterminal = verify_authenticated_document(
+                _parse_json(preterminal_raw), store._key
+            )
+            ordinary_locator_keys = {
+                "intent_sha256",
+                "journal_head_sha256",
+                "previous_locator_sha256",
+                "recovery_ref",
+                "schema",
+                "state",
+            }
+            if (
+                sha256_bytes(preterminal_raw)
+                != preterminal_locator_sha256
+                or set(preterminal) != ordinary_locator_keys
+                or preterminal.get("schema") != ACTIVE_LOCATOR_SCHEMA
+                or preterminal.get("recovery_ref") != recovery_ref
+                or preterminal.get("state") != "unapproved_restored"
+                or preterminal.get("intent_sha256")
+                != terminal["intent_sha256"]
+                or preterminal.get("journal_head_sha256")
+                != terminal["journal_head_sha256"]
+                or _SHA_RE.fullmatch(
+                    str(preterminal.get("previous_locator_sha256"))
+                )
+                is None
+            ):
+                raise _fail("project_update_legacy_recovery_state_changed")
+
+            intent, intent_sha256 = store.read_intent()
+            if terminal["intent_sha256"] != intent_sha256:
+                raise _fail("project_update_legacy_recovery_state_changed")
+            try:
+                exact_intent = recovery_intent_document(
+                    recovery_ref=str(intent["recovery_ref"]),
+                    old_transaction_ref=str(intent["old_transaction_ref"]),
+                    old_transaction_sha256=str(
+                        intent["old_transaction_sha256"]
+                    ),
+                    old_claim_sha256=str(intent["old_claim_sha256"]),
+                    old_lock_sha256=str(intent["old_lock_sha256"]),
+                    old_live_components_sha256=str(
+                        intent["old_live_components_sha256"]
+                    ),
+                    archive_identity_sha256=str(
+                        intent["archive_identity_sha256"]
+                    ),
+                    project_identity_sha256=str(
+                        intent["project_identity_sha256"]
+                    ),
+                    fresh_approval_seed_document_sha256=str(
+                        intent["fresh_approval_seed_document_sha256"]
+                    ),
+                )
+            except (KeyError, TypeError):
+                raise _fail(
+                    "project_update_legacy_recovery_binding_invalid"
+                ) from None
+            if exact_intent != intent:
+                raise _fail(
+                    "project_update_legacy_recovery_binding_invalid"
+                )
+
+            # The seed is authenticated and cross-bound but never returned;
+            # its raw reviewer remains confined to this private stack frame.
+            seed_path = (
+                store.paths.recovery_root / "fresh-approval-seed.json"
+            )
+            seed = store.read_fresh_approval_seed()
+            seed_document_sha256 = sha256_bytes(_read_regular(seed_path))
+            if (
+                intent["fresh_approval_seed_document_sha256"]
+                != seed_document_sha256
+                or seed["old_transaction_ref"]
+                != intent["old_transaction_ref"]
+                or seed["old_transaction_sha256"]
+                != intent["old_transaction_sha256"]
+                or seed["archive_identity_sha256"]
+                != intent["archive_identity_sha256"]
+                or seed["project_identity_sha256"]
+                != intent["project_identity_sha256"]
+            ):
+                raise _fail("project_update_legacy_recovery_state_changed")
+
+            chain = store._read_checkpoint_chain(
+                intent_sha256=intent_sha256
+            )
+            expected_phases = (
+                "legacy_eligibility_verified",
+                "old_transaction_staged",
+                "fresh_transaction_allocated",
+                "fresh_reservation_bound",
+                "fresh_plan_sealed",
+                "cancelled_fresh_staged",
+                "cancelled_fresh_cleaned",
+                "unapproved_restored",
+            )
+            if (
+                tuple(
+                    str(checkpoint.get("phase"))
+                    for checkpoint, _digest in chain
+                )
+                != expected_phases
+                or _checkpoint_chain_state(
+                    tuple(checkpoint for checkpoint, _digest in chain)
+                )
+                != "unapproved_restored"
+                or not chain
+                or terminal["journal_head_sha256"] != chain[-1][1]
+            ):
+                raise _fail("project_update_legacy_recovery_state_changed")
+            checkpoint_by_phase = {
+                str(checkpoint["phase"]): checkpoint
+                for checkpoint, _digest in chain
+            }
+            journal_head_sha256 = chain[-1][1]
+
+            control_paths = {
+                "pre": store.paths.recovery_root
+                / "pre-fetch-ref-snapshot.json",
+                "allocation": store.paths.recovery_root
+                / "fresh-allocation.json",
+                "reservation": store.paths.recovery_root
+                / "fresh-reservation.json",
+                "inventory": store.paths.recovery_root
+                / "fresh-transaction-inventory",
+                "post": store.paths.recovery_root
+                / "post-fetch-ref-snapshot.json",
+                "prospective": store.paths.recovery_root
+                / "prospective-plan.json",
+                "result": store.paths.recovery_root
+                / "cancellation-result.json",
+                "plan": store.paths.recovery_root / "cancellation-plan.json",
+                "stage": store.paths.recovery_root
+                / "cancellation-stage-evidence.json",
+                "cleanup": store.paths.recovery_root
+                / "cancellation-cleanup-evidence.json",
+                "restore": store.paths.recovery_root
+                / "cancellation-restore-evidence.json",
+                "receipt": store.paths.recovery_root
+                / "terminal-receipt.json",
+            }
+            if any(
+                not os.path.lexists(path) for path in control_paths.values()
+            ) or os.path.lexists(
+                store.paths.recovery_root
+                / "fresh-transaction-inventory.prepared"
+            ):
+                raise _fail("project_update_legacy_recovery_state_changed")
+
+            pre_snapshot = store.read_pre_fetch_ref_snapshot()
+            allocation = store.read_fresh_allocation()
+            reservation = store.read_fresh_reservation()
+            inventory = store.read_fresh_transaction_inventory()
+            post_snapshot = store.read_post_fetch_ref_snapshot()
+            prospective = store.read_prospective_plan()
+            cancellation_result = store.read_cancellation_result()
+            cancellation_plan = store.read_cancellation_plan()
+            stage_evidence = store.read_cancellation_stage_evidence()
+            cleanup_evidence = store.read_cancellation_cleanup_evidence()
+            restore_evidence = store.read_cancellation_restore_evidence()
+            receipt = store.read_terminal_receipt()
+
+            document_digests = {
+                name: sha256_bytes(_read_regular(path))
+                for name, path in control_paths.items()
+                if name != "inventory"
+            }
+            document_digests["inventory"] = inventory[
+                "fresh_transaction_inventory_document_sha256"
+            ]
+
+            try:
+                prepared = _prepared_reservation_from_allocation(allocation)
+                exact_allocation = fresh_allocation_document(
+                    recovery_ref=recovery_ref,
+                    prepared_reservation_document=prepared.document(),
+                    old_abandonment_sha256=str(
+                        allocation["old_abandonment_sha256"]
+                    ),
+                    pre_ref_snapshot_document_sha256=str(
+                        allocation[
+                            "pre_ref_snapshot_document_sha256"
+                        ]
+                    ),
+                    pre_ref_snapshot_sha256=str(
+                        allocation["pre_ref_snapshot_sha256"]
+                    ),
+                    transport_cache_policy=str(
+                        allocation["transport_cache_policy"]
+                    ),
+                )
+                exact_reservation = fresh_reservation_document(
+                    recovery_ref=recovery_ref,
+                    fresh_transaction_ref=str(
+                        reservation["fresh_transaction_ref"]
+                    ),
+                    fresh_reservation_sha256=str(
+                        reservation["fresh_reservation_sha256"]
+                    ),
+                    fresh_allocation_document_sha256=str(
+                        reservation[
+                            "fresh_allocation_document_sha256"
+                        ]
+                    ),
+                    old_abandonment_sha256=str(
+                        reservation["old_abandonment_sha256"]
+                    ),
+                )
+                exact_prospective = prospective_plan_document(
+                    recovery_ref=recovery_ref,
+                    fresh_allocation_document_sha256=str(
+                        prospective[
+                            "fresh_allocation_document_sha256"
+                        ]
+                    ),
+                    fresh_transaction_ref=str(
+                        prospective["fresh_transaction_ref"]
+                    ),
+                    fresh_intent_sha256=str(
+                        prospective["fresh_intent_sha256"]
+                    ),
+                    fresh_transaction_inventory_sha256=str(
+                        prospective[
+                            "fresh_transaction_inventory_sha256"
+                        ]
+                    ),
+                    fresh_transaction_inventory_document_sha256=str(
+                        prospective[
+                            "fresh_transaction_inventory_document_sha256"
+                        ]
+                    ),
+                    fresh_approval_plan_sha256=str(
+                        prospective["fresh_approval_plan_sha256"]
+                    ),
+                    fresh_approval_target_binding_sha256=str(
+                        prospective[
+                            "fresh_approval_target_binding_sha256"
+                        ]
+                    ),
+                    fresh_approval_context_sha256=str(
+                        prospective["fresh_approval_context_sha256"]
+                    ),
+                    fresh_recovery_binding_sha256=str(
+                        prospective["fresh_recovery_binding_sha256"]
+                    ),
+                    post_ref_snapshot_document_sha256=str(
+                        prospective[
+                            "post_ref_snapshot_document_sha256"
+                        ]
+                    ),
+                    post_ref_snapshot_sha256=str(
+                        prospective["post_ref_snapshot_sha256"]
+                    ),
+                    old_abandonment_sha256=str(
+                        prospective["old_abandonment_sha256"]
+                    ),
+                )
+                exact_plan = cancellation_plan_document(
+                    recovery_ref=recovery_ref,
+                    intent_sha256=str(cancellation_plan["intent_sha256"]),
+                    fresh_transaction_ref=str(
+                        cancellation_plan["fresh_transaction_ref"]
+                    ),
+                    prospective_plan_document_sha256=str(
+                        cancellation_plan[
+                            "prospective_plan_document_sha256"
+                        ]
+                    ),
+                    fresh_approval_plan_sha256=str(
+                        cancellation_plan["fresh_approval_plan_sha256"]
+                    ),
+                    fresh_approval_context_sha256=str(
+                        cancellation_plan[
+                            "fresh_approval_context_sha256"
+                        ]
+                    ),
+                    claim_absence_evidence_sha256=str(
+                        cancellation_plan[
+                            "claim_absence_evidence_sha256"
+                        ]
+                    ),
+                    old_transaction_ref=str(
+                        cancellation_plan["old_transaction_ref"]
+                    ),
+                    old_transaction_sha256=str(
+                        cancellation_plan["old_transaction_sha256"]
+                    ),
+                    old_lock_sha256=str(
+                        cancellation_plan["old_lock_sha256"]
+                    ),
+                    old_abandonment_sha256=str(
+                        cancellation_plan["old_abandonment_sha256"]
+                    ),
+                    fresh_transaction_inventory_sha256=str(
+                        cancellation_plan[
+                            "fresh_transaction_inventory_sha256"
+                        ]
+                    ),
+                    fresh_transaction_inventory_document_sha256=str(
+                        cancellation_plan[
+                            "fresh_transaction_inventory_document_sha256"
+                        ]
+                    ),
+                    cancellation_result_sha256=str(
+                        cancellation_plan["cancellation_result_sha256"]
+                    ),
+                    cancellation_result_document_sha256=str(
+                        cancellation_plan[
+                            "cancellation_result_document_sha256"
+                        ]
+                    ),
+                )
+                exact_stage = cancellation_stage_evidence_document(
+                    recovery_ref=recovery_ref,
+                    intent_sha256=str(stage_evidence["intent_sha256"]),
+                    fresh_transaction_ref=str(
+                        stage_evidence["fresh_transaction_ref"]
+                    ),
+                    cancellation_plan_document_sha256=str(
+                        stage_evidence[
+                            "cancellation_plan_document_sha256"
+                        ]
+                    ),
+                    claim_absence_evidence_sha256=str(
+                        stage_evidence[
+                            "claim_absence_evidence_sha256"
+                        ]
+                    ),
+                    fresh_transaction_inventory_sha256=str(
+                        stage_evidence[
+                            "fresh_transaction_inventory_sha256"
+                        ]
+                    ),
+                    fresh_transaction_inventory_document_sha256=str(
+                        stage_evidence[
+                            "fresh_transaction_inventory_document_sha256"
+                        ]
+                    ),
+                    stage_state=str(stage_evidence["stage_state"]),
+                )
+                exact_cleanup = cancellation_cleanup_evidence_document(
+                    recovery_ref=recovery_ref,
+                    intent_sha256=str(cleanup_evidence["intent_sha256"]),
+                    fresh_transaction_ref=str(
+                        cleanup_evidence["fresh_transaction_ref"]
+                    ),
+                    cancellation_plan_document_sha256=str(
+                        cleanup_evidence[
+                            "cancellation_plan_document_sha256"
+                        ]
+                    ),
+                    cancellation_stage_evidence_document_sha256=str(
+                        cleanup_evidence[
+                            "cancellation_stage_evidence_document_sha256"
+                        ]
+                    ),
+                    fresh_transaction_inventory_sha256=str(
+                        cleanup_evidence[
+                            "fresh_transaction_inventory_sha256"
+                        ]
+                    ),
+                    fresh_transaction_inventory_document_sha256=str(
+                        cleanup_evidence[
+                            "fresh_transaction_inventory_document_sha256"
+                        ]
+                    ),
+                    cleanup_state=str(cleanup_evidence["cleanup_state"]),
+                )
+                exact_restore = cancellation_restore_evidence_document(
+                    recovery_ref=recovery_ref,
+                    intent_sha256=str(restore_evidence["intent_sha256"]),
+                    fresh_transaction_ref=str(
+                        restore_evidence["fresh_transaction_ref"]
+                    ),
+                    cancellation_plan_document_sha256=str(
+                        restore_evidence[
+                            "cancellation_plan_document_sha256"
+                        ]
+                    ),
+                    cancellation_cleanup_evidence_document_sha256=str(
+                        restore_evidence[
+                            "cancellation_cleanup_evidence_document_sha256"
+                        ]
+                    ),
+                    old_transaction_ref=str(
+                        restore_evidence["old_transaction_ref"]
+                    ),
+                    old_transaction_sha256=str(
+                        restore_evidence["old_transaction_sha256"]
+                    ),
+                    old_lock_sha256=str(
+                        restore_evidence["old_lock_sha256"]
+                    ),
+                    restore_state=str(restore_evidence["restore_state"]),
+                )
+                exact_receipt = terminal_receipt_document(
+                    recovery_ref=recovery_ref,
+                    outcome="unapproved_restored",
+                    intent_sha256=str(receipt["intent_sha256"]),
+                    journal_head_sha256=str(receipt["journal_head_sha256"]),
+                    fresh_transaction_ref=str(
+                        receipt["fresh_transaction_ref"]
+                    ),
+                    old_transaction_inventory_sha256=str(
+                        receipt["old_transaction_inventory_sha256"]
+                    ),
+                    claim_absence_evidence_sha256=str(
+                        receipt["claim_absence_evidence_sha256"]
+                    ),
+                    cancelled_fresh_staging_sha256=str(
+                        receipt["cancelled_fresh_staging_sha256"]
+                    ),
+                    cancelled_fresh_transaction_inventory_sha256=str(
+                        receipt[
+                            "cancelled_fresh_transaction_inventory_sha256"
+                        ]
+                    ),
+                    cancelled_fresh_transaction_inventory_document_sha256=str(
+                        receipt[
+                            "cancelled_fresh_transaction_inventory_document_sha256"
+                        ]
+                    ),
+                    cancelled_fresh_cleanup_evidence_sha256=str(
+                        receipt[
+                            "cancelled_fresh_cleanup_evidence_sha256"
+                        ]
+                    ),
+                    restored_old_transaction_sha256=str(
+                        receipt["restored_old_transaction_sha256"]
+                    ),
+                    preserved_old_lock_sha256=str(
+                        receipt["preserved_old_lock_sha256"]
+                    ),
+                    cancellation_plan_document_sha256=str(
+                        receipt["cancellation_plan_document_sha256"]
+                    ),
+                    cancellation_result_document_sha256=str(
+                        receipt["cancellation_result_document_sha256"]
+                    ),
+                    cancellation_result_sha256=str(
+                        receipt["cancellation_result_sha256"]
+                    ),
+                    cancelled_fresh_staging_document_sha256=str(
+                        receipt[
+                            "cancelled_fresh_staging_document_sha256"
+                        ]
+                    ),
+                    cancelled_fresh_cleanup_evidence_document_sha256=str(
+                        receipt[
+                            "cancelled_fresh_cleanup_evidence_document_sha256"
+                        ]
+                    ),
+                    restored_evidence_sha256=str(
+                        receipt["restored_evidence_sha256"]
+                    ),
+                    restored_evidence_document_sha256=str(
+                        receipt["restored_evidence_document_sha256"]
+                    ),
+                )
+            except (KeyError, TypeError):
+                raise _fail(
+                    "project_update_legacy_recovery_binding_invalid"
+                ) from None
+
+            if (
+                allocation != exact_allocation
+                or reservation != exact_reservation
+                or prospective != exact_prospective
+                or cancellation_plan != exact_plan
+                or stage_evidence != exact_stage
+                or cleanup_evidence != exact_cleanup
+                or restore_evidence != exact_restore
+                or receipt != exact_receipt
+                or cancellation_result["cancellation_result"]
+                != cancellation_result_document()
+                or receipt["outcome"] != "unapproved_restored"
+            ):
+                raise _fail(
+                    "project_update_legacy_recovery_binding_invalid"
+                )
+
+            fresh_transaction_ref = str(
+                allocation["fresh_transaction_ref"]
+            )
+            phase_evidence = {
+                "fresh_transaction_allocated": document_digests[
+                    "allocation"
+                ],
+                "fresh_reservation_bound": document_digests[
+                    "reservation"
+                ],
+                "fresh_plan_sealed": document_digests["prospective"],
+                "cancelled_fresh_staged": document_digests["stage"],
+                "cancelled_fresh_cleaned": document_digests["cleanup"],
+                "unapproved_restored": document_digests["restore"],
+            }
+            if any(
+                checkpoint_by_phase[phase]["evidence_sha256"] != digest
+                for phase, digest in phase_evidence.items()
+            ):
+                raise _fail("project_update_legacy_recovery_state_changed")
+
+            old_abandonment_sha256 = checkpoint_by_phase[
+                "legacy_eligibility_verified"
+            ]["evidence_sha256"]
+            allowed_old_stage_evidence = {
+                sha256_document(
+                    {
+                        "old_transaction_sha256": intent[
+                            "old_transaction_sha256"
+                        ],
+                        "schema": (
+                            "wom-kit/project-update-legacy-stage-evidence/"
+                            "v0.4.19"
+                        ),
+                        "state": state,
+                    }
+                )
+                for state in ("staged", "already_staged")
+            }
+            stage_semantic_sha256 = sha256_document(stage_evidence)
+            cleanup_semantic_sha256 = sha256_document(cleanup_evidence)
+            restore_semantic_sha256 = sha256_document(restore_evidence)
+            if (
+                checkpoint_by_phase["old_transaction_staged"][
+                    "evidence_sha256"
+                ]
+                not in allowed_old_stage_evidence
+                or allocation["old_abandonment_sha256"]
+                != old_abandonment_sha256
+                or allocation["project_identity_sha256"]
+                != intent["project_identity_sha256"]
+                or allocation["project_identity_sha256"]
+                != seed["project_identity_sha256"]
+                or allocation["requested_target_tag"]
+                != seed["requested_target_tag"]
+                or allocation["pre_ref_snapshot_document_sha256"]
+                != pre_snapshot["pre_ref_snapshot_document_sha256"]
+                or allocation["pre_ref_snapshot_sha256"]
+                != pre_snapshot["pre_ref_snapshot_sha256"]
+                or reservation["fresh_transaction_ref"]
+                != fresh_transaction_ref
+                or reservation["fresh_allocation_document_sha256"]
+                != document_digests["allocation"]
+                or reservation["fresh_reservation_sha256"]
+                != allocation["prepared_reservation_document_sha256"]
+                or reservation["old_abandonment_sha256"]
+                != old_abandonment_sha256
+                or inventory["fresh_transaction_ref"]
+                != fresh_transaction_ref
+                or post_snapshot["pre_ref_snapshot_document_sha256"]
+                != pre_snapshot["pre_ref_snapshot_document_sha256"]
+                or post_snapshot["pre_ref_snapshot_sha256"]
+                != pre_snapshot["pre_ref_snapshot_sha256"]
+                or post_snapshot["requested_target_tag"]
+                != allocation["requested_target_tag"]
+                or post_snapshot["transport_cache_policy"]
+                != allocation["transport_cache_policy"]
+                or prospective["fresh_transaction_ref"]
+                != fresh_transaction_ref
+                or prospective["fresh_allocation_document_sha256"]
+                != document_digests["allocation"]
+                or prospective[
+                    "fresh_transaction_inventory_document_sha256"
+                ]
+                != document_digests["inventory"]
+                or prospective["fresh_transaction_inventory_sha256"]
+                != inventory["fresh_transaction_inventory_sha256"]
+                or prospective["post_ref_snapshot_document_sha256"]
+                != post_snapshot["post_ref_snapshot_document_sha256"]
+                or prospective["post_ref_snapshot_sha256"]
+                != post_snapshot["post_ref_snapshot_sha256"]
+                or prospective["old_abandonment_sha256"]
+                != old_abandonment_sha256
+                or cancellation_plan["intent_sha256"] != intent_sha256
+                or cancellation_plan["fresh_transaction_ref"]
+                != fresh_transaction_ref
+                or cancellation_plan["prospective_plan_document_sha256"]
+                != document_digests["prospective"]
+                or cancellation_plan["fresh_approval_plan_sha256"]
+                != prospective["fresh_approval_plan_sha256"]
+                or cancellation_plan["fresh_approval_context_sha256"]
+                != prospective["fresh_approval_context_sha256"]
+                or cancellation_plan["old_abandonment_sha256"]
+                != old_abandonment_sha256
+                or cancellation_plan["old_transaction_ref"]
+                != intent["old_transaction_ref"]
+                or cancellation_plan["old_transaction_sha256"]
+                != intent["old_transaction_sha256"]
+                or cancellation_plan["old_lock_sha256"]
+                != intent["old_lock_sha256"]
+                or cancellation_plan[
+                    "fresh_transaction_inventory_document_sha256"
+                ]
+                != document_digests["inventory"]
+                or cancellation_plan[
+                    "fresh_transaction_inventory_sha256"
+                ]
+                != inventory["fresh_transaction_inventory_sha256"]
+                or cancellation_plan[
+                    "cancellation_result_document_sha256"
+                ]
+                != cancellation_result[
+                    "cancellation_result_document_sha256"
+                ]
+                or document_digests["result"]
+                != cancellation_result[
+                    "cancellation_result_document_sha256"
+                ]
+                or cancellation_plan["cancellation_result_sha256"]
+                != cancellation_result["cancellation_result_sha256"]
+                or stage_evidence["intent_sha256"] != intent_sha256
+                or stage_evidence["fresh_transaction_ref"]
+                != fresh_transaction_ref
+                or stage_evidence["cancellation_plan_document_sha256"]
+                != document_digests["plan"]
+                or stage_evidence["claim_absence_evidence_sha256"]
+                != cancellation_plan["claim_absence_evidence_sha256"]
+                or stage_evidence[
+                    "fresh_transaction_inventory_document_sha256"
+                ]
+                != document_digests["inventory"]
+                or stage_evidence["fresh_transaction_inventory_sha256"]
+                != inventory["fresh_transaction_inventory_sha256"]
+                or cleanup_evidence["intent_sha256"] != intent_sha256
+                or cleanup_evidence["fresh_transaction_ref"]
+                != fresh_transaction_ref
+                or cleanup_evidence["cancellation_plan_document_sha256"]
+                != document_digests["plan"]
+                or cleanup_evidence[
+                    "cancellation_stage_evidence_document_sha256"
+                ]
+                != document_digests["stage"]
+                or cleanup_evidence[
+                    "fresh_transaction_inventory_document_sha256"
+                ]
+                != document_digests["inventory"]
+                or cleanup_evidence[
+                    "fresh_transaction_inventory_sha256"
+                ]
+                != inventory["fresh_transaction_inventory_sha256"]
+                or restore_evidence["intent_sha256"] != intent_sha256
+                or restore_evidence["fresh_transaction_ref"]
+                != fresh_transaction_ref
+                or restore_evidence["cancellation_plan_document_sha256"]
+                != document_digests["plan"]
+                or restore_evidence[
+                    "cancellation_cleanup_evidence_document_sha256"
+                ]
+                != document_digests["cleanup"]
+                or restore_evidence["old_transaction_ref"]
+                != intent["old_transaction_ref"]
+                or restore_evidence["old_transaction_sha256"]
+                != intent["old_transaction_sha256"]
+                or restore_evidence["old_lock_sha256"]
+                != intent["old_lock_sha256"]
+                or receipt["intent_sha256"] != intent_sha256
+                or receipt["journal_head_sha256"]
+                != journal_head_sha256
+                or receipt["fresh_transaction_ref"]
+                != fresh_transaction_ref
+                or receipt["old_transaction_inventory_sha256"]
+                != intent["old_transaction_sha256"]
+                or receipt["claim_absence_evidence_sha256"]
+                != cancellation_plan["claim_absence_evidence_sha256"]
+                or receipt[
+                    "cancelled_fresh_transaction_inventory_document_sha256"
+                ]
+                != document_digests["inventory"]
+                or receipt[
+                    "cancelled_fresh_transaction_inventory_sha256"
+                ]
+                != inventory["fresh_transaction_inventory_sha256"]
+                or receipt["cancellation_plan_document_sha256"]
+                != document_digests["plan"]
+                or receipt["cancellation_result_document_sha256"]
+                != cancellation_result[
+                    "cancellation_result_document_sha256"
+                ]
+                or receipt["cancellation_result_sha256"]
+                != cancellation_result["cancellation_result_sha256"]
+                or receipt["cancelled_fresh_staging_document_sha256"]
+                != document_digests["stage"]
+                or receipt["cancelled_fresh_staging_sha256"]
+                != stage_semantic_sha256
+                or receipt[
+                    "cancelled_fresh_cleanup_evidence_document_sha256"
+                ]
+                != document_digests["cleanup"]
+                or receipt["cancelled_fresh_cleanup_evidence_sha256"]
+                != cleanup_semantic_sha256
+                or receipt["restored_evidence_document_sha256"]
+                != document_digests["restore"]
+                or receipt["restored_evidence_sha256"]
+                != restore_semantic_sha256
+                or receipt["restored_old_transaction_sha256"]
+                != intent["old_transaction_sha256"]
+                or receipt["preserved_old_lock_sha256"]
+                != intent["old_lock_sha256"]
+                or terminal["terminal_receipt_sha256"]
+                != document_digests["receipt"]
+            ):
+                raise _fail("project_update_legacy_recovery_state_changed")
+
+            # Detect a competing active recovery or replacement of any bound
+            # terminal control document before returning the snapshot.
+            if (
+                os.path.lexists(store.paths.locator_path)
+                or os.path.lexists(transition_path)
+                or not hmac.compare_digest(
+                    _read_regular(terminal_path), terminal_raw
+                )
+                or any(
+                    sha256_bytes(_read_regular(path))
+                    != document_digests[name]
+                    for name, path in control_paths.items()
+                    if name != "inventory"
+                )
+            ):
+                raise _fail(
+                    "project_update_legacy_recovery_state_ambiguous"
+                )
+            with _retained_parent_chains(
+                store.paths.project_root,
+                store.paths.recovery_root,
+                history_root,
+            ):
+                if not hmac.compare_digest(
+                    _read_regular(preterminal_path), preterminal_raw
+                ):
+                    raise _fail(
+                        "project_update_legacy_recovery_state_ambiguous"
+                    )
+
+            return ResolvedTerminalRecovery(
+                recovery_ref=recovery_ref,
+                outcome="unapproved_restored",
+                archive_identity_sha256=str(
+                    intent["archive_identity_sha256"]
+                ),
+                project_identity_sha256=str(
+                    intent["project_identity_sha256"]
+                ),
+                intent_sha256=intent_sha256,
+                journal_head_sha256=journal_head_sha256,
+                fresh_transaction_ref=fresh_transaction_ref,
+                terminal_locator_sha256=terminal_locator_sha256,
+                terminal_receipt_document_sha256=document_digests[
+                    "receipt"
+                ],
+                cancellation_result_document_sha256=str(
+                    cancellation_result[
+                        "cancellation_result_document_sha256"
+                    ]
+                ),
+                cancellation_result_sha256=str(
+                    cancellation_result["cancellation_result_sha256"]
+                ),
+                cancellation_plan_document_sha256=document_digests["plan"],
+                cancellation_stage_evidence_document_sha256=(
+                    document_digests["stage"]
+                ),
+                cancellation_stage_evidence_sha256=stage_semantic_sha256,
+                cancellation_cleanup_evidence_document_sha256=(
+                    document_digests["cleanup"]
+                ),
+                cancellation_cleanup_evidence_sha256=(
+                    cleanup_semantic_sha256
+                ),
+                cancellation_restore_evidence_document_sha256=(
+                    document_digests["restore"]
+                ),
+                cancellation_restore_evidence_sha256=(
+                    restore_semantic_sha256
+                ),
             )
 
     try:
