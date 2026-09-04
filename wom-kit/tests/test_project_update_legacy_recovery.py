@@ -1211,7 +1211,19 @@ class ProjectUpdateLegacyRecoveryPrimitiveTests(unittest.TestCase):
                     )
 
                 advance("legacy_eligibility_verified", old_abandonment)
-                advance("old_transaction_staged", "sha256:" + "2" * 64)
+                advance(
+                    "old_transaction_staged",
+                    recovery.sha256_document(
+                        {
+                            "old_transaction_sha256": old_transaction_sha,
+                            "schema": (
+                                "wom-kit/project-update-legacy-stage-evidence/"
+                                "v0.4.19"
+                            ),
+                            "state": "staged",
+                        }
+                    ),
+                )
                 pre = store.write_pre_fetch_ref_snapshot(
                     {"state": "pre", "target": "v0.4.19"}
                 )
@@ -1591,6 +1603,300 @@ class ProjectUpdateLegacyRecoveryPrimitiveTests(unittest.TestCase):
                 reconstructed.terminal_receipt["outcome"],
                 "unapproved_restored",
             )
+            with recovery.LegacyRecoveryStore(
+                project, ref, self.key
+            ) as store:
+                retired = store.publish_terminal_locator_and_retire(
+                    intent_sha256=intent_sha,
+                    journal_head_sha256=restore_head,
+                    previous_locator_sha256=reconstructed.locator_sha256,
+                    terminal_receipt_sha256=receipt_sha,
+                )
+            self.assertFalse(
+                recovery.RecoveryPaths.build(project, ref).locator_path.exists()
+            )
+
+            # A fresh process can authenticate the retired terminal without
+            # recreating a key or exposing the private reviewer/result body.
+            terminal = recovery.resolve_terminal_recovery(
+                project,
+                archive,
+                ref,
+                Provider(self.key),
+            )
+            restarted = recovery.resolve_terminal_recovery(
+                project,
+                archive,
+                ref,
+                Provider(self.key),
+            )
+            self.assertEqual(terminal, restarted)
+            self.assertEqual(terminal.outcome, "unapproved_restored")
+            self.assertEqual(
+                terminal.terminal_locator_sha256,
+                retired["terminal_locator_sha256"],
+            )
+            self.assertEqual(
+                terminal.terminal_receipt_document_sha256,
+                receipt_sha,
+            )
+            self.assertEqual(
+                terminal.cancellation_result_document_sha256,
+                result_record["cancellation_result_document_sha256"],
+            )
+            self.assertEqual(
+                terminal.archive_identity_sha256,
+                "sha256:" + "6" * 64,
+            )
+            self.assertNotIn("reviewer", terminal.__dataclass_fields__)
+            self.assertNotIn(
+                "cancellation_result", terminal.__dataclass_fields__
+            )
+            self.assertNotIn("paths", terminal.__dataclass_fields__)
+
+            paths = recovery.RecoveryPaths.build(project, ref)
+            terminal_locator_path = paths.recovery_root / "terminal-locator.json"
+            terminal_receipt_path = paths.recovery_root / "terminal-receipt.json"
+            cancellation_plan_path = paths.recovery_root / "cancellation-plan.json"
+            restore_path = (
+                paths.recovery_root / "cancellation-restore-evidence.json"
+            )
+            terminal_payload = recovery.verify_authenticated_document(
+                json.loads(terminal_locator_path.read_bytes()), self.key
+            )
+            preterminal_path = (
+                paths.recovery_root
+                / "locator-history"
+                / (
+                    terminal_payload["previous_locator_sha256"].removeprefix(
+                        "sha256:"
+                    )
+                    + ".json"
+                )
+            )
+
+            def replace_authenticated(path, mutate):
+                original = path.read_bytes()
+                payload = recovery.verify_authenticated_document(
+                    json.loads(original), self.key
+                )
+                mutate(payload)
+                path.write_bytes(
+                    recovery._canonical(
+                        recovery.authenticated_document(payload, self.key)
+                    )
+                )
+                return original
+
+            # Missing exact evidence is not reconstructed from the terminal
+            # receipt or guessed from neighboring documents.
+            missing = terminal_receipt_path.with_suffix(".missing")
+            terminal_receipt_path.rename(missing)
+            try:
+                with self.assertRaisesRegex(
+                    recovery.LegacyProjectUpdateRecoveryError,
+                    "project_update_legacy_recovery_state_changed",
+                ):
+                    recovery.resolve_terminal_recovery(
+                        project, archive, ref, Provider(self.key)
+                    )
+            finally:
+                missing.rename(terminal_receipt_path)
+
+            # Authenticated extra fields, a cross-ref, and a cross-digest are
+            # independently rejected, then the exact original is restored.
+            mutations = (
+                (
+                    "extra",
+                    terminal_locator_path,
+                    lambda payload: payload.__setitem__("unexpected", True),
+                    "project_update_legacy_recovery_binding_invalid",
+                ),
+                (
+                    "cross_ref",
+                    cancellation_plan_path,
+                    lambda payload: payload.__setitem__(
+                        "recovery_ref", "recovery_" + "f" * 32
+                    ),
+                    "project_update_legacy_recovery_binding_invalid",
+                ),
+                (
+                    "cross_preterminal_locator",
+                    preterminal_path,
+                    lambda payload: payload.__setitem__(
+                        "state", "cancelled_fresh_cleaned"
+                    ),
+                    "project_update_legacy_recovery_state_changed",
+                ),
+                (
+                    "cross_digest",
+                    restore_path,
+                    lambda payload: payload.__setitem__(
+                        "cancellation_cleanup_evidence_document_sha256",
+                        "sha256:" + "f" * 64,
+                    ),
+                    "project_update_legacy_recovery_state_changed",
+                ),
+            )
+            for name, path, mutate, error in mutations:
+                with self.subTest(terminal_mutation=name):
+                    original = replace_authenticated(path, mutate)
+                    try:
+                        with self.assertRaisesRegex(
+                            recovery.LegacyProjectUpdateRecoveryError,
+                            error,
+                        ):
+                            recovery.resolve_terminal_recovery(
+                                project, archive, ref, Provider(self.key)
+                            )
+                    finally:
+                        path.write_bytes(original)
+
+            # An unauthenticated edit cannot be confused with a state drift.
+            original_terminal = terminal_locator_path.read_bytes()
+            tampered_terminal = json.loads(original_terminal)
+            original_mac = tampered_terminal["authentication"]["mac"]
+            prefix = "hmac-sha256:"
+            first = original_mac[len(prefix)]
+            tampered_terminal["authentication"]["mac"] = (
+                prefix
+                + ("0" if first != "0" else "1")
+                + original_mac[len(prefix) + 1 :]
+            )
+            terminal_locator_path.write_bytes(
+                recovery._canonical(tampered_terminal)
+            )
+            try:
+                with self.assertRaisesRegex(
+                    recovery.LegacyProjectUpdateRecoveryError,
+                    "project_update_legacy_recovery_authentication_invalid",
+                ):
+                    recovery.resolve_terminal_recovery(
+                        project, archive, ref, Provider(self.key)
+                    )
+            finally:
+                terminal_locator_path.write_bytes(original_terminal)
+
+            # A new active locator colliding with the retired terminal is an
+            # ambiguous authority and is rejected before terminal delivery.
+            paths.locator_path.write_bytes(original_terminal)
+            try:
+                with self.assertRaisesRegex(
+                    recovery.LegacyProjectUpdateRecoveryError,
+                    "project_update_legacy_recovery_state_ambiguous",
+                ):
+                    recovery.resolve_terminal_recovery(
+                        project, archive, ref, Provider(self.key)
+                    )
+            finally:
+                paths.locator_path.unlink()
+
+            # The exact HMAC child must not be accepted through a linked
+            # locator-history parent.  Use a real directory symlink when the
+            # host permits one; the deterministic fallback still proves that
+            # this intermediate directory is passed through the safety gate.
+            history_root = preterminal_path.parent
+            history_backup = paths.recovery_root / "locator-history.original"
+            outside_history = base / "outside-locator-history"
+            outside_history.mkdir()
+            (outside_history / preterminal_path.name).write_bytes(
+                preterminal_path.read_bytes()
+            )
+            history_root.rename(history_backup)
+            linked = False
+            try:
+                try:
+                    history_root.symlink_to(
+                        outside_history,
+                        target_is_directory=True,
+                    )
+                    linked = True
+                except OSError:
+                    history_backup.rename(history_root)
+                if linked:
+                    with self.assertRaisesRegex(
+                        recovery.LegacyProjectUpdateRecoveryError,
+                        "project_update_legacy_recovery_path_unsafe",
+                    ):
+                        recovery.resolve_terminal_recovery(
+                            project, archive, ref, Provider(self.key)
+                        )
+                else:
+                    real_safe_directory = recovery._safe_directory
+
+                    def reject_history_parent(path):
+                        if Path(path) == history_root:
+                            raise recovery.LegacyProjectUpdateRecoveryError(
+                                "project_update_legacy_recovery_path_unsafe"
+                            )
+                        return real_safe_directory(path)
+
+                    with patch.object(
+                        recovery,
+                        "_safe_directory",
+                        side_effect=reject_history_parent,
+                    ):
+                        with self.assertRaisesRegex(
+                            recovery.LegacyProjectUpdateRecoveryError,
+                            "project_update_legacy_recovery_path_unsafe",
+                        ):
+                            recovery.resolve_terminal_recovery(
+                                project, archive, ref, Provider(self.key)
+                            )
+            finally:
+                if linked and os.path.lexists(history_root):
+                    history_root.unlink()
+                if not history_root.exists() and history_backup.exists():
+                    history_backup.rename(history_root)
+
+            with self.assertRaisesRegex(
+                recovery.LegacyProjectUpdateRecoveryError,
+                "project_update_legacy_recovery_authentication_invalid",
+            ):
+                recovery.resolve_terminal_recovery(
+                    project,
+                    archive,
+                    ref,
+                    Provider(bytes(reversed(self.key))),
+                )
+
+            class TrackingProvider(Provider):
+                def __init__(self, key):
+                    super().__init__(key)
+                    self.calls = 0
+
+                def use_key(self, _root, consumer, *, create_if_missing=False):
+                    self.calls += 1
+                    return super().use_key(
+                        _root,
+                        consumer,
+                        create_if_missing=create_if_missing,
+                    )
+
+            unused = TrackingProvider(self.key)
+            with self.assertRaisesRegex(
+                recovery.LegacyProjectUpdateRecoveryError,
+                "project_update_legacy_recovery_binding_invalid",
+            ):
+                recovery.resolve_terminal_recovery(
+                    project,
+                    archive,
+                    "not-a-recovery-ref",
+                    unused,
+                )
+            self.assertEqual(unused.calls, 0)
+            with self.assertRaisesRegex(
+                recovery.LegacyProjectUpdateRecoveryError,
+                "project_update_legacy_recovery_binding_invalid",
+            ):
+                recovery.resolve_terminal_recovery(
+                    project,
+                    archive,
+                    ref,
+                    unused,
+                    create_if_missing=True,
+                )
+            self.assertEqual(unused.calls, 0)
 
     def test_terminal_locator_publish_and_retire_is_idempotent(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1652,6 +1958,28 @@ class ProjectUpdateLegacyRecoveryPrimitiveTests(unittest.TestCase):
                 )
                 self.assertEqual(first, second)
                 self.assertFalse(store.paths.locator_path.exists())
+
+            class Provider:
+                def use_key(
+                    self, _root, consumer, *, create_if_missing=False
+                ):
+                    if create_if_missing:
+                        raise AssertionError("must not create")
+                    return consumer(memoryview(self_key))
+
+            self_key = self.key
+            archive = Path(tmp) / "archive"
+            archive.mkdir()
+            with self.assertRaisesRegex(
+                recovery.LegacyProjectUpdateRecoveryError,
+                "project_update_legacy_recovery_state_changed",
+            ):
+                recovery.resolve_terminal_recovery(
+                    project,
+                    archive,
+                    ref,
+                    Provider(),
+                )
 
     def test_resolver_reconciles_exactly_one_forward_checkpoint(self) -> None:
         class Provider:
