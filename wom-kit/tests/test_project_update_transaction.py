@@ -488,6 +488,57 @@ class ProjectUpdateTransactionTests(unittest.TestCase):
             runtime_candidate_postimage_sha256=runtime_post,
         )
 
+    def test_legacy_recovery_detached_seal_requires_exact_private_binding(self) -> None:
+        reserved, lock_bytes, tree = self.reserve_and_build_candidate(
+            acquire=False
+        )
+        self.assertIsNone(lock_bytes)
+        binding = digest("legacy-recovery-binding")
+        static_receipt = self.static_receipt(reserved.transaction_ref)
+        components = self.components(receipt_postimage=static_receipt)
+        runtime_post = next(
+            component.post_sha256
+            for component in components
+            if component.role == "runtime"
+        )
+        common = {
+            "bindings": self.bindings(),
+            "components": components,
+            "preimages": dict(self.pre_values),
+            "static_receipt_postimage": static_receipt,
+            "runtime_candidate_inventory_sha256": tree.recursive_tree_sha256,
+            "runtime_candidate_postimage_sha256": runtime_post,
+            "_legacy_recovery_binding_sha256": binding,
+        }
+        self.assert_code(
+            "project_update_transaction_intent_invalid",
+            lambda: reserved.seal_intent(
+                **common,
+                private_binding_blobs={
+                    "git-runner-binding": b"private-runner",
+                    "legacy-prewrite-recovery-binding": b"wrong\n",
+                },
+            ),
+        )
+        transaction = reserved.seal_intent(
+            **common,
+            private_binding_blobs={
+                "git-runner-binding": b"private-runner",
+                "legacy-prewrite-recovery-binding": (
+                    binding + "\n"
+                ).encode("ascii"),
+            },
+        )
+        self.assertEqual(transaction.intent.requested_target_tag, "v0.4.3")
+        self.assertTrue((reserved.transaction_root / "intent-seal.json").is_file())
+        self.assertFalse((reserved.transaction_root / "checkpoints.jsonl").exists())
+        self.assertFalse(
+            (reserved.transaction_root / "reservation-lock-backlink.json").exists()
+        )
+        self.assertFalse(
+            (reserved.transaction_root / "lock-backlink.json").exists()
+        )
+
     def transaction_root(self, transaction: ProjectUpdateTransaction) -> Path:
         return (
             self.project
@@ -3286,6 +3337,585 @@ class ProjectUpdateTransactionTests(unittest.TestCase):
                             static_receipt_postimage=self.post_values["receipt"],
                         ),
                     )
+
+    def test_prepared_reservation_is_write_free_and_binds_exact_marker(self) -> None:
+        reservation = ProjectUpdateTransaction.prepare_reservation(
+            project_identity_sha256=digest("prepared-project"),
+            requested_target_tag="v0.4.19",
+            transaction_ref=self.DEFAULT_TRANSACTION_REF,
+            ownership_nonce="abcdef0123456789abcdef0123456789",
+            created_at=self.CREATED_AT,
+        )
+
+        self.assertFalse((self.project / ".zettel-kasten").exists())
+        self.assertEqual(reservation.transaction_ref, self.DEFAULT_TRANSACTION_REF)
+        self.assertEqual(
+            reservation.sha256,
+            transaction_module.sha256_document(reservation.document()),
+        )
+        self.assertEqual(
+            transaction_module.ProjectUpdateReservation.from_document(
+                reservation.document()
+            ),
+            reservation,
+        )
+
+    def test_reserve_or_resume_exact_recovers_every_durable_prefix_after_hard_exit(
+        self,
+    ) -> None:
+        worker = "\n".join(
+            (
+                "import json, os, sys",
+                "from pathlib import Path",
+                "from wom_kit.project_update_transaction import ProjectUpdateReservation, ProjectUpdateTransaction",
+                "reservation = ProjectUpdateReservation.from_document(json.loads(sys.argv[2]))",
+                "def stop_at_boundary(name):",
+                "    if name == sys.argv[3]:",
+                "        os._exit(79)",
+                "ProjectUpdateTransaction.reserve_or_resume_exact(Path(sys.argv[1]), reservation=reservation, _durable_boundary_callback=stop_at_boundary)",
+            )
+        )
+        expected_names = {
+            "root_durable": (),
+            "marker_durable": ("marker.json",),
+            "append_guard_durable": ("append.guard", "marker.json"),
+        }
+
+        for index, (boundary, expected) in enumerate(expected_names.items(), start=1):
+            with self.subTest(boundary=boundary):
+                project = self.project.parent / f"hard-exit-{index}"
+                project.mkdir()
+                reservation = ProjectUpdateTransaction.prepare_reservation(
+                    project_identity_sha256=digest(f"hard-exit-project-{index}"),
+                    requested_target_tag="v0.4.19",
+                    transaction_ref=self.DEFAULT_TRANSACTION_REF,
+                    ownership_nonce=f"{index:032x}",
+                    created_at=self.CREATED_AT,
+                )
+                self.run_hard_exit_worker(
+                    worker,
+                    str(project),
+                    json.dumps(
+                        reservation.document(),
+                        ensure_ascii=True,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ),
+                    boundary,
+                    expected_returncode=79,
+                )
+                root = (
+                    project
+                    / ".zettel-kasten"
+                    / "private"
+                    / "version-updates"
+                    / reservation.transaction_ref
+                )
+                self.assertEqual(tuple(sorted(item.name for item in root.iterdir())), expected)
+
+                resumed = ProjectUpdateTransaction.reserve_or_resume_exact(
+                    project,
+                    reservation=reservation,
+                )
+                self.assertEqual(resumed.reservation, reservation)
+                before = {
+                    name: ((root / name).read_bytes(), (root / name).stat().st_ino)
+                    for name in ("marker.json", "append.guard")
+                }
+                reopened = ProjectUpdateTransaction.reserve_or_resume_exact(
+                    project,
+                    reservation=reservation,
+                )
+                self.assertEqual(reopened.reservation.sha256, reservation.sha256)
+                self.assertEqual(
+                    {
+                        name: ((root / name).read_bytes(), (root / name).stat().st_ino)
+                        for name in ("marker.json", "append.guard")
+                    },
+                    before,
+                )
+
+    def test_reserve_or_resume_exact_two_processes_converge_on_one_reservation(
+        self,
+    ) -> None:
+        project = self.project.parent / "concurrent-reservation"
+        project.mkdir()
+        reservation = ProjectUpdateTransaction.prepare_reservation(
+            project_identity_sha256=digest("concurrent-project"),
+            requested_target_tag="v0.4.19",
+            transaction_ref=self.DEFAULT_TRANSACTION_REF,
+            ownership_nonce="abcdef0123456789abcdef0123456789",
+            created_at=self.CREATED_AT,
+        )
+        first_worker = "\n".join(
+            (
+                "import json, sys, time",
+                "from pathlib import Path",
+                "from wom_kit.project_update_transaction import ProjectUpdateReservation, ProjectUpdateTransaction",
+                "reservation = ProjectUpdateReservation.from_document(json.loads(sys.argv[2]))",
+                "ready, release = Path(sys.argv[3]), Path(sys.argv[4])",
+                "def hold_guard(name):",
+                "    if name == 'root_durable':",
+                "        ready.write_bytes(b'ready')",
+                "        while not release.exists():",
+                "            time.sleep(0.01)",
+                "result = ProjectUpdateTransaction.reserve_or_resume_exact(Path(sys.argv[1]), reservation=reservation, _durable_boundary_callback=hold_guard)",
+                "assert result.reservation.sha256 == reservation.sha256",
+            )
+        )
+        second_worker = "\n".join(
+            (
+                "import json, sys",
+                "from pathlib import Path",
+                "from wom_kit.project_update_transaction import ProjectUpdateReservation, ProjectUpdateTransaction",
+                "reservation = ProjectUpdateReservation.from_document(json.loads(sys.argv[2]))",
+                "result = ProjectUpdateTransaction.reserve_or_resume_exact(Path(sys.argv[1]), reservation=reservation)",
+                "assert result.reservation.sha256 == reservation.sha256",
+            )
+        )
+        environment = dict(os.environ)
+        environment.update(
+            {
+                "PYTHONDONTWRITEBYTECODE": "1",
+                "PYTHONPATH": str(SRC_ROOT),
+                "PYTHONUTF8": "1",
+            }
+        )
+        document = json.dumps(
+            reservation.document(),
+            ensure_ascii=True,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        ready = self.project.parent / "reservation-first-ready"
+        release = self.project.parent / "reservation-first-release"
+        first = subprocess.Popen(
+            [
+                sys.executable,
+                "-B",
+                "-c",
+                first_worker,
+                str(project),
+                document,
+                str(ready),
+                str(release),
+            ],
+            cwd=KIT_ROOT,
+            env=environment,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        second = None
+        try:
+            for _attempt in range(250):
+                if ready.exists():
+                    break
+                if first.poll() is not None:
+                    break
+                threading.Event().wait(0.02)
+            self.assertTrue(ready.is_file())
+            second = subprocess.Popen(
+                [sys.executable, "-B", "-c", second_worker, str(project), document],
+                cwd=KIT_ROOT,
+                env=environment,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            threading.Event().wait(0.25)
+            self.assertIsNone(second.poll(), "second process did not wait on the guard")
+            root = (
+                project
+                / ".zettel-kasten"
+                / "private"
+                / "version-updates"
+                / reservation.transaction_ref
+            )
+            self.assertEqual(tuple(root.iterdir()), ())
+            release.write_bytes(b"release")
+            first_stdout, first_stderr = first.communicate(timeout=30)
+            second_stdout, second_stderr = second.communicate(timeout=30)
+            self.assertEqual(first.returncode, 0, first_stdout + first_stderr)
+            self.assertEqual(second.returncode, 0, second_stdout + second_stderr)
+        finally:
+            for process in (first, second):
+                if process is not None and process.poll() is None:
+                    process.kill()
+                    process.communicate(timeout=10)
+        reopened = ProjectUpdateTransaction.reserve_or_resume_exact(
+            project,
+            reservation=reservation,
+        )
+        self.assertEqual(reopened.reservation, reservation)
+        self.assertEqual(
+            tuple(sorted(item.name for item in reopened.transaction_root.iterdir())),
+            ("append.guard", "marker.json"),
+        )
+
+    def test_reserve_or_resume_exact_blocks_nonexact_prefixes_without_deleting(
+        self,
+    ) -> None:
+        class BoundaryStop(BaseException):
+            pass
+
+        def materialize_prefix(label: str, boundary: str):
+            project = self.project.parent / label
+            project.mkdir()
+            reservation = ProjectUpdateTransaction.prepare_reservation(
+                project_identity_sha256=digest(label),
+                requested_target_tag="v0.4.19",
+                transaction_ref=self.DEFAULT_TRANSACTION_REF,
+                ownership_nonce=hashlib.sha256(label.encode("ascii")).hexdigest()[:32],
+                created_at=self.CREATED_AT,
+            )
+
+            def stop(name: str) -> None:
+                if name == boundary:
+                    raise BoundaryStop()
+
+            with self.assertRaises(BoundaryStop):
+                ProjectUpdateTransaction.reserve_or_resume_exact(
+                    project,
+                    reservation=reservation,
+                    _durable_boundary_callback=stop,
+                )
+            root = (
+                project
+                / ".zettel-kasten"
+                / "private"
+                / "version-updates"
+                / reservation.transaction_ref
+            )
+            return project, root, reservation
+
+        project, root, reservation = materialize_prefix("extra-entry", "root_durable")
+        extra = root / "unbound.bin"
+        extra.write_bytes(b"preserve-extra")
+        self.assert_code(
+            "project_update_transaction_reservation_state_changed",
+            lambda: ProjectUpdateTransaction.reserve_or_resume_exact(
+                project, reservation=reservation
+            ),
+        )
+        self.assertEqual(extra.read_bytes(), b"preserve-extra")
+
+        project, root, reservation = materialize_prefix("wrong-marker", "marker_durable")
+        marker = root / "marker.json"
+        marker.write_bytes(b"different-marker\n")
+        self.assert_code(
+            "project_update_transaction_reservation_state_changed",
+            lambda: ProjectUpdateTransaction.reserve_or_resume_exact(
+                project, reservation=reservation
+            ),
+        )
+        self.assertEqual(marker.read_bytes(), b"different-marker\n")
+
+        project, root, reservation = materialize_prefix(
+            "wrong-guard", "append_guard_durable"
+        )
+        guard = root / "append.guard"
+        guard.write_bytes(b"\x01")
+        self.assert_code(
+            "project_update_transaction_reservation_state_changed",
+            lambda: ProjectUpdateTransaction.reserve_or_resume_exact(
+                project, reservation=reservation
+            ),
+        )
+        self.assertEqual(guard.read_bytes(), b"\x01")
+
+        project = self.project.parent / "wrong-authority"
+        project.mkdir()
+        first = ProjectUpdateTransaction.prepare_reservation(
+            project_identity_sha256=digest("wrong-authority"),
+            requested_target_tag="v0.4.19",
+            transaction_ref=self.DEFAULT_TRANSACTION_REF,
+            ownership_nonce="1" * 32,
+            created_at=self.CREATED_AT,
+        )
+        ProjectUpdateTransaction.reserve_or_resume_exact(project, reservation=first)
+        marker = (
+            project
+            / ".zettel-kasten"
+            / "private"
+            / "version-updates"
+            / first.transaction_ref
+            / "marker.json"
+        )
+        original_marker = marker.read_bytes()
+        second = ProjectUpdateTransaction.prepare_reservation(
+            project_identity_sha256=digest("wrong-authority"),
+            requested_target_tag="v0.4.19",
+            transaction_ref=self.DEFAULT_TRANSACTION_REF,
+            ownership_nonce="2" * 32,
+            created_at=self.CREATED_AT,
+        )
+        self.assert_code(
+            "project_update_transaction_reservation_state_changed",
+            lambda: ProjectUpdateTransaction.reserve_or_resume_exact(
+                project, reservation=second
+            ),
+        )
+        self.assertEqual(marker.read_bytes(), original_marker)
+
+    def test_reserve_or_resume_exact_rejects_hardlink_and_reparse_marker(self) -> None:
+        reservation = ProjectUpdateTransaction.prepare_reservation(
+            project_identity_sha256=digest("linked-project"),
+            requested_target_tag="v0.4.19",
+            transaction_ref=self.DEFAULT_TRANSACTION_REF,
+            ownership_nonce="abcdef0123456789abcdef0123456789",
+            created_at=self.CREATED_AT,
+        )
+        reserved = ProjectUpdateTransaction.reserve_or_resume_exact(
+            self.project, reservation=reservation
+        )
+        marker = reserved.transaction_root / "marker.json"
+        outside = self.project / "linked-marker-copy"
+        outside.write_bytes(marker.read_bytes())
+        marker.unlink()
+        os.link(outside, marker)
+        self.assert_code(
+            "project_update_transaction_reservation_state_changed",
+            lambda: ProjectUpdateTransaction.reserve_or_resume_exact(
+                self.project, reservation=reservation
+            ),
+        )
+        self.assertTrue(marker.exists())
+        self.assertTrue(outside.exists())
+
+        marker.unlink()
+        marker.write_bytes(
+            canonical_json_bytes(reservation.document()) + b"\n"
+        )
+        original_lstat = Path.lstat
+
+        def report_marker_reparse(path: Path):
+            info = original_lstat(path)
+            if os.path.normcase(str(path)) == os.path.normcase(str(marker)):
+                return SimpleNamespace(
+                    st_mode=info.st_mode,
+                    st_file_attributes=0x400,
+                    st_dev=info.st_dev,
+                    st_ino=info.st_ino,
+                    st_mtime_ns=info.st_mtime_ns,
+                    st_size=info.st_size,
+                    st_nlink=info.st_nlink,
+                )
+            return info
+
+        with patch.object(Path, "lstat", new=report_marker_reparse):
+            self.assert_code(
+                "project_update_transaction_reservation_state_changed",
+                lambda: ProjectUpdateTransaction.reserve_or_resume_exact(
+                    self.project, reservation=reservation
+                ),
+            )
+        self.assertEqual(marker.read_bytes(), canonical_json_bytes(reservation.document()) + b"\n")
+
+    @unittest.skipUnless(os.name == "nt", "Windows retained directory handles")
+    def test_reserve_or_resume_exact_retains_root_through_final_identity_check(
+        self,
+    ) -> None:
+        reservation = ProjectUpdateTransaction.prepare_reservation(
+            project_identity_sha256=digest("retained-root-project"),
+            requested_target_tag="v0.4.19",
+            transaction_ref=self.DEFAULT_TRANSACTION_REF,
+            ownership_nonce="abcdef0123456789abcdef0123456789",
+            created_at=self.CREATED_AT,
+        )
+        root = (
+            self.project
+            / ".zettel-kasten"
+            / "private"
+            / "version-updates"
+            / reservation.transaction_ref
+        )
+        moved = root.with_name(root.name + "-moved")
+        blocked_boundaries: list[str] = []
+
+        def attempt_generation_swap(boundary: str) -> None:
+            if boundary not in {"root_bound", "prefix_verified"}:
+                return
+            try:
+                root.rename(moved)
+            except OSError:
+                blocked_boundaries.append(boundary)
+                return
+            moved.rename(root)
+            self.fail("retained root handle allowed a generation swap")
+
+        with patch.object(
+            transaction_module,
+            "_reservation_generation_test_hook",
+            side_effect=attempt_generation_swap,
+        ):
+            result = ProjectUpdateTransaction.reserve_or_resume_exact(
+                self.project, reservation=reservation
+            )
+        self.assertEqual(blocked_boundaries, ["root_bound", "prefix_verified"])
+        self.assertEqual(result.reservation, reservation)
+        self.assertTrue(root.is_dir())
+        self.assertFalse(moved.exists())
+
+    @unittest.skipUnless(os.name == "nt", "NTFS alternate stream fixture")
+    def test_reserve_or_resume_exact_rejects_named_streams_without_removing_them(
+        self,
+    ) -> None:
+        reservation = ProjectUpdateTransaction.prepare_reservation(
+            project_identity_sha256=digest("ads-project"),
+            requested_target_tag="v0.4.19",
+            transaction_ref=self.DEFAULT_TRANSACTION_REF,
+            ownership_nonce="abcdef0123456789abcdef0123456789",
+            created_at=self.CREATED_AT,
+        )
+        reserved = ProjectUpdateTransaction.reserve_or_resume_exact(
+            self.project, reservation=reservation
+        )
+        marker = reserved.transaction_root / "marker.json"
+        named_stream = Path(str(marker) + ":unbound")
+        try:
+            named_stream.write_bytes(b"preserve-stream")
+        except OSError as error:
+            self.skipTest(f"NTFS named streams unavailable: {type(error).__name__}")
+        self.assert_code(
+            "project_update_transaction_reservation_state_changed",
+            lambda: ProjectUpdateTransaction.reserve_or_resume_exact(
+                self.project, reservation=reservation
+            ),
+        )
+        self.assertEqual(named_stream.read_bytes(), b"preserve-stream")
+        self.assertTrue(marker.is_file())
+
+    @unittest.skipUnless(os.name == "nt", "Windows namespace guard injection")
+    def test_cleanup_residue_is_rechecked_after_reservation_guard_acquisition(
+        self,
+    ) -> None:
+        reservation = ProjectUpdateTransaction.prepare_reservation(
+            project_identity_sha256=digest("cleanup-race-project"),
+            requested_target_tag="v0.4.19",
+            transaction_ref=self.DEFAULT_TRANSACTION_REF,
+            ownership_nonce="abcdef0123456789abcdef0123456789",
+            created_at=self.CREATED_AT,
+        )
+        original_guard = transaction_module._reservation_materialization_guard
+        published: list[Path] = []
+
+        @contextmanager
+        def publish_cleanup_inside_guard(parent: Path, transaction_ref: str):
+            with original_guard(parent, transaction_ref) as binding:
+                proof = parent / f".cleanup-proof_{transaction_ref}.json"
+                proof.write_bytes(b"preserve-cleanup-proof")
+                published.append(proof)
+                yield binding
+
+        with patch.object(
+            transaction_module,
+            "_reservation_materialization_guard",
+            new=publish_cleanup_inside_guard,
+        ):
+            self.assert_code(
+                "project_update_transaction_exists",
+                lambda: ProjectUpdateTransaction.reserve_or_resume_exact(
+                    self.project, reservation=reservation
+                ),
+            )
+        self.assertEqual(len(published), 1)
+        self.assertEqual(published[0].read_bytes(), b"preserve-cleanup-proof")
+        self.assertFalse(
+            (
+                published[0].parent
+                / reservation.transaction_ref
+            ).exists()
+        )
+
+    @unittest.skipUnless(os.name != "nt", "POSIX descriptor-relative mutation")
+    def test_posix_reservation_writes_never_follow_parent_or_root_generation_swap(
+        self,
+    ) -> None:
+        for swap_boundary in ("guard_acquired", "root_bound"):
+            with self.subTest(boundary=swap_boundary):
+                project = self.project.parent / f"posix-{swap_boundary}"
+                project.mkdir()
+                reservation = ProjectUpdateTransaction.prepare_reservation(
+                    project_identity_sha256=digest(f"posix-{swap_boundary}"),
+                    requested_target_tag="v0.4.19",
+                    transaction_ref=self.DEFAULT_TRANSACTION_REF,
+                    ownership_nonce=("1" if swap_boundary == "guard_acquired" else "2")
+                    * 32,
+                    created_at=self.CREATED_AT,
+                )
+                parent = project / ".zettel-kasten" / "private" / "version-updates"
+                root = parent / reservation.transaction_ref
+                moved_parent = parent.with_name(parent.name + "-retained")
+                moved_root = (
+                    moved_parent / reservation.transaction_ref
+                    if swap_boundary == "guard_acquired"
+                    else root.with_name(root.name + "-retained")
+                )
+
+                def swap_generation(boundary: str) -> None:
+                    if boundary != swap_boundary:
+                        return
+                    if swap_boundary == "guard_acquired":
+                        parent.rename(moved_parent)
+                        parent.mkdir()
+                    else:
+                        root.rename(moved_root)
+                        root.mkdir()
+                        (root / "foreign.bin").write_bytes(b"preserve-foreign")
+
+                with patch.object(
+                    transaction_module,
+                    "_reservation_generation_test_hook",
+                    side_effect=swap_generation,
+                ):
+                    self.assert_code(
+                        "project_update_transaction_reservation_state_changed",
+                        lambda: ProjectUpdateTransaction.reserve_or_resume_exact(
+                            project, reservation=reservation
+                        ),
+                    )
+                if swap_boundary == "guard_acquired":
+                    self.assertFalse(root.exists())
+                    self.assertEqual(
+                        tuple(sorted(item.name for item in moved_root.iterdir())),
+                        ("append.guard", "marker.json"),
+                    )
+                else:
+                    self.assertEqual(
+                        (root / "foreign.bin").read_bytes(), b"preserve-foreign"
+                    )
+                    self.assertEqual(
+                        tuple(sorted(item.name for item in root.iterdir())),
+                        ("foreign.bin",),
+                    )
+                    self.assertEqual(
+                        tuple(sorted(item.name for item in moved_root.iterdir())),
+                        ("append.guard", "marker.json"),
+                    )
+
+    def test_legacy_reserve_remains_create_only_for_an_exact_existing_prefix(self) -> None:
+        reservation = ProjectUpdateTransaction.prepare_reservation(
+            project_identity_sha256=digest("legacy-compatible-project"),
+            requested_target_tag="v0.4.19",
+            transaction_ref=self.DEFAULT_TRANSACTION_REF,
+            ownership_nonce="abcdef0123456789abcdef0123456789",
+            created_at=self.CREATED_AT,
+        )
+        ProjectUpdateTransaction.reserve_or_resume_exact(
+            self.project, reservation=reservation
+        )
+        self.assert_code(
+            "project_update_transaction_exists",
+            lambda: ProjectUpdateTransaction.reserve(
+                self.project,
+                project_identity_sha256=reservation.project_identity_sha256,
+                requested_target_tag=reservation.requested_target_tag,
+                transaction_ref=reservation.transaction_ref,
+                ownership_nonce=reservation.ownership_nonce,
+                created_at=reservation.created_at,
+            ),
+        )
 
     def test_two_stage_reservation_lock_and_large_candidate_are_sealed_in_place(self) -> None:
         reserved, lock_bytes, tree = self.reserve_and_build_candidate(file_count=300)
