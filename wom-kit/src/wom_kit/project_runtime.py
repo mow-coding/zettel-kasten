@@ -1164,6 +1164,33 @@ def current_project_runtime_binding(
     live_payload_aligned = bool(
         static_receipt_aligned and inspection.get("live_payload_aligned") is True
     )
+    reported_live_payload_state = inspection.get("live_payload_state")
+    live_payload_state = str(
+        reported_live_payload_state
+        if reported_live_payload_state is not None
+        else "passed"
+        if live_payload_aligned
+        else "failed"
+        if static_receipt_aligned
+        else "not_reached"
+    )
+    if live_payload_state not in {
+        "passed",
+        "failed",
+        "not_reached",
+        "unavailable",
+    }:
+        live_payload_state = "unavailable"
+    reported_live_payload_reason = inspection.get("live_payload_reason_code")
+    live_payload_reason_code = str(
+        reported_live_payload_reason
+        if reported_live_payload_reason is not None
+        else "project_runtime_live_payload_verified"
+        if live_payload_aligned
+        else "project_runtime_live_payload_mismatch"
+        if static_receipt_aligned
+        else "project_runtime_static_receipt_invalid"
+    )
     receipt_path = final / PROJECT_RUNTIME_RECEIPT_NAME
     live_receipt_bytes = _read_limited(
         receipt_path,
@@ -1178,6 +1205,8 @@ def current_project_runtime_binding(
     if not receipt_generation_aligned:
         static_receipt_aligned = False
         live_payload_aligned = False
+        live_payload_state = "not_reached"
+        live_payload_reason_code = "project_runtime_static_receipt_invalid"
     try:
         module_relative = module_path.relative_to(final)
         module_parts = tuple(part.casefold() for part in module_relative.parts)
@@ -1229,6 +1258,14 @@ def current_project_runtime_binding(
                 logical: (size, digest) for logical, size, digest in inventory
             }
             live_payload_aligned = observed_payload == expected_payload
+            live_payload_state = (
+                "passed" if live_payload_aligned else "failed"
+            )
+            live_payload_reason_code = (
+                "project_runtime_live_payload_verified"
+                if live_payload_aligned
+                else "project_runtime_live_payload_mismatch"
+            )
 
             def receipt_bound_file(candidate: Path | None) -> bool:
                 if candidate is None:
@@ -1336,6 +1373,8 @@ def current_project_runtime_binding(
             )
         except ProjectRuntimeError:
             live_payload_aligned = False
+            live_payload_state = "unavailable"
+            live_payload_reason_code = "project_runtime_live_payload_unavailable"
     bound = bool(
         launcher_aligned
         and static_receipt_aligned
@@ -1354,7 +1393,7 @@ def current_project_runtime_binding(
     elif not static_receipt_aligned:
         reason_code = "project_runtime_static_receipt_invalid"
     elif not live_payload_aligned:
-        reason_code = "project_runtime_live_payload_mismatch"
+        reason_code = live_payload_reason_code
     elif not executable_aligned or not module_aligned or not prefix_aligned:
         reason_code = "project_runtime_process_binding_mismatch"
     elif not executable_receipt_bound or not module_receipt_bound:
@@ -1372,6 +1411,8 @@ def current_project_runtime_binding(
         "static_receipt_aligned": static_receipt_aligned,
         "receipt_generation_aligned": receipt_generation_aligned,
         "live_payload_aligned": live_payload_aligned,
+        "live_payload_state": live_payload_state,
+        "live_payload_reason_code": live_payload_reason_code,
         "running_executable_aligned": executable_aligned,
         "running_module_aligned": module_aligned,
         "running_prefix_aligned": prefix_aligned,
@@ -1574,6 +1615,8 @@ def inspect_runtime(
             "receipt_candidate_valid": False,
             "static_receipt_valid": False,
             "live_payload_aligned": False,
+            "live_payload_state": "not_reached",
+            "live_payload_reason_code": "project_runtime_target_version_invalid",
             "absolute_paths_echoed": False,
         }
     root = Path(os.path.abspath(str(project_root)))
@@ -1591,6 +1634,8 @@ def inspect_runtime(
             "receipt_candidate_valid": False,
             "static_receipt_valid": False,
             "live_payload_aligned": False,
+            "live_payload_state": "not_reached",
+            "live_payload_reason_code": "project_runtime_missing",
             "path": logical,
             "receipt_sha256": None,
             "absolute_paths_echoed": False,
@@ -1612,6 +1657,8 @@ def inspect_runtime(
             "receipt_candidate_valid": False,
             "static_receipt_valid": False,
             "live_payload_aligned": False,
+            "live_payload_state": "not_reached",
+            "live_payload_reason_code": "project_runtime_target_directory_invalid",
             "path": logical,
             "receipt_sha256": None,
             "absolute_paths_echoed": False,
@@ -1679,6 +1726,8 @@ def inspect_runtime(
     required_python_safe = False
     live_payload_sha256: str | None = None
     live_payload_aligned = False
+    live_payload_state = "not_reached"
+    live_payload_reason_code = "project_runtime_static_receipt_invalid"
     if static_receipt_valid:
         try:
             _python_digest, _python_size = _sha256_file(
@@ -1699,9 +1748,19 @@ def inspect_runtime(
                 and receipt.get("installed_payload_sha256")
                 == live_payload_sha256
             )
+            live_payload_state = (
+                "passed" if live_payload_aligned else "failed"
+            )
+            live_payload_reason_code = (
+                "project_runtime_live_payload_verified"
+                if live_payload_aligned
+                else "project_runtime_live_payload_mismatch"
+            )
         except (OSError, RuntimeError, ValueError, ProjectRuntimeError):
             required_python_safe = False
             live_payload_aligned = False
+            live_payload_state = "unavailable"
+            live_payload_reason_code = "project_runtime_live_payload_unavailable"
     valid = bool(static_receipt_valid and required_python_safe and live_payload_aligned)
     return {
         "status": "receipt_candidate" if valid else "invalid",
@@ -1709,6 +1768,8 @@ def inspect_runtime(
         "receipt_candidate_valid": valid,
         "static_receipt_valid": static_receipt_valid,
         "live_payload_aligned": live_payload_aligned,
+        "live_payload_state": live_payload_state,
+        "live_payload_reason_code": live_payload_reason_code,
         "required_python_safe": required_python_safe,
         "path": logical,
         "target_tag": f"v{version}",

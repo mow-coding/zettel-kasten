@@ -16161,6 +16161,29 @@ if __name__ == "__main__":
                     "project_version_update_state_changed_during_runtime_preparation",
                     result["blockers"],
                 )
+                revalidation = result["project_runtime"][
+                    "preparation_revalidation"
+                ]
+                self.assertEqual(revalidation["state"], "failed")
+                expected_changed_dimension = {
+                    "ref": "target_refs",
+                    "pin": "version_pins",
+                    "policy": "runtime_policy",
+                }[drift_kind]
+                self.assertEqual(
+                    revalidation["checks"][expected_changed_dimension]["state"],
+                    "failed",
+                )
+                self.assertIn(
+                    expected_changed_dimension,
+                    revalidation["changed_dimensions"],
+                )
+                self.assertIn(
+                    "version_update_lock",
+                    revalidation["expected_transaction_changes_excluded"],
+                )
+                self.assertFalse(revalidation["compared_values_echoed"])
+                self.assertFalse(revalidation["private_values_echoed"])
                 self.assertEqual(result["files_written"], [])
                 self.assertEqual(result["pins"]["written_paths"], [])
                 self.assertFalse(result["receipt"]["written"])

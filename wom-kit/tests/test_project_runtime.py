@@ -1118,6 +1118,51 @@ class ProjectRuntimeTests(unittest.TestCase):
         self.assertFalse(after["receipt_candidate_valid"])
         self.assertFalse(after["absolute_paths_echoed"])
 
+    def test_runtime_inspection_distinguishes_unavailable_from_mismatch(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp) / "project"
+            _write_receipt_bound_runtime(project)
+
+            with patch.object(
+                project_runtime,
+                "_runtime_payload_observation",
+                side_effect=project_runtime.ProjectRuntimeError(
+                    "synthetic_observation_unavailable"
+                ),
+            ):
+                unavailable = project_runtime.inspect_runtime(
+                    project,
+                    "0.4.3",
+                )
+
+        self.assertTrue(unavailable["static_receipt_valid"])
+        self.assertFalse(unavailable["live_payload_aligned"])
+        self.assertEqual(unavailable["live_payload_state"], "unavailable")
+        self.assertEqual(
+            unavailable["live_payload_reason_code"],
+            "project_runtime_live_payload_unavailable",
+        )
+        self.assertFalse(unavailable["receipt_candidate_valid"])
+        self.assertFalse(unavailable["absolute_paths_echoed"])
+
+    def test_runtime_inspection_marks_live_check_not_reached_for_bad_receipt(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp) / "project"
+            runtime, _executable, _module = _write_receipt_bound_runtime(project)
+            (runtime / project_runtime.PROJECT_RUNTIME_RECEIPT_NAME).write_bytes(
+                b"{invalid-receipt\n"
+            )
+
+            inspected = project_runtime.inspect_runtime(project, "0.4.3")
+
+        self.assertFalse(inspected["static_receipt_valid"])
+        self.assertFalse(inspected["live_payload_aligned"])
+        self.assertEqual(inspected["live_payload_state"], "not_reached")
+        self.assertEqual(
+            inspected["live_payload_reason_code"],
+            "project_runtime_static_receipt_invalid",
+        )
+
     def test_binding_rechecks_payload_after_reused_inspection(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             project = Path(tmp) / "project"

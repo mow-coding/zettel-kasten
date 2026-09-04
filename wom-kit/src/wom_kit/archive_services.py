@@ -104616,12 +104616,92 @@ def wom_kit_project_source_mirror_info(
     return summary
 
 
+WOM_KIT_RUNTIME_INTEGRITY_CHECK_FIELDS = (
+    "mirror_real_directory_inside_project",
+    "project_pin_path_components_real",
+    "wrapper_path_components_real",
+    "git_worktree_root_exact",
+    "git_metadata_local_real",
+    "worktree_clean_except_untracked_installed_version",
+    "installed_version_pin_untracked",
+    "wrapper_tracked_at_head",
+    "tracked_python_source_set_complete",
+    "tracked_python_index_flags_safe",
+    "tracked_python_index_matches_head",
+    "tracked_python_path_components_real",
+    "tracked_python_worktree_bytes_match_head",
+    "runtime_source_root_top_level_isolated",
+    "runtime_source_tree_path_components_real",
+    "runtime_python_filesystem_source_set_exact",
+    "runtime_python_bytecode_absent",
+    "runtime_python_extension_modules_absent",
+    "runtime_python_filesystem_closed_world",
+    "tracked_python_sources_verified",
+    "all_tracked_index_flags_safe",
+    "runtime_resource_manifest_verified",
+    "runtime_resource_index_matches_head",
+    "runtime_resource_path_components_real",
+    "runtime_resource_worktree_bytes_match_head",
+    "runtime_resources_verified",
+    "origin_configured",
+    "origin_config_key_present",
+    "head_commit_available",
+    "source_tag_available_locally",
+    "source_tag_annotated",
+    "source_tag_at_head",
+    "tag_source_versions_match",
+    "origin_main_available_locally",
+    "source_tag_reachable_from_origin_main",
+)
+
+
+def _wom_kit_runtime_integrity_record_check(
+    evidence: dict[str, Any],
+    field_name: str,
+    value: bool,
+    *,
+    state: str | None = None,
+    reason_code: str | None = None,
+) -> None:
+    """Record an evaluated integrity check without exposing its private input.
+
+    Legacy boolean fields remain available for older readers.  The adjacent
+    state map prevents a false default from being misread as an observed
+    failure when an earlier prerequisite stopped the inspection.
+    """
+
+    if field_name not in WOM_KIT_RUNTIME_INTEGRITY_CHECK_FIELDS:
+        raise ValueError("unknown_runtime_integrity_check")
+    resolved_state = state or ("passed" if value else "failed")
+    if resolved_state not in {
+        "passed",
+        "failed",
+        "not_reached",
+        "unavailable",
+    }:
+        raise ValueError("invalid_runtime_integrity_check_state")
+    evidence[field_name] = bool(value)
+    evidence["checks"][field_name] = {
+        "state": resolved_state,
+        "reason_code": reason_code
+        or (
+            "verified"
+            if resolved_state == "passed"
+            else "not_reached"
+            if resolved_state == "not_reached"
+            else "unavailable"
+            if resolved_state == "unavailable"
+            else "verification_failed"
+        ),
+    }
+
+
 def wom_kit_runtime_integrity_evidence(
     *,
     checked: bool = False,
     reason_code: str = "not_checked",
 ) -> dict[str, Any]:
-    return {
+    evidence = {
         "checked": checked,
         "verified": False,
         "reason_code": reason_code,
@@ -104671,6 +104751,14 @@ def wom_kit_runtime_integrity_evidence(
         "origin_remote_contacted": False,
         "network_used": False,
     }
+    evidence["checks"] = {
+        field_name: {
+            "state": "not_reached",
+            "reason_code": "verification_not_reached",
+        }
+        for field_name in WOM_KIT_RUNTIME_INTEGRITY_CHECK_FIELDS
+    }
+    return evidence
 
 
 def wom_kit_path_components_are_real(root: Path, path: Path) -> bool:
@@ -105476,30 +105564,56 @@ def _wom_kit_runtime_mirror_integrity_with_runner(
         checked=True,
         reason_code="verification_incomplete",
     )
-    evidence["mirror_real_directory_inside_project"] = bool(
+    mirror_is_real = bool(
         mirror_path.is_dir()
         and not mirror_path.is_symlink()
         and is_path_within_root(mirror_path, project_root)
         and wom_kit_path_components_are_real(project_root, mirror_path)
     )
+    _wom_kit_runtime_integrity_record_check(
+        evidence,
+        "mirror_real_directory_inside_project",
+        mirror_is_real,
+        reason_code=(
+            "verified"
+            if mirror_is_real
+            else "project_mirror_not_real_inside_project"
+        ),
+    )
     if not evidence["mirror_real_directory_inside_project"]:
         evidence["reason_code"] = "project_mirror_not_real_inside_project"
         return evidence
 
-    evidence["project_pin_path_components_real"] = bool(
+    project_pin_is_real = bool(
         project_pin_path is not None
         and project_pin_path.is_file()
         and is_path_within_root(project_pin_path, project_root)
         and wom_kit_path_components_are_real(project_root, project_pin_path)
     )
+    _wom_kit_runtime_integrity_record_check(
+        evidence,
+        "project_pin_path_components_real",
+        project_pin_is_real,
+        reason_code=(
+            "verified" if project_pin_is_real else "project_pin_path_unsafe"
+        ),
+    )
     if not evidence["project_pin_path_components_real"]:
         evidence["reason_code"] = "project_pin_path_unsafe"
         return evidence
 
-    evidence["wrapper_path_components_real"] = bool(
+    wrapper_is_real = bool(
         wrapper_path.is_file()
         and is_path_within_root(wrapper_path, mirror_path)
         and wom_kit_path_components_are_real(project_root, wrapper_path)
+    )
+    _wom_kit_runtime_integrity_record_check(
+        evidence,
+        "wrapper_path_components_real",
+        wrapper_is_real,
+        reason_code=(
+            "verified" if wrapper_is_real else "project_wrapper_path_unsafe"
+        ),
     )
     if not evidence["wrapper_path_components_real"]:
         evidence["reason_code"] = "project_wrapper_path_unsafe"
@@ -105519,19 +105633,44 @@ def _wom_kit_runtime_mirror_integrity_with_runner(
         exact_top = top_ok and Path(top_text).resolve() == mirror_path.resolve()
     except (OSError, RuntimeError, ValueError):
         exact_top = False
-    evidence["git_worktree_root_exact"] = bool(
+    git_worktree_root_exact = bool(
         inside_ok and inside_text == "true" and exact_top
+    )
+    _wom_kit_runtime_integrity_record_check(
+        evidence,
+        "git_worktree_root_exact",
+        git_worktree_root_exact,
+        state=(
+            "unavailable"
+            if not inside_ok or not top_ok
+            else None
+        ),
+        reason_code=(
+            "verified"
+            if git_worktree_root_exact
+            else "project_git_worktree_root_unavailable"
+            if not inside_ok or not top_ok
+            else "project_git_worktree_root_unverified"
+        ),
     )
     if not evidence["git_worktree_root_exact"]:
         evidence["reason_code"] = "project_git_worktree_root_unverified"
         return evidence
 
-    evidence["git_metadata_local_real"] = (
-        wom_kit_project_update_git_metadata_is_local_real(
-            project_root,
-            mirror_path,
-            runner=runner,
-        )
+    git_metadata_local_real = wom_kit_project_update_git_metadata_is_local_real(
+        project_root,
+        mirror_path,
+        runner=runner,
+    )
+    _wom_kit_runtime_integrity_record_check(
+        evidence,
+        "git_metadata_local_real",
+        git_metadata_local_real,
+        reason_code=(
+            "verified"
+            if git_metadata_local_real
+            else "project_git_metadata_not_local_real"
+        ),
     )
     if not evidence["git_metadata_local_real"]:
         evidence["reason_code"] = "project_git_metadata_not_local_real"
@@ -105541,13 +105680,26 @@ def _wom_kit_runtime_mirror_integrity_with_runner(
         mirror_path,
         runner=runner,
     )
-    evidence["worktree_clean_except_untracked_installed_version"] = bool(
+    worktree_clean = bool(
         runtime_snapshot is not None
         and runtime_snapshot.get("index_matches_head") is True
         and runtime_snapshot.get("flags_safe") is True
         and runtime_snapshot.get("raw_bytes_match_head") is True
         and runtime_snapshot.get("untracked_paths")
         in ([], ["installed-version.txt"])
+    )
+    _wom_kit_runtime_integrity_record_check(
+        evidence,
+        "worktree_clean_except_untracked_installed_version",
+        worktree_clean,
+        state="unavailable" if runtime_snapshot is None else None,
+        reason_code=(
+            "verified"
+            if worktree_clean
+            else "project_git_snapshot_unavailable"
+            if runtime_snapshot is None
+            else "project_git_worktree_dirty"
+        ),
     )
     if runtime_snapshot is None:
         evidence["reason_code"] = "project_git_snapshot_unavailable"
@@ -105561,7 +105713,14 @@ def _wom_kit_runtime_mirror_integrity_with_runner(
         ["ls-files", "--error-unmatch", "--", "installed-version.txt"],
         runner=runner,
     )
-    evidence["installed_version_pin_untracked"] = not pin_tracked
+    _wom_kit_runtime_integrity_record_check(
+        evidence,
+        "installed_version_pin_untracked",
+        not pin_tracked,
+        reason_code=(
+            "verified" if not pin_tracked else "project_source_pin_tracked"
+        ),
+    )
     if pin_tracked:
         evidence["reason_code"] = "project_source_pin_tracked"
         return evidence
@@ -105583,11 +105742,30 @@ def _wom_kit_runtime_mirror_integrity_with_runner(
         for line in origin_key_text.splitlines()
         if line.strip()
     ]
-    evidence["origin_config_key_present"] = bool(
+    origin_config_key_present = bool(
         origin_ok
         and origin_key_lines == ["remote.origin.url"]
     )
-    evidence["origin_configured"] = evidence["origin_config_key_present"]
+    _wom_kit_runtime_integrity_record_check(
+        evidence,
+        "origin_config_key_present",
+        origin_config_key_present,
+        reason_code=(
+            "verified"
+            if origin_config_key_present
+            else "project_origin_not_configured"
+        ),
+    )
+    _wom_kit_runtime_integrity_record_check(
+        evidence,
+        "origin_configured",
+        origin_config_key_present,
+        reason_code=(
+            "verified"
+            if origin_config_key_present
+            else "project_origin_not_configured"
+        ),
+    )
     if not evidence["origin_configured"]:
         evidence["reason_code"] = "project_origin_not_configured"
         return evidence
@@ -105602,7 +105780,15 @@ def _wom_kit_runtime_mirror_integrity_with_runner(
         if head_ok and re.fullmatch(r"[0-9a-fA-F]{40,64}", head_text)
         else None
     )
-    evidence["head_commit_available"] = head_commit is not None
+    _wom_kit_runtime_integrity_record_check(
+        evidence,
+        "head_commit_available",
+        head_commit is not None,
+        state="unavailable" if head_commit is None else None,
+        reason_code=(
+            "verified" if head_commit is not None else "project_head_unavailable"
+        ),
+    )
     if head_commit is None:
         evidence["reason_code"] = "project_head_unavailable"
         return evidence
@@ -105630,9 +105816,32 @@ def _wom_kit_runtime_mirror_integrity_with_runner(
         "tracked_python_sources_verified",
     )
     for field_name in tracked_python_fields:
-        evidence[field_name] = tracked_python_evidence[field_name]
-    evidence["wrapper_tracked_at_head"] = bool(
+        field_value = tracked_python_evidence[field_name]
+        if field_name in WOM_KIT_RUNTIME_INTEGRITY_CHECK_FIELDS:
+            _wom_kit_runtime_integrity_record_check(
+                evidence,
+                field_name,
+                bool(field_value),
+                reason_code=(
+                    "verified"
+                    if field_value
+                    else str(tracked_python_evidence["reason_code"])
+                ),
+            )
+        else:
+            evidence[field_name] = field_value
+    wrapper_tracked = bool(
         tracked_python_evidence["tracked_python_source_set_complete"]
+    )
+    _wom_kit_runtime_integrity_record_check(
+        evidence,
+        "wrapper_tracked_at_head",
+        wrapper_tracked,
+        reason_code=(
+            "verified"
+            if wrapper_tracked
+            else str(tracked_python_evidence["reason_code"])
+        ),
     )
     if not tracked_python_evidence["tracked_python_sources_verified"]:
         evidence["reason_code"] = tracked_python_evidence["reason_code"]
@@ -105655,7 +105864,20 @@ def _wom_kit_runtime_mirror_integrity_with_runner(
         "runtime_resources_verified",
     )
     for field_name in resource_fields:
-        evidence[field_name] = resource_evidence[field_name]
+        field_value = resource_evidence[field_name]
+        if field_name in WOM_KIT_RUNTIME_INTEGRITY_CHECK_FIELDS:
+            _wom_kit_runtime_integrity_record_check(
+                evidence,
+                field_name,
+                bool(field_value),
+                reason_code=(
+                    "verified"
+                    if field_value
+                    else str(resource_evidence["reason_code"])
+                ),
+            )
+        else:
+            evidence[field_name] = field_value
     if not resource_evidence["runtime_resources_verified"]:
         evidence["reason_code"] = resource_evidence["reason_code"]
         return evidence
@@ -105674,15 +105896,29 @@ def _wom_kit_runtime_mirror_integrity_with_runner(
         expected_source_tag,
         runner=runner,
     )
-    evidence["source_tag_available_locally"] = bool(
-        tag_evidence.get("tag_available_locally")
+    source_tag_available = bool(tag_evidence.get("tag_available_locally"))
+    _wom_kit_runtime_integrity_record_check(
+        evidence,
+        "source_tag_available_locally",
+        source_tag_available,
+        reason_code=(
+            "verified" if source_tag_available else "project_source_tag_missing"
+        ),
     )
     if not evidence["source_tag_available_locally"]:
         evidence["reason_code"] = "project_source_tag_missing"
         return evidence
 
-    evidence["source_tag_annotated"] = bool(
-        tag_evidence.get("annotated_tag_verified")
+    source_tag_annotated = bool(tag_evidence.get("annotated_tag_verified"))
+    _wom_kit_runtime_integrity_record_check(
+        evidence,
+        "source_tag_annotated",
+        source_tag_annotated,
+        reason_code=(
+            "verified"
+            if source_tag_annotated
+            else "project_source_tag_not_annotated"
+        ),
     )
     if not evidence["source_tag_annotated"]:
         evidence["reason_code"] = "project_source_tag_not_annotated"
@@ -105692,27 +105928,67 @@ def _wom_kit_runtime_mirror_integrity_with_runner(
     if not isinstance(tag_commit, str):
         evidence["reason_code"] = "project_source_tag_commit_unavailable"
         return evidence
-    evidence["source_tag_at_head"] = tag_commit.lower() == head_commit
+    source_tag_at_head = tag_commit.lower() == head_commit
+    _wom_kit_runtime_integrity_record_check(
+        evidence,
+        "source_tag_at_head",
+        source_tag_at_head,
+        reason_code=(
+            "verified"
+            if source_tag_at_head
+            else "project_source_tag_not_at_head"
+        ),
+    )
     if not evidence["source_tag_at_head"]:
         evidence["reason_code"] = "project_source_tag_not_at_head"
         return evidence
 
-    evidence["tag_source_versions_match"] = bool(
+    tag_source_versions_match = bool(
         tag_evidence.get("all_source_versions_match_target")
+    )
+    _wom_kit_runtime_integrity_record_check(
+        evidence,
+        "tag_source_versions_match",
+        tag_source_versions_match,
+        reason_code=(
+            "verified"
+            if tag_source_versions_match
+            else "project_tag_source_versions_mismatch"
+        ),
     )
     if not evidence["tag_source_versions_match"]:
         evidence["reason_code"] = "project_tag_source_versions_mismatch"
         return evidence
 
-    evidence["origin_main_available_locally"] = bool(
+    origin_main_available = bool(
         tag_evidence.get("origin_main_available_locally")
+    )
+    _wom_kit_runtime_integrity_record_check(
+        evidence,
+        "origin_main_available_locally",
+        origin_main_available,
+        reason_code=(
+            "verified"
+            if origin_main_available
+            else "project_origin_main_unavailable"
+        ),
     )
     if not evidence["origin_main_available_locally"]:
         evidence["reason_code"] = "project_origin_main_unavailable"
         return evidence
 
-    evidence["source_tag_reachable_from_origin_main"] = bool(
+    source_tag_reachable = bool(
         tag_evidence.get("target_reachable_from_origin_main")
+    )
+    _wom_kit_runtime_integrity_record_check(
+        evidence,
+        "source_tag_reachable_from_origin_main",
+        source_tag_reachable,
+        reason_code=(
+            "verified"
+            if source_tag_reachable
+            else "project_source_tag_not_reachable_from_origin_main"
+        ),
     )
     if not evidence["source_tag_reachable_from_origin_main"]:
         evidence["reason_code"] = (
@@ -112315,6 +112591,98 @@ WOM_KIT_PROJECT_UPDATE_SOURCE_DRIFT_BLOCKER = (
 WOM_KIT_PROJECT_UPDATE_SOURCE_DRIFT_BLOCKER_CODE = (
     "project_version_update_source_changed_before_materialization"
 )
+
+WOM_KIT_PROJECT_UPDATE_RUNTIME_PREPARATION_CHECKS = (
+    "git_snapshot",
+    "git_config_trust",
+    "git_metadata",
+    "version_pins",
+    "target_refs",
+    "target_evidence",
+    "runtime_policy",
+    "runtime_supply",
+    "runtime_bootstrap",
+    "runtime_plan",
+    "launcher",
+    "materialization_preflight",
+    "prepared_runtime_payload",
+    "source_branch",
+)
+WOM_KIT_PROJECT_UPDATE_EXPECTED_TRANSACTION_CHANGES = (
+    "durable_reservation",
+    "version_update_lock",
+    "prepared_runtime_candidate_private_path",
+    "progress_observations",
+)
+
+
+def wom_kit_project_update_runtime_preparation_revalidation(
+    observed: Mapping[str, tuple[str, str]] | None = None,
+) -> dict[str, Any]:
+    """Return a privacy-safe, field-level runtime preparation comparison.
+
+    The compared values are intentionally never returned.  A check that could
+    not run is different from a check that ran and observed drift, and fields
+    excluded because they are expected transaction effects are named
+    separately instead of being compared accidentally.
+    """
+
+    supplied = dict(observed or {})
+    if any(
+        name not in WOM_KIT_PROJECT_UPDATE_RUNTIME_PREPARATION_CHECKS
+        for name in supplied
+    ):
+        raise ValueError("unknown_runtime_preparation_revalidation_check")
+    checks: dict[str, dict[str, str]] = {}
+    for name in WOM_KIT_PROJECT_UPDATE_RUNTIME_PREPARATION_CHECKS:
+        state, reason_code = supplied.get(
+            name,
+            ("not_reached", "runtime_preparation_not_reached"),
+        )
+        if state not in {
+            "passed",
+            "failed",
+            "not_reached",
+            "unavailable",
+        }:
+            raise ValueError("invalid_runtime_preparation_revalidation_state")
+        checks[name] = {
+            "state": state,
+            "reason_code": reason_code,
+        }
+    states = {item["state"] for item in checks.values()}
+    overall_state = (
+        "failed"
+        if "failed" in states
+        else "unavailable"
+        if "unavailable" in states
+        else "not_reached"
+        if "not_reached" in states
+        else "passed"
+    )
+    return {
+        "schema": (
+            "wom-kit/project-version-update-runtime-preparation-"
+            "revalidation/v0.1"
+        ),
+        "state": overall_state,
+        "checks": checks,
+        "changed_dimensions": [
+            name
+            for name, detail in checks.items()
+            if detail["state"] == "failed"
+        ],
+        "unavailable_dimensions": [
+            name
+            for name, detail in checks.items()
+            if detail["state"] == "unavailable"
+        ],
+        "expected_transaction_changes_excluded": list(
+            WOM_KIT_PROJECT_UPDATE_EXPECTED_TRANSACTION_CHANGES
+        ),
+        "compared_values_echoed": False,
+        "private_values_echoed": False,
+    }
 
 
 def wom_kit_project_update_blocker_codes(
@@ -126107,6 +126475,9 @@ def _wom_kit_project_version_update_legacy_core_generator(
     prepared_runtime_bundle: Any | None = None
     prepared_runtime_bundle_summary: dict[str, Any] | None = None
     prepared_runtime_bundle_cleanup_state = "not_required"
+    runtime_preparation_revalidation = (
+        wom_kit_project_update_runtime_preparation_revalidation()
+    )
 
     def refresh_project_runtime_plan(*, enforce_interpreter: bool) -> None:
         nonlocal project_runtime_policy
@@ -126287,6 +126658,9 @@ def _wom_kit_project_version_update_legacy_core_generator(
             else "wom-kit/project-version-update-receipt/v0.2"
         )
         runtime_result = dict(project_runtime_plan)
+        runtime_result["preparation_revalidation"] = copy.deepcopy(
+            runtime_preparation_revalidation
+        )
         if project_runtime_materialization is not None and not rolled_back:
             runtime_result["materialized"] = (
                 project_runtime_materialization.public_summary()
@@ -127327,6 +127701,7 @@ def _wom_kit_project_version_update_legacy_core_generator(
                     runner=git_runner,
                 )
             )
+            prepared_runtime_payload_available = True
             try:
                 post_bundle_live_summary = dict(
                     project_runtime.verify_prepared_runtime_candidate(
@@ -127344,54 +127719,156 @@ def _wom_kit_project_version_update_legacy_core_generator(
                 )
             except project_runtime.ProjectRuntimeError:
                 post_bundle_live_summary = {}
-            post_bundle_state_still_exact = bool(
-                _wom_kit_project_update_git_snapshot(
+                prepared_runtime_payload_available = False
+
+            post_bundle_git_snapshot = _wom_kit_project_update_git_snapshot(
+                mirror_path,
+                runner=git_runner,
+            )
+            post_bundle_git_config_digest = (
+                wom_kit_project_update_git_config_trust_digest(
                     mirror_path,
                     runner=git_runner,
                 )
-                == preflight_git_snapshot
-                and wom_kit_project_update_git_config_trust_digest(
-                    mirror_path,
-                    runner=git_runner,
-                )
-                == preflight_git_config_digest
-                and wom_kit_project_update_git_metadata_is_local_real(
+            )
+            post_bundle_git_metadata_local_real = (
+                wom_kit_project_update_git_metadata_is_local_real(
                     project_root,
                     mirror_path,
                     runner=git_runner,
                 )
-                and wom_kit_project_update_all_pins_match_snapshot(
+            )
+            post_bundle_pins_match = (
+                wom_kit_project_update_all_pins_match_snapshot(
                     project_root,
                     pin_specs,
                 )
-                and post_bundle_ref_snapshot
-                == trusted_target_ref_snapshot
-                and post_bundle_target_evidence == target_evidence
-                and post_bundle_runtime_policy == project_runtime_policy
-                and post_bundle_runtime_supply == project_runtime_supply
-                and post_bundle_bootstrap == project_runtime_bootstrap
-                and post_bundle_bootstrap_summary
-                == project_runtime_bootstrap_summary
-                and not post_bundle_runtime_blockers
-                and post_bundle_runtime_plan == project_runtime_plan
-                and post_bundle_launcher_snapshot
-                == project_runtime_launcher_snapshot
-                and post_bundle_materialization_preflight
-                == materialization_preflight
-                and post_bundle_live_summary
-                == prepared_runtime_bundle_summary
-                and (
-                    original_branch is None
-                    or (
-                        head_before is not None
-                        and wom_kit_project_update_branch_points_to_commit(
-                            mirror_path,
-                            original_branch,
-                            head_before,
-                            runner=git_runner,
-                        )
+            )
+            post_bundle_branch_matches = bool(
+                original_branch is None
+                or (
+                    head_before is not None
+                    and wom_kit_project_update_branch_points_to_commit(
+                        mirror_path,
+                        original_branch,
+                        head_before,
+                        runner=git_runner,
                     )
                 )
+            )
+
+            def preparation_check(
+                name: str,
+                matches: bool,
+                *,
+                available: bool = True,
+                reason_code: str | None = None,
+            ) -> tuple[str, str]:
+                if not available:
+                    return (
+                        "unavailable",
+                        reason_code
+                        or f"runtime_preparation_{name}_unavailable",
+                    )
+                return (
+                    "passed" if matches else "failed",
+                    reason_code
+                    or (
+                        f"runtime_preparation_{name}_verified"
+                        if matches
+                        else f"runtime_preparation_{name}_changed"
+                    ),
+                )
+
+            runtime_preparation_revalidation = (
+                wom_kit_project_update_runtime_preparation_revalidation(
+                    {
+                        "git_snapshot": preparation_check(
+                            "git_snapshot",
+                            post_bundle_git_snapshot == preflight_git_snapshot,
+                            available=post_bundle_git_snapshot is not None,
+                        ),
+                        "git_config_trust": preparation_check(
+                            "git_config_trust",
+                            post_bundle_git_config_digest
+                            == preflight_git_config_digest,
+                            available=post_bundle_git_config_digest is not None,
+                        ),
+                        "git_metadata": preparation_check(
+                            "git_metadata",
+                            post_bundle_git_metadata_local_real,
+                        ),
+                        "version_pins": preparation_check(
+                            "version_pins",
+                            post_bundle_pins_match,
+                        ),
+                        "target_refs": preparation_check(
+                            "target_refs",
+                            post_bundle_ref_snapshot
+                            == trusted_target_ref_snapshot,
+                        ),
+                        "target_evidence": preparation_check(
+                            "target_evidence",
+                            post_bundle_target_evidence == target_evidence,
+                        ),
+                        "runtime_policy": preparation_check(
+                            "runtime_policy",
+                            post_bundle_runtime_policy
+                            == project_runtime_policy,
+                        ),
+                        "runtime_supply": preparation_check(
+                            "runtime_supply",
+                            post_bundle_runtime_supply
+                            == project_runtime_supply,
+                        ),
+                        "runtime_bootstrap": preparation_check(
+                            "runtime_bootstrap",
+                            post_bundle_bootstrap
+                            == project_runtime_bootstrap
+                            and post_bundle_bootstrap_summary
+                            == project_runtime_bootstrap_summary,
+                        ),
+                        "runtime_plan": preparation_check(
+                            "runtime_plan",
+                            not post_bundle_runtime_blockers
+                            and post_bundle_runtime_plan
+                            == project_runtime_plan,
+                            reason_code=(
+                                "runtime_preparation_runtime_plan_blocked"
+                                if post_bundle_runtime_blockers
+                                else None
+                            ),
+                        ),
+                        "launcher": preparation_check(
+                            "launcher",
+                            post_bundle_launcher_snapshot
+                            == project_runtime_launcher_snapshot,
+                        ),
+                        "materialization_preflight": preparation_check(
+                            "materialization_preflight",
+                            post_bundle_materialization_preflight
+                            == materialization_preflight,
+                        ),
+                        "prepared_runtime_payload": preparation_check(
+                            "prepared_runtime_payload",
+                            post_bundle_live_summary
+                            == prepared_runtime_bundle_summary,
+                            available=prepared_runtime_payload_available,
+                        ),
+                        "source_branch": preparation_check(
+                            "source_branch",
+                            post_bundle_branch_matches,
+                            reason_code=(
+                                "runtime_preparation_source_branch_not_applicable"
+                                if original_branch is None
+                                else None
+                            ),
+                        ),
+                    }
+                )
+            )
+            post_bundle_state_still_exact = bool(
+                runtime_preparation_revalidation["state"] == "passed"
             )
             if not post_bundle_state_still_exact:
                 blockers.append(
