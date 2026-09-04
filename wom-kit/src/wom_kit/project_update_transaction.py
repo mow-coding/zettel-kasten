@@ -11,11 +11,13 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import errno
 import json
 import os
 import re
 import secrets
 import stat
+import time
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
@@ -103,6 +105,7 @@ MAX_CLAIM_EVIDENCE_ITEMS = 16
 MAX_RUNTIME_CANDIDATE_ENTRIES = 500_000
 MAX_RUNTIME_CANDIDATE_FILE_BYTES = 2 * 1024 * 1024 * 1024
 MAX_TERMINAL_CLEANUP_SCAN_ENTRIES = 256
+_RESERVATION_GUARD_WAIT_SECONDS = 8.0
 MAX_TRANSACTION_DESCENDANT_SCAN_ENTRIES = (
     MAX_RUNTIME_CANDIDATE_ENTRIES
     + MAX_PRIVATE_BLOBS
@@ -197,6 +200,7 @@ class ProjectUpdateTransactionError(RuntimeError):
             "project_update_transaction_not_sealed",
             "project_update_transaction_candidate_invalid",
             "project_update_transaction_scan_incomplete",
+            "project_update_transaction_reservation_state_changed",
         }
     )
 
@@ -3305,6 +3309,535 @@ def _exclusive_guard(path: Path, *, within: Path) -> Iterator[None]:
         os.close(descriptor)
 
 
+def _reservation_prefix_error() -> ProjectUpdateTransactionError:
+    return _fail("project_update_transaction_reservation_state_changed")
+
+
+def _reservation_generation_test_hook(_boundary: str) -> None:
+    """Private deterministic race seam; production performs no callback."""
+
+
+def _assert_named_reservation_directory_identity(
+    path: Path,
+    expected_identity: tuple[int, int],
+) -> None:
+    try:
+        info = _safe_directory(path, within=path)
+    except ProjectUpdateTransactionError:
+        raise _reservation_prefix_error() from None
+    if (int(info.st_dev), int(info.st_ino)) != expected_identity:
+        raise _reservation_prefix_error()
+
+
+@contextmanager
+def _reservation_materialization_guard(
+    parent: Path,
+    transaction_ref: str,
+) -> Iterator[_BoundDirectoryForMove]:
+    """Serialize cooperating exact reservation publishers without path state."""
+
+    ref = _transaction_ref(transaction_ref)
+    parent = _absolute(parent)
+    _safe_existing_chain(parent, directory=True)
+    try:
+        with _bound_directory_for_move(parent) as binding:
+            _assert_named_reservation_directory_identity(parent, binding.identity)
+            if os.name != "nt":
+                import fcntl
+
+                descriptor = binding.descriptor
+                if not isinstance(descriptor, int):
+                    raise OSError("reservation directory binding missing")
+                # Stay below the ten-second progress heartbeat contract while
+                # leaving enough scheduler headroom for a loaded CI host.
+                deadline = time.monotonic() + _RESERVATION_GUARD_WAIT_SECONDS
+                while True:
+                    try:
+                        fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                        break
+                    except OSError as error:
+                        if error.errno not in (errno.EACCES, errno.EAGAIN):
+                            raise
+                        if time.monotonic() >= deadline:
+                            raise _reservation_prefix_error() from None
+                        time.sleep(0.02)
+                try:
+                    yield binding
+                    _assert_named_reservation_directory_identity(
+                        parent, binding.identity
+                    )
+                finally:
+                    fcntl.flock(descriptor, fcntl.LOCK_UN)
+                return
+
+            import ctypes
+            from ctypes import wintypes
+
+            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            create_mutex = kernel32.CreateMutexW
+            create_mutex.argtypes = [wintypes.LPVOID, wintypes.BOOL, wintypes.LPCWSTR]
+            create_mutex.restype = wintypes.HANDLE
+            wait = kernel32.WaitForSingleObject
+            wait.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+            wait.restype = wintypes.DWORD
+            release = kernel32.ReleaseMutex
+            release.argtypes = [wintypes.HANDLE]
+            release.restype = wintypes.BOOL
+            close = kernel32.CloseHandle
+            close.argtypes = [wintypes.HANDLE]
+            namespace_digest = hashlib.sha256(
+                (
+                    str(binding.identity[0])
+                    + ":"
+                    + str(binding.identity[1])
+                    + "\x00"
+                    + ref
+                ).encode("ascii")
+            ).hexdigest()
+            mutex = create_mutex(
+                None,
+                False,
+                "Local\\wom-kit-project-update-reservation-" + namespace_digest,
+            )
+            if not mutex:
+                raise OSError("reservation mutex creation failed")
+            acquired = False
+            try:
+                result = int(
+                    wait(mutex, int(_RESERVATION_GUARD_WAIT_SECONDS * 1000))
+                )
+                if result not in (0x00000000, 0x00000080):
+                    raise _reservation_prefix_error()
+                acquired = True
+                yield binding
+                _assert_named_reservation_directory_identity(parent, binding.identity)
+            finally:
+                if acquired:
+                    release(mutex)
+                close(mutex)
+    except ProjectUpdateTransactionError:
+        raise
+    except OSError:
+        raise _fail("project_update_transaction_path_unsafe") from None
+
+
+def _exact_reservation_prefix_names(root: Path) -> tuple[str, ...]:
+    try:
+        with os.scandir(root) as iterator:
+            records = []
+            for index, entry in enumerate(iterator, start=1):
+                if index > 2 or entry.name not in {"append.guard", "marker.json"}:
+                    raise _reservation_prefix_error()
+                # ``DirEntry.stat`` reports ``st_nlink == 0`` on supported
+                # Windows builds.  Re-open the exact named leaf while the
+                # complete directory chain is retained instead.
+                info = (root / entry.name).lstat()
+                if (
+                    not stat.S_ISREG(info.st_mode)
+                    or stat.S_ISLNK(info.st_mode)
+                    or _is_reparse(info)
+                    or info.st_nlink != 1
+                ):
+                    raise _reservation_prefix_error()
+                records.append(entry.name)
+    except ProjectUpdateTransactionError:
+        raise
+    except OSError:
+        raise _fail("project_update_transaction_path_unsafe") from None
+    names = tuple(sorted(records))
+    if names not in (
+        (),
+        ("marker.json",),
+        ("append.guard", "marker.json"),
+    ):
+        raise _reservation_prefix_error()
+    return names
+
+
+def _read_exact_reservation_prefix_file(
+    path: Path,
+    *,
+    root: Path,
+    expected: bytes,
+) -> None:
+    try:
+        if os.name == "nt":
+            from .legacy_cleanup_bound_delete import (
+                _reject_windows_alternate_streams,
+                _windows_close,
+                _windows_open,
+            )
+
+            handle = _windows_open(path, directory=False)
+            try:
+                _reject_windows_alternate_streams(handle, directory=False)
+            finally:
+                _windows_close(handle)
+        current = _read_regular(path, within=root, maximum=MAX_DOCUMENT_BYTES + 1)
+    except (OSError, ProjectUpdateTransactionError):
+        raise _reservation_prefix_error() from None
+    if not hmac.compare_digest(current, expected):
+        raise _reservation_prefix_error()
+
+
+def _posix_reservation_child_info(
+    directory_descriptor: int,
+    name: str,
+) -> os.stat_result | None:
+    try:
+        return os.stat(name, dir_fd=directory_descriptor, follow_symlinks=False)
+    except FileNotFoundError:
+        return None
+    except OSError:
+        raise _fail("project_update_transaction_path_unsafe") from None
+
+
+def _posix_exact_reservation_prefix_names(
+    root_descriptor: int,
+) -> tuple[str, ...]:
+    scan_descriptor: int | None = None
+    try:
+        scan_descriptor = os.open(
+            ".",
+            os.O_RDONLY
+            | getattr(os, "O_DIRECTORY", 0)
+            | getattr(os, "O_NOFOLLOW", 0),
+            dir_fd=root_descriptor,
+        )
+        with os.scandir(scan_descriptor) as iterator:
+            records = []
+            for index, entry in enumerate(iterator, start=1):
+                if index > 2 or entry.name not in {"append.guard", "marker.json"}:
+                    raise _reservation_prefix_error()
+                info = os.stat(
+                    entry.name,
+                    dir_fd=root_descriptor,
+                    follow_symlinks=False,
+                )
+                if (
+                    not stat.S_ISREG(info.st_mode)
+                    or stat.S_ISLNK(info.st_mode)
+                    or info.st_nlink != 1
+                ):
+                    raise _reservation_prefix_error()
+                records.append(entry.name)
+    except ProjectUpdateTransactionError:
+        raise
+    except OSError:
+        raise _fail("project_update_transaction_path_unsafe") from None
+    finally:
+        if scan_descriptor is not None:
+            os.close(scan_descriptor)
+    names = tuple(sorted(records))
+    if names not in (
+        (),
+        ("marker.json",),
+        ("append.guard", "marker.json"),
+    ):
+        raise _reservation_prefix_error()
+    return names
+
+
+def _posix_read_exact_reservation_prefix_file(
+    root_descriptor: int,
+    name: str,
+    expected: bytes,
+) -> None:
+    flags = _flags(os.O_RDONLY)
+    try:
+        descriptor = os.open(name, flags, dir_fd=root_descriptor)
+    except OSError:
+        raise _reservation_prefix_error() from None
+    try:
+        opened = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(opened.st_mode)
+            or opened.st_nlink != 1
+            or opened.st_size != len(expected)
+        ):
+            raise _reservation_prefix_error()
+        chunks: list[bytes] = []
+        remaining = len(expected) + 1
+        while remaining > 0:
+            chunk = os.read(descriptor, remaining)
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        current = b"".join(chunks)
+        opened_after = os.fstat(descriptor)
+        named_after = os.stat(
+            name,
+            dir_fd=root_descriptor,
+            follow_symlinks=False,
+        )
+        if (
+            (opened.st_dev, opened.st_ino, opened.st_size, opened.st_mtime_ns)
+            != (
+                opened_after.st_dev,
+                opened_after.st_ino,
+                opened_after.st_size,
+                opened_after.st_mtime_ns,
+            )
+            or (opened_after.st_dev, opened_after.st_ino)
+            != (named_after.st_dev, named_after.st_ino)
+            or not hmac.compare_digest(current, expected)
+        ):
+            raise _reservation_prefix_error()
+    except ProjectUpdateTransactionError:
+        raise
+    except OSError:
+        raise _fail("project_update_transaction_path_unsafe") from None
+    finally:
+        os.close(descriptor)
+
+
+def _posix_write_new_reservation_prefix_file(
+    root_descriptor: int,
+    name: str,
+    value: bytes,
+) -> None:
+    try:
+        descriptor = os.open(
+            name,
+            _flags(os.O_WRONLY | os.O_CREAT | os.O_EXCL),
+            0o600,
+            dir_fd=root_descriptor,
+        )
+    except FileExistsError:
+        raise _reservation_prefix_error() from None
+    except OSError:
+        raise _fail("project_update_transaction_path_unsafe") from None
+    try:
+        _write_all(descriptor, value)
+        os.fsync(descriptor)
+    except OSError:
+        raise _fail("project_update_transaction_durability_unverified") from None
+    finally:
+        os.close(descriptor)
+    _posix_read_exact_reservation_prefix_file(root_descriptor, name, value)
+    try:
+        os.fsync(root_descriptor)
+    except OSError:
+        raise _fail("project_update_transaction_durability_unverified") from None
+
+
+def _complete_exact_reservation_prefix_posix(
+    root_descriptor: int,
+    *,
+    marker_raw: bytes,
+    durable_boundary_callback: Callable[[str], None] | None,
+) -> None:
+    names = _posix_exact_reservation_prefix_names(root_descriptor)
+    if "marker.json" in names:
+        _posix_read_exact_reservation_prefix_file(
+            root_descriptor, "marker.json", marker_raw
+        )
+    else:
+        _posix_write_new_reservation_prefix_file(
+            root_descriptor, "marker.json", marker_raw
+        )
+        if durable_boundary_callback is not None:
+            durable_boundary_callback("marker_durable")
+        names = _posix_exact_reservation_prefix_names(root_descriptor)
+        if names != ("marker.json",):
+            raise _reservation_prefix_error()
+
+    if "append.guard" in names:
+        _posix_read_exact_reservation_prefix_file(
+            root_descriptor, "append.guard", b"\x00"
+        )
+    else:
+        _posix_write_new_reservation_prefix_file(
+            root_descriptor, "append.guard", b"\x00"
+        )
+        if durable_boundary_callback is not None:
+            durable_boundary_callback("append_guard_durable")
+
+    if _posix_exact_reservation_prefix_names(root_descriptor) != (
+        "append.guard",
+        "marker.json",
+    ):
+        raise _reservation_prefix_error()
+    _posix_read_exact_reservation_prefix_file(
+        root_descriptor, "marker.json", marker_raw
+    )
+    _posix_read_exact_reservation_prefix_file(
+        root_descriptor, "append.guard", b"\x00"
+    )
+
+
+def _materialize_exact_reservation_prefix_posix(
+    parent_binding: _BoundDirectoryForMove,
+    *,
+    transaction_ref: str,
+    marker_raw: bytes,
+    allow_exact_resume: bool,
+    durable_boundary_callback: Callable[[str], None] | None,
+) -> None:
+    parent_descriptor = parent_binding.descriptor
+    if not isinstance(parent_descriptor, int):
+        raise _fail("project_update_transaction_path_unsafe")
+    ref = _transaction_ref(transaction_ref)
+    for residue_name in (f".cleanup_{ref}", f".cleanup-proof_{ref}.json"):
+        if _posix_reservation_child_info(parent_descriptor, residue_name) is not None:
+            raise _fail("project_update_transaction_exists")
+
+    named_root = _posix_reservation_child_info(parent_descriptor, ref)
+    root_created = named_root is None
+    if named_root is not None:
+        if (
+            stat.S_ISLNK(named_root.st_mode)
+            or not stat.S_ISDIR(named_root.st_mode)
+        ):
+            raise _reservation_prefix_error()
+        if not allow_exact_resume:
+            raise _fail("project_update_transaction_exists")
+    else:
+        try:
+            os.mkdir(ref, mode=0o700, dir_fd=parent_descriptor)
+        except FileExistsError:
+            raise _reservation_prefix_error() from None
+        except OSError:
+            raise _fail("project_update_transaction_path_unsafe") from None
+        named_root = _posix_reservation_child_info(parent_descriptor, ref)
+        if named_root is None or not stat.S_ISDIR(named_root.st_mode):
+            raise _reservation_prefix_error()
+
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        root_descriptor = os.open(ref, flags, dir_fd=parent_descriptor)
+    except OSError:
+        raise _reservation_prefix_error() from None
+    try:
+        opened_root = os.fstat(root_descriptor)
+        current_named_root = _posix_reservation_child_info(parent_descriptor, ref)
+        if (
+            current_named_root is None
+            or not stat.S_ISDIR(opened_root.st_mode)
+            or (int(opened_root.st_dev), int(opened_root.st_ino))
+            != (int(current_named_root.st_dev), int(current_named_root.st_ino))
+        ):
+            raise _reservation_prefix_error()
+        if named_root is not None and (
+            int(opened_root.st_dev),
+            int(opened_root.st_ino),
+        ) != (int(named_root.st_dev), int(named_root.st_ino)):
+            raise _reservation_prefix_error()
+        _reservation_generation_test_hook("root_bound")
+
+        # Both namespace creation and the empty directory itself are durable
+        # before the root boundary can be reported to recovery.
+        if root_created:
+            try:
+                os.fsync(root_descriptor)
+                os.fsync(parent_descriptor)
+            except OSError:
+                raise _fail(
+                    "project_update_transaction_durability_unverified"
+                ) from None
+            if durable_boundary_callback is not None:
+                durable_boundary_callback("root_durable")
+
+        _complete_exact_reservation_prefix_posix(
+            root_descriptor,
+            marker_raw=marker_raw,
+            durable_boundary_callback=durable_boundary_callback,
+        )
+        _reservation_generation_test_hook("prefix_verified")
+        final_opened_root = os.fstat(root_descriptor)
+        final_named_root = _posix_reservation_child_info(parent_descriptor, ref)
+        if (
+            final_named_root is None
+            or (int(final_opened_root.st_dev), int(final_opened_root.st_ino))
+            != (int(final_named_root.st_dev), int(final_named_root.st_ino))
+            or (int(final_opened_root.st_dev), int(final_opened_root.st_ino))
+            != (int(opened_root.st_dev), int(opened_root.st_ino))
+        ):
+            raise _reservation_prefix_error()
+    finally:
+        os.close(root_descriptor)
+
+
+def _complete_exact_reservation_prefix(
+    project: Path,
+    parent: Path,
+    root: Path,
+    *,
+    marker_raw: bytes,
+    durable_boundary_callback: Callable[[str], None] | None,
+) -> None:
+    """Complete only empty -> marker -> append.guard durable prefixes."""
+
+    try:
+        initial_root = _safe_directory(root, within=project)
+        initial_identity = (int(initial_root.st_dev), int(initial_root.st_ino))
+        parent_identity = _safe_directory(parent, within=project)
+        expected_parent_identity = (
+            int(parent_identity.st_dev),
+            int(parent_identity.st_ino),
+        )
+        with _bound_directory_for_move(root) as binding:
+            if binding.identity != initial_identity:
+                raise _reservation_prefix_error()
+            _reservation_generation_test_hook("root_bound")
+            names = _exact_reservation_prefix_names(root)
+            if "marker.json" in names:
+                _read_exact_reservation_prefix_file(
+                    root / "marker.json", root=root, expected=marker_raw
+                )
+            else:
+                _write_new(root / "marker.json", marker_raw, within=root)
+                _require_directory_durable(root)
+                if durable_boundary_callback is not None:
+                    durable_boundary_callback("marker_durable")
+                names = _exact_reservation_prefix_names(root)
+                if names != ("marker.json",):
+                    raise _reservation_prefix_error()
+                _read_exact_reservation_prefix_file(
+                    root / "marker.json", root=root, expected=marker_raw
+                )
+
+            if "append.guard" in names:
+                _read_exact_reservation_prefix_file(
+                    root / "append.guard", root=root, expected=b"\x00"
+                )
+            else:
+                _write_new(root / "append.guard", b"\x00", within=root)
+                _require_directory_durable(root)
+                if durable_boundary_callback is not None:
+                    durable_boundary_callback("append_guard_durable")
+
+            if _exact_reservation_prefix_names(root) != (
+                "append.guard",
+                "marker.json",
+            ):
+                raise _reservation_prefix_error()
+            _read_exact_reservation_prefix_file(
+                root / "marker.json", root=root, expected=marker_raw
+            )
+            _read_exact_reservation_prefix_file(
+                root / "append.guard", root=root, expected=b"\x00"
+            )
+            _reservation_generation_test_hook("prefix_verified")
+            root_after = _safe_directory(root, within=project)
+            if (
+                int(root_after.st_dev),
+                int(root_after.st_ino),
+            ) != initial_identity:
+                raise _reservation_prefix_error()
+            parent_after = _safe_directory(parent, within=project)
+            if (
+                int(parent_after.st_dev),
+                int(parent_after.st_ino),
+            ) != expected_parent_identity:
+                raise _reservation_prefix_error()
+    except ProjectUpdateTransactionError:
+        raise
+    except OSError:
+        raise _fail("project_update_transaction_path_unsafe") from None
+
+
 class ReservedProjectUpdateTransaction:
     """Durable reservation whose candidate and final intent are not sealed yet."""
 
@@ -3353,22 +3886,21 @@ class ReservedProjectUpdateTransaction:
         return path
 
     @classmethod
-    def reserve(
+    def prepare_reservation(
         cls,
-        project_root: Path | str,
         *,
         project_identity_sha256: str,
         requested_target_tag: str,
         transaction_ref: str | None = None,
         ownership_nonce: str | None = None,
         created_at: str = "1970-01-01T00:00:00Z",
-    ) -> "ReservedProjectUpdateTransaction":
-        project = _absolute(project_root)
-        _safe_existing_chain(project, directory=True)
+    ) -> ProjectUpdateReservation:
+        """Prepare the exact immutable reservation marker without filesystem writes."""
+
         ref = _transaction_ref(transaction_ref or f"update_{secrets.token_hex(16)}")
         nonce = ownership_nonce or secrets.token_hex(16)
         logical = _transaction_logical_ref(ref)
-        reservation = ProjectUpdateReservation(
+        return ProjectUpdateReservation(
             transaction_ref=ref,
             transaction_logical_ref=logical,
             project_identity_sha256=project_identity_sha256,
@@ -3380,25 +3912,121 @@ class ReservedProjectUpdateTransaction:
             ),
             created_at=created_at,
         )
+
+    @classmethod
+    def reserve(
+        cls,
+        project_root: Path | str,
+        *,
+        project_identity_sha256: str,
+        requested_target_tag: str,
+        transaction_ref: str | None = None,
+        ownership_nonce: str | None = None,
+        created_at: str = "1970-01-01T00:00:00Z",
+    ) -> "ReservedProjectUpdateTransaction":
+        reservation = cls.prepare_reservation(
+            project_identity_sha256=project_identity_sha256,
+            requested_target_tag=requested_target_tag,
+            transaction_ref=transaction_ref,
+            ownership_nonce=ownership_nonce,
+            created_at=created_at,
+        )
+        return cls._materialize_prepared_reservation(
+            project_root,
+            reservation=reservation,
+            allow_exact_resume=False,
+        )
+
+    @classmethod
+    def reserve_or_resume_exact(
+        cls,
+        project_root: Path | str,
+        *,
+        reservation: ProjectUpdateReservation,
+        _durable_boundary_callback: Callable[[str], None] | None = None,
+    ) -> "ReservedProjectUpdateTransaction":
+        """Create or finish only the exact authenticated reservation prefix."""
+
+        if not isinstance(reservation, ProjectUpdateReservation) or (
+            _durable_boundary_callback is not None
+            and not callable(_durable_boundary_callback)
+        ):
+            raise _fail("project_update_transaction_intent_invalid")
+        # Reconstructing from the public marker document validates every exact
+        # field and prevents a subclass or forged object from changing the
+        # materialized bytes after an external recovery record bound its SHA.
+        exact = ProjectUpdateReservation.from_document(reservation.document())
+        if not hmac.compare_digest(exact.sha256, reservation.sha256):
+            raise _fail("project_update_transaction_intent_invalid")
+        return cls._materialize_prepared_reservation(
+            project_root,
+            reservation=exact,
+            allow_exact_resume=True,
+            durable_boundary_callback=_durable_boundary_callback,
+        )
+
+    @classmethod
+    def _materialize_prepared_reservation(
+        cls,
+        project_root: Path | str,
+        *,
+        reservation: ProjectUpdateReservation,
+        allow_exact_resume: bool,
+        durable_boundary_callback: Callable[[str], None] | None = None,
+    ) -> "ReservedProjectUpdateTransaction":
+        project = _absolute(project_root)
+        _safe_existing_chain(project, directory=True)
+        ref = reservation.transaction_ref
+        marker_raw = _document_bytes(reservation.document())
         parent = _mkdirs(project, TRANSACTION_ROOT_LOGICAL)
         root = parent / ref
         tombstone = parent / f".cleanup_{ref}"
         proof = parent / f".cleanup-proof_{ref}.json"
-        if os.path.lexists(tombstone) or os.path.lexists(proof):
-            raise _fail("project_update_transaction_exists")
         _within(root, project)
-        try:
-            root.mkdir(mode=0o700)
-        except FileExistsError:
-            raise _fail("project_update_transaction_exists") from None
-        except OSError:
-            raise _fail("project_update_transaction_path_unsafe") from None
-        _safe_directory(root, within=project)
-        _write_new(root / "marker.json", _document_bytes(reservation.document()), within=root)
-        _write_new(root / "append.guard", b"\x00", within=root)
-        _require_directory_durable(root)
-        _require_directory_durable(parent)
-        return cls.open(project, ref)
+        with _reservation_materialization_guard(parent, ref) as parent_binding:
+            _reservation_generation_test_hook("guard_acquired")
+            if os.name != "nt":
+                _materialize_exact_reservation_prefix_posix(
+                    parent_binding,
+                    transaction_ref=ref,
+                    marker_raw=marker_raw,
+                    allow_exact_resume=allow_exact_resume,
+                    durable_boundary_callback=durable_boundary_callback,
+                )
+                return cls(project, root, reservation)
+
+            # Cleanup publications and reservation creation share the same
+            # per-ref namespace guard.  A pre-guard observation is not
+            # authority after a contending process has finished.
+            if os.path.lexists(tombstone) or os.path.lexists(proof):
+                raise _fail("project_update_transaction_exists")
+            existed = os.path.lexists(root)
+            if existed and not allow_exact_resume:
+                raise _fail("project_update_transaction_exists")
+            if not existed:
+                try:
+                    root.mkdir(mode=0o700)
+                except FileExistsError:
+                    if not allow_exact_resume:
+                        raise _fail("project_update_transaction_exists") from None
+                except OSError:
+                    raise _fail("project_update_transaction_path_unsafe") from None
+                _safe_directory(root, within=project)
+                _require_directory_durable(root)
+                _require_directory_durable(parent)
+                if durable_boundary_callback is not None:
+                    durable_boundary_callback("root_durable")
+            _complete_exact_reservation_prefix(
+                project,
+                parent,
+                root,
+                marker_raw=marker_raw,
+                durable_boundary_callback=durable_boundary_callback,
+            )
+            # `_complete_exact_reservation_prefix` retains the root and full
+            # parent chain and verifies the final named generation.  Returning
+            # the already-authenticated object avoids a close-then-reopen gap.
+            return cls(project, root, reservation)
 
     @classmethod
     def open(
@@ -4709,10 +5337,32 @@ class ReservedProjectUpdateTransaction:
         runtime_candidate_inventory_sha256: str,
         runtime_candidate_postimage_sha256: str,
         runtime_candidate_receipt_relative_path: str = RUNTIME_CANDIDATE_RECEIPT_NAME,
+        _legacy_recovery_binding_sha256: str | None = None,
     ) -> "ProjectUpdateTransaction":
         """Seal exact bindings after the reserved candidate was built in place."""
 
-        self._verify_reservation_backlink()
+        if _legacy_recovery_binding_sha256 is None:
+            self._verify_reservation_backlink()
+        else:
+            # A legacy prewrite recovery prepares the complete replacement
+            # transaction while the predecessor lock is still live.  The
+            # recovery coordinator must bind this detached intent digest in
+            # the private plan and will call acquire_lock/bind only after its
+            # atomic old->fresh lock replacement.  Ordinary callers cannot
+            # select this state accidentally: the digest is strict and a
+            # reservation backlink must not yet exist.
+            _digest(
+                _legacy_recovery_binding_sha256,
+                code="project_update_transaction_intent_invalid",
+            )
+            if os.path.lexists(
+                self._transaction_root / RESERVATION_LOCK_BACKLINK_NAME
+            ):
+                raise _fail("project_update_transaction_state_transition_invalid")
+            if private_binding_blobs.get("legacy-prewrite-recovery-binding") != (
+                _legacy_recovery_binding_sha256 + "\n"
+            ).encode("ascii"):
+                raise _fail("project_update_transaction_intent_invalid")
         provider_inventory = _digest(
             runtime_candidate_inventory_sha256,
             code="project_update_transaction_candidate_invalid",
@@ -4970,6 +5620,18 @@ class ReservedProjectUpdateTransaction:
             within=self._transaction_root,
         )
         _require_directory_durable(self._transaction_root)
+        if _legacy_recovery_binding_sha256 is not None:
+            # The exact state loader intentionally refuses a sealed intent
+            # without its live-lock backlinks.  Return the just-validated
+            # in-memory object only to the recovery coordinator; after the
+            # atomic lock handoff it must create both backlinks before any
+            # generic reopen or journal append is possible.
+            return ProjectUpdateTransaction(
+                self._project_root,
+                self._transaction_root,
+                self.reservation,
+                intent,
+            )
         return ProjectUpdateTransaction.open(self._project_root, self.transaction_ref)
 
 
@@ -5014,6 +5676,24 @@ class ProjectUpdateTransaction:
         return path
 
     @classmethod
+    def prepare_reservation(
+        cls,
+        *,
+        project_identity_sha256: str,
+        requested_target_tag: str,
+        transaction_ref: str | None = None,
+        ownership_nonce: str | None = None,
+        created_at: str = "1970-01-01T00:00:00Z",
+    ) -> ProjectUpdateReservation:
+        return ReservedProjectUpdateTransaction.prepare_reservation(
+            project_identity_sha256=project_identity_sha256,
+            requested_target_tag=requested_target_tag,
+            transaction_ref=transaction_ref,
+            ownership_nonce=ownership_nonce,
+            created_at=created_at,
+        )
+
+    @classmethod
     def reserve(
         cls,
         project_root: Path | str,
@@ -5031,6 +5711,20 @@ class ProjectUpdateTransaction:
             transaction_ref=transaction_ref,
             ownership_nonce=ownership_nonce,
             created_at=created_at,
+        )
+
+    @classmethod
+    def reserve_or_resume_exact(
+        cls,
+        project_root: Path | str,
+        *,
+        reservation: ProjectUpdateReservation,
+        _durable_boundary_callback: Callable[[str], None] | None = None,
+    ) -> ReservedProjectUpdateTransaction:
+        return ReservedProjectUpdateTransaction.reserve_or_resume_exact(
+            project_root,
+            reservation=reservation,
+            _durable_boundary_callback=_durable_boundary_callback,
         )
 
     @classmethod
