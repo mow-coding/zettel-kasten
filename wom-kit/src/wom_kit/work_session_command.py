@@ -71,6 +71,9 @@ def dispatch_work_session_management(root, *, action, dry_run=False, approve=Fal
         "create": {"label", "reviewer_claim"},
     }.get(mode, set())
     value = {} if request is None else request
+    needs_session = mode.startswith("claim_") or mode in {
+        "state_transition_apply", "original_state_transition_resume",
+    }
     if (type(value) is not dict or any(type(key) is not str for key in value)
             or set(value) != required_request):
         return management_failure("work_session_request_invalid")
@@ -81,8 +84,8 @@ def dispatch_work_session_management(root, *, action, dry_run=False, approve=Fal
         if (type(client_app_ref) is not str or task_route_ref is not None or work_session_ref is not None):
             return management_failure("work_session_request_invalid")
     elif (type(client_app_ref) is not str or type(task_route_ref) is not str
-          or (mode.startswith("claim_") and type(work_session_ref) is not str)
-          or (not mode.startswith("claim_") and work_session_ref is not None)):
+          or (needs_session and type(work_session_ref) is not str)
+          or (not needs_session and work_session_ref is not None)):
         return management_failure("work_session_request_invalid")
     from . import work_session_service as service
 
@@ -103,6 +106,10 @@ def dispatch_work_session_management(root, *, action, dry_run=False, approve=Fal
             result = service.resume_task_create(root, **selected, **wait)
         elif mode == "original_rereview":
             result = service.review_original_task_create(root, **selected, **wait)
+        elif mode in {"state_transition_apply", "original_state_transition_resume"}:
+            result = service.transition_task_state(root, **selected, action=action,
+                original_resume=mode == "original_state_transition_resume",
+                work_session_ref=work_session_ref, **wait)
         else:
             result = service.apply_or_resume_task_claim(root, **selected,
                                                         work_session_ref=work_session_ref, **wait)

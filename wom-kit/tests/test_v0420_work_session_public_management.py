@@ -9,6 +9,7 @@ from unittest import mock
 
 from wom_kit import archive_cli, command_status, mcp_server
 from wom_kit import work_session_command as routing
+from wom_kit import work_session_registration as registration
 from wom_kit import exact_human_approval_windows as windows
 from wom_kit import exact_human_approval_workflow as workflow
 import test_v0420_work_session_execution as fixture
@@ -27,7 +28,7 @@ class WorkSessionPublicManagementTests(unittest.TestCase):
             code = archive_cli.main(["work-session", str(root), "--no-progress", *flags])
         return code, json.loads(output.getvalue()), errors.getvalue()
 
-    def test_cli_and_mcp_share_real_registration_original_resume_and_private_output(self):
+    def test_cli_and_mcp_share_registration_create_claim_pause_resume_and_private_output(self):
         private_label = "SYNTHETIC_PRIVATE_APP_LABEL"
         with tempfile.TemporaryDirectory(prefix="wom-public-session-") as directory:
             root = Path(directory) / "archive"
@@ -85,13 +86,57 @@ class WorkSessionPublicManagementTests(unittest.TestCase):
                 code, resumed_claim, _ = self.cli(root, "--action", "claim", "--resume", *refs,
                                                  "--work-session-ref", session)
                 self.assertEqual(code, 0, resumed_claim)
+                store = registration._store(root)
+                original_claim = store.read()._document["sessions"][session]["claim_ref"]
+                code, paused, _ = self.cli(root, "--action", "pause", "--apply", *refs,
+                                         "--work-session-ref", session)
+                self.assertEqual(code, 0, paused)
+                self.assertEqual(paused["result"]["state"], "paused")
+                self.assertFalse(paused["result"]["current_claim_ownership_verified"])
+                paused_snapshot = store.read()
+                self.assertIsNone(paused_snapshot._document["sessions"][session]["claim_ref"])
+                with mock.patch.dict(mcp_server.os.environ, {mcp_server.MCP_ALLOWED_ROOTS_ENV: str(root)}):
+                    replay = mcp_server.handle_tools_call({"name": "archive_work_session_manage", "arguments": {
+                        "archive_root": str(root), "action": "pause", "resume": True,
+                        "client_app_ref": selection["client_app_ref"], "task_route_ref": route,
+                        "work_session_ref": session,
+                    }})
+                    self.assertTrue(replay["structuredContent"]["ok"], replay)
+                    self.assertTrue(replay["structuredContent"]["result"]["original_operation_already_completed"])
+                    self.assertEqual(store.read().sha256, paused_snapshot.sha256)
+                    # A new paused-session resume is not a request to replay pause.
+                    resumed_state = mcp_server.handle_tools_call({"name": "archive_work_session_manage", "arguments": {
+                        "archive_root": str(root), "action": "resume", "apply": True,
+                        "client_app_ref": selection["client_app_ref"], "task_route_ref": route,
+                        "work_session_ref": session,
+                    }})
+                self.assertTrue(resumed_state["structuredContent"]["ok"], resumed_state)
+                self.assertEqual(resumed_state["structuredContent"]["result"]["state"], "claimed")
+                after_resume = store.read()
+                self.assertNotEqual(after_resume._document["sessions"][session]["claim_ref"], original_claim)
+                code, resumed_again, _ = self.cli(root, "--action", "resume", "--resume", *refs,
+                                                "--work-session-ref", session)
+                self.assertEqual(code, 0, resumed_again)
+                self.assertTrue(resumed_again["result"]["original_operation_already_completed"])
+                self.assertEqual(store.read().sha256, after_resume.sha256)
+                code, wrong_original, _ = self.cli(root, "--action", "pause", "--resume", *refs,
+                                                 "--work-session-ref", session)
+                self.assertNotEqual(code, 0)
+                self.assertFalse(wrong_original["ok"])
+                self.assertEqual(store.read().sha256, after_resume.sha256)
             self.assertEqual(native.calls, 1)
-            self.assertNotIn(private_label, json.dumps([created, continued, claimed, resumed_claim]))
+            public_results = json.dumps([created, continued, claimed, resumed_claim, paused,
+                                         replay, resumed_state, resumed_again, wrong_original])
+            self.assertNotIn(private_label, public_results)
+            self.assertNotIn(original_claim, public_results)
+            self.assertNotIn(after_resume._document["sessions"][session]["claim_ref"], public_results)
 
     def test_supported_write_modes_are_not_mistaken_for_required_dry_run(self):
         for action, mode, native in (("register-app", "--apply", False), ("register-app", "--resume", False),
                                      ("create", "--approve", True), ("create", "--resume", False),
-                                     ("claim", "--apply", False), ("claim", "--resume", False)):
+                                     ("claim", "--apply", False), ("claim", "--resume", False),
+                                     ("pause", "--apply", False), ("pause", "--resume", False),
+                                     ("resume", "--apply", False), ("resume", "--resume", False)):
             with self.subTest(action=action, mode=mode):
                 args = self.parser.parse_args(["work-session", "synthetic-archive", "--action", action, mode])
                 effects = command_status.resolve_namespace_invocation_effects(self.parser, args)
@@ -121,7 +166,7 @@ class WorkSessionPublicManagementTests(unittest.TestCase):
         self.assertEqual(result["reason_code"], "work_session_mode_unavailable")
 
     def test_inventory_only_does_not_claim_action_dependent_modes_are_available(self):
-        for action in ("list", "register-app", "request-init", "create", "claim"):
+        for action in ("list", "register-app", "request-init", "create", "claim", "pause", "resume"):
             with self.subTest(action=action):
                 result = command_status.resolve_capability_availability(
                     self.inventory, "work-session", requested_mode="dry_run",

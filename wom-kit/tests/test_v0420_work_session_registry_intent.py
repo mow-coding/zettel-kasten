@@ -166,11 +166,11 @@ class RegistryIntentTests(unittest.TestCase):
         self.assertEqual(self.files(), before)
         self.assertEqual(self.store.read().sha256, other.after.sha256)
 
-    def test_human_and_unimplemented_nonhuman_actions_are_refused(self):
+    def test_human_and_remaining_unimplemented_nonhuman_actions_are_refused(self):
         plan = self.claim_plan()
         intent = self.prepare_save(plan)
         document = json.loads(intent._raw)
-        for action in ("create", "handoff", "accept", "recover", "pause", "resume", "complete"):
+        for action in ("create", "handoff", "accept", "recover", "complete"):
             with self.subTest(action=action):
                 changed = deepcopy(document)
                 changed["request"]["action"] = action

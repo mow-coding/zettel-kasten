@@ -80,7 +80,7 @@ class WorkSessionServiceTests(unittest.TestCase):
 
     def test_public_signatures_exclude_authority_and_unsupported_actions(self):
         expected = {"preview_registration", "initialize_task_request", "apply_or_resume_registration", "create_task", "resume_task_create",
-                    "review_original_task_create", "apply_or_resume_task_claim"}
+                    "review_original_task_create", "apply_or_resume_task_claim", "transition_task_state"}
         self.assertEqual(set(subject.__all__), expected | {"WorkSessionServiceError"})
         forbidden = {"native", "key_provider", "context", "approval_id", "claim_ref", "manifest_sha256",
                      "running_version", "running_module_path", "running_archive_cli_module_path", "dry_run"}
@@ -159,6 +159,38 @@ class WorkSessionServiceTests(unittest.TestCase):
             waiting.assert_not_called()
         self.assertEqual(self.files(), before)
         self.assertEqual(self.native.calls, 0)
+
+    def test_state_modes_reject_invalid_authority_inputs_before_lock_or_writer(self):
+        arguments = dict(action="pause", original_resume=False, client_app_ref="client_app:" + "a" * 32,
+                         task_route_ref="task_route:" + "b" * 32, work_session_ref="work_session:" + "c" * 32)
+        before = self.files()
+        with patch.object(subject, "wait_for_archive_writer", side_effect=AssertionError("invalid input waited")) as waiting:
+            for changes in ({"action": "handoff"}, {"action": True}, {"original_resume": 1},
+                            {"client_app_ref": None}, {"task_route_ref": []}, {"work_session_ref": None}):
+                with self.subTest(changes=tuple(changes)):
+                    self.reject(lambda: subject.transition_task_state(self.root, **{**arguments, **changes}))
+            waiting.assert_not_called()
+        self.assertEqual(self.files(), before)
+
+    def test_all_state_modes_keep_runtime_and_cancellation_guards_before_facade(self):
+        self.register()
+        session = self.create()["work_session_binding"]["work_session_ref"]
+        self.claim(session)
+        before = self.files()
+        selected = dict(client_app_ref=self.app, task_route_ref=self.route, work_session_ref=session)
+        with patch.object(subject.session_state, "_transition_task_held", side_effect=AssertionError("blocked facade")) as facade:
+            for action in ("pause", "resume"):
+                for original_resume in (False, True):
+                    with self.subTest(action=action, original_resume=original_resume):
+                        arguments = dict(action=action, original_resume=original_resume, **selected)
+                        self.reject(lambda: subject.transition_task_state(self.root, **arguments,
+                            cancel_requested=lambda: True), "work_session_wait_cancelled")
+                        with patch.object(subject.project_runtime, "project_write_guard", return_value={
+                                "blocked": True, "reason_code": "project_runtime_mismatch"}):
+                            self.reject(lambda: subject.transition_task_state(self.root, **arguments), "project_runtime_mismatch")
+            facade.assert_not_called()
+        self.assertEqual(self.files(), before)
+        self.assertEqual(self.native.calls, 1)
 
     def test_runtime_pin_created_during_wait_blocks_before_any_writer_or_native(self):
         self.register()

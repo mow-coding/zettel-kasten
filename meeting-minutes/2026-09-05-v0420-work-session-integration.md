@@ -713,6 +713,56 @@ bump, PR, tag, wheel or client application has occurred.
   Public handoff, accept, complete and recover remain subsequent work rather
   than being advertised as completed by the narrower pause/resume slice.
 
+## Pause/resume implementation and verification in progress
+
+- The existing private registry intent reader/writer now accepts the exact
+  pause and paused-resume shapes. These new actions require the original
+  create selector; the historical register/claim format is preserved. Pause
+  consumes the current private claim without generating another reference;
+  resume binds one generated claim in its original intent for all replays.
+- `work_session_state.py` composes those intents with existing actor CAS,
+  original create MAC verification, exact route selection and state-specific
+  current checks. Fresh apply refuses a pending original operation. Original
+  continuation loads only the selected same-action intent. Completed original
+  evidence and current state/ownership are reported separately.
+- The shared mode classifier, service, CLI and MCP expose only those two new
+  actions. Eighteen explicit input combinations are supported across the
+  eight public actions; all 256 boolean combinations were checked against an
+  independent oracle. Pause/resume accept no native/key/claim capability,
+  label, reviewer or replacement approval input. Both fresh and original
+  continuation keep the same archive lock and actual runtime guard.
+- Root's initial public CLI/MCP and mode cohort passed fifteen tests and
+  291 subtests in 52.34 seconds. Its real synthetic journey registered an app,
+  created a task with the original synthetic native/key seam, claimed it,
+  paused through CLI, replayed pause through MCP, resumed through MCP and
+  replayed resume through CLI. Only the original create opened the decision
+  seam. Replay preserved registry generation, a new resume used a different
+  private claim, wrong-action replay was refused and no private claim or label
+  appeared in public output. This is not installed-wheel or client evidence.
+- Source review and the dedicated actor/interruption tests remain separate
+  gates for this new slice. Existing service tests now also audit the explicit
+  new signature, reject malformed modes before waiting, and verify all four
+  supported state-write modes stop at cancellation/runtime guards before the
+  held state facade. No wider lifecycle or approval capability is opened.
+- The consolidated root service/public-mode/MCP/transport cohort passed
+  52 tests and 358 subtests in 170.66 seconds. Independent source review found
+  no additional blocker in those paths and the held state facade; the separate
+  interruption cohort was then completed on the same frozen source.
+- The intent cohort passed 24 tests and 54 subtests in 90.78 seconds, followed
+  by one added semantic-rehash negative test with four subtests in 9.68 seconds.
+  It exercised actual child interruption and a fresh-process replay of the
+  same original references. Existing register/claim raw bytes and hashes
+  remained compatible. The separate held state-facade cohort passed eleven
+  tests and thirteen subtests in 315.02 seconds. It covered original MAC/route,
+  actor CAS, pending/committed/output-loss cuts, wrong selectors, changed
+  current state and key failure. Actual child exit released the OS lock before
+  original-plan continuation; this is not installed automatic discovery proof.
+- Final source review reported no additional blocker and did not duplicate
+  those tests. All four readiness gates and the 169-file resource check passed.
+  This bounded state-transition slice is ready for its own source backup;
+  final v0.4.19 integration, installed v0.4.20 acceptance and the remaining
+  human lifecycle actions still block a complete v0.4.20 release claim.
+
 ## Standard references
 
 - [OpenTelemetry service identity](https://opentelemetry.io/docs/specs/semconv/resource/service/)

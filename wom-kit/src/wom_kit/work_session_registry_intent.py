@@ -1,4 +1,4 @@
-"""Original private register/claim intents; never current ownership or approval.
+"""Original private nonhuman intents; never current ownership or approval.
 
 The caller owns the same archive lock and persists its explicit bootstrap/app
 selector before committing. This module never discovers a latest intent, opens
@@ -27,6 +27,8 @@ from .exact_human_approval import exact_human_approval_context_sha256 as approva
 INTENT_SCHEMA = "wom-kit/work-session-private-registry-intent/v1"
 PRIVATE_ROOT = ("profiles", "local", "work-sessions", "registry-intents")
 MAX_INTENT_BYTES = 64 * 1024
+_INTENT_ACTIONS = frozenset({"register-app", "claim", "pause", "resume"})
+_STATE_ACTIONS = frozenset({"pause", "resume"})
 _REQUEST_KEYS = frozenset({"action", "client_app_ref", "work_session_ref", "label", "claim_ref", "target_app_ref"})
 _DOCUMENT_KEYS = frozenset({"schema", "archive_identity_sha256", "before_revision", "before_sha256",
                             "request", "generated_refs", "after_sha256", "plan_sha256", "intent_sha256"})
@@ -109,24 +111,36 @@ def _strict_document(raw: bytes) -> dict[str, Any]:
     if type(request) is not dict or set(request) != _REQUEST_KEYS:
         raise _fail()
     action = request["action"]
-    if type(action) is not str or action not in {"register-app", "claim"}:
+    if type(action) is not str or action not in _INTENT_ACTIONS:
         raise _fail("work_session_registry_intent_action_refused")
-    if type(generated) is not list or len(generated) != 1:
+    if type(generated) is not list or request["target_app_ref"] is not None:
         raise _fail()
-    if request["claim_ref"] is not None or request["target_app_ref"] is not None:
+    # These new actions have no historical unbound format. Preserve the exact
+    # human-created task selector; the held facade, not this private record,
+    # authenticates its original completed approval and the caller's route.
+    if action in _STATE_ACTIONS and "original_create_selector" not in document:
         raise _fail()
     if action == "register-app":
-        if request["client_app_ref"] is not None or request["work_session_ref"] is not None:
+        if (request["client_app_ref"] is not None or request["work_session_ref"] is not None
+                or request["claim_ref"] is not None or len(generated) != 1):
             raise _fail()
         registry._label(request["label"])
         if not registry._ref(generated[0], "client_app"):
             raise _fail()
-    elif (request["label"] is not None or not registry._ref(request["client_app_ref"], "client_app")
-          or not registry._ref(request["work_session_ref"], "work_session")
-          or not registry._ref(generated[0], "claim")):
-        raise _fail()
+    else:
+        if (request["label"] is not None or not registry._ref(request["client_app_ref"], "client_app")
+                or not registry._ref(request["work_session_ref"], "work_session")):
+            raise _fail()
+        if action == "pause":
+            # Pause consumes the exact predecessor claim; it generates none.
+            if generated or not registry._ref(request["claim_ref"], "claim"):
+                raise _fail()
+        elif (request["claim_ref"] is not None or len(generated) != 1
+              or not registry._ref(generated[0], "claim")):
+            # Claim and paused-session resume preserve one original new claim.
+            raise _fail()
     if "original_create_selector" in document:
-        if action != "claim":
+        if action == "register-app":
             raise _fail("work_session_registry_intent_action_refused")
         _original_create_document(document["original_create_selector"])
     basis = {key: value for key, value in document.items() if key != "intent_sha256"}
@@ -253,7 +267,7 @@ def _prepare(store, transition, held_lock, original_create_selector=None):
     if type(transition) is not registry.RegistryTransition:
         raise _fail()
     transition.validate()
-    if transition.action not in {"register-app", "claim"}:
+    if transition.action not in _INTENT_ACTIONS:
         raise _fail("work_session_registry_intent_action_refused")
     basis = {"schema": INTENT_SCHEMA, "archive_identity_sha256": store.archive_identity_sha256,
              "before_revision": transition.after.revision - 1, "before_sha256": transition.before_sha256,

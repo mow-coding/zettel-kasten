@@ -1,8 +1,8 @@
 """Bounded public management using the original work-session authorities.
 
-Only app registration, human task creation, original continuation/re-review,
-and original task claiming are connected. No implicit current/latest selector,
-create preview, lifecycle expansion, native facade or key injection is exposed.
+App registration, human task creation, original continuation/re-review,
+claiming, pause and paused-session resume are connected. No implicit latest
+selector, create preview, other lifecycle action or key injection is exposed.
 Every mutation waits once, checks the actual loaded runtime under that lock,
 then calls the existing held runner. A successful registration is self-declared;
 an original receipt is not proof of present claim ownership.
@@ -19,6 +19,7 @@ from . import work_session_lifecycle as lifecycle
 from . import work_session_registration as registration
 from . import work_session_registry as registry
 from . import work_session_rereview as rereview
+from . import work_session_state as session_state
 from .work_session_wait import WorkSessionWaitError, wait_for_archive_writer
 
 
@@ -30,7 +31,7 @@ _RUNTIME_BLOCKERS = frozenset({
 _ERRORS = (frozenset({"work_session_service_invalid", "work_session_service_unavailable",
                      "work_session_wait_cancelled", "work_session_wait_root_changed"})
            | _RUNTIME_BLOCKERS | registration._ERRORS | lifecycle._ERRORS
-           | claim._ERRORS | rereview._ERRORS)
+           | claim._ERRORS | rereview._ERRORS | session_state._ERRORS)
 
 
 class WorkSessionServiceError(ValueError):
@@ -49,9 +50,11 @@ def _safe_call(call):
     except WorkSessionServiceError as error:
         code, committed = error.code, error.original_commit_verified
     except (registration.WorkSessionRegistrationError, lifecycle.WorkSessionLifecycleError,
-            claim.WorkSessionClaimError, rereview.WorkSessionRereviewError) as error:
+            claim.WorkSessionClaimError, rereview.WorkSessionRereviewError,
+            session_state.WorkSessionStateError) as error:
         code = error.code if type(error.code) is str and error.code in _ERRORS else code
-        committed = isinstance(error, claim.WorkSessionClaimError) and error.original_commit_verified is True
+        committed = (isinstance(error, (claim.WorkSessionClaimError, session_state.WorkSessionStateError))
+                     and error.original_commit_verified is True)
     except WorkSessionWaitError as error:
         if error.args in (("work_session_wait_cancelled",), ("work_session_wait_root_changed",)):
             code = error.args[0]
@@ -226,5 +229,28 @@ def apply_or_resume_task_claim(root, *, client_app_ref, task_route_ref, work_ses
     return _safe_call(run)
 
 
+def transition_task_state(root, *, action, original_resume, client_app_ref,
+                          task_route_ref, work_session_ref,
+                          cancel_requested=lambda: False, progress=lambda _event: None):
+    """Pause/reclaim a paused session, or continue only its original operation.
+
+    The action named resume creates a new exact claim only with apply. The
+    original_resume flag selects prior durable evidence and cannot create a
+    fresh transition. Private claim tokens remain owned by the actor facade.
+    """
+    def run():
+        if type(action) is not str or action not in {"pause", "resume"} or type(original_resume) is not bool:
+            raise WorkSessionServiceError()
+        _refs(client_app_ref, task_route_ref, work_session_ref, require_session=True)
+        resolved = _root(root)
+        return _write(resolved, cancel_requested=cancel_requested, progress=progress,
+            run=lambda held: session_state._transition_task_held(
+                resolved, held=held, action=action, original_resume=original_resume,
+                client_app_ref=client_app_ref, task_route_ref=task_route_ref,
+                work_session_ref=work_session_ref))
+    return _safe_call(run)
+
+
 __all__ = ["WorkSessionServiceError", "preview_registration", "initialize_task_request", "apply_or_resume_registration",
-           "create_task", "resume_task_create", "review_original_task_create", "apply_or_resume_task_claim"]
+           "create_task", "resume_task_create", "review_original_task_create", "apply_or_resume_task_claim",
+           "transition_task_state"]
