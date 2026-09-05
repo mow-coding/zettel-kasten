@@ -47,6 +47,7 @@ from .exact_operation_manifest import (
     ExactOperationApprovalAuthority,
     ExactOperationItem,
     ExactOperationManifest,
+    ExactOperationManifestError,
     ExactOperationProgress,
     ExactOperationWriterLock,
     FileExactOperationCheckpointStore,
@@ -2584,10 +2585,31 @@ def _persist_domain_receipt(
     return receipt_sha256
 
 
+def _require_git_backup_held_lock(
+    prepared: PreparedGitBackup,
+    held: ExactOperationWriterLock,
+) -> None:
+    """Require the caller's real, still-held lock for this exact archive."""
+
+    if type(held) is not ExactOperationWriterLock:
+        raise _fail("git_backup_git_state_drifted")
+    try:
+        held.verify_held()
+        if os.path.samefile(held.archive_root, prepared.root):
+            return
+    except (OSError, ExactOperationManifestError):
+        pass
+    # Raise outside the handler: even a suppressed exception context could
+    # otherwise retain a private filesystem path from the failed observation.
+    raise _fail("git_backup_git_state_drifted")
+
+
 @contextmanager
 def _git_backup_post_decision_boundary(
     prepared: PreparedGitBackup,
     lock_box: dict[str, ExactOperationWriterLock],
+    *,
+    held: ExactOperationWriterLock | None = None,
 ):
     _freeze_validated_prepared(prepared)
     claims_parent = (
@@ -2599,9 +2621,13 @@ def _git_backup_post_decision_boundary(
     )
     credential_parent = prepared.root / "profiles" / "local" / "credential-intake"
     with ExitStack() as stack:
-        lock = stack.enter_context(
-            exact_operation_writer_lock(prepared.root, timeout_seconds=2.0)
-        )
+        if held is None:
+            lock = stack.enter_context(
+                exact_operation_writer_lock(prepared.root, timeout_seconds=2.0)
+            )
+        else:
+            _require_git_backup_held_lock(prepared, held)
+            lock = held
         stack.enter_context(
             archive_services._activity_group_bound_directory_chain(
                 prepared.root,
@@ -2616,6 +2642,8 @@ def _git_backup_post_decision_boundary(
                 create=True,
             )
         )
+        if held is not None:
+            _require_git_backup_held_lock(prepared, held)
         lock_box["lock"] = lock
         try:
             yield prepared.root, claims_binding
@@ -2719,6 +2747,57 @@ def execute_git_backup(
     """Show one native approval, then re-observe, commit, push, and verify."""
 
     _freeze_validated_prepared(prepared)
+    return _execute_git_backup_core(
+        prepared,
+        selection_manifest_path=selection_manifest_path,
+        reviewer_claim=reviewer_claim,
+        progress_hook=progress_hook,
+        native=native,
+        key_provider=key_provider,
+        held=None,
+    )
+
+
+def _execute_git_backup_held(
+    prepared: PreparedGitBackup,
+    *,
+    held: ExactOperationWriterLock,
+    selection_manifest_path: Path | str,
+    reviewer_claim: str,
+    progress_hook: Callable[[ExactOperationProgress], None] | None = None,
+    native: Any | None = None,
+    key_provider: Any | None = None,
+) -> dict[str, Any]:
+    """Compose the original writer under a caller-owned same-archive lock.
+
+    The lock must already be held before native review and remains owned by
+    the caller. This private seam neither attests current actor/provenance nor
+    selects or resumes an original approval; those require separate evidence.
+    """
+
+    _freeze_validated_prepared(prepared)
+    _require_git_backup_held_lock(prepared, held)
+    return _execute_git_backup_core(
+        prepared,
+        selection_manifest_path=selection_manifest_path,
+        reviewer_claim=reviewer_claim,
+        progress_hook=progress_hook,
+        native=native,
+        key_provider=key_provider,
+        held=held,
+    )
+
+
+def _execute_git_backup_core(
+    prepared: PreparedGitBackup,
+    *,
+    selection_manifest_path: Path | str,
+    reviewer_claim: str,
+    progress_hook: Callable[[ExactOperationProgress], None] | None,
+    native: Any | None,
+    key_provider: Any | None,
+    held: ExactOperationWriterLock | None,
+) -> dict[str, Any]:
     context = _git_backup_approval_context(prepared, reviewer_claim=reviewer_claim)
     lock_box: dict[str, ExactOperationWriterLock] = {}
 
@@ -2740,6 +2819,10 @@ def execute_git_backup(
         lock = lock_box.get("lock")
         if lock is None:
             raise _fail("git_backup_git_state_drifted")
+        if held is not None:
+            if lock is not held:
+                raise _fail("git_backup_git_state_drifted")
+            _require_git_backup_held_lock(prepared, held)
         return _apply_prepared_with_claim(
             prepared,
             context=context,
@@ -2758,6 +2841,7 @@ def execute_git_backup(
         post_decision_boundary=lambda: _git_backup_post_decision_boundary(
             prepared,
             lock_box,
+            held=held,
         ),
     )
 

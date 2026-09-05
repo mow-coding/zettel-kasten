@@ -1074,6 +1074,42 @@ bump, PR, tag, wheel or client application has occurred.
   seam alone will not be declared a complete session backup workflow; original
   context discovery, actor authority and producer provenance must still meet.
 
+## Same-lock Git execution checkpoint
+
+- The private held Git entrypoint now verifies a real same-archive lock before
+  native review, reuses it through claim creation and exact application, and
+  returns without closing it. The caller still owns release. A missing,
+  unheld, released or foreign lock is rejected rather than replaced.
+- The existing public executor keeps its original signature and native-before-
+  default-lock behavior. Approval context, manifests, private bundle codecs,
+  receipt/result composition and legacy resume were not changed. This internal
+  seam alone grants no current actor or document provenance authority.
+- Seven new held tests passed in 136.622 seconds. Real temporary Git and local
+  bare remotes exercised commit/push/requery, original v1 bytes, bound-v2
+  exclusions, a competing lock through native/application/return, and native-
+  time lock/selection/prepared-data drift. Eleven existing writer tests passed
+  in 254.648 seconds and 23 existing v2 tests in 416.327 seconds, including
+  crash/resume, large grouping and staged/remote drift.
+- Independent review identified a private exception-chain leak in the new
+  lock guard: `raise ... from None` hides display but retains `__context__`.
+  The fixed error is now raised outside the handler. A new path-bearing OS/
+  nested-lock error test verifies empty cause/context; it passed, followed by
+  the real successful held-Git path again in 27.806 seconds. There are 42 unique
+  tests across these cohorts, not 43 from double-counting that rerun.
+- Final independent review confirmed the privacy fix with no remaining
+  blocking issue. Python 3.10 grammar/API checks passed, but native 3.10
+  execution remains a future integration-CI requirement. Four readiness gates,
+  169-resource synchronization and diff checks passed.
+- The remaining public workflow requires durable original Git context and
+  actor routing. Full planner recapture is appropriate before preparation but
+  not after its own ignored context/claim files are written: doing so creates
+  an approval-digest cycle. Reuse the existing exact source checks and separate
+  actor/provenance revalidation, without reconstructing an approved manifest.
+  Terminal commit evidence must also be distinguished from new completion
+  receipts that legitimately make the worktree dirty after push.
+- No client project or real provider was changed. These are developer-side
+  source/fixture results, not a public session-backup release or client receipt.
+
 ## Standard references
 
 - [OpenTelemetry service identity](https://opentelemetry.io/docs/specs/semconv/resource/service/)
