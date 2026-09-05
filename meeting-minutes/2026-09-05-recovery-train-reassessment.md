@@ -342,3 +342,98 @@ not complete at this checkpoint.
   ambiguous or changed legacy journals remain preserved and blocked, not
   silently counted as recovered. This source is frozen for a fresh complete CI
   candidate; no partial local test sum is substituted for that release gate.
+- Candidate `dd6c1669d5d56130c2de3ee232c7e8f41ab9debb` was committed and
+  pushed to the existing draft PR. Its installed-entrypoint, both Doctor scale,
+  link-index and readiness gates passed, but the complete CI has not passed.
+- An acceptance audit found that the installed-wheel gate proved installation
+  and healthy same-version no-op but not real-wheel repair, process-loss resume
+  or source/ref drift. The driver now observes real implementation returns to
+  inject source/ref changes and exits a child after the actual durable runtime
+  intent append. Fresh-process resume must reuse the old claim and prepared
+  runtime without another download, preparation or native approval. Production
+  verifier/writer results are not mocked. The existing time budget is unchanged;
+  the extended complete local installed run is still being measured.
+- Both Linux shard-one jobs exposed the same five dispatch fixtures that
+  instantiated the production Windows key provider before their synthetic
+  service seam. They now explicitly use the already-existing memory-only
+  provider. The single-file derived-text assertion now matches the actual
+  handler, including the public predecessor. Six focused tests and eleven
+  subtests passed in 22.70 seconds; independent source review agreed. Linux
+  execution still needs the next complete candidate CI.
+- Windows shard three exposed two additional failures in the actual staged
+  multi-group Git backup and runtime-repair interruption tests. They are being
+  independently diagnosed without weakening source binding, claim authority or
+  directory/file verification. A local repeat alone is not grounds to dismiss
+  a CI failure or mark the release ready.
+- The extended installed journey's first complete local run exceeded its
+  unchanged 1,200-second budget. Its global profile observer imposed about
+  10.5 times the cost in a bounded call comparison. Named, original-forwarding
+  wrappers removed that global overhead (1.01 times in the same comparison).
+  Actual implementation returns, durable append-before-cut and assertion
+  semantics remain intact; independent review found no additional blocker.
+  Twelve focused hook/diagnostic tests and eighteen subtests passed. A new
+  complete installed run is in progress; the timeout is not repair evidence.
+- Two local actual Git reproductions passed, and the real two-venv runtime
+  repair test passed in 229.235 seconds. Neither reproduced the CI-only
+  failure. Test-only diagnostics now retain fixed Git stages/error codes and
+  unexpected runtime exception frames without adding retries or changing
+  production guards. Their causes remain unconfirmed pending new evidence.
+- Run `33949084334` then completed with a failing aggregate, preserving every
+  job instead of cancelling the final Windows shards. Windows shard one had
+  only the already-corrected derived-text assertion. Windows shard two exposed
+  one additional real-update/no-op journey failure before the first update's
+  privacy-safe result. That masked preflight failure is being traced; it has
+  not been relabelled as a successful update or dismissed as test flakiness.
+- A separate actual-dispatch audit corrected `operation-control`: its cancel
+  writer never existed, despite an approval-available inventory entry. The
+  shared inventory, suggestions, help and dispatch now report writer unavailable
+  with the precise cancellation-unsupported reason, not a compound-approval
+  migration diagnosis. Existing status/wait/recovery-plan read results stay
+  unchanged. Fifty-two focused tests and 175 subtests passed; independent root
+  review found no additional blocker. Packaged schema synchronization and the
+  next complete candidate CI are still required.
+- The wrapper-observed full installed run also exceeded 1,200 seconds and
+  returned no final per-stage timings. This second failure means observer
+  microbenchmark improvement did not establish whole-journey performance or
+  repair completion. Another blind full retry was not started. The harness is
+  being extended with bounded, content-free per-stage evidence so a timeout
+  preserves its validated prefix and explicitly unknown unfinished work.
+- The new first-update failure observer preserves actual call/result/exception
+  behavior, bounded fixed error classifications and allowlisted production code
+  locations without raw output, arguments, exception text or frame locals.
+  Seven observer tests and three subtests passed. The exact Windows two-shard
+  failing journey then passed once locally in 355.02 seconds, including actual
+  first update, native/claim success, no-op, unavailable/timeout handling and
+  post-proof drift refusal. Its CI cause remains unconfirmed; no retry policy
+  or production verification was changed to obtain that local pass.
+- Root separately ran the installed-checker contracts, runtime fault diagnostic
+  and unsupported-control cases: 71 tests and 110 subtests passed in 29.71
+  seconds. All four readiness gates and synchronized package resources passed.
+  These results are not substitutes for the pending complete installed journey
+  or the next complete supported-platform candidate CI.
+- The public privacy gate caught a synthetic user-folder-shaped string in the
+  new observer test. The fixture now uses a generic synthetic drive/path while
+  retaining its private-marker redaction assertion; the scanner was not
+  weakened. The privacy gate and seven observer tests (three subtests) passed.
+- The installed harness now reports eighteen fixed stages through a separate,
+  bounded stderr protocol. The parent validates sequence, exact keys, integer
+  monotonic times and byte limits as data arrives, and retains only the valid
+  prefix on timeout or malformed tail. An unfinished stage has unknown product
+  completion and no invented duration. Partial observations cannot satisfy the
+  final runtime proof. The 1,200-second limit, process-tree containment, actual
+  writer calls, stdout result contract and temporary-fixture policy are unchanged.
+- Independent review found two path-bearing error surfaces in the observed
+  process launch and wheel-evidence read. Both now use fixed failure messages
+  in this narrow path. Review also caught a Windows-only constant missing from
+  a Linux-mimicking launch-failure fixture; only that fixture was corrected.
+  No additional blocker was found in the final source review. Linux execution
+  and full installed repair/resume success are still separate pending evidence.
+- Root ran the consolidated installed-checker, phase protocol, unsupported
+  control, runtime-fault and first-update-observer tests: 90 tests and 132
+  subtests passed in 34.62 seconds. The next full CI candidate will exercise
+  the extended installed journey with these observations. A third identical
+  local full retry was not run, and neither earlier timeout was waived.
+- All four release-readiness gates, synchronization of 169 packaged resources
+  and the final whitespace check passed before this consolidated candidate
+  checkpoint. The draft PR remains unmerged until the full matrix and extended
+  installed journey are independently green at the same candidate head.

@@ -109,8 +109,8 @@
     {
       "source": "schemas/command-approval-status-inventory-v0.2.schema.json",
       "packaged": "schemas/command-approval-status-inventory-v0.2.schema.json",
-      "bytes": 9692,
-      "sha256": "f0dafb93f7e5ceb08605fafa0f917a3816abce57591673ddc612adad29a6136a"
+      "bytes": 10195,
+      "sha256": "206892b1ebf1975964b573bd24638e410a25b60c54085bd881407d3b85b8e0a3"
     },
     {
       "source": "schemas/credential-adapter-manifest.schema.json",

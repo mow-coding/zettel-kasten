@@ -10,6 +10,7 @@ controlled; policy, supply, installer, broker, writers and verifiers stay real.
 from __future__ import annotations
 
 from contextlib import ExitStack, redirect_stderr, redirect_stdout
+from functools import wraps
 import hashlib
 import importlib.metadata
 import io
@@ -25,6 +26,15 @@ from unittest import mock
 
 
 SCHEMA = "wom-kit/installed-v0419-runtime-journey/v0.1"
+PHASE_SCHEMA = "wom-kit/installed-runtime-phase-event/v0.1"
+PHASE_PREFIX = "WOM_RUNTIME_PHASE_V1 "
+PHASES = (
+    "bootstrap_import", "synthetic_project", "initial_update", "healthy_noop",
+    "next_preview", "source_drift", "ref_drift", "repair_preimage",
+    "repair_prepare_to_cut", "repair_cut_validation", "repair_fresh_resume",
+    "repair_result_validation", "repair_independent_noop", "terminal_control_check",
+    "runtime_process_origin", "project_launcher_version", "doctor_startup", "final_claim_check",
+)
 SAFE_REASON_CODES = frozenset({
     "origin_modules_incomplete", "source_checkout_import_denied", "synthetic_child_command_failed",
     "source_resource_path_invalid", "source_resource_drift", "windows_cpython312_required",
@@ -37,11 +47,61 @@ SAFE_REASON_CODES = frozenset({
     "project_launcher_version_mismatch", "durable_broker_claim_missing", "journey_arguments_invalid",
     "doctor_startup_probe_failed", "doctor_startup_progress_missing", "doctor_startup_progress_deadline",
     "doctor_startup_output_invalid", "doctor_startup_probe_output_bound",
+    "drift_injection_not_observed", "drift_not_blocked",
+    "drift_domain_changed", "drift_requested_effect", "repair_interruption_not_reached",
+    "repair_preimage_changed_before_switch", "repair_checkpoint_missing", "repair_claim_missing",
+    "repair_resume_failed", "repair_resume_requested_effect", "repair_payload_not_restored",
+    "repair_worker_arguments_invalid", "repair_worker_origin_invalid",
 })
 
 
 class JourneyCheckError(RuntimeError):
     """Only explicit harness assertions can supply public reason codes."""
+
+
+class PhaseReporter:
+    """Bounded harness observations, never product recovery/approval evidence.
+
+    Keep the original stderr sink so CLI output capture cannot swallow events.
+    Child cut/resume are timed at the parent's actual invocation boundaries;
+    this does not claim to observe the child's internal implementation stages.
+    """
+
+    def __init__(self, *, stream=None, clock=None):
+        self.stream = sys.stderr if stream is None else stream
+        self.clock = time.monotonic if clock is None else clock
+        self.started = self.clock()
+        self.sequence = 0
+        self.index = 0
+        self.active = None
+        self.terminal = False
+
+    def _emit(self, stage, event):
+        # Do not clamp an over-budget observation into an apparent timely one.
+        # The parent retains the validated prefix and marks protocol_invalid.
+        elapsed = int((self.clock() - self.started) * 1000)
+        self.sequence += 1
+        payload = {"schema": PHASE_SCHEMA, "sequence": self.sequence,
+                   "stage": stage, "event": event, "elapsed_ms": elapsed}
+        self.stream.write(PHASE_PREFIX + json.dumps(payload, separators=(",", ":")) + "\n")
+        self.stream.flush()
+
+    def begin(self, stage):
+        require(not self.terminal and self.active is None and self.index < len(PHASES)
+                and stage == PHASES[self.index], "installed_runtime_journey_failed")
+        self.active = stage
+        self._emit(stage, "begin")
+
+    def passed(self):
+        require(not self.terminal and self.active is not None, "installed_runtime_journey_failed")
+        self._emit(self.active, "passed")
+        self.index += 1
+        self.active = None
+
+    def fail_active(self):
+        if self.active is not None and not self.terminal:
+            self._emit(self.active, "failed")
+            self.terminal = True
 
 
 def require(condition: object, reason: str) -> None:
@@ -59,7 +119,7 @@ def verify_installed_origins(modules: dict[str, object], prefix: Path) -> bool:
     return True
 
 
-def command(argv: list[str], *, cwd: Path, timeout: int = 120) -> str:
+def command(argv: list[str], *, cwd: Path, timeout: int = 120, expected_code: int = 0) -> str:
     options = {"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {}
     environment = dict(os.environ)
     environment.pop("PYTHONPATH", None)
@@ -70,8 +130,158 @@ def command(argv: list[str], *, cwd: Path, timeout: int = 120) -> str:
         argv, cwd=cwd, capture_output=True, text=True, encoding="utf-8",
         env=environment, timeout=timeout, check=False, **options,
     )
-    require(completed.returncode == 0, "synthetic_child_command_failed")
+    require(completed.returncode == expected_code, "synthetic_child_command_failed")
     return completed.stdout.strip()
+
+
+class CallObservation:
+    """Observe real Python boundaries without replacing implementations.
+
+    Only named boundaries are wrapped; their original implementation receives
+    the original arguments and supplies the unchanged result or exception. A
+    post-return fault may change synthetic disk state or terminate the child,
+    but cannot manufacture a verifier/writer result. No global tracing/profile
+    callback slows every unrelated file-tree operation.
+    """
+
+    def __init__(self, functions, *, on_return=None):
+        self.functions = functions
+        self.calls = {name: 0 for name in functions}
+        self.on_return = on_return
+        self.originals = []
+
+    def _wrap(self, name, original):
+        @wraps(original)
+        def observed(*args, **kwargs):
+            self.calls[name] += 1
+            value = original(*args, **kwargs)
+            if self.on_return is not None:
+                self.on_return(name, None, value)
+            return value
+        return observed
+
+    def __enter__(self):
+        try:
+            for name, (owner, attribute) in self.functions.items():
+                original = getattr(owner, attribute)
+                self.originals.append((owner, attribute, original))
+                setattr(owner, attribute, self._wrap(name, original))
+        except BaseException:
+            self.__exit__()
+            raise
+        return self
+
+    def __exit__(self, *_exception):
+        for owner, attribute, original in reversed(self.originals):
+            setattr(owner, attribute, original)
+        self.originals.clear()
+
+
+def cli_json(archive_cli, argv):
+    stdout, stderr = io.StringIO(), io.StringIO()
+    with redirect_stdout(stdout), redirect_stderr(stderr):
+        code = archive_cli.main(argv)
+    return code, json.loads(stdout.getvalue())
+
+
+def approved_arguments(project: Path, version: str) -> list[str]:
+    return ["project-version-update", str(project), "--target", "v" + version,
+            "--approve", "--affirm-external-writers-quiescent", "--reviewed-by",
+            "person:wheel-runtime-reviewer", "--format", "json"]
+
+
+def local_transport(project_runtime, wheel: Path, bootstrap):
+    original_download = project_runtime._download_exact_artifact
+
+    def transport(**kwargs):
+        if kwargs["url"] != bootstrap.url:
+            return original_download(**kwargs)
+        payload = wheel.read_bytes()
+        require(hashlib.sha256(payload).hexdigest() == kwargs["expected_sha256"], "local_transport_hash_mismatch")
+        size = kwargs.get("expected_size")
+        require(size is None or size == len(payload), "local_transport_size_mismatch")
+        Path(kwargs["destination"]).write_bytes(payload)
+        return len(payload)
+
+    return transport
+
+
+def assert_no_active_update(project: Path, project_runtime, transaction) -> None:
+    require(not (project / transaction.PROJECT_UPDATE_LOCK_LOGICAL).exists(), "active_update_lock_remains")
+    transactions = project / transaction.TRANSACTION_ROOT_LOGICAL
+    require(not transactions.exists() or not any(
+        path.is_dir() and (path.name.startswith("update_") or path.name.startswith(".cleanup_update_"))
+        for path in transactions.iterdir()
+    ), "active_update_transaction_remains")
+    require(not any(path.name == project_runtime.PROJECT_RUNTIME_CANDIDATE_NAME
+                    for path in (project / ".zettel-kasten").rglob("*")), "runtime_candidate_remains")
+
+
+def exercise_installed_drift(project, version, project_runtime, archive_services, native_type, cli, phases):
+    """Change real source/ref after the first genuine installed-runtime proof."""
+    metadata = project / ".zettel-kasten"
+    mirror = metadata / "source"
+    source_file = mirror / "wom-kit/src/wom_kit/__init__.py"
+    source_before = source_file.read_bytes()
+    tag = "refs/tags/v" + version
+    tag_before = git(mirror, "rev-parse", tag)
+    head = git(mirror, "rev-parse", "HEAD")
+    runtime = project_runtime.runtime_path(project, version)
+    runtime_before = project_runtime._candidate_inventory_snapshot(runtime)
+    receipt_root = metadata / "receipts/version-updates"
+    unchanged = {path: path.read_bytes() for path in [metadata / "installed-version.txt",
+                 project / project_runtime.PROJECT_RUNTIME_LAUNCHER_RELATIVE, *receipt_root.glob("*.json")]}
+    receipt_names = {path.name for path in receipt_root.glob("*.json")}
+    durations = {}
+    for kind in ("source", "ref"):
+        if kind == "ref":
+            phases.begin("ref_drift")
+        injected = []
+
+        def inject(name, _frame, result):
+            if name != "verify" or injected:
+                return
+            require(isinstance(result, dict) and result.get("reusable") is True, "drift_injection_not_observed")
+            if kind == "source":
+                source_file.write_bytes(source_before + b"\n# synthetic source drift\n")
+            else:
+                git(mirror, "update-ref", tag, head, tag_before)
+            injected.append(True)
+
+        started = time.monotonic()
+        try:
+            with CallObservation({"verify": (project_runtime, "verify_existing_runtime_for_noop"),
+                                  "prepare": (project_runtime, "prepare_runtime_candidate"),
+                                  "initialize": (project_runtime, "_initialize_runtime_payload")}, on_return=inject) as observer, mock.patch.object(
+                native_type, "show", side_effect=JourneyCheckError("drift_requested_effect"),
+            ) as native, mock.patch.object(project_runtime, "_download_exact_artifact",
+                                          side_effect=JourneyCheckError("drift_requested_effect")) as download:
+                code, result = cli(approved_arguments(project, version))
+            require(injected == [True], "drift_injection_not_observed")
+            revalidation = result.get("project_runtime", {}).get("preparation_revalidation", {})
+            dimension = "git_snapshot" if kind == "source" else "target_refs"
+            require(code != 0 and result.get("status") == "blocked"
+                    and dimension in revalidation.get("changed_dimensions", []), "drift_not_blocked")
+            require(native.call_count == download.call_count == 0
+                    and observer.calls["prepare"] == observer.calls["initialize"] == 0, "drift_requested_effect")
+            require(project_runtime._candidate_inventory_snapshot(runtime) == runtime_before
+                    and all(path.read_bytes() == content for path, content in unchanged.items())
+                    and {path.name for path in receipt_root.glob("*.json")} == receipt_names
+                    and git(mirror, "rev-parse", "HEAD") == head, "drift_domain_changed")
+            require(source_file.read_bytes() == (source_before + b"\n# synthetic source drift\n" if kind == "source" else source_before)
+                    and git(mirror, "rev-parse", tag) == (head if kind == "ref" else tag_before), "drift_domain_changed")
+            assert_no_active_update(project, project_runtime, archive_services.project_update_transaction)
+        finally:
+            # Only the harness restores its own injected synthetic fault. WOM
+            # must leave changed user bytes/refs intact when it refuses a write.
+            if injected:
+                if kind == "source":
+                    source_file.write_bytes(source_before)
+                else:
+                    git(mirror, "update-ref", tag, tag_before, head)
+        durations[kind + "_drift"] = round(time.monotonic() - started, 3)
+        phases.passed()
+    return durations
 
 
 def progress_timing(status_seconds: list[float], terminal_seconds: float) -> dict[str, float | int]:
@@ -234,7 +444,145 @@ class _MemoryOnlyApprovalKey:
             key[:] = b"\0" * len(key)
 
 
-def run_journey(wheel: Path, source: Path, shim: Path, root: Path, expected_version: str) -> dict[str, object]:
+def run_repair_worker(wheel: Path, root: Path, version: str, mode: str) -> dict[str, object]:
+    """Fresh installed process: one real repair, or exact ID-free continuation."""
+    require(mode in {"interrupt", "resume"}, "repair_worker_arguments_invalid")
+    require(os.name == "nt" and sys.version_info[:2] == (3, 12), "windows_cpython312_required")
+    from wom_kit import archive_cli, archive_services, project_runtime
+    from wom_kit import exact_human_approval_windows, exact_human_approval_workflow
+    import wom_kit
+    verify_installed_origins({"wom_kit": wom_kit, "archive_cli": archive_cli,
+                              "project_runtime": project_runtime}, Path(sys.prefix))
+    direct = json.loads(importlib.metadata.distribution("wom-kit").read_text("direct_url.json") or "{}")
+    wheel_hash = hashlib.sha256(wheel.read_bytes()).hexdigest()
+    require(wom_kit.__version__ == version and
+            direct.get("archive_info", {}).get("hashes", {}).get("sha256") == wheel_hash, "repair_worker_origin_invalid")
+    project = root / "project"
+    bootstrap = project_runtime.BootstrapWheel(version=version, tag="v" + version,
+        url="https://example.invalid/candidate/" + wheel.name, sha256=wheel_hash, file_name=wheel.name)
+    native_calls = []
+
+    def native_decision(*_args, **_kwargs):
+        native_calls.append(True)
+        require(mode == "interrupt" and len(native_calls) == 1, "repair_resume_requested_effect")
+        return exact_human_approval_windows.APPROVE_BUTTON_ID, False
+
+    observer = None
+
+    def interrupt_at_checkpoint(name, _frame, checkpoint):
+        if (mode == "interrupt" and name == "append"
+                and getattr(checkpoint, "phase", None) == "runtime"
+                and getattr(checkpoint, "stage", None) == "intent"):
+            require(native_calls == [True] and observer.calls["prepare"] == 1
+                    and observer.calls["initialize"] == 1, "repair_interruption_not_reached")
+            # The real append has returned: its fsynced journal and released
+            # append guard exist, but runtime promotion has not executed yet.
+            os._exit(86)
+
+    argv = (approved_arguments(project, version) if mode == "interrupt" else
+            ["project-version-update", str(project), "--resume",
+             "--affirm-external-writers-quiescent", "--format", "json"])
+    transport = local_transport(project_runtime, wheel, bootstrap)
+    with ExitStack() as stack:
+        stack.enter_context(mock.patch.object(project_runtime, "bootstrap_wheel_for_target",
+                            return_value=(bootstrap, bootstrap.public_summary())))
+        stack.enter_context(mock.patch.object(exact_human_approval_workflow, "_production_key_provider",
+                            return_value=_MemoryOnlyApprovalKey()))
+        stack.enter_context(mock.patch.object(exact_human_approval_windows._CtypesTaskDialogNative, "show",
+                            side_effect=native_decision))
+        download = stack.enter_context(mock.patch.object(project_runtime, "_download_exact_artifact", side_effect=transport))
+        observer = stack.enter_context(CallObservation({"prepare": (project_runtime, "prepare_runtime_candidate"),
+            "initialize": (project_runtime, "_initialize_runtime_payload"),
+            "append": (archive_services.project_update_transaction.ProjectUpdateTransaction, "append")},
+            on_return=interrupt_at_checkpoint))
+        code, result = cli_json(archive_cli, argv)
+    require(mode == "resume", "repair_interruption_not_reached")
+    require(code == 0 and result.get("status") == "updated_restart_required"
+            and result.get("terminal_finalization", {}).get("transaction_cleanup_completed") is True,
+            "repair_resume_failed")
+    require(native_calls == [] and download.call_count == 0
+            and observer.calls["prepare"] == observer.calls["initialize"] == 0, "repair_resume_requested_effect")
+    assert_no_active_update(project, project_runtime, archive_services.project_update_transaction)
+    return {"ok": True, "schema": SCHEMA, "worker": "resume",
+            "same_approval_resumed": True, "no_new_preparation_download_or_approval": True,
+            "private_values_echoed": False}
+
+
+def exercise_installed_repair(wheel, root, project, version, project_runtime, archive_services, cli, native_type, phases):
+    phases.begin("repair_preimage")
+    runtime = project_runtime.runtime_path(project, version)
+    package_file = runtime / "Lib/site-packages/wom_kit/__init__.py"
+    healthy_bytes = package_file.read_bytes()
+    package_file.write_bytes(healthy_bytes + b"\n# synthetic installed payload damage\n")
+    damaged_inventory = project_runtime._candidate_inventory_snapshot(runtime)
+    metadata = project / ".zettel-kasten"
+    receipt_root = metadata / "receipts/version-updates"
+    stable = {path: path.read_bytes() for path in [metadata / "installed-version.txt",
+              project / project_runtime.PROJECT_RUNTIME_LAUNCHER_RELATIVE, *receipt_root.glob("*.json")]}
+    receipt_names = {path.name for path in receipt_root.glob("*.json")}
+    worker = [sys.executable, "-I", "-B", str(Path(__file__).resolve()), "--repair-worker",
+              str(wheel), str(root), version]
+    phases.passed()
+    phases.begin("repair_prepare_to_cut")
+    started = time.monotonic()
+    command([*worker, "interrupt"], cwd=root, timeout=600, expected_code=86)
+    interruption_seconds = time.monotonic() - started
+    phases.passed()
+    phases.begin("repair_cut_validation")
+    require(project_runtime._candidate_inventory_snapshot(runtime) == damaged_inventory
+            and all(path.read_bytes() == content for path, content in stable.items())
+            and {path.name for path in receipt_root.glob("*.json")} == receipt_names, "repair_preimage_changed_before_switch")
+    transaction = archive_services.project_update_transaction
+    transaction_paths = [path for path in (project / transaction.TRANSACTION_ROOT_LOGICAL).iterdir()
+                         if path.is_dir() and transaction.TRANSACTION_REF_RE.fullmatch(path.name)]
+    require(len(transaction_paths) == 1, "repair_checkpoint_missing")
+    opened = transaction.ProjectUpdateTransaction.open(project, transaction_paths[0].name)
+    journal = opened.inspect().journal
+    require(journal.state == "exact" and journal.verified_prefix[-1].phase == "runtime"
+            and journal.verified_prefix[-1].stage == "intent"
+            and any(item.phase == "approval_bound" for item in journal.verified_prefix)
+            and (transaction_paths[0] / project_runtime.PROJECT_RUNTIME_CANDIDATE_NAME).is_dir(), "repair_checkpoint_missing")
+    claims_root = project / "archive/profiles/local/exact-human-approvals/claims"
+    interrupted_claims = {path: path.read_bytes() for path in claims_root.glob("approval_*.json")}
+    require(len(interrupted_claims) == 2, "repair_claim_missing")
+    phases.passed()
+    phases.begin("repair_fresh_resume")
+    started = time.monotonic()
+    resumed = json.loads(command([*worker, "resume"], cwd=root, timeout=600))
+    resume_seconds = time.monotonic() - started
+    require(resumed == {"ok": True, "schema": SCHEMA, "worker": "resume", "same_approval_resumed": True,
+                        "no_new_preparation_download_or_approval": True, "private_values_echoed": False}, "repair_resume_failed")
+    phases.passed()
+    phases.begin("repair_result_validation")
+    require(package_file.read_bytes() == healthy_bytes
+            and all(path.read_bytes() == content for path, content in stable.items())
+            and len({path.name for path in receipt_root.glob("*.json")} - receipt_names) == 1
+            and set(claims_root.glob("approval_*.json")) == set(interrupted_claims), "repair_payload_not_restored")
+    phases.passed()
+    phases.begin("repair_independent_noop")
+    # Independently re-run the entire retained-artifact, static executable,
+    # package-resource and new-process proof after the real writer completed.
+    started = time.monotonic()
+    with CallObservation({"prepare": (project_runtime, "prepare_runtime_candidate"),
+                          "initialize": (project_runtime, "_initialize_runtime_payload")}) as observer, mock.patch.object(
+        native_type, "show", side_effect=JourneyCheckError("repair_resume_requested_effect"),
+    ) as native, mock.patch.object(project_runtime, "_download_exact_artifact",
+                                  side_effect=JourneyCheckError("repair_resume_requested_effect")) as download:
+        code, verified = cli(approved_arguments(project, version))
+    require(code == 0 and verified.get("status") == "no_change"
+            and verified.get("project_runtime", {}).get("preparation_revalidation", {}).get("state") == "passed",
+            "repair_payload_not_restored")
+    require(native.call_count == download.call_count == observer.calls["prepare"] == observer.calls["initialize"] == 0,
+            "repair_resume_requested_effect")
+    assert_no_active_update(project, project_runtime, transaction)
+    phases.passed()
+    return {"repair_until_interruption": round(interruption_seconds, 3), "repair_fresh_resume": round(resume_seconds, 3),
+            "repair_independent_noop": round(time.monotonic() - started, 3)}
+
+
+def run_journey(wheel: Path, source: Path, shim: Path, root: Path, expected_version: str, *, phases=None) -> dict[str, object]:
+    phases = PhaseReporter() if phases is None else phases
+    phases.begin("bootstrap_import")
     require(os.name == "nt" and sys.version_info[:2] == (3, 12), "windows_cpython312_required")
     require(not root.exists(), "synthetic_fixture_must_be_new")
     root.mkdir()
@@ -249,6 +597,8 @@ def run_journey(wheel: Path, source: Path, shim: Path, root: Path, expected_vers
     wheel_hash = hashlib.sha256(wheel.read_bytes()).hexdigest()
     direct = json.loads(importlib.metadata.distribution("wom-kit").read_text("direct_url.json") or "{}")
     require(direct.get("archive_info", {}).get("hashes", {}).get("sha256") == wheel_hash, "bootstrap_wheel_hash_mismatch")
+    phases.passed()
+    phases.begin("synthetic_project")
     fixture = create_project(root, source, shim, expected_version)
     project = fixture["project"]
     metadata = fixture["metadata"]
@@ -258,29 +608,11 @@ def run_journey(wheel: Path, source: Path, shim: Path, root: Path, expected_vers
         url="https://example.invalid/candidate/" + wheel.name,
         sha256=wheel_hash, file_name=wheel.name,
     )
-    original_download = project_runtime._download_exact_artifact
-
-    def transport(**kwargs):
-        if kwargs["url"] != bootstrap.url:
-            # Real, hash/size locked PyPI dependencies; no provider credentials.
-            return original_download(**kwargs)
-        payload = wheel.read_bytes()
-        require(hashlib.sha256(payload).hexdigest() == kwargs["expected_sha256"], "local_transport_hash_mismatch")
-        size = kwargs.get("expected_size")
-        require(size is None or size == len(payload), "local_transport_size_mismatch")
-        Path(kwargs["destination"]).write_bytes(payload)
-        return len(payload)
-
-    def cli(argv):
-        stdout, stderr = io.StringIO(), io.StringIO()
-        with redirect_stdout(stdout), redirect_stderr(stderr):
-            code = archive_cli.main(argv)
-        payload = json.loads(stdout.getvalue())
-        return code, payload
-
-    approved = ["project-version-update", str(project), "--target", "v" + expected_version,
-                "--approve", "--affirm-external-writers-quiescent", "--reviewed-by",
-                "person:wheel-runtime-reviewer", "--format", "json"]
+    transport = local_transport(project_runtime, wheel, bootstrap)
+    cli = lambda argv: cli_json(archive_cli, argv)
+    approved = approved_arguments(project, expected_version)
+    phases.passed()
+    phases.begin("initial_update")
     with ExitStack() as stack:
         stack.enter_context(mock.patch.object(project_runtime, "bootstrap_wheel_for_target",
                            return_value=(bootstrap, bootstrap.public_summary())))
@@ -296,6 +628,8 @@ def run_journey(wheel: Path, source: Path, shim: Path, root: Path, expected_vers
         require(native.call_count == 1, "public_native_broker_not_once")
         require(first.get("terminal_finalization", {}).get("transaction_cleanup_completed") is True, "update_cleanup_incomplete")
         update_seconds = time.monotonic() - update_start
+        phases.passed()
+        phases.begin("healthy_noop")
         runtime = project_runtime.runtime_path(project, expected_version)
         before = project_runtime._candidate_inventory_snapshot(runtime)
         receipt_root = metadata / "receipts" / "version-updates"
@@ -317,19 +651,24 @@ def run_journey(wheel: Path, source: Path, shim: Path, root: Path, expected_vers
         require({path.name for path in receipt_root.glob("*.json")} == receipt_names, "noop_receipt_added")
         require(all(path.read_bytes() == content for path, content in unchanged.items()), "noop_pin_launcher_receipt_changed")
         noop_seconds = time.monotonic() - noop_start
+        phases.passed()
+        phases.begin("next_preview")
         dry = ["project-version-update", str(project), "--target", "v" + expected_version,
                "--dry-run", "--format", "json"]
         code, after = cli(dry)
         require(code == 0 and after.get("status") != "terminal_cleanup_required", "noop_blocks_next_command")
+        phases.passed()
+        phases.begin("source_drift")
+        drift_seconds = exercise_installed_drift(project, expected_version, project_runtime, archive_services,
+                                                exact_human_approval_windows._CtypesTaskDialogNative, cli, phases)
+        repair_seconds = exercise_installed_repair(wheel, root, project, expected_version, project_runtime,
+                                                  archive_services, cli, exact_human_approval_windows._CtypesTaskDialogNative, phases)
 
+    phases.begin("terminal_control_check")
     transaction = archive_services.project_update_transaction
-    require(not (project / transaction.PROJECT_UPDATE_LOCK_LOGICAL).exists(), "active_update_lock_remains")
-    transactions = project / transaction.TRANSACTION_ROOT_LOGICAL
-    require(not transactions.exists() or not any(
-        path.is_dir() and (path.name.startswith("update_") or path.name.startswith(".cleanup_update_"))
-        for path in transactions.iterdir()
-    ), "active_update_transaction_remains")
-    require(not any(path.name == project_runtime.PROJECT_RUNTIME_CANDIDATE_NAME for path in metadata.rglob("*")), "runtime_candidate_remains")
+    assert_no_active_update(project, project_runtime, transaction)
+    phases.passed()
+    phases.begin("runtime_process_origin")
     runtime_python = runtime / "Scripts" / "python.exe"
     origin_script = (
         "import json,sys;from pathlib import Path;import wom_kit;"
@@ -343,20 +682,27 @@ def run_journey(wheel: Path, source: Path, shim: Path, root: Path, expected_vers
     fresh = json.loads(command([str(runtime_python), "-I", "-B", "-c", origin_script, str(runtime)], cwd=root))
     fresh_seconds = time.monotonic() - fresh_start
     require(fresh == {"version": expected_version, "isolated": True, "origins": True, "prefix": True}, "runtime_origin_or_version_mismatch")
+    phases.passed()
+    phases.begin("project_launcher_version")
     launcher_start = time.monotonic()
     launcher = project / project_runtime.PROJECT_RUNTIME_LAUNCHER_RELATIVE
     launcher_version = command([str(launcher), "--version"], cwd=project)
     launcher_seconds = time.monotonic() - launcher_start
     require(launcher_version == "archive " + expected_version, "project_launcher_version_mismatch")
+    phases.passed()
+    phases.begin("doctor_startup")
     doctor_archive = root / "startup-doctor-archive"
     shutil.copytree(source / "examples" / "fake-life-archive", doctor_archive)
     startup = measure_doctor_startup([
         str(launcher), "doctor", str(doctor_archive), "--summary", "--format", "json", "--progress",
         "--object-byte-verification", "operational",
     ], cwd=project)
+    phases.passed()
+    phases.begin("final_claim_check")
     claims = [json.loads(path.read_text(encoding="utf-8")) for path in
               (fixture["archive"] / "profiles/local/exact-human-approvals/claims").glob("approval_*.json")]
-    require(len(claims) == 1 and claims[0].get("status") == "succeeded", "durable_broker_claim_missing")
+    require(len(claims) == 2 and all(claim.get("status") == "succeeded" for claim in claims), "durable_broker_claim_missing")
+    phases.passed()
     return {"ok": True, "schema": SCHEMA, "package_version": expected_version,
             "wheel_sha256": wheel_hash, "candidate_wheel_not_public_release_proof": True,
             "isolated_bootstrap_origins": True, "isolated_runtime_origins": True,
@@ -365,9 +711,15 @@ def run_journey(wheel: Path, source: Path, shim: Path, root: Path, expected_vers
             "pin_launcher_domain_receipts_unchanged_on_noop": True,
             "no_active_update_residue": True, "new_process_launcher_version": True,
             "public_launcher_doctor_startup_verified": True,
+            "real_source_and_ref_drift_blocked_before_approval": True,
+            "real_candidate_repair_and_process_loss_resume": True,
+            "pre_switch_damaged_preimage_and_active_pin_preserved": True,
+            "same_approval_identifier_free_resume_without_rebuild": True,
+            "repaired_runtime_independently_reverified": True,
             "doctor_startup_status_event_count": startup["status_event_count"],
             "private_values_echoed": False,
-            "seconds": {"bootstrap_import": round(import_seconds, 3), "update": round(update_seconds, 3),
+            "seconds": {**drift_seconds, **repair_seconds,
+                        "bootstrap_import": round(import_seconds, 3), "update": round(update_seconds, 3),
                         "noop": round(noop_seconds, 3), "fresh_runtime_import": round(fresh_seconds, 3),
                         "project_launcher_version": round(launcher_seconds, 3),
                         "doctor_first_status": startup["first_status_seconds"],
@@ -376,10 +728,20 @@ def run_journey(wheel: Path, source: Path, shim: Path, root: Path, expected_vers
 
 
 def main() -> int:
+    phases = None
     try:
-        require(len(sys.argv) == 6, "journey_arguments_invalid")
-        result = run_journey(*(Path(value).resolve() for value in sys.argv[1:5]), sys.argv[5])
+        if len(sys.argv) == 6 and sys.argv[1] == "--repair-worker":
+            result = run_repair_worker(Path(sys.argv[2]).resolve(), Path(sys.argv[3]).resolve(), sys.argv[4], sys.argv[5])
+        else:
+            phases = PhaseReporter()
+            require(len(sys.argv) == 6, "journey_arguments_invalid")
+            result = run_journey(*(Path(value).resolve() for value in sys.argv[1:5]), sys.argv[5], phases=phases)
     except Exception as error:
+        if phases is not None:
+            try:
+                phases.fail_active()
+            except Exception:
+                pass  # Broken diagnostic pipe must not replace the original failure.
         # Never print captured CLI output, private paths, transport values, or
         # traceback into the public wheel evidence. Known reasons are opaque.
         reason = str(error) if isinstance(error, JourneyCheckError) else "installed_runtime_journey_failed"

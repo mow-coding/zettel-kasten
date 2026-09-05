@@ -13452,6 +13452,8 @@ if __name__ == "__main__":
                         )
                     )
 
+    @patch.object(archive_cli, "_project_version_update_legacy_recovery_key_provider",
+                  new=lambda: _ProjectUpdateResumeKeyProvider())
     def test_project_version_update_supplied_approval_id_still_routes_through_discovery(
         self,
     ) -> None:
@@ -13564,6 +13566,8 @@ if __name__ == "__main__":
         self.assertEqual(binding.archive_id, "archive:test")
         self.assertEqual(binding.reviewer_claim, "person:sealed-reviewer")
 
+    @patch.object(archive_cli, "_project_version_update_legacy_recovery_key_provider",
+                  new=lambda: _ProjectUpdateResumeKeyProvider())
     def test_project_version_update_resume_marks_each_operator_identifier_supplied(
         self,
     ) -> None:
@@ -13671,6 +13675,8 @@ if __name__ == "__main__":
             )
             self.assertEqual(discovery_resume.call_count, 1)
 
+    @patch.object(archive_cli, "_project_version_update_legacy_recovery_key_provider",
+                  new=lambda: _ProjectUpdateResumeKeyProvider())
     def test_project_version_update_resume_forwards_approval_id_assertion_to_early_service_path(
         self,
     ) -> None:
@@ -15429,6 +15435,8 @@ if __name__ == "__main__":
             ),
         )
 
+    @patch.object(archive_cli, "_project_version_update_legacy_recovery_key_provider",
+                  new=lambda: _ProjectUpdateResumeKeyProvider())
     def test_project_version_update_reservation_wait_failure_is_fixed_public_json(
         self,
     ) -> None:
@@ -17042,6 +17050,8 @@ if __name__ == "__main__":
                 (archive_root / exact_human_approval_module.CLAIMS_RELATIVE_ROOT).exists()
             )
 
+    @patch.object(archive_cli, "_project_version_update_legacy_recovery_key_provider",
+                  new=lambda: _ProjectUpdateResumeKeyProvider())
     def test_project_version_update_cancellation_requires_delivery_authority(
         self,
     ) -> None:
@@ -83154,7 +83164,7 @@ class ObjetCaptureTests(unittest.TestCase):
             self.assertEqual(code, 1, output)
             blocked = json.loads(output)
             self.assertEqual(blocked["state"], "blocked")
-            self.assertEqual(blocked["lifecycle_action"], "derive_text_capture")
+            self.assertEqual(blocked["lifecycle_action"], "derived_text_capture_apply")
             self.assertEqual(
                 blocked["reason_codes"],
                 ["compound_exact_human_approval_binding_required"],

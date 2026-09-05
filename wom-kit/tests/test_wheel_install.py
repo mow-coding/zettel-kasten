@@ -2774,18 +2774,38 @@ class InstalledRuntimeJourneyHookTests(unittest.TestCase):
             "pin_launcher_domain_receipts_unchanged_on_noop": True,
             "no_active_update_residue": True, "new_process_launcher_version": True,
             "public_launcher_doctor_startup_verified": True,
+            "real_source_and_ref_drift_blocked_before_approval": True,
+            "real_candidate_repair_and_process_loss_resume": True,
+            "pre_switch_damaged_preimage_and_active_pin_preserved": True,
+            "same_approval_identifier_free_resume_without_rebuild": True,
+            "repaired_runtime_independently_reverified": True,
             "doctor_startup_status_event_count": 4,
             "private_values_echoed": False,
             "seconds": {"bootstrap_import": 1.2, "update": 200, "noop": 90,
                         "fresh_runtime_import": 1.4, "project_launcher_version": 1.5,
-                        "doctor_first_status": 0.2, "doctor_maximum_progress_gap": 5.1, "doctor_terminal": 14.0},
+                        "doctor_first_status": 0.2, "doctor_maximum_progress_gap": 5.1, "doctor_terminal": 14.0,
+                        "source_drift": 70, "ref_drift": 70, "repair_until_interruption": 150,
+                        "repair_fresh_resume": 75, "repair_independent_noop": 75},
         }
 
     def invoke(self, evidence):
+        def completed_child(*_args, **kwargs):
+            observer = kwargs["stderr_observer"]
+            sequence = 0
+            for stage in check_wheel_install.RUNTIME_PHASES:
+                for event in ("begin", "passed"):
+                    sequence += 1
+                    observer.feed(check_wheel_install.RUNTIME_PHASE_PREFIX + json.dumps({
+                        "schema": check_wheel_install.RUNTIME_PHASE_SCHEMA, "sequence": sequence,
+                        "stage": stage, "event": event, "elapsed_ms": sequence,
+                    }).encode("ascii") + b"\n")
+            observer.end_stream()
+            return json.dumps(evidence)
+
         with mock.patch.object(check_wheel_install.os, "name", "nt"), mock.patch.object(
             check_wheel_install.sys, "version_info", (3, 12, 10),
         ), mock.patch.object(
-            check_wheel_install, "_run_installed_entrypoint", return_value=json.dumps(evidence),
+            check_wheel_install, "_run_installed_entrypoint", side_effect=completed_child,
         ) as child, redirect_stderr(io.StringIO()):
             result = check_wheel_install._check_installed_v0419_runtime_journey(
                 self.root / "bootstrap/Scripts/python.exe", self.wheel, self.root / "source",
@@ -2812,6 +2832,11 @@ class InstalledRuntimeJourneyHookTests(unittest.TestCase):
             {**self.evidence, "isolated_runtime_origins": False},
             {**self.evidence, "wheel_sha256": "f" * 64},
             {**self.evidence, "no_candidate_download_or_approval_on_noop": False},
+            {**self.evidence, "real_candidate_repair_and_process_loss_resume": False},
+            {**self.evidence, "real_source_and_ref_drift_blocked_before_approval": False},
+            {**self.evidence, "same_approval_identifier_free_resume_without_rebuild": False},
+            {**self.evidence, "pre_switch_damaged_preimage_and_active_pin_preserved": False},
+            {**self.evidence, "repaired_runtime_independently_reverified": False},
             {**self.evidence, "seconds": {**self.evidence["seconds"], "update": float("nan")}},
             {**self.evidence, "seconds": {**self.evidence["seconds"], "doctor_first_status": 2.01}},
             {**self.evidence, "seconds": {**self.evidence["seconds"], "doctor_maximum_progress_gap": 10.01}},
@@ -2873,6 +2898,77 @@ class InstalledRuntimeJourneyHookTests(unittest.TestCase):
         with self.assertRaises(check_wheel_install.WheelCheckError) as caught:
             self.invoke({"ok": False, "reason_code": "private_lowercase_marker"})
         self.assertNotIn("private_lowercase_marker", str(caught.exception))
+
+    def test_fault_observer_forwards_real_result_and_restores_boundaries_after_error(self):
+        spec = importlib.util.spec_from_file_location("runtime_journey_observer", check_wheel_install.RUNTIME_JOURNEY_TOOL)
+        driver = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(driver)
+        effects = []
+
+        def actual_operation(value):
+            effects.append(value)
+            return {"verified": value}
+
+        holder = type("Holder", (), {})()
+        holder.operation = actual_operation
+        observations = []
+
+        def after_return(name, _frame, result):
+            observations.append((name, dict(result), tuple(effects)))
+
+        original_profile, original_trace = sys.getprofile(), sys.gettrace()
+        with driver.CallObservation({"actual": (holder, "operation")}, on_return=after_return) as observer:
+            self.assertEqual(holder.operation(7), {"verified": 7})
+            self.assertIs(sys.getprofile(), original_profile)
+            self.assertIs(sys.gettrace(), original_trace)
+        self.assertEqual(observer.calls, {"actual": 1})
+        self.assertEqual(observations, [("actual", {"verified": 7}, (7,))])
+        self.assertIs(holder.operation, actual_operation)
+
+        def fail_after_return(*_args):
+            raise driver.JourneyCheckError("repair_interruption_not_reached")
+
+        with self.assertRaises(driver.JourneyCheckError), driver.CallObservation(
+            {"actual": (holder, "operation")}, on_return=fail_after_return,
+        ):
+            holder.operation(8)
+        self.assertEqual(effects, [7, 8])
+        self.assertIs(holder.operation, actual_operation)
+        self.assertIs(sys.getprofile(), original_profile)
+        self.assertIs(sys.gettrace(), original_trace)
+
+        failure = ValueError("synthetic-original-failure")
+
+        def failing_operation(*args, **kwargs):
+            self.assertEqual(args, (1,))
+            self.assertEqual(kwargs, {"named": 2})
+            raise failure
+
+        holder.operation = failing_operation
+        with driver.CallObservation({"actual": (holder, "operation")}, on_return=after_return):
+            with self.assertRaises(ValueError) as caught:
+                holder.operation(1, named=2)
+        self.assertIs(caught.exception, failure)
+        self.assertIs(holder.operation, failing_operation)
+        self.assertEqual(len(observations), 1)
+        with self.assertRaises(driver.JourneyCheckError):
+            driver.run_repair_worker(self.wheel, self.root, "0.4.19", "unrecognized")
+
+    def test_repair_child_uses_installed_origins_and_identifier_free_resume(self):
+        tree = ast.parse(check_wheel_install.RUNTIME_JOURNEY_TOOL.read_text(encoding="utf-8"))
+        worker = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "run_repair_worker")
+        text = ast.unparse(worker)
+        self.assertIn("verify_installed_origins", text)
+        self.assertIn("os._exit(86)", text)
+        self.assertIn("ProjectUpdateTransaction, 'append'", text)
+        self.assertIn("'runtime'", text)
+        self.assertIn("'intent'", text)
+        self.assertIn("'--resume'", text)
+        self.assertNotIn("'--transaction-ref'", text)
+        self.assertNotIn("'--approval-ref'", text)
+        self.assertNotIn("patch.object(project_runtime, 'prepare_runtime_candidate'", text)
+        self.assertNotIn("patch.object(project_runtime, '_initialize_runtime_payload'", text)
+        self.assertNotIn("patch.object(archive_services, '_project_update_durable_writer'", text)
 
     def test_partial_failure_retains_only_completed_validated_runtime_proof(self):
         def later_failure(_output_dir, *, partial_evidence):
