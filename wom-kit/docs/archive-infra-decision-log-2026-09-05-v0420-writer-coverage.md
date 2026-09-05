@@ -139,3 +139,40 @@ new session completion receipts only. This is not general document backup.
 Preserve unknown/mixed/other-session changes and custom ignore rules. Current
 claim authority, historical producer identity and cleanup responsibility are
 three distinct concepts; none substitutes for another or for human approval.
+
+## Rechecked dispatch coverage, 2026-09-06
+
+A read-only recheck of the actual parser at `0d9e8498` plus the current scoped
+Git preparation work found 316 canonical paths and 259 alias spellings. The
+canonical approval inventory is now 48 available (11 conditional), 67 fixed
+closed and 201 not exposed. The additional available family is `work-session`;
+`operation-control` remains unsupported cancel/read-only and is not a writer.
+The 46 legacy paths in the four domain/local-record groups above still need
+current actor, held execution and explicit session-binding composition. An
+internal optional Git binding or held seam is not public route integration.
+
+The 201 not-exposed paths are not all read-only: the separate output/index/
+journal effects described above remain acceptance work. Aliases, declared
+permissions, callback count and historical coverage numbers are not writer
+denominators. MCP management is connected through the same session service;
+MCP project-intake choice is an existing unintegrated service, not a new family.
+
+Retain the exact current conditional modes. In particular, a local IMAP plan
+does not implement an IMAP provider writer; only relation rejection is currently
+available; existing exact-local/capture/recovery/adoption mode limits remain.
+Do not close these existing supported modes merely to claim session coverage.
+
+The implementation sequence is scoped Git original-operation composition,
+then exact-manifest families, native/custom contexts and local-record effects,
+all reusing the existing wait/held/current-selection seams. Legacy absent
+extensions and original approvals remain unchanged. Current capability tests
+check availability, not completed session coverage. The comprehensive
+writer-session coverage gate and `responsibility_assignment` implementation
+are still missing; the design text is not implementation evidence.
+
+Receipt-only provenance currently admits newly added, authenticated whole
+completion receipts. It explicitly does not attest canonical Zet/document
+ownership or full artifact backup. Real document changes remain unknown or
+excluded until an actual producer proof or separately approved responsibility
+assignment supplies the right evidence. No client archive was inspected or
+changed by this dispatch audit.

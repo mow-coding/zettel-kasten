@@ -57,6 +57,7 @@ from .exact_operation_manifest import (
     hash_field_value,
 )
 from .operation_approval_binding import exact_operation_manifest_approval_binding
+from .git_backup_session_scope import _GitBackupSessionScope
 from .work_session_binding import WorkSessionBinding, WorkSessionBindingError
 
 
@@ -116,6 +117,8 @@ class GitBackupWriterError(RuntimeError):
         "git_backup_selection_incomplete",
         "git_backup_no_selected_changes",
         "git_backup_work_session_binding_invalid",
+        "git_backup_session_scope_invalid",
+        "git_backup_scope_context_required",
         "git_backup_selection_plan_mismatch",
         "git_backup_repository_relation_unsafe",
         "git_backup_manifest_drifted",
@@ -290,6 +293,7 @@ class PreparedGitBackup:
     max_changed_bytes: int
     selection_schema: str = GIT_BACKUP_SELECTION_SCHEMA
     excluded_changes: tuple[Mapping[str, Any], ...] = ()
+    session_scope: _GitBackupSessionScope | None = None
 
     def public_plan(self) -> dict[str, Any]:
         result = {
@@ -355,6 +359,12 @@ class PreparedGitBackup:
             )
         if self.manifest.work_session_binding is not None:
             result["work_session_binding"] = self.manifest.work_session_binding.document()
+        if self.session_scope is not None:
+            result.update(
+                operation_evidence=self.session_scope.operation_evidence().document(),
+                ready_for_write=False, writer_available=False, status="scope_context_required",
+                blockers=["git_backup_scope_context_required"],
+            )
         return result
 
 
@@ -536,6 +546,22 @@ class _GitBackupSelectionV2:
         return "_GitBackupSelectionV2(<private>)"
 
 
+def _validated_git_backup_session_scope(scope, binding, selection_document, *, private_changes=None):
+    if scope is None:
+        return None
+    try:
+        if type(scope) is not _GitBackupSessionScope or type(binding) is not WorkSessionBinding:
+            raise _fail("git_backup_session_scope_invalid")
+        frozen = _GitBackupSessionScope.from_document(scope.document())
+        frozen.validate_selection(binding, selection_document)
+        if private_changes is not None:
+            frozen.validate_sources(private_changes)
+        return frozen
+    except Exception:
+        pass
+    raise _fail("git_backup_session_scope_invalid")
+
+
 def _change_paths(row: Mapping[str, Any]) -> tuple[str, ...]:
     paths = [row.get("path")]
     if row.get("original_path") is not None:
@@ -614,6 +640,7 @@ def _build_exact_manifest(
     push_source_payload: bytes,
     push_target_identity_sha256: str,
     work_session_binding: WorkSessionBinding | None = None,
+    session_scope: _GitBackupSessionScope | None = None,
 ) -> ExactOperationManifest:
     items: list[ExactOperationItem] = []
     for group in groups:
@@ -659,6 +686,7 @@ def _build_exact_manifest(
         ),
         items=items,
         work_session_binding=work_session_binding,
+        operation_evidence=session_scope.operation_evidence() if session_scope is not None else None,
     )
 
 
@@ -679,7 +707,7 @@ def prepare_git_backup(
 
     return _prepare_git_backup_core(
         archive_root, expected_plan_sha256=expected_plan_sha256,
-        selection_manifest_path=selection_manifest_path, selection=None,
+        selection_manifest_path=selection_manifest_path, selection=None, session_scope=None,
         remote_name=remote_name, branch=branch, credential_mode=credential_mode,
         max_changes=max_changes, max_changed_bytes=max_changed_bytes,
         progress_hook=progress_hook, work_session_binding=work_session_binding,
@@ -698,6 +726,7 @@ def _prepare_git_backup_from_selection(
     max_changed_bytes: int = planning.GIT_BACKUP_PLAN_DEFAULT_MAX_CHANGED_BYTES,
     progress_hook: Callable[[Mapping[str, Any]], None] | None = None,
     work_session_binding: WorkSessionBinding | Mapping[str, Any] | None = None,
+    session_scope: _GitBackupSessionScope | None = None,
 ) -> PreparedGitBackup:
     """Replan from typed private bytes without creating a selection file.
 
@@ -709,9 +738,12 @@ def _prepare_git_backup_from_selection(
         raise _fail("git_backup_selection_invalid")
     # Revalidate and detach before a planner progress hook can run.
     frozen = _GitBackupSelectionV2(getattr(selection, "raw_json", None))
+    frozen_scope = _validated_git_backup_session_scope(
+        session_scope, work_session_binding, _strict_json(frozen.raw_json),
+    )
     return _prepare_git_backup_core(
         archive_root, expected_plan_sha256=expected_plan_sha256,
-        selection_manifest_path=None, selection=frozen,
+        selection_manifest_path=None, selection=frozen, session_scope=frozen_scope,
         remote_name=remote_name, branch=branch, credential_mode=credential_mode,
         max_changes=max_changes, max_changed_bytes=max_changed_bytes,
         progress_hook=progress_hook, work_session_binding=work_session_binding,
@@ -724,6 +756,7 @@ def _prepare_git_backup_core(
     expected_plan_sha256: str,
     selection_manifest_path: Path | str | None,
     selection: _GitBackupSelectionV2 | None,
+    session_scope: _GitBackupSessionScope | None,
     remote_name: str,
     branch: str | None,
     credential_mode: str,
@@ -806,6 +839,9 @@ def _prepare_git_backup_core(
     binding = _validated_work_session_binding(binding, capture["archive_id"])
     if binding is not None and selection_document["schema"] != GIT_BACKUP_SELECTION_V2_SCHEMA:
         raise _fail("git_backup_work_session_binding_invalid")
+    session_scope = _validated_git_backup_session_scope(
+        session_scope, binding, selection_document, private_changes=private_changes,
+    )
 
     prepared_groups: list[_PreparedGroup] = []
     all_paths: set[str] = set()
@@ -908,6 +944,7 @@ def _prepare_git_backup_core(
         push_source_payload=push_source_payload,
         push_target_identity_sha256=push_target_identity_sha256,
         work_session_binding=binding,
+        session_scope=session_scope,
     )
     return PreparedGitBackup(
         root=Path(capture["root"]),
@@ -930,6 +967,7 @@ def _prepare_git_backup_core(
         max_changed_bytes=max_changed_bytes,
         selection_schema=selection_document["schema"],
         excluded_changes=tuple(prepared_exclusions),
+        session_scope=session_scope,
     )
 
 
@@ -1000,6 +1038,12 @@ def _bundle_document(prepared: PreparedGitBackup) -> dict[str, Any]:
         if prepared.selection_schema != GIT_BACKUP_SELECTION_V2_SCHEMA:
             raise _fail("git_backup_manifest_drifted")
         basis["work_session_binding"] = prepared.manifest.work_session_binding.document()
+    if prepared.session_scope is not None:
+        if (prepared.selection_schema != GIT_BACKUP_SELECTION_V2_SCHEMA
+                or prepared.manifest.work_session_binding is None
+                or type(prepared.session_scope) is not _GitBackupSessionScope):
+            raise _fail("git_backup_manifest_drifted")
+        basis["session_scope"] = prepared.session_scope.document()
     return {**basis, "bundle_sha256": _sha256_json(basis)}
 
 
@@ -1075,6 +1119,7 @@ def _decode_private_git_backup_bundle(
 
     is_v2 = document.get("schema") == "wom-kit/git-backup-private-execution-bundle/v2"
     has_binding = is_v2 and "work_session_binding" in document
+    has_scope = is_v2 and "session_scope" in document
     expected_keys = {
         "schema",
         "archive_id",
@@ -1100,6 +1145,8 @@ def _decode_private_git_backup_bundle(
         expected_keys.add("excluded_changes")
     if has_binding:
         expected_keys.add("work_session_binding")
+    if has_scope:
+        expected_keys.add("session_scope")
     if set(document) != expected_keys:
         raise _fail("git_backup_manifest_drifted")
     basis = dict(document)
@@ -1158,6 +1205,16 @@ def _decode_private_git_backup_bundle(
             )
         except GitBackupWriterError:
             raise _fail("git_backup_manifest_drifted") from None
+    session_scope = None
+    if has_scope:
+        try:
+            if not has_binding:
+                raise _fail("git_backup_manifest_drifted")
+            session_scope = _GitBackupSessionScope.from_document(document["session_scope"])
+        except Exception:
+            pass
+        if session_scope is None:
+            raise _fail("git_backup_manifest_drifted")
     raw_groups = document.get("groups")
     if (
         not isinstance(raw_groups, list)
@@ -1337,6 +1394,12 @@ def _decode_private_git_backup_bundle(
         if not hmac.compare_digest(selection_sha256, document["selection_sha256"]):
             raise _fail("git_backup_manifest_drifted")
         excluded_changes = tuple(dict(row) for row in raw_exclusions)
+    if session_scope is not None:
+        session_scope = _validated_git_backup_session_scope(
+            session_scope, binding, selection_document,
+            private_changes=[row for group in groups for row in group.private_changes]
+                            + [row["private_change"] for row in excluded_changes],
+        )
     push_source_payload = _canonical(document.get("push_source"))
     push_source = document.get("push_source")
     if (
@@ -1389,6 +1452,7 @@ def _decode_private_git_backup_bundle(
         push_source_payload=push_source_payload,
         push_target_identity_sha256=push_target,
         work_session_binding=binding,
+        session_scope=session_scope,
     )
     supplied_manifest = ExactOperationManifest.from_document(document["manifest"])
     if (
@@ -1417,6 +1481,7 @@ def _decode_private_git_backup_bundle(
         max_changed_bytes=document["max_changed_bytes"],
         selection_schema=(GIT_BACKUP_SELECTION_V2_SCHEMA if is_v2 else GIT_BACKUP_SELECTION_SCHEMA),
         excluded_changes=excluded_changes,
+        session_scope=session_scope,
     )
 
 
@@ -2755,6 +2820,15 @@ def _git_backup_post_decision_boundary(
             lock_box.pop("lock", None)
 
 
+def _require_legacy_git_backup_scope(prepared: PreparedGitBackup) -> None:
+    # A scope records immutable facts, not current ownership or post-click
+    # approval composition. No existing execution entry may infer that authority.
+    if type(prepared) is not PreparedGitBackup:
+        raise _fail("git_backup_manifest_drifted")
+    if prepared.session_scope is not None:
+        raise _fail("git_backup_scope_context_required")
+
+
 def _apply_prepared_with_claim(
     prepared: PreparedGitBackup,
     *,
@@ -2764,6 +2838,7 @@ def _apply_prepared_with_claim(
     resume: bool,
     progress_hook: Callable[[ExactOperationProgress], None] | None,
 ) -> dict[str, Any]:
+    _require_legacy_git_backup_scope(prepared)
     prepared = _freeze_validated_prepared(prepared)
     expected_context = _git_backup_approval_context(
         prepared, reviewer_claim=context.reviewer_claim,
@@ -2850,6 +2925,7 @@ def execute_git_backup(
 ) -> dict[str, Any]:
     """Show one native approval, then re-observe, commit, push, and verify."""
 
+    _require_legacy_git_backup_scope(prepared)
     _freeze_validated_prepared(prepared)
     return _execute_git_backup_core(
         prepared,
@@ -2879,6 +2955,7 @@ def _execute_git_backup_held(
     selects or resumes an original approval; those require separate evidence.
     """
 
+    _require_legacy_git_backup_scope(prepared)
     _freeze_validated_prepared(prepared)
     _require_git_backup_held_lock(prepared, held)
     return _execute_git_backup_core(
@@ -2902,6 +2979,8 @@ def _execute_git_backup_core(
     key_provider: Any | None,
     held: ExactOperationWriterLock | None,
 ) -> dict[str, Any]:
+    _require_legacy_git_backup_scope(prepared)
+    _freeze_validated_prepared(prepared)
     context = _git_backup_approval_context(prepared, reviewer_claim=reviewer_claim)
     lock_box: dict[str, ExactOperationWriterLock] = {}
 
@@ -2960,6 +3039,7 @@ def resume_git_backup(
 ) -> dict[str, Any]:
     """Resume one authenticated started claim and its exact checkpoint only."""
 
+    _require_legacy_git_backup_scope(prepared)
     _freeze_validated_prepared(prepared)
     context = _git_backup_approval_context(prepared, reviewer_claim=reviewer_claim)
     lock_box: dict[str, ExactOperationWriterLock] = {}

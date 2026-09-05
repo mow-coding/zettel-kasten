@@ -1225,6 +1225,76 @@ bump, PR, tag, wheel or client application has occurred.
   frozen source checkpoint. The branch remains unreleased, with final scope/
   authenticated completion/auto-resume composition still outstanding.
 
+## Current dispatch-coverage correction
+
+- The user requested continuation after an apparent interruption. Work resumed
+  from the existing candidates, preserving all unfinished workspaces and the
+  read-only client boundary. The v0.4.19 exact candidate remains on its own CI;
+  follow-on source work does not cancel or alter that candidate.
+- A fresh independent parser/dispatch audit distinguishes 316 canonical paths
+  from 259 aliases. Of 48 approval-available canonical paths, `work-session`
+  is publicly connected and `operation-control` is unsupported/non-mutating.
+  The other 46 legacy domain/local-record paths still need session composition.
+  Eleven conditional modes must keep their original limits. No availability
+  percentage or general all-writer coverage is claimed.
+- The existing writer-coverage decision log now records this exact gap and
+  the common integration sequence. The all-writer session coverage gate and
+  responsibility assignment remain unimplemented. Neither a requirements table
+  nor the receipt-only Git adapter proves ownership of real Zet/document
+  changes. Approval-free index/artifact/journal effects are a separate axis.
+- These are public source facts, not copied client letters, private archive
+  evidence, provider credentials or client recovery results.
+
+## Exact scoped Git evidence and original terminal checkpoint
+
+- Added immutable private session scope over the existing v2 selection: actual
+  task route, actor/registry preimages, claim reference, binding and whole-file
+  receipt producer facts. Public manifest evidence contains bounded counts and
+  digests only. The existing Git bundle reconstructs the scope and manifest;
+  omitted legacy extensions retain their original bytes and public API.
+- These source/hash/partition checks are not receipt MAC authentication or
+  current ownership. Until the held owned-session workflow is composed, every
+  scoped execution entry refuses before native review, key access or Git. Its
+  public plan truthfully says scope context is required. No existing unscoped
+  supported writer is closed.
+- Independent review caught a private-core pre-UI gap: a subclass or stripped
+  scope retaining scoped evidence could bypass the narrow entry guard. The
+  guard now requires the exact type and the private core reconstructs/freeze-
+  validates before native review. Both malformed cases across all five routes
+  make zero UI/key/Git calls. Final-source scope/context, legacy writer/held,
+  v2 selection and typed-selection cohorts passed 74 distinct cases (23 in
+  245.908 seconds, 19 in 423.697, 23 in 440.349 and nine in 136.804).
+- Added the original Git terminal authentication codec. It signs only with the
+  real ready original started claim and a matching authenticated common final
+  receipt/checkpoint set. It binds ordered OIDs, the exact approved URL/ref
+  digest and common result, not only a set of commit names. Read-only historical
+  authentication does not create evidence or upgrade unsigned legacy receipts.
+- Root review required input detachment before authentication callbacks. The
+  returned authenticated wrapper now retains separately frozen original bytes
+  even if the caller mutates its record during a nested audit. Twelve final
+  tests passed in 27.620 seconds, using real claims/MACs/common receipts; their
+  synthetic OIDs are assertions, not a remote Git test.
+- Added a separate read-only Git anchor observer that reuses the existing
+  immutable commit parent/message/path/blob verification and approved remote
+  query. It does not rerun a dirty-tree planner or invalidate old commit proof
+  because HEAD or an unrelated file later changes. Remote advancement is a
+  mismatch, not an inferred preservation success. Runtime/config/metadata and
+  held-lock checks remain required. No approval/completion authority is granted.
+- Its first real-Git fixture accidentally used ordinary Git newline conversion,
+  correctly failing exact blob comparison. The fixture now stages with explicit
+  no-conversion settings; the product validator was not relaxed. Independent
+  review also moved the separate current-HEAD hint after the slow remote query.
+  Six final tests passed in 104.900 seconds, including real later/concurrent
+  commits while the original remote proof remains intact. Together these
+  foundation cohorts have 92 distinct passing tests, not a public workflow run.
+- Python 3.10 grammar checks passed under Windows Python 3.12; actual 3.10
+  execution remains integration-CI work. Four readiness/privacy checks and
+  169-resource synchronization passed. Original terminal publication, current
+  actor/post-review authentication, fresh execution and identifier-free Git
+  continuation still need composition before exposing the new public route.
+  Public long operations must connect progress/cancellation to these bounded
+  existing observers. No client or actual provider operation was performed.
+
 ## Standard references
 
 - [OpenTelemetry service identity](https://opentelemetry.io/docs/specs/semconv/resource/service/)
