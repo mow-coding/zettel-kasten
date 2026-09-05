@@ -3,7 +3,9 @@
 Date: 2026-09-05
 
 Status: revised correction implemented; installed public workflow passed on
-candidate `3423028f`. Remaining Windows CI failures and release remain pending.
+candidate `3423028f`, but failed at repair continuation on `d6d978d2` with
+unchanged production code. Component classification is under investigation;
+full final-candidate CI and release remain pending.
 
 ## Context
 

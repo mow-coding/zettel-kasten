@@ -93,7 +93,7 @@ def _observe_project_update_fixture_boundaries():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     observation = module.FirstUpdateObservation()
-    with patch.object(
+    with observation.live_components(), patch.object(
         project_runtime,
         "prepare_runtime_candidate",
         new=observation.boundary(
