@@ -168,6 +168,8 @@ OBSERVED_SOURCE_FUNCTIONS = {
     "wom-kit/src/wom_kit/project_runtime.py": frozenset({
         "prepare_runtime_candidate", "_initialize_runtime_payload", "_candidate_inventory_snapshot",
         "_path_identity", "_runtime_payload_sha256", "_verify_retained_artifacts", "_run_bounded",
+        "_walk_regular_files", "_runtime_payload_observation", "_sha256_file",
+        "inspect_runtime", "_real_component_snapshot_observation", "_stable_regular_file_observation",
     }),
     "wom-kit/src/wom_kit/exact_human_approval_workflow.py": frozenset({
         "_execute_exact_human_approved_write_core", "_run_started_claim_writer",
@@ -196,6 +198,224 @@ PREPARATION_CHECKS = (
     "prepared_runtime_payload", "source_branch",
 )
 PREPARATION_STATES = frozenset({"passed", "failed", "not_reached", "unavailable"})
+RUNTIME_BOUNDARY_SCHEMA = "wom-kit/test-runtime-boundary-observation/v1"
+RUNTIME_DIRECTORY_COMPARISON_LINE = 3345
+RUNTIME_COMPARISON_RAISES = {3346: "directory_identity", 3402: "file_size", 3405: "tree_generation"}
+RUNTIME_IDENTITY_FIELDS = ("device", "inode", "type", "size", "mtime_ns", "attributes")
+RUNTIME_BOUNDARY_TARGETS = (
+    ("inspect_runtime", "installed_inspection"),
+    ("_real_component_snapshot_observation", "component_chain"),
+    ("_stable_regular_file_observation", "regular_file_read"),
+    ("_sha256_file", "file_hash"),
+    ("_runtime_payload_observation", "payload_inventory"),
+    ("_walk_regular_files", "tree_walk"),
+)
+RUNTIME_BOUNDARY_REASONS = frozenset({
+    "path_outside_root", "path_observation_unavailable", "path_component_missing",
+    "path_component_reparse", "path_component_not_directory", "path_target_kind_invalid",
+    "project_runtime_static_receipt_invalid", "project_runtime_live_payload_verified",
+    "project_runtime_live_payload_mismatch", "project_runtime_live_payload_unavailable",
+    "project_runtime_required_python_missing", "project_runtime_required_python_unsafe",
+    "project_runtime_tree_unsafe", "project_runtime_tree_case_collision", "project_runtime_tree_too_large",
+    "project_runtime_file_unreadable_or_changed", "project_runtime_tree_unreadable", "project_runtime_tree_changed",
+})
+
+
+def _runtime_boundary_row_valid(row):
+    keys = {"boundary", "outcome", "reason_code", "operation", "cause_depth", "errno", "winerror",
+            "comparison_site", "changed_identity_fields"}
+    if type(row) is not dict or set(row) != keys:
+        return False
+    boundary, outcome, reason = row["boundary"], row["outcome"], row["reason_code"]
+    boundaries = {value for _name, value in RUNTIME_BOUNDARY_TARGETS} | {"directory_identity"}
+    if (type(boundary) is not str or boundary not in boundaries or type(outcome) is not str
+            or outcome not in {"identity_changed", "exception", "os_error", "read_not_confirmed",
+                               "failed", "unavailable", "not_reached", "unclassified"}
+            or reason is not None and (type(reason) is not str or reason not in RUNTIME_BOUNDARY_REASONS)
+            or type(row["cause_depth"]) is not int or not 0 <= row["cause_depth"] <= 2):
+        return False
+    fields, site, operation = row["changed_identity_fields"], row["comparison_site"], row["operation"]
+    if (type(fields) is not list or any(type(value) is not str or value not in RUNTIME_IDENTITY_FIELDS for value in fields)
+            or fields != [value for value in RUNTIME_IDENTITY_FIELDS if value in fields]
+            or site is not None and (type(site) is not str or site not in set(RUNTIME_COMPARISON_RAISES.values()))
+            or operation is not None and (type(operation) is not str or operation not in {
+                "path_lstat", "os_open", "os_fstat", "before_after_directory_comparison"})):
+        return False
+    for name in ("errno", "winerror"):
+        number = row[name]
+        if number is not None and (type(number) is not int or not 0 <= number <= 65535 or outcome != "os_error"):
+            return False
+    if boundary == "directory_identity" or outcome == "identity_changed":
+        return (boundary == "directory_identity" and outcome == "identity_changed" and bool(fields)
+                and site == "directory_identity" and reason == "project_runtime_tree_changed"
+                and operation == "before_after_directory_comparison" and row["cause_depth"] == 0)
+    if fields or operation == "before_after_directory_comparison":
+        return False
+    if operation is not None and (outcome != "os_error" or row["cause_depth"] != 0):
+        return False
+    if site is not None and (outcome != "exception" or reason != "project_runtime_tree_changed"):
+        return False
+    if outcome == "read_not_confirmed":
+        return boundary == "regular_file_read" and reason is None and row["cause_depth"] == 0
+    if outcome in {"failed", "unavailable", "not_reached", "unclassified"}:
+        return boundary in {"installed_inspection", "component_chain"} and row["cause_depth"] == 0
+    return outcome in {"exception", "os_error"}
+
+
+class RuntimeBoundaryObservation:
+    """Reuse the fixture's exact predicate pairing, never nearby-file inference.
+
+    Original calls, results and exceptions are untouched. Only owner-thread
+    failures inside named runtime boundaries survive. Successful stat tuples
+    live for one exact before/after comparison and are then discarded. The two
+    other tree predicates report their actual site, not guessed changed fields.
+    """
+
+    def __init__(self, module):
+        self.module, self.stack = module, ExitStack()
+        self.owner_thread, self.active_boundaries, self.identity_pair = None, [], None
+        self.events, self.decisive, self.truncated = [], [], False
+        self.walk_code = getattr(module._walk_regular_files, "__code__", None)
+        shapes = [value for value in self.walk_code.co_consts
+                  if type(value) is CodeType and value.co_name == "shape_snapshot"] if type(self.walk_code) is CodeType else []
+        self.shape_code = shapes[0] if len(shapes) == 1 else None
+
+    @staticmethod
+    def _number(value):
+        return value if type(value) is int and 0 <= value <= 65535 else None
+
+    def _record(self, boundary, outcome, *, reason=None, error=None, operation=None, depth=0, site=None, fields=()):
+        row = {"boundary": boundary, "outcome": outcome,
+               "reason_code": reason if type(reason) is str and reason in RUNTIME_BOUNDARY_REASONS else None,
+               "operation": operation, "cause_depth": depth,
+               "errno": self._number(getattr(error, "errno", None)) if isinstance(error, OSError) else None,
+               "winerror": self._number(getattr(error, "winerror", None)) if isinstance(error, OSError) else None,
+               "comparison_site": site, "changed_identity_fields": list(fields)}
+        if not _runtime_boundary_row_valid(row):
+            return
+        # Incidental repair-preimage failures cannot exhaust the decisive lane.
+        lane = self.decisive if boundary == "directory_identity" or site is not None else self.events
+        if len(lane) >= 16:
+            self.truncated = True
+        else:
+            lane.append(row)
+
+    def _site(self, error):
+        trace, selected = error.__traceback__, None
+        while trace is not None:
+            if trace.tb_frame.f_code is self.walk_code or trace.tb_frame.f_code is self.shape_code:
+                selected = RUNTIME_COMPARISON_RAISES.get(trace.tb_lineno)
+            trace = trace.tb_next
+        return selected
+
+    def _exception(self, boundary, error):
+        for depth in range(3):
+            reason = error.args[0] if isinstance(error, self.module.ProjectRuntimeError) and len(error.args) == 1 else None
+            self._record(boundary, "os_error" if isinstance(error, OSError) else "exception",
+                         reason=reason, error=error, depth=depth, site=self._site(error))
+            error = error.__cause__
+            if error is None:
+                break
+
+    def _wrap(self, original, boundary):
+        @wraps(original)
+        def observed(*args, **kwargs):
+            if threading.get_ident() != self.owner_thread:
+                return original(*args, **kwargs)
+            self.active_boundaries.append(boundary)
+            try:
+                result = original(*args, **kwargs)
+            except BaseException as error:
+                try:
+                    self._exception(boundary, error)
+                except Exception:
+                    pass
+                raise
+            finally:
+                self.active_boundaries.pop()
+                if boundary == "tree_walk":
+                    self.identity_pair = None
+            try:
+                if boundary == "regular_file_read" and result is None:
+                    self._record(boundary, "read_not_confirmed")
+                elif boundary in {"installed_inspection", "component_chain"} and type(result) is dict:
+                    prefix = "live_payload_" if boundary == "installed_inspection" else ""
+                    state = result.get(prefix + "state")
+                    if state != "passed":
+                        self._record(boundary, state if type(state) is str and state in PREPARATION_STATES else "unclassified",
+                                     reason=result.get(prefix + "reason_code"))
+            except Exception:
+                pass
+            return result
+        return observed
+
+    def _wrap_identity(self, original):
+        @wraps(original)
+        def observed(*args, **kwargs):
+            if threading.get_ident() != self.owner_thread or not self.active_boundaries:
+                return original(*args, **kwargs)
+            try:
+                result = original(*args, **kwargs)
+            except BaseException:
+                self.identity_pair = None
+                raise
+            try:
+                caller = sys._getframe(1)
+                if (caller.f_code is not self.shape_code or caller.f_lineno != RUNTIME_DIRECTORY_COMPARISON_LINE
+                        or type(result) is not tuple or len(result) != 6 or any(type(value) is not int for value in result)):
+                    self.identity_pair = None
+                    return result
+                previous, self.identity_pair = self.identity_pair, None
+                if previous is None or previous[0] != id(caller):
+                    self.identity_pair = (id(caller), result)
+                    return result
+                fields = tuple(name for name, before, after in zip(RUNTIME_IDENTITY_FIELDS, previous[1], result)
+                               if before != after)
+                if fields:
+                    self._record("directory_identity", "identity_changed", reason="project_runtime_tree_changed",
+                                 operation="before_after_directory_comparison", site="directory_identity", fields=fields)
+            except Exception:
+                self.identity_pair = None
+            return result
+        return observed
+
+    def _wrap_os(self, original, operation):
+        @wraps(original)
+        def observed(*args, **kwargs):
+            try:
+                return original(*args, **kwargs)
+            except OSError as error:
+                try:
+                    if threading.get_ident() == self.owner_thread and self.active_boundaries:
+                        self._record(self.active_boundaries[-1], "os_error", error=error, operation=operation)
+                except Exception:
+                    pass
+                raise
+        return observed
+
+    def __enter__(self):
+        self.owner_thread = threading.get_ident()
+        try:
+            for name, boundary in RUNTIME_BOUNDARY_TARGETS:
+                self.stack.enter_context(mock.patch.object(self.module, name, self._wrap(getattr(self.module, name), boundary)))
+            if self.shape_code is not None:
+                self.stack.enter_context(mock.patch.object(self.module, "_stat_identity", self._wrap_identity(self.module._stat_identity)))
+            for target, name, operation in ((Path, "lstat", "path_lstat"), (os, "open", "os_open"), (os, "fstat", "os_fstat")):
+                self.stack.enter_context(mock.patch.object(target, name, self._wrap_os(getattr(target, name), operation)))
+        except BaseException:
+            self.stack.close()
+            raise
+        return self
+
+    def __exit__(self, *exception_info):
+        try:
+            return self.stack.__exit__(*exception_info)
+        finally:
+            self.identity_pair = None
+
+    def snapshot(self):
+        return json.loads(json.dumps({"schema": RUNTIME_BOUNDARY_SCHEMA,
+            "events": [*self.decisive, *self.events], "truncated": self.truncated}))
 
 
 class JourneyCheckError(RuntimeError):
@@ -393,6 +613,7 @@ class FirstUpdateObservation:
         self.boundaries = {name: {"entered": False, "returned": False} for name in self._BOUNDARIES}
         self.failures = {}
         self.component_observation = None
+        self.runtime_observation = None
         self._source_codes = {}
         source_functions = (
             (archive_cli, "archive_cli.py", (
@@ -411,6 +632,8 @@ class FirstUpdateObservation:
             (project_runtime, "project_runtime.py", (
                 "prepare_runtime_candidate", "_initialize_runtime_payload", "_candidate_inventory_snapshot",
                 "_path_identity", "_runtime_payload_sha256", "_verify_retained_artifacts", "_run_bounded",
+                "_walk_regular_files", "_runtime_payload_observation", "_sha256_file",
+                "inspect_runtime", "_real_component_snapshot_observation", "_stable_regular_file_observation",
             )),
             (exact_human_approval_workflow, "exact_human_approval_workflow.py", (
                 "_execute_exact_human_approved_write_core", "_run_started_claim_writer",
@@ -703,6 +926,8 @@ class FirstUpdateObservation:
         }
         if self.component_observation is not None:
             payload["component_observation"] = self.component_observation
+        if self.runtime_observation is not None:
+            payload["runtime_observation"] = self.runtime_observation
         if type(revalidation) is dict:
             # Existing product results already distinguish these checks. Keep
             # their fixed states, not compared values, paths or free-form
@@ -718,6 +943,17 @@ class FirstUpdateObservation:
             payload["preparation_observation"] = {"schema": PREPARATION_OBSERVATION_SCHEMA, "checks": states}
         return validate_first_update_observation(payload)
 
+    @contextmanager
+    def runtime_boundaries(self):
+        observation = RuntimeBoundaryObservation(self._runtime)
+        try:
+            with observation:
+                yield observation
+        finally:
+            snapshot = observation.snapshot()
+            if snapshot["events"]:
+                self.runtime_observation = snapshot
+
 
 def validate_first_update_observation(value):
     """Reject rather than echo any unexpected output from the child boundary."""
@@ -726,8 +962,16 @@ def validate_first_update_observation(value):
         "boundaries", "failures", "native_observed", "cli",
     }
     valid = (type(value) is dict and required <= set(value)
-             and set(value) <= required | {"component_observation", "preparation_observation"})
+             and set(value) <= required | {"component_observation", "preparation_observation", "runtime_observation"})
     require(valid, "installed_runtime_journey_failed")
+    if "runtime_observation" in value:
+        runtime = value["runtime_observation"]
+        require(type(runtime) is dict and set(runtime) == {"schema", "events", "truncated"}
+                and runtime["schema"] == RUNTIME_BOUNDARY_SCHEMA and type(runtime["truncated"]) is bool
+                and type(runtime["events"]) is list and 1 <= len(runtime["events"]) <= 32,
+                "installed_runtime_journey_failed")
+        for row in runtime["events"]:
+            require(_runtime_boundary_row_valid(row), "installed_runtime_journey_failed")
     if "component_observation" in value:
         component = value["component_observation"]
         require(type(component) is dict and set(component) == {"schema", "events"}
@@ -929,6 +1173,7 @@ def _observed_runtime_call(archive_cli, project_runtime, cli, argv, native, *, s
                    else "_execute_project_version_update_exact_human_approved_write")
     code, result = None, None
     with ExitStack() as stack:
+        stack.enter_context(observation.runtime_boundaries())
         stack.enter_context(observation.live_components())
         stack.enter_context(mock.patch.object(project_runtime, "prepare_runtime_candidate",
             new=observation.boundary("runtime_prepare", project_runtime.prepare_runtime_candidate)))

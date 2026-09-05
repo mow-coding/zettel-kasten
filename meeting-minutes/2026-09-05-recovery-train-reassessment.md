@@ -826,3 +826,56 @@ not complete at this checkpoint.
   checks and 169-file resource synchronization passed. Independent review
   confirmed the final cap correction and found no further actionable issue.
   A new exact candidate still requires full CI; prior failures remain evidence.
+- Candidate `59c466fb`, run `33971950109`, subsequently failed installed job
+  `101321952253` in repair-fresh-resume before either preparation or the broker.
+  The original CLI call raised `project_runtime_tree_changed`; the retained
+  source coordinate was its caller in `archive_cli.py:11019`. This run passed
+  the initial update stage but does not resolve the preceding preparation
+  refusal. The exact internal tree comparison is under investigation using the
+  existing content-free directory-observation tests; timestamp/identity guards
+  are not relaxed on speculation. The rest of this CI matrix remains separate.
+
+## Coherent runtime failure observation (2026-09-06 local time)
+
+- The same candidate's Windows shard 3 also failed one of 1,299 tests at the
+  complete runtime candidate's existing-runtime reuse assertion. Shard 1 failed
+  one of 1,469 at the real CLI candidate fixture: runtime preparation raised
+  incomplete with a nested tree-changed refusal during bytecode cleanup, before
+  approval. These are observed failure sites, not proof of a shared root cause.
+- A single content-free runtime observer now records the three actual tree
+  refusal coordinates. Only the exact directory before/after predicate and
+  same frame yield changed field names. File-size and whole-tree refusals name
+  their source site without guessing a changed directory field. Paths, identity
+  values and raw exceptions are not retained. Original calls/returns/exceptions
+  and production checks, retry behavior and deadlines remain unchanged.
+- The observer follows the existing fixture's semantics and is shared by both
+  installed driver stages, the source CLI fixture and the existing-candidate
+  comparison. Independent source review found no actionable issue. Its final
+  five-module cohort passed 53 tests and 158 subtests in 20.95 seconds.
+- The reuse test observes the already executed comparison's fixed state,
+  reason and matches plus two exact candidate booleans. It reuses that runtime
+  observer only inside the original comparison and retains at most its final
+  bounded result. Six small contracts and three subtests passed in 12.18
+  seconds. The actual previously failing selector ran once and passed in
+  243.04 seconds locally; the CI refusal was not reproduced or claimed fixed.
+- The source CLI helper also enters the same runtime context. A real small-tree
+  file-size predicate verifies that its inner refusal reaches the fixed failure
+  payload and that wrapping restores originals. The combined CLI/boundary/reuse
+  observer cohort passed 19 tests (unittest-reported 0.368 seconds excludes
+  module import/startup). No full local installed replay was duplicated.
+- Official CPython 3.12 changes and historical Windows stat issues were read as
+  background only. They do not establish this failure's cause or authorize
+  relaxing identity/timestamp guards: [3.12 filesystem changes](https://docs.python.org/3.12/whatsnew/3.12.html#os),
+  [Windows stat fast path](https://github.com/python/cpython/issues/99726),
+  [historical inaccessible-file handling](https://github.com/python/cpython/issues/111877).
+- Run `33971950109` finished with failure, without cancelling the unfinished
+  matrix. All four Ubuntu shards, Windows shards 2 and 4, the three scale gates
+  and readiness passed. Installed acceptance and Windows shards 1 and 3 failed
+  at the distinct sites above, so Required CI failed. Open secret alerts were
+  zero at recheck; this is not proof of no exposure. The next diagnostic
+  candidate remains a draft and cannot be released from this mixed result.
+- Before committing the combined diagnostic candidate, the final seven-module
+  focused cohort passed 64 tests (unittest-reported 2.084 seconds excludes
+  import/startup). Both the runtime observer and its reuse/source-CLI attachment
+  received independent source review with no remaining actionable blocker.
+  Readiness's four checks, 169-resource synchronization and diff checks passed.
