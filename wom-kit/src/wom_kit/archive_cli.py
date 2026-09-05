@@ -35770,7 +35770,10 @@ def _mark_compound_approval_help(parser: argparse.ArgumentParser) -> None:
         COMPOUND_APPROVAL_BLOCKED_COMMANDS,
     )
     setattr(parser, "_wom_capability_inventory", inventory)
-    for command_path in sorted(COMPOUND_APPROVAL_BLOCKED_COMMANDS):
+    for command_path in sorted(
+        set(COMPOUND_APPROVAL_BLOCKED_COMMANDS)
+        | set(command_status.UNSUPPORTED_APPROVAL_COMMAND_REASONS)
+    ):
         availability = command_status.resolve_capability_availability(
             inventory,
             command_path,
@@ -35829,7 +35832,12 @@ def _mark_compound_approval_help(parser: argparse.ArgumentParser) -> None:
             command_parser.epilog = "\n\n".join(
                 value for value in (command_parser.epilog, history_help) if value
             )
-        approval_actions[0].help = COMPOUND_APPROVAL_BLOCKED_HELP
+        approval_actions[0].help = (
+            command_status.OPERATION_CANCEL_UNSUPPORTED_HELP
+            if availability["detail_reason_code"]
+            == command_status.OPERATION_CANCEL_UNSUPPORTED_REASON_CODE
+            else COMPOUND_APPROVAL_BLOCKED_HELP
+        )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -47229,10 +47237,14 @@ def _writer_unavailable_dispatch_error(
         )
     else:
         print(
-            "Writer unavailable in this installed WOM version. Exact compound "
-            "human-approval binding is not implemented for this command; the "
-            "write did not start. Use the command's dry-run, plan, or audit "
-            "mode and check `archive capabilities --machine`.",
+            command_status.OPERATION_CANCEL_UNSUPPORTED_HELP
+            if detail_reason == command_status.OPERATION_CANCEL_UNSUPPORTED_REASON_CODE
+            else (
+                "Writer unavailable in this installed WOM version. Exact compound "
+                "human-approval binding is not implemented for this command; the "
+                "write did not start. Use the command's dry-run, plan, or audit "
+                "mode and check `archive capabilities --machine`."
+            ),
             file=sys.stderr,
         )
     return 1

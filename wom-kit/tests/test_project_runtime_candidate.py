@@ -48,6 +48,18 @@ WINDOWS_RUNTIME = (
 )
 
 
+@contextmanager
+def _expect_exact_runtime_fault(expected_code: str):
+    """Keep unexpected preflight failures' original traceback for diagnosis."""
+    try:
+        yield
+    except project_runtime.ProjectRuntimeError as error:
+        if error.args != (expected_code,):
+            raise
+    else:
+        raise AssertionError("The exact injected runtime fault was not raised.")
+
+
 class CompleteRuntimeCandidateTests(unittest.TestCase):
     def _candidate_inputs(
         self,
@@ -3865,10 +3877,7 @@ class CompleteRuntimeCandidateTests(unittest.TestCase):
                 "_atomic_promote_directory_no_replace",
                 side_effect=fail_second_move,
             ):
-                with self.assertRaisesRegex(
-                    project_runtime.ProjectRuntimeError,
-                    "project_runtime_repair_promotion_rolled_back",
-                ):
+                with _expect_exact_runtime_fault("project_runtime_repair_promotion_rolled_back"):
                     project_runtime.promote_runtime_candidate(
                         project,
                         target="v0.4.3",
