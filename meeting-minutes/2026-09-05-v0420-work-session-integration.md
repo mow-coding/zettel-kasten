@@ -1786,6 +1786,29 @@ bump, PR, tag, wheel or client application has occurred.
   expansion. The ADR now explicitly says checks occur before domain mutations:
   a refusal may still preserve private control evidence for safe original resume.
 
+### Scoped intake Git contract checkpoint and next composition
+
+- The v1/v2 Git scope cohort passed all 18 tests in 70.891 seconds on this
+  Windows Python 3.12 source checkout. This includes actual Git preparation and
+  original-context reconstruction, old-route rejection of scoped substitutions,
+  unchanged historical v1 bytes and the bounded 1,000-item/1,002-output v2 data
+  contract. It does not prove authenticated intake discovery or a live backup.
+- The independently reviewed v2 codec and its seven new tests are checkpointed
+  separately from the downstream integration. Completed public release
+  evidence remains attached to v0.4.19; v0.4.20 remains unreleased.
+- Next composition retains the original human-decision receipt producer and
+  adds a separately authenticated intake-output producer. Its hint inventory is
+  discovery data only. Retained original context, succeeded approval MAC,
+  exact completed output bytes and original session binding must all agree.
+  Active Git approval reuses its existing key context rather than opening a
+  nested credential provider. Original Git re-review uses stored producer
+  references, never a fresh inventory to replace the original approval.
+- A new joined test is being prepared for a completed intake whose common
+  receipt is already committed while source-intake receipts and its prepared
+  capture request remain changed. Other-session outputs and lookalike files
+  must remain excluded. A capture request is not preserved source bytes;
+  authenticated metadata backup must not claim completed artifact custody.
+
 ## Standard references
 
 - [OpenTelemetry service identity](https://opentelemetry.io/docs/specs/semconv/resource/service/)
