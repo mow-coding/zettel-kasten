@@ -36,8 +36,12 @@ class WorkSessionServiceTests(unittest.TestCase):
             self.root, approval.exact_human_approval_archive_identity_sha256(archive_id))
         self.native, self.key = fixture.SessionNative(), fixture._Key()
         # Use the original public facade defaults, not public/native/key args.
-        self.native_factory = self.enterContext(patch.object(windows, "_CtypesTaskDialogNative", return_value=self.native))
-        self.key_factory = self.enterContext(patch.object(workflow, "_production_key_provider", return_value=self.key))
+        native_patch = patch.object(windows, "_CtypesTaskDialogNative", return_value=self.native)
+        self.native_factory = native_patch.start()
+        self.addCleanup(native_patch.stop)
+        key_patch = patch.object(workflow, "_production_key_provider", return_value=self.key)
+        self.key_factory = key_patch.start()
+        self.addCleanup(key_patch.stop)
         self.route = actor.new_task_route_ref()
 
     def files(self):
@@ -179,7 +183,7 @@ class WorkSessionServiceTests(unittest.TestCase):
         before = self.files()
         selected = dict(client_app_ref=self.app, task_route_ref=self.route, work_session_ref=session)
         with patch.object(subject.session_state, "_transition_task_held", side_effect=AssertionError("blocked facade")) as facade:
-            for action in ("pause", "resume"):
+            for action in ("pause", "resume", "complete"):
                 for original_resume in (False, True):
                     with self.subTest(action=action, original_resume=original_resume):
                         arguments = dict(action=action, original_resume=original_resume, **selected)

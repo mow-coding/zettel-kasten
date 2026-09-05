@@ -46863,7 +46863,7 @@ def build_parser() -> argparse.ArgumentParser:
     init.set_defaults(func=command_init)
 
     work_session = subcommands.add_parser(
-        "work-session", help="Query sessions or explicitly register, create, claim, pause and resume a task.",
+        "work-session", help="Query sessions or explicitly register, create, claim, pause, resume or complete a task.",
         description=("List or inspect opaque app, workstream and session references. "
                      "Private labels and claim tokens are never printed. "
                      "Registration supports --dry-run then --apply/--resume using the original selection. "
@@ -46875,11 +46875,12 @@ def build_parser() -> argparse.ArgumentParser:
                      "Create has no dry-run preview yet. Claim uses --apply/--resume. "
                      "Pause and paused-session resume use --apply for a new state transition; "
                      "their --resume continues only the original transition without generating a new claim. "
+                     "Complete closes only session metadata; it does not delete or clean up archive data. "
                      "The AI retains original opaque references; humans do not copy hashes or JSON. "
                      "Handoff and other lifecycle operations are not exposed yet."),
     )
     work_session.add_argument("archive_root", help="Archive root.")
-    work_session.add_argument("--action", choices=["list", "inspect", "register-app", "request-init", "create", "claim", "pause", "resume"], default="list")
+    work_session.add_argument("--action", choices=["list", "inspect", "register-app", "request-init", "create", "claim", "pause", "resume", "complete"], default="list")
     work_session.add_argument("--kind", choices=["app", "workstream", "session"], default="session")
     work_session.add_argument("--ref", help="Opaque reference to inspect.")
     work_session.add_argument("--client-app-ref", help="Explicit registered app for management, or query filter.")
@@ -46888,11 +46889,11 @@ def build_parser() -> argparse.ArgumentParser:
     work_session.add_argument("--cursor", help="Continuation cursor from the same generation and query.")
     work_session.add_argument("--dry-run", action="store_true", help="Read-only query, routing request-init or registration preview; not create.")
     work_session.add_argument("--approve", action="store_true", help="Request the existing native decision for create only.")
-    work_session.add_argument("--apply", action="store_true", help="Apply registration, claim, pause or a new paused-session resume.")
+    work_session.add_argument("--apply", action="store_true", help="Apply registration, claim, pause, completion or a new paused-session resume.")
     work_session.add_argument("--resume", action="store_true", help="Continue the original operation; never create a new approval.")
     work_session.add_argument("--review-original", action="store_true", help="With create --approve only: review original pre-claim content.")
     work_session.add_argument("--task-route-ref", help="Original opaque task route retained by the AI before mutation.")
-    work_session.add_argument("--work-session-ref", help="Original opaque session reference for claim, pause or paused-session resume.")
+    work_session.add_argument("--work-session-ref", help="Original opaque session reference for claim or state transitions.")
     work_session.add_argument("--request-stdin", action="store_true", help="AI-only bounded private JSON input; never credential input.")
     work_session.add_argument("--progress", action=argparse.BooleanOptionalAction, default=True,
                               help="Content-free startup status on stderr; disable with --no-progress.")

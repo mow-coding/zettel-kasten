@@ -89,15 +89,16 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
     {
         "name": "archive_work_session_manage",
         "description": (
-            "Explicitly register an app, create a human-reviewed task, claim, pause or resume its session. "
+            "Explicitly register an app, create a human-reviewed task, claim, pause, resume or complete its session. "
             "The AI retains original registration selection and app/task references before mutation; "
             "Request-init returns a new routing-only task reference for an explicit registered app, "
             "without creating, approving or saving a task. Retain it before create; "
             "resume uses that original reference and never another request-init. "
             "humans never copy hashes or JSON. Private labels are input only, not output. "
             "Create dry-run and handoff or other later actions are not supported. "
-            "Action pause/resume with apply starts a state transition; the resume flag instead "
+            "Action pause/resume/complete with apply starts a state transition; the resume flag instead "
             "continues only the original operation and never creates a new claim or human approval."
+            " Completion closes only session metadata, never deleting or cleaning up archive data."
         ),
         "annotations": {"readOnlyHint": False, "destructiveHint": False,
                         "idempotentHint": False, "openWorldHint": False},
@@ -105,7 +106,7 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
             "type": "object", "additionalProperties": False,
             "properties": {
                 "archive_root": {"type": "string"},
-                "action": {"type": "string", "enum": ["register-app", "request-init", "create", "claim", "pause", "resume"]},
+                "action": {"type": "string", "enum": ["register-app", "request-init", "create", "claim", "pause", "resume", "complete"]},
                 "dry_run": {"type": "boolean", "default": False},
                 "approve": {"type": "boolean", "default": False},
                 "apply": {"type": "boolean", "default": False},
@@ -3922,7 +3923,7 @@ def tool_archive_work_session_manage(arguments: dict[str, Any]) -> dict[str, Any
     if (type(arguments) is not dict or any(type(key) is not str for key in arguments)
             or set(arguments) - allowed
             or type(arguments.get("action")) is not str
-            or arguments["action"] not in {"register-app", "request-init", "create", "claim", "pause", "resume"}):
+            or arguments["action"] not in {"register-app", "request-init", "create", "claim", "pause", "resume", "complete"}):
         raise InvalidParamsError()
     if (any(type(arguments[key]) is not bool for key in flags if key in arguments)
             or any(type(arguments[key]) is not str for key in refs if key in arguments)

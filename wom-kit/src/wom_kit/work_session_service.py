@@ -1,7 +1,7 @@
 """Bounded public management using the original work-session authorities.
 
 App registration, human task creation, original continuation/re-review,
-claiming, pause and paused-session resume are connected. No implicit latest
+claiming, pause, paused-session resume and completion are connected. No implicit latest
 selector, create preview, other lifecycle action or key injection is exposed.
 Every mutation waits once, checks the actual loaded runtime under that lock,
 then calls the existing held runner. A successful registration is self-declared;
@@ -232,14 +232,14 @@ def apply_or_resume_task_claim(root, *, client_app_ref, task_route_ref, work_ses
 def transition_task_state(root, *, action, original_resume, client_app_ref,
                           task_route_ref, work_session_ref,
                           cancel_requested=lambda: False, progress=lambda _event: None):
-    """Pause/reclaim a paused session, or continue only its original operation.
+    """Pause/reclaim/complete a session, or continue only its original operation.
 
     The action named resume creates a new exact claim only with apply. The
     original_resume flag selects prior durable evidence and cannot create a
     fresh transition. Private claim tokens remain owned by the actor facade.
     """
     def run():
-        if type(action) is not str or action not in {"pause", "resume"} or type(original_resume) is not bool:
+        if type(action) is not str or action not in {"pause", "resume", "complete"} or type(original_resume) is not bool:
             raise WorkSessionServiceError()
         _refs(client_app_ref, task_route_ref, work_session_ref, require_session=True)
         resolved = _root(root)

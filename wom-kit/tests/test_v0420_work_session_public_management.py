@@ -28,7 +28,7 @@ class WorkSessionPublicManagementTests(unittest.TestCase):
             code = archive_cli.main(["work-session", str(root), "--no-progress", *flags])
         return code, json.loads(output.getvalue()), errors.getvalue()
 
-    def test_cli_and_mcp_share_registration_create_claim_pause_resume_and_private_output(self):
+    def test_cli_and_mcp_share_registration_create_claim_pause_resume_complete_and_private_output(self):
         private_label = "SYNTHETIC_PRIVATE_APP_LABEL"
         with tempfile.TemporaryDirectory(prefix="wom-public-session-") as directory:
             root = Path(directory) / "archive"
@@ -124,9 +124,27 @@ class WorkSessionPublicManagementTests(unittest.TestCase):
                 self.assertNotEqual(code, 0)
                 self.assertFalse(wrong_original["ok"])
                 self.assertEqual(store.read().sha256, after_resume.sha256)
+                archive_bytes = (root / "archive.yml").read_bytes()
+                code, completed, _ = self.cli(root, "--action", "complete", "--apply", *refs,
+                                            "--work-session-ref", session)
+                self.assertEqual(code, 0, completed)
+                self.assertEqual(completed["result"]["state"], "completed")
+                self.assertFalse(completed["result"]["current_claim_ownership_verified"])
+                completed_snapshot = store.read()
+                with mock.patch.dict(mcp_server.os.environ, {mcp_server.MCP_ALLOWED_ROOTS_ENV: str(root)}):
+                    completed_replay = mcp_server.handle_tools_call({"name": "archive_work_session_manage", "arguments": {
+                        "archive_root": str(root), "action": "complete", "resume": True,
+                        "client_app_ref": selection["client_app_ref"], "task_route_ref": route,
+                        "work_session_ref": session,
+                    }})
+                self.assertTrue(completed_replay["structuredContent"]["ok"], completed_replay)
+                self.assertTrue(completed_replay["structuredContent"]["result"]["original_operation_already_completed"])
+                self.assertEqual(store.read().sha256, completed_snapshot.sha256)
+                self.assertEqual((root / "archive.yml").read_bytes(), archive_bytes)
             self.assertEqual(native.calls, 1)
             public_results = json.dumps([created, continued, claimed, resumed_claim, paused,
-                                         replay, resumed_state, resumed_again, wrong_original])
+                                         replay, resumed_state, resumed_again, wrong_original,
+                                         completed, completed_replay])
             self.assertNotIn(private_label, public_results)
             self.assertNotIn(original_claim, public_results)
             self.assertNotIn(after_resume._document["sessions"][session]["claim_ref"], public_results)
@@ -136,7 +154,8 @@ class WorkSessionPublicManagementTests(unittest.TestCase):
                                      ("create", "--approve", True), ("create", "--resume", False),
                                      ("claim", "--apply", False), ("claim", "--resume", False),
                                      ("pause", "--apply", False), ("pause", "--resume", False),
-                                     ("resume", "--apply", False), ("resume", "--resume", False)):
+                                     ("resume", "--apply", False), ("resume", "--resume", False),
+                                     ("complete", "--apply", False), ("complete", "--resume", False)):
             with self.subTest(action=action, mode=mode):
                 args = self.parser.parse_args(["work-session", "synthetic-archive", "--action", action, mode])
                 effects = command_status.resolve_namespace_invocation_effects(self.parser, args)
@@ -166,7 +185,7 @@ class WorkSessionPublicManagementTests(unittest.TestCase):
         self.assertEqual(result["reason_code"], "work_session_mode_unavailable")
 
     def test_inventory_only_does_not_claim_action_dependent_modes_are_available(self):
-        for action in ("list", "register-app", "request-init", "create", "claim", "pause", "resume"):
+        for action in ("list", "register-app", "request-init", "create", "claim", "pause", "resume", "complete"):
             with self.subTest(action=action):
                 result = command_status.resolve_capability_availability(
                     self.inventory, "work-session", requested_mode="dry_run",

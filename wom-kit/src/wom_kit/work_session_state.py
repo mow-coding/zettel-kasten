@@ -1,9 +1,10 @@
-"""Pause or resume an explicit task through its original private intent.
+"""Pause, resume or complete a task through its original private intent.
 
 The public service owns the single OS lock and actual runtime guard. This held
 facade adds no approval, lock, secret input, latest-task inference or raw claim
 argument. A fresh resume claims a paused session; original_resume only follows
-the already selected operation and never prepares another claim.
+the already selected operation and never prepares another claim. Completion
+only closes registry ownership; it never deletes or cleans up archive data.
 """
 
 from . import work_session_actor as actor
@@ -64,7 +65,7 @@ def _match_intent(intent, *, action=None, client_app_ref, work_session_ref):
     document = intents._strict_document(intent._raw)
     request = document["request"]
     if (request["client_app_ref"] != client_app_ref or request["work_session_ref"] != work_session_ref
-            or request["action"] not in {"claim", "pause", "resume"}):
+            or request["action"] not in {"claim", "pause", "resume", "complete"}):
         raise WorkSessionStateError("work_session_original_operation_changed")
     if action is not None and request["action"] != action:
         raise WorkSessionStateError("work_session_state_action_mismatch")
@@ -81,15 +82,18 @@ def _verify_create(root, store, routing, selected, *, held, app, route, session,
     )
 
 
-def _paused_binding(store, *, held, app, session, expected):
-    """State-specific read guard; paused is deliberately not claimed ownership."""
+def _unclaimed_binding(store, *, held, app, session, expected, state):
+    """Explicit paused/completed topology, never current claimed ownership."""
+    if state not in {"paused", "completed"}:
+        raise WorkSessionStateError("work_session_state_invalid")
     def observe():
         snapshot = store.read()
         value = snapshot._document["sessions"].get(session)
         binding = snapshot.binding(session)
-        if (value is None or value["client_app_ref"] != app or value["state"] != "paused"
+        if (value is None or value["client_app_ref"] != app or value["state"] != state
                 or value["claim_ref"] is not None
-                or snapshot._document["workstreams"][value["workstream_ref"]]["active_session_ref"] != session
+                or snapshot._document["workstreams"][value["workstream_ref"]]["active_session_ref"]
+                    != (session if state == "paused" else None)
                 or binding != expected):
             raise WorkSessionStateError("work_session_state_current_unavailable")
         return binding
@@ -140,13 +144,15 @@ def _finish(store, routing, selected, outcome, *, held, action, app, session, pu
     document = _match_intent(restored.intent, action=action, client_app_ref=app, work_session_ref=session)
     expected = restored.transition.after.binding(session)
     after = restored.transition.after._document["sessions"][session]
-    expected_claim = None if action == "pause" else document["generated_refs"][0]
-    if after["state"] != ("paused" if action == "pause" else "claimed") or after["claim_ref"] != expected_claim:
+    expected_state = {"pause": "paused", "resume": "claimed", "complete": "completed"}[action]
+    expected_claim = document["generated_refs"][0] if action == "resume" else None
+    if after["state"] != expected_state or after["claim_ref"] != expected_claim:
         raise WorkSessionStateError("work_session_original_operation_changed")
     _assert_selected(routing, selected)
     try:
-        if action == "pause":
-            current = _paused_binding(store, held=held, app=app, session=session, expected=expected)
+        if action in {"pause", "complete"}:
+            current = _unclaimed_binding(store, held=held, app=app, session=session,
+                                         expected=expected, state=expected_state)
         else:
             current = store.require_claimed_binding(client_app_ref=app, work_session_ref=session,
                 claim_ref=expected_claim, expected_binding=expected, held_lock=held)
@@ -181,7 +187,7 @@ def _finish(store, routing, selected, outcome, *, held, action, app, session, pu
 def _transition_task_held(root, *, held, action, original_resume,
                           client_app_ref, task_route_ref, work_session_ref):
     def run():
-        if type(action) is not str or action not in {"pause", "resume"} or type(original_resume) is not bool:
+        if type(action) is not str or action not in {"pause", "resume", "complete"} or type(original_resume) is not bool:
             raise WorkSessionStateError()
         if work_session_ref is None:
             raise WorkSessionStateError("work_session_task_context_required")
@@ -215,7 +221,7 @@ def _transition_task_held(root, *, held, action, original_resume,
             if pending is not None:
                 raise WorkSessionStateError("work_session_original_operation_pending")
             expected = WorkSessionBinding.from_document(document["observed_binding"])
-            if action == "pause":
+            if action in {"pause", "complete"}:
                 current = actor_guard._require_actor_selection_for_write_held(root, held=held,
                     client_app_ref=client_app_ref, task_route_ref=task_route_ref, work_session_ref=work_session_ref)
                 if current != expected:
@@ -223,7 +229,8 @@ def _transition_task_held(root, *, held, action, original_resume,
             else:
                 if document["claim_ref"] is not None:
                     raise WorkSessionStateError("work_session_state_current_unavailable")
-                _paused_binding(store, held=held, app=client_app_ref, session=work_session_ref, expected=expected)
+                _unclaimed_binding(store, held=held, app=client_app_ref, session=work_session_ref,
+                                     expected=expected, state="paused")
             _assert_selected(routing, selected)
             selector = _source_selector(store, selected, held=held, app=client_app_ref, session=work_session_ref)
             _verify_create(root, store, routing, selected, held=held, app=client_app_ref,
@@ -233,7 +240,7 @@ def _transition_task_held(root, *, held, action, original_resume,
                     or before._document["sessions"][work_session_ref]["claim_ref"] != document["claim_ref"]):
                 raise WorkSessionStateError("work_session_state_changed")
             transition = registry.plan_transition(before, action=action, client_app_ref=client_app_ref,
-                work_session_ref=work_session_ref, claim_ref=document["claim_ref"] if action == "pause" else None)
+                work_session_ref=work_session_ref, claim_ref=document["claim_ref"] if action != "resume" else None)
             intent = intents.prepare_registry_intent(store, transition, held_lock=held, original_create_selector=selector)
             intents.save_registry_intent(store, intent, held_lock=held)
             _assert_selected(routing, selected)

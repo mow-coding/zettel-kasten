@@ -59,7 +59,7 @@ def resolve_work_session_mode(
                 (True, False): "claim_apply",
                 (False, True): "claim_resume",
             }.get((apply, resume))
-    elif action in {"pause", "resume"}:
+    elif action in {"pause", "resume", "complete"}:
         if not dry_run and not approve and not review_original:
             mode = {
                 (True, False): "state_transition_apply",

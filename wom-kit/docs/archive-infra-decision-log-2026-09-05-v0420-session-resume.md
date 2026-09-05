@@ -142,3 +142,26 @@ create preview or write authority.
 These changes are an unpublished source integration checkpoint. Installed
 session workflows, later lifecycle actions, all-writer coverage and actual
 client outcomes remain separate gates.
+
+## State transitions and establishment distinction
+
+Pause, paused-session resume and completion reuse original private intents,
+the exact actor selection, current-state guards and existing claim/MAC checks.
+New state transitions use apply; original resume never creates a replacement
+intent or claim. Completion closes only session metadata, not archive data or
+cleanup responsibility. Public and held-runner tests are recorded separately
+in the integration minutes, and do not replace installed or client acceptance.
+
+Before exposing human handoff, accept and recover, separate the original
+task-establishment selector from the last completed operation. Accept creates
+a successor needing its own claim; its legitimate establishment is accept,
+not the predecessor's create. Recover changes the current claim but does not
+replace establishment history. The new integration must verify each original
+human operation with the existing completed-only runner and exact app/session/
+route, while preserving old manifests, context, receipts and raw hashes.
+
+Use typed create-or-accept origins in new private records and read-normalize
+old original-create references without in-place evidence migration. Preserve
+current storage and CAS, not a new event store. This planned origin contract
+does not yet make the human lifecycle commands publicly available, transfer
+old artifact ownership or assign legacy cleanup responsibility.

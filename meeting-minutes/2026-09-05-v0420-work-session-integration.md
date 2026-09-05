@@ -763,6 +763,52 @@ bump, PR, tag, wheel or client application has occurred.
   final v0.4.19 integration, installed v0.4.20 acceptance and the remaining
   human lifecycle actions still block a complete v0.4.20 release claim.
 
+## Completion checkpoint
+
+- The same state-transition path now exposes `complete --apply` and original
+  `complete --resume`. Completion consumes the exact current claim and records
+  completed state, no claim and no active session for the workstream. It does
+  not delete archive data, retire artifacts or grant cleanup responsibility.
+  Completed replay uses the original evidence without another transition.
+- The completion/core cohort passed nine tests and thirty subtests in 226.31
+  seconds. A Python-version compatibility review then found three fixture uses
+  of `TestCase.enterContext`, unavailable on supported Python 3.10. They were
+  replaced with the same patch start/addCleanup lifetime, without changing
+  product code or assertions. The existing pause/resume path then passed one
+  test and two subtests in 30.47 seconds. The local interpreter is Python 3.12;
+  actual Python 3.10 execution remains a CI obligation, not this local result.
+- Root's public flow, shared modes and service cohort passed 28 tests and
+  361 subtests in 120.82 seconds. The public journey now ends in completion and
+  original completion replay, with unchanged archive metadata bytes and no
+  exposed private claims. All 288 flag combinations across nine public actions
+  are covered by the independent mode oracle. Source-only independent review
+  found no further blocker in the completion delta.
+
+## Human handoff origin audit and next contract
+
+- The existing accept transition creates a successor in created state, without
+  a claim; it does not directly confer claimed ownership. The required path is
+  accept, then ordinary exact claim, then ordinary pause/resume/backup. Current
+  create-only origin checks would reject the legitimate accept successor.
+- Recover has a related gap: it replaces the claim under its own original
+  human decision, but recording that as the last completed human operation
+  would obscure the original task-establishment evidence for later state work.
+  An establishment selector and a last-operation selector have different jobs.
+- Preserve original manifests, context, approval MACs and receipt bytes. Use
+  a typed create-or-accept establishment reference in new private records and
+  normalize a historical original-create selector only when reading it. Do not
+  rewrite old approved evidence or copy a predecessor's create approval onto a
+  successor with a different app, session or route. Current ownership, original
+  establishment and the last completed operation must each be verified.
+- This is a WOM integration decision informed by immutable-event/projection
+  distinctions in [Microsoft's event-sourcing guidance](https://learn.microsoft.com/en-us/azure/architecture/patterns/event-sourcing)
+  and the separation of entities, activities and agents in
+  [W3C PROV-O](https://www.w3.org/TR/prov-o/#description-starting-point-terms).
+  Reuse current storage, CAS and approval runners; this does not introduce an
+  event-sourcing backend, event broker or claim conformance to a new ontology.
+  App handoff does not transfer predecessor artifacts or legacy cleanup
+  responsibility by inference. Public human lifecycle integration remains open.
+
 ## Standard references
 
 - [OpenTelemetry service identity](https://opentelemetry.io/docs/specs/semconv/resource/service/)

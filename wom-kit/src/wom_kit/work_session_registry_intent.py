@@ -27,8 +27,8 @@ from .exact_human_approval import exact_human_approval_context_sha256 as approva
 INTENT_SCHEMA = "wom-kit/work-session-private-registry-intent/v1"
 PRIVATE_ROOT = ("profiles", "local", "work-sessions", "registry-intents")
 MAX_INTENT_BYTES = 64 * 1024
-_INTENT_ACTIONS = frozenset({"register-app", "claim", "pause", "resume"})
-_STATE_ACTIONS = frozenset({"pause", "resume"})
+_INTENT_ACTIONS = frozenset({"register-app", "claim", "pause", "resume", "complete"})
+_STATE_ACTIONS = frozenset({"pause", "resume", "complete"})
 _REQUEST_KEYS = frozenset({"action", "client_app_ref", "work_session_ref", "label", "claim_ref", "target_app_ref"})
 _DOCUMENT_KEYS = frozenset({"schema", "archive_identity_sha256", "before_revision", "before_sha256",
                             "request", "generated_refs", "after_sha256", "plan_sha256", "intent_sha256"})
@@ -131,8 +131,9 @@ def _strict_document(raw: bytes) -> dict[str, Any]:
         if (request["label"] is not None or not registry._ref(request["client_app_ref"], "client_app")
                 or not registry._ref(request["work_session_ref"], "work_session")):
             raise _fail()
-        if action == "pause":
-            # Pause consumes the exact predecessor claim; it generates none.
+        if action in {"pause", "complete"}:
+            # Pause/completion consume the exact predecessor claim; neither
+            # generates a replacement claim or grants archival cleanup rights.
             if generated or not registry._ref(request["claim_ref"], "claim"):
                 raise _fail()
         elif (request["claim_ref"] is not None or len(generated) != 1

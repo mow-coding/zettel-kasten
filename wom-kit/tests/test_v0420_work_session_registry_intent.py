@@ -170,7 +170,7 @@ class RegistryIntentTests(unittest.TestCase):
         plan = self.claim_plan()
         intent = self.prepare_save(plan)
         document = json.loads(intent._raw)
-        for action in ("create", "handoff", "accept", "recover", "complete"):
+        for action in ("create", "handoff", "accept", "recover"):
             with self.subTest(action=action):
                 changed = deepcopy(document)
                 changed["request"]["action"] = action

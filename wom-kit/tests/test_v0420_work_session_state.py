@@ -29,7 +29,9 @@ class WorkSessionStateTests(unittest.TestCase):
         claim._claim_task_core(t.root, client_app_ref=t.app, task_route_ref=t.route,
                                work_session_ref=self.session, key_provider=t.key)
         # Existing production key seam only: no new public secret/authority arg.
-        self.enterContext(patch.object(workflow, "_production_key_provider", return_value=t.key))
+        key_patch = patch.object(workflow, "_production_key_provider", return_value=t.key)
+        key_patch.start()
+        self.addCleanup(key_patch.stop)
 
     def run_state(self, action="pause", original_resume=False, **changes):
         t = self.fixture
