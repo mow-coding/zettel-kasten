@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import os
@@ -462,7 +463,13 @@ class ProjectUpdateTransactionTests(unittest.TestCase):
         )
         return reserved, lock_bytes, tree
 
-    def seal_reserved(self, reserved, tree) -> ProjectUpdateTransaction:
+    def seal_reserved(
+        self,
+        reserved,
+        tree,
+        *,
+        provider_inventory_sha256: str | None = None,
+    ) -> ProjectUpdateTransaction:
         static_receipt = self.static_receipt(reserved.transaction_ref)
         components = self.components(receipt_postimage=static_receipt)
         runtime_post = next(
@@ -484,7 +491,9 @@ class ProjectUpdateTransactionTests(unittest.TestCase):
                 + b"\n"
             },
             static_receipt_postimage=static_receipt,
-            runtime_candidate_inventory_sha256=tree.recursive_tree_sha256,
+            runtime_candidate_inventory_sha256=(
+                provider_inventory_sha256 or tree.recursive_tree_sha256
+            ),
             runtime_candidate_postimage_sha256=runtime_post,
         )
 
@@ -586,6 +595,203 @@ class ProjectUpdateTransactionTests(unittest.TestCase):
         (transaction.transaction_root / "runtime-candidate-seal.json").unlink()
         if not transaction.intent.runtime_candidate.runtime_parent_existed_before:
             (self.project / ".zettel-kasten" / "runtimes").rmdir()
+
+    def runtime_cleanup_terminal_evidence(
+        self,
+        transaction,
+    ) -> dict[str, object]:
+        """Build the exact content-free runtime proof used by transaction tests."""
+
+        if isinstance(transaction, ProjectUpdateTransaction):
+            binding = transaction.intent.runtime_candidate
+            transaction_ref = transaction.transaction_ref
+            target_tag = transaction.intent.requested_target_tag
+            candidate_sha256 = binding.provider_candidate_sha256
+            inventory_sha256 = binding.provider_inventory_sha256
+            inventory_count = binding.inventory_count
+            inventory_bytes = binding.inventory_bytes
+        elif transaction.runtime_candidate_seal_path.is_file():
+            seal = json.loads(
+                transaction.runtime_candidate_seal_path.read_text(
+                    encoding="utf-8"
+                )
+            )
+            transaction_ref = transaction.transaction_ref
+            target_tag = transaction.reservation.requested_target_tag
+            candidate_sha256 = seal["candidate_sha256"]
+            inventory_sha256 = seal["inventory_sha256"]
+            inventory_count = seal["inventory_count"]
+            inventory_bytes = seal["inventory_bytes"]
+        else:
+            # A reservation may fail before the runtime candidate is built.
+            # The runtime subsystem still emits a terminal cleanup capsule
+            # proving the candidate/quarantine namespaces are absent; there is
+            # no candidate binding in the reservation against which these
+            # content-free inventory scalars could be compared.
+            transaction_ref = transaction.transaction_ref
+            target_tag = transaction.reservation.requested_target_tag
+            candidate_sha256 = digest(
+                "absent-runtime-candidate:" + transaction_ref
+            )
+            inventory_sha256 = digest(
+                "absent-runtime-inventory:" + transaction_ref
+            )
+            inventory_count = 1
+            inventory_bytes = 0
+        return {
+            "absolute_paths_echoed": False,
+            "candidate_root_absent": True,
+            "candidate_sha256": candidate_sha256,
+            "cleanup_complete": True,
+            "normal_seal_absent": True,
+            "outer_transaction_ack_required_before_retire": True,
+            "private_paths_echoed": False,
+            "provider_inventory_bytes": inventory_bytes,
+            "provider_inventory_count": inventory_count,
+            "provider_inventory_sha256": inventory_sha256,
+            "quarantine_root_absent": True,
+            "runtime_cleanup_capsule_identity_sha256": digest(
+                "runtime-cleanup-capsule-identity:" + transaction_ref
+            ),
+            "runtime_cleanup_capsule_sha256": digest(
+                "runtime-cleanup-capsule:" + transaction_ref
+            ),
+            "runtime_parent_restored": True,
+            "schema": (
+                transaction_module.RUNTIME_CLEANUP_TERMINAL_EVIDENCE_SCHEMA
+            ),
+            "sidecar_must_retire_before_transaction_cleanup": True,
+            "status": "terminal_cleanup_evidence",
+            "target_tag": target_tag,
+            "transaction_ref": transaction_ref,
+        }
+
+    def create_transaction_with_prepared_runtime_candidate(
+        self,
+        *,
+        transaction_ref: str = DEFAULT_TRANSACTION_REF,
+    ):
+        """Create one real PreparedRuntimeCandidate for service seam tests."""
+
+        runtime = archive_services.project_runtime
+        reserved, reservation_lock, tree = self.reserve_and_build_candidate(
+            transaction_ref=transaction_ref,
+            acquire=True,
+        )
+        assert reservation_lock is not None
+        candidate_root = reserved.runtime_candidate_path
+        seal_path = reserved.runtime_candidate_seal_path
+        inventory = runtime._candidate_inventory_snapshot(candidate_root)
+        inventory_sha256 = runtime._recursive_candidate_inventory_digest(
+            inventory
+        )
+        inventory_bytes = sum(
+            item.size_bytes
+            for item in inventory
+            if item.entry_type == "file"
+        )
+        seal = json.loads(seal_path.read_text(encoding="ascii"))
+        seal.update(
+            {
+                "inventory_sha256": "sha256:" + inventory_sha256,
+                "inventory_count": len(inventory),
+                "inventory_bytes": inventory_bytes,
+            }
+        )
+        seal_bytes = canonical_json_bytes(seal) + b"\n"
+        with seal_path.open("r+b") as stream:
+            stream.seek(0)
+            stream.write(seal_bytes)
+            stream.truncate()
+            stream.flush()
+            os.fsync(stream.fileno())
+        runtime._flush_directory_durable(reserved.transaction_root)
+        transaction = self.seal_reserved(
+            reserved,
+            tree,
+            provider_inventory_sha256="sha256:" + inventory_sha256,
+        )
+        transaction.bind_sealed_intent_to_lock(reservation_lock)
+        lock_bytes = reservation_lock
+        identities = seal["path_identities"]
+        receipt_bytes = (
+            candidate_root / "runtime-receipt.json"
+        ).read_bytes()
+        prepared = runtime.PreparedRuntimeCandidate(
+            target_tag=seal["target_tag"],
+            target_version=seal["target_tag"].removeprefix("v"),
+            target_commit=seal["target_commit"],
+            transaction_ref=transaction_ref,
+            logical_candidate_path=seal["candidate_locator"],
+            logical_seal_path=(
+                seal_path.relative_to(self.project).as_posix()
+            ),
+            project_root=self.project,
+            transaction_root=transaction.transaction_root,
+            candidate_root=candidate_root,
+            seal_path=seal_path,
+            project_root_identity=tuple(identities["project_root"]),
+            transaction_root_identity=tuple(identities["transaction_root"]),
+            candidate_root_identity=tuple(identities["candidate_root"]),
+            runtime_parent_identity=tuple(identities["runtime_parent"]),
+            runtime_parent_existed_before=seal[
+                "runtime_parent_existed_before"
+            ],
+            runtime_parent_created_identity=(
+                None
+                if identities["runtime_parent_created"] is None
+                else tuple(identities["runtime_parent_created"])
+            ),
+            same_volume_identity=identities["candidate_root"][0],
+            inventory=inventory,
+            inventory_sha256=inventory_sha256,
+            candidate_sha256=seal["candidate_sha256"].removeprefix(
+                "sha256:"
+            ),
+            inventory_count=len(inventory),
+            inventory_bytes=inventory_bytes,
+            seal_bytes=seal_bytes,
+            seal_sha256=hashlib.sha256(seal_bytes).hexdigest(),
+            receipt_bytes=receipt_bytes,
+            receipt_sha256=hashlib.sha256(receipt_bytes).hexdigest(),
+            wheel_file_name=seal["wheel_file_name"],
+            wheel_sha256=seal["wheel_sha256"].removeprefix("sha256:"),
+            supply_lock_sha256=seal["supply_lock_sha256"].removeprefix(
+                "sha256:"
+            ),
+            supply_lock_bytes=b"synthetic supply lock\n",
+            artifact_inventory=(),
+            installed_payload_sha256="0" * 64,
+            normalized_payload_inventory=(),
+            python_version="3.12.10",
+            installed_distributions=(),
+            verification={},
+            existing_runtime_reusable=False,
+            existing_runtime_repair_required=False,
+            existing_runtime_root_identity=None,
+            existing_runtime_inventory=(),
+            existing_runtime_inventory_sha256=None,
+            existing_runtime_inventory_count=0,
+            existing_runtime_inventory_bytes=0,
+        )
+        return transaction, lock_bytes, prepared
+
+    def prepare_typed_runtime_cleanup_capsule(
+        self,
+        transaction: ProjectUpdateTransaction,
+        candidate,
+    ):
+        """Create real durable capsule/evidence while keeping it unretired."""
+
+        runtime = archive_services.project_runtime
+        self.assertIsInstance(candidate, runtime.PreparedRuntimeCandidate)
+        capsule = runtime._create_runtime_candidate_cleanup_capsule(candidate)
+        self.assertIsInstance(capsule, runtime.RuntimeCandidateCleanupCapsule)
+        assert capsule is not None
+        self.remove_sealed_candidate(transaction)
+        evidence = runtime.runtime_candidate_cleanup_terminal_evidence(capsule)
+        self.assertIsInstance(evidence, dict)
+        return capsule, evidence
 
     @staticmethod
     def tree_snapshot(root: Path) -> dict[str, tuple[str, bytes | None]]:
@@ -912,12 +1118,19 @@ class ProjectUpdateTransactionTests(unittest.TestCase):
                 component_ref=component.component_ref,
                 live_component_sha256=live,
             )
+            runtime_cleanup = None
+            if component.role == "runtime":
+                runtime_cleanup = self.runtime_cleanup_terminal_evidence(
+                    transaction
+                )
+                self.remove_sealed_candidate(transaction)
             live[component.component_ref] = component.post_sha256
             transaction.append(
                 phase=component.role,
                 stage="verified",
                 component_ref=component.component_ref,
                 live_component_sha256=live,
+                runtime_cleanup_terminal_evidence=runtime_cleanup,
             )
         transaction.append(
             phase="domain_committed",
@@ -1655,12 +1868,19 @@ class ProjectUpdateTransactionTests(unittest.TestCase):
                 component_ref=component.component_ref,
                 live_component_sha256=live,
             )
+            runtime_cleanup = None
+            if component.role == "runtime":
+                runtime_cleanup = self.runtime_cleanup_terminal_evidence(
+                    reopened
+                )
+                self.remove_sealed_candidate(reopened)
             live[component.component_ref] = component.post_sha256
             reopened.append(
                 phase=component.role,
                 stage="verified",
                 component_ref=component.component_ref,
                 live_component_sha256=live,
+                runtime_cleanup_terminal_evidence=runtime_cleanup,
             )
         reopened.append(
             phase="domain_committed", stage="verified", live_component_sha256=live
@@ -4058,6 +4278,7 @@ class ProjectUpdateTransactionTests(unittest.TestCase):
             component_ref=runtime.component_ref,
             live_component_sha256=live,
         )
+        runtime_cleanup = self.runtime_cleanup_terminal_evidence(transaction)
         final_parent = self.project / ".zettel-kasten" / "runtimes"
         final_parent.mkdir(exist_ok=True)
         transaction.runtime_candidate_path.replace(final_parent / "v0.4.3")
@@ -4071,8 +4292,19 @@ class ProjectUpdateTransactionTests(unittest.TestCase):
             stage="verified",
             component_ref=runtime.component_ref,
             live_component_sha256=live,
+            runtime_cleanup_terminal_evidence=runtime_cleanup,
         )
         self.assertEqual(checkpoint.component_ref, "runtime")
+        ack = transaction_module.load_runtime_cleanup_durable_ack(
+            self.project,
+            transaction.transaction_ref,
+        )
+        self.assertIsNotNone(ack)
+        assert ack is not None
+        self.assertEqual(ack.authority_kind, "runtime_verified")
+        self.assertTrue(
+            transaction_module.revalidate_runtime_cleanup_durable_ack(ack)
+        )
 
     def test_static_receipt_and_bounded_claim_evidence_form_exact_join(self) -> None:
         transaction = self.create_transaction()
@@ -4084,12 +4316,19 @@ class ProjectUpdateTransactionTests(unittest.TestCase):
                 component_ref=component.component_ref,
                 live_component_sha256=live,
             )
+            runtime_cleanup = None
+            if component.role == "runtime":
+                runtime_cleanup = self.runtime_cleanup_terminal_evidence(
+                    transaction
+                )
+                self.remove_sealed_candidate(transaction)
             live[component.component_ref] = component.post_sha256
             transaction.append(
                 phase=component.role,
                 stage="verified",
                 component_ref=component.component_ref,
                 live_component_sha256=live,
+                runtime_cleanup_terminal_evidence=runtime_cleanup,
             )
         transaction.append(
             phase="domain_committed",
@@ -4202,6 +4441,233 @@ class ProjectUpdateTransactionTests(unittest.TestCase):
             ),
         )
 
+    def test_runtime_cleanup_evidence_is_exact_and_ack_is_disk_issued(self) -> None:
+        transaction = self.create_transaction()
+        _lock, live = self.begin(transaction)
+        source, runtime = transaction.intent.components[:2]
+        for component in (source,):
+            transaction.append(
+                phase=component.role,
+                stage="intent",
+                component_ref=component.component_ref,
+                live_component_sha256=live,
+            )
+            live[component.component_ref] = component.post_sha256
+            transaction.append(
+                phase=component.role,
+                stage="verified",
+                component_ref=component.component_ref,
+                live_component_sha256=live,
+            )
+        transaction.append(
+            phase=runtime.role,
+            stage="intent",
+            component_ref=runtime.component_ref,
+            live_component_sha256=live,
+        )
+        evidence = self.runtime_cleanup_terminal_evidence(transaction)
+        self.remove_sealed_candidate(transaction)
+        live[runtime.component_ref] = runtime.post_sha256
+        journal_path = transaction.transaction_root / "checkpoints.jsonl"
+        journal_before = journal_path.read_bytes()
+
+        missing = dict(evidence)
+        missing.pop("runtime_cleanup_capsule_sha256")
+        extra = dict(evidence, private_candidate_path="forbidden")
+        cross_ref = dict(evidence, transaction_ref="update_" + "f" * 32)
+        cross_candidate = dict(
+            evidence,
+            candidate_sha256=digest("different-candidate"),
+        )
+        false_required = dict(evidence, cleanup_complete=False)
+        bool_count = dict(evidence, provider_inventory_count=True)
+        for invalid in (
+            missing,
+            extra,
+            cross_ref,
+            cross_candidate,
+            false_required,
+            bool_count,
+            [evidence],
+        ):
+            with self.subTest(invalid_type=type(invalid).__name__):
+                self.assert_code(
+                    "project_update_transaction_candidate_invalid",
+                    lambda invalid=invalid: transaction.append(
+                        phase=runtime.role,
+                        stage="verified",
+                        component_ref=runtime.component_ref,
+                        live_component_sha256=live,
+                        runtime_cleanup_terminal_evidence=invalid,
+                    ),
+                )
+                self.assertEqual(journal_path.read_bytes(), journal_before)
+
+        checkpoint = transaction.append(
+            phase=runtime.role,
+            stage="verified",
+            component_ref=runtime.component_ref,
+            live_component_sha256=live,
+            runtime_cleanup_terminal_evidence=evidence,
+        )
+        self.assertEqual(
+            checkpoint.runtime_cleanup_terminal_evidence_sha256,
+            transaction_module.sha256_document(evidence),
+        )
+        self.assertEqual(
+            checkpoint.runtime_cleanup_capsule_sha256,
+            evidence["runtime_cleanup_capsule_sha256"],
+        )
+        self.assertEqual(
+            checkpoint.runtime_cleanup_capsule_identity_sha256,
+            evidence["runtime_cleanup_capsule_identity_sha256"],
+        )
+
+        ack = transaction_module.load_runtime_cleanup_durable_ack(
+            self.project,
+            transaction.transaction_ref,
+        )
+        self.assertIsInstance(
+            ack,
+            transaction_module.RuntimeCleanupDurableAck,
+        )
+        assert ack is not None
+        self.assertEqual(ack.authority_kind, "runtime_verified")
+        self.assertEqual(ack.authority_record_sha256, checkpoint.checkpoint_sha256)
+        self.assertEqual(
+            ack.runtime_cleanup_terminal_evidence_sha256,
+            transaction_module.sha256_document(evidence),
+        )
+        self.assertTrue(
+            transaction_module.revalidate_runtime_cleanup_durable_ack(ack)
+        )
+        self.assertNotIn(str(self.project), repr(ack))
+        self.assertNotIn("private_candidate_path", repr(ack))
+        for transient in (evidence, digest("plain-string"), object()):
+            self.assertFalse(
+                transaction_module.revalidate_runtime_cleanup_durable_ack(
+                    transient
+                )
+            )
+        forged = object.__new__(transaction_module.RuntimeCleanupDurableAck)
+        for name, value in vars(ack).items():
+            object.__setattr__(forged, name, value)
+        self.assertFalse(
+            transaction_module.revalidate_runtime_cleanup_durable_ack(forged)
+        )
+        with self.assertRaises(TypeError):
+            copy.copy(ack)
+        with self.assertRaises(TypeError):
+            copy.deepcopy(ack)
+
+        launcher = transaction.intent.components[2]
+        transaction.append(
+            phase=launcher.role,
+            stage="intent",
+            component_ref=launcher.component_ref,
+            live_component_sha256=live,
+        )
+        self.assertFalse(
+            transaction_module.revalidate_runtime_cleanup_durable_ack(ack)
+        )
+        current = transaction_module.load_runtime_cleanup_durable_ack(
+            self.project,
+            transaction.transaction_ref,
+        )
+        self.assertIsNotNone(current)
+        assert current is not None
+        self.assertTrue(
+            transaction_module.revalidate_runtime_cleanup_durable_ack(current)
+        )
+
+    def test_runtime_cleanup_checkpoint_triplet_is_atomic_and_legacy_readable(
+        self,
+    ) -> None:
+        transaction = self.create_transaction()
+        _lock, live = self.begin(transaction)
+        source, runtime = transaction.intent.components[:2]
+        transaction.append(
+            phase=source.role,
+            stage="intent",
+            component_ref=source.component_ref,
+            live_component_sha256=live,
+        )
+        live[source.component_ref] = source.post_sha256
+        transaction.append(
+            phase=source.role,
+            stage="verified",
+            component_ref=source.component_ref,
+            live_component_sha256=live,
+        )
+        transaction.append(
+            phase=runtime.role,
+            stage="intent",
+            component_ref=runtime.component_ref,
+            live_component_sha256=live,
+        )
+        evidence = self.runtime_cleanup_terminal_evidence(transaction)
+        self.remove_sealed_candidate(transaction)
+        live[runtime.component_ref] = runtime.post_sha256
+        transaction.append(
+            phase=runtime.role,
+            stage="verified",
+            component_ref=runtime.component_ref,
+            live_component_sha256=live,
+            runtime_cleanup_terminal_evidence=evidence,
+        )
+        journal_path = transaction.transaction_root / "checkpoints.jsonl"
+        rows = [
+            json.loads(line)
+            for line in journal_path.read_text(encoding="ascii").splitlines()
+        ]
+        runtime_index = next(
+            index
+            for index, row in enumerate(rows)
+            if row["phase"] == "runtime" and row["stage"] == "verified"
+        )
+
+        partial = [dict(row) for row in rows]
+        partial[runtime_index].pop(
+            "runtime_cleanup_capsule_identity_sha256"
+        )
+        journal_path.write_bytes(
+            b"".join(
+                canonical_json_bytes(row) + b"\n"
+                for row in partial
+            )
+        )
+        with self.assertRaises(ProjectUpdateTransactionError):
+            transaction_module.load_runtime_cleanup_durable_ack(
+                self.project,
+                transaction.transaction_ref,
+            )
+
+        legacy = [dict(row) for row in rows]
+        for name in (
+            "runtime_cleanup_terminal_evidence_sha256",
+            "runtime_cleanup_capsule_sha256",
+            "runtime_cleanup_capsule_identity_sha256",
+        ):
+            legacy[runtime_index].pop(name)
+        journal_path.write_bytes(
+            b"".join(
+                canonical_json_bytes(row) + b"\n"
+                for row in legacy
+            )
+        )
+        reopened = ProjectUpdateTransaction.open(
+            self.project,
+            transaction.transaction_ref,
+            verify_candidate_content=False,
+        )
+        self.assertEqual(reopened.inspect().journal.state, "exact")
+        self.assertIsNone(
+            transaction_module.load_runtime_cleanup_durable_ack(
+                self.project,
+                transaction.transaction_ref,
+            )
+        )
+
     def test_dynamic_approval_fields_are_refused_before_static_receipt_seal(self) -> None:
         reserved, _lock, tree = self.reserve_and_build_candidate()
         dynamic_receipt = canonical_json_bytes(
@@ -4266,6 +4732,7 @@ class ProjectUpdateTransactionTests(unittest.TestCase):
         self.assertFalse(
             transaction.exact_cleanup(cleanup_authority_sha256=digest("cleanup"))
         )
+        runtime_cleanup = self.runtime_cleanup_terminal_evidence(transaction)
         self.remove_sealed_candidate(transaction)
         receipt = transaction.candidate_cleanup_receipt_sha256()
         self.assert_code(
@@ -4273,6 +4740,7 @@ class ProjectUpdateTransactionTests(unittest.TestCase):
             lambda: transaction.cancel_before_approval(
                 expected_lock_bytes=lock_bytes,
                 live_component_sha256=live,
+                runtime_cleanup_terminal_evidence=runtime_cleanup,
                 candidate_cleanup_plan_sha256=plan,
                 candidate_cleanup_receipt_sha256=digest("invented-receipt"),
             ),
@@ -4280,6 +4748,7 @@ class ProjectUpdateTransactionTests(unittest.TestCase):
         completed = transaction.cancel_before_approval(
             expected_lock_bytes=lock_bytes,
             live_component_sha256=live,
+            runtime_cleanup_terminal_evidence=runtime_cleanup,
             candidate_cleanup_plan_sha256=plan,
             candidate_cleanup_receipt_sha256=receipt,
         )
@@ -4293,10 +4762,25 @@ class ProjectUpdateTransactionTests(unittest.TestCase):
         repeated = reopened.cancel_before_approval(
             expected_lock_bytes=lock_bytes,
             live_component_sha256=live,
+            runtime_cleanup_terminal_evidence=runtime_cleanup,
             candidate_cleanup_plan_sha256=plan,
             candidate_cleanup_receipt_sha256=receipt,
         )
         self.assertEqual(repeated.checkpoint_sha256, completed.checkpoint_sha256)
+        ack = transaction_module.load_runtime_cleanup_durable_ack(
+            self.project,
+            transaction.transaction_ref,
+        )
+        self.assertIsNotNone(ack)
+        assert ack is not None
+        self.assertEqual(ack.authority_kind, "preapproval_cancelled")
+        self.assertEqual(
+            ack.runtime_cleanup_terminal_evidence_sha256,
+            transaction_module.sha256_document(runtime_cleanup),
+        )
+        self.assertTrue(
+            transaction_module.revalidate_runtime_cleanup_durable_ack(ack)
+        )
         phases = [
             item.phase for item in reopened.inspect().journal.verified_prefix
         ]
@@ -4563,8 +5047,11 @@ class ProjectUpdateTransactionTests(unittest.TestCase):
     def test_resume_missing_handler_reuses_state_and_preserves_client_tree(
         self,
     ) -> None:
-        transaction = self.create_transaction()
-        lock_bytes = self.activate(transaction)
+        (
+            transaction,
+            lock_bytes,
+            prepared_runtime_candidate,
+        ) = self.create_transaction_with_prepared_runtime_candidate()
         live = self.live_pre()
         transaction.append(
             phase="lock_backlinked",
@@ -4601,7 +5088,7 @@ class ProjectUpdateTransactionTests(unittest.TestCase):
             expected_archive_id="client-archive",
             prepared_preview={"status": "prepared"},
             reviewer="reviewer-a",
-            runtime_candidate=object(),
+            runtime_candidate=prepared_runtime_candidate,
             directory_guard=SimpleNamespace(
                 close=lambda: closed.append("directory")
             ),
@@ -4622,9 +5109,12 @@ class ProjectUpdateTransactionTests(unittest.TestCase):
             self.assertEqual(journal_path.read_bytes(), before)
             return handler("authenticated_candidate_missing")
 
-        def cleanup_candidate(_candidate) -> bool:
-            self.remove_sealed_candidate(transaction)
-            return True
+        def cleanup_candidate(candidate):
+            capsule, _evidence = self.prepare_typed_runtime_cleanup_capsule(
+                transaction,
+                candidate,
+            )
+            return capsule
 
         with (
             patch.object(
@@ -6785,10 +7275,13 @@ class ProjectUpdateTransactionTests(unittest.TestCase):
                     )
                     self.project.mkdir()
                     transaction_ref = f"update_{index:032x}"
-                    transaction = self.create_transaction(
+                    (
+                        transaction,
+                        lock_bytes,
+                        prepared_runtime_candidate,
+                    ) = self.create_transaction_with_prepared_runtime_candidate(
                         transaction_ref=transaction_ref
                     )
-                    lock_bytes = self.activate(transaction)
                     live = self.live_pre()
                     transaction.append(
                         phase="lock_backlinked",
@@ -6802,7 +7295,13 @@ class ProjectUpdateTransactionTests(unittest.TestCase):
                     )
 
                     if case != "requested":
-                        self.remove_sealed_candidate(transaction)
+                        (
+                            _cleanup_capsule,
+                            runtime_cleanup,
+                        ) = self.prepare_typed_runtime_cleanup_capsule(
+                            transaction,
+                            prepared_runtime_candidate,
+                        )
                         original_append = transaction.append
 
                         def crash_at_boundary(*args, **kwargs):
@@ -6834,6 +7333,9 @@ class ProjectUpdateTransactionTests(unittest.TestCase):
                             transaction.cancel_before_approval(
                                 expected_lock_bytes=lock_bytes,
                                 live_component_sha256=live,
+                                runtime_cleanup_terminal_evidence=(
+                                    runtime_cleanup
+                                ),
                             )
                         else:
                             with patch.object(
@@ -6848,6 +7350,9 @@ class ProjectUpdateTransactionTests(unittest.TestCase):
                                     transaction.cancel_before_approval(
                                         expected_lock_bytes=lock_bytes,
                                         live_component_sha256=live,
+                                        runtime_cleanup_terminal_evidence=(
+                                            runtime_cleanup
+                                        ),
                                     )
 
                     self.assertEqual(
@@ -6867,9 +7372,10 @@ class ProjectUpdateTransactionTests(unittest.TestCase):
                     proof_calls: list[bool] = []
                     closed: list[str] = []
                     state = SimpleNamespace(
+                        project_root=self.project,
                         transaction=transaction,
                         expected_lock_bytes=lock_bytes,
-                        runtime_candidate=object(),
+                        runtime_candidate=prepared_runtime_candidate,
                         directory_guard=SimpleNamespace(
                             close=lambda: closed.append("directory")
                         ),
@@ -6880,10 +7386,14 @@ class ProjectUpdateTransactionTests(unittest.TestCase):
                         )
                     )
 
-                    def cleanup_candidate(_candidate) -> bool:
-                        if transaction.runtime_candidate_path.exists():
-                            self.remove_sealed_candidate(transaction)
-                        return True
+                    def cleanup_candidate(candidate):
+                        capsule, _evidence = (
+                            self.prepare_typed_runtime_cleanup_capsule(
+                                transaction,
+                                candidate,
+                            )
+                        )
+                        return capsule
 
                     with (
                         patch.object(
@@ -7170,11 +7680,13 @@ class ProjectUpdateTransactionTests(unittest.TestCase):
             live_component_sha256=live,
             candidate_cleanup_plan_sha256=plan,
         )
+        runtime_cleanup = self.runtime_cleanup_terminal_evidence(transaction)
         self.assert_code(
             "project_update_transaction_candidate_invalid",
             lambda: transaction.cancel_before_approval(
                 expected_lock_bytes=lock_bytes,
                 live_component_sha256=live,
+                runtime_cleanup_terminal_evidence=runtime_cleanup,
                 candidate_cleanup_plan_sha256=plan,
             ),
         )
@@ -7187,6 +7699,7 @@ class ProjectUpdateTransactionTests(unittest.TestCase):
             lambda: transaction.cancel_before_approval(
                 expected_lock_bytes=lock_bytes,
                 live_component_sha256=mixed,
+                runtime_cleanup_terminal_evidence=runtime_cleanup,
                 candidate_cleanup_plan_sha256=plan,
                 candidate_cleanup_receipt_sha256=receipt,
             ),
@@ -7200,6 +7713,7 @@ class ProjectUpdateTransactionTests(unittest.TestCase):
             lambda: transaction.cancel_before_approval(
                 expected_lock_bytes=lock_bytes,
                 live_component_sha256=live,
+                runtime_cleanup_terminal_evidence=runtime_cleanup,
                 candidate_cleanup_plan_sha256=plan,
                 candidate_cleanup_receipt_sha256=receipt,
             ),
@@ -7218,6 +7732,7 @@ class ProjectUpdateTransactionTests(unittest.TestCase):
             live_component_sha256=live,
             candidate_cleanup_plan_sha256=plan,
         )
+        runtime_cleanup = self.runtime_cleanup_terminal_evidence(transaction)
         self.remove_sealed_candidate(transaction)
         receipt = transaction.candidate_cleanup_receipt_sha256()
         lock_path = self.project / ".zettel-kasten" / "version-update.lock"
@@ -7229,6 +7744,7 @@ class ProjectUpdateTransactionTests(unittest.TestCase):
             lambda: transaction.cancel_before_approval(
                 expected_lock_bytes=lock_bytes,
                 live_component_sha256=live,
+                runtime_cleanup_terminal_evidence=runtime_cleanup,
                 candidate_cleanup_plan_sha256=plan,
                 candidate_cleanup_receipt_sha256=receipt,
             ),
@@ -7245,6 +7761,7 @@ class ProjectUpdateTransactionTests(unittest.TestCase):
             live_component_sha256=live,
             candidate_cleanup_plan_sha256=plan,
         )
+        runtime_cleanup = self.runtime_cleanup_terminal_evidence(transaction)
         self.remove_sealed_candidate(transaction)
         receipt = transaction.candidate_cleanup_receipt_sha256()
         original_append = transaction.append
@@ -7261,6 +7778,7 @@ class ProjectUpdateTransactionTests(unittest.TestCase):
                 transaction.cancel_before_approval(
                     expected_lock_bytes=lock_bytes,
                     live_component_sha256=live,
+                    runtime_cleanup_terminal_evidence=runtime_cleanup,
                     candidate_cleanup_plan_sha256=plan,
                     candidate_cleanup_receipt_sha256=receipt,
                 )
@@ -7273,10 +7791,21 @@ class ProjectUpdateTransactionTests(unittest.TestCase):
         completed = reopened.cancel_before_approval(
             expected_lock_bytes=lock_bytes,
             live_component_sha256=live,
+            runtime_cleanup_terminal_evidence=runtime_cleanup,
             candidate_cleanup_plan_sha256=plan,
             candidate_cleanup_receipt_sha256=receipt,
         )
         self.assertEqual(completed.phase, "completed")
+        ack = transaction_module.load_runtime_cleanup_durable_ack(
+            self.project,
+            transaction.transaction_ref,
+        )
+        self.assertIsNotNone(ack)
+        assert ack is not None
+        self.assertEqual(ack.authority_kind, "preapproval_cancelled")
+        self.assertTrue(
+            transaction_module.revalidate_runtime_cleanup_durable_ack(ack)
+        )
 
     def prepare_terminal_reserved_abort(
         self,
@@ -7293,8 +7822,10 @@ class ProjectUpdateTransactionTests(unittest.TestCase):
         )
         lock_bytes = reserved.acquire_lock()
         evidence = reserved.reservation_abort_plan_sha256()
+        runtime_cleanup = self.runtime_cleanup_terminal_evidence(reserved)
         terminal = reserved.abort_before_intent_seal(
             expected_lock_bytes=lock_bytes,
+            runtime_cleanup_terminal_evidence=runtime_cleanup,
             candidate_cleanup_evidence_sha256=evidence,
         )
         return reserved, terminal
@@ -7310,8 +7841,10 @@ class ProjectUpdateTransactionTests(unittest.TestCase):
         )
         lock_bytes = reserved.acquire_lock()
         evidence = reserved.reservation_abort_plan_sha256()
+        runtime_cleanup = self.runtime_cleanup_terminal_evidence(reserved)
         result = reserved.abort_before_intent_seal(
             expected_lock_bytes=lock_bytes,
+            runtime_cleanup_terminal_evidence=runtime_cleanup,
             candidate_cleanup_evidence_sha256=evidence,
         )
         self.assertEqual(result["state"], "aborted_before_intent_seal")
@@ -7323,12 +7856,55 @@ class ProjectUpdateTransactionTests(unittest.TestCase):
         )
         repeated = reopened.abort_before_intent_seal(
             expected_lock_bytes=lock_bytes,
+            runtime_cleanup_terminal_evidence=runtime_cleanup,
             candidate_cleanup_evidence_sha256=evidence,
         )
         self.assertEqual(repeated, result)
         root = reserved.transaction_root
+        self.assertEqual(
+            result["schema"],
+            transaction_module.RESERVATION_ABORT_RECEIPT_SCHEMA_V0419,
+        )
+        self.assertEqual(
+            result["runtime_cleanup_terminal_evidence_sha256"],
+            transaction_module.sha256_document(runtime_cleanup),
+        )
         self.assertTrue((root / "reservation-abort-intent.json").is_file())
         self.assertTrue((root / "reservation-abort-receipt.json").is_file())
+        intent_document = json.loads(
+            (root / "reservation-abort-intent.json").read_text(
+                encoding="ascii"
+            )
+        )
+        receipt_document = json.loads(
+            (root / "reservation-abort-receipt.json").read_text(
+                encoding="ascii"
+            )
+        )
+        self.assertEqual(
+            intent_document["schema"],
+            transaction_module.RESERVATION_ABORT_INTENT_SCHEMA_V0419,
+        )
+        for name in (
+            "runtime_cleanup_terminal_evidence_sha256",
+            "runtime_cleanup_capsule_sha256",
+            "runtime_cleanup_capsule_identity_sha256",
+        ):
+            self.assertEqual(intent_document[name], receipt_document[name])
+        ack = transaction_module.load_runtime_cleanup_durable_ack(
+            self.project,
+            reserved.transaction_ref,
+        )
+        self.assertIsNotNone(ack)
+        assert ack is not None
+        self.assertEqual(ack.authority_kind, "unsealed_abort")
+        self.assertEqual(
+            ack.runtime_cleanup_terminal_evidence_sha256,
+            transaction_module.sha256_document(runtime_cleanup),
+        )
+        self.assertTrue(
+            transaction_module.revalidate_runtime_cleanup_durable_ack(ack)
+        )
         self.assertEqual(
             inspect_prelock_orphans(self.project)[0].classification,
             "reserved_aborted_before_intent_seal",
@@ -7336,6 +7912,1082 @@ class ProjectUpdateTransactionTests(unittest.TestCase):
         self.assert_code(
             "project_update_transaction_state_transition_invalid",
             lambda: reopened.acquire_lock(),
+        )
+
+    def test_unsealed_abort_rejects_nonexact_cleanup_evidence_without_writes(
+        self,
+    ) -> None:
+        reserved = ProjectUpdateTransaction.reserve(
+            self.project,
+            project_identity_sha256=digest("project-identity"),
+            requested_target_tag="v0.4.19",
+            transaction_ref=self.DEFAULT_TRANSACTION_REF,
+            ownership_nonce="abcdef0123456789abcdef0123456789",
+            created_at=self.CREATED_AT,
+        )
+        lock_bytes = reserved.acquire_lock()
+        evidence = self.runtime_cleanup_terminal_evidence(reserved)
+        before = self.tree_snapshot(self.project)
+        invalid_documents = []
+        missing = dict(evidence)
+        missing.pop("runtime_parent_restored")
+        invalid_documents.append(missing)
+        invalid_documents.append(dict(evidence, unexpected="private"))
+        invalid_documents.append(dict(evidence, target_tag="v9.9.9"))
+        invalid_documents.append(
+            dict(evidence, provider_inventory_count=0)
+        )
+        invalid_documents.append(
+            dict(evidence, runtime_cleanup_capsule_sha256="not-a-digest")
+        )
+        for invalid in invalid_documents:
+            with self.subTest(keys=tuple(sorted(invalid))):
+                self.assert_code(
+                    "project_update_transaction_candidate_invalid",
+                    lambda invalid=invalid: reserved.abort_before_intent_seal(
+                        expected_lock_bytes=lock_bytes,
+                        runtime_cleanup_terminal_evidence=invalid,
+                    ),
+                )
+                self.assertEqual(self.tree_snapshot(self.project), before)
+                self.assertFalse(
+                    (
+                        reserved.transaction_root
+                        / transaction_module.RESERVATION_ABORT_INTENT_NAME
+                    ).exists()
+                )
+
+    def test_exact_empty_unsealed_abort_claims_namespace_and_capsule_blocks_omission(
+        self,
+    ) -> None:
+        empty = ProjectUpdateTransaction.reserve(
+            self.project,
+            project_identity_sha256=digest("empty-project-identity"),
+            requested_target_tag="v0.4.19",
+            transaction_ref=self.DEFAULT_TRANSACTION_REF,
+            ownership_nonce="abcdef0123456789abcdef0123456789",
+            created_at=self.CREATED_AT,
+        )
+        empty_lock = empty.acquire_lock()
+        terminal = empty.abort_before_intent_seal(
+            expected_lock_bytes=empty_lock,
+        )
+        self.assertEqual(
+            terminal["schema"],
+            transaction_module.RESERVATION_ABORT_RECEIPT_SCHEMA_V0419,
+        )
+        root = empty.transaction_root
+        anchor = root / transaction_module.EMPTY_ABORT_CLAIM_ANCHOR_NAME
+        retirement = root / transaction_module.EMPTY_ABORT_CLAIM_RETIREMENT_NAME
+        self.assertTrue(anchor.is_file())
+        self.assertEqual(anchor.stat().st_nlink, 1)
+        self.assertTrue(retirement.is_file())
+        self.assertFalse(
+            (
+                root.parent
+                / (
+                    ".runtime-candidate-cleanup_"
+                    + empty.transaction_ref
+                    + ".json"
+                )
+            ).exists()
+        )
+        self.assertIn("empty_abort_claim_retirement_sha256", terminal)
+        self.assertIsNone(
+            transaction_module.load_runtime_cleanup_durable_ack(
+                self.project,
+                empty.transaction_ref,
+            )
+        )
+
+        sidecar_ref = "update_99999999999999999999999999999999"
+        sidecar = ProjectUpdateTransaction.reserve(
+            self.project,
+            project_identity_sha256=digest("sidecar-project-identity"),
+            requested_target_tag="v0.4.19",
+            transaction_ref=sidecar_ref,
+            ownership_nonce="99999999999999999999999999999999",
+            created_at=self.CREATED_AT,
+        )
+        sidecar_lock = sidecar.acquire_lock()
+        sidecar_path = sidecar.transaction_root.parent / (
+            ".runtime-candidate-cleanup_" + sidecar_ref + ".json"
+        )
+        sidecar_path.write_bytes(b"synthetic-runtime-cleanup-capsule\n")
+        lock_path = self.project / ".zettel-kasten" / "version-update.lock"
+        lock_before = lock_path.read_bytes()
+        self.assert_code(
+            "project_update_transaction_candidate_invalid",
+            lambda: sidecar.abort_before_intent_seal(
+                expected_lock_bytes=sidecar_lock,
+            ),
+        )
+        self.assertEqual(lock_path.read_bytes(), lock_before)
+        self.assertEqual(
+            sidecar_path.read_bytes(),
+            b"synthetic-runtime-cleanup-capsule\n",
+        )
+        self.assertTrue(
+            (
+                sidecar.transaction_root
+                / transaction_module.EMPTY_ABORT_CLAIM_INTENT_NAME
+            ).is_file()
+        )
+        self.assertFalse(
+            (
+                sidecar.transaction_root
+                / transaction_module.RESERVATION_ABORT_INTENT_NAME
+            ).exists()
+        )
+
+    def test_empty_abort_sidecar_unavailable_preserves_every_owned_byte(self) -> None:
+        reserved = ProjectUpdateTransaction.reserve(
+            self.project,
+            project_identity_sha256=digest("project-identity"),
+            requested_target_tag="v0.4.19",
+            transaction_ref=self.DEFAULT_TRANSACTION_REF,
+            ownership_nonce="abcdef0123456789abcdef0123456789",
+            created_at=self.CREATED_AT,
+        )
+        lock_bytes = reserved.acquire_lock()
+        lock_path = self.project / ".zettel-kasten" / "version-update.lock"
+        lock_info = lock_path.stat()
+        before = self.tree_snapshot(reserved.transaction_root)
+        sidecar_path = reserved.transaction_root.parent / (
+            ".runtime-candidate-cleanup_"
+            + reserved.transaction_ref
+            + ".json"
+        )
+        original_open = os.open
+
+        for unavailable in (
+            PermissionError("synthetic access denial"),
+            OSError("synthetic observation failure"),
+        ):
+            with self.subTest(error_type=type(unavailable).__name__):
+
+                def fail_sidecar_open(path, flags, *args, **kwargs):
+                    if Path(path) == sidecar_path:
+                        raise unavailable
+                    return original_open(path, flags, *args, **kwargs)
+
+                with patch.object(
+                    transaction_module.os,
+                    "open",
+                    side_effect=fail_sidecar_open,
+                ):
+                    self.assert_code(
+                        "project_update_transaction_candidate_invalid",
+                        lambda: reserved.abort_before_intent_seal(
+                            expected_lock_bytes=lock_bytes,
+                        ),
+                    )
+                current = lock_path.stat()
+                self.assertEqual(lock_path.read_bytes(), lock_bytes)
+                self.assertEqual(
+                    (current.st_dev, current.st_ino),
+                    (lock_info.st_dev, lock_info.st_ino),
+                )
+                self.assertTrue(
+                    (
+                        reserved.transaction_root
+                        / transaction_module.EMPTY_ABORT_CLAIM_INTENT_NAME
+                    ).is_file()
+                )
+                self.assertFalse(sidecar_path.exists())
+
+    def test_empty_abort_rechecks_raw_sidecar_before_any_durable_mutation(
+        self,
+    ) -> None:
+        reserved = ProjectUpdateTransaction.reserve(
+            self.project,
+            project_identity_sha256=digest("project-identity"),
+            requested_target_tag="v0.4.19",
+            transaction_ref=self.DEFAULT_TRANSACTION_REF,
+            ownership_nonce="abcdef0123456789abcdef0123456789",
+            created_at=self.CREATED_AT,
+        )
+        lock_bytes = reserved.acquire_lock()
+        lock_path = self.project / ".zettel-kasten" / "version-update.lock"
+        lock_info = lock_path.stat()
+        sidecar_path = reserved.transaction_root.parent / (
+            ".runtime-candidate-cleanup_"
+            + reserved.transaction_ref
+            + ".json"
+        )
+        sidecar_bytes = b"raw-external-sidecar-appearance\n"
+
+        def inject_after_claim_intent(boundary: str) -> None:
+            if boundary == "after_claim_intent_durable":
+                sidecar_path.write_bytes(sidecar_bytes)
+
+        with patch.object(
+            transaction_module,
+            "_empty_abort_claim_test_hook",
+            side_effect=inject_after_claim_intent,
+        ):
+            self.assert_code(
+                "project_update_transaction_candidate_invalid",
+                lambda: reserved.abort_before_intent_seal(
+                    expected_lock_bytes=lock_bytes,
+                ),
+            )
+        current = lock_path.stat()
+        self.assertEqual(lock_path.read_bytes(), lock_bytes)
+        self.assertEqual(
+            (current.st_dev, current.st_ino),
+            (lock_info.st_dev, lock_info.st_ino),
+        )
+        self.assertTrue(
+            (
+                reserved.transaction_root
+                / transaction_module.EMPTY_ABORT_CLAIM_INTENT_NAME
+            ).is_file()
+        )
+        self.assertFalse(
+            (
+                reserved.transaction_root
+                / transaction_module.RESERVATION_ABORT_INTENT_NAME
+            ).exists()
+        )
+        self.assertEqual(sidecar_path.read_bytes(), sidecar_bytes)
+
+    def test_runtime_sidecar_creator_and_empty_abort_share_one_guard(self) -> None:
+        reserved = ProjectUpdateTransaction.reserve(
+            self.project,
+            project_identity_sha256=digest("project-identity"),
+            requested_target_tag="v0.4.19",
+            transaction_ref=self.DEFAULT_TRANSACTION_REF,
+            ownership_nonce="abcdef0123456789abcdef0123456789",
+            created_at=self.CREATED_AT,
+        )
+        lock_bytes = reserved.acquire_lock()
+        creator_results: list[str] = []
+        with transaction_module.runtime_cleanup_sidecar_creation_guard(
+            self.project,
+            reserved.transaction_ref,
+        ) as revalidate_creation:
+            self.assertTrue(callable(revalidate_creation))
+            revalidate_creation()
+
+        def try_guard_respecting_creator(boundary: str) -> None:
+            if boundary != "after_claim_intent_durable":
+                return
+
+            def creator() -> None:
+                try:
+                    with (
+                        transaction_module
+                        .runtime_cleanup_sidecar_creation_guard(
+                            self.project,
+                            reserved.transaction_ref,
+                        )
+                    ):
+                        creator_results.append("entered")
+                except ProjectUpdateTransactionError as error:
+                    creator_results.append(error.code)
+
+            thread = threading.Thread(target=creator)
+            thread.start()
+            thread.join(timeout=5)
+            self.assertFalse(thread.is_alive())
+
+        with patch.object(
+            transaction_module,
+            "_empty_abort_claim_test_hook",
+            side_effect=try_guard_respecting_creator,
+        ):
+            terminal = reserved.abort_before_intent_seal(
+                expected_lock_bytes=lock_bytes,
+            )
+        self.assertEqual(
+            creator_results,
+            ["project_update_transaction_checkpoint_write_failed"],
+        )
+        self.assertEqual(
+            terminal["schema"],
+            transaction_module.RESERVATION_ABORT_RECEIPT_SCHEMA_V0419,
+        )
+        self.assert_code(
+            "project_update_transaction_state_transition_invalid",
+            lambda: (
+                transaction_module.runtime_cleanup_sidecar_creation_guard(
+                    self.project,
+                    reserved.transaction_ref,
+                ).__enter__()
+            ),
+        )
+
+    def test_empty_abort_claim_resumes_every_durable_prefix(self) -> None:
+        boundaries = [
+            "claim_intent_after_create",
+            "claim_intent_after_prefix",
+            "claim_intent_after_complete",
+            "after_claim_intent_durable",
+            "claim_sidecar_after_create",
+            "claim_sidecar_after_prefix",
+            "claim_sidecar_after_complete",
+            "after_claim_anchor",
+            "after_claim_bound",
+            "claim_abort_intent_after_create",
+            "claim_abort_intent_after_prefix",
+            "claim_abort_intent_after_complete",
+            "after_abort_intent_durable",
+            "after_abort_lock_unlinked",
+            "claim_abort_receipt_after_create",
+            "claim_abort_receipt_after_prefix",
+            "claim_abort_receipt_after_complete",
+            "after_abort_receipt_durable",
+            "before_claim_original_name_retire",
+            "after_claim_original_name_retired",
+            "claim_retirement_after_create",
+            "claim_retirement_after_prefix",
+            "claim_retirement_after_complete",
+            "after_claim_retirement_durable",
+        ]
+        if os.name != "nt":
+            boundaries.append("before_claim_original_name_unlink")
+        for index, boundary in enumerate(boundaries, start=0x100):
+            with self.subTest(boundary=boundary):
+                ref = f"update_{index:032x}"
+                reserved = ProjectUpdateTransaction.reserve(
+                    self.project,
+                    project_identity_sha256=digest(f"project-{index}"),
+                    requested_target_tag="v0.4.19",
+                    transaction_ref=ref,
+                    ownership_nonce=f"{index:032x}",
+                    created_at=self.CREATED_AT,
+                )
+                lock_bytes = reserved.acquire_lock()
+                crashed = False
+
+                def stop_once(actual: str) -> None:
+                    nonlocal crashed
+                    if actual == boundary and not crashed:
+                        crashed = True
+                        raise RuntimeError("synthetic power loss")
+
+                with patch.object(
+                    transaction_module,
+                    "_empty_abort_claim_test_hook",
+                    side_effect=stop_once,
+                ):
+                    with self.assertRaisesRegex(
+                        RuntimeError,
+                        "synthetic power loss",
+                    ):
+                        reserved.abort_before_intent_seal(
+                            expected_lock_bytes=lock_bytes,
+                        )
+                self.assertTrue(crashed)
+                reopened = (
+                    transaction_module.ReservedProjectUpdateTransaction.open(
+                        self.project,
+                        ref,
+                    )
+                )
+                terminal = reopened.abort_before_intent_seal(
+                    expected_lock_bytes=lock_bytes,
+                )
+                self.assertEqual(
+                    terminal["schema"],
+                    transaction_module.RESERVATION_ABORT_RECEIPT_SCHEMA_V0419,
+                )
+                anchor = (
+                    reopened.transaction_root
+                    / transaction_module.EMPTY_ABORT_CLAIM_ANCHOR_NAME
+                )
+                self.assertEqual(anchor.stat().st_nlink, 1)
+                self.assertTrue(
+                    (
+                        reopened.transaction_root
+                        / transaction_module.EMPTY_ABORT_CLAIM_RETIREMENT_NAME
+                    ).is_file()
+                )
+                sidecar = reopened.transaction_root.parent / (
+                    ".runtime-candidate-cleanup_" + ref + ".json"
+                )
+                self.assertFalse(sidecar.exists())
+
+    def test_empty_abort_unanchored_claim_is_never_resumed_or_deleted(
+        self,
+    ) -> None:
+        boundaries = (
+            "claim_sidecar_unbound_after_create",
+            "before_claim_anchor",
+        )
+        for index, boundary in enumerate(boundaries, start=0x180):
+            with self.subTest(boundary=boundary):
+                ref = f"update_{index:032x}"
+                reserved = ProjectUpdateTransaction.reserve(
+                    self.project,
+                    project_identity_sha256=digest(f"project-{boundary}"),
+                    requested_target_tag="v0.4.19",
+                    transaction_ref=ref,
+                    ownership_nonce=f"{index:032x}",
+                    created_at=self.CREATED_AT,
+                )
+                lock_bytes = reserved.acquire_lock()
+                lock_path = (
+                    self.project / ".zettel-kasten" / "version-update.lock"
+                )
+                lock_info = lock_path.stat()
+
+                def stop(actual: str) -> None:
+                    if actual == boundary:
+                        raise RuntimeError("synthetic power loss")
+
+                with patch.object(
+                    transaction_module,
+                    "_empty_abort_claim_test_hook",
+                    side_effect=stop,
+                ):
+                    with self.assertRaisesRegex(
+                        RuntimeError,
+                        "synthetic power loss",
+                    ):
+                        reserved.abort_before_intent_seal(
+                            expected_lock_bytes=lock_bytes,
+                        )
+                sidecar = reserved.transaction_root.parent / (
+                    ".runtime-candidate-cleanup_" + ref + ".json"
+                )
+                anchor = (
+                    reserved.transaction_root
+                    / transaction_module.EMPTY_ABORT_CLAIM_ANCHOR_NAME
+                )
+                self.assertEqual(sidecar.read_bytes(), b"")
+                self.assertFalse(anchor.exists())
+                if boundary == "claim_sidecar_unbound_after_create":
+                    # A byte-identical replacement is intentionally
+                    # indistinguishable without the same-inode anchor.
+                    sidecar.unlink()
+                    sidecar.write_bytes(b"")
+                before = self.tree_snapshot(self.project)
+                reopened = (
+                    transaction_module.ReservedProjectUpdateTransaction.open(
+                        self.project,
+                        ref,
+                    )
+                )
+                self.assert_code(
+                    "project_update_transaction_candidate_invalid",
+                    lambda: reopened.abort_before_intent_seal(
+                        expected_lock_bytes=lock_bytes,
+                    ),
+                )
+                self.assertEqual(self.tree_snapshot(self.project), before)
+                current = lock_path.stat()
+                self.assertEqual(lock_path.read_bytes(), lock_bytes)
+                self.assertEqual(
+                    (current.st_dev, current.st_ino),
+                    (lock_info.st_dev, lock_info.st_ino),
+                )
+                sidecar.unlink()
+                lock_path.unlink()
+
+    def test_empty_abort_foreign_zero_byte_sidecar_after_claim_intent_is_preserved(
+        self,
+    ) -> None:
+        reserved = ProjectUpdateTransaction.reserve(
+            self.project,
+            project_identity_sha256=digest("project-identity"),
+            requested_target_tag="v0.4.19",
+            transaction_ref=self.DEFAULT_TRANSACTION_REF,
+            ownership_nonce="abcdef0123456789abcdef0123456789",
+            created_at=self.CREATED_AT,
+        )
+        lock_bytes = reserved.acquire_lock()
+        lock_path = self.project / ".zettel-kasten" / "version-update.lock"
+        lock_info = lock_path.stat()
+        sidecar = reserved.transaction_root.parent / (
+            ".runtime-candidate-cleanup_" + reserved.transaction_ref + ".json"
+        )
+
+        def inject(actual: str) -> None:
+            if actual == "after_claim_intent_durable":
+                sidecar.write_bytes(b"")
+
+        with patch.object(
+            transaction_module,
+            "_empty_abort_claim_test_hook",
+            side_effect=inject,
+        ):
+            self.assert_code(
+                "project_update_transaction_candidate_invalid",
+                lambda: reserved.abort_before_intent_seal(
+                    expected_lock_bytes=lock_bytes,
+                ),
+            )
+        current = lock_path.stat()
+        self.assertEqual(sidecar.read_bytes(), b"")
+        self.assertEqual(lock_path.read_bytes(), lock_bytes)
+        self.assertEqual(
+            (current.st_dev, current.st_ino),
+            (lock_info.st_dev, lock_info.st_ino),
+        )
+        self.assertFalse(
+            (
+                reserved.transaction_root
+                / transaction_module.EMPTY_ABORT_CLAIM_ANCHOR_NAME
+            ).exists()
+        )
+        self.assertFalse(
+            (
+                reserved.transaction_root
+                / transaction_module.RESERVATION_ABORT_INTENT_NAME
+            ).exists()
+        )
+
+    def test_empty_abort_claim_physically_blocks_raw_create(self) -> None:
+        reserved = ProjectUpdateTransaction.reserve(
+            self.project,
+            project_identity_sha256=digest("project-identity"),
+            requested_target_tag="v0.4.19",
+            transaction_ref=self.DEFAULT_TRANSACTION_REF,
+            ownership_nonce="abcdef0123456789abcdef0123456789",
+            created_at=self.CREATED_AT,
+        )
+        lock_bytes = reserved.acquire_lock()
+        sidecar = reserved.transaction_root.parent / (
+            ".runtime-candidate-cleanup_" + reserved.transaction_ref + ".json"
+        )
+        raw_creator_blocked = False
+
+        def raw_create(boundary: str) -> None:
+            nonlocal raw_creator_blocked
+            if boundary != "claim_sidecar_after_complete":
+                return
+            try:
+                descriptor = os.open(
+                    sidecar,
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                    0o600,
+                )
+            except FileExistsError:
+                raw_creator_blocked = True
+            else:
+                os.close(descriptor)
+
+        with patch.object(
+            transaction_module,
+            "_empty_abort_claim_test_hook",
+            side_effect=raw_create,
+        ):
+            reserved.abort_before_intent_seal(
+                expected_lock_bytes=lock_bytes,
+            )
+        self.assertTrue(raw_creator_blocked)
+
+    def test_empty_abort_claim_rejects_foreign_hardlink_and_extra_link(self) -> None:
+        cases = ("foreign_at_sidecar", "third_link_after_anchor")
+        for index, case in enumerate(cases, start=0x200):
+            with self.subTest(case=case):
+                ref = f"update_{index:032x}"
+                reserved = ProjectUpdateTransaction.reserve(
+                    self.project,
+                    project_identity_sha256=digest(f"project-{case}"),
+                    requested_target_tag="v0.4.19",
+                    transaction_ref=ref,
+                    ownership_nonce=f"{index:032x}",
+                    created_at=self.CREATED_AT,
+                )
+                lock_bytes = reserved.acquire_lock()
+                sidecar = reserved.transaction_root.parent / (
+                    ".runtime-candidate-cleanup_" + ref + ".json"
+                )
+                foreign = reserved.transaction_root.parent / f"foreign-{index}.bin"
+                extra = reserved.transaction_root / "unexpected-third-link.json"
+
+                def inject(boundary: str) -> None:
+                    if (
+                        case == "foreign_at_sidecar"
+                        and boundary == "after_claim_intent_durable"
+                    ):
+                        foreign.write_bytes(b"")
+                        os.link(foreign, sidecar)
+                    elif (
+                        case == "third_link_after_anchor"
+                        and boundary == "after_claim_anchor"
+                    ):
+                        os.link(sidecar, extra)
+
+                with patch.object(
+                    transaction_module,
+                    "_empty_abort_claim_test_hook",
+                    side_effect=inject,
+                ):
+                    self.assert_code(
+                        "project_update_transaction_candidate_invalid",
+                        lambda: reserved.abort_before_intent_seal(
+                            expected_lock_bytes=lock_bytes,
+                        ),
+                    )
+                self.assertTrue(
+                    (
+                        self.project
+                        / ".zettel-kasten"
+                        / "version-update.lock"
+                    ).is_file()
+                )
+                self.assertFalse(
+                    (
+                        reserved.transaction_root
+                        / transaction_module.RESERVATION_ABORT_INTENT_NAME
+                    ).exists()
+                )
+                if case == "foreign_at_sidecar":
+                    self.assertEqual(foreign.stat().st_nlink, 2)
+                    self.assertEqual(sidecar.stat().st_nlink, 2)
+                    sidecar.unlink()
+                    foreign.unlink()
+                else:
+                    self.assertEqual(sidecar.stat().st_nlink, 3)
+                    self.assertEqual(extra.stat().st_nlink, 3)
+                    extra.unlink()
+                    sidecar.unlink()
+                (
+                    self.project
+                    / ".zettel-kasten"
+                    / "version-update.lock"
+                ).unlink()
+
+    def test_empty_abort_claim_anchor_replacement_is_preserved_and_blocked(
+        self,
+    ) -> None:
+        reserved = ProjectUpdateTransaction.reserve(
+            self.project,
+            project_identity_sha256=digest("project-identity"),
+            requested_target_tag="v0.4.19",
+            transaction_ref=self.DEFAULT_TRANSACTION_REF,
+            ownership_nonce="abcdef0123456789abcdef0123456789",
+            created_at=self.CREATED_AT,
+        )
+        lock_bytes = reserved.acquire_lock()
+        anchor = (
+            reserved.transaction_root
+            / transaction_module.EMPTY_ABORT_CLAIM_ANCHOR_NAME
+        )
+        foreign = b"foreign-anchor\n"
+
+        def replace_anchor(boundary: str) -> None:
+            if boundary == "after_claim_bound":
+                anchor.unlink()
+                anchor.write_bytes(foreign)
+
+        with patch.object(
+            transaction_module,
+            "_empty_abort_claim_test_hook",
+            side_effect=replace_anchor,
+        ):
+            self.assert_code(
+                "project_update_transaction_candidate_invalid",
+                lambda: reserved.abort_before_intent_seal(
+                    expected_lock_bytes=lock_bytes,
+                ),
+            )
+        self.assertEqual(anchor.read_bytes(), foreign)
+        self.assertTrue(
+            (
+                self.project / ".zettel-kasten" / "version-update.lock"
+            ).is_file()
+        )
+
+    @unittest.skipUnless(os.name == "nt", "Windows ADS regression")
+    def test_empty_abort_claim_ads_is_preserved_and_blocked(self) -> None:
+        reserved = ProjectUpdateTransaction.reserve(
+            self.project,
+            project_identity_sha256=digest("project-identity"),
+            requested_target_tag="v0.4.19",
+            transaction_ref=self.DEFAULT_TRANSACTION_REF,
+            ownership_nonce="abcdef0123456789abcdef0123456789",
+            created_at=self.CREATED_AT,
+        )
+        lock_bytes = reserved.acquire_lock()
+        sidecar = reserved.transaction_root.parent / (
+            ".runtime-candidate-cleanup_" + reserved.transaction_ref + ".json"
+        )
+
+        def add_ads(boundary: str) -> None:
+            if boundary == "after_claim_bound":
+                Path(str(sidecar) + ":foreign").write_bytes(b"private")
+
+        with patch.object(
+            transaction_module,
+            "_empty_abort_claim_test_hook",
+            side_effect=add_ads,
+        ):
+            self.assert_code(
+                "project_update_transaction_cleanup_refused",
+                lambda: reserved.abort_before_intent_seal(
+                    expected_lock_bytes=lock_bytes,
+                ),
+            )
+        self.assertEqual(
+            Path(str(sidecar) + ":foreign").read_bytes(),
+            b"private",
+        )
+
+    def test_empty_abort_claim_is_held_exact_through_lock_release_boundary(
+        self,
+    ) -> None:
+        cases = ["sidecar_replace", "anchor_replace", "third_link"]
+        if os.name == "nt":
+            cases.append("ads")
+        for index, case in enumerate(cases, start=0x280):
+            with self.subTest(case=case):
+                ref = f"update_{index:032x}"
+                reserved = ProjectUpdateTransaction.reserve(
+                    self.project,
+                    project_identity_sha256=digest(f"project-{case}"),
+                    requested_target_tag="v0.4.19",
+                    transaction_ref=ref,
+                    ownership_nonce=f"{index:032x}",
+                    created_at=self.CREATED_AT,
+                )
+                lock_bytes = reserved.acquire_lock()
+                lock_path = (
+                    self.project / ".zettel-kasten" / "version-update.lock"
+                )
+                lock_info = lock_path.stat()
+                sidecar = reserved.transaction_root.parent / (
+                    ".runtime-candidate-cleanup_" + ref + ".json"
+                )
+                anchor = (
+                    reserved.transaction_root
+                    / transaction_module.EMPTY_ABORT_CLAIM_ANCHOR_NAME
+                )
+                extra = reserved.transaction_root / "foreign-third-link.json"
+                foreign = ("foreign-" + case + "\n").encode("ascii")
+                observed_claim = b""
+
+                def mutate_after_intent(boundary: str) -> None:
+                    nonlocal observed_claim
+                    if boundary != "after_abort_intent_durable":
+                        return
+                    observed_claim = sidecar.read_bytes()
+                    if case == "sidecar_replace":
+                        sidecar.unlink()
+                        sidecar.write_bytes(foreign)
+                    elif case == "anchor_replace":
+                        anchor.unlink()
+                        anchor.write_bytes(foreign)
+                    elif case == "third_link":
+                        os.link(sidecar, extra)
+                    else:
+                        Path(str(sidecar) + ":foreign").write_bytes(foreign)
+
+                with patch.object(
+                    transaction_module,
+                    "_empty_abort_claim_test_hook",
+                    side_effect=mutate_after_intent,
+                ):
+                    self.assert_code(
+                        "project_update_transaction_candidate_invalid",
+                        lambda: reserved.abort_before_intent_seal(
+                            expected_lock_bytes=lock_bytes,
+                        ),
+                    )
+                current_lock = lock_path.stat()
+                self.assertTrue(observed_claim)
+                self.assertEqual(lock_path.read_bytes(), lock_bytes)
+                self.assertEqual(
+                    (current_lock.st_dev, current_lock.st_ino),
+                    (lock_info.st_dev, lock_info.st_ino),
+                )
+                self.assertFalse(
+                    (
+                        reserved.transaction_root
+                        / transaction_module.RESERVATION_ABORT_RECEIPT_NAME
+                    ).exists()
+                )
+                if case == "third_link":
+                    self.assertEqual(extra.read_bytes(), observed_claim)
+                    self.assertEqual(extra.stat().st_nlink, 3)
+                elif case == "ads":
+                    self.assertEqual(
+                        Path(str(sidecar) + ":foreign").read_bytes(),
+                        foreign,
+                    )
+                elif os.name == "nt":
+                    # Retained no-delete handles rejected replacement itself.
+                    self.assertEqual(sidecar.read_bytes(), observed_claim)
+                    self.assertEqual(anchor.read_bytes(), observed_claim)
+                    self.assertEqual(sidecar.stat().st_nlink, 2)
+                    self.assertEqual(anchor.stat().st_nlink, 2)
+                elif case == "sidecar_replace":
+                    self.assertEqual(sidecar.read_bytes(), foreign)
+                    self.assertEqual(anchor.read_bytes(), observed_claim)
+                else:
+                    self.assertEqual(anchor.read_bytes(), foreign)
+                    self.assertEqual(sidecar.read_bytes(), observed_claim)
+                lock_path.unlink()
+
+    def test_empty_abort_claim_replacement_before_retire_blocks_and_preserves(
+        self,
+    ) -> None:
+        reserved = ProjectUpdateTransaction.reserve(
+            self.project,
+            project_identity_sha256=digest("project-identity"),
+            requested_target_tag="v0.4.19",
+            transaction_ref=self.DEFAULT_TRANSACTION_REF,
+            ownership_nonce="abcdef0123456789abcdef0123456789",
+            created_at=self.CREATED_AT,
+        )
+        lock_bytes = reserved.acquire_lock()
+        sidecar = reserved.transaction_root.parent / (
+            ".runtime-candidate-cleanup_" + reserved.transaction_ref + ".json"
+        )
+        foreign = b"foreign-runtime-sidecar\n"
+        replaced = False
+        replacement_blocked = False
+
+        def replace_before_retire(boundary: str) -> None:
+            nonlocal replaced, replacement_blocked
+            if boundary == "after_abort_receipt_durable" and not replaced:
+                try:
+                    sidecar.unlink()
+                    sidecar.write_bytes(foreign)
+                except OSError:
+                    replacement_blocked = True
+                    raise
+                replaced = True
+
+        with patch.object(
+            transaction_module,
+            "_empty_abort_claim_test_hook",
+            side_effect=replace_before_retire,
+        ):
+            self.assert_code(
+                "project_update_transaction_candidate_invalid",
+                lambda: reserved.abort_before_intent_seal(
+                    expected_lock_bytes=lock_bytes,
+                ),
+            )
+        self.assertTrue(replaced or replacement_blocked)
+        if replacement_blocked:
+            # Windows retained no-delete handles reject the replacement
+            # itself.  The durable receipt remains resumable and the exact
+            # original claim is retired by the next process.
+            self.assertNotEqual(sidecar.read_bytes(), foreign)
+            reopened = (
+                transaction_module.ReservedProjectUpdateTransaction.open(
+                    self.project,
+                    reserved.transaction_ref,
+                )
+            )
+            terminal = reopened.resume_abort_after_lock_release()
+            self.assertEqual(
+                terminal["schema"],
+                transaction_module.RESERVATION_ABORT_RECEIPT_SCHEMA_V0419,
+            )
+            self.assertFalse(sidecar.exists())
+            return
+        self.assertEqual(sidecar.read_bytes(), foreign)
+        self.assertFalse(
+            (
+                reserved.transaction_root
+                / transaction_module.EMPTY_ABORT_CLAIM_RETIREMENT_NAME
+            ).exists()
+        )
+        before = self.tree_snapshot(self.project)
+        reopened = transaction_module.ReservedProjectUpdateTransaction.open(
+            self.project,
+            reserved.transaction_ref,
+        )
+        self.assert_code(
+            "project_update_transaction_candidate_invalid",
+            lambda: reopened.resume_abort_after_lock_release(),
+        )
+        self.assertEqual(self.tree_snapshot(self.project), before)
+
+    @unittest.skipUnless(
+        os.name == "nt",
+        "exact abort-history cleanup mutation is Windows-only",
+    )
+    def test_empty_abort_cleanup_preserves_foreign_sidecar_created_after_retire(
+        self,
+    ) -> None:
+        reserved = ProjectUpdateTransaction.reserve(
+            self.project,
+            project_identity_sha256=digest("project-identity"),
+            requested_target_tag="v0.4.19",
+            transaction_ref=self.DEFAULT_TRANSACTION_REF,
+            ownership_nonce="abcdef0123456789abcdef0123456789",
+            created_at=self.CREATED_AT,
+        )
+        lock_bytes = reserved.acquire_lock()
+        sidecar = reserved.transaction_root.parent / (
+            ".runtime-candidate-cleanup_" + reserved.transaction_ref + ".json"
+        )
+        foreign = b"post-retirement-foreign-sidecar\n"
+        injected = False
+
+        def inject_after_retire(boundary: str) -> None:
+            nonlocal injected
+            if boundary == "after_claim_original_name_retired" and not injected:
+                sidecar.write_bytes(foreign)
+                injected = True
+
+        with patch.object(
+            transaction_module,
+            "_empty_abort_claim_test_hook",
+            side_effect=inject_after_retire,
+        ):
+            terminal = reserved.abort_before_intent_seal(
+                expected_lock_bytes=lock_bytes,
+            )
+        self.assertTrue(injected)
+        self.assertEqual(sidecar.read_bytes(), foreign)
+        self.assertTrue(
+            reserved.exact_cleanup(
+                cleanup_authority_sha256=terminal["receipt_sha256"],
+            )
+        )
+        self.assertEqual(sidecar.read_bytes(), foreign)
+        self.assertFalse(reserved.transaction_root.exists())
+
+    def test_legacy_unsealed_abort_remains_readable_but_is_not_cleanup_authority(
+        self,
+    ) -> None:
+        reserved = ProjectUpdateTransaction.reserve(
+            self.project,
+            project_identity_sha256=digest("project-identity"),
+            requested_target_tag="v0.4.19",
+            transaction_ref=self.DEFAULT_TRANSACTION_REF,
+            ownership_nonce="abcdef0123456789abcdef0123456789",
+            created_at=self.CREATED_AT,
+        )
+        lock_bytes = reserved.acquire_lock()
+        evidence = self.runtime_cleanup_terminal_evidence(reserved)
+        reserved.abort_before_intent_seal(
+            expected_lock_bytes=lock_bytes,
+            runtime_cleanup_terminal_evidence=evidence,
+        )
+        ack = transaction_module.load_runtime_cleanup_durable_ack(
+            self.project,
+            reserved.transaction_ref,
+        )
+        self.assertIsNotNone(ack)
+        assert ack is not None
+
+        intent_path = (
+            reserved.transaction_root
+            / transaction_module.RESERVATION_ABORT_INTENT_NAME
+        )
+        receipt_path = (
+            reserved.transaction_root
+            / transaction_module.RESERVATION_ABORT_RECEIPT_NAME
+        )
+        intent = json.loads(intent_path.read_text(encoding="ascii"))
+        receipt = json.loads(receipt_path.read_text(encoding="ascii"))
+        for name in (
+            "runtime_cleanup_terminal_evidence_sha256",
+            "runtime_cleanup_capsule_sha256",
+            "runtime_cleanup_capsule_identity_sha256",
+        ):
+            intent.pop(name)
+            receipt.pop(name)
+        intent["schema"] = transaction_module.RESERVATION_ABORT_INTENT_SCHEMA
+        receipt["schema"] = (
+            transaction_module.RESERVATION_ABORT_RECEIPT_SCHEMA
+        )
+        receipt["abort_intent_sha256"] = (
+            transaction_module.sha256_document(intent)
+        )
+        intent_path.write_bytes(canonical_json_bytes(intent) + b"\n")
+        receipt_path.write_bytes(canonical_json_bytes(receipt) + b"\n")
+
+        terminal = reserved.inspect_abort_receipt()
+        self.assertIsNotNone(terminal)
+        assert terminal is not None
+        self.assertEqual(
+            terminal["schema"],
+            transaction_module.RESERVATION_ABORT_RECEIPT_SCHEMA,
+        )
+        self.assertIsNone(
+            transaction_module.load_runtime_cleanup_durable_ack(
+                self.project,
+                reserved.transaction_ref,
+            )
+        )
+        self.assertFalse(
+            transaction_module.revalidate_runtime_cleanup_durable_ack(ack)
+        )
+
+    def test_unsealed_abort_resumes_v0419_intent_before_lock_unlink(self) -> None:
+        reserved = ProjectUpdateTransaction.reserve(
+            self.project,
+            project_identity_sha256=digest("project-identity"),
+            requested_target_tag="v0.4.19",
+            transaction_ref=self.DEFAULT_TRANSACTION_REF,
+            ownership_nonce="abcdef0123456789abcdef0123456789",
+            created_at=self.CREATED_AT,
+        )
+        lock_bytes = reserved.acquire_lock()
+        evidence = self.runtime_cleanup_terminal_evidence(reserved)
+        with patch.object(
+            reserved,
+            "_verify_reservation_backlink",
+            side_effect=RuntimeError("simulated stop before lock unlink"),
+        ):
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "simulated stop before lock unlink",
+            ):
+                reserved.abort_before_intent_seal(
+                    expected_lock_bytes=lock_bytes,
+                    runtime_cleanup_terminal_evidence=evidence,
+                )
+        intent_path = (
+            reserved.transaction_root
+            / transaction_module.RESERVATION_ABORT_INTENT_NAME
+        )
+        receipt_path = (
+            reserved.transaction_root
+            / transaction_module.RESERVATION_ABORT_RECEIPT_NAME
+        )
+        lock_path = (
+            self.project / ".zettel-kasten" / "version-update.lock"
+        )
+        self.assertTrue(intent_path.is_file())
+        self.assertTrue(lock_path.is_file())
+        self.assertFalse(receipt_path.exists())
+        self.assertIsNone(
+            transaction_module.load_runtime_cleanup_durable_ack(
+                self.project,
+                reserved.transaction_ref,
+            )
+        )
+        before = self.tree_snapshot(self.project)
+        reopened = transaction_module.ReservedProjectUpdateTransaction.open(
+            self.project,
+            reserved.transaction_ref,
+        )
+        self.assert_code(
+            "project_update_transaction_state_transition_invalid",
+            lambda: reopened.abort_before_intent_seal(
+                expected_lock_bytes=lock_bytes,
+            ),
+        )
+        self.assertEqual(self.tree_snapshot(self.project), before)
+        terminal = reopened.abort_before_intent_seal(
+            expected_lock_bytes=lock_bytes,
+            runtime_cleanup_terminal_evidence=evidence,
+        )
+        self.assertEqual(
+            terminal["schema"],
+            transaction_module.RESERVATION_ABORT_RECEIPT_SCHEMA_V0419,
+        )
+        ack = transaction_module.load_runtime_cleanup_durable_ack(
+            self.project,
+            reserved.transaction_ref,
+        )
+        self.assertIsNotNone(ack)
+        assert ack is not None
+        self.assertEqual(ack.authority_kind, "unsealed_abort")
+        self.assertTrue(
+            transaction_module.revalidate_runtime_cleanup_durable_ack(ack)
         )
 
     @unittest.skipUnless(
@@ -8110,10 +9762,12 @@ class ProjectUpdateTransactionTests(unittest.TestCase):
         reserved.runtime_candidate_path.mkdir()
         partial = reserved.runtime_candidate_path / "partial.bin"
         partial.write_bytes(b"partial-private-runtime")
+        runtime_cleanup = self.runtime_cleanup_terminal_evidence(reserved)
         self.assert_code(
             "project_update_transaction_candidate_invalid",
             lambda: reserved.abort_before_intent_seal(
                 expected_lock_bytes=lock_bytes,
+                runtime_cleanup_terminal_evidence=runtime_cleanup,
                 candidate_cleanup_evidence_sha256=digest("unknown-cleanup"),
             ),
         )
@@ -8137,6 +9791,7 @@ class ProjectUpdateTransactionTests(unittest.TestCase):
         )
         lock_bytes = reserved.acquire_lock()
         evidence = reserved.reservation_abort_plan_sha256()
+        runtime_cleanup = self.runtime_cleanup_terminal_evidence(reserved)
         original_write = transaction_module._write_new
 
         def crash_before_receipt(path, value, *, within):
@@ -8150,6 +9805,7 @@ class ProjectUpdateTransactionTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "simulated process loss"):
                 reserved.abort_before_intent_seal(
                     expected_lock_bytes=lock_bytes,
+                    runtime_cleanup_terminal_evidence=runtime_cleanup,
                     candidate_cleanup_evidence_sha256=evidence,
                 )
         self.assertFalse(
@@ -8158,14 +9814,30 @@ class ProjectUpdateTransactionTests(unittest.TestCase):
         self.assertTrue(
             (reserved.transaction_root / "reservation-abort-intent.json").exists()
         )
+        self.assertIsNone(
+            transaction_module.load_runtime_cleanup_durable_ack(
+                self.project,
+                reserved.transaction_ref,
+            )
+        )
         reopened = transaction_module.ReservedProjectUpdateTransaction.open(
             self.project, reserved.transaction_ref
         )
         result = reopened.abort_before_intent_seal(
             expected_lock_bytes=lock_bytes,
+            runtime_cleanup_terminal_evidence=runtime_cleanup,
             candidate_cleanup_evidence_sha256=evidence,
         )
         self.assertEqual(result["state"], "aborted_before_intent_seal")
+        ack = transaction_module.load_runtime_cleanup_durable_ack(
+            self.project,
+            reserved.transaction_ref,
+        )
+        self.assertIsNotNone(ack)
+        assert ack is not None
+        self.assertTrue(
+            transaction_module.revalidate_runtime_cleanup_durable_ack(ack)
+        )
 
     def test_public_identifierless_resume_completes_reserved_abort_after_hard_exit(
         self,
@@ -8179,14 +9851,17 @@ class ProjectUpdateTransactionTests(unittest.TestCase):
             created_at=self.CREATED_AT,
         )
         reserved.acquire_lock()
+        runtime_cleanup = self.runtime_cleanup_terminal_evidence(reserved)
         worker = "\n".join(
             (
+                "import json",
                 "import os",
                 "import sys",
                 "from pathlib import Path",
                 "from unittest.mock import patch",
                 "from wom_kit import project_update_transaction as module",
                 "reservation = module.ReservedProjectUpdateTransaction.open(Path(sys.argv[1]), sys.argv[2])",
+                "runtime_cleanup = json.loads(sys.argv[3])",
                 "lock_bytes = reservation.existing_lock_bytes_read_only()",
                 "evidence = reservation.reservation_abort_plan_sha256()",
                 "original_write = module._write_new",
@@ -8195,7 +9870,7 @@ class ProjectUpdateTransactionTests(unittest.TestCase):
                 "        os._exit(86)",
                 "    return original_write(path, value, within=within)",
                 "with patch.object(module, '_write_new', side_effect=crash):",
-                "    reservation.abort_before_intent_seal(expected_lock_bytes=lock_bytes, candidate_cleanup_evidence_sha256=evidence)",
+                "    reservation.abort_before_intent_seal(expected_lock_bytes=lock_bytes, runtime_cleanup_terminal_evidence=runtime_cleanup, candidate_cleanup_evidence_sha256=evidence)",
                 "raise SystemExit(99)",
             )
         )
@@ -8215,6 +9890,7 @@ class ProjectUpdateTransactionTests(unittest.TestCase):
                 worker,
                 str(self.project),
                 reserved.transaction_ref,
+                json.dumps(runtime_cleanup, separators=(",", ":")),
             ],
             cwd=KIT_ROOT,
             env=environment,
@@ -8734,8 +10410,10 @@ class ProjectUpdateTransactionTests(unittest.TestCase):
             created_at=self.CREATED_AT,
         )
         abort_lock = abort.acquire_lock()
+        abort_runtime_cleanup = self.runtime_cleanup_terminal_evidence(abort)
         abort.abort_before_intent_seal(
             expected_lock_bytes=abort_lock,
+            runtime_cleanup_terminal_evidence=abort_runtime_cleanup,
         )
         recovered = {
             "ok": True,
