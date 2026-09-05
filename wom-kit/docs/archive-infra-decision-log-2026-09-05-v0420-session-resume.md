@@ -38,6 +38,26 @@ it. The existing broker authenticates claims against the full original context.
    collection. Persist opaque references and label digests in public evidence,
    not duplicate titles in receipts or JSON. Reobserve the exact registry before
    approval; sensitive previews may be omitted without losing target identity.
+9. One app installation can host simultaneous tasks. Require an explicit
+   opaque task route beneath the existing app selector, never a newest/current
+   default. New task decisions bind its archive/app/route digest in existing
+   manifest evidence. Legacy approvals keep their original bytes and resume
+   path; do not add a current route to an old approval.
+10. Keep original pending and last-completed selectors in the same private
+    actor CAS image. After verified completion, atomically retain the original
+    completed pointer while releasing the pending gate. Output loss after that
+    save must still find the same receipt. Optional-field omission by old
+    callers preserves completion pointers; explicit null cannot erase them.
+11. A completed pointer is not proof. Completed-only resume rejects a started
+    claim and can only verify an original succeeded claim, terminal MAC,
+    receipt and immutable target. Pending registry work cannot fall through to
+    an older completed human decision. Fresh writes independently check the
+    caller's selected session and actual current claimed binding.
+12. Persist the pending selector after the native decision and original bundle
+    save, before authenticated claim publication. Revalidate the original
+    source/context/manifest/predecessor and OS lock after the callback. A cut
+    before claim publication is not approved work; a native re-review path is
+    required before this branch can become a complete public recovery flow.
 
 ## Evidence and remaining integration
 
@@ -50,6 +70,13 @@ started-before-checkpoint, post-publication and succeeded-before-output cuts.
 The parent independently reacquired the OS lock and verified the original
 claim, terminal MAC and disk generation. POSIX-specific
 retained-parent race tests still require Linux execution.
+
+The later task lifecycle/ownership integration passed 19 tests in 51.081
+seconds, including an actual exit after final actor save and a new process
+recovering its original completed receipt without rewriting bytes. Independent
+review found and helped correct same-app cross-route pointer substitution and
+old-image optional-field migration. These are source-level regression results,
+not installed-wheel or client completion evidence.
 
 This is an internal integration checkpoint, not a public release. Public CLI
 and MCP routing, app installation attachment, task-scoped payload discovery,

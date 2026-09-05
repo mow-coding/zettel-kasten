@@ -37,6 +37,8 @@ _KEYS = frozenset({
     "previous_sha256", "work_session_ref", "observed_binding", "claim_ref",
     "pending_manifest_sha256", "pending_context_sha256", "actor_sha256",
 })
+_EXTENSION_KEYS = frozenset({"pending_registry_intent_plan_sha256", "last_completed_operation"})
+_UNSET = object()
 _ERRORS = frozenset({
     "work_session_actor_invalid", "work_session_actor_changed",
     "work_session_actor_path_unsafe", "work_session_actor_lock_required",
@@ -67,11 +69,58 @@ def new_task_route_ref():
     return registry._new_ref("task_route")
 
 
+def _completed_document(value):
+    if type(value) is not dict or type(value.get("kind")) is not str:
+        raise _fail()
+    if value["kind"] == "human_session_decision":
+        fields = ("manifest_sha256", "context_sha256")
+    elif value["kind"] == "registry_transition":
+        # Registry-intent load/observe uses plan_sha256, not the distinct
+        # integrity digest named intent_sha256 inside its private payload.
+        fields = ("plan_sha256",)
+    else:
+        raise _fail()
+    if set(value) != {"kind", *fields} or any(not registry._is_digest(value[field]) for field in fields):
+        raise _fail()
+    return {"kind": value["kind"], **{field: value[field] for field in fields}}
+
+
+@dataclass(frozen=True, repr=False)
+class CompletedOperationSelector:
+    """Original private selector only; completion still requires independent proof."""
+
+    _raw: bytes
+
+    def __post_init__(self):
+        try:
+            if type(self._raw) is not bytes or not self._raw or len(self._raw) > MAX_ACTOR_BYTES:
+                raise _fail()
+            _completed_document(bundle._strict_document(self._raw))
+            return
+        except Exception:
+            pass
+        raise _fail()
+
+    @classmethod
+    def from_document(cls, value):
+        try:
+            return cls(registry._canonical(_completed_document(value)))
+        except Exception:
+            pass
+        raise _fail()
+
+    def document(self):
+        return _completed_document(bundle._strict_document(self._raw))
+
+    def __repr__(self):
+        return "CompletedOperationSelector(<private selector; no completion authority>)"
+
+
 def _decode(raw):
     if type(raw) is not bytes or not raw or len(raw) > MAX_ACTOR_BYTES:
         raise _fail()
     document = bundle._strict_document(raw)
-    if set(document) != _KEYS or document["schema"] != ACTOR_SCHEMA:
+    if not _KEYS <= set(document) or set(document) - _KEYS - _EXTENSION_KEYS or document["schema"] != ACTOR_SCHEMA:
         raise _fail()
     if (not registry._ref(document["client_app_ref"], "client_app")
             or not registry._ref(document["task_route_ref"], "task_route")
@@ -100,6 +149,14 @@ def _decode(raw):
         item is not None and not registry._is_digest(item) for item in pending
     ):
         raise _fail()
+    registry_pending = document.get("pending_registry_intent_plan_sha256")
+    if registry_pending is not None and (
+        not registry._is_digest(registry_pending) or pending[0] is not None
+    ):
+        raise _fail()
+    completed = document.get("last_completed_operation")
+    if completed is not None:
+        _completed_document(completed)
     expected = _sha(registry._canonical({key: value for key, value in document.items()
                                        if key != "actor_sha256"}))
     if not registry._is_digest(document["actor_sha256"]) or not hmac.compare_digest(
@@ -138,16 +195,30 @@ class ActorContext:
 
     def public_summary(self):
         value = self.document()
-        return {
+        summary = {
             "schema": ACTOR_SCHEMA, "revision": value["revision"],
             "scope": "private_actor_routing",
             "routing_identity_level": "self_declared", "identity_is_app_attestation": False,
             "session_selected": value["work_session_ref"] is not None,
             "claim_assertion_present": value["claim_ref"] is not None,
-            "pending_original_operation_selected": value["pending_manifest_sha256"] is not None,
+            "pending_original_operation_selected": (
+                value["pending_manifest_sha256"] is not None
+                or value.get("pending_registry_intent_plan_sha256") is not None
+            ),
             "routing_is_write_authority": False, "claim_tokens_echoed": False,
             "private_labels_echoed": False,
         }
+        # Keep the old summary shape for old raw images. Extended summaries
+        # contain only booleans/kinds, never selector or approval digests.
+        if _EXTENSION_KEYS & set(value):
+            completed = value.get("last_completed_operation")
+            summary.update(
+                pending_registry_operation_selected=value.get("pending_registry_intent_plan_sha256") is not None,
+                last_completed_operation_selected=completed is not None,
+                last_completed_operation_kind=completed["kind"] if completed is not None else None,
+                completion_selector_is_authority=False,
+            )
+        return summary
 
 
 class WorkSessionActorStore:
@@ -264,7 +335,8 @@ class WorkSessionActorStore:
             raise _fail("work_session_actor_changed")
         # A pending original operation can have changed the registry already.
         # Do not block its real MAC/checkpoint verification on an old assertion.
-        if current and document["pending_manifest_sha256"] is None:
+        if (current and document["pending_manifest_sha256"] is None
+                and document.get("pending_registry_intent_plan_sha256") is None):
             if (document["observed_binding"] != snapshot.binding(session_ref).document()
                     or (document["claim_ref"] is not None
                         and document["claim_ref"] != session["claim_ref"])):
@@ -308,28 +380,40 @@ class WorkSessionActorStore:
 
     def save(self, *, expected_sha256, work_session_ref=None, claim_ref=None,
              observed_binding=None, pending_manifest_sha256=None,
-             pending_context_sha256=None, held_lock):
+             pending_context_sha256=None, pending_registry_intent_plan_sha256=_UNSET,
+             last_completed_operation=_UNSET, held_lock):
         """Replace routing selections by appending one full CAS image.
 
-        All selection fields are explicit full-image values; None clears them.
+        Original selection fields retain their explicit full-image behavior.
+        Omitted extension fields alone inherit their previous values, so an
+        older caller cannot erase terminal discovery evidence. Explicit None
+        clears registry pending, but never an existing completed selector.
+        A completed selector is replaceable only with another typed selector;
+        callers must independently verify completion before this CAS write.
         Unpublished .pending files are retained and never selected as context.
         """
         code = "work_session_actor_invalid"
         try:
             return self._save(expected_sha256, work_session_ref, claim_ref,
                               observed_binding, pending_manifest_sha256,
-                              pending_context_sha256, held_lock)
+                              pending_context_sha256, pending_registry_intent_plan_sha256,
+                              last_completed_operation, held_lock)
         except WorkSessionActorError as error:
             code = error.code
         except Exception:
             pass
         raise _fail(code)
 
-    def _save(self, expected, session, claim, binding, manifest, context_sha, held):
+    def _save(self, expected, session, claim, binding, manifest, context_sha,
+              registry_pending, completed, held):
         self._lock(held)
         if expected is not None and not registry._is_digest(expected):
             raise _fail()
         if binding is not None and type(binding) is not WorkSessionBinding:
+            raise _fail()
+        if registry_pending is not _UNSET and registry_pending is not None and not registry._is_digest(registry_pending):
+            raise _fail()
+        if completed is not _UNSET and completed is not None and type(completed) is not CompletedOperationSelector:
             raise _fail()
         if (session is not None and not registry._ref(session, "work_session")) or (
             claim is not None and not registry._ref(claim, "claim")
@@ -341,6 +425,9 @@ class WorkSessionActorStore:
         previous = self._read(current=False)
         if expected != (previous.sha256 if previous is not None else None):
             raise _fail("work_session_actor_changed")
+        previous_document = previous.document() if previous is not None else {}
+        if completed is None and previous_document.get("last_completed_operation") is not None:
+            raise _fail("work_session_actor_changed")
         basis = {
             "schema": ACTOR_SCHEMA, "archive_identity_sha256": self._archive_sha,
             "client_app_ref": self._app, "task_route_ref": self._route,
@@ -350,11 +437,21 @@ class WorkSessionActorStore:
             "claim_ref": claim, "pending_manifest_sha256": manifest,
             "pending_context_sha256": context_sha,
         }
+        for field, value in (
+            ("pending_registry_intent_plan_sha256", registry_pending),
+            ("last_completed_operation", completed),
+        ):
+            if value is _UNSET:
+                if field in previous_document:
+                    basis[field] = previous_document[field]
+            else:
+                basis[field] = value.document() if type(value) is CompletedOperationSelector else value
         raw = registry._canonical({**basis, "actor_sha256": _sha(registry._canonical(basis))})
         frozen = ActorContext(raw)
         self._routes(frozen, self._check_store(), current=True)
         if previous is not None and all(
-            value == previous.document()[key] for key, value in basis.items()
+            key in previous_document and value == previous_document[key]
+            for key, value in basis.items()
             if key not in {"revision", "previous_sha256"}
         ):
             self._lock(held)

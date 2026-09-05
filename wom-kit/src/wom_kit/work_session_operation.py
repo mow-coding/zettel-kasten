@@ -35,11 +35,26 @@ def _sha(raw: bytes) -> str:
     return "sha256:" + hashlib.sha256(raw).hexdigest()
 
 
+def task_route_binding_sha256(*, archive_identity_sha256, client_app_ref, task_route_ref) -> str:
+    """Bind an explicit private caller route, not app attestation or authority."""
+    if (not registry._is_digest(archive_identity_sha256)
+            or not registry._ref(client_app_ref, "client_app")
+            or not registry._ref(task_route_ref, "task_route")):
+        raise _fail()
+    return registry._digest({
+        "schema": "wom-kit/work-session-task-route-binding/v1",
+        "archive_identity_sha256": archive_identity_sha256,
+        "client_app_ref": client_app_ref,
+        "task_route_ref": task_route_ref,
+    })
+
+
 @dataclass(frozen=True, repr=False)
 class PreparedSessionDecision:
     transition: registry.RegistryTransition
     manifest: exact.ExactOperationManifest
     source_bytes: bytes
+    task_route_ref: str | None = None
 
     def __repr__(self) -> str:
         return "PreparedSessionDecision(<private>)"
@@ -49,10 +64,20 @@ class PreparedSessionDecision:
         if self.transition.action not in _ACTIONS:
             raise _fail()
         # Recompute all public bindings from the frozen private transition.
-        expected = _build(self.transition)
+        expected = _build(self.transition, task_route_ref=self.task_route_ref)
         if (self.manifest.document() != expected.manifest.document()
                 or self.source_bytes != expected.source_bytes):
             raise _fail()
+
+    @property
+    def task_route_binding_sha256(self) -> str | None:
+        if self.task_route_ref is None:
+            return None
+        binding = self.transition.after.binding(self.transition.result_refs[-1])
+        return task_route_binding_sha256(
+            archive_identity_sha256=binding.archive_identity_sha256,
+            client_app_ref=binding.client_app_ref, task_route_ref=self.task_route_ref,
+        )
 
     def context(self, *, archive_id: str, reviewer_claim: str) -> ExactHumanApprovalContext:
         self.validate()
@@ -66,7 +91,7 @@ class PreparedSessionDecision:
         return binding.context(archive_id=archive_id, reviewer_claim=reviewer_claim)
 
 
-def _build(transition: registry.RegistryTransition) -> PreparedSessionDecision:
+def _build(transition: registry.RegistryTransition, *, task_route_ref=None) -> PreparedSessionDecision:
     archive_sha = transition.after._document["archive_identity_sha256"]
     revision = transition.after.revision
     target = f"work-session-generation:{revision:012d}"
@@ -81,6 +106,12 @@ def _build(transition: registry.RegistryTransition) -> PreparedSessionDecision:
     # later registry lookup, and never retrofit an old approval.
     session_ref = transition.result_refs[-1]
     binding = transition.after.binding(session_ref)
+    evidence_digests = (("transition_sha256", transition.plan_sha256),)
+    if task_route_ref is not None:
+        evidence_digests = (("task_route_binding_sha256", task_route_binding_sha256(
+            archive_identity_sha256=archive_sha, client_app_ref=binding.client_app_ref,
+            task_route_ref=task_route_ref,
+        )), *evidence_digests)
     item = exact.ExactOperationItem(
         ordinal=0, item_id=f"item:session-generation:{revision:012d}",
         target_kind=_KIND, target_ref=target,
@@ -96,19 +127,21 @@ def _build(transition: registry.RegistryTransition) -> PreparedSessionDecision:
         operation_evidence=exact.ExactOperationEvidence(
             schema="wom-kit/work-session-decision-evidence/v1",
             counts=(("generation_count", 1),),
-            digests=(("transition_sha256", transition.plan_sha256),),
+            digests=evidence_digests,
         ),
     )
-    return PreparedSessionDecision(transition, manifest, source)
+    return PreparedSessionDecision(transition, manifest, source, task_route_ref)
 
 
-def prepare_session_decision(transition: registry.RegistryTransition) -> PreparedSessionDecision:
+def prepare_session_decision(transition: registry.RegistryTransition, *, task_route_ref=None) -> PreparedSessionDecision:
     if type(transition) is not registry.RegistryTransition:
         raise _fail()
     transition.validate()
     if transition.action not in _ACTIONS:
         raise _fail()
-    return _build(transition)
+    # None is the historical contract: no new evidence, source or bundle key.
+    # Never retrofit an old approved operation with a current caller route.
+    return _build(transition, task_route_ref=task_route_ref)
 
 
 class _Payloads:

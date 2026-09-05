@@ -118,6 +118,8 @@ def _document(prepared: operation.PreparedSessionDecision) -> dict[str, Any]:
         "source_ascii": prepared.source_bytes.decode("ascii"),
         "manifest": prepared.manifest.document(),
     }
+    if prepared.task_route_ref is not None:
+        basis["task_route_ref"] = prepared.task_route_ref
     return {**basis, "bundle_sha256": _sha(_canonical(basis))}
 
 
@@ -217,7 +219,10 @@ def _decode(store, raw: bytes, manifest_sha256: str) -> operation.PreparedSessio
     if not registry._is_digest(manifest_sha256):
         raise _fail()
     document = _strict_document(raw)
-    if set(document) != {"schema", "archive_identity_sha256", "transition", "source_ascii", "manifest", "bundle_sha256"}:
+    required_keys = {"schema", "archive_identity_sha256", "transition", "source_ascii", "manifest", "bundle_sha256"}
+    if set(document) not in (required_keys, required_keys | {"task_route_ref"}):
+        raise _fail()
+    if "task_route_ref" in document and not registry._ref(document["task_route_ref"], "task_route"):
         raise _fail()
     basis = {key: value for key, value in document.items() if key != "bundle_sha256"}
     if (document["schema"] != BUNDLE_SCHEMA
@@ -253,7 +258,7 @@ def _decode(store, raw: bytes, manifest_sha256: str) -> operation.PreparedSessio
                                        _ref_factory=lambda _prefix: next(generated))
     if next(generated, None) is not None or rebuilt != transition:
         raise _fail()
-    prepared = operation.prepare_session_decision(rebuilt)
+    prepared = operation.prepare_session_decision(rebuilt, task_route_ref=document.get("task_route_ref"))
     if (prepared.manifest.manifest_sha256 != manifest_sha256
             or prepared.manifest.document() != document["manifest"]
             or prepared.source_bytes != document["source_ascii"].encode("ascii")):

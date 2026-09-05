@@ -56,7 +56,8 @@ def _require_actor_selection_for_write_held(
                 or document["task_route_ref"] != task_route_ref
                 or document["work_session_ref"] != work_session_ref):
             raise WorkSessionTaskSelectionError("work_session_task_context_mismatch")
-        if document["pending_manifest_sha256"] is not None:
+        if (document["pending_manifest_sha256"] is not None
+                or document.get("pending_registry_intent_plan_sha256") is not None):
             raise WorkSessionTaskSelectionError("work_session_original_operation_pending")
         binding = store.require_claimed_binding(
             client_app_ref=client_app_ref, work_session_ref=work_session_ref,

@@ -18,6 +18,7 @@ from . import exact_operation_manifest as exact
 from . import work_session_bundle as bundle
 from . import work_session_operation as operation
 from . import work_session_registry as registry
+from .exact_human_approval_windows import ExactHumanApprovalContext
 from .work_session_wait import wait_for_archive_writer
 from .target_collection_preview import TargetCollectionItem, TargetCollectionPreview
 
@@ -27,6 +28,7 @@ class WorkSessionExecutionError(RuntimeError):
         self.code = code if code in {
             "work_session_execution_invalid", "work_session_execution_changed",
             "work_session_resume_evidence_invalid",
+            "work_session_execution_pending_selection_failed",
         } else "work_session_execution_invalid"
         super().__init__(self.code)
 
@@ -46,6 +48,7 @@ def _reload(store, prepared, context):
             approval.exact_human_approval_context_sha256(restored.context),
             approval.exact_human_approval_context_sha256(context))):
         raise WorkSessionExecutionError("work_session_execution_changed")
+    return restored
 
 
 @contextmanager
@@ -178,6 +181,8 @@ def _execute_session_decision_held(
     archive_root, *, held, action, client_app_ref, reviewer_claim,
     work_session_ref=None, label=None, claim_ref=None, target_app_ref=None,
     native=None, key_provider=None,
+    before_claim_publication: Callable[[operation.PreparedSessionDecision, ExactHumanApprovalContext], None] | None = None,
+    task_route_ref=None,
 ) -> dict[str, Any]:
     """Internal composition seam; a same-archive held OS lock is mandatory.
 
@@ -187,14 +192,21 @@ def _execute_session_decision_held(
     """
     store, archive_id = _store(archive_root)
     store._require_held_lock(held)
+    if before_claim_publication is not None and not callable(before_claim_publication):
+        raise WorkSessionExecutionError()
     transition = registry.plan_transition(
         store.read(), action=action, client_app_ref=client_app_ref,
         work_session_ref=work_session_ref, label=label,
         claim_ref=claim_ref, target_app_ref=target_app_ref,
     )
-    prepared = operation.prepare_session_decision(transition)
+    prepared = operation.prepare_session_decision(transition, task_route_ref=task_route_ref)
     context = prepared.context(archive_id=archive_id, reviewer_claim=reviewer_claim)
     terminal = {}
+    original_manifest_sha = prepared.manifest.manifest_sha256
+    original_context_sha = approval.exact_human_approval_context_sha256(context)
+    original_source = prepared.source_bytes
+    original_predecessor_sha = prepared.transition.before_sha256
+    publication_failure = None
 
     def observe_target_binding():
         held.verify_held()
@@ -205,10 +217,47 @@ def _execute_session_decision_held(
 
     @contextmanager
     def publication():
+        nonlocal publication_failure
         held.verify_held()
         if store.read().sha256 != prepared.transition.before_sha256:
             raise WorkSessionExecutionError("work_session_execution_changed")
         bundle.save_context_bound_session_decision(store, prepared, context=context, held_lock=held)
+        if before_claim_publication is not None:
+            # The native decision has happened; key/empty claim-directory
+            # preparation may have happened too. No claim has been published.
+            # Pass detached data so a callback cannot mutate the runner's
+            # original objects through these argument aliases.
+            try:
+                detached = _reload(store, prepared, context)
+                store._require_held_lock(held)
+            except BaseException:
+                publication_failure = "work_session_execution_changed"
+                raise WorkSessionExecutionError(publication_failure) from None
+            try:
+                returned = before_claim_publication(detached.prepared, detached.context)
+                if returned is not None:
+                    raise WorkSessionExecutionError("work_session_execution_pending_selection_failed")
+            except BaseException:
+                publication_failure = "work_session_execution_pending_selection_failed"
+                raise WorkSessionExecutionError(publication_failure) from None
+            try:
+                store._require_held_lock(held)
+                prepared.validate()
+                detached.prepared.validate()
+                if (
+                    prepared.manifest.manifest_sha256 != original_manifest_sha
+                    or prepared.source_bytes != original_source
+                    or approval.exact_human_approval_context_sha256(context) != original_context_sha
+                    or detached.prepared != prepared
+                    or approval.exact_human_approval_context_sha256(detached.context) != original_context_sha
+                    or store.read().sha256 != original_predecessor_sha
+                ):
+                    raise WorkSessionExecutionError("work_session_execution_changed")
+                _reload(store, prepared, context)
+                store._require_held_lock(held)
+            except BaseException:
+                publication_failure = "work_session_execution_changed"
+                raise WorkSessionExecutionError(publication_failure) from None
         yield
 
     def writer(claim):
@@ -220,12 +269,21 @@ def _execute_session_decision_held(
     def finish(claim):
         terminal.update(_verified_terminal(store, prepared, context, claim))
 
-    outcome = workflow._execute_exact_human_approved_write_core(
-        store.root, context, writer, native=native, key_provider=key_provider,
-        post_decision_boundary=lambda: _claim_boundary(store, held, create=True),
-        claim_publication_boundary=publication, claim_succeeded_finalizer=finish,
-        target_collection=_local_preview(prepared), observe_target_binding=observe_target_binding,
-    )
+    try:
+        outcome = workflow._execute_exact_human_approved_write_core(
+            store.root, context, writer, native=native, key_provider=key_provider,
+            post_decision_boundary=lambda: _claim_boundary(store, held, create=True),
+            claim_publication_boundary=publication, claim_succeeded_finalizer=finish,
+            target_collection=_local_preview(prepared), observe_target_binding=observe_target_binding,
+        )
+    except BaseException:
+        if publication_failure is None:
+            raise
+    if publication_failure is not None:
+        # Outside the broker's error handler: do not retain the callback's
+        # private exception in __context__ or __cause__, or mislabel it as a
+        # credential failure. The historical default and resume stay unchanged.
+        raise WorkSessionExecutionError(publication_failure)
     return _result(prepared, outcome, terminal)
 
 
@@ -245,7 +303,7 @@ def _resume_session_decision_core(
 
 
 def _resume_session_decision_held(
-    archive_root, *, held, manifest_sha256, key_provider=None,
+    archive_root, *, held, manifest_sha256, key_provider=None, completed_only: bool = False,
 ) -> dict[str, Any]:
     """Resume under the caller's same-archive lock without renewed authority.
 
@@ -254,15 +312,23 @@ def _resume_session_decision_held(
     """
     store, _archive_id = _store(archive_root)
     store._require_held_lock(held)
+    if type(completed_only) is not bool:
+        raise WorkSessionExecutionError()
     bound = bundle.load_context_bound_session_decision(store, manifest_sha256=manifest_sha256)
     prepared, context = bound.prepared, bound.context
     terminal, resume_state = {}, {}
 
     def started_guard(claim):
+        if completed_only:
+            # A private actor's completed selector is not evidence that a
+            # started operation finished, nor authority to finish it now.
+            return False
         _started_state(store, prepared, context, claim)
         return True
 
     def writer(claim):
+        if completed_only:
+            raise WorkSessionExecutionError("work_session_resume_evidence_invalid")
         state = _started_state(store, prepared, context, claim)
         resume_state["started_resume_state"] = state
         return operation.apply_session_decision_with_claim(

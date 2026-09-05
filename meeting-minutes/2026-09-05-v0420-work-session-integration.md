@@ -373,6 +373,55 @@ bump, PR, tag, wheel or client application has occurred.
   and MCP without requiring a human to copy IDs, hashes or checkpoint names.
   This internal checkpoint is not advertised as a completed public workflow.
 
+## Task-scoped start and terminal-output-loss continuation
+
+- The held decision runner now publishes the original context-bound private
+  bundle, invokes an internal pending-selector callback, then revalidates its
+  immutable original manifest/context/source/predecessor and held lock before
+  the existing broker publishes an approval claim. The native decision and
+  key/empty claim-directory preparation may already have happened at this cut;
+  that is not a durable approval claim. Callback failure cannot invoke the
+  registry writer, and its private exception chain is not exposed.
+- Private actor images now distinguish a pending human decision, a pending
+  registry transition and the last completed operation selector. Only strict
+  typed selectors are retained; no selector is approval or completion proof.
+  Pending-to-completed moves in one actor CAS image, so a process exit after
+  terminal publication but before stdout cannot lose the original discovery
+  pointer. An older caller omitting the optional fields preserves them, and
+  an explicit null cannot erase an existing completed selector.
+- A regression exposed a real optional-field migration bug: the no-op compare
+  indexed a new field absent from an old actor image. The comparison now checks
+  key presence, with old-image-to-pending and old-image-to-completed tests.
+  The first root integration cohort had one error; its later corrected run is
+  recorded separately, not retroactively marked passed.
+- Root connected registered-app task creation and original continuation through
+  these components. The real broker/runner authenticates original claims and
+  verifies immutable target bytes before actor finalization. Completed-only
+  continuation cannot execute a started operation even if a local selector
+  incorrectly calls it completed. Cancellation saves no actor/claim; new work
+  does not silently replace another task's selection or skip a pending registry
+  transition to return an older completed result.
+- Independent review reproduced copying an original pending approval into a
+  different blank task route of the same app. The prior app-only comparison
+  could not distinguish it. New task-created manifests now bind the explicit
+  route using one additional existing operation-evidence digest; the private
+  bundle reconstructs that exact digest during load. The facade compares its
+  caller route with the validated original route before resuming. Legacy null
+  route source/manifest/bundle/context bytes and their original core resume
+  remain unchanged; old approval is never rebound to a current route.
+- Root's corrected final lifecycle/ownership cohort passed 19 tests in 51.081
+  seconds. It includes a real child exit after terminal actor publication and
+  a separate process recovering the same completed receipt without changed
+  bytes, cross-route refusal, native-decision actor drift and pending-registry
+  fallback refusal. Component cohorts and independent source reviews are
+  separate evidence; these source tests do not establish installed-wheel,
+  platform-matrix or client completion.
+- Remaining integration is explicit: registration selector discovery, claim,
+  public CLI/MCP dispatch, all writer-family enforcement and the native
+  re-review path when a process stops before an approval claim is recorded.
+  A bundle without an authenticated claim does not authorize automatic resume.
+  The current refusal is safe but is not a completed user recovery workflow.
+
 ## Standard references
 
 - [OpenTelemetry service identity](https://opentelemetry.io/docs/specs/semconv/resource/service/)

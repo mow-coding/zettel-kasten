@@ -45,6 +45,27 @@ class TaskSelectionExecutionTests(unittest.TestCase):
         self.assertEqual(self.registry.read().sha256, generation)
         self.assertNotIn(self.claim, json.dumps(binding.document()))
 
+    def test_registry_pending_blocks_but_completed_selector_does_not_grant_or_block_ownership(self):
+        original = self.save()
+        intent_sha = "sha256:" + "a" * 64
+        with exact.ExactOperationWriterLock(self.root) as held:
+            pending = self.actor.save(expected_sha256=original.sha256, held_lock=held,
+                **self.fields(), pending_registry_intent_plan_sha256=intent_sha)
+            with patch.object(registry.WorkSessionRegistryStore, "require_claimed_binding",
+                              side_effect=AssertionError("pending must fail before claim admission")):
+                self.rejected(held, "work_session_original_operation_pending")
+            self.actor.save(expected_sha256=pending.sha256, held_lock=held,
+                **self.fields(), pending_registry_intent_plan_sha256=None,
+                last_completed_operation=actor.CompletedOperationSelector.from_document({
+                    "kind": "registry_transition", "plan_sha256": intent_sha,
+                }))
+            # No completion claim follows from this synthetic pointer. The
+            # existing actual ownership guard still independently decides.
+            self.assertEqual(self.require(held), self.binding)
+            with patch.object(registry.WorkSessionRegistryStore, "require_claimed_binding",
+                              side_effect=registry.WorkSessionRegistryError("work_session_claim_conflict")):
+                self.rejected(held, "work_session_task_ownership_unavailable")
+
     def test_two_valid_claims_do_not_allow_substituting_another_task_route(self):
         self.save()
         second = self.transition(action="create", client_app_ref=self.app,
