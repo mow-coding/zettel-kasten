@@ -164,7 +164,7 @@ def _review_bound_original_held(store, routing, selected, bound, *, held, pendin
             terminal.update(execution._verified_terminal(store, prepared, context, claim))
 
         try:
-            outcome = workflow._execute_exact_human_approved_write_core(
+            outcome = workflow._execute_exact_human_approved_original_review_core(
                 store.root, context, writer, native=native, key_provider=key_provider,
                 post_decision_boundary=post_decision, claim_publication_boundary=publication,
                 claim_succeeded_finalizer=finish, target_collection=execution._local_preview(prepared),

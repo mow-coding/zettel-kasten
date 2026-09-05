@@ -12548,17 +12548,19 @@ def _command_session_git_backup(args: argparse.Namespace) -> int:
     from .work_session_git_progress import _git_command_progress_observer
 
     original_resume = bool(getattr(args, "resume", False))
+    original_review = bool(getattr(args, "review_original", False))
+    original_mode = original_resume or original_review
     modes = int(bool(args.dry_run)) + int(bool(args.approve)) + int(original_resume)
     forbidden = any(getattr(args, name, None) is not None for name in (
         "expected_plan_sha256", "expected_hidden_effect_set_sha256", "expected_local_head_oid",
         "expected_remote_oid", "selection_manifest", "resume_approval_id", "expected_manifest_sha256",
     ))
-    if modes != 1 or forbidden:
+    if modes != 1 or forbidden or original_review and (not args.approve or original_resume):
         return _git_backup_cli_error(
             command="git-backup-reconcile-plan", dry_run=bool(args.dry_run),
             reason_code="work_session_git_original_inputs_forbidden" if forbidden else "work_session_git_command_mode_required",
         )
-    if original_resume and (
+    if original_mode and (
         args.reviewed_by is not None or args.branch is not None or args.remote != "origin"
         or args.max_changes != git_backup_planning.GIT_BACKUP_PLAN_DEFAULT_MAX_CHANGES
         or args.max_changed_bytes != git_backup_planning.GIT_BACKUP_PLAN_DEFAULT_MAX_CHANGED_BYTES
@@ -12568,7 +12570,8 @@ def _command_session_git_backup(args: argparse.Namespace) -> int:
             command="git-backup-reconcile-plan", dry_run=False,
             reason_code="work_session_git_original_inputs_forbidden",
         )
-    mode = "resume" if original_resume else ("preview" if args.dry_run else "apply")
+    mode = ("review_original" if original_review else
+            "resume" if original_resume else ("preview" if args.dry_run else "apply"))
     dispatch_entered, original_verified = False, False
     try:
         with _git_command_progress_observer() as observer:
@@ -12582,7 +12585,7 @@ def _command_session_git_backup(args: argparse.Namespace) -> int:
                 Path(args.archive_root), mode=mode,
                 client_app_ref=getattr(args, "client_app_ref", None), task_route_ref=getattr(args, "task_route_ref", None),
                 work_session_ref=getattr(args, "work_session_ref", None), reviewer_claim=args.reviewed_by,
-                options=None if original_resume else {
+                options=None if original_mode else {
                     "remote_name": args.remote, "branch": args.branch, "credential_mode": args.credential_mode,
                     "max_changes": args.max_changes, "max_changed_bytes": args.max_changed_bytes,
                 },
@@ -12611,7 +12614,8 @@ def _command_session_git_backup(args: argparse.Namespace) -> int:
 
 
 def command_git_backup_reconcile_plan(args: argparse.Namespace) -> int:
-    if (getattr(args, "resume", False) or any(getattr(args, name, None) is not None
+    if (getattr(args, "resume", False) or getattr(args, "review_original", False)
+            or any(getattr(args, name, None) is not None
             for name in ("client_app_ref", "task_route_ref", "work_session_ref"))):
         return _command_session_git_backup(args)
     if args.expected_plan_sha256 is None:
@@ -36796,6 +36800,8 @@ def build_parser() -> argparse.ArgumentParser:
     git_backup_reconcile.add_argument("--work-session-ref", help="Explicit current session for preview/approve; optional assertion for original resume.")
     git_backup_reconcile.add_argument("--resume", action="store_true",
         help="Continue this route's original Git operation without new approval IDs, hashes or reviewer.")
+    git_backup_reconcile.add_argument("--review-original", action="store_true",
+        help="With --approve and retained app/task refs: review only the same original operation whose claim was never published.")
     git_backup_reconcile.add_argument(
         "--expected-hidden-effect-set-sha256",
         help="Optional exact hidden-effect-set SHA-256 from the reviewed plan.",
@@ -36857,7 +36863,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     git_backup_reconcile.add_argument(
         "--reviewed-by",
-        help="Safe reviewer claim required for approve or resume.",
+        help="Reviewer required for fresh approval or legacy resume; forbidden on session original resume/re-review.",
     )
     git_backup_reconcile.add_argument(
         "--resume-approval-id",
@@ -47624,6 +47630,7 @@ def main(argv: list[str] | None = None) -> int:
                 if (getattr(args, "func", None) is command_git_backup_reconcile_plan
                         and args.expected_plan_sha256 is None
                         and not getattr(args, "resume", False)
+                        and not getattr(args, "review_original", False)
                         and not any(getattr(args, name, None) is not None
                                     for name in ("client_app_ref", "task_route_ref", "work_session_ref"))):
                     parser.error("the following arguments are required: --expected-plan-sha256")

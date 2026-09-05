@@ -90,7 +90,7 @@ def startup_progress_requested(argv: list[str]) -> bool:
     if any(option in {"--no-progress", "--help", "-h", "--version"} for option in options):
         return False
     if argv[0] == "git-backup-reconcile-plan" and any(
-        option.split("=", 1)[0] in {"--client-app-ref", "--task-route-ref", "--work-session-ref", "--resume"}
+        option.split("=", 1)[0] in {"--client-app-ref", "--task-route-ref", "--work-session-ref", "--resume", "--review-original"}
         for option in options
     ):
         # The explicit session route owns progress by default, including the

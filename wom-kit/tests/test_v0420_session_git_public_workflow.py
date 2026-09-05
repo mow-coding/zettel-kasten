@@ -134,3 +134,61 @@ class SessionGitPublicWorkflowTests(unittest.TestCase):
         self.assertFalse(resumed["domain_writer_reentered"])
         self.assertEqual(fixture.evidence(), retained)
         self.assertEqual(fixture.git("rev-parse", "HEAD").stdout.strip(), local_head)
+
+    def test_cli_missing_claim_original_review_keeps_original_context_and_never_replans(self):
+        fixture = self.fixture
+        fresh = ["--work-session-ref", fixture.session, "--credential-mode", "stored",
+                 "--reviewed-by", "person:synthetic-reviewer"]
+        with patch.object(native, "_CtypesTaskDialogNative", return_value=fixture.native), \
+             patch.object(fixtures.broker, "_claim_exact_human_approval_core",
+                          side_effect=RuntimeError("synthetic pre-claim interruption")):
+            code, incomplete, _progress = self.call("--approve", *fresh)
+        self.assertNotEqual(code, 0, incomplete)
+        self.assertFalse(incomplete["backup_completion_verified"])
+        self.assertEqual(fixture.native.calls, 1)
+        with fixtures.exact.ExactOperationWriterLock(fixture.root) as held:
+            original = fixture.original_git(held)
+            pending = fixture.routing._read(current=False)
+        original_context_sha = fixtures.approval.exact_human_approval_context_sha256(original.context)
+        self.assertEqual(fixture.git("rev-parse", "HEAD").stdout.strip(), fixture.fixture.initial_head)
+        original_save = actor.WorkSessionActorStore.save
+        actor_saves = []
+
+        def save_terminal_actor(store, *args, **options):
+            self.assertEqual(options["expected_sha256"], pending.sha256)
+            self.assertIsNone(options.get("pending_operation"))
+            actor_saves.append(True)
+            return original_save(store, *args, **options)
+
+        with patch.object(native, "_CtypesTaskDialogNative", return_value=fixture.native), \
+             patch.object(fixtures.broker, "_request_exact_human_approval_core",
+                          wraps=fixtures.broker._request_exact_human_approval_core) as review, \
+             patch.object(fixtures.bundle, "_save_original_git_context_held",
+                          side_effect=AssertionError("original context rewritten")), \
+             patch.object(writer.planning, "git_backup_plan", side_effect=AssertionError("new plan")), \
+             patch.object(actor.WorkSessionActorStore, "save", new=save_terminal_actor):
+            code, result, _progress = self.call("--approve", "--review-original")
+        self.assertEqual(code, 0, result)
+        self.assertTrue(result["original_commit_verified"])
+        self.assertTrue(result["native_approval_redisplayed"])
+        self.assertEqual(fixture.native.calls, 2)
+        self.assertEqual(len(actor_saves), 1)
+        self.assertEqual(review.call_count, 1)
+        self.assertEqual(fixtures.approval.exact_human_approval_context_sha256(review.call_args.args[0]),
+                         original_context_sha)
+        local_head = fixture.git("rev-parse", "HEAD").stdout.strip()
+        self.assertEqual(local_head, fixture.fixture.git_dir(
+            fixture.fixture.remote, "rev-parse", "refs/heads/main").stdout.strip())
+        self.assertNotEqual(local_head, fixture.fixture.initial_head)
+        self.assertEqual((fixture.root / "tracked.txt").read_text(), "after\n")
+        self.assertEqual((fixture.root / "new-private.txt").read_text(), "new bytes\n")
+        retained = fixture.evidence()
+        with patch.object(native, "_CtypesTaskDialogNative", side_effect=AssertionError("new approval")), \
+             patch.object(writer.planning, "git_backup_plan", side_effect=AssertionError("new plan")), \
+             patch.object(writer, "_run_git_backup_exact_operation", side_effect=AssertionError("writer reentered")), \
+             patch.object(actor.WorkSessionActorStore, "save", side_effect=AssertionError("actor rewritten")):
+            code, completed, _progress = self.call("--approve", "--review-original")
+        self.assertEqual(code, 0, completed)
+        self.assertFalse(completed["native_approval_redisplayed"])
+        self.assertTrue(completed["original_operation_already_completed"])
+        self.assertEqual(fixture.evidence(), retained)

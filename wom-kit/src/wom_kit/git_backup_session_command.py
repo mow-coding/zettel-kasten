@@ -38,18 +38,19 @@ def dispatch_session_git_backup(
     try:
         from . import work_session_git_workflow as workflow
 
-        if (type(mode) is not str or mode not in {"preview", "apply", "resume"}
+        if (type(mode) is not str or mode not in {"preview", "apply", "resume", "review_original"}
                 or not callable(cancel_requested) or not callable(progress)
                 or options is not None and type(options) is not dict):
             return _failure("work_session_git_command_invalid", mode=mode)
-        if mode == "resume" and (reviewer_claim is not None or options):
+        original_mode = mode in {"resume", "review_original"}
+        if original_mode and (reviewer_claim is not None or options):
             return _failure("work_session_git_original_inputs_forbidden", mode=mode)
         if mode != "apply" and reviewer_claim is not None:
             return _failure("work_session_git_command_invalid", mode=mode)
         if mode == "apply" and (type(reviewer_claim) is not str or not reviewer_claim.strip()):
             return _failure("git_backup_reviewer_required", mode=mode)
         sessions._refs(client_app_ref, task_route_ref, work_session_ref,
-                       require_session=mode != "resume")
+                       require_session=not original_mode)
         resolved = sessions._root(root)
         fresh_options = dict(options or {})
         if set(fresh_options) - {"remote_name", "branch", "credential_mode", "max_changes", "max_changed_bytes"}:
@@ -77,6 +78,8 @@ def dispatch_session_git_backup(
             started = True
             if mode == "resume":
                 return workflow._resume_session_git_backup_held(resolved, held=held, **common)
+            if mode == "review_original":
+                return workflow._review_original_session_git_backup_held(resolved, held=held, **common)
             if mode == "preview":
                 return workflow._preview_session_git_backup_held(resolved, held=held, **common, **fresh_options)
             return workflow._execute_session_git_backup_held(

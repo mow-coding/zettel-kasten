@@ -43,6 +43,13 @@ class GitProgressContractTests(unittest.TestCase):
                 self.assertIsNone(subject._project({"stage": "preflight", "total_bytes": value}))
         self.assertIsNone(subject._project({"stage": "PRIVATE", "total_items": 2}))
 
+    def test_original_preimage_stage_is_visible_without_private_review_context(self):
+        self.assertEqual(subject._project({"phase": "git_original_preimage",
+            "approval_context_sha256": "PRIVATE", "reviewer": "PRIVATE"}),
+            {"stage": "git_original_preimage"})
+        # The actual independent child validates against the same fixed stages.
+        self.assertIn("git_original_preimage", subject._STAGES)
+
     def test_signal_install_change_then_raise_restores_handlers_without_launch(self):
         numbers = (subject.signal.SIGINT,) + ((subject.signal.SIGBREAK,)
                    if hasattr(subject.signal, "SIGBREAK") else ())

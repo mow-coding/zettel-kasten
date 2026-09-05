@@ -38,6 +38,7 @@ _STAGES = frozenset({
     "building_change_inventory", "drift_reobservation", "receipt_inventory_cas_recheck",
     "handoff_scope_final", "preflight_final", "git_projection_final", "remote_ref_final",
     "repository_relation", "finalizing_plan", "pinning_git", "verifying_git_pin",
+    "git_original_preimage",
 })
 _COUNTS = frozenset({
     "completed_items", "total_items", "completed_fields", "total_fields", "item_ordinal",

@@ -55,9 +55,24 @@ separately if current ownership or actor completion cannot be established.
 
 A pending operation with no authenticated original claim currently reports
 `work_session_git_original_approval_missing`. It is preserved, never treated as
-approval and never silently replaced with a fresh review. An explicit original
-re-review path for that cut remains acceptance work; do not claim every
-interruption is already automatically resolved.
+approval and never silently replaced with a fresh review. For this specific
+pre-claim interruption, the development route adds explicit original review:
+
+```powershell
+& $projectArchive git-backup-reconcile-plan $archiveRoot `
+  --client-app-ref $clientAppRef --task-route-ref $taskRouteRef `
+  --approve --review-original --format json
+```
+
+This shows the same retained decision, not a fresh plan. Its original reviewer,
+manifest, selection and pending actor remain fixed. A changed target, corrupted
+claim or ambiguous evidence stops the attempt. If an authenticated claim already
+exists, WOM resumes that original without displaying another approval. The shared
+broker also checks claim presence after entering the key provider, so a newly
+inserted claim cannot become a duplicate approval. No hash, replacement reviewer
+or provider setting belongs on this route. These are development source contracts;
+installed acceptance remains a separate gate, not automatic recovery of every
+possible corruption or interruption.
 
 The new scoped CLI route owns content-free progress by default, while keeping
 stdout for the final JSON. Its separate hidden observer receives only a closed

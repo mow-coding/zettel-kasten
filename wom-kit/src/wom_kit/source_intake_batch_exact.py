@@ -53,6 +53,7 @@ from .exact_operation_manifest import (
     ExactOperationManifest,
     ExactOperationManifestError,
     ExactOperationProgress,
+    ExactOperationWriterLock,
     FileExactOperationCheckpointStore,
     apply_exact_operation,
     exact_operation_completion_authentication_payload,
@@ -121,6 +122,8 @@ class SourceIntakeBatchExactError(RuntimeError):
         "source_intake_batch_resume_invalid",
         "source_intake_batch_state_drifted",
         "source_intake_batch_write_failed",
+        "source_intake_batch_lock_required",
+        "source_intake_batch_scope_context_required",
         "exact_human_approval_cancelled",
     }
 
@@ -1528,6 +1531,38 @@ def _success_document(
     }
 
 
+def _require_legacy_unbound_plan(plan: SourceIntakeBatchExactPlan) -> None:
+    """This extraction does not admit an unattached session execution scope."""
+    if type(plan) is not SourceIntakeBatchExactPlan or type(plan.manifest) is not ExactOperationManifest:
+        raise _fail("source_intake_batch_plan_blocked")
+    evidence = plan.manifest.operation_evidence
+    if (plan.manifest.work_session_binding is not None or getattr(plan, "session_scope", None) is not None
+            or evidence is None or evidence.schema != EVIDENCE_SCHEMA
+            or {name for name, _value in evidence.counts} != {
+                "source_item_count", "receipt_byte_count", "source_byte_count", "warning_count",
+                "prepared_capture_request_count",
+            }
+            or {name for name, _value in evidence.digests} != {
+                "item_receipt_set_sha256", "item_source_set_sha256", "request_bytes_sha256",
+                "request_document_sha256", "prepared_capture_request_sha256",
+                "intake_capture_chain_sha256", "warning_set_sha256",
+            }):
+        raise _fail("source_intake_batch_scope_context_required")
+
+
+def _require_source_intake_batch_held_lock(plan, writer_lock) -> None:
+    if type(writer_lock) is not ExactOperationWriterLock:
+        raise _fail("source_intake_batch_lock_required")
+    try:
+        writer_lock.verify_held()
+        if os.path.samefile(writer_lock.archive_root, plan.archive_root):
+            return
+    except (OSError, ExactOperationManifestError):
+        pass
+    # A rejected filesystem observation must not survive in an error chain.
+    raise _fail("source_intake_batch_lock_required")
+
+
 def _apply_with_store(
     plan: SourceIntakeBatchExactPlan,
     authority: ExactOperationApprovalAuthority,
@@ -1538,7 +1573,7 @@ def _apply_with_store(
     progress_hook: Callable[[ExactOperationProgress], None] | None,
     completion_authenticator: Callable[[bytes], Mapping[str, Any]],
 ) -> dict[str, Any]:
-    assert plan.manifest is not None
+    _require_legacy_unbound_plan(plan)
     core = apply_exact_operation(
         plan.manifest,
         payloads=_Payloads(plan),
@@ -1567,6 +1602,45 @@ def _completion_authenticator(
     return authenticate
 
 
+def _run_source_intake_batch_exact_operation(
+    plan: SourceIntakeBatchExactPlan,
+    *,
+    context: ExactHumanApprovalContext,
+    claim: _ClaimedExactHumanApproval,
+    writer_lock: ExactOperationWriterLock,
+    resume: bool,
+    progress_hook: Callable[[ExactOperationProgress], None] | None,
+) -> dict[str, Any]:
+    """Run the existing legacy operation under the caller's same archive lock.
+
+    No lock or key consumer is acquired here. Bound/session operations remain
+    unavailable until their concrete ownership and original-context facade exists.
+    """
+    _require_legacy_unbound_plan(plan)
+    if (type(context) is not ExactHumanApprovalContext or type(claim) is not _ClaimedExactHumanApproval
+            or type(resume) is not bool):
+        raise _fail("source_intake_batch_approval_required")
+    _require_source_intake_batch_held_lock(plan, writer_lock)
+    authority_error = None
+    try:
+        authority = _authority(plan, claim, context, allow_resume=resume)
+    except SourceIntakeBatchExactError as error:
+        authority_error = error.code
+    if authority_error is not None:
+        # Keep the legacy authority algorithm, but do not retain its rejected
+        # private claim observation through the new internal facade's chain.
+        raise _fail(authority_error)
+    # One request read; each source is rehashed immediately before its own
+    # receipt mutation. Do not add a second whole-batch planning pass.
+    request_items = _request_items(plan)
+    _require_source_intake_batch_held_lock(plan, writer_lock)
+    store = FileExactOperationCheckpointStore(plan.archive_root, writer_lock=writer_lock)
+    return _apply_with_store(
+        plan, authority, store, request_items=request_items, resume=resume,
+        progress_hook=progress_hook, completion_authenticator=_completion_authenticator(claim),
+    )
+
+
 def _execute_core(
     plan: SourceIntakeBatchExactPlan,
     claim: _ClaimedExactHumanApproval,
@@ -1574,25 +1648,14 @@ def _execute_core(
     *,
     progress_hook: Callable[[ExactOperationProgress], None] | None,
 ) -> dict[str, Any]:
-    authority = _authority(plan, claim, context, allow_resume=False)
+    _require_legacy_unbound_plan(plan)
+    # Preserve legacy refusal before lockfile creation, then reauthenticate
+    # under the caller's held lock in the shared runner.
+    _authority(plan, claim, context, allow_resume=False)
     with exact_operation_writer_lock(plan.archive_root) as writer_lock:
-        # Revalidate the approved request once.  Each source is independently
-        # re-hashed by the writer immediately before its own create-only
-        # receipt mutation, so a second whole-batch planning pass is both
-        # redundant and expensive for 508/1000-item real workloads.
-        request_items = _request_items(plan)
-        store = FileExactOperationCheckpointStore(
-            plan.archive_root,
-            writer_lock=writer_lock,
-        )
-        return _apply_with_store(
-            plan,
-            authority,
-            store,
-            request_items=request_items,
-            resume=False,
-            progress_hook=progress_hook,
-            completion_authenticator=_completion_authenticator(claim),
+        return _run_source_intake_batch_exact_operation(
+            plan, context=context, claim=claim, writer_lock=writer_lock,
+            resume=False, progress_hook=progress_hook,
         )
 
 
@@ -1612,6 +1675,7 @@ def execute_source_intake_batch(
         raise _fail("source_intake_batch_plan_digest_mismatch")
     if not plan.approveable or plan.manifest is None:
         raise _fail("source_intake_batch_plan_blocked")
+    _require_legacy_unbound_plan(plan)
     context = approval_context(plan, reviewer_claim=reviewer_claim)
     return _execute_exact_human_approved_write(
         plan.archive_root,

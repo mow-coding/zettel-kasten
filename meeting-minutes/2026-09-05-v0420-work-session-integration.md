@@ -1484,6 +1484,80 @@ bump, PR, tag, wheel or client application has occurred.
   recorded in that release's separate evidence PR, not as a v0.4.20 release or
   client-recovery result. No client project was updated.
 
+## Original-review public route and release-evidence follow-through
+
+- Added the existing Git command's explicit `--approve --review-original`
+  mode. It selects only retained app/task context, optionally asserts the
+  original session, and forbids a replacement reviewer, selection, approval
+  identifier, plan or provider setting. Original resume remains no-review;
+  missing or contradictory flags fail before dispatch. The adapter retains the
+  existing wait/held/runtime and fixed private-error boundaries. The private
+  authenticated re-review implementation is still being completed separately.
+- The public routing, legacy Git, startup and availability cohort passed
+  76 tests in 41.504 seconds. The new adapter cases use a stub domain through
+  the actual held boundary; they do not prove original bundle selection or
+  claim absence. Independent read review found no public-route blocker, and
+  explicitly retained that distinction. Existing normal Git arguments and
+  its missing-plan usage error remain compatible.
+- v0.4.19 release-evidence PR #98, head `60481d64`, records the successful
+  public artifact and exact-public-origin bootstrap verification. Independent
+  evidence review compared retained JSON, actual wheel bytes, installed origin
+  metadata and public release/tag/CI records without finding an actionable issue.
+  Its full CI is running; no second full-matrix result is inferred from the
+  already-passed main/tag readiness-only runs.
+- Removal of the two completed, task-created external verification venvs was
+  rejected by tool policy before the command ran. They remain preserved. No
+  alternate shell, deletion mechanism or privilege workaround was attempted.
+  The release worktree remains needed by PR #98; the unfinished v0.4.20 worktree
+  also remains. Neither all cleanup nor client recovery is falsely marked done.
+
+## Original-review broker and representative held-writer checkpoint
+
+- The Git pre-claim interruption route now reuses the retained context and
+  pending actor. Its explicit original review authenticates establishment and
+  producer proofs, current ownership and exact Git preimage around the native
+  decision. Existing authenticated claims follow original resume; ambiguous,
+  corrupt or failed claims never become permission to obtain a replacement.
+  The original pending record is not republished, and only authenticated
+  completion performs its final CAS. Independent source review found no blocker.
+- Review caught a key-lifecycle error in the first implementation: original
+  review must never create a replacement archive key. The corrected common
+  broker requests an existing key and performs authenticated same-key absence
+  checking after provider entry and immediately before claim publication. Fresh
+  approval preserves its original key-creation behavior. Six focused tests cover
+  actual provider-entry claim insertion, missing-key refusal and fresh behavior.
+  The existing lifecycle original-review helper now uses this same broker entry,
+  not a second scanner. Independent review of both the common broker and helper
+  switch found no blocker; the drift test still acts inside the real held claim
+  publication boundary, not a vacuous replacement-key path.
+- On the corrected common broker and lifecycle helper, 47 established approval
+  and original-review tests passed in 86.400 seconds. The new actual CLI/Git
+  interruption, original re-review and completed replay test passed in 116.866
+  seconds. It checks unchanged original context, no replanning or pending
+  rewrite, actual push/remote verification and no second completed execution.
+  The earlier two-case public workflow run passed in 242.175 seconds before the
+  key-lifecycle correction and is not relabelled as final-source evidence.
+  These are source-tree synthetic tests, not installed v0.4.20 client results.
+- Source-intake batch now exposes one private already-held runner using the
+  original authority, request, exact store and completion authenticator. The
+  legacy entry preserves its pre-lock authority and public error ordering,
+  then delegates to that runner. Wrong/released/foreign locks, request drift and
+  unsupported bound plans fail closed; it creates no extra lock or key consumer.
+  Ten new held-runner tests passed in 3.707 seconds and four existing actual
+  legacy/interrupt/identity-free-resume/drift cases passed in 2.683 seconds.
+  Independent source review found no blocker. Session-bound source-intake
+  composition is still absent; this extraction does not claim writer coverage.
+- The final five actual private Git original-review tests passed in 464.901
+  seconds, and the six common-broker tests passed in 0.683 seconds. This final
+  source includes noncreating key use, same-key provider-entry insertion refusal,
+  repeated interruption, cancellation/drift and completed original replay.
+  The reviewer also noticed the fixed original-preimage progress stage was
+  missing from the observer allowlist. Adding only that fixed stage and a
+  private-context-stripping assertion closed the finding; all 16 observer tests
+  passed in 21.972 seconds, including actual child and cancellation handling.
+  Four readiness/privacy gates, 169-resource synchronization and diff checks
+  passed. No full v0.4.20 platform or installed acceptance result is claimed.
+
 ## Standard references
 
 - [OpenTelemetry service identity](https://opentelemetry.io/docs/specs/semconv/resource/service/)

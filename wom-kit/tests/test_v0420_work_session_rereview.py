@@ -2,6 +2,7 @@
 
 import json
 import os
+from contextlib import contextmanager
 from pathlib import Path
 import subprocess
 import sys
@@ -21,7 +22,7 @@ from wom_kit import work_session_rereview as subject
 
 class GuardedKey:
     def __init__(self, delegate):
-        self.delegate, self.active, self.requests, self.before_create = delegate, False, [], None
+        self.delegate, self.active, self.requests, self.before_use = delegate, False, [], None
 
     def use_key(self, root, consumer, *, create_if_missing=False):
         if self.active:
@@ -29,8 +30,8 @@ class GuardedKey:
         self.active = True
         self.requests.append(create_if_missing)
         try:
-            if create_if_missing and self.before_create is not None:
-                self.before_create()
+            if self.before_use is not None:
+                self.before_use()
             return self.delegate.use_key(root, consumer, create_if_missing=create_if_missing)
         finally:
             self.active = False
@@ -92,13 +93,13 @@ class OriginalRereviewTests(unittest.TestCase):
         original_raw = plan.read_bytes()
         original = bundle.load_context_bound_session_decision(t.store, manifest_sha256=selected["pending_manifest_sha256"])
         contexts = []
-        execute = workflow._execute_exact_human_approved_write_core
+        execute = workflow._execute_exact_human_approved_original_review_core
 
         def observe(root, context, writer, **kwargs):
             contexts.append(context)
             return execute(root, context, writer, **kwargs)
 
-        with patch.object(workflow, "_execute_exact_human_approved_write_core", new=observe), \
+        with patch.object(workflow, "_execute_exact_human_approved_original_review_core", new=observe), \
                 patch.object(registry, "_new_ref", side_effect=AssertionError("re-review regenerated ref")), \
                 patch.object(bundle, "save_context_bound_session_decision", side_effect=AssertionError("re-review replaced original")):
             result = self.review()
@@ -109,7 +110,7 @@ class OriginalRereviewTests(unittest.TestCase):
         self.assertEqual(t.native.calls, 2)
         self.assertEqual(t.store.read().revision, 2)
         self.assertEqual(len(t.claims()), 1)
-        self.assertEqual(self.key.requests[-3:], [False, False, True])
+        self.assertEqual(self.key.requests[-3:], [False, False, False])
 
     def test_cancel_preserves_original_pending_and_domain_bytes_without_creating_key(self):
         t = self.fixture
@@ -244,14 +245,29 @@ class OriginalRereviewTests(unittest.TestCase):
         self.cut_before_claim()
         with exact.ExactOperationWriterLock(t.root) as held:
             selected = t.routing.read()
+            original_boundary = subject.execution._claim_boundary
+            publication_ready = [False]
+
+            @contextmanager
+            def boundary(*args, create, **kwargs):
+                with original_boundary(*args, create=create, **kwargs) as value:
+                    publication_ready[0] = create
+                    try:
+                        yield value
+                    finally:
+                        publication_ready[0] = False
 
             def change_actor():
-                t.routing.save(expected_sha256=selected.sha256, held_lock=held)
+                if publication_ready[0]:
+                    self.assertTrue(self.key.active)
+                    self.assertFalse(self.key.requests[-1])
+                    t.routing.save(expected_sha256=selected.sha256, held_lock=held)
 
-            self.key.before_create = change_actor
-            self.reject(lambda: subject._review_original_session_decision_held(
-                t.root, held=held, client_app_ref=t.app, task_route_ref=t.route, native=t.native, key_provider=self.key,
-            ), "work_session_original_operation_changed")
+            self.key.before_use = change_actor
+            with patch.object(subject.execution, "_claim_boundary", new=boundary):
+                self.reject(lambda: subject._review_original_session_decision_held(
+                    t.root, held=held, client_app_ref=t.app, task_route_ref=t.route, native=t.native, key_provider=self.key,
+                ), "work_session_original_operation_changed")
         self.assertEqual(t.claims(), {})
         self.assertEqual(t.store.read().revision, 1)
 

@@ -28,7 +28,7 @@ PRIVATE = "SYNTHETIC_PRIVATE_COMMAND_VALUE"
 class SessionGitCliRoutingTests(unittest.TestCase):
     def test_scoped_startup_is_visible_without_changing_legacy_progress_default(self):
         command_name = "git-backup-reconcile-plan"
-        for flag in ("--client-app-ref", "--task-route-ref", "--work-session-ref", "--resume"):
+        for flag in ("--client-app-ref", "--task-route-ref", "--work-session-ref", "--resume", "--review-original"):
             for option in (flag, flag + "=" + PRIVATE):
                 with self.subTest(option=option):
                     self.assertTrue(cli_entry.startup_progress_requested([command_name, option]))
@@ -76,6 +76,37 @@ class SessionGitCliRoutingTests(unittest.TestCase):
         self.assertIsNone(values["work_session_ref"])
         self.assertIsNone(values["reviewer_claim"])
         self.assertIsNone(values["options"])
+
+    def test_original_review_forwards_saved_route_without_replacement_inputs(self):
+        base = ["--client-app-ref", APP, "--task-route-ref", ROUTE]
+        for session_args in ([], ["--work-session-ref", SESSION]):
+            with self.subTest(session=bool(session_args)), patch.object(
+                    command, "dispatch_session_git_backup", return_value={"ok": True}) as dispatch:
+                code, stdout, _stderr = self.call(base + session_args + ["--approve", "--review-original"])
+                self.assertEqual(code, 0, stdout)
+                values = dispatch.call_args.kwargs
+                self.assertEqual(values["mode"], "review_original")
+                self.assertEqual(values["work_session_ref"], SESSION if session_args else None)
+                self.assertIsNone(values["reviewer_claim"])
+                self.assertIsNone(values["options"])
+
+    def test_original_review_requires_explicit_approve_and_refuses_fresh_evidence(self):
+        route = ["--client-app-ref", APP, "--task-route-ref", ROUTE, "--review-original"]
+        invalid = [[], ["--dry-run"], ["--resume"], ["--approve", "--resume"],
+                   ["--approve", "--dry-run"], ["--approve", "--reviewed-by", PRIVATE],
+                   ["--approve", "--selection-manifest", PRIVATE],
+                   ["--approve", "--expected-plan-sha256", PRIVATE],
+                   ["--approve", "--expected-manifest-sha256", PRIVATE],
+                   ["--approve", "--resume-approval-id", PRIVATE],
+                   ["--approve", "--branch", PRIVATE],
+                   ["--approve", "--credential-mode", "stored"],
+                   ["--approve", "--remote", PRIVATE], ["--approve", "--max-changes", "1"]]
+        for extra in invalid:
+            with self.subTest(flags=extra), patch.object(command, "dispatch_session_git_backup") as dispatch:
+                code, stdout, stderr = self.call(route + extra)
+                self.assertNotEqual(code, 0)
+                dispatch.assert_not_called()
+                self.assertNotIn(PRIVATE, stdout + stderr)
 
     def test_new_original_cannot_be_replaced_by_legacy_inputs_or_a_fresh_mode(self):
         base = ["--client-app-ref", APP, "--task-route-ref", ROUTE, "--resume"]
@@ -147,7 +178,8 @@ class SessionGitCommandBoundaryTests(unittest.TestCase):
         fake.WorkSessionGitWorkflowError = WorkSessionGitWorkflowError
         for mode, name in (("preview", "_preview_session_git_backup_held"),
                            ("apply", "_execute_session_git_backup_held"),
-                           ("resume", "_resume_session_git_backup_held")):
+                           ("resume", "_resume_session_git_backup_held"),
+                           ("review_original", "_review_original_session_git_backup_held")):
             def run(root, *, held, _mode=mode, **values):
                 self.assertIs(type(held), exact.ExactOperationWriterLock)
                 held.verify_held()
@@ -168,7 +200,7 @@ class SessionGitCommandBoundaryTests(unittest.TestCase):
         return command.dispatch_session_git_backup(self.root, mode=mode, **values)
 
     def test_all_modes_use_real_shared_lock_and_loaded_runtime_guard(self):
-        for mode in ("preview", "apply", "resume"):
+        for mode in ("preview", "apply", "resume", "review_original"):
             values = {"reviewer_claim": "person:synthetic-reviewer"} if mode == "apply" else {}
             result = self.call(mode, **values)
             self.assertTrue(result["ok"], result)
@@ -178,10 +210,19 @@ class SessionGitCommandBoundaryTests(unittest.TestCase):
 
     def test_invalid_or_original_replacement_input_stops_before_domain_runner(self):
         for mode, changes in (("resume", {"reviewer_claim": PRIVATE}), ("resume", {"options": {"branch": PRIVATE}}),
+                              ("review_original", {"reviewer_claim": PRIVATE}),
+                              ("review_original", {"options": {"branch": PRIVATE}}),
                               ("preview", {"options": {"native": PRIVATE}}), ("apply", {}),
                               ("preview", {"client_app_ref": None}), ("preview", {"task_route_ref": PRIVATE})):
             self.assertFalse(self.call(mode, **changes)["ok"])
         self.assertEqual(self.calls, [])
+
+    def test_original_review_without_session_uses_actor_route_not_latest_session(self):
+        result = self.call("review_original", work_session_ref=None)
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(self.calls[0][0], "review_original")
+        self.assertIsNone(self.calls[0][1]["work_session_ref"])
+        self.assertFalse(set(self.calls[0][1]) & {"reviewer_claim", "options", "approval_id"})
 
     def test_cancel_and_private_errors_are_truthful_and_content_free(self):
         cancelled = self.call(cancel_requested=lambda: True)

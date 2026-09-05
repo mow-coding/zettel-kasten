@@ -1,9 +1,9 @@
 """Private held receipt-only Git workflow, never an app-identity attestation.
 
 Fresh review binds current task ownership and authenticated receipt producers.
-Original continuation selects only the retained actor/context and claim. Public
-dispatch, original re-review after a missing claim, and document provenance are
-separate contracts. No Git operation changes the work-session registry.
+Original continuation and explicit re-review select only retained actor/context
+facts. A missing claim permits a new native decision only over the unchanged
+original preimage. No Git operation changes the work-session registry.
 """
 
 from contextlib import contextmanager
@@ -732,3 +732,203 @@ def _resume_session_git_backup_held(
                 authenticated_precheckpoint_preimage_verified=True)
         return {**outcome, **state, **result}
     return _safe_call(resume)
+
+
+def _original_git_claim_presence_held(prepared, context, store, routing, selected, held, key_provider):
+    """Presence only: invalid/checkpoint-less claims are never treated as absent."""
+    absent = {"ok": False, "original_claim_absent": True}
+
+    def missing(reason):
+        if reason not in {"authenticated_candidate_missing", "claim_store_absent"}:
+            raise WorkSessionGitWorkflowError("work_session_git_original_evidence_invalid")
+        # Discovery may hold its key here. Never start a broker or another key.
+        return dict(absent)
+
+    _assert_actor(routing, selected)
+    _original_context(prepared, context, held)
+    found = approval_workflow._discover_exact_human_approved_transaction_resume_core(
+        prepared.root, context, lambda _claim: True, lambda _claim: True,
+        candidate_missing_handler=missing, key_provider=key_provider,
+        resume_boundary=lambda: session_execution._claim_boundary(store, held, create=False))
+    _assert_actor(routing, selected)
+    _original_context(prepared, context, held)
+    if type(found) is str:
+        return "existing"
+    if type(found) is dict and found == absent:
+        return "absent"
+    raise WorkSessionGitWorkflowError("work_session_git_original_evidence_invalid")
+
+
+def _original_git_proof_image_held(prepared, store, held):
+    """Bound original proof bytes, including their claims; this does not authenticate."""
+    scope = prepared.session_scope.document()
+    images = []
+    with session_execution._claim_boundary(store, held, create=False) as (root, parent):
+        for proof in (scope["establishment_proof"], *scope["producer_proofs"]):
+            original = session_bundle.load_context_bound_session_decision(
+                store, manifest_sha256=proof["manifest_sha256"])
+            receipt = exact.load_exact_operation_final_receipt_read_only(root, proof["execution_sha256"],
+                                                                         heartbeat=held.verify_held)
+            if receipt is None:
+                raise WorkSessionGitWorkflowError("work_session_git_original_evidence_invalid")
+            reference = receipt["result"]["completion_authentication"]["approval_reference"]
+            authority = exact.ExactOperationApprovalAuthority.from_reference(reference)
+            if (receipt["receipt_sha256"] != proof["receipt_sha256"]
+                    or receipt["result"]["manifest_sha256"] != proof["manifest_sha256"]
+                    or approval.exact_human_approval_context_sha256(original.context) != proof["context_sha256"]
+                    or authority.context_sha256 != proof["context_sha256"]
+                    or exact.exact_operation_execution_sha256(original.prepared.manifest,
+                        approval_authority=authority) != proof["execution_sha256"]
+                    or exact.verify_exact_operation(original.prepared.manifest,
+                        verifier=session_operation._Verifier(store, original.prepared), state="post")["all_match"] is not True):
+                raise WorkSessionGitWorkflowError("work_session_git_original_evidence_invalid")
+            claim_bytes = approval._read_claim_bytes(parent["path"] / (reference["approval_id"] + ".json"),
+                                                    bound_archive_root=root, claim_parent_binding=parent)
+            images.append((session_bundle._canonical(session_bundle._document(original.prepared)),
+                           proof["context_sha256"], exact._canonical_json_bytes(receipt), claim_bytes))
+    return tuple(images)
+
+
+def _authenticate_original_git_review_proofs_held(prepared, store, routing, selected, origin, held, key_provider):
+    image = _original_git_proof_image_held(prepared, store, held)
+    binding, scope = prepared.manifest.work_session_binding, prepared.session_scope.document()
+    session_claim._verify_original_establishment(prepared.root, store, routing, selected,
+        held=held, client_app_ref=binding.client_app_ref, task_route_ref=scope["task_route_ref"],
+        work_session_ref=binding.work_session_ref, key_provider=key_provider,
+        original_establishment_selector=origin)
+    verified = session_execution._resume_session_decision_held(prepared.root, held=held,
+        manifest_sha256=origin.manifest_sha256, completed_only=True, key_provider=key_provider)
+    if (verified.get("ok") is not True or verified.get("independent_post_verification") is not True
+            or verified.get("execution_sha256") != scope["establishment_proof"]["execution_sha256"]
+            or verified.get("receipt_sha256") != scope["establishment_proof"]["receipt_sha256"]):
+        raise WorkSessionGitWorkflowError("work_session_git_original_evidence_invalid")
+    rows = {row["public_observation"]["change_ref"]: row
+            for row in [row for group in prepared.groups for row in group.private_changes]
+                       + [row["private_change"] for row in prepared.excluded_changes]}
+    for proof in scope["producer_proofs"]:
+        observed = provenance._authenticated_receipt(store, held, rows[proof["change_ref"]],
+                                                     proof["execution_sha256"], key_provider=key_provider)
+        if observed != proof:
+            raise WorkSessionGitWorkflowError("work_session_git_original_evidence_invalid")
+    if _original_git_proof_image_held(prepared, store, held) != image:
+        raise WorkSessionGitWorkflowError("work_session_git_changed")
+    _current_scope(prepared, store, routing, selected, held)
+    return image
+
+
+def _review_original_session_git_backup_held(
+    root, *, held, client_app_ref, task_route_ref, work_session_ref=None,
+    native=None, key_provider=None, progress_hook=None,
+):
+    """Explicit new native decision over one unchanged original; never a new plan."""
+    def review():
+        store, routing = lifecycle._routing(root, held=held, client_app_ref=client_app_ref,
+                                            task_route_ref=task_route_ref)
+        selected = routing._read(current=False)
+        if selected is None:
+            raise WorkSessionGitWorkflowError("work_session_git_original_missing")
+        document = selected.document()
+        if work_session_ref is not None and document["work_session_ref"] != work_session_ref:
+            raise WorkSessionGitWorkflowError("work_session_task_context_mismatch")
+        pending = selected.pending_operation()
+        pointer = pending.document() if pending is not None else document.get("last_completed_operation")
+        if type(pointer) is not dict or pointer.get("kind") != "git_backup":
+            raise WorkSessionGitWorkflowError("work_session_git_original_missing")
+        bound = git_bundle._load_original_git_context_held(root, held=held, manifest_sha256=pointer["manifest_sha256"])
+        prepared, context = bound.prepared, bound.context
+        if (approval.exact_human_approval_context_sha256(context) != pointer["context_sha256"]
+                or prepared.session_scope is None
+                or prepared.session_scope.document()["task_route_ref"] != task_route_ref
+                or prepared.manifest.work_session_binding.client_app_ref != client_app_ref
+                or prepared.manifest.work_session_binding.work_session_ref != document["work_session_ref"]):
+            raise WorkSessionGitWorkflowError("work_session_git_changed")
+        _frozen, _store, _routing, retained, origin = _selected_scope(prepared, context, held,
+                                                                    completed=pending is None)
+        if retained._raw != selected._raw:
+            raise WorkSessionGitWorkflowError("work_session_git_changed")
+        if _original_git_claim_presence_held(prepared, context, store, routing, selected, held, key_provider) == "existing":
+            _assert_actor(routing, selected)
+            result = _resume_session_git_backup_held(root, held=held, client_app_ref=client_app_ref,
+                task_route_ref=task_route_ref, work_session_ref=document["work_session_ref"],
+                key_provider=key_provider, progress_hook=progress_hook)
+            return {**result, "native_approval_redisplayed": False}
+        if pending is None:
+            raise WorkSessionGitWorkflowError("work_session_git_original_evidence_invalid")
+        _current_scope(prepared, store, routing, selected, held)
+        proof_image = _authenticate_original_git_review_proofs_held(
+            prepared, store, routing, selected, origin, held, key_provider)
+        finished, boundary_failure, finish_failure = {}, [], []
+
+        def unchanged():
+            _progress(progress_hook, "git_original_preimage")
+            _original_context(prepared, context, held)
+            _current_scope(prepared, store, routing, selected, held)
+            if _original_git_proof_image_held(prepared, store, held) != proof_image:
+                raise WorkSessionGitWorkflowError("work_session_git_changed")
+            with writer._pinned_git_runtime(prepared):
+                verified = exact.verify_exact_operation(prepared.manifest,
+                    verifier=_SessionGitBackupVerifier(writer._GitBackupBackend(prepared)), state="pre",
+                    heartbeat=held.verify_held)
+            if verified["all_match"] is not True:
+                raise WorkSessionGitWorkflowError("work_session_git_original_evidence_invalid")
+            _current_scope(prepared, store, routing, selected, held)
+            _original_context(prepared, context, held)
+            if _original_git_proof_image_held(prepared, store, held) != proof_image:
+                raise WorkSessionGitWorkflowError("work_session_git_changed")
+
+        unchanged()
+
+        @contextmanager
+        def post_decision():
+            try:
+                unchanged()
+                if (_authenticate_original_git_review_proofs_held(prepared, store, routing, selected,
+                        origin, held, key_provider) != proof_image
+                        or _original_git_claim_presence_held(prepared, context, store, routing, selected,
+                            held, key_provider) != "absent"):
+                    raise WorkSessionGitWorkflowError("work_session_git_changed")
+            except Exception:
+                boundary_failure.append("work_session_git_changed")
+                raise
+            with writer._git_backup_post_decision_boundary(prepared, {}, held=held) as boundary:
+                yield boundary
+
+        @contextmanager
+        def publication():
+            try:
+                unchanged()
+            except Exception:
+                boundary_failure.append("work_session_git_changed")
+                raise
+            # Keep original bundle and pending actor bytes. A second pending
+            # CAS would invalidate scope.actor_sha256 / previous_sha256.
+            yield
+
+        def apply(claim):
+            result, backend = writer._run_git_backup_exact_operation(prepared, context=context,
+                claim=claim, writer_lock=held, resume=False, progress_hook=progress_hook)
+            _save_terminal(prepared, context, claim, held, tuple(backend.commit_oids))
+            return {**result, "ok": result["status"] == "completed"}
+
+        def finish(claim):
+            try:
+                finished.update(_finish(prepared, context, claim, held, completed=False))
+            except WorkSessionGitWorkflowError as error:
+                finish_failure.append((error.code, error.original_commit_verified))
+                raise
+
+        try:
+            outcome = approval_workflow._execute_exact_human_approved_original_review_core(
+                root, context, apply, native=native, key_provider=key_provider,
+                post_decision_boundary=post_decision, claim_publication_boundary=publication,
+                claim_succeeded_finalizer=finish)
+        except Exception:
+            if not boundary_failure and not finish_failure:
+                raise
+        if boundary_failure:
+            raise WorkSessionGitWorkflowError(boundary_failure[0])
+        if finish_failure:
+            raise WorkSessionGitWorkflowError(finish_failure[0][0], original_commit_verified=finish_failure[0][1])
+        return {**approval_workflow._automatic_resume_content_free_projection(outcome), **finished,
+                "native_approval_redisplayed": True, "original_context_preserved": True}
+    return _safe_call(review)

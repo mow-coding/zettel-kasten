@@ -250,3 +250,28 @@ silencing progress. The integration minutes record source and actual synthetic
 Git tests, final observer cancellation regressions and their different source
 snapshots. Installed acceptance, full writer coverage and client results remain
 unfinished; no released or recovered-client claim follows from this checkpoint.
+
+## Explicit original Git review after pre-claim interruption
+
+The next source slice connects `--approve --review-original` to the same retained
+Git decision when its authenticated claim is genuinely absent. Keep the saved
+context, manifest, reviewer, scope and pending actor unchanged. Authenticate
+establishment and producer proofs and the exact preimage around native review;
+only successful terminal verification performs the pending-to-completed CAS.
+Existing claims take original resume; failed, corrupt or ambiguous claims are
+not absence, and a completed actor cannot gain a replacement missing approval.
+
+Extract the existing authenticated scanner once. Normal fresh execution keeps
+its signature, order and bytes; the separate private original-review entry uses
+one closed internal review kind to require same-key absence immediately before
+publishing the claim. No provider callback intervenes between that scan and
+publication, and no second key consumer, signature model or public authority
+parameter is added. This closes the key-provider-entry insertion window without
+changing the ordinary existing approval path. Source test outcomes and installed
+acceptance limits are recorded separately in the integration minutes.
+
+Original review requires the existing archive authentication key; unlike fresh
+approval, it must not generate a key when evidence is unavailable. The existing
+lifecycle original-review helper uses this same private broker entry. Its
+previous typed context, exact preimage and held publication checks remain;
+historical approval and context bytes are never rewritten by the migration.
